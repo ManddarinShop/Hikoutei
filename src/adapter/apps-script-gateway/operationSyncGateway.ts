@@ -59,6 +59,7 @@ import {
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
 } from "./observationOperation.js";
+import { invalidOperationResponse } from "./errors.js";
 
 /** Configuration required to bind the operation client to SQLite projections. */
 export interface AppsScriptOperationSyncGatewayOptions {
@@ -366,7 +367,10 @@ function decodeProvisionResult(
 ): Awaited<ReturnType<SyncGatewayProvisioner["provisionRegistry"]>> {
   const record = requireRecord(value, "provisioning result");
   if (!Array.isArray(record.registrations)) {
-    return invalidGatewayResponse("provisioning registrations must be an array");
+    return invalidOperationResponse(
+      "Apps Script operation",
+      "provisioning registrations must be an array",
+    );
   }
   return {
     registrations: record.registrations.map((entry, index) =>
@@ -438,7 +442,7 @@ function decodeProjectionStatus(value: unknown): AppsScriptOperationProjectionSt
 
 function requireStringArray(value: unknown, label: string): readonly string[] {
   if (!Array.isArray(value)) {
-    return invalidGatewayResponse(label + " must be an array");
+    return invalidOperationResponse("Apps Script operation", label + " must be an array");
   }
   return value.map((entry, index) =>
     requireSyncGatewayText(
@@ -505,16 +509,9 @@ function observationRouteOptions(
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return invalidGatewayResponse(label + " must be an object");
+    return invalidOperationResponse("Apps Script operation", label + " must be an object");
   }
   return value as Record<string, unknown>;
-}
-
-function invalidGatewayResponse(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    "Apps Script operation " + message,
-  );
 }
 
 const PROVISION_SOURCE = [

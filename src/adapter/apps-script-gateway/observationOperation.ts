@@ -16,7 +16,6 @@ import { PRESENCE_KINDS } from "../../core/state/constants.js";
 import type { NormalizedCell, Presence } from "../../core/index.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-  SyncGatewayContractError,
 } from "../../runtime/gateway/errors.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
@@ -32,6 +31,10 @@ import {
 } from "../../runtime/gateway/validation.js";
 import type { AppsScriptOperationDefinition } from "./operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "./timing.js";
+import {
+  invalidOperationRequest,
+  invalidOperationResponse,
+} from "./errors.js";
 
 const OBSERVATION_OPERATION_MODES = {
   ENSURE_ANCHORS: "ensureRowAnchors",
@@ -127,7 +130,10 @@ function validateObservationRequest(request: ObservationOperationRequest): void 
     SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
   );
   if (request.checkboxHeaders !== undefined && !Array.isArray(request.checkboxHeaders)) {
-    invalidObservationRequest("checkboxHeaders must be an array");
+    invalidOperationRequest(
+      "Apps Script observation operation",
+      "checkboxHeaders must be an array",
+    );
   }
   if ("readMode" in request && request.readMode !== undefined) {
     const readMode = requireSyncGatewaySnapshotReadMode(
@@ -139,7 +145,10 @@ function validateObservationRequest(request: ObservationOperationRequest): void 
       readMode === SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT &&
       request.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT
     ) {
-      invalidObservationRequest("user_input readMode requires the user_input projection");
+      invalidOperationRequest(
+        "Apps Script observation operation",
+        "user_input readMode requires the user_input projection",
+      );
     }
   }
 }
@@ -179,7 +188,10 @@ function decodeSnapshot(value: unknown): SyncGatewaySnapshot {
     SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
   );
   if (protocolVersion !== SYNC_GATEWAY_PROTOCOL_VERSIONS.V1) {
-    return invalidObservationResponse("snapshot protocolVersion is unsupported");
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      "snapshot protocolVersion is unsupported",
+    );
   }
   const projection = requireSyncGatewayProjection(
     record.projection,
@@ -219,7 +231,12 @@ function decodeSnapshot(value: unknown): SyncGatewaySnapshot {
 }
 
 function decodeSnapshotRows(value: unknown): SyncGatewaySnapshot["rows"] {
-  if (!Array.isArray(value)) return invalidObservationResponse("snapshot rows must be an array");
+  if (!Array.isArray(value)) {
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      "snapshot rows must be an array",
+    );
+  }
   return value.map((entry, index) => {
     const record = requireRecord(entry, "snapshot row[" + index + "]");
     return {
@@ -259,7 +276,10 @@ function decodeSnapshotCells(
       SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
     );
     if (!isCellObservationKind(cellKind)) {
-      return invalidObservationResponse("snapshot cell " + fieldName + " kind is unsupported");
+      return invalidOperationResponse(
+        "Apps Script observation operation",
+        "snapshot cell " + fieldName + " kind is unsupported",
+      );
     }
     cells[fieldName] = {
       cellKind,
@@ -293,7 +313,10 @@ function decodeNormalizedCell(value: unknown, label: string): NormalizedCell {
   if (kind === NORMALIZED_CELL_KINDS.DATE && typeof record.value === "string") {
     return { kind: NORMALIZED_CELL_KINDS.DATE, value: record.value };
   }
-  return invalidObservationResponse(label + " normalizedCell is invalid");
+  return invalidOperationResponse(
+    "Apps Script observation operation",
+    label + " normalizedCell is invalid",
+  );
 }
 
 function decodePresenceString(value: unknown, label: string): Presence<string> {
@@ -321,7 +344,12 @@ function decodePresenceNonNegativeInteger(value: unknown, label: string): Presen
 }
 
 function decodeDuplicateAnchors(value: unknown): SyncGatewaySnapshot["duplicateAnchors"] {
-  if (!Array.isArray(value)) return invalidObservationResponse("duplicateAnchors must be an array");
+  if (!Array.isArray(value)) {
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      "duplicateAnchors must be an array",
+    );
+  }
   return value.map((entry, index) => {
     const record = requireRecord(entry, "duplicateAnchors[" + index + "]");
     return {
@@ -339,7 +367,12 @@ function decodeDuplicateAnchors(value: unknown): SyncGatewaySnapshot["duplicateA
 }
 
 function decodePositiveIntegerArray(value: unknown, label: string): readonly number[] {
-  if (!Array.isArray(value)) return invalidObservationResponse(label + " must be an array");
+  if (!Array.isArray(value)) {
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      label + " must be an array",
+    );
+  }
   return value.map((entry, index) =>
     requireSyncGatewayPositiveSafeInteger(
       entry,
@@ -349,7 +382,12 @@ function decodePositiveIntegerArray(value: unknown, label: string): readonly num
 }
 
 function decodeStringArray(value: unknown, label: string): readonly string[] {
-  if (!Array.isArray(value)) return invalidObservationResponse(label + " must be an array");
+  if (!Array.isArray(value)) {
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      label + " must be an array",
+    );
+  }
   const values = value.map((entry, index) =>
     requireSyncGatewayText(
       entry,
@@ -357,7 +395,10 @@ function decodeStringArray(value: unknown, label: string): readonly string[] {
       SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
     ));
   if (new Set(values).size !== values.length) {
-    return invalidObservationResponse(label + " contains a duplicate");
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      label + " contains a duplicate",
+    );
   }
   return values;
 }
@@ -368,23 +409,12 @@ function isCellObservationKind(value: string): value is CellObservationKind {
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return invalidObservationResponse(label + " must be an object");
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      label + " must be an object",
+    );
   }
   return value as Record<string, unknown>;
-}
-
-function invalidObservationRequest(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-    "Apps Script observation operation request is invalid: " + message,
-  );
-}
-
-function invalidObservationResponse(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    "Apps Script observation operation response is invalid: " + message,
-  );
 }
 
 /**

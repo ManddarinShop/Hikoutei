@@ -6,14 +6,14 @@ import {
   type FastAppendRow,
 } from "../../runtime/gateway/syncGateway.js";
 import { SYNC_GATEWAY_FAST_APPEND_STATUSES } from "../../runtime/gateway/constants.js";
-import {
-  SYNC_GATEWAY_ERROR_CODES,
-  SyncGatewayContractError,
-} from "../../runtime/gateway/errors.js";
 import type {
   AppsScriptOperationDefinition,
 } from "./operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "./timing.js";
+import {
+  invalidOperationRequest,
+  invalidOperationResponse,
+} from "./errors.js";
 import type { NormalizedCell } from "../../core/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "../../core/encoding/constants.js";
 
@@ -142,21 +142,27 @@ const FAST_APPEND_OPERATION_SOURCE = `function (spreadsheet, args) {
 
 function validateFastAppendRequest(request: AppsScriptFastAppendOperationRequest): void {
   if (request.sheetName.trim().length === 0) {
-    throw invalidFastAppendRequest("sheetName is required");
+    invalidOperationRequest("fast append operation", "sheetName is required");
   }
   if (request.headers.length === 0 || request.headers.some((header) => header.trim().length === 0)) {
-    throw invalidFastAppendRequest("headers must contain non-empty names");
+    invalidOperationRequest(
+      "fast append operation",
+      "headers must contain non-empty names",
+    );
   }
   if (new Set(request.headers).size !== request.headers.length) {
-    throw invalidFastAppendRequest("headers must not contain duplicates");
+    invalidOperationRequest("fast append operation", "headers must not contain duplicates");
   }
   for (const row of request.rows) {
     if (row.effectId.trim().length === 0) {
-      throw invalidFastAppendRequest("every row needs an effectId");
+      invalidOperationRequest("fast append operation", "every row needs an effectId");
     }
     for (const cell of Object.values(row.fields)) {
       if (!isSupportedNormalizedCell(cell)) {
-        throw invalidFastAppendRequest("rows contain an unsupported normalized cell");
+        invalidOperationRequest(
+          "fast append operation",
+          "rows contain an unsupported normalized cell",
+        );
       }
     }
   }
@@ -169,7 +175,10 @@ function decodeFastAppendResult(value: unknown, expectedCount: number): FastAppe
     value.results.length !== expectedCount ||
     value.hasMore !== false
   ) {
-    throw invalidFastAppendResponse("result must contain results and hasMore=false");
+    invalidOperationResponse(
+      "fast append operation",
+      "result must contain results and hasMore=false",
+    );
   }
   const timing = decodeOptionalSyncGatewayTiming(value.timing, "fast append timing");
   const result: FastAppendRowsResult = {
@@ -185,7 +194,10 @@ function decodeFastAppendRowResult(value: unknown): FastAppendRowResult {
     typeof value.effectId !== "string" ||
     value.status !== SYNC_GATEWAY_FAST_APPEND_STATUSES.APPLIED
   ) {
-    throw invalidFastAppendResponse("result contains an invalid fast-append row");
+    invalidOperationResponse(
+      "fast append operation",
+      "result contains an invalid fast-append row",
+    );
   }
   return {
     effectId: value.effectId,
@@ -202,20 +214,6 @@ function isSupportedNormalizedCell(value: NormalizedCell): boolean {
     return Number.isFinite(value.value);
   }
   return value.kind === NORMALIZED_CELL_KINDS.BOOLEAN && typeof value.value === "boolean";
-}
-
-function invalidFastAppendRequest(message: string): SyncGatewayContractError {
-  return new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-    `fast append operation request is invalid: ${message}`,
-  );
-}
-
-function invalidFastAppendResponse(message: string): SyncGatewayContractError {
-  return new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    `fast append operation response is invalid: ${message}`,
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

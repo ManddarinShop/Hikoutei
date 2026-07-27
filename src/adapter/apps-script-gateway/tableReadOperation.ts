@@ -4,7 +4,6 @@ import type { NormalizedCell } from "../../core/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../core/encoding/constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-  SyncGatewayContractError,
 } from "../../runtime/gateway/errors.js";
 import {
   requireSyncGatewayPositiveSafeInteger,
@@ -16,6 +15,7 @@ import type {
 } from "../../runtime/gateway/syncGateway.js";
 import type { AppsScriptOperationDefinition } from "./operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "./timing.js";
+import { invalidOperationRequest, invalidOperationResponse } from "./errors.js";
 
 /** Request for one registered table's raw values. */
 export interface AppsScriptReadTableRowsRequest {
@@ -131,16 +131,19 @@ const READ_TABLE_ROWS_OPERATION_SOURCE = String.raw`function (spreadsheet, args)
 
 function validateRequest(request: AppsScriptReadTableRowsRequest): void {
   if (request.sheetName.trim().length === 0) {
-    throw invalidRequest("sheetName is required");
+    invalidOperationRequest("Apps Script table read", "sheetName is required");
   }
   if (!/^[A-Z]+:[A-Z]+$/.test(request.registeredRange)) {
-    throw invalidRequest("registeredRange must be an uppercase whole-column range");
+    invalidOperationRequest(
+      "Apps Script table read",
+      "registeredRange must be an uppercase whole-column range",
+    );
   }
   if (request.headers.length === 0 || request.headers.some((header) => header.trim().length === 0)) {
-    throw invalidRequest("headers must contain non-empty names");
+    invalidOperationRequest("Apps Script table read", "headers must contain non-empty names");
   }
   if (new Set(request.headers).size !== request.headers.length) {
-    throw invalidRequest("headers must not contain duplicates");
+    invalidOperationRequest("Apps Script table read", "headers must not contain duplicates");
   }
 }
 
@@ -148,9 +151,11 @@ function decodeResult(value: unknown, request: AppsScriptReadTableRowsRequest): 
   const record = requireRecord(value, "table read result");
   const headers = decodeHeaders(record.headers);
   if (headers.length !== request.headers.length || headers.some((header, index) => header !== request.headers[index])) {
-    throw invalidResponse("headers do not match the registered route");
+    invalidOperationResponse("Apps Script table read", "headers do not match the registered route");
   }
-  if (!Array.isArray(record.rows)) throw invalidResponse("rows must be an array");
+  if (!Array.isArray(record.rows)) {
+    invalidOperationResponse("Apps Script table read", "rows must be an array");
+  }
   const timing = decodeOptionalSyncGatewayTiming(record.timing, "table read timing");
   const result: SyncTableRowsResult = {
     sheetName: requireSyncGatewayText(
@@ -204,18 +209,24 @@ function decodeCell(value: unknown, header: string, rowIndex: number): Normalize
   }
   if (kind === NORMALIZED_CELL_KINDS.NUMBER) {
     const number = record.value;
-    if (typeof number !== "number" || !Number.isFinite(number)) return invalidResponse("table read number cell is invalid");
+    if (typeof number !== "number" || !Number.isFinite(number)) {
+      return invalidOperationResponse("Apps Script table read", "table read number cell is invalid");
+    }
     return { kind, value: number };
   }
   if (kind === NORMALIZED_CELL_KINDS.BOOLEAN) {
-    if (typeof record.value !== "boolean") return invalidResponse("table read boolean cell is invalid");
+    if (typeof record.value !== "boolean") {
+      return invalidOperationResponse("Apps Script table read", "table read boolean cell is invalid");
+    }
     return { kind, value: record.value };
   }
-  return invalidResponse("table read cell kind is unsupported");
+  return invalidOperationResponse("Apps Script table read", "table read cell kind is unsupported");
 }
 
 function decodeHeaders(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) return invalidResponse("headers must be an array");
+  if (!Array.isArray(value)) {
+    return invalidOperationResponse("Apps Script table read", "headers must be an array");
+  }
   return value.map((header, index) => requireSyncGatewayText(
     header,
     "table read headers[" + index + "]",
@@ -225,21 +236,7 @@ function decodeHeaders(value: unknown): readonly string[] {
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return invalidResponse(label + " must be an object");
+    return invalidOperationResponse("Apps Script table read", label + " must be an object");
   }
   return value as Record<string, unknown>;
-}
-
-function invalidRequest(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-    "Apps Script table read request is invalid: " + message,
-  );
-}
-
-function invalidResponse(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    "Apps Script table read response is invalid: " + message,
-  );
 }

@@ -5,11 +5,12 @@ import {
   type SyncGatewayTiming,
   type SyncTimingOperationKind,
 } from "../../runtime/telemetry/syncTiming.js";
-import { SYNC_GATEWAY_ERROR_CODES, SyncGatewayContractError } from "../../runtime/gateway/errors.js";
+import { SYNC_GATEWAY_ERROR_CODES } from "../../runtime/gateway/errors.js";
 import {
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayText,
 } from "../../runtime/gateway/validation.js";
+import { invalidOperationResponse } from "./errors.js";
 
 /** Promotes an untrusted gateway timing object into the typed diagnostics contract. */
 export function decodeOptionalSyncGatewayTiming(
@@ -19,7 +20,10 @@ export function decodeOptionalSyncGatewayTiming(
   if (value === undefined) return undefined;
   const record = requireRecord(value, label);
   if (!Array.isArray(record.operationKinds) || !Array.isArray(record.phases)) {
-    return invalidTimingResponse(label + " must contain operationKinds and phases");
+    return invalidOperationResponse(
+      "Apps Script timing",
+      label + " must contain operationKinds and phases",
+    );
   }
   const operationKinds = record.operationKinds.map((kind, index) => {
     const text = requireSyncGatewayText(
@@ -28,7 +32,10 @@ export function decodeOptionalSyncGatewayTiming(
       SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
     );
     if (!isTimingOperationKind(text)) {
-      return invalidTimingResponse(label + " contains an unsupported operation kind");
+      return invalidOperationResponse(
+        "Apps Script timing",
+        label + " contains an unsupported operation kind",
+      );
     }
     return text;
   });
@@ -76,14 +83,7 @@ function isTimingOperationKind(value: string): value is SyncTimingOperationKind 
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return invalidTimingResponse(label + " must be an object");
+    return invalidOperationResponse("Apps Script timing", label + " must be an object");
   }
   return value as Record<string, unknown>;
-}
-
-function invalidTimingResponse(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    "Apps Script timing response is invalid: " + message,
-  );
 }

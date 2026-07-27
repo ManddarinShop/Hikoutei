@@ -15,7 +15,6 @@ import {
 } from "../../runtime/gateway/constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-  SyncGatewayContractError,
 } from "../../runtime/gateway/errors.js";
 import {
   requireSyncGatewayNonNegativeSafeInteger,
@@ -26,6 +25,10 @@ import { PRESENCE_KINDS } from "../../core/state/constants.js";
 import type { Presence } from "../../core/state/types.js";
 import type { AppsScriptOperationDefinition } from "./operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "./timing.js";
+import {
+  invalidOperationRequest,
+  invalidOperationResponse,
+} from "./errors.js";
 
 const EFFECT_OPERATION_MODES = {
   APPLY: "applyEffects",
@@ -141,21 +144,30 @@ function validateEffectRequest(
     );
   }
   if (request.checkboxHeaders !== undefined && !Array.isArray(request.checkboxHeaders)) {
-    invalidEffectRequest("checkboxHeaders must be an array");
+    invalidOperationRequest(
+      "Apps Script effect operation",
+      "checkboxHeaders must be an array",
+    );
   }
 }
 
 function decodeApplyEffectsResult(value: unknown, expectedCount: number): ApplySyncEffectsResult {
   const record = requireRecord(value, "effect result");
   if (!Array.isArray(record.results) || typeof record.hasMore !== "boolean") {
-    return invalidEffectResponse("result must contain results and hasMore");
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      "result must contain results and hasMore",
+    );
   }
   if (
     record.results.length > expectedCount ||
     (!record.hasMore && record.results.length !== expectedCount) ||
     (record.hasMore && record.results.length >= expectedCount)
   ) {
-    return invalidEffectResponse("result contains an invalid bounded effect prefix");
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      "result contains an invalid bounded effect prefix",
+    );
   }
   const timing = decodeOptionalSyncGatewayTiming(record.timing, "effect timing");
   const result: ApplySyncEffectsResult = {
@@ -174,7 +186,10 @@ function decodeEffectResult(value: unknown, index: number): SyncGatewayEffectRes
     SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
   );
   if (!isEffectResultStatus(status)) {
-    return invalidEffectResponse("effect result[" + index + "] has an unsupported status");
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      "effect result[" + index + "] has an unsupported status",
+    );
   }
   const postcondition = requireSyncGatewayText(
     record.postcondition,
@@ -182,7 +197,10 @@ function decodeEffectResult(value: unknown, index: number): SyncGatewayEffectRes
     SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
   );
   if (!isPostconditionStatus(postcondition)) {
-    return invalidEffectResponse("effect result[" + index + "] has an unsupported postcondition");
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      "effect result[" + index + "] has an unsupported postcondition",
+    );
   }
   return {
     effectId: requireSyncGatewayText(
@@ -216,7 +234,10 @@ function decodeEffectResult(value: unknown, index: number): SyncGatewayEffectRes
 function decodePostconditionBatch(value: unknown): readonly SyncGatewayEffectPostconditionResult[] {
   const record = requireRecord(value, "postcondition batch result");
   if (!Array.isArray(record.results)) {
-    return invalidEffectResponse("postcondition batch result must contain results");
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      "postcondition batch result must contain results",
+    );
   }
   return record.results.map((entry, index) => {
     const result = requireRecord(entry, "postcondition result[" + index + "]");
@@ -244,7 +265,10 @@ function decodePostcondition(value: unknown): SyncEffectPostcondition {
     SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
   );
   if (!isPostconditionDisposition(disposition)) {
-    return invalidEffectResponse("postcondition disposition is unsupported");
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      "postcondition disposition is unsupported",
+    );
   }
   return {
     disposition,
@@ -303,23 +327,12 @@ function isPostconditionDisposition(
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return invalidEffectResponse(label + " must be an object");
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      label + " must be an object",
+    );
   }
   return value as Record<string, unknown>;
-}
-
-function invalidEffectRequest(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-    "Apps Script effect operation request is invalid: " + message,
-  );
-}
-
-function invalidEffectResponse(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    "Apps Script effect operation response is invalid: " + message,
-  );
 }
 
 /**

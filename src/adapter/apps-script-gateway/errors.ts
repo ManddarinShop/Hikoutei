@@ -1,6 +1,10 @@
 import { CoreErrorException } from "../../core/errors/index.js";
 import { PRESENCE_KINDS } from "../../core/state/index.js";
 import type { Presence } from "../../core/state/index.js";
+import {
+  SYNC_GATEWAY_ERROR_CODES,
+  SyncGatewayContractError,
+} from "../../runtime/gateway/errors.js";
 
 /** Stable error categories emitted by the signed gateway protocol. */
 export const SYNC_GATEWAY_PROTOCOL_ERROR_CODES = {
@@ -61,4 +65,26 @@ export class AppsScriptSyncGatewayError extends CoreErrorException<
     this.status = status;
     this.remoteCode = remoteCode;
   }
+}
+
+/** Throws the shared contract error used when an operation request is invalid. */
+export function invalidOperationRequest(
+  operationLabel: string,
+  message: string,
+): never {
+  throw new SyncGatewayContractError(
+    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+    `${operationLabel} request is invalid: ${message}`,
+  );
+}
+
+/** Throws the shared contract error used when an operation response is invalid. */
+export function invalidOperationResponse(
+  operationLabel: string,
+  message: string,
+): never {
+  throw new SyncGatewayContractError(
+    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+    `${operationLabel} response is invalid: ${message}`,
+  );
 }
