@@ -52,7 +52,7 @@ import {
   type NewEffect,
   type RegisteredSyncSheet,
 } from "../storage/index.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "./adapters/contracts.js";
 import type { RegisteredSyncProjectionDefinition } from "../runtime/gateway/SyncGatewayBootstrap.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,

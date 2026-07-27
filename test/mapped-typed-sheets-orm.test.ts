@@ -32,7 +32,7 @@ import {
   migrateMikroOrmSqliteSchema,
   persistMappedObservedRowWithMikroOrm,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/mikro-orm/index.js";
+} from "../src/orm/adapters/mikro-orm/index.js";
 import { parseSyncProjectionEffectPayload } from "../src/runtime/gateway/syncGateway.js";
 import type { PersistObservedRowInput } from "../src/storage/index.js";
 

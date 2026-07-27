@@ -24,7 +24,7 @@ import {
   type TypedSheetsFindOptions,
   type TypedSheetsForkOptions,
   type TypedSheetsOrm,
-} from "../../orm/index.js";
+} from "../../index.js";
 import {
   initializeMikroOrmSqliteAdapter,
   type InitializeMikroOrmSqliteAdapterOptions,

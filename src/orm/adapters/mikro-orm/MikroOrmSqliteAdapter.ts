@@ -18,7 +18,7 @@ import type {
   SqlParameter,
   SqlStorageAdapter,
   SqlStorageContext,
-} from "../orm/contracts.js";
+} from "../contracts.js";
 
 /** MikroORM entity-manager type used by the Node SQLite dialect. */
 export type MikroOrmSqliteEntityManager = SqlEntityManager<SqliteDriver>;

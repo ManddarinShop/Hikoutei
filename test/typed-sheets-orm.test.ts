@@ -17,7 +17,7 @@ import {
   createMikroOrmSqliteAdapter,
   createTypedSheetsOrm,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/mikro-orm/index.js";
+} from "../src/orm/adapters/mikro-orm/index.js";
 
 const OrderSchema = defineEntity({
   name: "TypedSheetsFacadeOrder",
