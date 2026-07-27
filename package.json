@@ -5,30 +5,31 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "typed-sheets": "dist/cli/Cli.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./orm": {
+      "types": "./dist/orm/index.d.ts",
+      "import": "./dist/orm/index.js"
+    },
+    "./mikro-orm": {
+      "types": "./dist/adapter/mikro-orm/index.d.ts",
+      "import": "./dist/adapter/mikro-orm/index.js"
     }
   },
   "files": [
     "dist",
     "docs",
-    "templates/manual-apps-script-gateway/SheetInfo.gs",
-    "templates/manual-apps-script-gateway/Code.gs",
-    "templates/manual-apps-script-gateway/README.md"
+    "apps-script/gateway/Code.gs"
   ],
   "scripts": {
-    "build:gateway": "node scripts/build-manual-gateway.mjs",
-    "build": "npm run build:gateway && tsc -p tsconfig.json",
-    "pretest": "npm run build:gateway",
+    "clean": "node scripts/clean-dist.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
-    "test": "vitest run test/*.test.ts",
-    "test:integration": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run test/integration/google-sheets-smoke.test.ts"
+    "test": "vitest run test/*.test.ts"
   },
   "keywords": [
     "google-sheets",
@@ -38,12 +39,22 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "@mikro-orm/core": "7.1.7",
+    "@mikro-orm/sql": "7.1.7",
     "@types/node": "^20.14.10",
     "typescript": "^5.5.3",
     "vitest": "^1.6.0"
   },
-  "dependencies": {
-    "@googleapis/sheets": "^13.0.2",
-    "@inquirer/prompts": "^8.5.2"
+  "peerDependencies": {
+    "@mikro-orm/core": "7.1.7",
+    "@mikro-orm/sql": "7.1.7"
+  },
+  "peerDependenciesMeta": {
+    "@mikro-orm/core": {
+      "optional": true
+    },
+    "@mikro-orm/sql": {
+      "optional": true
+    }
   }
 }
