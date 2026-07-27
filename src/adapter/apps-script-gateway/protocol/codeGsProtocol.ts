@@ -12,7 +12,7 @@ import {
 import {
   SYNC_GATEWAY_PROTOCOL_ERROR_CODES,
   SyncGatewayProtocolError,
-} from "./errors.js";
+} from "../errors.js";
 import {
   requireSyncGatewayExpiry,
   requireSyncGatewayIssuedAt,

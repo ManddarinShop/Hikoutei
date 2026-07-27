@@ -2,16 +2,16 @@
 
 export {
   APPS_SCRIPT_OPERATION_NAMES,
-} from "./constants.js";
-export type { AppsScriptOperationName } from "./constants.js";
+} from "./protocol/constants.js";
+export type { AppsScriptOperationName } from "./protocol/constants.js";
 
 export {
   canonicalSyncJson,
   syncSha256Hex,
-} from "./syncProtocol.js";
+} from "./protocol/syncProtocol.js";
 export type {
   SyncJsonValue,
-} from "./syncProtocol.js";
+} from "./protocol/syncProtocol.js";
 export {
   AppsScriptSyncGatewayError,
   SYNC_GATEWAY_CLIENT_ERROR_CODES,
@@ -22,28 +22,28 @@ export {
   appsScriptOperationSigningInput,
   signAppsScriptOperationEnvelope,
   createAppsScriptOperationEnvelope,
-} from "./codeGsProtocol.js";
+} from "./protocol/codeGsProtocol.js";
 export type {
   AppsScriptOperationWire,
   AppsScriptOperationPayload,
   AppsScriptOperationSigningFields,
   AppsScriptOperationEnvelope,
   CreateAppsScriptOperationEnvelopeOptions,
-} from "./codeGsProtocol.js";
-export { AppsScriptOperationClient } from "./operationClient.js";
-export { createFastAppendRowsOperation } from "./fastAppendOperation.js";
-export { createReadTableRowsOperation } from "./tableReadOperation.js";
+} from "./protocol/codeGsProtocol.js";
+export { AppsScriptOperationClient } from "./transport/operationClient.js";
+export { createFastAppendRowsOperation } from "./operations/fastAppendOperation.js";
+export { createReadTableRowsOperation } from "./operations/tableReadOperation.js";
 export {
   createApplyEffectsOperation,
   createReadEffectPostconditionOperation,
   createReadEffectPostconditionsOperation,
-} from "./effectOperation.js";
+} from "./operations/effectOperation.js";
 export {
   createEnsureRowAnchorsOperation,
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
-} from "./observationOperation.js";
-export { AppsScriptOperationSyncGateway } from "./operationSyncGateway.js";
+} from "./operations/observationOperation.js";
+export { AppsScriptOperationSyncGateway } from "./transport/operationSyncGateway.js";
 export type {
   AppsScriptOperationDefinition,
   AnyAppsScriptOperationDefinition,
@@ -52,27 +52,27 @@ export type {
   AppsScriptOperationResults,
   AppsScriptOperationClientOptions,
   AppsScriptOperationRequestEvent,
-} from "./operationClient.js";
+} from "./transport/operationClient.js";
 export type {
   AppsScriptFastAppendOperationArgs,
   AppsScriptFastAppendOperationRequest,
   AppsScriptFastAppendOperation,
-} from "./fastAppendOperation.js";
+} from "./operations/fastAppendOperation.js";
 export type {
   AppsScriptApplyEffectsOperationArgs,
   AppsScriptApplyEffectsOperationRequest,
   AppsScriptReadEffectPostconditionOperationArgs,
   AppsScriptReadEffectPostconditionsOperationArgs,
-} from "./effectOperation.js";
+} from "./operations/effectOperation.js";
 export type {
   AppsScriptEnsureRowAnchorsOperationArgs,
   AppsScriptObserveSnapshotOperationArgs,
   AppsScriptReadSnapshotOperationArgs,
-} from "./observationOperation.js";
+} from "./operations/observationOperation.js";
 export type {
   AppsScriptReadTableRowsRequest,
-} from "./tableReadOperation.js";
+} from "./operations/tableReadOperation.js";
 export type {
   AppsScriptOperationProjectionStatus,
   AppsScriptOperationSyncGatewayOptions,
-} from "./operationSyncGateway.js";
+} from "./transport/operationSyncGateway.js";

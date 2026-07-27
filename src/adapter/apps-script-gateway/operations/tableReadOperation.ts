@@ -1,21 +1,21 @@
 /** Lightweight table reads for polling user-visible Sheet values. */
 
-import type { NormalizedCell } from "../../core/index.js";
-import { NORMALIZED_CELL_KINDS } from "../../core/encoding/constants.js";
+import type { NormalizedCell } from "../../../core/index.js";
+import { NORMALIZED_CELL_KINDS } from "../../../core/encoding/constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-} from "../../runtime/gateway/errors.js";
+} from "../../../runtime/gateway/errors.js";
 import {
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayText,
-} from "../../runtime/gateway/validation.js";
+} from "../../../runtime/gateway/validation.js";
 import type {
   SyncTableRow,
   SyncTableRowsResult,
-} from "../../runtime/gateway/syncGateway.js";
-import type { AppsScriptOperationDefinition } from "./operationClient.js";
-import { decodeOptionalSyncGatewayTiming } from "./timing.js";
-import { invalidOperationRequest, invalidOperationResponse } from "./errors.js";
+} from "../../../runtime/gateway/syncGateway.js";
+import type { AppsScriptOperationDefinition } from "../transport/operationClient.js";
+import { decodeOptionalSyncGatewayTiming } from "../protocol/timing.js";
+import { invalidOperationRequest, invalidOperationResponse } from "../errors.js";
 
 /** Request for one registered table's raw values. */
 export interface AppsScriptReadTableRowsRequest {

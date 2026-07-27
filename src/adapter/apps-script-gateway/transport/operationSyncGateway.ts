@@ -10,18 +10,18 @@ import type {
   RegisteredSyncProjectionDefinition,
   SyncGatewayProvisionRoute,
   SyncGatewayProvisioner,
-} from "../../runtime/gateway/SyncGatewayBootstrap.js";
+} from "../../../runtime/gateway/SyncGatewayBootstrap.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
-} from "../../runtime/gateway/errors.js";
+} from "../../../runtime/gateway/errors.js";
 import {
   requireSyncGatewayNonEmptyList,
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewayText,
-} from "../../runtime/gateway/validation.js";
+} from "../../../runtime/gateway/validation.js";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
@@ -42,24 +42,24 @@ import type {
   SyncSheetObservationBatchGateway,
   SyncEffectWorkerFullGateway,
   SyncTableRowsResult,
-} from "../../runtime/gateway/syncGateway.js";
+} from "../../../runtime/gateway/syncGateway.js";
 import type {
   AppsScriptOperationDefinition,
   AppsScriptOperationGateway,
 } from "./operationClient.js";
-import { createFastAppendRowsOperation } from "./fastAppendOperation.js";
-import { createReadTableRowsOperation } from "./tableReadOperation.js";
+import { createFastAppendRowsOperation } from "../operations/fastAppendOperation.js";
+import { createReadTableRowsOperation } from "../operations/tableReadOperation.js";
 import {
   createApplyEffectsOperation,
   createReadEffectPostconditionOperation,
   createReadEffectPostconditionsOperation,
-} from "./effectOperation.js";
+} from "../operations/effectOperation.js";
 import {
   createEnsureRowAnchorsOperation,
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
-} from "./observationOperation.js";
-import { invalidOperationResponse } from "./errors.js";
+} from "../operations/observationOperation.js";
+import { invalidOperationResponse } from "../errors.js";
 
 /** Configuration required to bind the operation client to SQLite projections. */
 export interface AppsScriptOperationSyncGatewayOptions {

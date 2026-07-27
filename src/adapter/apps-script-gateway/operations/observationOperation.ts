@@ -6,35 +6,35 @@ import type {
   ReadSyncSnapshotRequest,
   SyncObservedSnapshot,
   SyncGatewaySnapshot,
-} from "../../runtime/gateway/syncGateway.js";
+} from "../../../runtime/gateway/syncGateway.js";
 import {
   CELL_OBSERVATION_KINDS,
   NORMALIZED_CELL_KINDS,
   type CellObservationKind,
-} from "../../core/encoding/constants.js";
-import { PRESENCE_KINDS } from "../../core/state/constants.js";
-import type { NormalizedCell, Presence } from "../../core/index.js";
+} from "../../../core/encoding/constants.js";
+import { PRESENCE_KINDS } from "../../../core/state/constants.js";
+import type { NormalizedCell, Presence } from "../../../core/index.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-} from "../../runtime/gateway/errors.js";
+} from "../../../runtime/gateway/errors.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_PROTOCOL_VERSIONS,
   SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-} from "../../runtime/gateway/constants.js";
+} from "../../../runtime/gateway/constants.js";
 import {
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewaySnapshotReadMode,
   requireSyncGatewayText,
-} from "../../runtime/gateway/validation.js";
-import type { AppsScriptOperationDefinition } from "./operationClient.js";
-import { decodeOptionalSyncGatewayTiming } from "./timing.js";
+} from "../../../runtime/gateway/validation.js";
+import type { AppsScriptOperationDefinition } from "../transport/operationClient.js";
+import { decodeOptionalSyncGatewayTiming } from "../protocol/timing.js";
 import {
   invalidOperationRequest,
   invalidOperationResponse,
-} from "./errors.js";
+} from "../errors.js";
 
 const OBSERVATION_OPERATION_MODES = {
   ENSURE_ANCHORS: "ensureRowAnchors",

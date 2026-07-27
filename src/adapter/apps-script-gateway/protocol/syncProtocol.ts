@@ -1,7 +1,7 @@
 /** Canonical JSON and hashing helpers shared by the thin operation protocol. */
 
 import { createHash } from "node:crypto";
-import { JAVASCRIPT_TYPE_NAMES } from "../../core/encoding/constants.js";
+import { JAVASCRIPT_TYPE_NAMES } from "../../../core/encoding/constants.js";
 import {
   SYNC_GATEWAY_ENCODINGS,
   SYNC_GATEWAY_HASH_ALGORITHMS,
@@ -10,7 +10,7 @@ import {
 import {
   SYNC_GATEWAY_PROTOCOL_ERROR_CODES,
   SyncGatewayProtocolError,
-} from "./errors.js";
+} from "../errors.js";
 export type { SyncJsonValue } from "./types.js";
 
 /** Canonical JSON used for payload hashes and cross-runtime HMAC inputs. */

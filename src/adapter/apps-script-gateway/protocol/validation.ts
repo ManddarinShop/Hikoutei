@@ -1,8 +1,8 @@
 import {
   EMPTY_STRING_LENGTH_ZERO,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../core/constants.js";
-import { JAVASCRIPT_TYPE_NAMES } from "../../core/encoding/constants.js";
+} from "../../../core/constants.js";
+import { JAVASCRIPT_TYPE_NAMES } from "../../../core/encoding/constants.js";
 import {
   SYNC_GATEWAY_DEFAULTS,
   SYNC_GATEWAY_REQUEST_ID_PATTERN,
@@ -11,7 +11,7 @@ import {
   SYNC_GATEWAY_PROTOCOL_ERROR_CODES,
   SyncGatewayProtocolError,
   type SyncGatewayProtocolErrorCode,
-} from "./errors.js";
+} from "../errors.js";
 
 /** Requires a non-empty text value for a protocol field. */
 export function requireSyncGatewayText(

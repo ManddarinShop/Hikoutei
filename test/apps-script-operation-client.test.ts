@@ -6,16 +6,16 @@ import {
   APPS_SCRIPT_OPERATION_NAMES,
   SYNC_GATEWAY_ENCODINGS,
   SYNC_GATEWAY_HASH_ALGORITHMS,
-} from "../src/adapter/apps-script-gateway/constants.js";
+} from "../src/adapter/apps-script-gateway/protocol/constants.js";
 import {
   AppsScriptOperationClient,
   type AppsScriptOperationRequestEvent,
-} from "../src/adapter/apps-script-gateway/operationClient.js";
+} from "../src/adapter/apps-script-gateway/transport/operationClient.js";
 import {
   appsScriptOperationSigningInput,
   createAppsScriptOperationEnvelope,
-} from "../src/adapter/apps-script-gateway/codeGsProtocol.js";
-import { canonicalSyncJson, syncSha256Hex } from "../src/adapter/apps-script-gateway/syncProtocol.js";
+} from "../src/adapter/apps-script-gateway/protocol/codeGsProtocol.js";
+import { canonicalSyncJson, syncSha256Hex } from "../src/adapter/apps-script-gateway/protocol/syncProtocol.js";
 import {
   SYNC_GATEWAY_CLIENT_ERROR_CODES,
   SyncGatewayProtocolError,

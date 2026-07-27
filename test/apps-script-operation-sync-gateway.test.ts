@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   AppsScriptOperationSyncGateway,
   type AppsScriptOperationProjectionStatus,
-} from "../src/adapter/apps-script-gateway/operationSyncGateway.js";
+} from "../src/adapter/apps-script-gateway/transport/operationSyncGateway.js";
 import type {
   AnyAppsScriptOperationDefinition,
   AppsScriptOperationGateway,
   AppsScriptOperationResults,
-} from "../src/adapter/apps-script-gateway/operationClient.js";
+} from "../src/adapter/apps-script-gateway/transport/operationClient.js";
 import type {
   ApplySyncEffectsRequest,
   SyncGatewayEffect,

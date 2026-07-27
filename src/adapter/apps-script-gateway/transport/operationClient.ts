@@ -4,23 +4,23 @@ import {
   APPS_SCRIPT_OPERATION_NAMES,
   SYNC_GATEWAY_CLIENT_DEFAULTS,
   type AppsScriptOperationName,
-} from "./constants.js";
+} from "../protocol/constants.js";
 import {
   createAppsScriptOperationEnvelope,
   type AppsScriptOperationEnvelope,
   type AppsScriptOperationPayload,
   type AppsScriptOperationWire,
-} from "./codeGsProtocol.js";
+} from "../protocol/codeGsProtocol.js";
 import {
   SYNC_GATEWAY_PROTOCOL_ERROR_CODES,
   SyncGatewayProtocolError,
   AppsScriptSyncGatewayError,
   SYNC_GATEWAY_CLIENT_ERROR_CODES,
-} from "./errors.js";
-import { canonicalSyncJson } from "./syncProtocol.js";
-import type { SyncJsonValue } from "./types.js";
-import { PRESENCE_KINDS } from "../../core/state/constants.js";
-import type { Presence } from "../../core/state/types.js";
+} from "../errors.js";
+import { canonicalSyncJson } from "../protocol/syncProtocol.js";
+import type { SyncJsonValue } from "../protocol/types.js";
+import { PRESENCE_KINDS } from "../../../core/state/constants.js";
+import type { Presence } from "../../../core/state/types.js";
 
 /** One self-contained function call serialized for `Code.gs`. */
 export interface AppsScriptOperationDefinition<

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SYNC_GATEWAY_ADMIN_OPERATIONS,
   SYNC_GATEWAY_OPERATIONS,
-} from "../src/adapter/apps-script-gateway/constants.js";
+} from "../src/adapter/apps-script-gateway/protocol/constants.js";
 import {
   SYNC_GATEWAY_PROTOCOL_ERROR_CODES,
   SyncGatewayProtocolError,
@@ -10,7 +10,7 @@ import {
 import {
   canonicalSyncJson,
   createSyncGatewayEnvelope,
-} from "../src/adapter/apps-script-gateway/syncProtocol.js";
+} from "../src/adapter/apps-script-gateway/protocol/syncProtocol.js";
 import { createSyncGatewayAdminEnvelope } from "../src/adapter/apps-script-gateway/syncAdminProtocol.js";
 
 describe("signed Apps Script gateway protocol contracts", () => {

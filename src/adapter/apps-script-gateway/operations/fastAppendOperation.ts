@@ -4,18 +4,18 @@ import {
   type FastAppendRowResult,
   type FastAppendRowsResult,
   type FastAppendRow,
-} from "../../runtime/gateway/syncGateway.js";
-import { SYNC_GATEWAY_FAST_APPEND_STATUSES } from "../../runtime/gateway/constants.js";
+} from "../../../runtime/gateway/syncGateway.js";
+import { SYNC_GATEWAY_FAST_APPEND_STATUSES } from "../../../runtime/gateway/constants.js";
 import type {
   AppsScriptOperationDefinition,
-} from "./operationClient.js";
-import { decodeOptionalSyncGatewayTiming } from "./timing.js";
+} from "../transport/operationClient.js";
+import { decodeOptionalSyncGatewayTiming } from "../protocol/timing.js";
 import {
   invalidOperationRequest,
   invalidOperationResponse,
-} from "./errors.js";
-import type { NormalizedCell } from "../../core/encoding/types.js";
-import { NORMALIZED_CELL_KINDS } from "../../core/encoding/constants.js";
+} from "../errors.js";
+import type { NormalizedCell } from "../../../core/encoding/types.js";
+import { NORMALIZED_CELL_KINDS } from "../../../core/encoding/constants.js";
 
 /** Arguments sent to the self-contained fast-append function in `Code.gs`. */
 export type AppsScriptFastAppendOperationArgs = {

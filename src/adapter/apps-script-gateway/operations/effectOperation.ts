@@ -7,28 +7,28 @@ import type {
   SyncGatewayEffect,
   SyncGatewayEffectPostconditionResult,
   SyncGatewayEffectResult,
-} from "../../runtime/gateway/syncGateway.js";
+} from "../../../runtime/gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
   SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
-} from "../../runtime/gateway/constants.js";
+} from "../../../runtime/gateway/constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-} from "../../runtime/gateway/errors.js";
+} from "../../../runtime/gateway/errors.js";
 import {
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayText,
-} from "../../runtime/gateway/validation.js";
-import { PRESENCE_KINDS } from "../../core/state/constants.js";
-import type { Presence } from "../../core/state/types.js";
-import type { AppsScriptOperationDefinition } from "./operationClient.js";
-import { decodeOptionalSyncGatewayTiming } from "./timing.js";
+} from "../../../runtime/gateway/validation.js";
+import { PRESENCE_KINDS } from "../../../core/state/constants.js";
+import type { Presence } from "../../../core/state/types.js";
+import type { AppsScriptOperationDefinition } from "../transport/operationClient.js";
+import { decodeOptionalSyncGatewayTiming } from "../protocol/timing.js";
 import {
   invalidOperationRequest,
   invalidOperationResponse,
-} from "./errors.js";
+} from "../errors.js";
 
 const EFFECT_OPERATION_MODES = {
   APPLY: "applyEffects",
