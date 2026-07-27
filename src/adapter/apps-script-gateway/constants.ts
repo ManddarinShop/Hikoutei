@@ -1,7 +1,6 @@
-/** Protocol versions for the data and control planes. */
+/** Protocol version used by the thin Apps Script operation dispatcher. */
 export const SYNC_GATEWAY_PROTOCOL_VERSIONS = {
   DATA: "typed-sheets-sync-v1",
-  ADMIN: "typed-sheets-sync-admin-v1",
 } as const;
 
 export type SyncGatewayProtocolVersion =
@@ -11,33 +10,17 @@ export type SyncGatewayProtocolVersion =
 export type SyncGatewayDataProtocolVersion =
   (typeof SYNC_GATEWAY_PROTOCOL_VERSIONS)["DATA"];
 
-/** Control-plane protocol version used by signed provisioning requests. */
-export type SyncGatewayAdminProtocolVersion =
-  (typeof SYNC_GATEWAY_PROTOCOL_VERSIONS)["ADMIN"];
-
-/** Operations accepted by the registry-bound data plane. */
-export const SYNC_GATEWAY_OPERATIONS = {
-  ENSURE_ROW_ANCHORS: "ensureRowAnchors",
-  READ_SNAPSHOT: "readSnapshot",
-  READ_EFFECT_POSTCONDITION: "readEffectPostcondition",
-  APPLY_EFFECTS: "applyEffects",
+/** Operation names accepted by the thin Code.gs function dispatcher. */
+export const APPS_SCRIPT_OPERATION_NAMES = {
+  APPLY_OPERATIONS: "applyOperations",
 } as const;
 
-export type SyncGatewayOperation =
-  (typeof SYNC_GATEWAY_OPERATIONS)[keyof typeof SYNC_GATEWAY_OPERATIONS];
-
-/** Operations reserved for trusted registry provisioning. */
-export const SYNC_GATEWAY_ADMIN_OPERATIONS = {
-  PROVISION_REGISTRY: "provisionRegistry",
-} as const;
-
-export type SyncGatewayAdminOperation =
-  (typeof SYNC_GATEWAY_ADMIN_OPERATIONS)[keyof typeof SYNC_GATEWAY_ADMIN_OPERATIONS];
+export type AppsScriptOperationName =
+  (typeof APPS_SCRIPT_OPERATION_NAMES)[keyof typeof APPS_SCRIPT_OPERATION_NAMES];
 
 /** Shared defaults for signed gateway envelopes. */
 export const SYNC_GATEWAY_DEFAULTS = {
   DATA_ACTOR_ID: "typed-sheets-sync-worker",
-  ADMIN_ACTOR_ID: "typed-sheets-sync-bootstrap",
   KEY_ID: "typed-sheets-shared-secret-v1",
   EXPIRY_MS: 60_000,
   MIN_EXPIRY_MS: 1_000,

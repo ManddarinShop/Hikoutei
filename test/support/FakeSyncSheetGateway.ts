@@ -1,10 +1,10 @@
 /**
  * In-memory implementation of the sync gateway contract.
  *
- * It deliberately models only the safety boundary: anchor identity, visible
- * compare-and-set, effect-id receipts, read-back after response loss, and
- * bounded partial batches.  Tests can therefore prove outbox behavior without
- * a network call or a Google Sheet.
+ * It deliberately models the safety boundary of the regular path and the
+ * append-only behavior of the fast path: visible compare-and-set, effect-id
+ * receipts, read-back after response loss, and bounded partial batches. Tests
+ * can therefore prove outbox behavior without a network call or a Sheet.
  */
 
 import {
@@ -16,49 +16,57 @@ import {
   type LookupResult,
   type NormalizedCell,
   type Presence,
-} from "../../core/index.js";
-import { CELL_OBSERVATION_KINDS } from "../../core/encoding/constants.js";
+} from "../../src/core/index.js";
+import { CELL_OBSERVATION_KINDS } from "../../src/core/encoding/constants.js";
 import {
   APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../core/state/index.js";
-import { CoreErrorException } from "../../core/errors/index.js";
+} from "../../src/core/state/index.js";
+import { CoreErrorException } from "../../src/core/errors/index.js";
 import {
   computeSyncVisibleHash,
   type ApplySyncEffectsRequest,
   type ApplySyncEffectsResult,
+  type FastAppendRow,
+  type FastAppendRowResult,
+  type FastAppendRowsRequest,
+  type FastAppendRowsResult,
   type EnsureSyncRowAnchorsRequest,
   type EnsureSyncRowAnchorsResult,
+  type ReadSyncEffectPostconditionsRequest,
   type ReadSyncSnapshotRequest,
   type SyncEffectPostcondition,
   type SyncGatewayEffect,
+  type SyncGatewayEffectPostconditionResult,
   type SyncGatewayEffectResult,
   type SyncGatewaySnapshot,
   type SyncProjection,
   type SyncSheetGateway,
   type SyncSnapshotCell,
   type SyncSnapshotRow,
-} from "../gateway/syncGateway.js";
+} from "../../src/runtime/gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_KINDS,
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
+  SYNC_GATEWAY_FAST_APPEND_STATUSES,
   SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
+  SYNC_GATEWAY_POSTCONDITION_MODES,
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_PROTOCOL_VERSIONS,
-} from "../gateway/constants.js";
+} from "../../src/runtime/gateway/constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
-} from "../gateway/errors.js";
+} from "../../src/runtime/gateway/errors.js";
 import {
   requireSyncGatewayNonEmptyList,
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewayText,
-} from "../gateway/validation.js";
+} from "../../src/runtime/gateway/validation.js";
 
 const FAKE_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",
@@ -66,6 +74,7 @@ const FAKE_EFFECT_KINDS = {
   SYSTEM_REPAIR: "system_repair",
   RESOLUTION_PROJECTION: "resolution_projection",
   RESOLUTION_DELETE: SYNC_GATEWAY_EFFECT_KINDS.RESOLUTION_DELETE,
+  USER_INPUT_DELETE: SYNC_GATEWAY_EFFECT_KINDS.USER_INPUT_DELETE,
 } as const satisfies Record<string, EffectKind>;
 
 const EMPTY_VISIBLE_HASH = "" as const;
@@ -94,6 +103,8 @@ export interface FakeSyncSheetInput {
   readonly projection: SyncProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
+  /** Business-key header used to find rows appended without physical metadata. */
+  readonly identityField?: string;
   readonly rows?: readonly FakeSyncRowInput[];
 }
 
@@ -106,6 +117,7 @@ export interface FakeSyncGatewayOptions {
 interface FakeRow {
   readonly targetId: string;
   readonly anchor: string;
+  physicalAnchorPresent: boolean;
   fields: Record<string, NormalizedCell>;
   visibleRevision: number;
   visibleHash: string;
@@ -119,6 +131,7 @@ interface FakeSheet {
   readonly projection: SyncProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
+  readonly identityField: string | undefined;
   readonly rowsByAnchor: Map<string, FakeRow>;
 }
 
@@ -154,6 +167,9 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
   private readonly maxEffectsPerApply: Presence<number>;
   private anchorSequence = 0;
   private dropResponse = false;
+  private postconditionBatchReadCount = 0;
+  private fastAppendCallCount = 0;
+  private lastApplyPostconditionMode: ApplySyncEffectsRequest["postconditionMode"] | undefined;
 
   public constructor(inputs: readonly FakeSyncSheetInput[], options: FakeSyncGatewayOptions = {}) {
     this.maxEffectsPerApply = options.maxEffectsPerApply === undefined
@@ -254,7 +270,9 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           ])),
         })),
       }),
-      unanchoredRows: [],
+      unanchoredRows: rows
+        .filter((row) => row.physicalAnchor.kind === PRESENCE_KINDS.ABSENT)
+        .map((row) => row.rowNumber),
       duplicateAnchors: groupDuplicateAnchors(rows.flatMap((row) =>
         row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT
           ? [row.physicalAnchor.value]
@@ -264,12 +282,26 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
   }
 
   public async applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
+    this.lastApplyPostconditionMode = request.postconditionMode;
     const sheet = this.requireMatchingSheet(request);
     const limit = this.maxEffectsPerApply.kind === PRESENCE_KINDS.PRESENT
       ? this.maxEffectsPerApply.value
       : request.effects.length;
     const selected = request.effects.slice(0, limit);
-    const results = selected.map((effect) => this.applyOne(sheet, effect));
+    const results = selected.map((effect) => {
+      const result = this.applyOne(sheet, effect);
+      if (
+        request.postconditionMode === SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED &&
+        (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
+          result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED)
+      ) {
+        return {
+          ...result,
+          postcondition: SYNC_GATEWAY_POSTCONDITION_STATUSES.ACKNOWLEDGED,
+        };
+      }
+      return result;
+    });
     const snapshotHash = this.sheetSnapshotHash(sheet);
     if (this.dropResponse) {
       this.dropResponse = false;
@@ -282,15 +314,34 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     };
   }
 
+  /** Appends rows without CAS, metadata, or retry deduplication. */
+  public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
+    this.fastAppendCallCount += 1;
+    const sheet = this.requireMatchingSheet(request);
+    const limit = this.maxEffectsPerApply.kind === PRESENCE_KINDS.PRESENT
+      ? this.maxEffectsPerApply.value
+      : request.rows.length;
+    const selected = request.rows.slice(0, limit);
+    const results = selected.map((row) => this.fastAppendOne(sheet, row));
+    if (this.dropResponse) {
+      this.dropResponse = false;
+      throw new FakeSyncResponseLossError();
+    }
+    return {
+      results,
+      hasMore: selected.length < request.rows.length,
+    };
+  }
+
   public async readEffectPostcondition(effect: SyncGatewayEffect): Promise<SyncEffectPostcondition> {
     const sheetResult = lookupResult(this.sheets.get(effect.physicalSheetId));
     if (sheetResult.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       return unavailablePostcondition();
     }
     const sheet = sheetResult.value;
-    const row = lookupResult(sheet.rowsByAnchor.get(effect.payload.targetAnchor));
+    const row = this.findRowByAnchorOrIdentity(sheet, effect.payload.targetAnchor, effect.targetId);
     const snapshotHash = presentValue(this.sheetSnapshotHash(sheet));
-    if (effect.effectKind === FAKE_EFFECT_KINDS.RESOLUTION_DELETE) {
+    if (isProjectionDeletionEffect(effect.effectKind)) {
       const receipt = this.receipts.get(effect.effectId);
       if (receipt !== undefined && receipt.payloadHash !== effect.payloadHash) {
         return changedPostcondition(snapshotHash);
@@ -360,6 +411,34 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     return { disposition: SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED, ...base };
   }
 
+  /** Reads a recovery batch through the same contract as the real gateway. */
+  public async readEffectPostconditions(
+    request: ReadSyncEffectPostconditionsRequest,
+  ): Promise<readonly SyncGatewayEffectPostconditionResult[]> {
+    this.postconditionBatchReadCount += 1;
+    this.requireMatchingSheet(request);
+    return Promise.all(request.effects.map(async (effect) => ({
+      effectId: effect.effectId,
+      payloadHash: effect.payloadHash,
+      postcondition: await this.readEffectPostcondition(effect),
+    })));
+  }
+
+  /** Exposes batch-call count for worker tests without exposing fake internals. */
+  public get postconditionBatchReads(): number {
+    return this.postconditionBatchReadCount;
+  }
+
+  /** Exposes fast-append calls so worker tests can prove routing occurred. */
+  public get fastAppendCalls(): number {
+    return this.fastAppendCallCount;
+  }
+
+  /** Exposes the last verification mode so worker tests can assert the contract. */
+  public get applyPostconditionMode(): ApplySyncEffectsRequest["postconditionMode"] {
+    return this.lastApplyPostconditionMode;
+  }
+
   private addSheet(input: FakeSyncSheetInput): void {
     const physicalSheetId = requireSyncGatewayText(
       input.physicalSheetId,
@@ -426,6 +505,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
         ),
         anchor,
+        physicalAnchorPresent: true,
         fields,
         visibleRevision: initial.visibleRevision === undefined
           ? NON_NEGATIVE_SAFE_INTEGER_MINIMUM
@@ -445,8 +525,28 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       projection,
       schemaVersion,
       headers,
+      identityField: input.identityField ??
+        (projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE && headers.includes("id") ? "id" : undefined),
       rowsByAnchor,
     });
+  }
+
+  private fastAppendOne(sheet: FakeSheet, row: FastAppendRow): FastAppendRowResult {
+    const anchor = this.nextAnchor();
+    const fields = { ...row.fields };
+    sheet.rowsByAnchor.set(anchor, {
+      targetId: row.effectId,
+      anchor,
+      physicalAnchorPresent: false,
+      fields,
+      visibleRevision: 1,
+      visibleHash: computeSyncVisibleHash(fields),
+      activeCandidateHash: notApplicableValue(),
+    });
+    return {
+      effectId: row.effectId,
+      status: SYNC_GATEWAY_FAST_APPEND_STATUSES.APPLIED,
+    };
   }
 
   private applyOne(sheet: FakeSheet, effect: SyncGatewayEffect): SyncGatewayEffectResult {
@@ -478,7 +578,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
         presentValue("effect target hash does not match fields"),
       );
     }
-    const deletionShapeError = this.resolutionDeleteShapeError(sheet, effect);
+    const deletionShapeError = this.projectionDeleteShapeError(sheet, effect);
     if (deletionShapeError.kind === PRESENCE_KINDS.PRESENT) {
       return this.result(
         effect,
@@ -498,8 +598,8 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           presentValue("effect ID was reused with another payload"),
         );
       }
-      const row = lookupResult(sheet.rowsByAnchor.get(effect.payload.targetAnchor));
-      if (effect.effectKind === FAKE_EFFECT_KINDS.RESOLUTION_DELETE) {
+      const row = this.findRowByAnchorOrIdentity(sheet, effect.payload.targetAnchor, effect.targetId);
+      if (isProjectionDeletionEffect(effect.effectKind)) {
         if (row.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
           return this.result(
             effect,
@@ -539,7 +639,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       );
     }
 
-    const existingRow = lookupResult(sheet.rowsByAnchor.get(effect.payload.targetAnchor));
+    const existingRow = this.findRowByAnchorOrIdentity(sheet, effect.payload.targetAnchor, effect.targetId);
     let row: FakeRow;
     if (existingRow.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       if (!effect.payload.createIfMissing) {
@@ -564,6 +664,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       row = {
         targetId: effect.targetId,
         anchor: effect.payload.targetAnchor,
+        physicalAnchorPresent: true,
         fields: {},
         visibleRevision: NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
         visibleHash: EMPTY_VISIBLE_HASH,
@@ -574,7 +675,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       row = existingRow.value;
     }
 
-    if (effect.effectKind === FAKE_EFFECT_KINDS.RESOLUTION_DELETE) {
+    if (isProjectionDeletionEffect(effect.effectKind)) {
       if (
         row.visibleRevision !== effect.expectedVisibleRevision ||
         row.visibleHash !== effect.expectedVisibleHash
@@ -584,6 +685,17 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           SYNC_GATEWAY_EFFECT_RESULT_STATUSES.GUARD_MISMATCH,
           foundValue(row),
           presentValue("visible_guard_mismatch"),
+        );
+      }
+      if (
+        effect.effectKind === FAKE_EFFECT_KINDS.USER_INPUT_DELETE &&
+        row.activeCandidateHash.kind === APPLICABILITY_KINDS.APPLICABLE
+      ) {
+        return this.result(
+          effect,
+          SYNC_GATEWAY_EFFECT_RESULT_STATUSES.GUARD_MISMATCH,
+          foundValue(row),
+          presentValue("active_candidate_preserved"),
         );
       }
       const deletionReceipt: Receipt = {
@@ -680,20 +792,26 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
   }
 
   /** Rejects broad or ambiguous delete effects before an anchor is ever removed. */
-  private resolutionDeleteShapeError(
+  private projectionDeleteShapeError(
     sheet: FakeSheet,
     effect: SyncGatewayEffect,
   ): Presence<string> {
-    if (effect.effectKind !== FAKE_EFFECT_KINDS.RESOLUTION_DELETE) {
+    if (!isProjectionDeletionEffect(effect.effectKind)) {
       return absentValue();
     }
+    const expectedProjection = effect.effectKind === FAKE_EFFECT_KINDS.RESOLUTION_DELETE
+      ? SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS
+      : SYNC_GATEWAY_PROJECTIONS.USER_INPUT;
+    const errorPrefix = effect.effectKind === FAKE_EFFECT_KINDS.RESOLUTION_DELETE
+      ? "resolution_delete"
+      : "user_input_delete";
     if (
-      effect.projection !== SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS ||
+      effect.projection !== expectedProjection ||
       effect.payload.createIfMissing ||
       effect.expectedVisibleRevision < POSITIVE_SAFE_INTEGER_MINIMUM ||
       effect.payload.targetVisibleHash !== effect.expectedVisibleHash
     ) {
-      return presentValue("invalid_resolution_delete_guard");
+      return presentValue(`invalid_${errorPrefix}_guard`);
     }
     const actualFields = Object.keys(effect.payload.fields).sort();
     const expectedFields = [...sheet.headers].sort();
@@ -701,7 +819,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       actualFields.length !== expectedFields.length ||
       actualFields.some((fieldName, index) => fieldName !== expectedFields[index])
     ) {
-      return presentValue("resolution_delete_requires_full_row");
+      return presentValue(`${errorPrefix}_requires_full_row`);
     }
     return absentValue();
   }
@@ -763,7 +881,9 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     }
     return {
       rowNumber,
-      physicalAnchor: presentValue(row.anchor),
+      physicalAnchor: row.physicalAnchorPresent
+        ? presentValue(row.anchor)
+        : absentValue(),
       visibleRevision: presentValue(row.visibleRevision),
       visibleHash: presentValue(row.visibleHash),
       cells,
@@ -779,6 +899,28 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       );
     }
     return sheet.value;
+  }
+
+  /** Finds a row by anchor first, then by the registered business key. */
+  private findRowByAnchorOrIdentity(
+    sheet: FakeSheet,
+    anchor: string,
+    targetId: string,
+  ): LookupResult<FakeRow> {
+    const anchored = lookupResult(sheet.rowsByAnchor.get(anchor));
+    if (anchored.kind === LOOKUP_RESULT_KINDS.FOUND || sheet.identityField === undefined) {
+      return anchored;
+    }
+    const matches = [...sheet.rowsByAnchor.values()].filter((row) =>
+      normalizedCellIdentity(row.fields[sheet.identityField as string]) === targetId,
+    );
+    if (matches.length > 1) {
+      throw new SyncGatewayContractError(
+        SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
+        `fake sync identity is duplicated: ${targetId}`,
+      );
+    }
+    return matches[0] === undefined ? notFoundValue() : { kind: LOOKUP_RESULT_KINDS.FOUND, value: matches[0] };
   }
 
   private requireRow(sheet: FakeSheet, anchor: string): FakeRow {
@@ -833,6 +975,14 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
   }
 }
 
+function normalizedCellIdentity(cell: NormalizedCell | undefined): string | undefined {
+  if (cell === undefined || cell === null) return undefined;
+  if (typeof cell.value === "string") return cell.value.length === 0 ? undefined : cell.value;
+  if (typeof cell.value === "number") return Number.isFinite(cell.value) ? String(cell.value) : undefined;
+  if (typeof cell.value === "boolean") return String(cell.value);
+  return undefined;
+}
+
 function presentValue<T>(value: T): Presence<T> {
   return { kind: PRESENCE_KINDS.PRESENT, value };
 }
@@ -867,6 +1017,11 @@ function sameApplicability<T>(left: Applicability<T>, right: Applicability<T>): 
     return left.kind === right.kind;
   }
   return left.value === right.value;
+}
+
+function isProjectionDeletionEffect(effectKind: EffectKind): boolean {
+  return effectKind === FAKE_EFFECT_KINDS.RESOLUTION_DELETE ||
+    effectKind === FAKE_EFFECT_KINDS.USER_INPUT_DELETE;
 }
 
 function toStableApplicability(

@@ -4,12 +4,8 @@ import {
 } from "../../core/constants.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../core/encoding/constants.js";
 import {
-  SYNC_GATEWAY_ADMIN_OPERATIONS,
   SYNC_GATEWAY_DEFAULTS,
-  SYNC_GATEWAY_OPERATIONS,
   SYNC_GATEWAY_REQUEST_ID_PATTERN,
-  type SyncGatewayAdminOperation,
-  type SyncGatewayOperation,
 } from "./constants.js";
 import {
   SYNC_GATEWAY_PROTOCOL_ERROR_CODES,
@@ -76,48 +72,10 @@ export function requireSyncGatewayRequestId(value: unknown): string {
   return requestId;
 }
 
-/** Requires a data-plane operation from the closed protocol set. */
-export function requireSyncGatewayOperation(value: unknown): SyncGatewayOperation {
-  if (!isString(value) || !isSyncGatewayOperation(value)) {
-    throw new SyncGatewayProtocolError(
-      SYNC_GATEWAY_PROTOCOL_ERROR_CODES.INVALID_OPERATION,
-      "sync gateway operation is not supported",
-    );
-  }
-  return value;
-}
-
-/** Requires a control-plane operation from the closed protocol set. */
-export function requireSyncGatewayAdminOperation(
-  value: unknown,
-): SyncGatewayAdminOperation {
-  if (!isString(value) || !isSyncGatewayAdminOperation(value)) {
-    throw new SyncGatewayProtocolError(
-      SYNC_GATEWAY_PROTOCOL_ERROR_CODES.INVALID_ADMIN_OPERATION,
-      "sync gateway admin operation is not supported",
-    );
-  }
-  return value;
-}
-
 function isString(value: unknown): value is string {
   return typeof value === JAVASCRIPT_TYPE_NAMES.STRING;
 }
 
 function isNumber(value: unknown): value is number {
   return typeof value === JAVASCRIPT_TYPE_NAMES.NUMBER;
-}
-
-function isSyncGatewayOperation(value: string): value is SyncGatewayOperation {
-  return Object.values(SYNC_GATEWAY_OPERATIONS).includes(
-    value as SyncGatewayOperation,
-  );
-}
-
-function isSyncGatewayAdminOperation(
-  value: string,
-): value is SyncGatewayAdminOperation {
-  return Object.values(SYNC_GATEWAY_ADMIN_OPERATIONS).includes(
-    value as SyncGatewayAdminOperation,
-  );
 }
