@@ -11,7 +11,7 @@ import { SYNC_GATEWAY_PROJECTIONS } from "../src/runtime/gateway/constants.js";
 import {
   FakeSyncSheetGateway,
   type FakeSyncSheetInput,
-} from "../src/runtime/testing/FakeSyncSheetGateway.js";
+} from "./support/FakeSyncSheetGateway.js";
 
 function createSheetInput(): FakeSyncSheetInput {
   return {
