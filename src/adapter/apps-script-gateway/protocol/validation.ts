@@ -3,6 +3,7 @@ import {
   POSITIVE_SAFE_INTEGER_MINIMUM,
 } from "../../../core/constants.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../../core/encoding/constants.js";
+import { isJavaScriptType } from "../../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_DEFAULTS,
   SYNC_GATEWAY_REQUEST_ID_PATTERN,
@@ -19,7 +20,10 @@ export function requireSyncGatewayText(
   label: string,
   errorCode: SyncGatewayProtocolErrorCode,
 ): string {
-  if (!isString(value) || value.length === EMPTY_STRING_LENGTH_ZERO) {
+  if (
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    value.length === EMPTY_STRING_LENGTH_ZERO
+  ) {
     throw new SyncGatewayProtocolError(errorCode, `${label} is required`);
   }
   return value;
@@ -28,7 +32,7 @@ export function requireSyncGatewayText(
 /** Requires a positive safe integer for a protocol timestamp. */
 export function requireSyncGatewayIssuedAt(value: unknown): number {
   if (
-    !isNumber(value) ||
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
     !Number.isSafeInteger(value) ||
     value < POSITIVE_SAFE_INTEGER_MINIMUM
   ) {
@@ -43,7 +47,7 @@ export function requireSyncGatewayIssuedAt(value: unknown): number {
 /** Requires an expiry duration within the protocol's bounded window. */
 export function requireSyncGatewayExpiry(value: unknown): number {
   if (
-    !isNumber(value) ||
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
     !Number.isSafeInteger(value) ||
     value < SYNC_GATEWAY_DEFAULTS.MIN_EXPIRY_MS ||
     value > SYNC_GATEWAY_DEFAULTS.MAX_EXPIRY_MS
@@ -70,12 +74,4 @@ export function requireSyncGatewayRequestId(value: unknown): string {
     );
   }
   return requestId;
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.STRING;
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.NUMBER;
 }

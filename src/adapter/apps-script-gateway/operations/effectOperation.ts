@@ -23,6 +23,7 @@ import {
 } from "../../../runtime/gateway/validation.js";
 import { PRESENCE_KINDS } from "../../../core/state/constants.js";
 import type { Presence } from "../../../core/state/types.js";
+import { isRecord } from "../../../core/encoding/typeGuards.js";
 import type { AppsScriptOperationDefinition } from "../transport/operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "../protocol/timing.js";
 import {
@@ -179,54 +180,55 @@ function decodeApplyEffectsResult(value: unknown, expectedCount: number): ApplyS
 }
 
 function decodeEffectResult(value: unknown, index: number): SyncGatewayEffectResult {
-  const record = requireRecord(value, "effect result[" + index + "]");
+  const resultLabel = effectResultLabel(index);
+  const record = requireRecord(value, resultLabel);
   const status = requireSyncGatewayText(
     record.status,
-    "effect result[" + index + "].status",
+    effectResultLabel(index, "status"),
     SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
   );
   if (!isEffectResultStatus(status)) {
     return invalidOperationResponse(
       "Apps Script effect operation",
-      "effect result[" + index + "] has an unsupported status",
+      resultLabel + " has an unsupported status",
     );
   }
   const postcondition = requireSyncGatewayText(
     record.postcondition,
-    "effect result[" + index + "].postcondition",
+    effectResultLabel(index, "postcondition"),
     SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
   );
   if (!isPostconditionStatus(postcondition)) {
     return invalidOperationResponse(
       "Apps Script effect operation",
-      "effect result[" + index + "] has an unsupported postcondition",
+      resultLabel + " has an unsupported postcondition",
     );
   }
   return {
     effectId: requireSyncGatewayText(
       record.effectId,
-      "effect result[" + index + "].effectId",
+      effectResultLabel(index, "effectId"),
       SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
     ),
     payloadHash: requireSyncGatewayText(
       record.payloadHash,
-      "effect result[" + index + "].payloadHash",
+      effectResultLabel(index, "payloadHash"),
       SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
     ),
     status,
     visibleRevision: decodePresenceNonNegativeInteger(
       record.visibleRevision,
-      "effect result[" + index + "].visibleRevision",
+      effectResultLabel(index, "visibleRevision"),
     ),
     visibleHash: decodePresenceString(
       record.visibleHash,
-      "effect result[" + index + "].visibleHash",
+      effectResultLabel(index, "visibleHash"),
     ),
     snapshotHash: decodePresenceString(
       record.snapshotHash,
-      "effect result[" + index + "].snapshotHash",
+      effectResultLabel(index, "snapshotHash"),
     ),
-    reason: decodePresenceString(record.reason, "effect result[" + index + "].reason"),
+    reason: decodePresenceString(record.reason, effectResultLabel(index, "reason")),
     postcondition,
   };
 }
@@ -240,21 +242,32 @@ function decodePostconditionBatch(value: unknown): readonly SyncGatewayEffectPos
     );
   }
   return record.results.map((entry, index) => {
-    const result = requireRecord(entry, "postcondition result[" + index + "]");
+    const resultLabel = postconditionResultLabel(index);
+    const result = requireRecord(entry, resultLabel);
     return {
       effectId: requireSyncGatewayText(
         result.effectId,
-        "postcondition result[" + index + "].effectId",
+        postconditionResultLabel(index, "effectId"),
         SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
       ),
       payloadHash: requireSyncGatewayText(
         result.payloadHash,
-        "postcondition result[" + index + "].payloadHash",
+        postconditionResultLabel(index, "payloadHash"),
         SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
       ),
       postcondition: decodePostcondition(result.postcondition),
     };
   });
+}
+
+function effectResultLabel(index: number, field?: string): string {
+  const label = `effect result[${index}]`;
+  return field === undefined ? label : `${label}.${field}`;
+}
+
+function postconditionResultLabel(index: number, field?: string): string {
+  const label = `postcondition result[${index}]`;
+  return field === undefined ? label : `${label}.${field}`;
 }
 
 function decodePostcondition(value: unknown): SyncEffectPostcondition {
@@ -326,7 +339,7 @@ function isPostconditionDisposition(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return invalidOperationResponse(
       "Apps Script effect operation",
       label + " must be an object",

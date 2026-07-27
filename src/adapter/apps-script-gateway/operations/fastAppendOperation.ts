@@ -16,6 +16,7 @@ import {
 } from "../errors.js";
 import type { NormalizedCell } from "../../../core/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "../../../core/encoding/constants.js";
+import { isRecord } from "../../../core/encoding/typeGuards.js";
 
 /** Arguments sent to the self-contained fast-append function in `Code.gs`. */
 export type AppsScriptFastAppendOperationArgs = {
@@ -214,8 +215,4 @@ function isSupportedNormalizedCell(value: NormalizedCell): boolean {
     return Number.isFinite(value.value);
   }
   return value.kind === NORMALIZED_CELL_KINDS.BOOLEAN && typeof value.value === "boolean";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -37,3 +37,12 @@ export function isJavaScriptType(
 export function isJavaScriptType(value: unknown, type: JavaScriptTypeName): boolean {
   return typeof value === type;
 }
+
+/** Checks whether a value is a non-null, non-array object record. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT) &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}

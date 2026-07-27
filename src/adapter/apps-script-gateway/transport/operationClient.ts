@@ -19,6 +19,8 @@ import {
 } from "../errors.js";
 import { canonicalSyncJson } from "../protocol/syncProtocol.js";
 import type { SyncJsonValue } from "../protocol/types.js";
+import { JAVASCRIPT_TYPE_NAMES } from "../../../core/encoding/constants.js";
+import { isJavaScriptType, isRecord } from "../../../core/encoding/typeGuards.js";
 import { PRESENCE_KINDS } from "../../../core/state/constants.js";
 import type { Presence } from "../../../core/state/types.js";
 
@@ -295,7 +297,7 @@ function parseCodeGsResponse(
       status,
     );
   }
-  if (!isRecord(parsed) || typeof parsed.ok !== "boolean") {
+  if (!isRecord(parsed) || !isJavaScriptType(parsed.ok, JAVASCRIPT_TYPE_NAMES.BOOLEAN)) {
     throw new AppsScriptSyncGatewayError(
       SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_RESPONSE,
       "Code.gs response must contain a boolean ok field",
@@ -303,7 +305,11 @@ function parseCodeGsResponse(
     );
   }
   if (parsed.ok) return { ok: true, result: parsed.result };
-  if (!isRecord(parsed.error) || typeof parsed.error.code !== "string" || typeof parsed.error.message !== "string") {
+  if (
+    !isRecord(parsed.error) ||
+    !isJavaScriptType(parsed.error.code, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    !isJavaScriptType(parsed.error.message, JAVASCRIPT_TYPE_NAMES.STRING)
+  ) {
     throw new AppsScriptSyncGatewayError(
       SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_RESPONSE,
       "Code.gs error response is malformed",
@@ -329,7 +335,10 @@ function remoteError(
 }
 
 function requireTextOption(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
+  if (
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    value.trim().length === 0
+  ) {
     throw new SyncGatewayProtocolError(
       SYNC_GATEWAY_PROTOCOL_ERROR_CODES.INVALID_CLIENT_OPTIONS,
       `${label} is required`,
@@ -340,7 +349,7 @@ function requireTextOption(value: unknown, label: string): string {
 
 function requireRequestTimeout(value: unknown): number {
   if (
-    typeof value !== "number" ||
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
     !Number.isSafeInteger(value) ||
     value < SYNC_GATEWAY_CLIENT_DEFAULTS.MIN_REQUEST_TIMEOUT_MS ||
     value > SYNC_GATEWAY_CLIENT_DEFAULTS.MAX_REQUEST_TIMEOUT_MS
@@ -351,10 +360,6 @@ function requireRequestTimeout(value: unknown): number {
     );
   }
   return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function present<T>(value: T): Presence<T> {

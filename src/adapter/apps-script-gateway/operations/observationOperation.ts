@@ -14,6 +14,7 @@ import {
 } from "../../../core/encoding/constants.js";
 import { PRESENCE_KINDS } from "../../../core/state/constants.js";
 import type { NormalizedCell, Presence } from "../../../core/index.js";
+import { isRecord } from "../../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
 } from "../../../runtime/gateway/errors.js";
@@ -408,7 +409,7 @@ function isCellObservationKind(value: string): value is CellObservationKind {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return invalidOperationResponse(
       "Apps Script observation operation",
       label + " must be an object",

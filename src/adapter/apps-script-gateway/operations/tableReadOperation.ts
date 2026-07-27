@@ -2,6 +2,7 @@
 
 import type { NormalizedCell } from "../../../core/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../../core/encoding/constants.js";
+import { isRecord } from "../../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
 } from "../../../runtime/gateway/errors.js";
@@ -235,7 +236,7 @@ function decodeHeaders(value: unknown): readonly string[] {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return invalidOperationResponse("Apps Script table read", label + " must be an object");
   }
   return value as Record<string, unknown>;

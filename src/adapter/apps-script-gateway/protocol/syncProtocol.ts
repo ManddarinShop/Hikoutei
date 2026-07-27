@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { JAVASCRIPT_TYPE_NAMES } from "../../../core/encoding/constants.js";
+import { isJavaScriptType } from "../../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ENCODINGS,
   SYNC_GATEWAY_HASH_ALGORITHMS,
@@ -18,10 +19,14 @@ export function canonicalSyncJson(value: unknown): string {
   if (value === null) return SYNC_JSON_LITERAL_TOKENS.NULL;
   if (value === true) return SYNC_JSON_LITERAL_TOKENS.TRUE;
   if (value === false) return SYNC_JSON_LITERAL_TOKENS.FALSE;
-  if (isString(value)) return JSON.stringify(value);
-  if (isNumber(value)) return canonicalNumber(value);
+  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING)) return JSON.stringify(value);
+  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER)) return canonicalNumber(value);
   if (Array.isArray(value)) return `[${value.map((item) => canonicalSyncJson(item)).join(",")}]`;
-  if (isObject(value) && isPlainObject(value)) {
+  if (
+    isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT) &&
+    value !== null &&
+    isPlainObject(value)
+  ) {
     const entries = Object.keys(value)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${canonicalSyncJson((value as Record<string, unknown>)[key])}`);
@@ -54,16 +59,4 @@ function canonicalNumber(value: number): string {
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.STRING;
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.NUMBER;
-}
-
-function isObject(value: unknown): value is object {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.OBJECT && value !== null;
 }

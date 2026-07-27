@@ -43,6 +43,7 @@ import type {
   SyncEffectWorkerFullGateway,
   SyncTableRowsResult,
 } from "../../../runtime/gateway/syncGateway.js";
+import { isRecord } from "../../../core/encoding/typeGuards.js";
 import type {
   AppsScriptOperationDefinition,
   AppsScriptOperationGateway,
@@ -508,7 +509,7 @@ function observationRouteOptions(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return invalidOperationResponse("Apps Script operation", label + " must be an object");
   }
   return value as Record<string, unknown>;

@@ -10,6 +10,7 @@ import {
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayText,
 } from "../../../runtime/gateway/validation.js";
+import { isRecord } from "../../../core/encoding/typeGuards.js";
 import { invalidOperationResponse } from "../errors.js";
 
 /** Promotes an untrusted gateway timing object into the typed diagnostics contract. */
@@ -82,7 +83,7 @@ function isTimingOperationKind(value: string): value is SyncTimingOperationKind 
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return invalidOperationResponse("Apps Script timing", label + " must be an object");
   }
   return value as Record<string, unknown>;
