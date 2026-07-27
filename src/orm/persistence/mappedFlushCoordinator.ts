@@ -22,23 +22,23 @@ import {
   type EffectTargetKind,
   type NormalizedCell,
   type Presence,
-} from "../core/index.js";
+} from "../../core/index.js";
 import {
   NORMALIZED_CELL_KINDS,
-} from "../core/encoding/constants.js";
-import { ROW_BINDING_STATES } from "../core/model/constants.js";
+} from "../../core/encoding/constants.js";
+import { ROW_BINDING_STATES } from "../../core/model/constants.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
-} from "../runtime/gateway/constants.js";
+} from "../../runtime/gateway/constants.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../runtime/gateway/syncGateway.js";
+} from "../../runtime/gateway/syncGateway.js";
 import {
   createCandidateReconcileEffect,
   createSystemProjectionEffect,
   createUserInputDeleteEffect,
-} from "../runtime/projection/ProjectionEffectFactory.js";
+} from "../../runtime/projection/ProjectionEffectFactory.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
@@ -51,15 +51,15 @@ import {
   type FencingContext,
   type NewEffect,
   type RegisteredSyncSheet,
-} from "../storage/index.js";
-import type { SqlExecutor, SqlStorageAdapter } from "./adapters/contracts.js";
-import type { RegisteredSyncProjectionDefinition } from "../runtime/gateway/SyncGatewayBootstrap.js";
+} from "../../storage/index.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../adapters/contracts.js";
+import type { RegisteredSyncProjectionDefinition } from "../../runtime/gateway/SyncGatewayBootstrap.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,
   type TypedSheetsFlushContext,
   type TypedSheetsFlushCoordinator,
-} from "./contracts.js";
+} from "../api/contracts.js";
 import {
   createTypedSheetsEntityMappingRegistry,
   createTypedSheetsMappedProjectionDefinitions,
@@ -71,18 +71,18 @@ import {
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
-} from "./entityMapping.js";
+} from "../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "./errors.js";
+} from "../errors.js";
 import {
   SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
   type SyncTimingOperationCounts,
   type SyncTimingOperationKind,
   type SyncTimingSink,
-} from "../runtime/telemetry/syncTiming.js";
+} from "../../runtime/telemetry/syncTiming.js";
 
 const DEFAULT_MAPPED_WRITER_ROLE = "typed-sheets-entity-writer";
 const DEFAULT_MAPPED_WRITER_LEASE_DURATION_MS = 60_000;

@@ -8,8 +8,8 @@
  * or quarantined user edit into an entity-table write.
  */
 
-import { ROW_OPERATIONS } from "../core/index.js";
-import type { CanonicalCommitInput } from "../storage/index.js";
+import { ROW_OPERATIONS } from "../../core/index.js";
+import type { CanonicalCommitInput } from "../../storage/index.js";
 import {
   decodeTypedSheetsEntityField,
   requireTypedSheetsEntityField,
@@ -18,7 +18,7 @@ import {
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "./errors.js";
+} from "../errors.js";
 
 /** Runtime kinds of entity-table mutations derived from accepted observations. */
 export const MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS = {

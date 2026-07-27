@@ -14,18 +14,18 @@ import {
   type FieldOwnership,
   type NormalizedCell,
   type OwnershipManifest,
-} from "../core/index.js";
+} from "../../core/index.js";
 import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
-} from "../core/encoding/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../runtime/gateway/constants.js";
-import type { RegisterSyncSheetInput, RegisteredProjection } from "../storage/index.js";
-import type { TypedSheetsEntityReference } from "./contracts.js";
+} from "../../core/encoding/constants.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../../runtime/gateway/constants.js";
+import type { RegisterSyncSheetInput, RegisteredProjection } from "../../storage/index.js";
+import type { TypedSheetsEntityReference } from "../api/contracts.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "./errors.js";
+} from "../errors.js";
 
 /** Physical projections supported by a mapped business entity. */
 export type TypedSheetsEntityProjection =

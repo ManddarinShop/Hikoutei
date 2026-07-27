@@ -1,12 +1,12 @@
 export {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   primaryKeyPresence,
-} from "./contracts.js";
+} from "./api/contracts.js";
 export {
   createTypedSheetsOrm,
   TypedSheetsEntityManager,
   TypedSheetsOrm,
-} from "./TypedSheetsOrm.js";
+} from "./api/TypedSheetsOrm.js";
 export {
   createTypedSheetsEntityMappingRegistry,
   createTypedSheetsEntityOwnershipManifest,
@@ -23,7 +23,7 @@ export {
   typedSheetsEntityId,
   typedSheetsEntityProjectionHeaders,
   typedSheetsEntityRowBindingId,
-} from "./entityMapping.js";
+} from "./mapping/entityMapping.js";
 export {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -32,11 +32,11 @@ export {
   createMappedTypedSheetsFlushCoordinator,
   registeredTypedSheetsProjectionDefinitions,
   registerTypedSheetsEntityMappings,
-} from "./mappedFlushCoordinator.js";
+} from "./persistence/mappedFlushCoordinator.js";
 export {
   MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS,
   planMappedObservationEntityMutation,
-} from "./observationMapping.js";
+} from "./mapping/observationMapping.js";
 export type {
   TypedSheetsEntityClass,
   TypedSheetsEntityChange,
@@ -51,14 +51,14 @@ export type {
   TypedSheetsForkOptions,
   TypedSheetsFlushContext,
   TypedSheetsFlushCoordinator,
-} from "./contracts.js";
-export type { CreateTypedSheetsOrmOptions } from "./TypedSheetsOrm.js";
+} from "./api/contracts.js";
+export type { CreateTypedSheetsOrmOptions } from "./api/TypedSheetsOrm.js";
 export type {
   CreateMappedTypedSheetsFlushCoordinatorOptions,
   RegisteredTypedSheetsMappedProjection,
   TypedSheetsEntityWriterOptions,
-} from "./mappedFlushCoordinator.js";
-export type { MappedObservationEntityMutation } from "./observationMapping.js";
+} from "./persistence/mappedFlushCoordinator.js";
+export type { MappedObservationEntityMutation } from "./mapping/observationMapping.js";
 export type {
   TypedSheetsEntityFieldCodec,
   TypedSheetsEntityFieldMapping,
@@ -71,5 +71,5 @@ export type {
   TypedSheetsEntityProjectionMappingInput,
   TypedSheetsEntityProperty,
   TypedSheetsMappedProjectionDefinition,
-} from "./entityMapping.js";
+} from "./mapping/entityMapping.js";
 export type { TypedSheetsOrmErrorCode } from "./errors.js";

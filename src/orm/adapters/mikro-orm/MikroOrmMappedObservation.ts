@@ -19,11 +19,11 @@ import {
   createTypedSheetsEntityMappingRegistry,
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
-} from "../../entityMapping.js";
+} from "../../mapping/entityMapping.js";
 import {
   MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS,
   planMappedObservationEntityMutation,
-} from "../../observationMapping.js";
+} from "../../mapping/observationMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
