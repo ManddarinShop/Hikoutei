@@ -26,47 +26,65 @@ import {
 } from "../../core/state/constants.js";
 import { CONFLICT_STATUSES } from "../../core/model/constants.js";
 import {
-  applyEffectResult,
-  claimEffect,
-  claimWriterLease,
-  listReadyEffects,
-  releaseUnprocessedEffect,
-  supersedeAndReplan,
-  type DatabaseSyncLike,
+  applyEffectResultWithAdapter,
+  claimEffectWithAdapter,
+  claimWriterLeaseWithAdapter,
+  recoverExpiredLeasesWithAdapter,
+  listReadyEffectsWithAdapter,
+  releaseUnprocessedEffectWithAdapter,
+  retryClaimedEffectWithAdapter,
+  supersedeAndReplanWithAdapter,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES,
+  type ApplyResultOptions,
+  type ClaimEffectOptions,
+  type ClaimLeaseOptions,
+  type ClaimResult,
   type FencingContext,
   type NewEffect,
   type PendingEffect,
+  type RetryClaimedEffectOptions,
   type WriterLease,
+  type WriterLeaseClaimResult,
 } from "../../storage/index.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
 } from "../../storage/errors.js";
 import { fromSqlNullable } from "../../storage/sqlite/sqlState.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
 import {
   parseSyncProjectionEffectPayload,
   type ApplySyncEffectsRequest,
+  type FastAppendRowsRequest,
+  type ReadSyncEffectPostconditionsRequest,
   type SyncEffectPostcondition,
   type SyncGatewayEffect,
   type SyncGatewayEffectResult,
   type SyncProjection,
-  type SyncSheetGateway,
+  type SyncEffectWorkerGateway,
+  type SyncEffectWorkerFullGateway,
 } from "../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
   SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
+  SYNC_GATEWAY_POSTCONDITION_MODES,
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
 } from "../gateway/constants.js";
+import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../storage/sync/writerLease.js";
+import {
+  SYNC_TIMING_OPERATION_KINDS,
+  SYNC_TIMING_SCOPES,
+  type SyncGatewayTiming,
+  type SyncTimingEvent,
+  type SyncTimingOperationCounts,
+  type SyncTimingOperationKind,
+  type SyncTimingSink,
+} from "../telemetry/syncTiming.js";
 
 const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 const DEFAULT_WRITER_LEASE_DURATION_MS = 60_000;
 const DEFAULT_EFFECT_LEASE_DURATION_MS = 30_000;
-
-const WRITER_LEASE_CLAIM_KINDS = {
-  CLAIMED: "claimed",
-  NOT_CLAIMED: "not_claimed",
-} as const;
 
 const SYNC_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",
@@ -74,6 +92,7 @@ const SYNC_EFFECT_KINDS = {
   SYSTEM_REPAIR: "system_repair",
   RESOLUTION_PROJECTION: "resolution_projection",
   RESOLUTION_DELETE: "resolution_delete",
+  USER_INPUT_DELETE: "user_input_delete",
 } as const satisfies Record<string, EffectKind>;
 
 const EFFECT_TARGET_KINDS = {
@@ -84,11 +103,11 @@ const EFFECT_TARGET_KINDS = {
 } as const satisfies Record<string, EffectTargetKind>;
 
 const OUTBOX_EFFECT_STATUSES = {
+  FAILED: "failed",
   APPLIED: "applied",
   BLOCKED_CANDIDATE: "blocked_candidate",
   SUPERSEDED: "superseded",
   CONFLICT: "conflict",
-  FAILED: "failed",
 } as const satisfies Record<string, EffectStatus>;
 
 const WORKER_ERROR_CODES = {
@@ -98,21 +117,23 @@ const WORKER_ERROR_CODES = {
   CANDIDATE_GUARD_MISMATCH: "candidate_guard_mismatch",
   VISIBLE_GUARD_MISMATCH: "visible_guard_mismatch",
   GATEWAY_SCHEMA_ERROR: "gateway_schema_error",
-  GATEWAY_RETRYABLE_ERROR: "gateway_retryable_error",
-  POSTCONDITION_READ_FAILED: "postcondition_read_failed",
+  GATEWAY_RETRYABLE_ERROR: SYNC_EFFECT_RECOVERY_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+  POSTCONDITION_READ_FAILED: SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED,
   POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE: "postcondition_applied_without_visible_state",
-  POSTCONDITION_UNAVAILABLE: "postcondition_unavailable",
+  POSTCONDITION_UNAVAILABLE: SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
   POSTCONDITION_CHANGED: "postcondition_changed",
-  POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE: "postcondition_unapplied_requires_redrive",
+  POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE:
+    SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
   REPAIR_REOBSERVE_REQUIRES_WRITER_REPLAN: "repair_reobserve_requires_writer_replan",
   REPAIR_REPLAN_FAILED: "repair_replan_failed",
   REPAIR_REPLAN_DEFERRED: "repair_replan_deferred",
+  GATEWAY_CAPABILITY_MISSING: "gateway_capability_missing",
 } as const;
 
 type SyncEffectWorkerErrorCode =
   (typeof WORKER_ERROR_CODES)[keyof typeof WORKER_ERROR_CODES];
 
-const CANDIDATE_RECONCILE_BLOCK_SQL = `
+const USER_INPUT_CANDIDATE_BLOCK_SQL = `
     SELECT 1 AS blocked
     FROM sheet_visible_field_state AS visible
     LEFT JOIN sync_conflict AS conflict
@@ -139,10 +160,9 @@ export interface RepairReplanRequest {
 /** Callback that creates a fresh effect without mutating the old evidence. */
 export type RepairReplanFactory = (request: RepairReplanRequest) => Presence<NewEffect>;
 
-/** Construction options for a bounded worker pass. */
-export interface SyncEffectWorkerOptions {
-  readonly database: DatabaseSyncLike;
-  readonly gateway: SyncSheetGateway;
+/** Shared construction options for a bounded effect-worker pass. */
+interface SyncEffectWorkerBaseOptions {
+  readonly gateway: SyncEffectWorkerGateway;
   readonly workerId: string;
   readonly now: number;
   readonly maxEffects: number;
@@ -150,11 +170,23 @@ export interface SyncEffectWorkerOptions {
   readonly writerLeaseDurationMs?: number;
   readonly effectLeaseDurationMs?: number;
   readonly makeRepairReplan?: RepairReplanFactory;
+  /** Optional diagnostics sink for worker and gateway phases. */
+  readonly onTiming?: SyncTimingSink;
+}
+
+type SyncEffectWorkerFullOptions = Omit<SyncEffectWorkerBaseOptions, "gateway"> & {
+  readonly gateway: SyncEffectWorkerFullGateway;
+};
+
+/** Construction options for a worker running through an async storage adapter. */
+export interface SyncEffectWorkerWithAdapterOptions extends SyncEffectWorkerBaseOptions {
+  readonly storage: SqlStorageAdapter;
 }
 
 /** Counters that make partial results and recovery visible to callers. */
 export interface SyncEffectWorkerReport {
   readonly lease: Presence<WriterLease>;
+  readonly expiredLeasesRecovered: number;
   readonly selected: number;
   readonly claimed: number;
   readonly applied: number;
@@ -163,6 +195,7 @@ export interface SyncEffectWorkerReport {
   readonly conflicted: number;
   readonly failed: number;
   readonly deferred: number;
+  readonly requeued: number;
   readonly replanned: number;
   readonly responseLossRecovered: number;
 }
@@ -174,41 +207,101 @@ interface ClaimedEffect {
   readonly invalidPayloadError: Presence<string>;
 }
 
+/** Persistence operations used by the shared effect-worker state machine. */
+interface EffectWorkerStorage {
+  claimWriterLease(options: ClaimLeaseOptions): Promise<WriterLeaseClaimResult>;
+  recoverExpiredLeases(fence: FencingContext): Promise<number>;
+  listReadyEffects(limit: number): Promise<readonly PendingEffect[]>;
+  claimEffect(options: ClaimEffectOptions): Promise<ClaimResult>;
+  applyEffectResult(options: ApplyResultOptions): Promise<boolean>;
+  releaseUnprocessedEffect(
+    options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
+      readonly effectId: string;
+      readonly claimToken: string;
+    },
+  ): Promise<boolean>;
+  retryClaimedEffect(options: RetryClaimedEffectOptions): Promise<boolean>;
+  supersedeAndReplan(
+    fence: FencingContext,
+    oldEffectId: string,
+    newEffect: NewEffect,
+  ): Promise<void>;
+  isUserInputCandidateBlocked(item: ClaimedEffect): Promise<boolean>;
+}
+
 /**
- * Processes head-of-line effects once under a renewable worker fence.
+ * Processes effects through an adapter-owned SQL connection.
  *
- * A missing batch result is deliberately treated exactly like response loss:
- * the worker reads a remote postcondition before it records any terminal
- * local status.  It never changes `applied` back to `pending`.
+ * This is the MikroORM-compatible worker entrypoint. It never opens the
+ * legacy synchronous `node:sqlite` database beside the ORM connection.
  */
-export async function runSyncEffectWorker(
-  options: SyncEffectWorkerOptions,
+export async function runSyncEffectWorkerWithAdapter(
+  options: SyncEffectWorkerWithAdapterOptions,
 ): Promise<SyncEffectWorkerReport> {
+  return runEffectWorker(options, createAdapterEffectWorkerStorage(options.storage));
+}
+
+async function runEffectWorker(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+): Promise<SyncEffectWorkerReport> {
+  const passStartedAt = Date.now();
   validateOptions(options);
   const role = options.writerRole ?? DEFAULT_WORKER_ROLE;
   const leaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
   const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
-  const claimResult = claimWriterLease(options.database, {
+  const leaseStartedAt = Date.now();
+  const claimResult = await storage.claimWriterLease({
     role,
     writerId: options.workerId,
     leaseDurationMs: leaseDuration,
     now: options.now,
   });
-  const lease = claimResult.kind === WRITER_LEASE_CLAIM_KINDS.CLAIMED
-    ? presentValue(claimResult.lease)
-    : absentValue<WriterLease>();
-  const report = mutableReport(lease);
-  if (claimResult.kind === WRITER_LEASE_CLAIM_KINDS.NOT_CLAIMED) {
+  if (claimResult.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+    const report = mutableReport(absentValue<WriterLease>());
+    emitWorkerTiming(options, {
+      scope: SYNC_TIMING_SCOPES.WORKER,
+      phase: "writer_lease_claim",
+      durationMs: Date.now() - leaseStartedAt,
+      operationKinds: [],
+      operationCounts: emptyOperationCounts(),
+    });
+    emitWorkerTiming(options, {
+      scope: SYNC_TIMING_SCOPES.WORKER,
+      phase: "worker_total",
+      durationMs: Date.now() - passStartedAt,
+      operationKinds: [],
+      operationCounts: emptyOperationCounts(),
+    });
     return freezeReport(report);
   }
+  const report = mutableReport(presentValue(claimResult.lease));
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "writer_lease_claim",
+    durationMs: Date.now() - leaseStartedAt,
+    operationKinds: [],
+    operationCounts: emptyOperationCounts(),
+  });
   const fence = fenceFromLease(claimResult.lease, options.now);
-  const selected = listReadyEffects(options.database, options.maxEffects);
+  const selectStartedAt = Date.now();
+  report.expiredLeasesRecovered = await storage.recoverExpiredLeases(fence);
+  const selected = await storage.listReadyEffects(options.maxEffects);
   report.selected = selected.length;
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "recover_and_select",
+    durationMs: Date.now() - selectStartedAt,
+    operationKinds: operationKindsForPendingEffects(selected),
+    operationCounts: countsForPendingEffects(selected),
+  });
 
   const claimed: ClaimedEffect[] = [];
+  const recoveryCandidates: ClaimedEffect[] = [];
+  const claimEffectsStartedAt = Date.now();
   for (const pending of selected) {
     const claimToken = "claim:" + randomUUID();
-    const claim = claimEffect(options.database, {
+    const claim = await storage.claimEffect({
       ...fence,
       effectId: pending.effect_id,
       claimToken,
@@ -216,27 +309,52 @@ export async function runSyncEffectWorker(
     });
     if (!claim.success) continue;
     report.claimed += 1;
+    let gatewayEffect: Presence<SyncGatewayEffect>;
+    let invalidPayloadError: Presence<string>;
     try {
-      claimed.push({
-        pending,
-        claimToken,
-        gatewayEffect: presentValue(toGatewayEffect(pending)),
-        invalidPayloadError: absentValue(),
-      });
+      gatewayEffect = presentValue(toGatewayEffect(pending));
+      invalidPayloadError = absentValue();
     } catch (error: unknown) {
-      claimed.push({
-        pending,
-        claimToken,
-        gatewayEffect: absentValue(),
-        invalidPayloadError: presentValue(safeErrorMessage(error)),
-      });
+      gatewayEffect = absentValue();
+      invalidPayloadError = presentValue(safeErrorMessage(error));
     }
+    const item = { pending, claimToken, gatewayEffect, invalidPayloadError };
+    if (pending.status === OUTBOX_EFFECT_STATUSES.FAILED) {
+      recoveryCandidates.push(item);
+      continue;
+    }
+    claimed.push(item);
+  }
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "effect_claims",
+    durationMs: Date.now() - claimEffectsStartedAt,
+    operationKinds: operationKindsForItems([...claimed, ...recoveryCandidates]),
+    operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
+  });
+
+  const fullGateway = isFullEffectGateway(options.gateway);
+  if (fullGateway === undefined) {
+    await rejectUnsupportedGatewayEffects(
+      storage,
+      fence,
+      recoveryCandidates,
+      report,
+    );
+  } else {
+    await recoverUnknownResults(
+      { ...options, gateway: fullGateway },
+      storage,
+      fence,
+      recoveryCandidates,
+      report,
+    );
   }
 
   const usable = claimed.filter((item) => isPresent(item.gatewayEffect));
   for (const invalid of claimed.filter((item) => isAbsent(item.gatewayEffect))) {
-    completeFailure(
-      options.database,
+    await completeFailure(
+      storage,
       fence,
       invalid,
       WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
@@ -245,13 +363,18 @@ export async function runSyncEffectWorker(
     );
   }
 
-  // A User_Input reconcile is a canonical projection only while no unresolved
-  // user candidate owns one of its fields.  This local gate runs before the
-  // remote CAS so a stale canonical effect cannot erase a candidate merely
-  // because its sheet baseline happens to still look unchanged.
-  const dispatchable = usable.filter((item) => {
-    if (!isCandidateReconcileBlocked(options.database, item)) return true;
-    if (applyEffectResult(options.database, {
+  // A User_Input reconcile or physical delete is safe only while no unresolved
+  // user candidate owns one of its fields. This local gate runs before the
+  // remote CAS so stale canonical work cannot erase a candidate merely because
+  // its Sheet baseline happens to still look unchanged.
+  const dispatchable: ClaimedEffect[] = [];
+  const candidateGateStartedAt = Date.now();
+  for (const item of usable) {
+    if (!(await storage.isUserInputCandidateBlocked(item))) {
+      dispatchable.push(item);
+      continue;
+    }
+    if (await storage.applyEffectResult({
       ...fence,
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
@@ -261,85 +384,161 @@ export async function runSyncEffectWorker(
     })) {
       report.blockedCandidate += 1;
     }
-    return false;
+  }
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "candidate_gate",
+    durationMs: Date.now() - candidateGateStartedAt,
+    operationKinds: operationKindsForItems(usable),
+    operationCounts: countsForItems(usable),
   });
 
-  for (const group of groupByGatewayRequest(dispatchable)) {
-    const deferredEffectIds = new Set<string>();
-    let response: Awaited<ReturnType<SyncSheetGateway["applyEffects"]>>;
-    try {
-      response = await options.gateway.applyEffects(group.request);
-    } catch {
-      // Remote side may have written the effect before transport failed.
-      for (const item of group.items) {
-        await recoverUnknownResult(options, fence, item, report);
-      }
-      continue;
-    }
+  const fastAppendItems = dispatchable.filter(isFastAppendCandidate);
+  const regularItems = dispatchable.filter((item) => !isFastAppendCandidate(item));
 
-    const byEffectId = new Map(response.results.map((result) => [result.effectId, result]));
-    for (const item of group.items) {
-      const result = lookupResult(byEffectId.get(item.pending.effect_id));
-      if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND && response.hasMore) {
-        if (releaseUnprocessedEffect(options.database, {
-          ...fence,
-          effectId: item.pending.effect_id,
-          claimToken: item.claimToken,
-        })) {
-          report.deferred += 1;
-          deferredEffectIds.add(item.pending.effect_id);
+  for (const group of groupByFastAppendRequest(fastAppendItems)) {
+    await dispatchFastAppendGroup(options, storage, fence, group, report);
+  }
+
+  if (fullGateway === undefined) {
+    await rejectUnsupportedGatewayEffects(storage, fence, regularItems, report);
+  } else {
+    for (const group of groupByGatewayRequest(regularItems)) {
+      const deferredEffectIds = new Set<string>();
+      let response: Awaited<ReturnType<SyncEffectWorkerFullGateway["applyEffects"]>>;
+      const regularOperationCounts = countsForItems(group.items);
+      const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
+      const gatewayStartedAt = Date.now();
+      try {
+        response = await fullGateway.applyEffects(group.request);
+      } catch {
+        emitWorkerTiming(options, {
+          scope: SYNC_TIMING_SCOPES.WORKER,
+          phase: "regular_gateway_dispatch",
+          durationMs: Date.now() - gatewayStartedAt,
+          operationKinds: regularOperationKinds,
+          operationCounts: regularOperationCounts,
+        });
+        // Remote side may have written the effect before transport failed.
+        await recoverUnknownResults(
+          { ...options, gateway: fullGateway },
+          storage,
+          fence,
+          group.items,
+          report,
+        );
+        continue;
+      }
+      emitGatewayTiming(options, response.timing);
+      emitWorkerTiming(options, {
+        scope: SYNC_TIMING_SCOPES.WORKER,
+        phase: "regular_gateway_dispatch",
+        durationMs: Date.now() - gatewayStartedAt,
+        operationKinds: regularOperationKinds,
+        operationCounts: regularOperationCounts,
+      });
+
+      const resultPersistenceStartedAt = Date.now();
+      const byEffectId = new Map(response.results.map((result) => [result.effectId, result]));
+      for (const item of group.items) {
+        const result = lookupResult(byEffectId.get(item.pending.effect_id));
+        if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND && response.hasMore) {
+          if (await storage.releaseUnprocessedEffect({
+            ...fence,
+            effectId: item.pending.effect_id,
+            claimToken: item.claimToken,
+          })) {
+            report.deferred += 1;
+            deferredEffectIds.add(item.pending.effect_id);
+          }
         }
       }
-    }
-    for (const item of group.items) {
-      const result = lookupResult(byEffectId.get(item.pending.effect_id));
-      if (
-        result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND &&
-        deferredEffectIds.has(item.pending.effect_id)
-      ) continue;
-      if (
-        result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
-        result.value.payloadHash !== item.pending.payload_hash
-      ) {
-        await recoverUnknownResult(options, fence, item, report);
-        continue;
+      const recoveryItems: ClaimedEffect[] = [];
+      for (const item of group.items) {
+        const result = lookupResult(byEffectId.get(item.pending.effect_id));
+        if (
+          result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND &&
+          deferredEffectIds.has(item.pending.effect_id)
+        ) continue;
+        if (
+          result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
+          result.value.payloadHash !== item.pending.payload_hash
+        ) {
+          recoveryItems.push(item);
+          continue;
+        }
+        if (
+          (result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
+            result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
+          (
+            !isSuccessfulGatewayPostcondition(result.value.postcondition) ||
+            !isPresent(result.value.visibleRevision) ||
+            !isPresent(result.value.visibleHash) ||
+            !isPresent(item.gatewayEffect) ||
+            result.value.visibleHash.value !== item.gatewayEffect.value.payload.targetVisibleHash
+          )
+        ) {
+          // A success label without the acknowledged target state is not enough
+          // to close a durable effect. Treat it like a lost response and read
+          // back first.
+          recoveryItems.push(item);
+          continue;
+        }
+        await completeGatewayResult(options, storage, fence, item, result.value, report);
       }
-      if (
-        (result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
-          result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
-        (
-          result.value.postcondition !== SYNC_GATEWAY_POSTCONDITION_STATUSES.VERIFIED ||
-          !isPresent(result.value.visibleRevision) ||
-          !isPresent(result.value.visibleHash) ||
-          !isPresent(item.gatewayEffect) ||
-          result.value.visibleHash.value !== item.gatewayEffect.value.payload.targetVisibleHash
-        )
-      ) {
-        // A success label without a verified row state is not enough to close
-        // a durable effect. Treat it like a lost response and read back first.
-        await recoverUnknownResult(options, fence, item, report);
-        continue;
-      }
-      completeGatewayResult(options, fence, item, result.value, report);
+      await recoverUnknownResults(
+        { ...options, gateway: fullGateway },
+        storage,
+        fence,
+        recoveryItems,
+        report,
+      );
+      emitWorkerTiming(options, {
+        scope: SYNC_TIMING_SCOPES.WORKER,
+        phase: "regular_result_persistence",
+        durationMs: Date.now() - resultPersistenceStartedAt,
+        operationKinds: regularOperationKinds,
+        operationCounts: regularOperationCounts,
+      });
     }
   }
 
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "worker_total",
+    durationMs: Date.now() - passStartedAt,
+    operationKinds: operationKindsForItems(dispatchable),
+    operationCounts: countsForItems(dispatchable),
+  });
   return freezeReport(report);
 }
 
-/**
- * Returns true when SQLite still has an unresolved candidate for a field a
- * User_Input reconcile would overwrite.
- *
- * The single writer lease serializes candidate creation with this check; the
- * gateway's visible CAS remains the second protection against a Sheet edit
- * that happens while the request is in flight.
- */
-function isCandidateReconcileBlocked(db: DatabaseSyncLike, item: ClaimedEffect): boolean {
+function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWorkerStorage {
+  return {
+    claimWriterLease: (options) => claimWriterLeaseWithAdapter(storage, options),
+    recoverExpiredLeases: (fence) => recoverExpiredLeasesWithAdapter(storage, fence),
+    listReadyEffects: (limit) => listReadyEffectsWithAdapter(storage, limit),
+    claimEffect: (options) => claimEffectWithAdapter(storage, options),
+    applyEffectResult: (options) => applyEffectResultWithAdapter(storage, options),
+    releaseUnprocessedEffect: (options) => releaseUnprocessedEffectWithAdapter(storage, options),
+    retryClaimedEffect: (options) => retryClaimedEffectWithAdapter(storage, options),
+    supersedeAndReplan: (fence, oldEffectId, newEffect) => {
+      return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
+    },
+    isUserInputCandidateBlocked: (item) => {
+      return storage.read(({ sql }) => isUserInputCandidateBlockedWithSql(sql, item));
+    },
+  };
+}
+
+async function isUserInputCandidateBlockedWithSql(
+  sql: SqlExecutor,
+  item: ClaimedEffect,
+): Promise<boolean> {
   const effect = item.gatewayEffect;
   if (
     !isPresent(effect) ||
-    effect.value.effectKind !== SYNC_EFFECT_KINDS.CANDIDATE_RECONCILE ||
+    !isCandidateProtectingUserInputEffect(effect.value) ||
     !isPresent(effect.value.rowBindingId)
   ) {
     return false;
@@ -347,33 +546,32 @@ function isCandidateReconcileBlocked(db: DatabaseSyncLike, item: ClaimedEffect):
   const fieldNames = Object.keys(effect.value.payload.fields);
   if (fieldNames.length === 0) return true;
   const placeholders = fieldNames.map(() => "?").join(", ");
-  const blockSql = CANDIDATE_RECONCILE_BLOCK_SQL.replace("__FIELD_NAMES__", placeholders);
-  const row = lookupResult(
-    db.prepare(blockSql).get<CandidateBlockSqlRow>(
-      effect.value.physicalSheetId,
-      effect.value.rowBindingId.value,
-      ...fieldNames,
-    ),
-  );
-  return row.kind === LOOKUP_RESULT_KINDS.FOUND;
+  const blockSql = USER_INPUT_CANDIDATE_BLOCK_SQL.replace("__FIELD_NAMES__", placeholders);
+  const row = await sql.get<CandidateBlockSqlRow>(blockSql, [
+    effect.value.physicalSheetId,
+    effect.value.rowBindingId.value,
+    ...fieldNames,
+  ]);
+  return row !== undefined;
 }
 
-function completeGatewayResult(
-  options: SyncEffectWorkerOptions,
+async function completeGatewayResult(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
   result: SyncGatewayEffectResult,
   report: MutableReport,
-): void {
+): Promise<void> {
   if (
     result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
     result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED
   ) {
-    completeApplied(options.database, fence, item, result.visibleRevision, result.visibleHash, report);
+    await completeApplied(storage, fence, item, result.visibleRevision, result.visibleHash, report);
     return;
   }
   if (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.SUPERSEDED) {
-    if (applyEffectResult(options.database, {
+    if (await storage.applyEffectResult({
       ...fence,
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
@@ -385,11 +583,11 @@ function completeGatewayResult(
   }
   if (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.GUARD_MISMATCH) {
     const blocked = isPresent(item.gatewayEffect) &&
-      item.gatewayEffect.value.effectKind === SYNC_EFFECT_KINDS.CANDIDATE_RECONCILE;
+      isCandidateProtectingUserInputEffect(item.gatewayEffect.value);
     const status = blocked
       ? OUTBOX_EFFECT_STATUSES.BLOCKED_CANDIDATE
       : OUTBOX_EFFECT_STATUSES.CONFLICT;
-    const applied = applyEffectResult(options.database, {
+    const applied = await storage.applyEffectResult({
       ...fence,
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
@@ -408,8 +606,9 @@ function completeGatewayResult(
     return;
   }
   if (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.REPAIR_REOBSERVE) {
-    replanOrFail(
+    await replanOrFail(
       options,
+      storage,
       fence,
       item,
       {
@@ -421,8 +620,8 @@ function completeGatewayResult(
     );
     return;
   }
-  completeFailure(
-    options.database,
+  await completeFailure(
+    storage,
     fence,
     item,
     result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.SCHEMA_ERROR
@@ -433,15 +632,89 @@ function completeGatewayResult(
   );
 }
 
-async function recoverUnknownResult(
-  options: SyncEffectWorkerOptions,
+async function recoverUnknownResults(
+  options: SyncEffectWorkerFullOptions,
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  items: readonly ClaimedEffect[],
+  report: MutableReport,
+): Promise<void> {
+  const usable: ClaimedEffect[] = [];
+  for (const item of items) {
+    if (isPresent(item.gatewayEffect)) {
+      usable.push(item);
+      continue;
+    }
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      item.invalidPayloadError,
+      report,
+    );
+  }
+  for (const group of groupByGatewayPostconditionRequest(usable)) {
+    let results: readonly {
+      readonly effectId: string;
+      readonly payloadHash: string;
+      readonly postcondition: SyncEffectPostcondition;
+    }[];
+    try {
+      results = await options.gateway.readEffectPostconditions(group.request);
+    } catch (error: unknown) {
+      for (const item of group.items) {
+        await completeFailure(
+          storage,
+          fence,
+          item,
+          WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
+          presentValue(safeErrorMessage(error)),
+          report,
+        );
+      }
+      continue;
+    }
+    const byEffectId = new Map(results.map((result) => [result.effectId, result]));
+    for (const item of group.items) {
+      const result = lookupResult(byEffectId.get(item.pending.effect_id));
+      if (
+        result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
+        result.value.payloadHash !== item.pending.payload_hash
+      ) {
+        await completeFailure(
+          storage,
+          fence,
+          item,
+          WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
+          presentValue("Gateway postcondition batch did not return the expected effect evidence."),
+          report,
+        );
+        continue;
+      }
+      await settleUnknownPostcondition(
+        options,
+        storage,
+        fence,
+        item,
+        result.value.postcondition,
+        report,
+      );
+    }
+  }
+}
+
+async function settleUnknownPostcondition(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
+  postcondition: SyncEffectPostcondition,
   report: MutableReport,
 ): Promise<void> {
   if (!isPresent(item.gatewayEffect)) {
-    completeFailure(
-      options.database,
+    await completeFailure(
+      storage,
       fence,
       item,
       WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
@@ -450,33 +723,25 @@ async function recoverUnknownResult(
     );
     return;
   }
-  let postcondition: SyncEffectPostcondition;
-  try {
-    postcondition = await options.gateway.readEffectPostcondition(item.gatewayEffect.value);
-  } catch (error: unknown) {
-    completeFailure(
-      options.database,
-      fence,
-      item,
-      WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
-      presentValue(safeErrorMessage(error)),
-      report,
-    );
-    return;
-  }
-
   if (
     postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.APPLIED &&
     isPresent(postcondition.visibleRevision) &&
     isPresent(postcondition.visibleHash)
   ) {
-    completeApplied(options.database, fence, item, postcondition.visibleRevision, postcondition.visibleHash, report);
+    await completeApplied(
+      storage,
+      fence,
+      item,
+      postcondition.visibleRevision,
+      postcondition.visibleHash,
+      report,
+    );
     report.responseLossRecovered += 1;
     return;
   }
   if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.APPLIED) {
-    completeFailure(
-      options.database,
+    await completeFailure(
+      storage,
       fence,
       item,
       WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
@@ -489,8 +754,9 @@ async function recoverUnknownResult(
     postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED &&
     item.gatewayEffect.value.effectKind === SYNC_EFFECT_KINDS.SYSTEM_REPAIR
   ) {
-    replanOrFail(
+    await replanOrFail(
       options,
+      storage,
       fence,
       item,
       {
@@ -502,13 +768,27 @@ async function recoverUnknownResult(
     );
     return;
   }
+  if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAPPLIED) {
+    const requeued = await storage.retryClaimedEffect({
+      ...fence,
+      effectId: item.pending.effect_id,
+      claimToken: item.claimToken,
+      lastErrorCode: WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
+      lastErrorMessage: "Gateway did not expose the effect as applied; it was returned to pending.",
+    });
+    if (requeued) {
+      report.deferred += 1;
+      report.requeued += 1;
+    }
+    return;
+  }
   const code = postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE
     ? WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE
     : postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED
       ? WORKER_ERROR_CODES.POSTCONDITION_CHANGED
       : WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE;
-  completeFailure(
-    options.database,
+  await completeFailure(
+    storage,
     fence,
     item,
     code,
@@ -517,14 +797,14 @@ async function recoverUnknownResult(
   );
 }
 
-function completeApplied(
-  db: DatabaseSyncLike,
+async function completeApplied(
+  storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
   visibleRevision: Presence<number>,
   visibleHash: Presence<string>,
   report: MutableReport,
-): void {
+): Promise<void> {
   const gatewayEffect = item.gatewayEffect;
   const confirmation = isPresent(gatewayEffect) &&
     isPresent(gatewayEffect.value.rowBindingId) &&
@@ -543,7 +823,7 @@ function completeApplied(
       ),
     }
     : undefined;
-  const applied = applyEffectResult(db, {
+  const applied = await storage.applyEffectResult({
     ...fence,
     effectId: item.pending.effect_id,
     claimToken: item.claimToken,
@@ -555,16 +835,17 @@ function completeApplied(
   if (applied) report.applied += 1;
 }
 
-function replanOrFail(
-  options: SyncEffectWorkerOptions,
+async function replanOrFail(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
   request: RepairReplanRequest,
   report: MutableReport,
-): void {
+): Promise<void> {
   if (options.makeRepairReplan === undefined) {
-    completeFailure(
-      options.database,
+    await completeFailure(
+      storage,
       fence,
       item,
       WORKER_ERROR_CODES.REPAIR_REOBSERVE_REQUIRES_WRITER_REPLAN,
@@ -577,8 +858,8 @@ function replanOrFail(
   try {
     replacement = options.makeRepairReplan(request);
   } catch (error: unknown) {
-    completeFailure(
-      options.database,
+    await completeFailure(
+      storage,
       fence,
       item,
       WORKER_ERROR_CODES.REPAIR_REPLAN_FAILED,
@@ -588,8 +869,8 @@ function replanOrFail(
     return;
   }
   if (!isPresent(replacement)) {
-    completeFailure(
-      options.database,
+    await completeFailure(
+      storage,
       fence,
       item,
       WORKER_ERROR_CODES.REPAIR_REPLAN_DEFERRED,
@@ -599,11 +880,11 @@ function replanOrFail(
     return;
   }
   try {
-    supersedeAndReplan(options.database, fence, item.pending.effect_id, replacement.value);
+    await storage.supersedeAndReplan(fence, item.pending.effect_id, replacement.value);
     report.replanned += 1;
   } catch (error: unknown) {
-    completeFailure(
-      options.database,
+    await completeFailure(
+      storage,
       fence,
       item,
       WORKER_ERROR_CODES.REPAIR_REPLAN_FAILED,
@@ -613,15 +894,15 @@ function replanOrFail(
   }
 }
 
-function completeFailure(
-  db: DatabaseSyncLike,
+async function completeFailure(
+  storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
   code: SyncEffectWorkerErrorCode,
   message: Presence<string>,
   report: MutableReport,
-): void {
-  if (applyEffectResult(db, {
+): Promise<void> {
+  if (await storage.applyEffectResult({
     ...fence,
     effectId: item.pending.effect_id,
     claimToken: item.claimToken,
@@ -629,6 +910,271 @@ function completeFailure(
     lastErrorCode: presentValue(code),
     lastErrorMessage: message,
   })) report.failed += 1;
+}
+
+/** Returns the full gateway only when every regular recovery capability exists. */
+function isFullEffectGateway(
+  gateway: SyncEffectWorkerGateway,
+): SyncEffectWorkerFullGateway | undefined {
+  const candidate = gateway as Partial<SyncEffectWorkerFullGateway>;
+  if (
+    typeof candidate.applyEffects !== "function" ||
+    typeof candidate.readEffectPostcondition !== "function" ||
+    typeof candidate.readEffectPostconditions !== "function"
+  ) {
+    return undefined;
+  }
+  return gateway as SyncEffectWorkerFullGateway;
+}
+
+function emptyOperationCounts(): SyncTimingOperationCounts {
+  return { append: 0, update: 0, delete: 0 };
+}
+
+function timingOperationKindForEffect(effect: SyncGatewayEffect): SyncTimingOperationKind {
+  if (
+    effect.effectKind === SYNC_EFFECT_KINDS.RESOLUTION_DELETE ||
+    effect.effectKind === SYNC_EFFECT_KINDS.USER_INPUT_DELETE
+  ) {
+    return SYNC_TIMING_OPERATION_KINDS.DELETE;
+  }
+  if (
+    effect.payload.createIfMissing &&
+    effect.expectedVisibleRevision === NON_NEGATIVE_SAFE_INTEGER_MINIMUM &&
+    effect.expectedVisibleHash === ""
+  ) {
+    return SYNC_TIMING_OPERATION_KINDS.APPEND;
+  }
+  return SYNC_TIMING_OPERATION_KINDS.UPDATE;
+}
+
+function timingOperationKindForPending(effect: PendingEffect): SyncTimingOperationKind {
+  if (
+    effect.effect_kind === SYNC_EFFECT_KINDS.RESOLUTION_DELETE ||
+    effect.effect_kind === SYNC_EFFECT_KINDS.USER_INPUT_DELETE
+  ) {
+    return SYNC_TIMING_OPERATION_KINDS.DELETE;
+  }
+  if (
+    effect.expected_visible_revision === NON_NEGATIVE_SAFE_INTEGER_MINIMUM &&
+    effect.expected_visible_hash === ""
+  ) {
+    return SYNC_TIMING_OPERATION_KINDS.APPEND;
+  }
+  return SYNC_TIMING_OPERATION_KINDS.UPDATE;
+}
+
+function countsForOperationKinds(
+  kinds: readonly SyncTimingOperationKind[],
+): SyncTimingOperationCounts {
+  return {
+    append: kinds.filter((kind) => kind === SYNC_TIMING_OPERATION_KINDS.APPEND).length,
+    update: kinds.filter((kind) => kind === SYNC_TIMING_OPERATION_KINDS.UPDATE).length,
+    delete: kinds.filter((kind) => kind === SYNC_TIMING_OPERATION_KINDS.DELETE).length,
+  };
+}
+
+function countsForItems(items: readonly ClaimedEffect[]): SyncTimingOperationCounts {
+  const kinds = items.flatMap((item) =>
+    isPresent(item.gatewayEffect) ? [timingOperationKindForEffect(item.gatewayEffect.value)] : []);
+  return countsForOperationKinds(kinds);
+}
+
+function operationKindsForItems(items: readonly ClaimedEffect[]): readonly SyncTimingOperationKind[] {
+  return operationKindsForCounts(countsForItems(items));
+}
+
+function countsForPendingEffects(effects: readonly PendingEffect[]): SyncTimingOperationCounts {
+  return countsForOperationKinds(effects.map(timingOperationKindForPending));
+}
+
+function operationKindsForPendingEffects(
+  effects: readonly PendingEffect[],
+): readonly SyncTimingOperationKind[] {
+  return operationKindsForCounts(countsForPendingEffects(effects));
+}
+
+function operationKindsForCounts(
+  counts: SyncTimingOperationCounts,
+): readonly SyncTimingOperationKind[] {
+  return [
+    ...(counts.append > 0 ? [SYNC_TIMING_OPERATION_KINDS.APPEND] : []),
+    ...(counts.update > 0 ? [SYNC_TIMING_OPERATION_KINDS.UPDATE] : []),
+    ...(counts.delete > 0 ? [SYNC_TIMING_OPERATION_KINDS.DELETE] : []),
+  ];
+}
+
+function emitGatewayTiming(
+  options: SyncEffectWorkerBaseOptions,
+  timing: SyncGatewayTiming | undefined,
+): void {
+  if (timing === undefined) return;
+  for (const phase of timing.phases) {
+    emitWorkerTiming(options, {
+      scope: SYNC_TIMING_SCOPES.GATEWAY,
+      phase: phase.phase,
+      durationMs: phase.durationMs,
+      operationKinds: timing.operationKinds,
+      operationCounts: timing.operationCounts,
+    });
+  }
+}
+
+function emitWorkerTiming(
+  options: SyncEffectWorkerBaseOptions,
+  event: SyncTimingEvent,
+): void {
+  try {
+    options.onTiming?.(event);
+  } catch {
+    // Diagnostics must never change worker state transitions.
+  }
+}
+
+/** Fails regular effects explicitly when the configured gateway is fast-only. */
+async function rejectUnsupportedGatewayEffects(
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  items: readonly ClaimedEffect[],
+  report: MutableReport,
+): Promise<void> {
+  for (const item of items) {
+    if (!isPresent(item.gatewayEffect)) {
+      await completeFailure(
+        storage,
+        fence,
+        item,
+        WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+        item.invalidPayloadError,
+        report,
+      );
+      continue;
+    }
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.GATEWAY_CAPABILITY_MISSING,
+      presentValue(
+        "The configured gateway supports fast append only; regular effect dispatch or recovery is unavailable.",
+      ),
+      report,
+    );
+  }
+}
+
+/**
+ * Dispatches append-only system rows without remote CAS or postcondition reads.
+ *
+ * A lost response is returned to pending. The append-only gateway deliberately
+ * does not keep row metadata for retry deduplication, so a retry can append a
+ * duplicate; reconciliation remains the eventual correction path.
+ */
+async function dispatchFastAppendGroup(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  group: {
+    readonly request: FastAppendRowsRequest;
+    readonly items: readonly ClaimedEffect[];
+  },
+  report: MutableReport,
+): Promise<void> {
+  let response: Awaited<ReturnType<SyncEffectWorkerGateway["fastAppendRows"]>>;
+  const gatewayStartedAt = Date.now();
+  try {
+    response = await options.gateway.fastAppendRows(group.request);
+  } catch {
+    emitWorkerTiming(options, {
+      scope: SYNC_TIMING_SCOPES.WORKER,
+      phase: "append_gateway_dispatch",
+      durationMs: Date.now() - gatewayStartedAt,
+      operationKinds: [SYNC_TIMING_OPERATION_KINDS.APPEND],
+      operationCounts: { append: group.items.length, update: 0, delete: 0 },
+    });
+    await requeueFastAppendItems(storage, fence, group.items, report);
+    return;
+  }
+  emitGatewayTiming(options, response.timing);
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "append_gateway_dispatch",
+    durationMs: Date.now() - gatewayStartedAt,
+    operationKinds: [SYNC_TIMING_OPERATION_KINDS.APPEND],
+    operationCounts: { append: group.items.length, update: 0, delete: 0 },
+  });
+
+  const resultPersistenceStartedAt = Date.now();
+  const byEffectId = new Map(response.results.map((result) => [result.effectId, result]));
+  const deferredEffectIds = new Set<string>();
+  for (const item of group.items) {
+    if (byEffectId.has(item.pending.effect_id) || !response.hasMore) continue;
+    if (await storage.releaseUnprocessedEffect({
+      ...fence,
+      effectId: item.pending.effect_id,
+      claimToken: item.claimToken,
+    })) {
+      deferredEffectIds.add(item.pending.effect_id);
+      report.deferred += 1;
+    }
+  }
+
+  for (const item of group.items) {
+    if (deferredEffectIds.has(item.pending.effect_id)) continue;
+    const result = lookupResult(byEffectId.get(item.pending.effect_id));
+    if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
+      await requeueFastAppendItems(storage, fence, [item], report);
+      continue;
+    }
+    if (!isPresent(item.gatewayEffect)) {
+      await requeueFastAppendItems(storage, fence, [item], report);
+      continue;
+    }
+    await completeApplied(
+      storage,
+      fence,
+      item,
+      presentValue(item.pending.expected_visible_revision + 1),
+      presentValue(item.gatewayEffect.value.payload.targetVisibleHash),
+      report,
+    );
+  }
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "append_result_persistence",
+    durationMs: Date.now() - resultPersistenceStartedAt,
+    operationKinds: [SYNC_TIMING_OPERATION_KINDS.APPEND],
+    operationCounts: { append: group.items.length, update: 0, delete: 0 },
+  });
+}
+
+/** Returns a response-lost fast append to pending for reconciliation-backed retry. */
+async function requeueFastAppendItems(
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  items: readonly ClaimedEffect[],
+  report: MutableReport,
+): Promise<void> {
+  for (const item of items) {
+    if (await storage.retryClaimedEffect({
+      ...fence,
+      effectId: item.pending.effect_id,
+      claimToken: item.claimToken,
+      lastErrorCode: WORKER_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+      lastErrorMessage: "Fast append response was not observed; the row will be retried and reconciled later.",
+    })) {
+      report.deferred += 1;
+      report.requeued += 1;
+    }
+  }
+}
+
+/** Accepts either inline read-back or a flushed-write acknowledgement. */
+function isSuccessfulGatewayPostcondition(
+  status: SyncGatewayEffectResult["postcondition"],
+): boolean {
+  return status === SYNC_GATEWAY_POSTCONDITION_STATUSES.VERIFIED ||
+    status === SYNC_GATEWAY_POSTCONDITION_STATUSES.ACKNOWLEDGED;
 }
 
 function toGatewayEffect(effect: PendingEffect): SyncGatewayEffect {
@@ -682,6 +1228,95 @@ function groupByGatewayRequest(items: readonly ClaimedEffect[]): readonly {
           registeredRange: effect.value.payload.registeredRange,
           projection: effect.value.projection,
           schemaVersion: effect.value.payload.schemaVersion,
+          postconditionMode: SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED,
+          effects: [effect.value],
+        },
+        items: [item],
+      });
+    } else {
+      existing.value.request = {
+        ...existing.value.request,
+        postconditionMode: SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED,
+        effects: [...existing.value.request.effects, effect.value],
+      };
+      existing.value.items.push(item);
+    }
+  }
+  return [...groups.values()];
+}
+
+/** Groups append-only system effects into one fast gateway request per route. */
+function groupByFastAppendRequest(items: readonly ClaimedEffect[]): readonly {
+  readonly request: FastAppendRowsRequest;
+  readonly items: readonly ClaimedEffect[];
+}[] {
+  const groups = new Map<string, { request: FastAppendRowsRequest; items: ClaimedEffect[] }>();
+  for (const item of items) {
+    const effect = item.gatewayEffect;
+    if (!isPresent(effect)) continue;
+    const key = [
+      effect.value.physicalSheetId,
+      effect.value.payload.sheetName,
+      effect.value.payload.registeredRange,
+      effect.value.projection,
+      effect.value.payload.schemaVersion,
+    ].join("\u0000");
+    const row = {
+      effectId: effect.value.effectId,
+      fields: effect.value.payload.fields,
+    };
+    const existing = lookupResult(groups.get(key));
+    if (existing.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
+      groups.set(key, {
+        request: {
+          physicalSheetId: effect.value.physicalSheetId,
+          sheetName: effect.value.payload.sheetName,
+          registeredRange: effect.value.payload.registeredRange,
+          projection: effect.value.projection,
+          schemaVersion: effect.value.payload.schemaVersion,
+          rows: [row],
+        },
+        items: [item],
+      });
+    } else {
+      existing.value.request = {
+        ...existing.value.request,
+        rows: [...existing.value.request.rows, row],
+      };
+      existing.value.items.push(item);
+    }
+  }
+  return [...groups.values()];
+}
+
+/** Groups postcondition reads so each group performs one remote Sheet scan. */
+function groupByGatewayPostconditionRequest(items: readonly ClaimedEffect[]): readonly {
+  readonly request: ReadSyncEffectPostconditionsRequest;
+  readonly items: readonly ClaimedEffect[];
+}[] {
+  const groups = new Map<string, {
+    request: ReadSyncEffectPostconditionsRequest;
+    items: ClaimedEffect[];
+  }>();
+  for (const item of items) {
+    const effect = item.gatewayEffect;
+    if (!isPresent(effect)) continue;
+    const key = [
+      effect.value.physicalSheetId,
+      effect.value.payload.sheetName,
+      effect.value.payload.registeredRange,
+      effect.value.projection,
+      effect.value.payload.schemaVersion,
+    ].join("\u0000");
+    const existing = lookupResult(groups.get(key));
+    if (existing.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
+      groups.set(key, {
+        request: {
+          physicalSheetId: effect.value.physicalSheetId,
+          sheetName: effect.value.payload.sheetName,
+          registeredRange: effect.value.payload.registeredRange,
+          projection: effect.value.projection,
+          schemaVersion: effect.value.payload.schemaVersion,
           effects: [effect.value],
         },
         items: [item],
@@ -702,7 +1337,25 @@ function isSyncEffectKind(value: string): value is SyncGatewayEffect["effectKind
     value === SYNC_EFFECT_KINDS.CANDIDATE_RECONCILE ||
     value === SYNC_EFFECT_KINDS.SYSTEM_REPAIR ||
     value === SYNC_EFFECT_KINDS.RESOLUTION_PROJECTION ||
-    value === SYNC_EFFECT_KINDS.RESOLUTION_DELETE;
+    value === SYNC_EFFECT_KINDS.RESOLUTION_DELETE ||
+    value === SYNC_EFFECT_KINDS.USER_INPUT_DELETE;
+}
+
+function isCandidateProtectingUserInputEffect(effect: SyncGatewayEffect): boolean {
+  return effect.effectKind === SYNC_EFFECT_KINDS.CANDIDATE_RECONCILE ||
+    effect.effectKind === SYNC_EFFECT_KINDS.USER_INPUT_DELETE;
+}
+
+/** Selects only new System_State entity rows for the append-only fast path. */
+function isFastAppendCandidate(item: ClaimedEffect): boolean {
+  if (!isPresent(item.gatewayEffect)) return false;
+  const effect = item.gatewayEffect.value;
+  return effect.effectKind === SYNC_EFFECT_KINDS.SYSTEM_PROJECTION &&
+    effect.projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE &&
+    effect.targetKind === EFFECT_TARGET_KINDS.ENTITY &&
+    effect.payload.createIfMissing &&
+    effect.expectedVisibleRevision === NON_NEGATIVE_SAFE_INTEGER_MINIMUM &&
+    effect.expectedVisibleHash === "";
 }
 
 function isSyncProjection(value: string): value is SyncProjection {
@@ -729,6 +1382,7 @@ function fenceFromLease(lease: WriterLease, now: number): FencingContext {
 
 interface MutableReport {
   lease: Presence<WriterLease>;
+  expiredLeasesRecovered: number;
   selected: number;
   claimed: number;
   applied: number;
@@ -737,6 +1391,7 @@ interface MutableReport {
   conflicted: number;
   failed: number;
   deferred: number;
+  requeued: number;
   replanned: number;
   responseLossRecovered: number;
 }
@@ -744,6 +1399,7 @@ interface MutableReport {
 function mutableReport(lease: Presence<WriterLease>): MutableReport {
   return {
     lease,
+    expiredLeasesRecovered: 0,
     selected: 0,
     claimed: 0,
     applied: 0,
@@ -752,6 +1408,7 @@ function mutableReport(lease: Presence<WriterLease>): MutableReport {
     conflicted: 0,
     failed: 0,
     deferred: 0,
+    requeued: 0,
     replanned: 0,
     responseLossRecovered: 0,
   };
@@ -761,7 +1418,7 @@ function freezeReport(report: MutableReport): SyncEffectWorkerReport {
   return { ...report };
 }
 
-function validateOptions(options: SyncEffectWorkerOptions): void {
+function validateOptions(options: SyncEffectWorkerBaseOptions): void {
   if (options.workerId.length === EMPTY_STRING_LENGTH_ZERO) {
     throwWorkerError("effect worker ID is required");
   }

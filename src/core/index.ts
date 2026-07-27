@@ -49,6 +49,10 @@ export type {
   EffectStatus,
   SheetEffect,
 } from "./model/index.js";
+export {
+  FIELD_OWNERSHIPS,
+  ROW_OPERATIONS,
+} from "./model/index.js";
 
 // Evaluator
 export {

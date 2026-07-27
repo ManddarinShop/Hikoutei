@@ -18,6 +18,7 @@ import { EMPTY_STRING_LENGTH_ZERO } from "../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 import type { NewEffect } from "../sync/effectOutbox.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
+import type { SqlExecutor } from "../../adapter/orm/contracts.js";
 import type {
   CanonicalRowMutation,
   ObservationAttemptInput,
@@ -159,6 +160,42 @@ export function ensureRegisteredProjection(
   }
 }
 
+/**
+ * Ensures the observed projection is enabled through the active async SQL
+ * context. This keeps registry validation in the same transaction as the
+ * observation receipt it protects.
+ */
+export async function ensureRegisteredProjectionWithSql(
+  sql: SqlExecutor,
+  batch: ObservedEditBatch,
+  physicalSheetId: string,
+): Promise<void> {
+  const row = await sql.get<RegisteredProjectionRow>(READ_REGISTERED_PROJECTION_SQL, [
+    physicalSheetId,
+  ]);
+  if (
+    row === undefined ||
+    row.logical_sheet_id !== batch.sheetId ||
+    row.projection !== batch.projection ||
+    row.enabled !== 1
+  ) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "physical sheet is not an enabled projection of the observed logical sheet",
+    );
+  }
+
+  const logical = await sql.get<LogicalSheetEnabledRow>(READ_LOGICAL_SHEET_ENABLED_SQL, [
+    batch.sheetId,
+  ]);
+  if (logical === undefined || logical.enabled !== 1) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "logical sheet is not enabled",
+    );
+  }
+}
+
 /** Ensures every generated effect targets an enabled registered projection. */
 export function ensureEffectsTargetRegistered(
   db: DatabaseSyncLike,
@@ -168,6 +205,30 @@ export function ensureEffectsTargetRegistered(
   for (const effect of effects) {
     const target = db.prepare(READ_REGISTERED_PROJECTION_SQL)
       .get<RegisteredProjectionRow>(effect.physicalSheetId);
+    if (
+      target === undefined ||
+      target.logical_sheet_id !== logicalSheetId ||
+      target.projection !== effect.projection ||
+      target.enabled !== 1
+    ) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+        "effect targets an unregistered physical projection",
+      );
+    }
+  }
+}
+
+/** Validates every generated effect target through the active async SQL context. */
+export async function ensureEffectsTargetRegisteredWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+  effects: readonly NewEffect[],
+): Promise<void> {
+  for (const effect of effects) {
+    const target = await sql.get<RegisteredProjectionRow>(READ_REGISTERED_PROJECTION_SQL, [
+      effect.physicalSheetId,
+    ]);
     if (
       target === undefined ||
       target.logical_sheet_id !== logicalSheetId ||

@@ -445,7 +445,9 @@ export type EffectKind =
   | "system_repair"
   | "resolution_projection"
   /** Removes a resolved system-owned Sync_Conflicts row after a visible CAS. */
-  | "resolution_delete";
+  | "resolution_delete"
+  /** Removes one candidate-free User_Input row after a full-row visible CAS. */
+  | "user_input_delete";
 
 export type EffectTargetKind = "entity" | "row_binding" | "projection_row" | "conflict";
 
