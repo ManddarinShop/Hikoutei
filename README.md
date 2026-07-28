@@ -1,4 +1,4 @@
-[English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
+[한국어](README.ko.md) | [日本語](README.ja.md)
 
 <div align="center">
 
@@ -6,7 +6,7 @@
 
 **Typed repository and safe write layer for Google Sheets-backed MVPs.**
 
-<a href="https://www.npmjs.com/package/typed-sheets">npm</a> ·
+<a href="https://www.npmjs.com/package/typed-sheets">npm package</a> ·
 <a href="https://github.com/ManddarinShop/google-sheets-orm/issues">Issues</a> ·
 <a href="apps-script/gateway/Code.gs">Apps Script gateway</a>
 
@@ -16,162 +16,127 @@
 
 </div>
 
-> [!NOTE]
-> **Hikoutei** is the project brand. The package is currently published as
-> `typed-sheets` while the public package identity is still stabilizing.
+Hikoutei helps TypeScript and Node.js applications use Google Sheets as a
+human-friendly part of an MVP or internal workflow. Your application works
+with typed entities and local SQLite; changes can be delivered to Google
+Sheets asynchronously through the included Apps Script gateway.
 
-Hikoutei gives TypeScript applications an entity-oriented repository API backed
-by local SQLite, with Google Sheets used as an asynchronous, human-readable
-projection. It is designed for MVPs, internal tools, prototypes, and low-traffic
-administrative workflows where a spreadsheet is part of the product experience.
+Hikoutei is intentionally focused. It is not a general-purpose database
+replacement, a Prisma/JPA clone, or a general Google Sheets API wrapper.
 
-It is intentionally **not** a general-purpose database replacement, a Prisma or
-JPA clone, or a general Google Sheets API wrapper.
+## Why Hikoutei?
 
-## When to use it
+- Entity-oriented lifecycle: create, find, mutate, persist, remove, and flush.
+- Typed field mappings with runtime validation for Sheet data.
+- Local SQLite reads for application workflows that should not wait on a remote
+  spreadsheet request.
+- Asynchronous Google Sheets views for human review and lightweight
+  collaboration.
+- Protection against common spreadsheet problems such as unexpected schema
+  changes and accidentally overwriting newer changes.
 
-Hikoutei is a good fit when:
+## Installation
 
-- the application already runs on a TypeScript/Node.js server
-- SQLite can be the local canonical store
-- users need to inspect or occasionally edit data in Google Sheets
-- eventual consistency is acceptable
-- the workload is an MVP, internal tool, prototype, or low-traffic admin flow
+The project is called Hikoutei and its current npm package is `typed-sheets`.
 
-## When not to use it
+```sh
+npm install typed-sheets @mikro-orm/core @mikro-orm/sql
+```
 
-Choose a conventional database and direct Google APIs instead when you need:
+The MikroORM packages are optional peer dependencies of the root package, but
+are required when using Hikoutei's built-in SQLite adapter.
 
-- strong cross-row or cross-service transactions
-- high write throughput or many concurrent writers
-- complex SQL queries, joins, or reporting workloads
-- multi-region or multi-server coordination
-- immediate read-after-write consistency in Google Sheets
-- Google Sheets to behave like the primary database
+## Quick start
+
+After defining an entity mapping, use a request-local manager to work with
+entities. A complete mapping and gateway setup are shown in the
+[Quick start guide](docs/quick-start.md).
+
+```ts
+import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
+import { User } from "./entities/User.js";
+import { userMapping } from "./mappings/userMapping.js";
+
+const hikoutei = await initializeMappedTypedSheetsOrm({
+  dbName: "./hikoutei.sqlite",
+  entities: [User],
+  mappings: [userMapping],
+  writer: { writerId: "users-service" },
+});
+
+const em = hikoutei.em.fork();
+const user = em.create(User, { id: "u1", name: "Ada" });
+em.persist(user);
+await em.flush();
+
+user.name = "Ada Lovelace";
+await em.flush();
+```
+
+`flush()` updates the local application state and schedules the configured
+Sheet view. Remote delivery is asynchronous, so start the sync worker
+and provision the gateway as described in the [setup guide](docs/quick-start.md).
+
+## When to use Hikoutei
+
+Hikoutei is a good fit for:
+
+- MVPs and prototypes where a spreadsheet is part of the product workflow.
+- Internal tools and low-traffic administrative applications.
+- Teams that want typed application data while keeping Sheets easy for people
+  to inspect.
+- Services that can use SQLite locally and accept asynchronous Sheet updates.
+
+## When to choose something else
+
+Use a conventional database and direct Google APIs when you need:
+
+- Strong transactions across many rows or services.
+- High write throughput or many concurrent writers.
+- Complex queries, joins, or reporting workloads.
+- Multi-server or multi-region coordination.
+- Immediate read-after-write consistency in Google Sheets.
+- Google Sheets to be the primary database for the application.
+
+## Google Sheets setup
+
+1. Define the entity-to-Sheet mapping in your server application.
+2. Deploy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) as a
+   Google Apps Script Web App.
+3. Provision the registered tabs and ranges from the server.
+4. Run the sync worker that delivers pending changes.
+
+Keep the gateway secret on the server. Do not put it in browser code or commit
+it to Git.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Quick start](docs/quick-start.md)
-- [Write and synchronization flow](docs/write-and-synchronization-flow.md)
-- [Development](docs/development.md)
-- [Full benchmark history](docs/sync-bulk-write-benchmark.md)
-
-## Google Sheets gateway
-
-Deploy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) as a Google
-Apps Script Web App. The shipped gateway is intentionally thin:
-
-1. verify the signed operation envelope
-2. validate the operation contract
-3. execute the allowlisted Sheet operation
-4. return a structured result to the server worker
-
-Canonical state, outbox decisions, retry policy, reconciliation, and entity
-evaluation remain in the Node/SQLite side of Hikoutei. Do not put the shared
-gateway secret in browser code or commit it to Git.
-
-Provisioning is explicit. Initialize the local SQLite registry first, then use
-`provisionRegisteredSyncSheets()` through the operation-backed gateway.
-
-## Earlier path vs. current path
-
-The current design is a path-level evolution rather than a promise that every
-old beta release is directly comparable. The important changes are:
-
-| Area | Earlier synchronization path | Hikoutei current path |
-| --- | --- | --- |
-| Authority | Mixed Sheet metadata and remote checks | SQLite is the canonical source |
-| Write path | Per-effect metadata, snapshot, CAS, receipt, and postcondition work | Durable SQLite outbox plus batched fast append |
-| Gateway | More synchronization decisions executed in Apps Script | Thin signed operation dispatcher |
-| Repair | Repair work competed with initial writes | Reconciliation is a separate safety net |
-| Polling | Full snapshot and metadata-oriented scan | One batched values-only read followed by local comparison |
-| Public API | Low-level insert/update/delete concepts | Entity lifecycle: `persist`, mutate, `flush`, `remove` |
-
-The current design deliberately accepts at-least-once remote delivery and uses
-idempotent effects plus reconciliation instead of trying to prove a remote
-write exactly once from a possibly lost HTTP response.
-
-## Performance snapshot
-
-These are measured repository benchmarks, not universal Google Sheets
-guarantees. They separate raw Gateway throughput from the complete operational
-worker path.
-
-### Lightweight polling improvement
-
-The same 66-row operational shape was measured with the earlier full-snapshot
-poll and the current values-only poll:
-
-| Path | Elapsed | Remote read | Result |
-| --- | ---: | ---: | --- |
-| Earlier full snapshot poll | 27,652 ms | — | baseline |
-| Current first lightweight poll | 2,109 ms | 573 ms | about 13x faster |
-| Current steady-state poll | 2,240 ms | 530 ms | about 12x faster |
-
-The current poll performs one signed request containing three batched
-`getValues()` operations and compares values locally. It does not yet evaluate
-user edits into canonical writes.
-
-### Fast append ceiling
-
-With a clean Sheet and reconciliation disabled, the real library interface sent
-370 synthetic six-column rows through the local server and deployed Gateway in
-one request:
-
-| Rows | Elapsed | Rows/s | Cells/s | Result |
-| ---: | ---: | ---: | ---: | --- |
-| 20 | 2,275 ms | 8.79 | 52.75 | applied |
-| 100 | 2,729 ms | 36.64 | 219.86 | applied |
-| 370 | 3,792 ms | 97.57 | 585.44 | applied |
-
-All 490 rows across the measured stages were acknowledged successfully. This
-is a raw fast-append measurement; it excludes SQLite outbox draining,
-reconciliation, postcondition checks, and delete handling.
-
-### End-to-end operational path
-
-For the real `User`/`Order`/`OrderItem` server flow, 370 new Orders and 740
-OrderItems produced 1,110 materialized rows in 36,865 ms, with zero failed
-effects. The dominant cost was HTTP/Apps Script dispatch and range lookup, not
-local ORM flush or raw `setValues()` execution.
-
-See the full dated measurements in
-[`docs/sync-bulk-write-benchmark.md`](docs/sync-bulk-write-benchmark.md).
+- [Quick start](docs/quick-start.md) — installation, mapping, and gateway setup.
+- [Architecture](docs/architecture.md) — how the local store and Sheet views
+  fit together.
+- [Write and synchronization flow](docs/write-and-synchronization-flow.md) —
+  asynchronous delivery and recovery behavior.
+- [Development](docs/development.md) — local development and test commands.
+- [Benchmark notes](docs/sync-bulk-write-benchmark.md) — dated measurements
+  and their limitations.
 
 ## Limitations
 
-- Google Sheets remains eventually consistent and subject to quota and latency
-  limits.
-- SQLite is the canonical store; this is not a multi-server coordination layer.
-- `_version` and effect state provide stale-write protection, not distributed
-  transactions.
-- User edits, update/delete conflict handling, and reconciliation require
-  separate operational policies.
-- Apps Script Web App execution limits and response loss are external failure
-  modes that the worker must recover from.
-- The package should not be used for high-throughput transactional workloads.
+- Google Sheets has quota, latency, and Apps Script execution limits.
+- Sheet updates are asynchronous; the application should read its local state.
+- SQLite is local to the service and is not a distributed coordination layer.
+- Schema changes, manual edits, and conflicting updates still need an
+  operational policy from the application.
 
 ## Roadmap
 
-- stabilize the `Hikoutei` public brand while maintaining the `typed-sheets`
-  beta package compatibility path
-- finish the user-edit ingestion contract through `onEdit` and lightweight
-  polling
-- harden update/delete effects and conflict presentation
-- add a setup-oriented CLI for registry and Apps Script deployment
-- publish a stable package once the operational sync contract is proven
+- Complete ingestion of intentional user edits from Google Sheets.
+- Improve update/delete conflict handling and presentation.
+- Add setup tooling for registry and Apps Script deployment.
+- Stabilize the public package release.
 
-For implementation notes and current issues, see the
-[open issues](https://github.com/ManddarinShop/google-sheets-orm/issues).
-
-## Further reading
-
-- [MikroORM adapter and entity facade](docs/mikro-orm-adapter-spike.md)
-- [SQL layer plan](docs/sql-layer-plan.md)
-- [Task queue write model](docs/task-queue-write-model.md)
-- [Sync observability](docs/sync-observability.md)
-- [Apps Script gateway source](apps-script/gateway/Code.gs)
+See the [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues)
+for current work.
 
 ## License
 

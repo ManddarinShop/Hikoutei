@@ -1,7 +1,7 @@
 # Hikoutei Quick Start
 
-The package is currently published as `typed-sheets` while the public project
-brand is being stabilized.
+The project is called Hikoutei and is currently published on npm as
+`typed-sheets`.
 
 ## Installation
 
