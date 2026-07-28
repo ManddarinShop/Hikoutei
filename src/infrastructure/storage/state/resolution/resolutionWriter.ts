@@ -100,7 +100,7 @@ export async function persistResolutionCommandWithSql(
         // A durable processing receipt already owns the request. Only a terminal
         // replay may consume a still-checked control with a reset projection.
         if (duplicateResult.status !== RESOLUTION_COMMAND_STATUSES.PROCESSING) {
-          await appendResolutionEffectsWithSql(sql, fence, input, input.duplicateEffects ?? []);
+          await appendResolutionEffectsWithSql(sql, fence, input.duplicateEffects ?? []);
         }
         return duplicateResult;
       }
@@ -392,7 +392,7 @@ async function applyResolvedCommandWithSql(
   ]);
   if (binding.changes !== 1) throw new FenceLostError();
 
-  await appendResolutionEffectsWithSql(sql, fence, input, input.effects);
+  await appendResolutionEffectsWithSql(sql, fence, input.effects);
   const commandResult = await sql.run(MARK_COMMAND_APPLIED_SQL, [
     input.commitId,
     command.commandId,
@@ -419,7 +419,7 @@ async function markStaleCommandWithSql(
     ...fenceParameters(fence),
   ]);
   if (command.changes !== 1) throw new FenceLostError();
-  await appendResolutionEffectsWithSql(sql, fence, input, input.staleEffects ?? []);
+  await appendResolutionEffectsWithSql(sql, fence, input.staleEffects ?? []);
 }
 
 /** Marks a command rejected and appends its rejection effects through active async SQL. */
@@ -433,18 +433,17 @@ async function markRejectedCommandWithSql(
     ...fenceParameters(fence),
   ]);
   if (result.changes !== 1) throw new FenceLostError();
-  await appendResolutionEffectsWithSql(sql, fence, input, input.rejectedEffects ?? []);
+  await appendResolutionEffectsWithSql(sql, fence, input.rejectedEffects ?? []);
 }
 
 /** Registers unseen resolution effects through the active async SQL transaction. */
 async function appendResolutionEffectsWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
-  input: PersistResolutionCommandInput,
   effects: readonly NewEffect[],
 ): Promise<void> {
   if (effects.length === 0) return;
-  await ensureResolutionEffectsRegisteredWithSql(sql, input, effects);
+  await ensureResolutionEffectsRegisteredWithSql(sql, effects);
   const unseen: NewEffect[] = [];
   for (const effect of effects) {
     const existing = await sql.get<EffectDedupeRow>(READ_EFFECT_DEDUPE_SQL, [
@@ -478,7 +477,6 @@ async function appendResolutionEffectsWithSql(
 /** Validates every resolution effect target through the active async SQL transaction. */
 async function ensureResolutionEffectsRegisteredWithSql(
   sql: SqlExecutor,
-  input: PersistResolutionCommandInput,
   effects: readonly NewEffect[],
 ): Promise<void> {
   for (const effect of effects) {

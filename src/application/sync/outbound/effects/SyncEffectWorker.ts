@@ -11,20 +11,11 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-  stableHash,
-  type Applicability,
-  type EffectKind,
-  type EffectStatus,
-  type EffectTargetKind,
-  type LookupResult,
   type Presence,
 } from "../../../../domain/index.js";
 import {
-  APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
-  PRESENCE_KINDS,
 } from "../../../../shared/state/constants.js";
-import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
 import {
   applyEffectResultWithAdapter,
   claimEffectWithAdapter,
@@ -34,7 +25,6 @@ import {
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
-  SYNC_EFFECT_RECOVERY_ERROR_CODES,
   type ApplyResultOptions,
   type ClaimEffectOptions,
   type ClaimLeaseOptions,
@@ -46,55 +36,32 @@ import {
   type WriterLease,
   type WriterLeaseClaimResult,
 } from "../../../../infrastructure/storage/index.js";
-import {
-  STORAGE_ERROR_CODES,
-  StorageError,
-} from "../../../../infrastructure/storage/errors.js";
-import { fromSqlNullable } from "../../../../infrastructure/storage/sqlite/sqlState.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
-  parseSyncProjectionEffectPayload,
-  type ApplySyncEffectsRequest,
-  type FastAppendRowsRequest,
-  type ReadSyncEffectPostconditionsRequest,
   type SyncEffectPostcondition,
   type SyncGatewayEffect,
   type SyncGatewayEffectResult,
-  type SyncProjection,
   type SyncEffectWorkerGateway,
   type SyncEffectWorkerFullGateway,
 } from "../../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
-  SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
-  SYNC_GATEWAY_POSTCONDITION_MODES,
-  SYNC_GATEWAY_POSTCONDITION_STATUSES,
-  SYNC_GATEWAY_PROJECTIONS,
 } from "../../gateway/constants.js";
 import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
-  SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
-  type SyncGatewayTiming,
-  type SyncTimingEvent,
-  type SyncTimingOperationCounts,
-  type SyncTimingOperationKind,
   type SyncTimingSink,
 } from "../../telemetry/syncTiming.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
-  EFFECT_TARGET_KINDS,
   OUTBOX_EFFECT_STATUSES,
-  SYNC_EFFECT_KINDS,
   USER_INPUT_CANDIDATE_BLOCK_SQL,
   WORKER_ERROR_CODES,
-  type SyncEffectWorkerErrorCode,
 } from "./SyncEffectWorkerConstants.js";
 import {
   absentValue,
-  applicabilityFromSqlNullable,
   isAbsent,
   isPresent,
   lookupResult,
@@ -102,7 +69,6 @@ import {
   safeErrorMessage,
   throwWorkerError,
   type CandidateBlockSqlRow,
-  type PresentValue,
 } from "./SyncEffectWorkerHelpers.js";
 import {
   countsForItems,
@@ -115,7 +81,6 @@ import {
   operationKindsForCounts,
 } from "./SyncEffectWorkerTiming.js";
 import {
-  completeApplied,
   completeFailure,
   completeGatewayResult,
   recoverUnknownResults,

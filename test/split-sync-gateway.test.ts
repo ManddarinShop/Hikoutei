@@ -6,7 +6,6 @@ import {
   type ReadSyncEffectPostconditionsRequest,
   type ReadSyncSnapshotRequest,
   type SyncEffectPostcondition,
-  type SyncGatewayEffect,
   type SyncGatewaySnapshot,
   type SyncSheetGateway,
 } from "../src/application/sync/gateway/syncGateway.js";

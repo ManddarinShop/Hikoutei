@@ -11,11 +11,9 @@ import type { NormalizedCellKind } from "../../shared/encoding/types.js";
 import type { Applicability, Presence } from "../../shared/state/types.js";
 import type {
   CANONICAL_RESOLUTION_STATUSES,
-  CanonicalResolutionStatus,
   DeleteEvidence,
   FieldOwnership,
   QuarantineReason,
-  RowBindingState,
   RowOperation,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,

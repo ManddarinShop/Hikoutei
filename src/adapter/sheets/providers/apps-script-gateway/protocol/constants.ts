@@ -3,13 +3,6 @@ export const SYNC_GATEWAY_PROTOCOL_VERSIONS = {
   DATA: "typed-sheets-sync-v1",
 } as const;
 
-export type SyncGatewayProtocolVersion =
-  (typeof SYNC_GATEWAY_PROTOCOL_VERSIONS)[keyof typeof SYNC_GATEWAY_PROTOCOL_VERSIONS];
-
-/** Data-plane protocol version used by signed sync requests. */
-export type SyncGatewayDataProtocolVersion =
-  (typeof SYNC_GATEWAY_PROTOCOL_VERSIONS)["DATA"];
-
 /** Operation names accepted by the thin Code.gs function dispatcher. */
 export const APPS_SCRIPT_OPERATION_NAMES = {
   APPLY_OPERATIONS: "applyOperations",

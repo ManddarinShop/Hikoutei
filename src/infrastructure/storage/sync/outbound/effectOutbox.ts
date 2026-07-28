@@ -20,7 +20,6 @@ import type {
   ApplyResultOptions,
   ClaimEffectOptions,
   ClaimResult,
-  EffectProjectionConfirmation,
   NewEffect,
   PendingEffect,
   RetryClaimedEffectOptions,
