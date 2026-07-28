@@ -189,7 +189,6 @@ export interface SyncGatewayEffect {
   readonly targetKind: EffectTargetKind;
   readonly targetId: string;
   readonly rowBindingId: Presence<string>;
-  readonly conflictId: Presence<string>;
   readonly expectedVisibleRevision: number;
   readonly expectedVisibleHash: string;
   readonly repairGuardHash: Presence<string>;

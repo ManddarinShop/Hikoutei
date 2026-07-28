@@ -393,7 +393,6 @@ function createEffect(): SyncGatewayEffect {
     targetKind: "entity",
     targetId: "order-1",
     rowBindingId: { kind: "present", value: "row-1" },
-    conflictId: { kind: "absent" },
     expectedVisibleRevision: 1,
     expectedVisibleHash: computeSyncVisibleHash({
       status: { kind: "string", value: "pending" },
