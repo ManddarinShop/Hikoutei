@@ -9,6 +9,7 @@ export {
   initializeTypedSheetsOrm,
   MikroOrmSqliteTypedSheetsEngine,
 } from "./engine/MikroOrmTypedSheetsEngine.js";
+export { createTypedSheets } from "./engine/TypedSheetsFactory.js";
 export { persistMappedObservedRowWithMikroOrm } from "./observation/MikroOrmMappedObservation.js";
 export {
   createMappedTypedSheetsOrm,

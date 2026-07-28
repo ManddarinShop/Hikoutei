@@ -40,24 +40,30 @@ Hikoutei의 범위는 의도적으로 작습니다. 범용 데이터베이스 �
 npm install typed-sheets @mikro-orm/core @mikro-orm/sql
 ```
 
-MikroORM 패키지는 루트 패키지의 선택적 peer dependency이지만, Hikoutei의
-기본 SQLite 어댑터를 사용할 때는 필요합니다.
+애플리케이션은 `typed-sheets`만 import합니다. MikroORM은 현재 SQLite 실행
+프로바이더가 사용하는 선택적 의존성이며, 애플리케이션의 엔티티 정의 API에는
+노출되지 않습니다.
 
 ## 빠른 시작
 
-엔티티 매핑을 정의한 후 요청 단위 manager로 엔티티를 다룹니다. 전체 매핑과
-Gateway 설정은 [빠른 시작 가이드](docs/quick-start.md)에 있습니다.
+typed-sheets를 통해 엔티티를 정의한 후 요청 단위 manager로 엔티티를 다룹니다.
+전체 라우트와 Gateway 설정은 [빠른 시작 가이드](docs/quick-start.md)에 있습니다.
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "typed-sheets";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
 });
 
 const em = hikoutei.em.fork();
@@ -69,9 +75,10 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`flush()`는 로컬 애플리케이션 상태를 변경하고 설정된 Sheet 뷰에 반영할 작업을
-예약합니다. 원격 전달은 비동기이므로 [설정 가이드](docs/quick-start.md)에 따라
-sync worker를 실행하고 Gateway를 프로비저닝해야 합니다.
+`flush()`는 로컬 SQLite 상태를 커밋합니다. 해당 엔티티를 Google Sheets outbox와
+연결하려면 별도의 `sync` 라우트 설정을 추가합니다. 원격 전달은 비동기이므로
+[설정 가이드](docs/quick-start.md)에 따라 sync worker를 실행하고 Gateway를
+프로비저닝해야 합니다.
 
 ## Hikoutei를 사용하기 좋은 경우
 

@@ -20,68 +20,44 @@ SQLite execution engine behind them.
 ## Public entity lifecycle
 
 The application-facing lifecycle follows the familiar entity-manager shape,
-without returning a raw MikroORM manager:
+without returning a raw MikroORM manager or requiring provider-specific schema
+builders:
 
 ```ts
-import {
-  defineTypedSheetsEntityMapping,
-} from "typed-sheets/orm";
-import {
-  initializeMappedTypedSheetsOrm,
-} from "typed-sheets/mikro-orm";
-import { provisionRegisteredSyncSheets } from "typed-sheets";
+import { createTypedSheets, defineTypedSheetsEntity } from "typed-sheets";
 
-const orderMapping = defineTypedSheetsEntityMapping({
-  entity: Order,
-  logicalSheetId: "orders",
-  primaryKey: "id",
-  businessKey: "orderNumber",
-  schemaVersion: 1,
-  fields: [
-    {
-      property: "orderNumber",
-      cellKind: "string",
-      ownership: "user",
-      required: true,
-      unique: true,
-    },
-    {
-      property: "status",
-      cellKind: "string",
-      ownership: "user",
-      required: true,
-    },
-    {
-      property: "approvedAt",
-      cellKind: "date",
-      ownership: "system",
-    },
-  ],
-  projections: [
-    {
-      physicalSheetId: "orders-input",
-      spreadsheetId: process.env.GOOGLE_SHEET_ID!,
-      tabName: "User_Input",
-      registeredRange: "A:B",
-      projection: "user_input",
-    },
-    {
-      physicalSheetId: "orders-system",
-      spreadsheetId: process.env.GOOGLE_SHEET_ID!,
-      tabName: "System_State",
-      registeredRange: "A:D",
-      projection: "system_state",
-    },
-  ],
+const Order = defineTypedSheetsEntity({
+  name: "Order",
+  tableName: "orders",
+  properties: {
+    id: { type: "string", primary: true },
+    orderNumber: { type: "string" },
+    status: { type: "string" },
+  },
 });
 
-const typedSheetsOrm = await initializeMappedTypedSheetsOrm({
+const typedSheetsOrm = await createTypedSheets({
   dbName: "./typed-sheets.sqlite",
   entities: [Order],
-  mappings: [orderMapping],
-  writer: { writerId: "orders-service" },
-  onRegisteredProjections: (definitions) =>
-    provisionRegisteredSyncSheets(appsScriptGateway, definitions),
+  sync: {
+    writerId: "orders-service",
+    entities: {
+      Order: {
+        systemState: {
+          spreadsheetId: process.env.GOOGLE_SHEET_ID!,
+          tabName: "System_State",
+          registeredRange: "A:D",
+        },
+        userInput: {
+          spreadsheetId: process.env.GOOGLE_SHEET_ID!,
+          tabName: "User_Input",
+          registeredRange: "A:C",
+        },
+        editableFields: ["id", "orderNumber", "status"],
+        businessKey: "orderNumber",
+      },
+    },
+  },
 });
 
 const em = typedSheetsOrm.em.fork();
@@ -109,16 +85,16 @@ index, and ordered Sheets outbox effects in one SQLite transaction. It does
 not synchronously call Google Sheets. If planning throws, all of those local
 writes roll back together.
 
-The mapping requires exactly one `System_State` route and may additionally
-declare one `User_Input` route. `System_State` receives the complete canonical
-view plus a system tombstone marker. A direct create or a direct change to a
-user-owned field also emits a candidate-preserving `User_Input` reconcile
-effect; it does not overwrite an unresolved Sheet candidate. A direct remove
-also creates a guarded `user_input_delete` effect when a `User_Input` route
-exists. Its payload contains the complete expected input row, so the gateway
-deletes only an anchored row whose visible revision and full row hash still
-match. The worker blocks that effect rather than deleting when an unresolved
-candidate owns any user-owned field.
+The public route configuration requires exactly one `System_State` route and
+may additionally declare one `User_Input` route. `System_State` receives the
+complete canonical view plus a system tombstone marker. A direct create or a
+direct change to a user-owned field also emits a candidate-preserving
+`User_Input` reconcile effect; it does not overwrite an unresolved Sheet
+candidate. A direct remove also creates a guarded `user_input_delete` effect
+when a `User_Input` route exists. Its payload contains the complete expected
+input row, so the gateway deletes only an anchored row whose visible revision
+and full row hash still match. The worker blocks that effect rather than
+deleting when an unresolved candidate owns any user-owned field.
 
 The production-shaped sync gateway source at
 `apps-script/gateway/Code.gs` is the thin operation data plane. Deploy the
