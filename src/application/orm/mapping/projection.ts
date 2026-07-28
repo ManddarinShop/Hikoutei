@@ -10,7 +10,7 @@ import {
   type FieldManifestEntry,
   type OwnershipManifest,
 } from "../../../domain/index.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../../application/sync/gateway/constants.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../../sync/gateway/constants.js";
 import type { RegisterSyncSheetInput, RegisteredProjection } from "../../../infrastructure/storage/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

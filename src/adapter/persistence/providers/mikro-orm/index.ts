@@ -2,18 +2,18 @@ export {
   createMikroOrmSqliteAdapter,
   initializeMikroOrmSqliteAdapter,
   MikroOrmSqliteAdapter,
-} from "./MikroOrmSqliteAdapter.js";
+} from "./storage/MikroOrmSqliteAdapter.js";
 export {
   createMikroOrmSqliteTypedSheetsEngine,
   createTypedSheetsOrm,
   initializeTypedSheetsOrm,
   MikroOrmSqliteTypedSheetsEngine,
-} from "./MikroOrmTypedSheetsEngine.js";
-export { persistMappedObservedRowWithMikroOrm } from "./MikroOrmMappedObservation.js";
+} from "./engine/MikroOrmTypedSheetsEngine.js";
+export { persistMappedObservedRowWithMikroOrm } from "./observation/MikroOrmMappedObservation.js";
 export {
   createMappedTypedSheetsOrm,
   initializeMappedTypedSheetsOrm,
-} from "./MikroOrmMappedTypedSheets.js";
+} from "./engine/MikroOrmMappedTypedSheets.js";
 export {
   TypedSheetsEntityManager,
   TypedSheetsOrm,
@@ -21,7 +21,7 @@ export {
 export {
   migrateMikroOrmSqliteSchema,
   migrateMikroOrmSqliteStorageSchema,
-} from "./MikroOrmSqliteSchema.js";
+} from "./storage/MikroOrmSqliteSchema.js";
 export { runSyncEffectWorkerWithAdapter } from "../../../../application/sync/outbound/effects/SyncEffectWorker.js";
 export {
   createSyncEffectWorkerSupervisor,
@@ -34,15 +34,15 @@ export type {
   MikroOrmSqliteEntity,
   MikroOrmSqliteEntityManager,
   MikroOrmSqliteTransaction,
-} from "./MikroOrmSqliteAdapter.js";
+} from "./storage/MikroOrmSqliteAdapter.js";
 export type {
   InitializeTypedSheetsOrmOptions,
-} from "./MikroOrmTypedSheetsEngine.js";
-export type { PersistMappedObservedRowOptions } from "./MikroOrmMappedObservation.js";
+} from "./engine/MikroOrmTypedSheetsEngine.js";
+export type { PersistMappedObservedRowOptions } from "./observation/MikroOrmMappedObservation.js";
 export type {
   CreateMappedTypedSheetsOrmOptions,
   InitializeMappedTypedSheetsOrmOptions,
-} from "./MikroOrmMappedTypedSheets.js";
+} from "./engine/MikroOrmMappedTypedSheets.js";
 export type { CreateTypedSheetsOrmOptions } from "../../../../application/orm/index.js";
 export type {
   SyncEffectWorkerReport,

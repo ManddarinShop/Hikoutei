@@ -13,7 +13,7 @@ import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
 } from "../../../shared/encoding/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../../application/sync/gateway/constants.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../../sync/gateway/constants.js";
 import type {
   TypedSheetsEntityFieldMapping,
   TypedSheetsEntityFieldMappingInput,

@@ -24,7 +24,7 @@ import {
 } from "../../../shared/encoding/typeGuards.js";
 import { APPLICABILITY_KINDS } from "../../../shared/state/constants.js";
 import type { Applicability, Presence } from "../../../shared/state/types.js";
-import type { RegisteredProjection } from "../../../infrastructure/storage/sync/syncRegistry.js";
+import type { RegisteredProjection } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import {
   EMPTY_ARRAY_LENGTH_ZERO,
   EMPTY_STRING_LENGTH_ZERO,

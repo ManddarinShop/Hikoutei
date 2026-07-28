@@ -2,7 +2,7 @@
 
 import { stableHash } from "../../../../domain/index.js";
 import type { NewEffect } from "../../../../infrastructure/storage/index.js";
-import type { FencingContext } from "../../../../infrastructure/storage/sync/writerLease.js";
+import type { FencingContext } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
   LOOKUP_RESULT_KINDS,
 } from "../../../../shared/state/constants.js";

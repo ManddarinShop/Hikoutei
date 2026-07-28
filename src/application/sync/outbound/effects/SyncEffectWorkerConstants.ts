@@ -2,7 +2,7 @@
 
 import type { EffectKind, EffectStatus, EffectTargetKind } from "../../../../domain/index.js";
 import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
-import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../../infrastructure/storage/sync/effectOutbox.js";
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../../infrastructure/storage/sync/outbound/effectOutbox.js";
 import { SYNC_GATEWAY_PROJECTIONS } from "../../gateway/constants.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";

@@ -71,7 +71,7 @@ import {
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
 } from "../../gateway/constants.js";
-import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/writerLease.js";
+import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
   SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,

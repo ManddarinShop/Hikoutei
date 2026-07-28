@@ -32,7 +32,7 @@ export {
   createMappedTypedSheetsFlushCoordinator,
   registeredTypedSheetsProjectionDefinitions,
   registerTypedSheetsEntityMappings,
-} from "./persistence/mappedFlushCoordinator.js";
+} from "./persistence/flush/mappedFlushCoordinator.js";
 export {
   MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS,
   planMappedObservationEntityMutation,
@@ -62,7 +62,7 @@ export type {
   CreateMappedTypedSheetsFlushCoordinatorOptions,
   RegisteredTypedSheetsMappedProjection,
   TypedSheetsEntityWriterOptions,
-} from "./persistence/mappedFlushCoordinator.js";
+} from "./persistence/flush/mappedFlushCoordinator.js";
 export type { MappedObservationEntityMutation } from "./mapping/observationMapping.js";
 export type {
   TypedSheetsEntityFieldCodec,

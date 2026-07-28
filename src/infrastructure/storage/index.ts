@@ -6,7 +6,7 @@ export {
   commitCanonicalChanges,
   commitCanonicalChangesWithAdapter,
   commitCanonicalChangesWithSql,
-} from "./state/canonicalCommit.js";
+} from "./state/canonical/canonicalCommit.js";
 export type {
   CanonicalCommitInput,
   CanonicalCommitResult,
@@ -15,7 +15,7 @@ export type {
   CanonicalInsertCommitInput,
   CanonicalUpdateCommitInput,
   CanonicalDeleteCommitInput,
-} from "./state/canonicalCommit.js";
+} from "./state/canonical/canonicalCommit.js";
 export {
   openDatabase,
   openReadOnlyDatabase,
@@ -33,11 +33,11 @@ export {
   isFencingValid,
   isFencingValidWithAdapter,
   isFencingValidWithSql,
-} from "./sync/writerLease.js";
+} from "./sync/shared/writerLease.js";
 export {
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "./sync/writerLease.js";
+} from "./sync/shared/writerLease.js";
 export type {
   WriterLease,
   ClaimLeaseOptions,
@@ -45,7 +45,7 @@ export type {
   WriterLeaseClaimFailureReason,
   WriterLeaseClaimResult,
   WriterLeaseClaimResultKind,
-} from "./sync/writerLease.js";
+} from "./sync/shared/writerLease.js";
 export {
   claimEffect,
   claimEffectWithAdapter,
@@ -77,7 +77,7 @@ export {
   appendPendingEffects,
   appendPendingEffectsWithAdapter,
   appendPendingEffectsWithSql,
-} from "./sync/effectOutbox.js";
+} from "./sync/outbound/effectOutbox.js";
 export type {
   ClaimResult,
   ClaimEffectOptions,
@@ -86,13 +86,13 @@ export type {
   NewEffect,
   PendingEffect,
   RetryClaimedEffectOptions,
-} from "./sync/effectOutbox.js";
-export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./sync/effectOutbox.js";
+} from "./sync/outbound/effectOutbox.js";
+export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./sync/outbound/effectOutbox.js";
 export {
   persistObservedRow,
   persistObservedRowWithAdapter,
   persistObservedRowWithSql,
-} from "./state/observationWriter.js";
+} from "./state/observation/observationWriter.js";
 export type {
   ObservationAttemptInput,
   EventIdentityInput,
@@ -100,16 +100,16 @@ export type {
   CanonicalRowMutation,
   PersistObservedRowInput,
   PersistObservedRowResult,
-} from "./state/observationWriter.js";
+} from "./state/observation/observationWriter.js";
 export {
   persistResolutionCommand,
   persistResolutionCommandWithAdapter,
   persistResolutionCommandWithSql,
-} from "./state/resolutionWriter.js";
+} from "./state/resolution/resolutionWriter.js";
 export type {
   PersistResolutionCommandInput,
   PersistResolutionCommandResult,
-} from "./state/resolutionWriter.js";
+} from "./state/resolution/resolutionWriter.js";
 export {
   registerSyncSheet,
   registerSyncSheetWithAdapter,
@@ -117,22 +117,22 @@ export {
   requireRegisteredSyncSheet,
   requireRegisteredSyncSheetWithAdapter,
   requireRegisteredSyncSheetWithSql,
-} from "./sync/syncRegistry.js";
+} from "./sync/shared/syncRegistry.js";
 export type {
   RegisteredProjection,
   RegisterSyncSheetInput,
   RegisteredSyncSheet,
   RegisterSyncSheetResult,
-} from "./sync/syncRegistry.js";
+} from "./sync/shared/syncRegistry.js";
 export {
   persistReadOnlySnapshotObservation,
   persistReadOnlySnapshotObservationWithAdapter,
   persistReadOnlySnapshotObservationWithSql,
-} from "./state/readOnlyObservation.js";
+} from "./state/readonly/readOnlyObservation.js";
 export type {
   ReadOnlySnapshotObservationInput,
   ReadOnlySnapshotObservationResult,
-} from "./state/readOnlyObservation.js";
+} from "./state/readonly/readOnlyObservation.js";
 export {
   inspectRestoredBackup,
   beginRestoreReconciliation,

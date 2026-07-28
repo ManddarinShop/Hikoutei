@@ -14,7 +14,7 @@ import {
   serializeSyncProjectionEffectPayload,
   type SyncProjectionEffectPayload,
 } from "../src/application/sync/gateway/syncGateway.js";
-import type { RegisteredSyncSheet } from "../src/infrastructure/storage/sync/syncRegistry.js";
+import type { RegisteredSyncSheet } from "../src/infrastructure/storage/sync/shared/syncRegistry.js";
 
 const fields = {
   active: { kind: "boolean" as const, value: true },

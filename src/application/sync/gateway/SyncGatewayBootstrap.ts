@@ -11,7 +11,7 @@
 import type {
   RegisteredProjection,
   RegisteredSyncSheet,
-} from "../../../infrastructure/storage/sync/syncRegistry.js";
+} from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,

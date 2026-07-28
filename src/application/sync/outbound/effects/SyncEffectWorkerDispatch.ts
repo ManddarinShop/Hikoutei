@@ -1,6 +1,6 @@
 /** Fast-append and unsupported-capability dispatch paths for the effect worker. */
 
-import type { FencingContext } from "../../../../infrastructure/storage/sync/writerLease.js";
+import type { FencingContext } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
 import type {
   FastAppendRowsRequest,
