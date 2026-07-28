@@ -44,6 +44,7 @@ const PROJECTION_EFFECT_KINDS = {
   SYSTEM_REPAIR: "system_repair",
   RESOLUTION_PROJECTION: "resolution_projection",
   RESOLUTION_DELETE: SYNC_GATEWAY_EFFECT_KINDS.RESOLUTION_DELETE,
+  USER_INPUT_DELETE: SYNC_GATEWAY_EFFECT_KINDS.USER_INPUT_DELETE,
 } as const satisfies Record<string, SyncEffectKind>;
 
 const PROJECTION_TARGET_KINDS = {
@@ -93,6 +94,12 @@ export type CandidateReconcileEffectInput =
     readonly projection?: typeof SYNC_GATEWAY_PROJECTIONS.USER_INPUT;
   };
 
+/** Input for a guarded physical deletion from a User_Input projection. */
+export type UserInputDeleteEffectInput =
+  Omit<ProjectionEffectInput, "effectKind" | "projection"> & {
+    readonly projection?: typeof SYNC_GATEWAY_PROJECTIONS.USER_INPUT;
+  };
+
 /** Shared input for effects projected to the Sync_Conflicts control sheet. */
 export type ResolutionEffectInput =
   Omit<ProjectionEffectInput, "effectKind" | "projection" | "targetKind"> & {
@@ -103,11 +110,8 @@ export type ResolutionEffectInput =
 export function createProjectionEffect(input: ProjectionEffectInput): NewEffect {
   validateInput(input);
   const targetVisibleHash = computeSyncVisibleHash(input.fields);
-  if (
-    input.effectKind === PROJECTION_EFFECT_KINDS.RESOLUTION_DELETE &&
-    targetVisibleHash !== input.expectedVisibleHash
-  ) {
-    throwEffectError("resolution deletion requires the full current visible hash");
+  if (isProjectionDeletionEffect(input.effectKind) && targetVisibleHash !== input.expectedVisibleHash) {
+    throwEffectError("projection deletion requires the full current visible hash");
   }
   const expectedCandidateHash = input.expectedCandidateHash ?? notApplicableValue();
   const targetEntityRevision = input.targetEntityRevision ?? notApplicableValue();
@@ -181,6 +185,23 @@ export function createCandidateReconcileEffect(
     ...input,
     projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
     effectKind: PROJECTION_EFFECT_KINDS.CANDIDATE_RECONCILE,
+  });
+}
+
+/**
+ * Creates a full-row, candidate-preserving deletion for one User_Input row.
+ *
+ * The payload must represent the exact current visible row. The gateway can
+ * therefore remove only the anchored row that the canonical delete observed,
+ * while the worker blocks the effect if an unresolved user candidate exists.
+ */
+export function createUserInputDeleteEffect(
+  input: UserInputDeleteEffectInput,
+): NewEffect {
+  return createProjectionEffect({
+    ...input,
+    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    effectKind: PROJECTION_EFFECT_KINDS.USER_INPUT_DELETE,
   });
 }
 
@@ -278,10 +299,19 @@ function validateInput(input: ProjectionEffectInput): void {
     throwEffectError("resolution projection must target sync_conflicts");
   }
   if (
-    input.effectKind === PROJECTION_EFFECT_KINDS.RESOLUTION_DELETE &&
+    isProjectionDeletionEffect(input.effectKind) &&
     (input.createIfMissing || input.expectedVisibleRevision < POSITIVE_SAFE_INTEGER_MINIMUM)
   ) {
-    throwEffectError("resolution deletion requires an existing visible row");
+    throwEffectError("projection deletion requires an existing visible row");
+  }
+  if (
+    input.effectKind === PROJECTION_EFFECT_KINDS.USER_INPUT_DELETE &&
+    (
+      input.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT ||
+      input.targetKind !== PROJECTION_TARGET_KINDS.PROJECTION_ROW
+    )
+  ) {
+    throwEffectError("user input deletion must target one User_Input projection row");
   }
   if (
     input.rowBindingId.kind === PRESENCE_KINDS.ABSENT &&
@@ -331,6 +361,11 @@ function absentValue<T>(): Presence<T> {
 
 function stableApplicabilityValue<T>(value: Applicability<T>): T | null {
   return value.kind === APPLICABILITY_KINDS.APPLICABLE ? value.value : null;
+}
+
+function isProjectionDeletionEffect(effectKind: SyncEffectKind): boolean {
+  return effectKind === PROJECTION_EFFECT_KINDS.RESOLUTION_DELETE ||
+    effectKind === PROJECTION_EFFECT_KINDS.USER_INPUT_DELETE;
 }
 
 function throwEffectError(message: string): never {

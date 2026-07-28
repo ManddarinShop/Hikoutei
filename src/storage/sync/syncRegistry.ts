@@ -8,7 +8,13 @@
 
 import { withImmediateTransaction, type DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../errors.js";
-import { isFencingValid, type FencingContext } from "./writerLease.js";
+import { withSqlSavepoint } from "../sqlite/sqlTransaction.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import {
+  isFencingValid,
+  isFencingValidWithSql,
+  type FencingContext,
+} from "./writerLease.js";
 
 const READ_LOGICAL_SHEET_REGISTRATION_SQL = `
   SELECT schema_version, ownership_manifest_json, business_key_field, anchor_mode, enabled
@@ -93,13 +99,7 @@ export function registerSyncSheet(
   fence: FencingContext,
   input: RegisterSyncSheetInput,
 ): RegisterSyncSheetResult {
-  const normalizedInput = {
-    ...input,
-    registeredRange: normalizeRegisteredRange(
-      input.registeredRange,
-      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
-    ),
-  };
+  const normalizedInput = normalizeRegistrationInput(input);
   validateRegistration(normalizedInput);
   if (!isFencingValid(db, fence)) return { kind: "fenced_out" };
   return withImmediateTransaction(db, () => {
@@ -120,13 +120,7 @@ export function registerSyncSheet(
           "could not register logical sheet",
         );
       }
-    } else if (
-      logical.schema_version !== normalizedInput.schemaVersion ||
-      logical.ownership_manifest_json !== normalizedInput.ownershipManifestJson ||
-      logical.business_key_field !== normalizedInput.businessKeyField ||
-      logical.anchor_mode !== (normalizedInput.anchorMode ?? "developer_metadata") ||
-      logical.enabled !== 1
-    ) {
+    } else if (!sameLogicalRegistration(logical, normalizedInput)) {
       throw new StorageError(
         STORAGE_ERROR_CODES.SYNC_REGISTRATION_CONFLICT,
         "logical sync sheet registration does not match the existing allowlist",
@@ -158,8 +152,96 @@ export function registerSyncSheet(
         "physical sync sheet registration does not match the existing allowlist",
       );
     }
-    return { kind: "registered", sheet: requireRegisteredSyncSheet(db, normalizedInput.physicalSheetId) };
+    return {
+      kind: "registered",
+      sheet: requireRegisteredSyncSheet(db, normalizedInput.physicalSheetId),
+    };
   });
+}
+
+/**
+ * Registers one logical sheet/projection pair through an active async SQL context.
+ *
+ * Call this from the same MikroORM transaction as any related setup state. The
+ * registration and its writer-fence check then use the ORM-owned connection
+ * instead of opening a second SQLite connection.
+ */
+export async function registerSyncSheetWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: RegisterSyncSheetInput,
+): Promise<RegisterSyncSheetResult> {
+  const normalizedInput = normalizeRegistrationInput(input);
+  validateRegistration(normalizedInput);
+  if (!(await isFencingValidWithSql(sql, fence))) return { kind: "fenced_out" };
+
+  return withSqlSavepoint(sql, "register_sync_sheet", async () => {
+    if (!(await isFencingValidWithSql(sql, fence))) return { kind: "fenced_out" };
+    const logical = await sql.get<LogicalRow>(READ_LOGICAL_SHEET_REGISTRATION_SQL, [
+      normalizedInput.logicalSheetId,
+    ]);
+    if (logical === undefined) {
+      const inserted = await sql.run(INSERT_LOGICAL_SHEET_REGISTRATION_SQL, [
+        normalizedInput.logicalSheetId,
+        normalizedInput.schemaVersion,
+        normalizedInput.ownershipManifestJson,
+        normalizedInput.businessKeyField,
+        normalizedInput.anchorMode ?? "developer_metadata",
+      ]);
+      if (inserted.changes !== 1) {
+        throw new StorageError(
+          STORAGE_ERROR_CODES.SYNC_REGISTRATION_WRITE_FAILED,
+          "could not register logical sheet",
+        );
+      }
+    } else if (!sameLogicalRegistration(logical, normalizedInput)) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.SYNC_REGISTRATION_CONFLICT,
+        "logical sync sheet registration does not match the existing allowlist",
+      );
+    }
+
+    const physical = await sql.get<PhysicalRow>(READ_PHYSICAL_SHEET_REGISTRATION_SQL, [
+      normalizedInput.physicalSheetId,
+    ]);
+    if (physical === undefined) {
+      const inserted = await sql.run(INSERT_PHYSICAL_SHEET_REGISTRATION_SQL, [
+        normalizedInput.physicalSheetId,
+        normalizedInput.logicalSheetId,
+        normalizedInput.spreadsheetId,
+        normalizedInput.tabName,
+        normalizedInput.registeredRange,
+        normalizedInput.projection,
+        normalizedInput.schemaVersion,
+        normalizedInput.anchorMode ?? "developer_metadata",
+      ]);
+      if (inserted.changes !== 1) {
+        throw new StorageError(
+          STORAGE_ERROR_CODES.SYNC_REGISTRATION_WRITE_FAILED,
+          "could not register physical sheet",
+        );
+      }
+    } else if (!samePhysicalRegistration(physical, normalizedInput)) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.SYNC_REGISTRATION_CONFLICT,
+        "physical sync sheet registration does not match the existing allowlist",
+      );
+    }
+
+    return {
+      kind: "registered",
+      sheet: await requireRegisteredSyncSheetWithSql(sql, normalizedInput.physicalSheetId),
+    };
+  });
+}
+
+/** Registers one projection in an adapter-owned MikroORM transaction. */
+export async function registerSyncSheetWithAdapter(
+  storage: SqlStorageAdapter,
+  fence: FencingContext,
+  input: RegisterSyncSheetInput,
+): Promise<RegisterSyncSheetResult> {
+  return storage.transaction(({ sql }) => registerSyncSheetWithSql(sql, fence, input));
 }
 
 /** Reads one enabled physical registry entry or rejects any unregistered target. */
@@ -175,40 +257,30 @@ export function requireRegisteredSyncSheet(
   }
   const row = db.prepare(READ_REGISTERED_SYNC_SHEET_SQL)
     .get(physicalSheetId) as RegisteredRow | undefined;
-  if (row === undefined || row.physical_enabled !== 1 || row.logical_enabled !== 1) {
+  return registeredSyncSheetFromRow(row);
+}
+
+/** Reads one enabled physical registry entry through an active async SQL context. */
+export async function requireRegisteredSyncSheetWithSql(
+  sql: SqlExecutor,
+  physicalSheetId: string,
+): Promise<RegisteredSyncSheet> {
+  if (physicalSheetId.length === 0) {
     throw new StorageError(
-      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
-      "physical sheet is not an enabled sync registry target",
+      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
+      "physical sheet ID is required",
     );
   }
-  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== "developer_metadata") {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
-      "physical sheet registry has an unsupported projection or anchor mode",
-    );
-  }
-  const registeredRange = normalizeRegisteredRange(
-    row.registered_range,
-    STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
-  );
-  if (registeredRange !== row.registered_range) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
-      "physical sheet registry range is not in canonical whole-column form",
-    );
-  }
-  return {
-    logicalSheetId: row.logical_sheet_id,
-    physicalSheetId: row.physical_sheet_id,
-    spreadsheetId: row.spreadsheet_id,
-    tabName: row.tab_name,
-    registeredRange,
-    projection: row.projection,
-    schemaVersion: row.schema_version,
-    ownershipManifestJson: row.ownership_manifest_json,
-    businessKeyField: row.business_key_field,
-    anchorMode: "developer_metadata",
-  };
+  const row = await sql.get<RegisteredRow>(READ_REGISTERED_SYNC_SHEET_SQL, [physicalSheetId]);
+  return registeredSyncSheetFromRow(row);
+}
+
+/** Reads one enabled physical registry entry through a fresh adapter read context. */
+export async function requireRegisteredSyncSheetWithAdapter(
+  storage: SqlStorageAdapter,
+  physicalSheetId: string,
+): Promise<RegisteredSyncSheet> {
+  return storage.read(({ sql }) => requireRegisteredSyncSheetWithSql(sql, physicalSheetId));
 }
 
 interface LogicalRow {
@@ -290,6 +362,24 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
   }
 }
 
+function normalizeRegistrationInput(input: RegisterSyncSheetInput): RegisterSyncSheetInput {
+  return {
+    ...input,
+    registeredRange: normalizeRegisteredRange(
+      input.registeredRange,
+      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
+    ),
+  };
+}
+
+function sameLogicalRegistration(existing: LogicalRow, input: RegisterSyncSheetInput): boolean {
+  return existing.schema_version === input.schemaVersion &&
+    existing.ownership_manifest_json === input.ownershipManifestJson &&
+    existing.business_key_field === input.businessKeyField &&
+    existing.anchor_mode === (input.anchorMode ?? "developer_metadata") &&
+    existing.enabled === 1;
+}
+
 function samePhysicalRegistration(existing: PhysicalRow, input: RegisterSyncSheetInput): boolean {
   return existing.logical_sheet_id === input.logicalSheetId &&
     existing.spreadsheet_id === input.spreadsheetId &&
@@ -299,6 +389,43 @@ function samePhysicalRegistration(existing: PhysicalRow, input: RegisterSyncShee
     existing.schema_version === input.schemaVersion &&
     existing.anchor_mode === (input.anchorMode ?? "developer_metadata") &&
     existing.enabled === 1;
+}
+
+function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredSyncSheet {
+  if (row === undefined || row.physical_enabled !== 1 || row.logical_enabled !== 1) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "physical sheet is not an enabled sync registry target",
+    );
+  }
+  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== "developer_metadata") {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "physical sheet registry has an unsupported projection or anchor mode",
+    );
+  }
+  const registeredRange = normalizeRegisteredRange(
+    row.registered_range,
+    STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+  );
+  if (registeredRange !== row.registered_range) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "physical sheet registry range is not in canonical whole-column form",
+    );
+  }
+  return {
+    logicalSheetId: row.logical_sheet_id,
+    physicalSheetId: row.physical_sheet_id,
+    spreadsheetId: row.spreadsheet_id,
+    tabName: row.tab_name,
+    registeredRange,
+    projection: row.projection,
+    schemaVersion: row.schema_version,
+    ownershipManifestJson: row.ownership_manifest_json,
+    businessKeyField: row.business_key_field,
+    anchorMode: "developer_metadata",
+  };
 }
 
 function isRegisteredProjection(value: string): value is RegisteredProjection {

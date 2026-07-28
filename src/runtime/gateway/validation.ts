@@ -9,8 +9,10 @@ import { isJavaScriptType } from "../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_PROTOCOL_VERSIONS,
+  SYNC_GATEWAY_SNAPSHOT_READ_MODES,
   type SyncGatewayProjection,
   type SyncGatewayProtocolVersion,
+  type SyncGatewaySnapshotReadMode,
 } from "./constants.js";
 import {
   SyncGatewayContractError,
@@ -104,6 +106,26 @@ export function requireSyncGatewayProjection(
     );
   }
   return value;
+}
+
+/** Requires a supported snapshot detail level at a gateway boundary. */
+export function requireSyncGatewaySnapshotReadMode(
+  value: unknown,
+  label: string,
+  errorCode: SyncGatewayErrorCode,
+): SyncGatewaySnapshotReadMode {
+  if (
+    !isString(value) ||
+    !Object.values(SYNC_GATEWAY_SNAPSHOT_READ_MODES).includes(
+      value as SyncGatewaySnapshotReadMode,
+    )
+  ) {
+    throw new SyncGatewayContractError(
+      errorCode,
+      `${label} is not supported`,
+    );
+  }
+  return value as SyncGatewaySnapshotReadMode;
 }
 
 /** Requires a non-empty list at a gateway contract boundary. */

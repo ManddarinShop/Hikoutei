@@ -44,6 +44,7 @@ export const STORAGE_ERROR_CODES = {
   SCHEMA_INDEX_MISSING: "schema_index_missing",
   SCHEMA_COLUMN_MISSING: "schema_column_missing",
   SCHEMA_VERSION_INVALID: "schema_version_invalid",
+  INVALID_SQL_SCRIPT: "invalid_sql_script",
 } as const;
 
 export type StorageErrorCode =

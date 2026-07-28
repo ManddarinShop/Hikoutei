@@ -1,6 +1,12 @@
 export { CURRENT_SCHEMA_VERSION, migrateSchema, schemaDdl } from "./sqlite/schema.js";
 export type { SchemaMigrationResult } from "./sqlite/schema.js";
-export { commitCanonicalChanges } from "./state/canonicalCommit.js";
+export {
+  CANONICAL_COMMIT_RESULT_KINDS,
+  CANONICAL_COMMIT_STALE_TARGETS,
+  commitCanonicalChanges,
+  commitCanonicalChangesWithAdapter,
+  commitCanonicalChangesWithSql,
+} from "./state/canonicalCommit.js";
 export type {
   CanonicalCommitInput,
   CanonicalCommitResult,
@@ -19,19 +25,58 @@ export {
 export type { DatabaseSyncLike, StatementLike } from "./sqlite/sqliteBridge.js";
 export {
   claimWriterLease,
+  claimWriterLeaseWithAdapter,
+  claimWriterLeaseWithSql,
   readWriterLease,
+  readWriterLeaseWithAdapter,
+  readWriterLeaseWithSql,
   isFencingValid,
+  isFencingValidWithAdapter,
+  isFencingValidWithSql,
 } from "./sync/writerLease.js";
-export type { WriterLease, ClaimLeaseOptions, FencingContext } from "./sync/writerLease.js";
+export {
+  WRITER_LEASE_CLAIM_FAILURE_REASONS,
+  WRITER_LEASE_CLAIM_RESULT_KINDS,
+} from "./sync/writerLease.js";
+export type {
+  WriterLease,
+  ClaimLeaseOptions,
+  FencingContext,
+  WriterLeaseClaimFailureReason,
+  WriterLeaseClaimResult,
+  WriterLeaseClaimResultKind,
+} from "./sync/writerLease.js";
 export {
   claimEffect,
+  claimEffectWithAdapter,
+  claimEffectWithSql,
   applyEffectResult,
+  applyEffectResultWithAdapter,
+  applyEffectResultWithSql,
   supersedeAndReplan,
+  supersedeAndReplanWithAdapter,
+  supersedeAndReplanWithSql,
   recoverExpiredLeases,
+  recoverExpiredLeasesWithAdapter,
+  recoverExpiredLeasesWithSql,
   releaseUnprocessedEffect,
+  releaseUnprocessedEffectWithAdapter,
+  releaseUnprocessedEffectWithSql,
+  retryClaimedEffect,
+  retryClaimedEffectWithAdapter,
+  retryClaimedEffectWithSql,
   findPendingEffectsByTarget,
+  findPendingEffectsByTargetWithAdapter,
+  findPendingEffectsByTargetWithSql,
   listReadyEffects,
+  listReadyEffectsWithAdapter,
+  listReadyEffectsWithSql,
+  hasPendingOrProcessingEffects,
+  hasPendingOrProcessingEffectsWithAdapter,
+  hasPendingOrProcessingEffectsWithSql,
   appendPendingEffects,
+  appendPendingEffectsWithAdapter,
+  appendPendingEffectsWithSql,
 } from "./sync/effectOutbox.js";
 export type {
   ClaimResult,
@@ -40,8 +85,14 @@ export type {
   EffectProjectionConfirmation,
   NewEffect,
   PendingEffect,
+  RetryClaimedEffectOptions,
 } from "./sync/effectOutbox.js";
-export { persistObservedRow } from "./state/observationWriter.js";
+export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./sync/effectOutbox.js";
+export {
+  persistObservedRow,
+  persistObservedRowWithAdapter,
+  persistObservedRowWithSql,
+} from "./state/observationWriter.js";
 export type {
   ObservationAttemptInput,
   EventIdentityInput,
@@ -50,19 +101,34 @@ export type {
   PersistObservedRowInput,
   PersistObservedRowResult,
 } from "./state/observationWriter.js";
-export { persistResolutionCommand } from "./state/resolutionWriter.js";
+export {
+  persistResolutionCommand,
+  persistResolutionCommandWithAdapter,
+  persistResolutionCommandWithSql,
+} from "./state/resolutionWriter.js";
 export type {
   PersistResolutionCommandInput,
   PersistResolutionCommandResult,
 } from "./state/resolutionWriter.js";
-export { registerSyncSheet, requireRegisteredSyncSheet } from "./sync/syncRegistry.js";
+export {
+  registerSyncSheet,
+  registerSyncSheetWithAdapter,
+  registerSyncSheetWithSql,
+  requireRegisteredSyncSheet,
+  requireRegisteredSyncSheetWithAdapter,
+  requireRegisteredSyncSheetWithSql,
+} from "./sync/syncRegistry.js";
 export type {
   RegisteredProjection,
   RegisterSyncSheetInput,
   RegisteredSyncSheet,
   RegisterSyncSheetResult,
 } from "./sync/syncRegistry.js";
-export { persistReadOnlySnapshotObservation } from "./state/readOnlyObservation.js";
+export {
+  persistReadOnlySnapshotObservation,
+  persistReadOnlySnapshotObservationWithAdapter,
+  persistReadOnlySnapshotObservationWithSql,
+} from "./state/readOnlyObservation.js";
 export type {
   ReadOnlySnapshotObservationInput,
   ReadOnlySnapshotObservationResult,

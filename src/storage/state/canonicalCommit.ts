@@ -14,10 +14,18 @@ import {
 import { ROW_OPERATIONS } from "../../core/model/constants.js";
 import type { Applicability, FieldOwnership, NormalizedCell, Presence } from "../../core/index.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
-import { isFencingValid } from "../sync/writerLease.js";
+import {
+  isFencingValid,
+  isFencingValidWithSql,
+} from "../sync/writerLease.js";
 import type { FencingContext } from "../sync/writerLease.js";
-import type { NewEffect } from "../sync/effectOutbox.js";
+import {
+  appendPendingEffectsWithSql,
+  type NewEffect,
+} from "../sync/effectOutbox.js";
 import { toSqlNullable } from "../sqlite/sqlState.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import { rollbackSqlSavepoint } from "../sqlite/sqlTransaction.js";
 
 const FENCE_EXISTS_SQL = `
   SELECT 1 FROM writer_lease
@@ -207,6 +215,67 @@ export function commitCanonicalChanges(
   }
 }
 
+/**
+ * Commits canonical state and outbox effects inside an already-active async
+ * SQL transaction.
+ *
+ * This is the MikroORM-compatible counterpart of `commitCanonicalChanges()`.
+ * Call it from the same adapter transaction as the user entity mutation so a
+ * database error cannot persist one side without the other.
+ */
+export async function commitCanonicalChangesWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: CanonicalCommitInput,
+): Promise<CanonicalCommitResult> {
+  const invalidReason = validateInput(input);
+  if (invalidReason.kind === PRESENCE_KINDS.PRESENT) {
+    return { kind: CANONICAL_COMMIT_RESULT_KINDS.INVALID, reason: invalidReason.value };
+  }
+  if (!(await isFencingValidWithSql(sql, fence))) {
+    return { kind: CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT };
+  }
+
+  await sql.run("SAVEPOINT canonical_commit");
+  try {
+    const result = input.kind === ROW_OPERATIONS.INSERT
+      ? await applyInsertWithSql(sql, fence, input)
+      : input.kind === ROW_OPERATIONS.UPDATE
+        ? await applyUpdateWithSql(sql, fence, input)
+        : await applyDeleteWithSql(sql, fence, input);
+    if (result.kind !== CANONICAL_COMMIT_RESULT_KINDS.APPLIED) {
+      await rollbackSqlSavepoint(sql, "canonical_commit");
+      return result;
+    }
+
+    if (!(await appendPendingEffectsWithSql(sql, fence, input.effects))) {
+      throw new AsyncFenceLostError();
+    }
+
+    await sql.run("RELEASE canonical_commit");
+    return result;
+  } catch (error: unknown) {
+    try {
+      await rollbackSqlSavepoint(sql, "canonical_commit");
+    } catch {
+      // Preserve the storage error that made the canonical commit fail.
+    }
+    if (error instanceof AsyncFenceLostError) {
+      return { kind: CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT };
+    }
+    throw error;
+  }
+}
+
+/** Commits canonical state in one adapter-owned transaction. */
+export async function commitCanonicalChangesWithAdapter(
+  storage: SqlStorageAdapter,
+  fence: FencingContext,
+  input: CanonicalCommitInput,
+): Promise<CanonicalCommitResult> {
+  return storage.transaction(({ sql }) => commitCanonicalChangesWithSql(sql, fence, input));
+}
+
 function applyInsert(
   db: DatabaseSyncLike,
   fence: FencingContext,
@@ -230,6 +299,45 @@ function applyInsert(
     );
     if (result.changes !== 1) throwFenceIfLost(db, fence);
     if (result.changes !== 1) {
+      return {
+        kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
+        target: CANONICAL_COMMIT_STALE_TARGETS.FIELD,
+        fieldName: applicableFieldName(field.fieldName),
+      };
+    }
+    fieldRevisions.set(field.fieldName, 1);
+  }
+
+  return {
+    kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
+    entityRevision: 1,
+    fieldRevisions,
+  };
+}
+
+async function applyInsertWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: CanonicalInsertCommitInput,
+): Promise<CanonicalCommitResult> {
+  const entityResult = await sql.run(INSERT_CANONICAL_ENTITY_SQL, [
+    input.entityId,
+    toSqlNullable(input.acceptedSnapshotHash),
+    ...fenceParameters(fence),
+  ]);
+  if (entityResult.changes !== 1) return lostFenceOrStaleEntityWithSql(sql, fence);
+
+  const fieldRevisions = new Map<string, number>();
+  for (const field of input.fields) {
+    const result = await sql.run(INSERT_CANONICAL_FIELD_SQL, [
+      input.entityId,
+      field.fieldName,
+      serializeCell(field.value),
+      field.ownership,
+      ...fenceParameters(fence),
+    ]);
+    if (result.changes !== 1) {
+      await throwFenceIfLostWithSql(sql, fence);
       return {
         kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
         target: CANONICAL_COMMIT_STALE_TARGETS.FIELD,
@@ -299,6 +407,62 @@ function applyUpdate(
   };
 }
 
+async function applyUpdateWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: CanonicalUpdateCommitInput,
+): Promise<CanonicalCommitResult> {
+  const entity = await sql.get<{ readonly entity_revision: number }>(
+    READ_CANONICAL_ENTITY_SQL,
+    [input.entityId],
+  );
+  if (entity === undefined) {
+    return {
+      kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
+      target: CANONICAL_COMMIT_STALE_TARGETS.ENTITY,
+      fieldName: notApplicableFieldName(),
+    };
+  }
+
+  const fieldRevisions = new Map<string, number>();
+  for (const field of input.fields) {
+    const expectedFieldRevision = requireApplicableRevision(field.expectedFieldRevision);
+    const result = await sql.run(UPDATE_CANONICAL_FIELD_SQL, [
+      serializeCell(field.value),
+      input.entityId,
+      field.fieldName,
+      expectedFieldRevision,
+      field.ownership,
+      ...fenceParameters(fence),
+    ]);
+    if (result.changes !== 1) {
+      await throwFenceIfLostWithSql(sql, fence);
+      return {
+        kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
+        target: CANONICAL_COMMIT_STALE_TARGETS.FIELD,
+        fieldName: applicableFieldName(field.fieldName),
+      };
+    }
+    fieldRevisions.set(field.fieldName, expectedFieldRevision + 1);
+  }
+
+  const nextEntityRevision = entity.entity_revision + 1;
+  const entityResult = await sql.run(UPDATE_CANONICAL_ENTITY_SQL, [
+    nextEntityRevision,
+    toSqlNullable(input.acceptedSnapshotHash),
+    input.entityId,
+    entity.entity_revision,
+    ...fenceParameters(fence),
+  ]);
+  if (entityResult.changes !== 1) return lostFenceOrStaleEntityWithSql(sql, fence);
+
+  return {
+    kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
+    entityRevision: nextEntityRevision,
+    fieldRevisions,
+  };
+}
+
 /** Marks an entity tombstoned only when the observed entity revision is still current. */
 function applyDelete(
   db: DatabaseSyncLike,
@@ -314,6 +478,28 @@ function applyDelete(
     ...fenceParameters(fence),
   );
   if (result.changes !== 1) return lostFenceOrStaleEntity(db, fence);
+
+  return {
+    kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
+    entityRevision: nextEntityRevision,
+    fieldRevisions: new Map(),
+  };
+}
+
+async function applyDeleteWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: CanonicalDeleteCommitInput,
+): Promise<CanonicalCommitResult> {
+  const nextEntityRevision = input.expectedEntityRevision + 1;
+  const result = await sql.run(DELETE_CANONICAL_ENTITY_SQL, [
+    nextEntityRevision,
+    toSqlNullable(input.acceptedSnapshotHash),
+    input.entityId,
+    input.expectedEntityRevision,
+    ...fenceParameters(fence),
+  ]);
+  if (result.changes !== 1) return lostFenceOrStaleEntityWithSql(sql, fence);
 
   return {
     kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
@@ -414,6 +600,19 @@ function lostFenceOrStaleEntity(
     : { kind: CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT };
 }
 
+async function lostFenceOrStaleEntityWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+): Promise<CanonicalCommitResult> {
+  return (await isFencingValidWithSql(sql, fence))
+    ? {
+        kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
+        target: CANONICAL_COMMIT_STALE_TARGETS.ENTITY,
+        fieldName: notApplicableFieldName(),
+      }
+    : { kind: CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT };
+}
+
 function requireApplicableRevision(revision: Applicability<number>): number {
   if (revision.kind !== APPLICABILITY_KINDS.APPLICABLE) {
     throw new StorageError(
@@ -444,9 +643,16 @@ function throwFenceIfLost(db: DatabaseSyncLike, fence: FencingContext): void {
   if (!isFencingValid(db, fence)) throw new FenceLostError();
 }
 
+async function throwFenceIfLostWithSql(sql: SqlExecutor, fence: FencingContext): Promise<void> {
+  if (!(await isFencingValidWithSql(sql, fence))) throw new AsyncFenceLostError();
+}
+
 function rollbackSavepoint(db: DatabaseSyncLike, name: string): void {
   db.exec(`ROLLBACK TO ${name}`);
   db.exec(`RELEASE ${name}`);
 }
 
 class FenceLostError extends Error {}
+
+/** Internal control-flow signal that rolls the async canonical savepoint back. */
+class AsyncFenceLostError extends Error {}
