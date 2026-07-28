@@ -5,6 +5,7 @@ import {
   POSITIVE_SAFE_INTEGER_MINIMUM,
 } from "../../core/constants.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../core/encoding/constants.js";
+import { isJavaScriptType } from "../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_PROTOCOL_VERSIONS,
@@ -23,7 +24,7 @@ export function requireSyncGatewayText(
   errorCode: SyncGatewayErrorCode,
 ): string {
   if (
-    !isString(value) ||
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
     value.length === EMPTY_STRING_LENGTH_ZERO
   ) {
     throw new SyncGatewayContractError(errorCode, `${label} is required`);
@@ -38,7 +39,7 @@ export function requireSyncGatewayPositiveSafeInteger(
   errorCode: SyncGatewayErrorCode,
 ): number {
   if (
-    !isNumber(value) ||
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
     !Number.isSafeInteger(value) ||
     value < POSITIVE_SAFE_INTEGER_MINIMUM
   ) {
@@ -57,7 +58,7 @@ export function requireSyncGatewayNonNegativeSafeInteger(
   errorCode: SyncGatewayErrorCode,
 ): number {
   if (
-    !isNumber(value) ||
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
     !Number.isSafeInteger(value) ||
     value < NON_NEGATIVE_SAFE_INTEGER_MINIMUM
   ) {
@@ -75,7 +76,10 @@ export function requireSyncGatewayProtocolVersion(
   label: string,
   errorCode: SyncGatewayErrorCode,
 ): SyncGatewayProtocolVersion {
-  if (!isString(value) || value !== SYNC_GATEWAY_PROTOCOL_VERSIONS.V1) {
+  if (
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    value !== SYNC_GATEWAY_PROTOCOL_VERSIONS.V1
+  ) {
     throw new SyncGatewayContractError(
       errorCode,
       `${label} is not supported`,
@@ -90,7 +94,10 @@ export function requireSyncGatewayProjection(
   label: string,
   errorCode: SyncGatewayErrorCode,
 ): SyncGatewayProjection {
-  if (!isString(value) || !isSyncGatewayProjection(value)) {
+  if (
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    !isSyncGatewayProjection(value)
+  ) {
     throw new SyncGatewayContractError(
       errorCode,
       `${label} is not supported`,
@@ -108,14 +115,6 @@ export function requireSyncGatewayNonEmptyList<T>(
   if (values.length === EMPTY_ARRAY_LENGTH_ZERO) {
     throw new SyncGatewayContractError(errorCode, `${label} requires at least one item`);
   }
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.STRING;
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.NUMBER;
 }
 
 function isSyncGatewayProjection(value: string): value is SyncGatewayProjection {

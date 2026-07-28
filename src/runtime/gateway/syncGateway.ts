@@ -18,6 +18,10 @@ import {
   JAVASCRIPT_TYPE_NAMES,
   NORMALIZED_CELL_KINDS,
 } from "../../core/encoding/constants.js";
+import {
+  isJavaScriptType,
+  isRecord,
+} from "../../core/encoding/typeGuards.js";
 import { APPLICABILITY_KINDS } from "../../core/state/constants.js";
 import type { Applicability, Presence } from "../../core/state/types.js";
 import type { RegisteredProjection } from "../../storage/sync/syncRegistry.js";
@@ -238,7 +242,7 @@ export function parseSyncProjectionEffectPayload(value: string): SyncProjectionE
     "effect payload schemaVersion",
     SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
   );
-  if (!isBoolean(parsed.createIfMissing)) {
+  if (!isJavaScriptType(parsed.createIfMissing, JAVASCRIPT_TYPE_NAMES.BOOLEAN)) {
     throw new SyncGatewayContractError(
       SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       "effect payload createIfMissing must be boolean",
@@ -306,18 +310,6 @@ export function serializeSyncProjectionEffectPayload(payload: SyncProjectionEffe
     createIfMissing: checked.createIfMissing,
     expectedCandidateHash: toNullableCandidateHash(checked.expectedCandidateHash),
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === JAVASCRIPT_TYPE_NAMES.OBJECT &&
-    value !== null &&
-    !Array.isArray(value)
-  );
-}
-
-function isBoolean(value: unknown): value is boolean {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.BOOLEAN;
 }
 
 function parseNullableCandidateHash(value: unknown): Applicability<string> {

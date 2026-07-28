@@ -11,7 +11,7 @@ import {
   JAVASCRIPT_TYPE_NAMES,
   NORMALIZED_CELL_KINDS,
 } from "../encoding/constants.js";
-import { isJavaScriptType } from "../encoding/typeGuards.js";
+import { isJavaScriptType, isRecord } from "../encoding/typeGuards.js";
 import { stableHash } from "../encoding/stableEncode.js";
 import {
   CANONICAL_RESOLUTION_STATUSES,
@@ -424,12 +424,6 @@ function isDeleteEvidence(value: unknown): value is DeleteEvidence {
   return value === DELETE_EVIDENCE.DELETED_CONFIRMED ||
     value === DELETE_EVIDENCE.ANCHOR_LOST ||
     value === DELETE_EVIDENCE.UNAVAILABLE;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null &&
-    isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT) &&
-    !Array.isArray(value);
 }
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
