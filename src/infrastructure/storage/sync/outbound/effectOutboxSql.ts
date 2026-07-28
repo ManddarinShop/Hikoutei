@@ -1,0 +1,201 @@
+/** SQL statements used by the effect outbox state machine. */
+
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./effectOutboxContracts.js";
+
+export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
+].map((code) => `'${code}'`)
+  .join(", ");
+
+export const FENCE_EXISTS_SQL = `
+  SELECT 1 FROM writer_lease
+  WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until > ?
+`;
+
+export const CLAIM_EFFECT_SQL = `
+  UPDATE sheet_effect_outbox AS candidate
+  SET status = 'processing', claim_token = ?, writer_epoch = ?, lease_until = ?,
+      attempts = attempts + 1
+  WHERE candidate.effect_id = ?
+    AND candidate.status IN ('pending', 'failed')
+    AND EXISTS (${FENCE_EXISTS_SQL})
+    AND NOT EXISTS (
+      SELECT 1
+      FROM sheet_effect_outbox AS predecessor
+      WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
+        AND predecessor.target_kind = candidate.target_kind
+        AND predecessor.target_id = candidate.target_id
+        AND predecessor.stream_sequence < candidate.stream_sequence
+        AND predecessor.status NOT IN ('applied', 'superseded')
+    )
+`;
+
+export const INSERT_PENDING_EFFECT_SQL = `
+  INSERT INTO sheet_effect_outbox (
+    effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+    projection, row_binding_id, conflict_id, target_kind, target_id,
+    target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+    expected_visible_revision, expected_visible_hash, repair_guard_hash,
+    source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+    stream_sequence, created_at, status
+  )
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
+  WHERE EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const APPLY_EFFECT_RESULT_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = ?, last_error_code = ?, last_error_message = ?,
+      claim_token = NULL, lease_until = NULL
+  WHERE effect_id = ?
+    AND status = 'processing'
+    AND claim_token = ?
+    AND writer_epoch = ?
+    AND lease_until IS NOT NULL
+    AND lease_until > ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const SUPERSEDE_EFFECT_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'superseded', supersedes_effect_id = ?
+  WHERE effect_id = ?
+    AND status IN ('pending', 'processing', 'blocked_candidate', 'conflict', 'failed')
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const INSERT_REPLANNED_EFFECT_SQL = `
+  INSERT INTO sheet_effect_outbox (
+    effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+    projection, row_binding_id, conflict_id, target_kind, target_id,
+    target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+    expected_visible_revision, expected_visible_hash, repair_guard_hash,
+    source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+    stream_sequence, predecessor_effect_id, created_at, status
+  )
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
+  WHERE EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const RECOVER_EXPIRED_LEASES_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'failed', claim_token = NULL, lease_until = NULL,
+      last_error_code = '${SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION}',
+      last_error_message = 'Read the remote postcondition before retrying this effect.'
+  WHERE status = 'processing' AND lease_until IS NOT NULL AND lease_until <= ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const REQUEUE_CLAIMED_EFFECT_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'pending', claim_token = NULL, lease_until = NULL,
+      last_error_code = ?, last_error_message = ?
+  WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
+    AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const RELEASE_UNPROCESSED_EFFECT_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'pending', claim_token = NULL, lease_until = NULL,
+      last_error_code = 'gateway_batch_deferred',
+      last_error_message = 'Gateway acknowledged a bounded batch before this effect.'
+  WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
+    AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const SELECT_PENDING_EFFECTS_BY_TARGET_SQL = `
+  SELECT effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+         projection, row_binding_id, conflict_id, target_kind, target_id,
+         target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+         expected_visible_revision, expected_visible_hash, repair_guard_hash,
+         source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+         stream_sequence, created_at, status
+  FROM sheet_effect_outbox
+  WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
+    AND status = 'pending'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM sheet_effect_outbox AS predecessor
+      WHERE predecessor.logical_sheet_id = sheet_effect_outbox.logical_sheet_id
+        AND predecessor.target_kind = sheet_effect_outbox.target_kind
+        AND predecessor.target_id = sheet_effect_outbox.target_id
+        AND predecessor.stream_sequence < sheet_effect_outbox.stream_sequence
+        AND predecessor.status NOT IN ('applied', 'superseded')
+    )
+  ORDER BY stream_sequence
+`;
+
+export const SELECT_READY_EFFECTS_SQL = `
+  SELECT effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+         projection, row_binding_id, conflict_id, target_kind, target_id,
+         target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+         expected_visible_revision, expected_visible_hash, repair_guard_hash,
+         source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+         stream_sequence, created_at, status
+  FROM sheet_effect_outbox AS candidate
+  WHERE (
+    candidate.status = 'pending'
+    OR (
+      candidate.status = 'failed'
+      AND candidate.last_error_code IN (${RECOVERABLE_EFFECT_ERROR_CODE_SQL})
+    )
+  )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM sheet_effect_outbox AS predecessor
+      WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
+        AND predecessor.target_kind = candidate.target_kind
+        AND predecessor.target_id = candidate.target_id
+        AND predecessor.stream_sequence < candidate.stream_sequence
+        AND predecessor.status NOT IN ('applied', 'superseded')
+    )
+  ORDER BY candidate.logical_sheet_id, candidate.physical_sheet_id,
+           candidate.target_kind, candidate.target_id, candidate.stream_sequence
+  LIMIT ?
+`;
+
+export const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
+  SELECT COUNT(*) AS count
+  FROM sheet_effect_outbox
+  WHERE status IN ('pending', 'processing')
+`;
+
+export const UPSERT_VISIBLE_STATE_SQL = `
+  INSERT INTO sheet_visible_state (
+    physical_sheet_id, projection, row_binding_id, confirmed_snapshot_hash,
+    confirmed_visible_revision, confirmed_entity_revision, last_observed_hash
+  ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(physical_sheet_id, projection, row_binding_id)
+  DO UPDATE SET
+    confirmed_snapshot_hash = excluded.confirmed_snapshot_hash,
+    confirmed_visible_revision = excluded.confirmed_visible_revision,
+    confirmed_entity_revision = excluded.confirmed_entity_revision,
+    last_observed_hash = excluded.last_observed_hash
+  WHERE sheet_visible_state.confirmed_visible_revision <= excluded.confirmed_visible_revision
+`;
+
+export const UPSERT_VISIBLE_FIELD_STATE_SQL = `
+  INSERT INTO sheet_visible_field_state (
+    physical_sheet_id, projection, row_binding_id, field_name,
+    confirmed_field_hash, confirmed_visible_revision, candidate_epoch,
+    last_observed_field_hash
+  ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  ON CONFLICT(physical_sheet_id, projection, row_binding_id, field_name)
+  DO UPDATE SET
+    confirmed_field_hash = excluded.confirmed_field_hash,
+    confirmed_visible_revision = excluded.confirmed_visible_revision,
+    last_observed_field_hash = excluded.last_observed_field_hash
+  WHERE sheet_visible_field_state.confirmed_visible_revision <= excluded.confirmed_visible_revision
+`;
+
+
+/**
+ * Claims a pending effect for processing.
+ * Uses CAS on status to ensure only one worker wins.
+ */

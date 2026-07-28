@@ -11,12 +11,12 @@
       "import": "./dist/index.js"
     },
     "./orm": {
-      "types": "./dist/orm/index.d.ts",
-      "import": "./dist/orm/index.js"
+      "types": "./dist/application/orm/index.d.ts",
+      "import": "./dist/application/orm/index.js"
     },
     "./mikro-orm": {
-      "types": "./dist/adapter/mikro-orm/index.d.ts",
-      "import": "./dist/adapter/mikro-orm/index.js"
+      "types": "./dist/adapter/persistence/providers/mikro-orm/index.d.ts",
+      "import": "./dist/adapter/persistence/providers/mikro-orm/index.js"
     }
   },
   "files": [

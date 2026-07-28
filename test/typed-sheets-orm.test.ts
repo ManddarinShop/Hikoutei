@@ -7,17 +7,17 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PRESENCE_KINDS } from "../src/core/state/index.js";
+import { PRESENCE_KINDS } from "../src/shared/state/index.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,
   type TypedSheetsFlushCoordinator,
-} from "../src/orm/index.js";
+} from "../src/application/orm/index.js";
 import {
   createMikroOrmSqliteAdapter,
   createTypedSheetsOrm,
   type MikroOrmSqliteAdapter,
-} from "../src/orm/adapters/mikro-orm/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/index.js";
 
 const OrderSchema = defineEntity({
   name: "TypedSheetsFacadeOrder",

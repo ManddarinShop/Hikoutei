@@ -70,27 +70,43 @@ MVP exclusions:
 
 ## Architecture
 
-Keep the core repository logic separate from Google API details.
+Keep domain rules separate from application orchestration, infrastructure
+storage, and Google API details.
 
 Recommended package boundaries:
 
 ```txt
 src/
-  core/
-    repository.ts
-    schema.ts
-    columns.ts
-    errors.ts
-    row-parser.ts
-    versioning.ts
-  adapters/
-    types.ts
-    memory.ts
-    google-sheets.ts
+  domain/                       # 정규화 값, 평가, 충돌, 상태 규칙
+  shared/                       # 도메인 간 공유 상수·인코딩·상태 계약
+  application/
+    orm/                        # 공개 ORM facade, mapping, flush 계획
+    sync/                       # worker, reconciliation, gateway orchestration
+  adapter/
+    persistence/
+      contracts/                # 저장소 공통 계약
+      providers/mikro-orm/      # 현재 MikroORM + SQLite 구현
+    sheets/
+      providers/apps-script-gateway/
+        protocol/               # 서명·직렬화·응답 검증
+        transport/              # HTTP operation client
+        operations/
+          read/                 # 테이블 읽기
+          write/                # fast append
+          observation/           # snapshot·anchor 관측
+          effect/               # update/delete effect
+  infrastructure/
+    storage/                    # SQLite canonical state와 outbox
   index.ts
 ```
 
-The core should depend on an adapter interface, not directly on Google Sheets SDKs.
+`domain/`과 `shared/`는 외부 SDK를 몰라야 한다. `application/`은 use case와
+동기화 흐름을 조율하고, `infrastructure/`는 SQLite 같은 외부 저장 기술을
+담당한다. `adapter/`는 persistence와 Sheets provider를 각각 계약 뒤에
+격리한다.
+
+The domain should depend on adapter interfaces, not directly on Google Sheets
+SDKs.
 
 The first tests should use an in-memory fake adapter. Real Google integration tests can come later and should be opt-in because they require credentials and quota.
 
@@ -117,6 +133,17 @@ Allowed without extra confirmation when requested:
 If a production source issue blocks the requested work, describe the blocker and ask before editing `src/**`.
 
 ## Adapter Boundary
+
+Adapters are split by capability and provider. A provider is a concrete
+implementation such as MikroORM or Apps Script; a contract is the stable
+boundary that core, ORM, storage, or runtime code consumes.
+
+- `adapter/persistence/contracts/`: SQL and persistence contracts independent of
+  MikroORM, Prisma, or another future implementation
+- `adapter/persistence/providers/mikro-orm/`: the current MikroORM-backed
+  entity engine and SQLite storage bridge
+- `adapter/sheets/providers/apps-script-gateway/`: the current signed Apps Script
+  provider, separated into protocol, transport, and operation capabilities
 
 The adapter should expose sheet-level operations in terms the core needs, not Google-specific concepts.
 

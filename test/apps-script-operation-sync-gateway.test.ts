@@ -3,22 +3,22 @@ import { describe, expect, it } from "vitest";
 import {
   AppsScriptOperationSyncGateway,
   type AppsScriptOperationProjectionStatus,
-} from "../src/adapter/apps-script-gateway/transport/operationSyncGateway.js";
+} from "../src/adapter/sheets/providers/apps-script-gateway/transport/operationSyncGateway.js";
 import type {
   AnyAppsScriptOperationDefinition,
   AppsScriptOperationGateway,
   AppsScriptOperationResults,
-} from "../src/adapter/apps-script-gateway/transport/operationClient.js";
+} from "../src/adapter/sheets/providers/apps-script-gateway/transport/operationClient.js";
 import type {
   ApplySyncEffectsRequest,
   SyncGatewayEffect,
-} from "../src/runtime/gateway/syncGateway.js";
-import { computeSyncVisibleHash } from "../src/runtime/gateway/syncGateway.js";
+} from "../src/application/sync/gateway/syncGateway.js";
+import { computeSyncVisibleHash } from "../src/application/sync/gateway/syncGateway.js";
 import type {
   RegisteredSyncProjectionDefinition,
   SyncGatewayProvisionRoute,
-} from "../src/runtime/gateway/SyncGatewayBootstrap.js";
-import type { SyncEffectWorkerGateway } from "../src/runtime/gateway/syncGateway.js";
+} from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
+import type { SyncEffectWorkerGateway } from "../src/application/sync/gateway/syncGateway.js";
 
 describe("AppsScriptOperationSyncGateway", () => {
   it("moves provisioning, fast append, and projection reads behind the library adapter", async () => {
@@ -273,7 +273,7 @@ describe("AppsScriptOperationSyncGateway", () => {
 
     expect(anchors.assigned).toBe(1);
     expect(anchors.duplicateAnchors[0]?.rowNumbers).toEqual([2, 4]);
-    expect(snapshot.rows[0]?.cells.id.normalizedCell).toEqual({
+    expect(snapshot.rows[0]?.cells.id?.normalizedCell).toEqual({
       kind: "string",
       value: "order-1",
     });

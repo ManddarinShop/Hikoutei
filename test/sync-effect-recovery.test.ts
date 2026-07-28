@@ -16,14 +16,14 @@ import {
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/runtime/gateway/syncGateway.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/runtime/effects/SyncEffectWorker.js";
+} from "../src/application/sync/gateway/syncGateway.js";
+import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 import {
   migrateMikroOrmSqliteSchema,
   MikroOrmSqliteAdapter,
-} from "../src/adapter/mikro-orm/index.js";
-import type { NewEffect } from "../src/storage/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/index.js";
+import type { NewEffect } from "../src/infrastructure/storage/index.js";
 
 const EntitySchema = defineEntity({
   name: "SyncEffectRecoveryEntity",

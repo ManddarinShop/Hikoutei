@@ -4,9 +4,9 @@ import {
   PRECONDITION_RESULTS,
   QUARANTINE_REASONS,
   ROW_OPERATIONS,
-} from "../src/core/model/constants.js";
-import type { RawObservedRowChange } from "../src/core/model/types.js";
-import { validateStructuralPreconditions } from "../src/core/evaluate/preconditions.js";
+} from "../src/domain/model/constants.js";
+import type { RawObservedRowChange } from "../src/domain/model/types.js";
+import { validateStructuralPreconditions } from "../src/domain/evaluate/preconditions.js";
 
 const snapshot = {
   rowBindingId: "binding-1",

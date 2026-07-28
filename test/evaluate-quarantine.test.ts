@@ -4,21 +4,21 @@ import {
   FIELD_OWNERSHIPS,
   QUARANTINE_REASONS,
   ROW_OPERATIONS,
-} from "../src/core/model/constants.js";
+} from "../src/domain/model/constants.js";
 import type {
   CanonicalEntityState,
   ObservedRowChange,
-} from "../src/core/model/types.js";
+} from "../src/domain/model/types.js";
 import {
   quarantineRow,
   quarantineSystemRow,
-} from "../src/core/evaluate/quarantine.js";
+} from "../src/domain/evaluate/quarantine.js";
 import {
   QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
   QUARANTINE_REPAIR_STATUSES,
   ROW_OUTCOMES,
-} from "../src/core/evaluate/constants.js";
-import type { OwnershipCheckResult } from "../src/core/evaluate/preconditions.js";
+} from "../src/domain/evaluate/constants.js";
+import type { OwnershipCheckResult } from "../src/domain/evaluate/preconditions.js";
 
 const row: ObservedRowChange = {
   rowBindingId: "binding-1",

@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../src/core/state/index.js";
+} from "../src/shared/state/index.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
-} from "../src/runtime/gateway/errors.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../src/runtime/gateway/constants.js";
+} from "../src/application/sync/gateway/errors.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../src/application/sync/gateway/constants.js";
 import {
   FakeSyncSheetGateway,
   type FakeSyncSheetInput,

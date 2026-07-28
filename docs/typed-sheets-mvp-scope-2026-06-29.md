@@ -12,11 +12,12 @@ MVP의 목표는 다음 한 문장으로 제한한다.
 
 ## MVP에 반드시 포함할 것
 
-### 1. Core / Adapter 분리
+### 1. Domain / Application / Adapter 분리
 
-MVP부터 core와 adapter는 분리한다.
+MVP부터 domain, application, adapter를 분리한다.
 
-Core는 Google API를 몰라야 한다. 테스트는 fake adapter로 먼저 작성한다.
+Domain은 Google API와 SQLite 구현을 몰라야 한다. 테스트는 fake adapter로
+먼저 작성한다.
 
 초기 adapter port:
 
@@ -304,10 +305,14 @@ import {
 단일 package 안에서 module 경계는 명확히 둔다.
 
 ```txt
-src/core/
+src/domain/
+src/application/
+src/adapter/
+src/infrastructure/
 ```
 
-repository의 핵심 로직을 둔다.
+domain에는 순수 규칙을, application에는 ORM과 동기화 흐름을, adapter에는
+외부 provider 계약과 구현을, infrastructure에는 SQLite 저장을 둔다.
 
 - schema validation
 - row parsing
@@ -316,18 +321,14 @@ repository의 핵심 로직을 둔다.
 - optimistic locking
 - error types
 
-```txt
-src/testing/
-```
-
-테스트용 fake adapter를 둔다.
+테스트용 fake adapter는 `test/support/`에 둔다.
 
 - in-memory sheet snapshot
 - append row 기록
 - update row 기록
 - conflict simulation helper
 
-`testing`은 MVP에서 public export할지 고민이 필요하다. 초기에는 internal test helper로 두고, 나중에 사용자가 adapter contract를 테스트하고 싶다는 수요가 생기면 public export로 승격한다.
+fake adapter는 public package surface에 포함하지 않는다.
 
 ### 2차 패키지 구성
 

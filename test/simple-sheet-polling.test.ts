@@ -5,13 +5,13 @@ import {
   initializeMikroOrmSqliteAdapter,
   migrateMikroOrmSqliteStorageSchema,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/mikro-orm/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/index.js";
 import {
   pollSimpleSheetRowsWithAdapter,
   type SyncSheetTableReaderGateway,
   type SyncTableRowsResult,
 } from "../src/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/runtime/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
 
 const TestEntitySchema = defineEntity({
   name: "SimpleSheetPollingTestEntity",

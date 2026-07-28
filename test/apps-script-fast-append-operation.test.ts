@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createFastAppendRowsOperation,
-} from "../src/adapter/apps-script-gateway/operations/fastAppendOperation.js";
+} from "../src/adapter/sheets/providers/apps-script-gateway/operations/write/fastAppendOperation.js";
 
 describe("thin Code.gs fast-append operation", () => {
   it("builds a single setValues operation without metadata work", () => {
