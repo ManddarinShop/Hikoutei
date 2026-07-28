@@ -45,6 +45,16 @@ The public foundation now includes:
 - public lifecycle tests covering local persistence, route-backed outbox
   planning, relations, and invalid primary keys.
 
+The root package now exports only this application-facing entity API. Domain,
+storage, gateway, and MikroORM adapter contracts are internal or provider
+subpath concerns; contract tests import those modules directly so a test cannot
+accidentally define an implementation detail as public API.
+
+The obsolete MikroORM spike document was removed. Its public examples had
+drifted toward provider-specific mapping and raw storage calls even though the
+supported application workflow is `defineTypedSheetsEntity()` plus
+`createTypedSheets()`.
+
 ## Implementation status
 
 | Area | Current state | Cleanup decision |
@@ -52,12 +62,12 @@ The public foundation now includes:
 | Public entity definition | Implemented and materialized by the current provider | Keep provider conversion private |
 | Entity flush transaction | Implemented for entity table, sync state, and outbox | Keep as the SQLite transaction boundary |
 | Outbound worker | Implemented with lease, retry, recovery, and reconciliation primitives | Keep in the separate worker process |
-| User_Input polling | Polling detects changed rows, but does not yet complete observation → evaluation → SQLite entity mutation orchestration | Implement as the next vertical slice |
+| User_Input polling | The old simple comparison scaffold was removed; the complete polling vertical slice is isolated on the feature branch | Implement and merge only through the dedicated inbound-sync branch |
 | Conflict projection | Schema, effect kinds, and storage primitives exist | Finish global registration, two-checkbox observation, and field-level projection |
 | `use_system` | Domain/storage acknowledgement path exists | Preserve current SQLite value and delete the remote row through outbox |
 | `use_user` | Not implemented end to end | Apply candidate to the entity table with revision/CAS in the same SQLite transaction |
-| Persistence abstraction | Adapter-neutral contracts exist, but raw synchronous storage and async adapter-backed paths coexist | Migrate callers first; remove/hide raw paths only after coverage exists |
-| Tests | 81 tests pass, mostly domain/provider/outbound contracts | Add inbound/conflict scenario tests before deleting lower-level coverage |
+| Persistence abstraction | Adapter-neutral contracts and async adapter-backed storage are the only runtime path | Keep provider-specific SQL behind the adapter boundary |
+| Tests | Public boundary and provider/domain contract tests are kept separate | Add inbound/conflict scenario tests before deleting lower-level coverage |
 
 ## Legacy code that should not be deleted yet
 
@@ -67,9 +77,17 @@ desired application API, but deleting them now would remove coverage for the
 current materializer and transaction bridge before equivalent public scenario
 tests exist.
 
-Likewise, the raw `DatabaseSyncLike` storage functions are still used by
-recovery and lower-level tests. They are a cleanup target, not safe deletion
-targets in this phase.
+The duplicate synchronous `node:sqlite` storage path was removed. Runtime
+storage now enters through the adapter-backed SQL contract, while provider-level
+MikroORM fixtures remain because they verify the current materializer boundary.
+
+The unused restore/cutover path was removed as well. It had no callers or
+tests, and its `cutover_state` table is no longer created for new databases;
+existing tables are left untouched by this cleanup.
+
+The unused read-only snapshot persistence path was removed for the same reason:
+gateway observation is now recorded through the normal observation ledger, so
+there is no second storage writer with a different contract.
 
 ## Next implementation order
 
@@ -82,5 +100,5 @@ targets in this phase.
    next System_State outbox effect.
 4. Add scenario tests for accepted edits, stale edits, server-side rebase,
    both-checkbox invalid input, each resolution choice, and stale resolution.
-5. Only after those tests pass, migrate remaining callers away from raw storage
-   helpers and remove transitional public exports.
+5. Keep the low-level provider/domain contract tests while adding the inbound
+   and conflict scenario tests; do not reintroduce a second storage path.

@@ -10,10 +10,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./orm": {
-      "types": "./dist/application/orm/index.d.ts",
-      "import": "./dist/application/orm/index.js"
-    },
     "./mikro-orm": {
       "types": "./dist/adapter/persistence/providers/mikro-orm/index.d.ts",
       "import": "./dist/adapter/persistence/providers/mikro-orm/index.js"

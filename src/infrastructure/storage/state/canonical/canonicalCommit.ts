@@ -25,11 +25,7 @@ import {
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import { rollbackSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import { toSqlNullable } from "../../sqlite/sqlState.js";
-import type { DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
-import {
-  isFencingValid,
-  isFencingValidWithSql,
-} from "../../sync/shared/writerLease.js";
+import { isFencingValidWithSql } from "../../sync/shared/writerLease.js";
 import type { FencingContext } from "../../sync/shared/writerLease.js";
 
 // Outbound synchronization: accepted canonical changes become outbox effects.
@@ -37,10 +33,7 @@ import {
   appendPendingEffectsWithSql,
   type NewEffect,
 } from "../../sync/outbound/effectOutbox.js";
-import {
-  FENCE_EXISTS_SQL,
-  INSERT_PENDING_EFFECT_SQL,
-} from "../../sync/outbound/effectOutboxSql.js";
+import { FENCE_EXISTS_SQL } from "../../sync/outbound/effectOutboxSql.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 
 const INSERT_CANONICAL_ENTITY_SQL = `
@@ -167,57 +160,9 @@ export type CanonicalCommitResult =
     };
 
 /**
- * Commits an insert, field-level update, or confirmed delete under a writer fence.
- *
- * Field revisions are independent: an update CASes each supplied field, then
- * increments the entity revision once. An outbox uniqueness failure therefore
- * rolls back the canonical state as well as the pending effect rows.
- */
-export function commitCanonicalChanges(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  input: CanonicalCommitInput,
-): CanonicalCommitResult {
-  const invalidReason = validateInput(input);
-  if (invalidReason.kind === PRESENCE_KINDS.PRESENT) {
-    return { kind: CANONICAL_COMMIT_RESULT_KINDS.INVALID, reason: invalidReason.value };
-  }
-  if (!isFencingValid(db, fence)) {
-    return { kind: CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT };
-  }
-
-  db.exec("SAVEPOINT canonical_commit");
-  try {
-    const result = input.kind === ROW_OPERATIONS.INSERT
-      ? applyInsert(db, fence, input)
-      : input.kind === ROW_OPERATIONS.UPDATE
-        ? applyUpdate(db, fence, input)
-        : applyDelete(db, fence, input);
-    if (result.kind !== CANONICAL_COMMIT_RESULT_KINDS.APPLIED) {
-      rollbackSavepoint(db, "canonical_commit");
-      return result;
-    }
-
-    for (const effect of input.effects) {
-      insertPendingEffect(db, fence, effect);
-    }
-
-    db.exec("RELEASE canonical_commit");
-    return result;
-  } catch (error: unknown) {
-    rollbackSavepoint(db, "canonical_commit");
-    if (error instanceof FenceLostError) {
-      return { kind: CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT };
-    }
-    throw error;
-  }
-}
-
-/**
  * Commits canonical state and outbox effects inside an already-active async
  * SQL transaction.
  *
- * This is the MikroORM-compatible counterpart of `commitCanonicalChanges()`.
  * Call it from the same adapter transaction as the user entity mutation so a
  * database error cannot persist one side without the other.
  */
@@ -274,45 +219,6 @@ export async function commitCanonicalChangesWithAdapter(
   return storage.transaction(({ sql }) => commitCanonicalChangesWithSql(sql, fence, input));
 }
 
-function applyInsert(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  input: CanonicalInsertCommitInput,
-): CanonicalCommitResult {
-  const entityResult = db.prepare(INSERT_CANONICAL_ENTITY_SQL).run(
-    input.entityId,
-    toSqlNullable(input.acceptedSnapshotHash),
-    ...fenceParameters(fence),
-  );
-  if (entityResult.changes !== 1) return lostFenceOrStaleEntity(db, fence);
-
-  const fieldRevisions = new Map<string, number>();
-  for (const field of input.fields) {
-    const result = db.prepare(INSERT_CANONICAL_FIELD_SQL).run(
-      input.entityId,
-      field.fieldName,
-      serializeCell(field.value),
-      field.ownership,
-      ...fenceParameters(fence),
-    );
-    if (result.changes !== 1) throwFenceIfLost(db, fence);
-    if (result.changes !== 1) {
-      return {
-        kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
-        target: CANONICAL_COMMIT_STALE_TARGETS.FIELD,
-        fieldName: applicableFieldName(field.fieldName),
-      };
-    }
-    fieldRevisions.set(field.fieldName, 1);
-  }
-
-  return {
-    kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
-    entityRevision: 1,
-    fieldRevisions,
-  };
-}
-
 async function applyInsertWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
@@ -348,59 +254,6 @@ async function applyInsertWithSql(
   return {
     kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
     entityRevision: 1,
-    fieldRevisions,
-  };
-}
-
-function applyUpdate(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  input: CanonicalUpdateCommitInput,
-): CanonicalCommitResult {
-  const entity = db.prepare(READ_CANONICAL_ENTITY_SQL)
-    .get(input.entityId) as { entity_revision: number } | undefined;
-  if (entity === undefined) {
-    return {
-      kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
-      target: CANONICAL_COMMIT_STALE_TARGETS.ENTITY,
-      fieldName: notApplicableFieldName(),
-    };
-  }
-
-  const fieldRevisions = new Map<string, number>();
-  for (const field of input.fields) {
-    const result = db.prepare(UPDATE_CANONICAL_FIELD_SQL).run(
-      serializeCell(field.value),
-      input.entityId,
-      field.fieldName,
-      requireApplicableRevision(field.expectedFieldRevision),
-      field.ownership,
-      ...fenceParameters(fence),
-    );
-    if (result.changes !== 1) {
-      throwFenceIfLost(db, fence);
-      return {
-        kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
-        target: CANONICAL_COMMIT_STALE_TARGETS.FIELD,
-        fieldName: applicableFieldName(field.fieldName),
-      };
-    }
-    fieldRevisions.set(field.fieldName, requireApplicableRevision(field.expectedFieldRevision) + 1);
-  }
-
-  const nextEntityRevision = entity.entity_revision + 1;
-  const entityResult = db.prepare(UPDATE_CANONICAL_ENTITY_SQL).run(
-    nextEntityRevision,
-    toSqlNullable(input.acceptedSnapshotHash),
-    input.entityId,
-    entity.entity_revision,
-    ...fenceParameters(fence),
-  );
-  if (entityResult.changes !== 1) return lostFenceOrStaleEntity(db, fence);
-
-  return {
-    kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
-    entityRevision: nextEntityRevision,
     fieldRevisions,
   };
 }
@@ -461,29 +314,6 @@ async function applyUpdateWithSql(
   };
 }
 
-/** Marks an entity tombstoned only when the observed entity revision is still current. */
-function applyDelete(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  input: CanonicalDeleteCommitInput,
-): CanonicalCommitResult {
-  const nextEntityRevision = input.expectedEntityRevision + 1;
-  const result = db.prepare(DELETE_CANONICAL_ENTITY_SQL).run(
-    nextEntityRevision,
-    toSqlNullable(input.acceptedSnapshotHash),
-    input.entityId,
-    input.expectedEntityRevision,
-    ...fenceParameters(fence),
-  );
-  if (result.changes !== 1) return lostFenceOrStaleEntity(db, fence);
-
-  return {
-    kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
-    entityRevision: nextEntityRevision,
-    fieldRevisions: new Map(),
-  };
-}
-
 async function applyDeleteWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
@@ -504,45 +334,6 @@ async function applyDeleteWithSql(
     entityRevision: nextEntityRevision,
     fieldRevisions: new Map(),
   };
-}
-
-function insertPendingEffect(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  effect: NewEffect,
-): void {
-  const result = db.prepare(INSERT_PENDING_EFFECT_SQL).run(
-    effect.effectId,
-    effect.effectKind,
-    effect.commitId,
-    effect.logicalSheetId,
-    effect.physicalSheetId,
-    effect.projection,
-    toSqlNullable(effect.rowBindingId),
-    toSqlNullable(effect.conflictId),
-    effect.targetKind,
-    effect.targetId,
-    toSqlNullable(effect.targetEntityRevision),
-    toSqlNullable(effect.targetFieldRevisionHash),
-    toSqlNullable(effect.targetCanonicalCommitId),
-    effect.expectedVisibleRevision,
-    effect.expectedVisibleHash,
-    toSqlNullable(effect.repairGuardHash),
-    toSqlNullable(effect.sourceQuarantineId),
-    effect.payloadJson,
-    effect.payloadHash,
-    effect.effectDedupeKey,
-    effect.streamSequence,
-    fence.now,
-    ...fenceParameters(fence),
-  );
-  if (result.changes !== 1) throwFenceIfLost(db, fence);
-  if (result.changes !== 1) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.EFFECT_WRITE_FAILED,
-      `could not insert effect ${effect.effectId}`,
-    );
-  }
 }
 
 function validateInput(input: CanonicalCommitInput): Presence<string> {
@@ -585,19 +376,6 @@ function serializeCell(value: NormalizedCell): string {
   return JSON.stringify(value);
 }
 
-function lostFenceOrStaleEntity(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-): CanonicalCommitResult {
-  return isFencingValid(db, fence)
-    ? {
-        kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
-        target: CANONICAL_COMMIT_STALE_TARGETS.ENTITY,
-        fieldName: notApplicableFieldName(),
-      }
-    : { kind: CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT };
-}
-
 async function lostFenceOrStaleEntityWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
@@ -637,20 +415,9 @@ function absentError(): Presence<string> {
   return { kind: PRESENCE_KINDS.ABSENT };
 }
 
-function throwFenceIfLost(db: DatabaseSyncLike, fence: FencingContext): void {
-  if (!isFencingValid(db, fence)) throw new FenceLostError();
-}
-
 async function throwFenceIfLostWithSql(sql: SqlExecutor, fence: FencingContext): Promise<void> {
   if (!(await isFencingValidWithSql(sql, fence))) throw new AsyncFenceLostError();
 }
-
-function rollbackSavepoint(db: DatabaseSyncLike, name: string): void {
-  db.exec(`ROLLBACK TO ${name}`);
-  db.exec(`RELEASE ${name}`);
-}
-
-class FenceLostError extends Error {}
 
 /** Internal control-flow signal that rolls the async canonical savepoint back. */
 class AsyncFenceLostError extends Error {}

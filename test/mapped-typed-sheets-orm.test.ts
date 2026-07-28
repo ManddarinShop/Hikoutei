@@ -7,13 +7,9 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  APPLICABILITY_KINDS,
-  FIELD_OWNERSHIPS,
-  PRESENCE_KINDS,
-  ROW_OPERATIONS,
-  claimWriterLeaseWithAdapter,
-} from "../src/index.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/index.js";
+import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "../src/domain/model/constants.js";
+import { claimWriterLeaseWithAdapter } from "../src/infrastructure/storage/sync/shared/writerLease.js";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../src/shared/encoding/constants.js";
@@ -34,7 +30,7 @@ import {
   type MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/index.js";
 import { parseSyncProjectionEffectPayload } from "../src/application/sync/gateway/syncGateway.js";
-import type { PersistObservedRowInput } from "../src/infrastructure/storage/index.js";
+import type { PersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationWriter.js";
 
 const OrderSchema = defineEntity({
   name: "MappedTypedSheetsOrder",

@@ -25,7 +25,6 @@ import {
 } from "../../../../domain/model/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import { EMPTY_ARRAY_LENGTH_ZERO } from "../../constants.js";
-import type { DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
 import { fromSqlNullable, toSqlNullable } from "../../sqlite/sqlState.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import {
@@ -85,84 +84,6 @@ function observedAfterRow(row: ObservedRowChange): NormalizedRow | null {
     case ROW_OPERATIONS.DELETE:
       return null;
   }
-}
-
-/** Appends an observation occurrence and classifies receipt replay semantics. */
-export function appendObservation(
-  db: DatabaseSyncLike,
-  batch: ObservedEditBatch,
-  physicalSheetId: string,
-  observation: ObservationAttemptInput,
-): ObservationAppendResult {
-  const receipt = db.prepare(READ_OBSERVATION_RECEIPT_SQL)
-    .get<ReceiptRow>(batch.sheetId, observation.observationKey);
-
-  const samePayload = receipt !== undefined &&
-    receipt.representative_payload_hash === observation.payloadHash;
-  const linkedEventId = samePayload ? receipt.event_id : null;
-  db.prepare(INSERT_EVENT_OBSERVATION_SQL).run(
-    observation.observationId,
-    batch.sheetId,
-    physicalSheetId,
-    observation.observationKey,
-    linkedEventId,
-    batch.source,
-    observation.payloadJson,
-    observation.payloadHash,
-    observation.detectedAt,
-    observation.receivedAt,
-    observation.ingressActorId,
-    toSqlNullable(observation.editorActorId),
-    observation.editorActorSource,
-  );
-
-  if (receipt === undefined) {
-    db.prepare(INSERT_OBSERVATION_RECEIPT_SQL).run(
-      batch.sheetId,
-      observation.observationKey,
-      observation.payloadHash,
-      observation.observationId,
-      observation.observationId,
-      observation.receivedAt,
-      observation.receivedAt,
-    );
-    return {
-      kind: OBSERVATION_APPEND_RESULT_KINDS.NEW,
-      eventId: fromSqlNullable<string>(null),
-    };
-  }
-
-  const nextState = !samePayload
-    ? receipt.state
-    : receipt.state === OBSERVATION_RECEIPT_STATES.PENDING
-      ? OBSERVATION_RECEIPT_STATES.PENDING
-      : receipt.state === OBSERVATION_RECEIPT_STATES.QUARANTINED
-        ? OBSERVATION_RECEIPT_STATES.QUARANTINED
-        : OBSERVATION_RECEIPT_STATES.DUPLICATE;
-  db.prepare(UPDATE_OBSERVATION_RECEIPT_REPLAY_SQL).run(
-    observation.observationId,
-    observation.receivedAt,
-    nextState,
-    batch.sheetId,
-    observation.observationKey,
-  );
-
-  if (!samePayload) {
-    return {
-      kind: OBSERVATION_APPEND_RESULT_KINDS.INTEGRITY_COLLISION,
-      eventId: fromSqlNullable<string>(null),
-    };
-  }
-  if (receipt.state === OBSERVATION_RECEIPT_STATES.PENDING && receipt.event_id === null) {
-    return {
-      kind: OBSERVATION_APPEND_RESULT_KINDS.PENDING_REPLAY,
-      eventId: fromSqlNullable<string>(null),
-    };
-  }
-  return {
-    kind: OBSERVATION_APPEND_RESULT_KINDS.DUPLICATE,
-    eventId: fromSqlNullable(receipt.event_id),
-  };
 }
 
 /**
@@ -248,20 +169,6 @@ export async function appendObservationWithSql(
   };
 }
 
-/** Completes the receipt after an event, duplicate, or quarantine outcome. */
-export function completeObservation(
-  db: DatabaseSyncLike,
-  logicalSheetId: string,
-  observation: ObservationAttemptInput,
-  eventId: Presence<string>,
-  state: ObservationCompletionState,
-): void {
-  db.prepare(UPDATE_EVENT_OBSERVATION_EVENT_SQL)
-    .run(toSqlNullable(eventId), observation.observationId);
-  db.prepare(COMPLETE_OBSERVATION_RECEIPT_SQL)
-    .run(toSqlNullable(eventId), state, logicalSheetId, observation.observationKey);
-}
-
 /** Completes one observation receipt through the active async SQL transaction. */
 export async function completeObservationWithSql(
   sql: SqlExecutor,
@@ -280,26 +187,6 @@ export async function completeObservationWithSql(
     logicalSheetId,
     observation.observationKey,
   ]);
-}
-
-/** Requires the binding identity that makes an event-bearing observation safe. */
-export function requireKnownBinding(
-  db: DatabaseSyncLike,
-  logicalSheetId: string,
-  rowBindingId: string,
-): RowBindingRow {
-  const binding = db.prepare(READ_ROW_BINDING_SQL)
-    .get<SqlRowBindingRow>(rowBindingId, logicalSheetId);
-  if (binding === undefined) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
-      "event-bearing observations require a known row binding",
-    );
-  }
-  return {
-    entity_id: fromSqlNullable(binding.entity_id),
-    state: binding.state,
-  };
 }
 
 /** Requires a row binding through the active async SQL transaction. */
@@ -322,49 +209,6 @@ export async function requireKnownBindingWithSql(
     entity_id: fromSqlNullable(binding.entity_id),
     state: binding.state,
   };
-}
-
-/** Finds a duplicate event represented by an unchanged active conflict candidate. */
-export function findMatchingCandidateEventId(
-  db: DatabaseSyncLike,
-  input: PersistObservedRowInput,
-  row: ObservedRowChange,
-  binding: RowBindingRow,
-): LookupResult<string> {
-  if (
-    input.evaluation.outcome === ROW_OUTCOMES.QUARANTINE ||
-    input.evaluation.acceptedFields.length > 0 ||
-    input.evaluation.conflicts.length === EMPTY_ARRAY_LENGTH_ZERO ||
-    binding.state !== ROW_BINDING_STATES.ACTIVE ||
-    binding.entity_id.kind === PRESENCE_KINDS.ABSENT
-  ) {
-    return { kind: LOOKUP_RESULT_KINDS.NOT_FOUND };
-  }
-
-  const eventIds = new Set<string>();
-  for (const conflict of input.evaluation.conflicts) {
-    const active = readActiveCandidate(
-      db,
-      input.physicalSheetId,
-      input.batch.projection,
-      row.rowBindingId,
-      conflict.fieldName,
-    );
-    if (
-      active.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
-      (active.value.status !== CONFLICT_STATUSES.OPEN &&
-        active.value.status !== CONFLICT_STATUSES.NEEDS_REBASE) ||
-      active.value.active_candidate_hash !== candidateHash(conflict)
-    ) {
-      return { kind: LOOKUP_RESULT_KINDS.NOT_FOUND };
-    }
-    eventIds.add(active.value.event_id);
-  }
-  if (eventIds.size !== 1) return { kind: LOOKUP_RESULT_KINDS.NOT_FOUND };
-  const eventId = [...eventIds][0];
-  return eventId === undefined
-    ? { kind: LOOKUP_RESULT_KINDS.NOT_FOUND }
-    : { kind: LOOKUP_RESULT_KINDS.FOUND, value: eventId };
 }
 
 /** Finds an unchanged active conflict candidate through the active async SQL transaction. */
@@ -410,21 +254,6 @@ export async function findMatchingCandidateEventIdWithSql(
     : { kind: LOOKUP_RESULT_KINDS.FOUND, value: eventId };
 }
 
-/** Reads the currently visible unresolved candidate for one row field. */
-export function readActiveCandidate(
-  db: DatabaseSyncLike,
-  physicalSheetId: string,
-  projection: string,
-  rowBindingId: string,
-  fieldName: string,
-): LookupResult<ActiveCandidateRow> {
-  const candidate = db.prepare(READ_ACTIVE_CANDIDATE_SQL)
-    .get<ActiveCandidateRow>(physicalSheetId, projection, rowBindingId, fieldName);
-  return candidate === undefined
-    ? { kind: LOOKUP_RESULT_KINDS.NOT_FOUND }
-    : { kind: LOOKUP_RESULT_KINDS.FOUND, value: candidate };
-}
-
 /** Reads the active candidate through the active async SQL transaction. */
 export async function readActiveCandidateWithSql(
   sql: SqlExecutor,
@@ -444,19 +273,6 @@ export async function readActiveCandidateWithSql(
     : { kind: LOOKUP_RESULT_KINDS.FOUND, value: candidate };
 }
 
-/** Finds a prior event with the caller-supplied idempotency key. */
-export function findEventByKey(
-  db: DatabaseSyncLike,
-  logicalSheetId: string,
-  eventKey: string,
-): LookupResult<EventRow> {
-  const event = db.prepare(READ_EVENT_BY_KEY_SQL)
-    .get<EventRow>(logicalSheetId, eventKey);
-  return event === undefined
-    ? { kind: LOOKUP_RESULT_KINDS.NOT_FOUND }
-    : { kind: LOOKUP_RESULT_KINDS.FOUND, value: event };
-}
-
 /** Finds an idempotent event key through the active async SQL transaction. */
 export async function findEventByKeyWithSql(
   sql: SqlExecutor,
@@ -467,72 +283,6 @@ export async function findEventByKeyWithSql(
   return event === undefined
     ? { kind: LOOKUP_RESULT_KINDS.NOT_FOUND }
     : { kind: LOOKUP_RESULT_KINDS.FOUND, value: event };
-}
-
-/** Creates the event log, row evidence, and field evidence for one new observation. */
-export function createEvent(
-  db: DatabaseSyncLike,
-  input: PersistObservedRowInput,
-  row: ObservedRowChange,
-): CreatedEvent {
-  const eventIdentity = input.event;
-  if (eventIdentity.kind === PRESENCE_KINDS.ABSENT) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_OBSERVATION_INPUT,
-      "cannot create an event without an identity",
-    );
-  }
-  const event = eventIdentity.value;
-  ensureEventBatch(db, input);
-
-  const sequenceRow = db.prepare(READ_NEXT_EVENT_SEQUENCE_SQL)
-    .get<EventSequenceRow>(input.batch.sheetId);
-  const eventSequence = sequenceRow?.next_sequence;
-  if (eventSequence === undefined || !Number.isSafeInteger(eventSequence)) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
-      "could not allocate the next event sequence",
-    );
-  }
-
-  const eventId = `event:${randomUUID()}`;
-  const status = input.evaluation.outcome === ROW_OUTCOMES.QUARANTINE
-    ? "quarantined"
-    : input.evaluation.conflicts.length > 0
-      ? ROW_OUTCOMES.CONFLICT
-      : ROW_OUTCOMES.ACCEPTED;
-  db.prepare(INSERT_EVENT_LOG_SQL).run(
-    eventId,
-    input.batch.sheetId,
-    input.physicalSheetId,
-    event.eventKey,
-    event.payloadHash,
-    eventSequence,
-    input.batch.batchId,
-    row.rowBindingId,
-    row.operation,
-    status,
-    input.observation.receivedAt,
-  );
-  const beforeRow = observedBeforeRow(row);
-  const afterRow = observedAfterRow(row);
-  db.prepare(INSERT_EVENT_ROW_SQL).run(
-    eventId,
-    auditJson(beforeRow),
-    auditJson(afterRow),
-    rowHash(beforeRow, row.rowBindingId),
-    rowHash(afterRow, row.rowBindingId),
-  );
-  for (const field of row.fields) {
-    db.prepare(INSERT_EVENT_FIELD_SQL).run(
-      eventId,
-      field.fieldName,
-      auditJson(field.previousValue),
-      auditJson(field.nextValue),
-      field.baseFieldRevision,
-    );
-  }
-  return { eventId, eventSequence };
 }
 
 /** Creates the event and its evidence through the active async SQL transaction. */
@@ -602,29 +352,6 @@ export async function createEventWithSql(
   return { eventId, eventSequence };
 }
 
-/** Updates visible hashes after a new event has recorded its observed evidence. */
-export function persistObservedHashes(
-  db: DatabaseSyncLike,
-  input: PersistObservedRowInput,
-  row: ObservedRowChange,
-): void {
-  db.prepare(UPDATE_VISIBLE_ROW_OBSERVED_HASH_SQL).run(
-    rowHash(observedAfterRow(row), row.rowBindingId),
-    input.physicalSheetId,
-    input.batch.projection,
-    row.rowBindingId,
-  );
-  for (const field of row.fields) {
-    db.prepare(UPDATE_VISIBLE_FIELD_OBSERVED_HASH_SQL).run(
-      stableHash(field.nextValue),
-      input.physicalSheetId,
-      input.batch.projection,
-      row.rowBindingId,
-      field.fieldName,
-    );
-  }
-}
-
 /** Updates observed row and field hashes through the active async SQL transaction. */
 export async function persistObservedHashesWithSql(
   sql: SqlExecutor,
@@ -651,36 +378,6 @@ export async function persistObservedHashesWithSql(
 /** Produces the idempotency hash for a visible unresolved field candidate. */
 export function candidateHash(conflict: FieldConflict): string {
   return stableHash({ value: conflict.userValue, revision: conflict.userBaseRevision });
-}
-
-function ensureEventBatch(db: DatabaseSyncLike, input: PersistObservedRowInput): void {
-  const existing = db.prepare(READ_EVENT_BATCH_SQL)
-    .get<EventBatchRow>(input.batch.batchId);
-  if (existing !== undefined) {
-    const matches = existing.logical_sheet_id === input.batch.sheetId &&
-      existing.physical_sheet_id === input.physicalSheetId &&
-      existing.source === input.batch.source &&
-      existing.projection === input.batch.projection &&
-      existing.atomicity === input.batch.atomicity &&
-      existing.base_snapshot_hash === input.batch.baseSnapshotHash;
-    if (!matches) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
-        "batch ID was replayed with different batch identity",
-      );
-    }
-    return;
-  }
-
-  db.prepare(INSERT_EVENT_BATCH_SQL).run(
-    input.batch.batchId,
-    input.batch.sheetId,
-    input.physicalSheetId,
-    input.batch.source,
-    input.batch.projection,
-    input.batch.atomicity,
-    input.batch.baseSnapshotHash,
-  );
 }
 
 /** Creates or verifies the idempotent batch identity through active async SQL. */

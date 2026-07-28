@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import * as typedSheetsPublicApi from "../src/index.js";
 
 import {
   createTypedSheets,
@@ -11,6 +12,13 @@ describe("typed-sheets public entity API", () => {
 
   afterEach(async () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close(true)));
+  });
+
+  it("does not expose storage, domain, or provider internals from the root package", () => {
+    expect("openDatabase" in typedSheetsPublicApi).toBe(false);
+    expect("claimWriterLeaseWithAdapter" in typedSheetsPublicApi).toBe(false);
+    expect("defineEntity" in typedSheetsPublicApi).toBe(false);
+    expect("MikroOrmSqliteAdapter" in typedSheetsPublicApi).toBe(false);
   });
 
   it("keeps entity definition and lifecycle code independent from MikroORM", async () => {

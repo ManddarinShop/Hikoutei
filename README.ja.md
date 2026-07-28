@@ -45,20 +45,25 @@ Hikoutei の組み込み SQLite アダプターを使う場合は必要です。
 
 ## クイックスタート
 
-エンティティマッピングを定義したら、リクエスト単位の manager でエンティティを
-操作します。完全なマッピングと Gateway の設定は
-[クイックスタートガイド](docs/quick-start.md)を参照してください。
+typed-sheets でエンティティを定義し、リクエスト単位の manager でエンティティを
+操作します。Sheet の設定は [クイックスタートガイド](docs/quick-start.md) を
+参照してください。
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "typed-sheets";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
 });
 
 const em = hikoutei.em.fork();
@@ -66,8 +71,11 @@ const user = em.create(User, { id: "u1", name: "Ada" });
 em.persist(user);
 await em.flush();
 
-user.name = "Ada Lovelace";
-await em.flush();
+const loaded = await em.findOne(User, { id: "u1" });
+if (loaded !== null) {
+  loaded.name = "Ada Lovelace";
+  await em.flush();
+}
 ```
 
 `flush()` はローカルのアプリケーション状態を更新し、設定済みの Sheet ビューへ

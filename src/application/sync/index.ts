@@ -23,18 +23,6 @@ export type {
   SyncGatewayProvisioner,
 } from "./gateway/SyncGatewayBootstrap.js";
 export {
-  pollSimpleSheetRowsWithAdapter,
-  SIMPLE_POLL_INVALID_REASONS,
-  SIMPLE_POLL_ROW_KINDS,
-} from "./inbound/polling/SimpleSheetPolling.js";
-export type {
-  SimplePollChangedRow,
-  SimplePollInvalidReason,
-  SimplePollRowKind,
-  SimpleSheetPollingResult,
-  SimpleSheetTablePollingResult,
-} from "./inbound/polling/SimpleSheetPolling.js";
-export {
   observeSyncSnapshot,
   observeSyncSnapshots,
   SplitSyncGateway,
