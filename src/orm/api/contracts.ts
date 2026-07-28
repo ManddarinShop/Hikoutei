@@ -10,7 +10,7 @@ import {
   PRESENCE_KINDS,
   type Presence,
 } from "../../core/state/index.js";
-import type { SqlExecutor } from "../adapters/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 
 /** Constructor accepted by the initial entity-style public API. */
 export interface TypedSheetsEntityClass<Entity extends object> {

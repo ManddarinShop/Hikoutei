@@ -33,7 +33,7 @@ import {
   type CanonicalCommitInput,
 } from "./canonicalCommit.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
-import type { SqlExecutor } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 import type { FencingContext } from "../sync/writerLease.js";
 import { auditJson } from "./observationAudit.js";
 import {

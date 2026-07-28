@@ -26,7 +26,7 @@ import type {
   SqlExecutor,
   SqlParameter,
   SqlStorageAdapter,
-} from "../../adapter/orm/contracts.js";
+} from "../../adapter/persistence/contracts/sql.js";
 import { toSqlNullable } from "../sqlite/sqlState.js";
 
 /** Failed effect codes that are safe to inspect and redrive after read-back. */

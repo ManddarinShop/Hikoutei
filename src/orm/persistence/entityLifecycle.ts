@@ -24,7 +24,7 @@ import {
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
 } from "../mapping/entityMapping.js";
-import type { SqlExecutor } from "../adapters/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 import type { FencingContext, CanonicalFieldWrite, CanonicalCommitInput } from "./contracts.js";
 import type { ResolvedWriterOptions, MappedChangePlan } from "./contracts.js";
 import {

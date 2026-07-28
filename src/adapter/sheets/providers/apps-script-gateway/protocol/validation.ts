@@ -1,9 +1,9 @@
 import {
   EMPTY_STRING_LENGTH_ZERO,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../core/constants.js";
-import { JAVASCRIPT_TYPE_NAMES } from "../../../core/encoding/constants.js";
-import { isJavaScriptType } from "../../../core/encoding/typeGuards.js";
+} from "../../../../../core/constants.js";
+import { JAVASCRIPT_TYPE_NAMES } from "../../../../../core/encoding/constants.js";
+import { isJavaScriptType } from "../../../../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_DEFAULTS,
   SYNC_GATEWAY_REQUEST_ID_PATTERN,

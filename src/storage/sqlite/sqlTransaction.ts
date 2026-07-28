@@ -1,4 +1,4 @@
-import type { SqlExecutor } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 
 /** Runs a nested storage unit atomically inside the current async SQL transaction. */
 export async function withSqlSavepoint<T>(

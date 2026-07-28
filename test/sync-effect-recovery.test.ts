@@ -22,7 +22,7 @@ import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 import {
   migrateMikroOrmSqliteSchema,
   MikroOrmSqliteAdapter,
-} from "../src/adapter/mikro-orm/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/index.js";
 import type { NewEffect } from "../src/storage/index.js";
 
 const EntitySchema = defineEntity({

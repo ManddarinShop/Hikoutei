@@ -18,7 +18,7 @@ import { EMPTY_STRING_LENGTH_ZERO } from "../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 import type { NewEffect } from "../sync/effectOutbox.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
-import type { SqlExecutor } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 import type {
   CanonicalRowMutation,
   ObservationAttemptInput,

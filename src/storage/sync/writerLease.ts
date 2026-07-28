@@ -12,7 +12,7 @@ import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 import { LOOKUP_RESULT_KINDS } from "../../core/state/constants.js";
 import type { LookupResult } from "../../core/state/types.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 import { withSqlSavepoint } from "../sqlite/sqlTransaction.js";
 
 const READ_WRITER_LEASE_SQL =

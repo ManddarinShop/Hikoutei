@@ -5,15 +5,15 @@
  * delegation and changeset normalization live in focused adapter modules.
  */
 
-import { createTypedSheetsOrm as createTypedSheetsOrmFacade } from "../../api/TypedSheetsOrm.js";
+import { createTypedSheetsOrm as createTypedSheetsOrmFacade } from "../../../../orm/api/TypedSheetsOrm.js";
 import type {
   TypedSheetsEntityEngine,
   TypedSheetsEntityEngineManager,
-} from "../../api/contracts.js";
+} from "../../../../orm/api/contracts.js";
 import type {
   CreateTypedSheetsOrmOptions,
   TypedSheetsOrm,
-} from "../../api/TypedSheetsOrm.js";
+} from "../../../../orm/api/TypedSheetsOrm.js";
 import {
   initializeMikroOrmSqliteAdapter,
   type InitializeMikroOrmSqliteAdapterOptions,

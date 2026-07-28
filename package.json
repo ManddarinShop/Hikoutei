@@ -15,8 +15,8 @@
       "import": "./dist/orm/index.js"
     },
     "./mikro-orm": {
-      "types": "./dist/adapter/mikro-orm/index.d.ts",
-      "import": "./dist/adapter/mikro-orm/index.js"
+      "types": "./dist/adapter/persistence/providers/mikro-orm/index.d.ts",
+      "import": "./dist/adapter/persistence/providers/mikro-orm/index.js"
     }
   },
   "files": [

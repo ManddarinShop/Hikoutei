@@ -11,7 +11,7 @@ import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 import {
   migrateMikroOrmSqliteSchema,
   MikroOrmSqliteAdapter,
-} from "../src/adapter/mikro-orm/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/index.js";
 import {
   runReconciliationScan,
   RECONCILIATION_DEFAULTS,

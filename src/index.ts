@@ -15,7 +15,7 @@ export type {
   SqlParameter,
   SqlStorageAdapter,
   SqlStorageContext,
-} from "./adapter/orm/index.js";
+} from "./adapter/persistence/index.js";
 export {
   AppsScriptSyncGatewayError,
   APPS_SCRIPT_OPERATION_NAMES,
@@ -29,7 +29,7 @@ export {
   createReadSnapshotOperation,
   createReadTableRowsOperation,
   AppsScriptOperationSyncGateway,
-} from "./adapter/apps-script-gateway/index.js";
+} from "./adapter/sheets/providers/apps-script-gateway/index.js";
 export type {
   AppsScriptOperationDefinition,
   AnyAppsScriptOperationDefinition,
@@ -39,28 +39,28 @@ export type {
   AppsScriptOperationClientOptions,
   AppsScriptOperationRequestEvent,
   AppsScriptOperationName,
-} from "./adapter/apps-script-gateway/index.js";
+} from "./adapter/sheets/providers/apps-script-gateway/index.js";
 export type {
   AppsScriptFastAppendOperationArgs,
   AppsScriptFastAppendOperationRequest,
   AppsScriptFastAppendOperation,
-} from "./adapter/apps-script-gateway/index.js";
+} from "./adapter/sheets/providers/apps-script-gateway/index.js";
 export type {
   AppsScriptApplyEffectsOperationArgs,
   AppsScriptApplyEffectsOperationRequest,
   AppsScriptReadEffectPostconditionOperationArgs,
   AppsScriptReadEffectPostconditionsOperationArgs,
-} from "./adapter/apps-script-gateway/index.js";
+} from "./adapter/sheets/providers/apps-script-gateway/index.js";
 export type {
   AppsScriptEnsureRowAnchorsOperationArgs,
   AppsScriptObserveSnapshotOperationArgs,
   AppsScriptReadSnapshotOperationArgs,
   AppsScriptReadTableRowsRequest,
-} from "./adapter/apps-script-gateway/index.js";
+} from "./adapter/sheets/providers/apps-script-gateway/index.js";
 export type {
   AppsScriptOperationProjectionStatus,
   AppsScriptOperationSyncGatewayOptions,
-} from "./adapter/apps-script-gateway/index.js";
+} from "./adapter/sheets/providers/apps-script-gateway/index.js";
 export { provisionRegisteredSyncSheets } from "./runtime/gateway/SyncGatewayBootstrap.js";
 export {
   createSyncEffectWorkerSupervisor,

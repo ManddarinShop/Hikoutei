@@ -16,7 +16,7 @@ import type {
   TypedSheetsEntityReference,
   TypedSheetsFindOptions,
   TypedSheetsForkOptions,
-} from "../../api/contracts.js";
+} from "../../../../orm/api/contracts.js";
 import { collectMikroOrmFlushChanges } from "./MikroOrmFlushChanges.js";
 import type {
   MikroOrmSqliteAdapter,

@@ -19,7 +19,7 @@ import {
   type FencingContext,
 } from "../../storage/index.js";
 import type { RegisteredSyncProjectionDefinition } from "../../runtime/gateway/SyncGatewayBootstrap.js";
-import type { SqlStorageAdapter } from "../adapters/contracts.js";
+import type { SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,

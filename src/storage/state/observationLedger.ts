@@ -27,7 +27,7 @@ import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 import { EMPTY_ARRAY_LENGTH_ZERO } from "../constants.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
 import { fromSqlNullable, toSqlNullable } from "../sqlite/sqlState.js";
-import type { SqlExecutor } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 import {
   OBSERVATION_APPEND_RESULT_KINDS,
   OBSERVATION_RECEIPT_STATES,

@@ -1,8 +1,8 @@
 /** Canonical JSON and hashing helpers shared by the thin operation protocol. */
 
 import { createHash } from "node:crypto";
-import { JAVASCRIPT_TYPE_NAMES } from "../../../core/encoding/constants.js";
-import { isJavaScriptType } from "../../../core/encoding/typeGuards.js";
+import { JAVASCRIPT_TYPE_NAMES } from "../../../../../core/encoding/constants.js";
+import { isJavaScriptType } from "../../../../../core/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ENCODINGS,
   SYNC_GATEWAY_HASH_ALGORITHMS,

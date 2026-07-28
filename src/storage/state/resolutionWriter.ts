@@ -40,7 +40,7 @@ import {
   isFencingValidWithSql,
   type FencingContext,
 } from "../sync/writerLease.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 
 const FENCE_EXISTS_SQL = `
   SELECT 1 FROM writer_lease

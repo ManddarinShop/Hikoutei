@@ -1,3 +1,5 @@
+/** Adapter-neutral persistence contracts grouped by storage capability. */
+
 export type {
   SqlExecutor,
   SqlGeneratedId,
@@ -5,4 +7,4 @@ export type {
   SqlParameter,
   SqlStorageAdapter,
   SqlStorageContext,
-} from "./contracts.js";
+} from "./sql.js";

@@ -76,17 +76,23 @@ Recommended package boundaries:
 
 ```txt
 src/
-  core/
-    repository.ts
-    schema.ts
-    columns.ts
-    errors.ts
-    row-parser.ts
-    versioning.ts
-  adapters/
-    types.ts
-    memory.ts
-    google-sheets.ts
+  core/                         # 정규화 값, 평가, 상태 계약
+  orm/                          # 공개 ORM facade, mapping, flush 계획
+  adapter/
+    persistence/
+      contracts/                # 저장소 공통 계약
+      providers/mikro-orm/      # 현재 MikroORM + SQLite 구현
+    sheets/
+      providers/apps-script-gateway/
+        protocol/               # 서명·직렬화·응답 검증
+        transport/              # HTTP operation client
+        operations/
+          read/                 # 테이블 읽기
+          write/                # fast append
+          observation/           # snapshot·anchor 관측
+          effect/               # update/delete effect
+  storage/                      # SQLite canonical state와 outbox
+  runtime/                      # worker, reconciliation, gateway 조율
   index.ts
 ```
 
@@ -117,6 +123,17 @@ Allowed without extra confirmation when requested:
 If a production source issue blocks the requested work, describe the blocker and ask before editing `src/**`.
 
 ## Adapter Boundary
+
+Adapters are split by capability and provider. A provider is a concrete
+implementation such as MikroORM or Apps Script; a contract is the stable
+boundary that core, ORM, storage, or runtime code consumes.
+
+- `adapter/persistence/contracts/`: SQL and persistence contracts independent of
+  MikroORM, Prisma, or another future implementation
+- `adapter/persistence/providers/mikro-orm/`: the current MikroORM-backed
+  entity engine and SQLite storage bridge
+- `adapter/sheets/providers/apps-script-gateway/`: the current signed Apps Script
+  provider, separated into protocol, transport, and operation capabilities
 
 The adapter should expose sheet-level operations in terms the core needs, not Google-specific concepts.
 

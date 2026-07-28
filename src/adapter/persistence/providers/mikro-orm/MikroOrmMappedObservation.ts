@@ -7,27 +7,27 @@
  * second outbound Sheets projection.
  */
 
-import { PRESENCE_KINDS } from "../../../core/index.js";
+import { PRESENCE_KINDS } from "../../../../core/index.js";
 import {
   persistObservedRowWithSql,
   type FencingContext,
   type PersistObservedRowInput,
   type PersistObservedRowResult,
-} from "../../../storage/index.js";
-import { OBSERVATION_WRITE_RESULT_KINDS } from "../../../storage/state/observationConstants.js";
+} from "../../../../storage/index.js";
+import { OBSERVATION_WRITE_RESULT_KINDS } from "../../../../storage/state/observationConstants.js";
 import {
   createTypedSheetsEntityMappingRegistry,
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
-} from "../../mapping/entityMapping.js";
+} from "../../../../orm/mapping/entityMapping.js";
 import {
   MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS,
   planMappedObservationEntityMutation,
-} from "../../mapping/observationMapping.js";
+} from "../../../../orm/mapping/observationMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../errors.js";
+} from "../../../../orm/errors.js";
 import type { MikroOrmSqliteAdapter } from "./MikroOrmSqliteAdapter.js";
 
 /** Input for committing one pre-evaluated Sheet observation and its entity update together. */

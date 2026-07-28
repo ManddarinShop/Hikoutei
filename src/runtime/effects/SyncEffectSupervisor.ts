@@ -12,7 +12,7 @@ import {
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
 } from "../../core/index.js";
-import type { SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 import type { ReconciliationScanReport } from "../operations/ReconciliationScanner.js";
 import {
   runSyncEffectWorkerWithAdapter,

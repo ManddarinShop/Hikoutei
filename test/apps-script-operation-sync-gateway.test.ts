@@ -3,12 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   AppsScriptOperationSyncGateway,
   type AppsScriptOperationProjectionStatus,
-} from "../src/adapter/apps-script-gateway/transport/operationSyncGateway.js";
+} from "../src/adapter/sheets/providers/apps-script-gateway/transport/operationSyncGateway.js";
 import type {
   AnyAppsScriptOperationDefinition,
   AppsScriptOperationGateway,
   AppsScriptOperationResults,
-} from "../src/adapter/apps-script-gateway/transport/operationClient.js";
+} from "../src/adapter/sheets/providers/apps-script-gateway/transport/operationClient.js";
 import type {
   ApplySyncEffectsRequest,
   SyncGatewayEffect,
@@ -273,7 +273,7 @@ describe("AppsScriptOperationSyncGateway", () => {
 
     expect(anchors.assigned).toBe(1);
     expect(anchors.duplicateAnchors[0]?.rowNumbers).toEqual([2, 4]);
-    expect(snapshot.rows[0]?.cells.id.normalizedCell).toEqual({
+    expect(snapshot.rows[0]?.cells.id?.normalizedCell).toEqual({
       kind: "string",
       value: "order-1",
     });

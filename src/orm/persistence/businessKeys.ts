@@ -7,7 +7,7 @@
  */
 
 import { stableHash, type NormalizedCell } from "../../core/index.js";
-import type { SqlExecutor } from "../adapters/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 import type { TypedSheetsEntityMapping } from "../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

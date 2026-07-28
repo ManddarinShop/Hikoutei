@@ -36,7 +36,7 @@ import {
   type NewEffect,
 } from "../../storage/index.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../storage/errors.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshot,

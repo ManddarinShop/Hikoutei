@@ -51,7 +51,7 @@ import {
   StorageError,
 } from "../../storage/errors.js";
 import { fromSqlNullable } from "../../storage/sqlite/sqlState.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 import {
   parseSyncProjectionEffectPayload,
   type ApplySyncEffectsRequest,

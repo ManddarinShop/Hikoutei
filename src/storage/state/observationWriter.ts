@@ -78,7 +78,7 @@ import {
   requireBatchRow,
   validatePersistObservedRowInput,
 } from "./observationValidation.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 
 const UPDATE_EVENT_STATUS_SQL = `
   UPDATE event_log

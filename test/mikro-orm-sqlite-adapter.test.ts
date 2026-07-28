@@ -40,7 +40,7 @@ import {
   migrateMikroOrmSqliteSchema,
   migrateMikroOrmSqliteStorageSchema,
   MikroOrmSqliteAdapter,
-} from "../src/orm/adapters/mikro-orm/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/index.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,

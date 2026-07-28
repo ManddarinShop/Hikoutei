@@ -14,7 +14,7 @@ import {
 import { QUARANTINE_REASONS, ROW_OPERATIONS } from "../../core/model/constants.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
 import { toSqlNullable } from "../sqlite/sqlState.js";
-import type { SqlExecutor } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor } from "../../adapter/persistence/contracts/sql.js";
 import { auditJson } from "./observationAudit.js";
 import type { ObservationIntegrityDiscriminator } from "./observationConstants.js";
 import type { PersistObservedRowInput } from "./observationTypes.js";

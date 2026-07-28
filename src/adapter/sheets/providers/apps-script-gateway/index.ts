@@ -31,18 +31,18 @@ export type {
   CreateAppsScriptOperationEnvelopeOptions,
 } from "./protocol/codeGsProtocol.js";
 export { AppsScriptOperationClient } from "./transport/operationClient.js";
-export { createFastAppendRowsOperation } from "./operations/fastAppendOperation.js";
-export { createReadTableRowsOperation } from "./operations/tableReadOperation.js";
+export { createFastAppendRowsOperation } from "./operations/write/fastAppendOperation.js";
+export { createReadTableRowsOperation } from "./operations/read/tableReadOperation.js";
 export {
   createApplyEffectsOperation,
   createReadEffectPostconditionOperation,
   createReadEffectPostconditionsOperation,
-} from "./operations/effectOperation.js";
+} from "./operations/effect/effectOperation.js";
 export {
   createEnsureRowAnchorsOperation,
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
-} from "./operations/observationOperation.js";
+} from "./operations/observation/observationOperation.js";
 export { AppsScriptOperationSyncGateway } from "./transport/operationSyncGateway.js";
 export type {
   AppsScriptOperationDefinition,
@@ -57,21 +57,21 @@ export type {
   AppsScriptFastAppendOperationArgs,
   AppsScriptFastAppendOperationRequest,
   AppsScriptFastAppendOperation,
-} from "./operations/fastAppendOperation.js";
+} from "./operations/write/fastAppendOperation.js";
 export type {
   AppsScriptApplyEffectsOperationArgs,
   AppsScriptApplyEffectsOperationRequest,
   AppsScriptReadEffectPostconditionOperationArgs,
   AppsScriptReadEffectPostconditionsOperationArgs,
-} from "./operations/effectOperation.js";
+} from "./operations/effect/effectOperation.js";
 export type {
   AppsScriptEnsureRowAnchorsOperationArgs,
   AppsScriptObserveSnapshotOperationArgs,
   AppsScriptReadSnapshotOperationArgs,
-} from "./operations/observationOperation.js";
+} from "./operations/observation/observationOperation.js";
 export type {
   AppsScriptReadTableRowsRequest,
-} from "./operations/tableReadOperation.js";
+} from "./operations/read/tableReadOperation.js";
 export type {
   AppsScriptOperationProjectionStatus,
   AppsScriptOperationSyncGatewayOptions,

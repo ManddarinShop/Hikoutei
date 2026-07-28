@@ -4,13 +4,13 @@ import {
   SYNC_TIMING_OPERATION_KINDS,
   type SyncGatewayTiming,
   type SyncTimingOperationKind,
-} from "../../../runtime/telemetry/syncTiming.js";
-import { SYNC_GATEWAY_ERROR_CODES } from "../../../runtime/gateway/errors.js";
+} from "../../../../../runtime/telemetry/syncTiming.js";
+import { SYNC_GATEWAY_ERROR_CODES } from "../../../../../runtime/gateway/errors.js";
 import {
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayText,
-} from "../../../runtime/gateway/validation.js";
-import { isRecord } from "../../../core/encoding/typeGuards.js";
+} from "../../../../../runtime/gateway/validation.js";
+import { isRecord } from "../../../../../core/encoding/typeGuards.js";
 import { invalidOperationResponse } from "../errors.js";
 
 /** Promotes an untrusted gateway timing object into the typed diagnostics contract. */

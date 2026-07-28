@@ -18,7 +18,7 @@ import {
 import { withSqlSavepoint } from "../sqlite/sqlTransaction.js";
 import { PRESENCE_KINDS } from "../../core/state/constants.js";
 import type { Presence } from "../../core/state/types.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 
 const READ_OBSERVATION_RECEIPT_SQL = `
   SELECT representative_payload_hash, event_id

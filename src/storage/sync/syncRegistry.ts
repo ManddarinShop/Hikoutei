@@ -9,7 +9,7 @@
 import { withImmediateTransaction, type DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../errors.js";
 import { withSqlSavepoint } from "../sqlite/sqlTransaction.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 import {
   isFencingValid,
   isFencingValidWithSql,

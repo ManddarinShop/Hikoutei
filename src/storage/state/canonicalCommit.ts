@@ -24,7 +24,7 @@ import {
   type NewEffect,
 } from "../sync/effectOutbox.js";
 import { toSqlNullable } from "../sqlite/sqlState.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/persistence/contracts/sql.js";
 import { rollbackSqlSavepoint } from "../sqlite/sqlTransaction.js";
 
 const FENCE_EXISTS_SQL = `
