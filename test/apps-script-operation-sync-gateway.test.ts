@@ -110,11 +110,9 @@ describe("AppsScriptOperationSyncGateway", () => {
           status: "applied",
           visibleRevision: 2,
           visibleHash: effect.payload.targetVisibleHash,
-          snapshotHash: null,
           reason: null,
           postcondition: "acknowledged",
         }],
-        snapshotHash: null,
         hasMore: false,
         timing: {
           operationKinds: ["update"],
@@ -127,7 +125,6 @@ describe("AppsScriptOperationSyncGateway", () => {
         disposition: "applied",
         visibleRevision: 2,
         visibleHash: effect.payload.targetVisibleHash,
-        snapshotHash: null,
       },
       {
         results: [{
@@ -137,7 +134,6 @@ describe("AppsScriptOperationSyncGateway", () => {
             disposition: "applied",
             visibleRevision: 2,
             visibleHash: effect.payload.targetVisibleHash,
-            snapshotHash: null,
           },
         }],
       },
@@ -201,7 +197,6 @@ describe("AppsScriptOperationSyncGateway", () => {
             },
           },
         }],
-        snapshotHash: "snapshot-hash",
         unanchoredRows: [],
         duplicateAnchors: [],
       },
@@ -380,7 +375,6 @@ function createObservedSnapshot(
       schemaVersion: 1,
       headers: ["id", "status"],
       rows: [],
-      snapshotHash: "snapshot-hash-" + projection,
       unanchoredRows: [],
       duplicateAnchors: [],
     },

@@ -136,8 +136,8 @@ of a batch:
   sheet's last row.
 - The final full snapshot read was removed from the write response. SQLite is
   authoritative for visible revision/hash state, while each changed effect is
-  still verified from raw Sheet cells before its receipt is written. The
-  optional `snapshotHash` in an apply response is therefore `null`.
+  still verified from raw Sheet cells before its receipt is written. Apply
+  responses now contain only per-effect results and bounded-batch state.
 - Stable row anchors and the receipt sheet remain unchanged because they are
   still required for row identity and response-loss recovery.
 

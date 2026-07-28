@@ -246,7 +246,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var operationCounts = countOperationKinds_(args.effects);
   return {
     results: results,
-    snapshotHash: null,
     hasMore: args.effects.length > count,
     timing: {
       operationKinds: operationKinds_(operationCounts),
@@ -392,7 +391,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   }
 
   function postcondition_(disposition, revision, hash) {
-    return { disposition: disposition, visibleRevision: revision, visibleHash: hash, snapshotHash: null };
+    return { disposition: disposition, visibleRevision: revision, visibleHash: hash };
   }
 
   function requireEffect_(rawEffect, request) {
@@ -468,7 +467,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       status: status,
       visibleRevision: receipt === null ? null : receipt.visibleRevision,
       visibleHash: receipt === null ? null : receipt.visibleHash,
-      snapshotHash: null,
       reason: reason === null ? null : reason,
       postcondition: receipt === null ? "unavailable" : "verified",
     };

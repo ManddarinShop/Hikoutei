@@ -76,7 +76,6 @@ export interface SyncGatewaySnapshot {
   readonly schemaVersion: number;
   readonly headers: readonly string[];
   readonly rows: readonly SyncSnapshotRow[];
-  readonly snapshotHash: string;
   readonly unanchoredRows: readonly number[];
   readonly duplicateAnchors: readonly {
     readonly anchor: string;
@@ -205,7 +204,6 @@ export interface SyncGatewayEffectResult {
   readonly status: SyncGatewayEffectResultStatus;
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
-  readonly snapshotHash: Presence<string>;
   readonly reason: Presence<string>;
   readonly postcondition: SyncGatewayPostconditionStatus;
 }
@@ -228,7 +226,6 @@ export interface ApplySyncEffectsRequest {
 /** A batch may intentionally return only a prefix when its budget is exhausted. */
 export interface ApplySyncEffectsResult {
   readonly results: readonly SyncGatewayEffectResult[];
-  readonly snapshotHash: Presence<string>;
   /** True only when the gateway intentionally stopped before the supplied suffix. */
   readonly hasMore: boolean;
   /** Optional phase timing returned by newer Code.gs deployments. */
@@ -240,7 +237,6 @@ export interface SyncEffectPostcondition {
   readonly disposition: SyncGatewayPostconditionDisposition;
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
-  readonly snapshotHash: Presence<string>;
 }
 
 /** One effect identity paired with its read-back result in a recovery batch. */
