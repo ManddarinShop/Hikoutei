@@ -14,23 +14,25 @@ import {
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,
+  type TypedSheetsEntityChangeKind,
 } from "../api/contracts.js";
 import type {
   MappedChangePlan,
   ResolvedWriterOptions,
 } from "./contracts.js";
 
+/** Stable translation from entity lifecycle states to timing operation states. */
+const SYNC_TIMING_OPERATION_BY_ENTITY_CHANGE_KIND = {
+  [TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE]: SYNC_TIMING_OPERATION_KINDS.APPEND,
+  [TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE]: SYNC_TIMING_OPERATION_KINDS.UPDATE,
+  [TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE]: SYNC_TIMING_OPERATION_KINDS.DELETE,
+} as const satisfies Record<TypedSheetsEntityChangeKind, SyncTimingOperationKind>;
+
 /** Converts public entity lifecycle kinds into timing operation kinds. */
 export function timingOperationKind(
   value: TypedSheetsEntityChange["kind"],
 ): SyncTimingOperationKind {
-  if (value === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE) {
-    return SYNC_TIMING_OPERATION_KINDS.APPEND;
-  }
-  if (value === TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE) {
-    return SYNC_TIMING_OPERATION_KINDS.UPDATE;
-  }
-  return SYNC_TIMING_OPERATION_KINDS.DELETE;
+  return SYNC_TIMING_OPERATION_BY_ENTITY_CHANGE_KIND[value];
 }
 
 /** Counts one lifecycle operation for aggregate diagnostics. */

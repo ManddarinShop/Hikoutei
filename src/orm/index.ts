@@ -40,7 +40,11 @@ export {
 export type {
   TypedSheetsEntityClass,
   TypedSheetsEntityChange,
+  TypedSheetsEntityChangeBase,
   TypedSheetsEntityChangeKind,
+  TypedSheetsEntityChangePayload,
+  TypedSheetsCreatedEntityChange,
+  TypedSheetsDeletedEntityChange,
   TypedSheetsEntityData,
   TypedSheetsEntityEngine,
   TypedSheetsEntityEngineManager,
@@ -51,6 +55,7 @@ export type {
   TypedSheetsForkOptions,
   TypedSheetsFlushContext,
   TypedSheetsFlushCoordinator,
+  TypedSheetsUpdatedEntityChange,
 } from "./api/contracts.js";
 export type { CreateTypedSheetsOrmOptions } from "./api/TypedSheetsOrm.js";
 export type {

@@ -101,21 +101,43 @@ export const TYPED_SHEETS_ENTITY_CHANGE_KINDS = {
 export type TypedSheetsEntityChangeKind =
   (typeof TYPED_SHEETS_ENTITY_CHANGE_KINDS)[keyof typeof TYPED_SHEETS_ENTITY_CHANGE_KINDS];
 
-/**
- * One entity change collected from a single `flush()` operation.
- *
- * `primaryKey` is absent only when the underlying entity engine has not yet
- * assigned a key. A Sheets mapping that requires a stable row identity must
- * reject that case before it writes canonical state or an effect.
- */
-export interface TypedSheetsEntityChange {
-  readonly kind: TypedSheetsEntityChangeKind;
+/** Values captured from one MikroORM changeset before it reaches persistence. */
+export type TypedSheetsEntityChangePayload = Readonly<Record<string, unknown>>;
+
+/** Shared data carried by every normalized entity lifecycle change. */
+export interface TypedSheetsEntityChangeBase {
   readonly entityName: string;
   readonly entity: object;
   readonly primaryKey: Presence<string>;
   /** Changed scalar values for updates and persisted values for inserts. */
-  readonly payload: Readonly<Record<string, unknown>>;
+  readonly payload: TypedSheetsEntityChangePayload;
 }
+
+/** Entity was newly managed and will be inserted during the current flush. */
+export interface TypedSheetsCreatedEntityChange extends TypedSheetsEntityChangeBase {
+  readonly kind: typeof TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE;
+}
+
+/** Existing entity fields changed during the current flush. */
+export interface TypedSheetsUpdatedEntityChange extends TypedSheetsEntityChangeBase {
+  readonly kind: typeof TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE;
+}
+
+/** Existing entity was marked for removal during the current flush. */
+export interface TypedSheetsDeletedEntityChange extends TypedSheetsEntityChangeBase {
+  readonly kind: typeof TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE;
+}
+
+/**
+ * One normalized entity change collected from a single `flush()` operation.
+ *
+ * The discriminant keeps lifecycle branching explicit for coordinators while
+ * the adapter-specific changeset shape remains outside the public contract.
+ */
+export type TypedSheetsEntityChange =
+  | TypedSheetsCreatedEntityChange
+  | TypedSheetsUpdatedEntityChange
+  | TypedSheetsDeletedEntityChange;
 
 /** Context available to the typed-sheets sync planner during an entity flush. */
 export interface TypedSheetsFlushContext {

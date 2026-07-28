@@ -161,19 +161,23 @@ function isCanonicalIsoDate(value: string): boolean {
 }
 
 function isNonNullNormalizedCell(value: unknown): value is Exclude<NormalizedCell, null> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const candidate = value as { readonly kind?: unknown; readonly value?: unknown };
-  switch (candidate.kind) {
+  if (!isRecord(value)) return false;
+  switch (value.kind) {
     case NORMALIZED_CELL_KINDS.STRING:
     case NORMALIZED_CELL_KINDS.DATE:
-      return typeof candidate.value === "string";
+      return typeof value.value === "string";
     case NORMALIZED_CELL_KINDS.NUMBER:
-      return typeof candidate.value === "number";
+      return typeof value.value === "number";
     case NORMALIZED_CELL_KINDS.BOOLEAN:
-      return typeof candidate.value === "boolean";
+      return typeof value.value === "boolean";
     default:
       return false;
   }
+}
+
+/** Promotes unknown codec output to a non-array record before tag inspection. */
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function invalidMappedFieldValue(
