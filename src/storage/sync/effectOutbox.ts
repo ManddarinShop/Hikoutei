@@ -10,10 +10,42 @@
 
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
-import { isFencingValid } from "./writerLease.js";
+import { withSqlSavepoint } from "../sqlite/sqlTransaction.js";
+import {
+  isFencingValid,
+  isFencingValidWithSql,
+} from "./writerLease.js";
 import type { FencingContext } from "./writerLease.js";
-import type { Applicability, Presence } from "../../core/state/types.js";
+import type {
+  Applicability,
+  EffectKind,
+  EffectTargetKind,
+  Presence,
+} from "../../core/index.js";
+import type {
+  SqlExecutor,
+  SqlParameter,
+  SqlStorageAdapter,
+} from "../../adapter/orm/contracts.js";
 import { toSqlNullable } from "../sqlite/sqlState.js";
+
+/** Failed effect codes that are safe to inspect and redrive after read-back. */
+export const SYNC_EFFECT_RECOVERY_ERROR_CODES = {
+  LEASE_EXPIRED_REQUIRES_POSTCONDITION: "lease_expired_requires_postcondition",
+  GATEWAY_RETRYABLE_ERROR: "gateway_retryable_error",
+  POSTCONDITION_READ_FAILED: "postcondition_read_failed",
+  POSTCONDITION_UNAVAILABLE: "postcondition_unavailable",
+  POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE: "postcondition_unapplied_requires_redrive",
+} as const;
+
+const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
+].map((code) => `'${code}'`)
+  .join(", ");
 
 const FENCE_EXISTS_SQL = `
   SELECT 1 FROM writer_lease
@@ -25,7 +57,7 @@ const CLAIM_EFFECT_SQL = `
   SET status = 'processing', claim_token = ?, writer_epoch = ?, lease_until = ?,
       attempts = attempts + 1
   WHERE candidate.effect_id = ?
-    AND candidate.status = 'pending'
+    AND candidate.status IN ('pending', 'failed')
     AND EXISTS (${FENCE_EXISTS_SQL})
     AND NOT EXISTS (
       SELECT 1
@@ -88,9 +120,18 @@ const INSERT_REPLANNED_EFFECT_SQL = `
 const RECOVER_EXPIRED_LEASES_SQL = `
   UPDATE sheet_effect_outbox
   SET status = 'failed', claim_token = NULL, lease_until = NULL,
-      last_error_code = 'lease_expired_requires_postcondition',
+      last_error_code = '${SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION}',
       last_error_message = 'Read the remote postcondition before retrying this effect.'
   WHERE status = 'processing' AND lease_until IS NOT NULL AND lease_until <= ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+const REQUEUE_CLAIMED_EFFECT_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'pending', claim_token = NULL, lease_until = NULL,
+      last_error_code = ?, last_error_message = ?
+  WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
+    AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
     AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 
@@ -134,7 +175,13 @@ const SELECT_READY_EFFECTS_SQL = `
          source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
          stream_sequence, created_at, status
   FROM sheet_effect_outbox AS candidate
-  WHERE candidate.status = 'pending'
+  WHERE (
+    candidate.status = 'pending'
+    OR (
+      candidate.status = 'failed'
+      AND candidate.last_error_code IN (${RECOVERABLE_EFFECT_ERROR_CODE_SQL})
+    )
+  )
     AND NOT EXISTS (
       SELECT 1
       FROM sheet_effect_outbox AS predecessor
@@ -147,6 +194,12 @@ const SELECT_READY_EFFECTS_SQL = `
   ORDER BY candidate.logical_sheet_id, candidate.physical_sheet_id,
            candidate.target_kind, candidate.target_id, candidate.stream_sequence
   LIMIT ?
+`;
+
+const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
+  SELECT COUNT(*) AS count
+  FROM sheet_effect_outbox
+  WHERE status IN ('pending', 'processing')
 `;
 
 const UPSERT_VISIBLE_STATE_SQL = `
@@ -204,12 +257,7 @@ export function claimEffect(db: DatabaseSyncLike, options: ClaimEffectOptions): 
       reason: "stale_fencing",
     };
   }
-  if (!Number.isSafeInteger(options.leaseDurationMs) || options.leaseDurationMs <= 0) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
-      "effect lease duration must be a positive safe integer",
-    );
-  }
+  validateEffectLeaseDuration(options.leaseDurationMs);
 
   const result = db
     .prepare(CLAIM_EFFECT_SQL)
@@ -231,6 +279,48 @@ export function claimEffect(db: DatabaseSyncLike, options: ClaimEffectOptions): 
       ? "claimed"
       : isFencingValid(db, options) ? "not_claimable" : "stale_fencing",
   };
+}
+
+/**
+ * Claims a pending effect through an already-active async SQL context.
+ *
+ * The compare-and-set query and both fencing checks use the same connection,
+ * so a MikroORM-backed worker cannot accidentally claim through a second
+ * SQLite connection.
+ */
+export async function claimEffectWithSql(
+  sql: SqlExecutor,
+  options: ClaimEffectOptions,
+): Promise<ClaimResult> {
+  if (!(await isFencingValidWithSql(sql, options))) {
+    return {
+      effectId: options.effectId,
+      claimToken: options.claimToken,
+      success: false,
+      reason: "stale_fencing",
+    };
+  }
+  validateEffectLeaseDuration(options.leaseDurationMs);
+
+  const result = await sql.run(CLAIM_EFFECT_SQL, claimEffectParameters(options));
+  const success = result.changes > 0;
+
+  return {
+    effectId: options.effectId,
+    claimToken: options.claimToken,
+    success,
+    reason: success
+      ? "claimed"
+      : await isFencingValidWithSql(sql, options) ? "not_claimable" : "stale_fencing",
+  };
+}
+
+/** Claims one effect inside an adapter-owned transaction. */
+export async function claimEffectWithAdapter(
+  storage: SqlStorageAdapter,
+  options: ClaimEffectOptions,
+): Promise<ClaimResult> {
+  return storage.transaction(({ sql }) => claimEffectWithSql(sql, options));
 }
 
 export interface ApplyResultOptions extends FencingContext {
@@ -261,14 +351,14 @@ export interface EffectProjectionConfirmation {
 /** A pending outbox row prepared by the writer transaction. */
 export interface NewEffect {
   readonly effectId: string;
-  readonly effectKind: string;
+  readonly effectKind: EffectKind;
   readonly commitId: string;
   readonly logicalSheetId: string;
   readonly physicalSheetId: string;
   readonly projection: string;
   readonly rowBindingId: Presence<string>;
   readonly conflictId: Presence<string>;
-  readonly targetKind: string;
+  readonly targetKind: EffectTargetKind;
   readonly targetId: string;
   readonly targetEntityRevision: Applicability<number>;
   readonly targetFieldRevisionHash: Applicability<string>;
@@ -348,6 +438,50 @@ export function appendPendingEffects(
 }
 
 /**
+ * Appends pending effects inside an already-active async SQL transaction.
+ *
+ * This is the MikroORM-compatible path used when an entity mutation and its
+ * Sheets outbox records must commit or roll back together.
+ */
+export async function appendPendingEffectsWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  effects: readonly NewEffect[],
+): Promise<boolean> {
+  if (effects.length === 0) return isFencingValidWithSql(sql, fence);
+  if (!(await isFencingValidWithSql(sql, fence))) return false;
+
+  try {
+    return await withSqlSavepoint(sql, "append_pending_effects", async () => {
+      for (const effect of effects) {
+        const result = await sql.run(INSERT_PENDING_EFFECT_SQL, pendingEffectParameters(effect, fence));
+        if (result.changes === 1) continue;
+        if (!(await isFencingValidWithSql(sql, fence))) {
+          throw new AsyncFenceLostError();
+        }
+        throw new StorageError(
+          STORAGE_ERROR_CODES.EFFECT_WRITE_FAILED,
+          `could not insert effect ${effect.effectId}`,
+        );
+      }
+      return true;
+    });
+  } catch (error: unknown) {
+    if (error instanceof AsyncFenceLostError) return false;
+    throw error;
+  }
+}
+
+/** Appends pending effects in one adapter-owned transaction. */
+export async function appendPendingEffectsWithAdapter(
+  storage: SqlStorageAdapter,
+  fence: FencingContext,
+  effects: readonly NewEffect[],
+): Promise<boolean> {
+  return storage.transaction(({ sql }) => appendPendingEffectsWithSql(sql, fence, effects));
+}
+
+/**
  * Applies a result to a claimed effect.
  * Validates fencing (claim token + writer epoch) before applying.
  * Returns true if the result was applied, false if fencing failed.
@@ -356,15 +490,7 @@ export function applyEffectResult(db: DatabaseSyncLike, options: ApplyResultOpti
   if (!isFencingValid(db, options)) {
     return false;
   }
-  if (options.status !== "applied" && options.projectionConfirmation !== undefined) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_EFFECT_RESULT,
-      "only an applied effect may advance confirmed projection state",
-    );
-  }
-  if (options.projectionConfirmation !== undefined) {
-    validateProjectionConfirmation(options.projectionConfirmation);
-  }
+  validateApplyResultOptions(options);
 
   db.exec("SAVEPOINT apply_effect_result");
   try {
@@ -400,6 +526,37 @@ export function applyEffectResult(db: DatabaseSyncLike, options: ApplyResultOpti
     }
     throw error;
   }
+}
+
+/**
+ * Applies a claimed effect result through an already-active async SQL context.
+ *
+ * If projection confirmation fails, the savepoint rolls the effect transition
+ * back too; confirmed visible state can never advance without its outbox row.
+ */
+export async function applyEffectResultWithSql(
+  sql: SqlExecutor,
+  options: ApplyResultOptions,
+): Promise<boolean> {
+  if (!(await isFencingValidWithSql(sql, options))) return false;
+  validateApplyResultOptions(options);
+
+  return withSqlSavepoint(sql, "apply_effect_result", async () => {
+    const result = await sql.run(APPLY_EFFECT_RESULT_SQL, applyEffectResultParameters(options));
+    if (result.changes !== 1) return false;
+    if (options.projectionConfirmation !== undefined) {
+      await writeProjectionConfirmationWithSql(sql, options.projectionConfirmation);
+    }
+    return true;
+  });
+}
+
+/** Applies one effect result inside an adapter-owned transaction. */
+export async function applyEffectResultWithAdapter(
+  storage: SqlStorageAdapter,
+  options: ApplyResultOptions,
+): Promise<boolean> {
+  return storage.transaction(({ sql }) => applyEffectResultWithSql(sql, options));
 }
 
 /**
@@ -471,6 +628,52 @@ export function supersedeAndReplan(
   }
 }
 
+/** Supersedes and replans an effect through an already-active async SQL context. */
+export async function supersedeAndReplanWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  oldEffectId: string,
+  newEffect: NewEffect,
+): Promise<void> {
+  await requireCurrentFenceWithSql(sql, fence);
+  await withSqlSavepoint(sql, "replan", async () => {
+    const superseded = await sql.run(SUPERSEDE_EFFECT_SQL, [
+      newEffect.effectId,
+      oldEffectId,
+      ...fenceParameters(fence),
+    ]);
+    if (superseded.changes !== 1) {
+      await requireCurrentFenceWithSql(sql, fence);
+      throw new StorageError(
+        STORAGE_ERROR_CODES.EFFECT_REPLAN_CONFLICT,
+        `effect ${oldEffectId} cannot be replanned from its current status`,
+      );
+    }
+
+    const inserted = await sql.run(
+      INSERT_REPLANNED_EFFECT_SQL,
+      replannedEffectParameters(newEffect, oldEffectId, fence),
+    );
+    if (inserted.changes !== 1) {
+      await requireCurrentFenceWithSql(sql, fence);
+      throw new StorageError(
+        STORAGE_ERROR_CODES.EFFECT_WRITE_FAILED,
+        `effect ${newEffect.effectId} could not be inserted during replan`,
+      );
+    }
+  });
+}
+
+/** Supersedes and replans an effect inside an adapter-owned transaction. */
+export async function supersedeAndReplanWithAdapter(
+  storage: SqlStorageAdapter,
+  fence: FencingContext,
+  oldEffectId: string,
+  newEffect: NewEffect,
+): Promise<void> {
+  await storage.transaction(({ sql }) => supersedeAndReplanWithSql(sql, fence, oldEffectId, newEffect));
+}
+
 /**
  * Marks expired processing effects as requiring postcondition recovery.
  *
@@ -486,6 +689,27 @@ export function recoverExpiredLeases(
     .prepare(RECOVER_EXPIRED_LEASES_SQL)
     .run(fence.now, ...fenceParameters(fence));
   return result.changes;
+}
+
+/** Marks expired effect leases through an already-active async SQL context. */
+export async function recoverExpiredLeasesWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+): Promise<number> {
+  await requireCurrentFenceWithSql(sql, fence);
+  const result = await sql.run(RECOVER_EXPIRED_LEASES_SQL, [
+    fence.now,
+    ...fenceParameters(fence),
+  ]);
+  return result.changes;
+}
+
+/** Marks expired effect leases inside an adapter-owned transaction. */
+export async function recoverExpiredLeasesWithAdapter(
+  storage: SqlStorageAdapter,
+  fence: FencingContext,
+): Promise<number> {
+  return storage.transaction(({ sql }) => recoverExpiredLeasesWithSql(sql, fence));
 }
 
 /**
@@ -513,6 +737,89 @@ export function releaseUnprocessedEffect(
   return result.changes === 1;
 }
 
+/** Returns one acknowledged-but-unprocessed effect through an async SQL context. */
+export async function releaseUnprocessedEffectWithSql(
+  sql: SqlExecutor,
+  options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
+    readonly effectId: string;
+    readonly claimToken: string;
+  },
+): Promise<boolean> {
+  if (!(await isFencingValidWithSql(sql, options))) return false;
+  const result = await sql.run(RELEASE_UNPROCESSED_EFFECT_SQL, [
+    options.effectId,
+    options.claimToken,
+    options.writerEpoch,
+    options.now,
+    ...fenceParameters(options),
+  ]);
+  return result.changes === 1;
+}
+
+/** Returns one acknowledged-but-unprocessed effect inside an adapter transaction. */
+export async function releaseUnprocessedEffectWithAdapter(
+  storage: SqlStorageAdapter,
+  options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
+    readonly effectId: string;
+    readonly claimToken: string;
+  },
+): Promise<boolean> {
+  return storage.transaction(({ sql }) => releaseUnprocessedEffectWithSql(sql, options));
+}
+
+/** Input for returning a claimed effect to the redrive queue after read-back. */
+export interface RetryClaimedEffectOptions
+  extends Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> {
+  readonly effectId: string;
+  readonly claimToken: string;
+  readonly lastErrorCode: string;
+  readonly lastErrorMessage: string;
+}
+
+/** Requeues a claimed effect only after the current fence still owns it. */
+export function retryClaimedEffect(
+  db: DatabaseSyncLike,
+  options: RetryClaimedEffectOptions,
+): boolean {
+  if (!isFencingValid(db, options)) return false;
+  const result = db.prepare(REQUEUE_CLAIMED_EFFECT_SQL).run(
+    options.lastErrorCode,
+    options.lastErrorMessage,
+    options.effectId,
+    options.claimToken,
+    options.writerEpoch,
+    options.now,
+    ...fenceParameters(options),
+  );
+  return result.changes === 1;
+}
+
+/** Requeues a claimed effect through an already-active async SQL context. */
+export async function retryClaimedEffectWithSql(
+  sql: SqlExecutor,
+  options: RetryClaimedEffectOptions,
+): Promise<boolean> {
+  if (!(await isFencingValidWithSql(sql, options))) return false;
+  const result = await sql.run(REQUEUE_CLAIMED_EFFECT_SQL, [
+    options.lastErrorCode,
+    options.lastErrorMessage,
+    options.effectId,
+    options.claimToken,
+    options.writerEpoch,
+    options.now,
+    ...fenceParameters(options),
+  ]);
+  return result.changes === 1;
+}
+
+/** Requeues a claimed effect inside an adapter-owned transaction. */
+export async function retryClaimedEffectWithAdapter(
+  storage: SqlStorageAdapter,
+  options: RetryClaimedEffectOptions,
+): Promise<boolean> {
+  return storage.transaction(({ sql }) => retryClaimedEffectWithSql(sql, options));
+}
+
 /**
  * Finds pending effects for a given stream (target), ordered by stream_sequence.
  * Returns the head-of-line effects for a target stream.
@@ -528,6 +835,32 @@ export function findPendingEffectsByTarget(
     .all(logicalSheetId, targetKind, targetId) as PendingEffect[];
 }
 
+/** Reads one target stream through an already-active async SQL context. */
+export async function findPendingEffectsByTargetWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+  targetKind: string,
+  targetId: string,
+): Promise<readonly PendingEffect[]> {
+  return sql.all<PendingEffect>(SELECT_PENDING_EFFECTS_BY_TARGET_SQL, [
+    logicalSheetId,
+    targetKind,
+    targetId,
+  ]);
+}
+
+/** Reads one target stream through a fresh adapter read context. */
+export async function findPendingEffectsByTargetWithAdapter(
+  storage: SqlStorageAdapter,
+  logicalSheetId: string,
+  targetKind: string,
+  targetId: string,
+): Promise<readonly PendingEffect[]> {
+  return storage.read(({ sql }) => {
+    return findPendingEffectsByTargetWithSql(sql, logicalSheetId, targetKind, targetId);
+  });
+}
+
 /**
  * Returns ordered head-of-line effects across streams for one bounded worker pass.
  *
@@ -538,13 +871,48 @@ export function listReadyEffects(
   db: DatabaseSyncLike,
   limit: number,
 ): readonly PendingEffect[] {
-  if (!Number.isSafeInteger(limit) || limit < 1) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
-      "ready effect limit must be a positive safe integer",
-    );
-  }
+  validateReadyEffectLimit(limit);
   return db.prepare(SELECT_READY_EFFECTS_SQL).all(limit) as PendingEffect[];
+}
+
+/** Reads bounded head-of-line effects through an already-active async SQL context. */
+export async function listReadyEffectsWithSql(
+  sql: SqlExecutor,
+  limit: number,
+): Promise<readonly PendingEffect[]> {
+  validateReadyEffectLimit(limit);
+  return sql.all<PendingEffect>(SELECT_READY_EFFECTS_SQL, [limit]);
+}
+
+/** Reads bounded head-of-line effects through a fresh adapter read context. */
+export async function listReadyEffectsWithAdapter(
+  storage: SqlStorageAdapter,
+  limit: number,
+): Promise<readonly PendingEffect[]> {
+  return storage.read(({ sql }) => listReadyEffectsWithSql(sql, limit));
+}
+
+/** Returns whether normal outbox work is still pending or actively processing. */
+export function hasPendingOrProcessingEffects(db: DatabaseSyncLike): boolean {
+  const row = db.prepare(COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL).get() as
+    | { count: number }
+    | undefined;
+  return row !== undefined && row.count > 0;
+}
+
+/** Checks whether the durable outbox still has pending or processing work. */
+export async function hasPendingOrProcessingEffectsWithSql(
+  sql: SqlExecutor,
+): Promise<boolean> {
+  const row = await sql.get<{ count: number }>(COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL);
+  return row !== undefined && row.count > 0;
+}
+
+/** Checks outbox activity through a fresh adapter read context. */
+export async function hasPendingOrProcessingEffectsWithAdapter(
+  storage: SqlStorageAdapter,
+): Promise<boolean> {
+  return storage.read(({ sql }) => hasPendingOrProcessingEffectsWithSql(sql));
 }
 
 export interface PendingEffect {
@@ -597,6 +965,36 @@ function validateProjectionConfirmation(confirmation: EffectProjectionConfirmati
   }
 }
 
+function validateApplyResultOptions(options: ApplyResultOptions): void {
+  if (options.status !== "applied" && options.projectionConfirmation !== undefined) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_RESULT,
+      "only an applied effect may advance confirmed projection state",
+    );
+  }
+  if (options.projectionConfirmation !== undefined) {
+    validateProjectionConfirmation(options.projectionConfirmation);
+  }
+}
+
+function validateEffectLeaseDuration(leaseDurationMs: number): void {
+  if (!Number.isSafeInteger(leaseDurationMs) || leaseDurationMs <= 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "effect lease duration must be a positive safe integer",
+    );
+  }
+}
+
+function validateReadyEffectLimit(limit: number): void {
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "ready effect limit must be a positive safe integer",
+    );
+  }
+}
+
 /** Writes row and field confirmation only after the outbox effect has won its claim CAS. */
 function writeProjectionConfirmation(
   db: DatabaseSyncLike,
@@ -637,8 +1035,60 @@ function writeProjectionConfirmation(
   }
 }
 
+/** Writes confirmed row and field state through the active async SQL context. */
+async function writeProjectionConfirmationWithSql(
+  sql: SqlExecutor,
+  confirmation: EffectProjectionConfirmation,
+): Promise<void> {
+  const row = await sql.run(UPSERT_VISIBLE_STATE_SQL, [
+    confirmation.physicalSheetId,
+    confirmation.projection,
+    confirmation.rowBindingId,
+    confirmation.visibleHash,
+    confirmation.visibleRevision,
+    toSqlNullable(confirmation.entityRevision),
+    confirmation.visibleHash,
+  ]);
+  if (row.changes !== 1) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.PROJECTION_CONFIRMATION_REGRESSION,
+      "projection confirmation would move visible state backwards",
+    );
+  }
+
+  for (const [fieldName, hash] of Object.entries(confirmation.fieldHashes)) {
+    const field = await sql.run(UPSERT_VISIBLE_FIELD_STATE_SQL, [
+      confirmation.physicalSheetId,
+      confirmation.projection,
+      confirmation.rowBindingId,
+      fieldName,
+      hash,
+      confirmation.visibleRevision,
+      hash,
+    ]);
+    if (field.changes !== 1) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.PROJECTION_CONFIRMATION_REGRESSION,
+        "projection confirmation would move a field visible state backwards",
+      );
+    }
+  }
+}
+
 function requireCurrentFence(db: DatabaseSyncLike, fence: FencingContext): void {
   if (!isFencingValid(db, fence)) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.STALE_WRITER_FENCE,
+      "writer fencing is stale or expired",
+    );
+  }
+}
+
+async function requireCurrentFenceWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+): Promise<void> {
+  if (!(await isFencingValidWithSql(sql, fence))) {
     throw new StorageError(
       STORAGE_ERROR_CODES.STALE_WRITER_FENCE,
       "writer fencing is stale or expired",
@@ -649,3 +1099,79 @@ function requireCurrentFence(db: DatabaseSyncLike, fence: FencingContext): void 
 function fenceParameters(fence: FencingContext): readonly [string, number, string, number] {
   return [fence.role, fence.writerEpoch, fence.fencingToken, fence.now];
 }
+
+function claimEffectParameters(options: ClaimEffectOptions): readonly SqlParameter[] {
+  return [
+    options.claimToken,
+    options.writerEpoch,
+    options.now + options.leaseDurationMs,
+    options.effectId,
+    ...fenceParameters(options),
+  ];
+}
+
+function applyEffectResultParameters(options: ApplyResultOptions): readonly SqlParameter[] {
+  return [
+    options.status,
+    toSqlNullable(options.lastErrorCode),
+    toSqlNullable(options.lastErrorMessage),
+    options.effectId,
+    options.claimToken,
+    options.writerEpoch,
+    options.now,
+    ...fenceParameters(options),
+  ];
+}
+
+function effectInsertParameters(effect: NewEffect): readonly SqlParameter[] {
+  return [
+    effect.effectId,
+    effect.effectKind,
+    effect.commitId,
+    effect.logicalSheetId,
+    effect.physicalSheetId,
+    effect.projection,
+    toSqlNullable(effect.rowBindingId),
+    toSqlNullable(effect.conflictId),
+    effect.targetKind,
+    effect.targetId,
+    toSqlNullable(effect.targetEntityRevision),
+    toSqlNullable(effect.targetFieldRevisionHash),
+    toSqlNullable(effect.targetCanonicalCommitId),
+    effect.expectedVisibleRevision,
+    effect.expectedVisibleHash,
+    toSqlNullable(effect.repairGuardHash),
+    toSqlNullable(effect.sourceQuarantineId),
+    effect.payloadJson,
+    effect.payloadHash,
+    effect.effectDedupeKey,
+    effect.streamSequence,
+  ];
+}
+
+function pendingEffectParameters(
+  effect: NewEffect,
+  fence: FencingContext,
+): readonly SqlParameter[] {
+  return [
+    ...effectInsertParameters(effect),
+    fence.now,
+    ...fenceParameters(fence),
+  ];
+}
+
+function replannedEffectParameters(
+  effect: NewEffect,
+  oldEffectId: string,
+  fence: FencingContext,
+): readonly SqlParameter[] {
+  return [
+    ...effectInsertParameters(effect),
+    oldEffectId,
+    fence.now,
+    ...fenceParameters(fence),
+  ];
+}
+
+/** Internal control-flow signal that forces the enclosing async savepoint to roll back. */
+class AsyncFenceLostError extends Error {}

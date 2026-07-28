@@ -1,19 +1,23 @@
 import { CoreErrorException } from "../../core/errors/index.js";
 import { PRESENCE_KINDS } from "../../core/state/index.js";
 import type { Presence } from "../../core/state/index.js";
+import {
+  SYNC_GATEWAY_ERROR_CODES,
+  SyncGatewayContractError,
+} from "../../runtime/gateway/errors.js";
 
 /** Stable error categories emitted by the signed gateway protocol. */
 export const SYNC_GATEWAY_PROTOCOL_ERROR_CODES = {
   INVALID_OPERATION: "invalid_sync_gateway_operation",
-  INVALID_ADMIN_OPERATION: "invalid_sync_gateway_admin_operation",
   INVALID_SECRET: "invalid_sync_gateway_secret",
   INVALID_ISSUED_AT: "invalid_sync_gateway_issued_at",
   INVALID_EXPIRY: "invalid_sync_gateway_expiry",
   INVALID_SHEET_ID: "invalid_sync_gateway_sheet_id",
-  INVALID_REGISTERED_RANGE: "invalid_sync_gateway_registered_range",
   INVALID_ACTOR_ID: "invalid_sync_gateway_actor_id",
   INVALID_KEY_ID: "invalid_sync_gateway_key_id",
   INVALID_REQUEST_ID: "invalid_sync_gateway_request_id",
+  INVALID_CLIENT_OPTIONS: "invalid_sync_gateway_client_options",
+  INVALID_OPERATION_SOURCE: "invalid_sync_gateway_operation_source",
   INVALID_JSON_VALUE: "invalid_sync_gateway_json_value",
   NON_FINITE_NUMBER: "non_finite_sync_gateway_number",
 } as const;
@@ -61,4 +65,26 @@ export class AppsScriptSyncGatewayError extends CoreErrorException<
     this.status = status;
     this.remoteCode = remoteCode;
   }
+}
+
+/** Throws the shared contract error used when an operation request is invalid. */
+export function invalidOperationRequest(
+  operationLabel: string,
+  message: string,
+): never {
+  throw new SyncGatewayContractError(
+    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+    `${operationLabel} request is invalid: ${message}`,
+  );
+}
+
+/** Throws the shared contract error used when an operation response is invalid. */
+export function invalidOperationResponse(
+  operationLabel: string,
+  message: string,
+): never {
+  throw new SyncGatewayContractError(
+    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+    `${operationLabel} response is invalid: ${message}`,
+  );
 }

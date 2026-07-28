@@ -18,6 +18,10 @@ import {
   JAVASCRIPT_TYPE_NAMES,
   NORMALIZED_CELL_KINDS,
 } from "../../core/encoding/constants.js";
+import {
+  isJavaScriptType,
+  isRecord,
+} from "../../core/encoding/typeGuards.js";
 import { APPLICABILITY_KINDS } from "../../core/state/constants.js";
 import type { Applicability, Presence } from "../../core/state/types.js";
 import type { RegisteredProjection } from "../../storage/sync/syncRegistry.js";
@@ -27,9 +31,12 @@ import {
 } from "../../core/constants.js";
 import {
   type SyncGatewayEffectResultStatus,
+  type SyncGatewayFastAppendStatus,
+  type SyncGatewayPostconditionMode,
   type SyncGatewayPostconditionDisposition,
   type SyncGatewayPostconditionStatus,
   type SyncGatewayProtocolVersion,
+  type SyncGatewaySnapshotReadMode,
 } from "./constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
@@ -39,6 +46,7 @@ import {
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayText,
 } from "./validation.js";
+import type { SyncGatewayTiming } from "../telemetry/syncTiming.js";
 
 /** Projections supported by the v1 sync gateway. */
 export type SyncProjection = RegisteredProjection;
@@ -55,13 +63,13 @@ export interface SyncSnapshotCell extends CellObservation {
 export interface SyncSnapshotRow {
   readonly rowNumber: number;
   readonly physicalAnchor: Presence<string>;
-  /** Projection metadata is absent when a legacy/user row has never been materialized. */
+  /** Optional compatibility fields; the real gateway leaves visible state to SQLite. */
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
   readonly cells: Readonly<Record<string, SyncSnapshotCell>>;
 }
 
-/** Metadata-rich, lock-free snapshot returned by a gateway. */
+/** Lock-free normalized snapshot returned by a gateway. */
 export interface SyncGatewaySnapshot {
   readonly protocolVersion: SyncGatewayProtocolVersion;
   readonly sheetName: string;
@@ -98,7 +106,63 @@ export interface EnsureSyncRowAnchorsResult {
 }
 
 /** Lock-free snapshot request. */
-export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {}
+export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {
+  /** Full metadata for reconciliation, or user-editable values for polling. */
+  readonly readMode?: SyncGatewaySnapshotReadMode;
+}
+
+/** Result of one combined anchor assignment and snapshot read. */
+export interface SyncObservedSnapshot {
+  readonly anchors: EnsureSyncRowAnchorsResult;
+  readonly snapshot: SyncGatewaySnapshot;
+  /** Optional diagnostic phases returned by newer observation gateways. */
+  readonly timing?: SyncGatewayTiming;
+}
+
+/** Optional batch observation capability used to share one remote request. */
+export interface SyncSheetObservationBatchGateway extends SyncSheetObservationGateway {
+  observeSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot>;
+  observeSnapshots(
+    requests: readonly ReadSyncSnapshotRequest[],
+  ): Promise<readonly SyncObservedSnapshot[]>;
+}
+
+/** Returns whether a gateway supports the one-request observation path. */
+export function isSyncSheetObservationBatchGateway(
+  gateway: SyncSheetObservationGateway,
+): gateway is SyncSheetObservationBatchGateway {
+  const candidate = gateway as Partial<SyncSheetObservationBatchGateway>;
+  return typeof candidate.observeSnapshot === "function" &&
+    typeof candidate.observeSnapshots === "function";
+}
+
+/** Reads one snapshot with one combined request when the gateway supports it. */
+export async function observeSyncSnapshot(
+  gateway: SyncSheetObservationGateway,
+  request: ReadSyncSnapshotRequest,
+): Promise<SyncObservedSnapshot> {
+  if (isSyncSheetObservationBatchGateway(gateway)) {
+    return gateway.observeSnapshot(request);
+  }
+  const anchors = await gateway.ensureRowAnchors(request);
+  const snapshot = await gateway.readSnapshot(request);
+  return { anchors, snapshot };
+}
+
+/** Reads several snapshots through one remote operation when available. */
+export async function observeSyncSnapshots(
+  gateway: SyncSheetObservationGateway,
+  requests: readonly ReadSyncSnapshotRequest[],
+): Promise<readonly SyncObservedSnapshot[]> {
+  if (isSyncSheetObservationBatchGateway(gateway)) {
+    return gateway.observeSnapshots(requests);
+  }
+  const results: SyncObservedSnapshot[] = [];
+  for (const request of requests) {
+    results.push(await observeSyncSnapshot(gateway, request));
+  }
+  return results;
+}
 
 /**
  * Serializable projection values written by one outbox effect.
@@ -156,6 +220,11 @@ export interface ApplySyncEffectsRequest {
   readonly projection: SyncProjection;
   readonly schemaVersion: number;
   readonly effects: readonly SyncGatewayEffect[];
+  /**
+   * Defaults to inline verification for compatibility. The worker explicitly
+   * selects deferred verification so recovery/reconciliation owns read-back.
+   */
+  readonly postconditionMode?: SyncGatewayPostconditionMode;
 }
 
 /** A batch may intentionally return only a prefix when its budget is exhausted. */
@@ -164,6 +233,8 @@ export interface ApplySyncEffectsResult {
   readonly snapshotHash: Presence<string>;
   /** True only when the gateway intentionally stopped before the supplied suffix. */
   readonly hasMore: boolean;
+  /** Optional phase timing returned by newer Code.gs deployments. */
+  readonly timing?: SyncGatewayTiming;
 }
 
 /** Read-back classification used after a response is lost or a lease expires. */
@@ -174,17 +245,202 @@ export interface SyncEffectPostcondition {
   readonly snapshotHash: Presence<string>;
 }
 
-/**
- * Small adapter boundary used by the effect worker and observation runtime.
+/** One effect identity paired with its read-back result in a recovery batch. */
+export interface SyncGatewayEffectPostconditionResult {
+  readonly effectId: string;
+  readonly payloadHash: string;
+  readonly postcondition: SyncEffectPostcondition;
+}
+
+/** One row written through the fast-append path.
  *
- * The gateway never determines canonical winners or conflict resolution.  It
- * only reads registered ranges and conditionally materializes an effect.
+ * This path is deliberately append-only. It does not carry a row anchor,
+ * compare-and-set state, visible hash, receipt, or metadata instruction. A
+ * response loss may therefore cause a later retry to append the row again;
+ * reconciliation is the component that detects and repairs that drift.
  */
-export interface SyncSheetGateway {
-  ensureRowAnchors(request: EnsureSyncRowAnchorsRequest): Promise<EnsureSyncRowAnchorsResult>;
-  readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot>;
+export interface FastAppendRow {
+  readonly effectId: string;
+  readonly fields: Readonly<Record<string, NormalizedCell>>;
+}
+
+/** Per-effect result for one fast-append row. */
+export interface FastAppendRowResult {
+  readonly effectId: string;
+  /** The row was included in the gateway's bulk write. */
+  readonly status: SyncGatewayFastAppendStatus;
+}
+
+/** Bounded fast-append request for one System_State projection sheet. */
+export interface FastAppendRowsRequest {
+  readonly physicalSheetId: string;
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly projection: SyncProjection;
+  readonly schemaVersion: number;
+  readonly rows: readonly FastAppendRow[];
+}
+
+/** Result of one bounded fast-append batch. */
+export interface FastAppendRowsResult {
+  readonly results: readonly FastAppendRowResult[];
+  /** True when the gateway intentionally stopped before the supplied suffix. */
+  readonly hasMore: boolean;
+  /** Optional phase timing returned by newer Code.gs deployments. */
+  readonly timing?: SyncGatewayTiming;
+}
+
+/** Request used to classify several response-loss effects with one Sheet read. */
+export interface ReadSyncEffectPostconditionsRequest {
+  readonly physicalSheetId: string;
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly projection: SyncProjection;
+  readonly schemaVersion: number;
+  readonly effects: readonly SyncGatewayEffect[];
+}
+
+/** Fast append capability required for new System_State rows. */
+export interface SyncEffectWorkerGateway {
+  fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult>;
+}
+
+/**
+ * Full effect capability required for regular updates, deletes, and recovery.
+ *
+ * A fast-only gateway can still run the worker when its outbox contains only
+ * appendable System_State creates; regular effects are rejected explicitly.
+ */
+export interface SyncEffectWorkerFullGateway extends SyncEffectWorkerGateway {
   applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult>;
   readEffectPostcondition(effect: SyncGatewayEffect): Promise<SyncEffectPostcondition>;
+  readEffectPostconditions(
+    request: ReadSyncEffectPostconditionsRequest,
+  ): Promise<readonly SyncGatewayEffectPostconditionResult[]>;
+}
+
+/** Read-only gateway capability used by polling and onEdit observation. */
+export interface SyncSheetObservationGateway {
+  ensureRowAnchors(request: EnsureSyncRowAnchorsRequest): Promise<EnsureSyncRowAnchorsResult>;
+  readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot>;
+}
+
+/** Request for a lightweight table read used by simple polling. */
+export interface ReadSyncTableRowsRequest {
+  readonly physicalSheetId: string;
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly projection: SyncProjection;
+  readonly schemaVersion: number;
+  readonly headers: readonly string[];
+}
+
+/** One nonblank row returned by a lightweight table read. */
+export interface SyncTableRow {
+  readonly rowNumber: number;
+  readonly fields: Readonly<Record<string, NormalizedCell>>;
+}
+
+/** Result of a lightweight table read without Sheet metadata or CAS work. */
+export interface SyncTableRowsResult {
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly headers: readonly string[];
+  readonly rows: readonly SyncTableRow[];
+  readonly timing?: SyncGatewayTiming;
+}
+
+/** Gateway capability for reading literal table values without observation metadata. */
+export interface SyncSheetTableReaderGateway {
+  readRows(request: ReadSyncTableRowsRequest): Promise<SyncTableRowsResult>;
+  readRowsBatch(
+    requests: readonly ReadSyncTableRowsRequest[],
+  ): Promise<readonly SyncTableRowsResult[]>;
+}
+
+/**
+ * Full gateway boundary used by observation and reconciliation.
+ *
+ * It includes the full effect-worker capabilities plus the metadata/snapshot
+ * reads required to observe user edits and repair projection drift.
+ */
+export interface SyncSheetGateway extends SyncEffectWorkerFullGateway, SyncSheetObservationGateway {}
+
+/**
+ * Dependencies for a gateway that routes append writes and full observation
+ * work to separate remote capabilities.
+ *
+ * The fast gateway may be the thin operation-based Code.gs deployment, while
+ * the full gateway may be a separately deployed observation/reconciliation
+ * endpoint. Keeping this composition explicit prevents a fast-only endpoint
+ * from being mistaken for a complete sync gateway.
+ */
+export interface SplitSyncGatewayOptions {
+  readonly fastGateway: SyncEffectWorkerGateway;
+  readonly fullGateway: SyncSheetGateway;
+}
+
+/**
+ * Combines the low-latency append path with the full observation path.
+ *
+ * New System_State creates use `fastGateway`. Updates, deletes, response-loss
+ * recovery, user-edit observation, and reconciliation use `fullGateway`.
+ * Neither delegate is allowed to silently handle the other capability.
+ */
+export class SplitSyncGateway implements SyncSheetGateway {
+  private readonly fastGateway: SyncEffectWorkerGateway;
+  private readonly fullGateway: SyncSheetGateway;
+
+  public constructor(options: SplitSyncGatewayOptions) {
+    this.fastGateway = options.fastGateway;
+    this.fullGateway = options.fullGateway;
+  }
+
+  /** Sends append-only System_State creates through the thin gateway. */
+  public fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
+    return this.fastGateway.fastAppendRows(request);
+  }
+
+  /** Sends regular effect writes through the full gateway. */
+  public applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
+    return this.fullGateway.applyEffects(request);
+  }
+
+  /** Reads one effect postcondition through the full gateway. */
+  public readEffectPostcondition(effect: SyncGatewayEffect): Promise<SyncEffectPostcondition> {
+    return this.fullGateway.readEffectPostcondition(effect);
+  }
+
+  /** Reads a batch of effect postconditions through the full gateway. */
+  public readEffectPostconditions(
+    request: ReadSyncEffectPostconditionsRequest,
+  ): Promise<readonly SyncGatewayEffectPostconditionResult[]> {
+    return this.fullGateway.readEffectPostconditions(request);
+  }
+
+  /** Ensures row anchors through the full observation gateway. */
+  public ensureRowAnchors(
+    request: EnsureSyncRowAnchorsRequest,
+  ): Promise<EnsureSyncRowAnchorsResult> {
+    return this.fullGateway.ensureRowAnchors(request);
+  }
+
+  /** Reads snapshots through the full observation gateway. */
+  public readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
+    return this.fullGateway.readSnapshot(request);
+  }
+
+  /** Shares the full gateway's combined observation capability when present. */
+  public observeSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot> {
+    return observeSyncSnapshot(this.fullGateway, request);
+  }
+
+  /** Shares one remote observation request across the supplied projections. */
+  public observeSnapshots(
+    requests: readonly ReadSyncSnapshotRequest[],
+  ): Promise<readonly SyncObservedSnapshot[]> {
+    return observeSyncSnapshots(this.fullGateway, requests);
+  }
 }
 
 /** Computes the stable visible-state hash shared by fake and real gateways. */
@@ -238,7 +494,7 @@ export function parseSyncProjectionEffectPayload(value: string): SyncProjectionE
     "effect payload schemaVersion",
     SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
   );
-  if (!isBoolean(parsed.createIfMissing)) {
+  if (!isJavaScriptType(parsed.createIfMissing, JAVASCRIPT_TYPE_NAMES.BOOLEAN)) {
     throw new SyncGatewayContractError(
       SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       "effect payload createIfMissing must be boolean",
@@ -306,18 +562,6 @@ export function serializeSyncProjectionEffectPayload(payload: SyncProjectionEffe
     createIfMissing: checked.createIfMissing,
     expectedCandidateHash: toNullableCandidateHash(checked.expectedCandidateHash),
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === JAVASCRIPT_TYPE_NAMES.OBJECT &&
-    value !== null &&
-    !Array.isArray(value)
-  );
-}
-
-function isBoolean(value: unknown): value is boolean {
-  return typeof value === JAVASCRIPT_TYPE_NAMES.BOOLEAN;
 }
 
 function parseNullableCandidateHash(value: unknown): Applicability<string> {

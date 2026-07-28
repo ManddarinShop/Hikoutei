@@ -37,6 +37,8 @@ export interface SyncGatewayProvisionRoute {
   readonly projection: RegisteredProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
+  /** Business-key header used to find append-only rows without metadata. */
+  readonly identityField?: string;
   readonly checkboxHeaders?: readonly string[];
 }
 
@@ -130,12 +132,26 @@ export async function provisionRegisteredSyncSheets(
       "sync gateway provisioning schemaVersion",
       SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
     );
+    const identityField = definition.sheet.projection === "system_state"
+      ? requireSyncGatewayText(
+        definition.sheet.businessKeyField,
+        "sync gateway provisioning identityField",
+        SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
+      )
+      : undefined;
+    if (identityField !== undefined && !definition.headers.includes(identityField)) {
+      throw new SyncGatewayContractError(
+        SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
+        `sync gateway provisioning identityField is not declared: ${identityField}`,
+      );
+    }
     return {
       sheetName,
       registeredRange,
       projection: definition.sheet.projection,
       schemaVersion,
       headers: definition.headers,
+      ...(identityField === undefined ? {} : { identityField }),
       ...(definition.checkboxHeaders === undefined ? {} : { checkboxHeaders: definition.checkboxHeaders }),
     };
   });

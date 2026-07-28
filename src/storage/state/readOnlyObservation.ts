@@ -9,9 +9,16 @@
 
 import { withImmediateTransaction, type DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
-import { isFencingValid, type FencingContext } from "../sync/writerLease.js";
+import {
+  isFencingValid,
+  isFencingValidWithAdapter,
+  isFencingValidWithSql,
+  type FencingContext,
+} from "../sync/writerLease.js";
+import { withSqlSavepoint } from "../sqlite/sqlTransaction.js";
 import { PRESENCE_KINDS } from "../../core/state/constants.js";
 import type { Presence } from "../../core/state/types.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../adapter/orm/contracts.js";
 
 const READ_OBSERVATION_RECEIPT_SQL = `
   SELECT representative_payload_hash, event_id
@@ -129,6 +136,83 @@ export function persistReadOnlySnapshotObservation(
   });
 }
 
+/**
+ * Persists raw Sheet observation evidence through the active async adapter.
+ *
+ * This keeps the observation receipt and event-evidence insert in the same
+ * adapter transaction used by the MikroORM-backed runtime. It does not
+ * evaluate a user edit or create a projection effect.
+ */
+export async function persistReadOnlySnapshotObservationWithAdapter(
+  storage: SqlStorageAdapter,
+  fence: FencingContext,
+  input: ReadOnlySnapshotObservationInput,
+): Promise<ReadOnlySnapshotObservationResult> {
+  validateInput(input);
+  if (!(await isFencingValidWithAdapter(storage, fence))) return { kind: "fenced_out" };
+  return storage.transaction(({ sql }) =>
+    persistReadOnlySnapshotObservationWithSql(sql, fence, input));
+}
+
+/** Persists one raw observation occurrence inside an existing SQL transaction. */
+export async function persistReadOnlySnapshotObservationWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: ReadOnlySnapshotObservationInput,
+): Promise<ReadOnlySnapshotObservationResult> {
+  validateInput(input);
+  if (!(await isFencingValidWithSql(sql, fence))) return { kind: "fenced_out" };
+  return withSqlSavepoint(sql, "persist_read_only_observation", async () => {
+    if (!(await isFencingValidWithSql(sql, fence))) return { kind: "fenced_out" };
+    await ensureRegisteredTargetWithSql(sql, input);
+    const receipt = await sql.get<ReceiptRow>(READ_OBSERVATION_RECEIPT_SQL, [
+      input.logicalSheetId,
+      input.observationKey,
+    ]);
+    const kind = receipt === undefined
+      ? "captured"
+      : receipt.representative_payload_hash === input.payloadHash
+        ? "duplicate"
+        : "integrity_collision";
+    await sql.run(INSERT_EVENT_OBSERVATION_SQL, [
+      input.observationId,
+      input.logicalSheetId,
+      input.physicalSheetId,
+      input.observationKey,
+      receipt?.event_id ?? null,
+      input.source,
+      input.payloadJson,
+      input.payloadHash,
+      input.detectedAt,
+      input.receivedAt,
+      input.ingressActorId,
+      input.editorActorId.kind === PRESENCE_KINDS.PRESENT
+        ? input.editorActorId.value
+        : null,
+      input.editorActorSource,
+    ]);
+    if (receipt === undefined) {
+      await sql.run(INSERT_OBSERVATION_RECEIPT_SQL, [
+        input.logicalSheetId,
+        input.observationKey,
+        input.payloadHash,
+        input.observationId,
+        input.observationId,
+        input.receivedAt,
+        input.receivedAt,
+      ]);
+    } else {
+      await sql.run(UPDATE_OBSERVATION_RECEIPT_SQL, [
+        input.observationId,
+        input.receivedAt,
+        input.logicalSheetId,
+        input.observationKey,
+      ]);
+    }
+    return { kind, observationId: input.observationId };
+  });
+}
+
 interface ReceiptRow {
   readonly representative_payload_hash: string;
   readonly event_id: string | null;
@@ -141,6 +225,24 @@ function ensureRegisteredTarget(db: DatabaseSyncLike, input: ReadOnlySnapshotObs
     logical_sheet_id: string;
     logical_enabled: number;
   } | undefined;
+  if (row === undefined || row.physical_enabled !== 1 || row.logical_enabled !== 1 ||
+    row.logical_sheet_id !== input.logicalSheetId) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "read-only snapshot target is not an enabled registered projection",
+    );
+  }
+}
+
+async function ensureRegisteredTargetWithSql(
+  sql: SqlExecutor,
+  input: ReadOnlySnapshotObservationInput,
+): Promise<void> {
+  const row = await sql.get<{
+    readonly physical_enabled: number;
+    readonly logical_sheet_id: string;
+    readonly logical_enabled: number;
+  }>(READ_REGISTERED_OBSERVATION_TARGET_SQL, [input.physicalSheetId]);
   if (row === undefined || row.physical_enabled !== 1 || row.logical_enabled !== 1 ||
     row.logical_sheet_id !== input.logicalSheetId) {
     throw new StorageError(

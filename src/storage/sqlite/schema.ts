@@ -25,13 +25,17 @@ export interface SchemaMigrationResult {
   readonly appliedVersions: readonly number[];
 }
 
-const CONNECTION_PRAGMAS = `
+/** Connection settings required by every typed-sheets SQLite store. */
+export const SQLITE_CONNECTION_PRAGMAS = `
   PRAGMA foreign_keys = ON;
   PRAGMA journal_mode = WAL;
   PRAGMA busy_timeout = 5000;
 `;
 
-const REQUIRED_V2_COLUMNS: Readonly<Record<"sync_conflict" | "resolution_command", readonly string[]>> = {
+/** Columns that must exist before a version-two-or-later marker is trusted. */
+export const REQUIRED_V2_COLUMNS: Readonly<
+  Record<"sync_conflict" | "resolution_command", readonly string[]>
+> = {
   sync_conflict: [
     "conflict_id",
     "conflict_group_id",
@@ -70,7 +74,8 @@ const REQUIRED_V2_COLUMNS: Readonly<Record<"sync_conflict" | "resolution_command
   ],
 };
 
-const REQUIRED_V3_COLUMNS: Readonly<Record<"sheet_effect_outbox", readonly string[]>> = {
+/** Columns that must exist before a version-three marker is trusted. */
+export const REQUIRED_V3_COLUMNS: Readonly<Record<"sheet_effect_outbox", readonly string[]>> = {
   sheet_effect_outbox: ["effect_id", "created_at"],
 };
 
@@ -81,7 +86,7 @@ const REQUIRED_V3_COLUMNS: Readonly<Record<"sheet_effect_outbox", readonly strin
  * directly cannot safely evolve an already-populated database.
  */
 export function schemaDdl(): string {
-  return `${CONNECTION_PRAGMAS}\n${latestSchemaDdl()}\n${currentIndexesDdl()}`;
+  return `${SQLITE_CONNECTION_PRAGMAS}\n${syncSchemaTablesDdl()}\n${syncSchemaIndexesDdl()}`;
 }
 
 /**
@@ -94,7 +99,7 @@ export function schemaDdl(): string {
  * databases created by schemaDdl() are adopted only after verification.
  */
 export function migrateSchema(db: DatabaseSyncLike): SchemaMigrationResult {
-  db.exec(CONNECTION_PRAGMAS);
+  db.exec(SQLITE_CONNECTION_PRAGMAS);
   return withImmediateTransaction(db, () => {
     const fromVersion = readSchemaVersion(db);
     if (fromVersion > CURRENT_SCHEMA_VERSION) {
@@ -106,9 +111,9 @@ export function migrateSchema(db: DatabaseSyncLike): SchemaMigrationResult {
 
     const hasSchema = tableExists(db, "sheet_registry");
     if (fromVersion === 0 && !hasSchema) {
-      db.exec(latestSchemaDdl());
+      db.exec(syncSchemaTablesDdl());
       verifyRequiredColumns(db);
-      db.exec(currentIndexesDdl());
+      db.exec(syncSchemaIndexesDdl());
       writeSchemaVersion(db, CURRENT_SCHEMA_VERSION);
       verifyCurrentSchema(db);
       return {
@@ -127,7 +132,7 @@ export function migrateSchema(db: DatabaseSyncLike): SchemaMigrationResult {
 
     // Create tables that were added after the original one-shot bootstrap,
     // without changing existing table definitions implicitly.
-    db.exec(latestSchemaDdl());
+    db.exec(syncSchemaTablesDdl());
     const appliedVersions: number[] = [];
     if (fromVersion < 2) {
       applyVersion2CandidateEpochMigration(db);
@@ -140,7 +145,7 @@ export function migrateSchema(db: DatabaseSyncLike): SchemaMigrationResult {
       appliedVersions.push(3);
     }
     verifyRequiredColumns(db);
-    db.exec(currentIndexesDdl());
+    db.exec(syncSchemaIndexesDdl());
 
     verifyCurrentSchema(db);
     return {
@@ -152,7 +157,7 @@ export function migrateSchema(db: DatabaseSyncLike): SchemaMigrationResult {
 }
 
 /** Returns table DDL only, so migration transactions never change connection pragmas. */
-function latestSchemaDdl(): string {
+export function syncSchemaTablesDdl(): string {
   return [
     REGISTRY_TABLES_DDL,
     IDENTITY_TABLES_DDL,
@@ -162,7 +167,6 @@ function latestSchemaDdl(): string {
     CONFLICT_AND_QUARANTINE_TABLES_DDL,
     BUSINESS_KEY_INDEX_DDL,
     EFFECT_OUTBOX_DDL,
-    GATEWAY_REQUEST_RECEIPT_DDL,
     WRITER_LEASE_DDL,
     CUTOVER_STATE_DDL,
   ].join("\n");
@@ -172,7 +176,7 @@ function latestSchemaDdl(): string {
  * Creates indexes that depend on additive migration columns only after those
  * columns have been confirmed. This keeps a version-one upgrade ordered.
  */
-function currentIndexesDdl(): string {
+export function syncSchemaIndexesDdl(): string {
   return `
     CREATE UNIQUE INDEX IF NOT EXISTS sync_conflict_candidate_attempt_uq
       ON sync_conflict(row_binding_id, field_name, candidate_epoch);
@@ -517,22 +521,6 @@ const CONFLICT_AND_QUARANTINE_TABLES_DDL = `
     updated_at INTEGER NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS quarantine_command (
-    command_id TEXT PRIMARY KEY,
-    request_key TEXT NOT NULL UNIQUE,
-    action TEXT NOT NULL,
-    actor_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    target_quarantine_id TEXT NOT NULL REFERENCES quarantine_record(quarantine_id),
-    evidence_hash TEXT NOT NULL,
-    expected_revision INTEGER NOT NULL,
-    payload_hash TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    issued_at INTEGER NOT NULL,
-    applied_at INTEGER,
-    result_hash TEXT
-  );
-
   CREATE TABLE IF NOT EXISTS resolution_command (
     command_id TEXT PRIMARY KEY,
     request_key TEXT NOT NULL UNIQUE,
@@ -604,24 +592,6 @@ const EFFECT_OUTBOX_DDL = `
   CREATE INDEX IF NOT EXISTS effect_outbox_stream_idx
     ON sheet_effect_outbox(logical_sheet_id, target_kind, target_id, stream_sequence)
     WHERE status IN ('pending', 'processing');
-`;
-
-const GATEWAY_REQUEST_RECEIPT_DDL = `
-  CREATE TABLE IF NOT EXISTS gateway_request_receipt (
-    request_id TEXT PRIMARY KEY,
-    operation TEXT NOT NULL,
-    key_id TEXT NOT NULL,
-    body_hash TEXT NOT NULL,
-    issued_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    ingress_actor_id TEXT NOT NULL,
-    editor_actor_id TEXT,
-    editor_actor_source TEXT NOT NULL DEFAULT 'unavailable',
-    status TEXT,
-    result_hash TEXT,
-    received_at INTEGER NOT NULL,
-    redacted_at INTEGER
-  );
 `;
 
 const WRITER_LEASE_DDL = `
