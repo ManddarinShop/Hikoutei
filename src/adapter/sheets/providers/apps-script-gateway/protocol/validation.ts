@@ -1,9 +1,7 @@
 import {
-  EMPTY_STRING_LENGTH_ZERO,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../../../shared/constants.js";
-import { JAVASCRIPT_TYPE_NAMES } from "../../../../../shared/encoding/constants.js";
-import { isJavaScriptType } from "../../../../../shared/encoding/typeGuards.js";
+  isNonEmptyString,
+  isPositiveSafeInteger,
+} from "../../../../../shared/validation.js";
 import {
   SYNC_GATEWAY_DEFAULTS,
   SYNC_GATEWAY_REQUEST_ID_PATTERN,
@@ -20,10 +18,7 @@ export function requireSyncGatewayText(
   label: string,
   errorCode: SyncGatewayProtocolErrorCode,
 ): string {
-  if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
-    value.length === EMPTY_STRING_LENGTH_ZERO
-  ) {
+  if (!isNonEmptyString(value)) {
     throw new SyncGatewayProtocolError(errorCode, `${label} is required`);
   }
   return value;
@@ -31,11 +26,7 @@ export function requireSyncGatewayText(
 
 /** Requires a positive safe integer for a protocol timestamp. */
 export function requireSyncGatewayIssuedAt(value: unknown): number {
-  if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
-    !Number.isSafeInteger(value) ||
-    value < POSITIVE_SAFE_INTEGER_MINIMUM
-  ) {
+  if (!isPositiveSafeInteger(value)) {
     throw new SyncGatewayProtocolError(
       SYNC_GATEWAY_PROTOCOL_ERROR_CODES.INVALID_ISSUED_AT,
       "sync gateway issuedAt must be a positive safe integer",
@@ -47,8 +38,7 @@ export function requireSyncGatewayIssuedAt(value: unknown): number {
 /** Requires an expiry duration within the protocol's bounded window. */
 export function requireSyncGatewayExpiry(value: unknown): number {
   if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
-    !Number.isSafeInteger(value) ||
+    !isPositiveSafeInteger(value) ||
     value < SYNC_GATEWAY_DEFAULTS.MIN_EXPIRY_MS ||
     value > SYNC_GATEWAY_DEFAULTS.MAX_EXPIRY_MS
   ) {

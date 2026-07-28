@@ -37,12 +37,11 @@ import {
   appendPendingEffectsWithSql,
   type NewEffect,
 } from "../../sync/outbound/effectOutbox.js";
+import {
+  FENCE_EXISTS_SQL,
+  INSERT_PENDING_EFFECT_SQL,
+} from "../../sync/outbound/effectOutboxSql.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-
-const FENCE_EXISTS_SQL = `
-  SELECT 1 FROM writer_lease
-  WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until > ?
-`;
 
 const INSERT_CANONICAL_ENTITY_SQL = `
   INSERT INTO entity_state (entity_id, entity_revision, accepted_snapshot_hash, status)
@@ -82,19 +81,6 @@ const DELETE_CANONICAL_ENTITY_SQL = `
   SET entity_revision = ?, accepted_snapshot_hash = ?, status = 'tombstoned'
   WHERE entity_id = ? AND entity_revision = ? AND status = 'active'
     AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const INSERT_PENDING_EFFECT_SQL = `
-  INSERT INTO sheet_effect_outbox (
-    effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
-    projection, row_binding_id, conflict_id, target_kind, target_id,
-    target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
-    expected_visible_revision, expected_visible_hash, repair_guard_hash,
-    source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
-    stream_sequence, created_at, status
-  )
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
-  WHERE EXISTS (${FENCE_EXISTS_SQL})
 `;
 
 /** Runtime values returned by the canonical commit writer. */

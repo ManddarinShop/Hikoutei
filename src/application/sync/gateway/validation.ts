@@ -1,11 +1,11 @@
-import {
-  EMPTY_ARRAY_LENGTH_ZERO,
-  EMPTY_STRING_LENGTH_ZERO,
-  NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../shared/constants.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../../shared/encoding/constants.js";
 import { isJavaScriptType } from "../../../shared/encoding/typeGuards.js";
+import {
+  isNonEmptyList,
+  isNonEmptyString,
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+} from "../../../shared/validation.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_PROTOCOL_VERSIONS,
@@ -25,10 +25,7 @@ export function requireSyncGatewayText(
   label: string,
   errorCode: SyncGatewayErrorCode,
 ): string {
-  if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
-    value.length === EMPTY_STRING_LENGTH_ZERO
-  ) {
+  if (!isNonEmptyString(value)) {
     throw new SyncGatewayContractError(errorCode, `${label} is required`);
   }
   return value;
@@ -40,11 +37,7 @@ export function requireSyncGatewayPositiveSafeInteger(
   label: string,
   errorCode: SyncGatewayErrorCode,
 ): number {
-  if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
-    !Number.isSafeInteger(value) ||
-    value < POSITIVE_SAFE_INTEGER_MINIMUM
-  ) {
+  if (!isPositiveSafeInteger(value)) {
     throw new SyncGatewayContractError(
       errorCode,
       `${label} must be a positive safe integer`,
@@ -59,11 +52,7 @@ export function requireSyncGatewayNonNegativeSafeInteger(
   label: string,
   errorCode: SyncGatewayErrorCode,
 ): number {
-  if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
-    !Number.isSafeInteger(value) ||
-    value < NON_NEGATIVE_SAFE_INTEGER_MINIMUM
-  ) {
+  if (!isNonNegativeSafeInteger(value)) {
     throw new SyncGatewayContractError(
       errorCode,
       `${label} must be a non-negative safe integer`,
@@ -134,7 +123,7 @@ export function requireSyncGatewayNonEmptyList<T>(
   label: string,
   errorCode: SyncGatewayErrorCode,
 ): void {
-  if (values.length === EMPTY_ARRAY_LENGTH_ZERO) {
+  if (!isNonEmptyList(values)) {
     throw new SyncGatewayContractError(errorCode, `${label} requires at least one item`);
   }
 }
