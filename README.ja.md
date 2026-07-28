@@ -112,11 +112,18 @@ if (loaded !== null) {
 Gateway のシークレットはサーバーだけに保管してください。ブラウザコードに
 含めたり、Git にコミットしたりしないでください。
 
+現在の公開ランタイムが対応するのは、ローカルエンティティのライフサイクル、
+SQLite トランザクションと outbox の計画、outbound worker による配信、Gateway
+のプロビジョニングです。User_Input のポーリングとグローバル Conflict の
+チェックボックス解決は、まだ end-to-end では実装されていない inbound 機能です。
+
 ## ドキュメント
 
 - [クイックスタート](docs/quick-start.md) — インストール、マッピング、Gateway 設定。
 - [アーキテクチャ](docs/architecture.md) — ローカルストアと Sheet ビューの関係。
 - [書き込みと同期の流れ](docs/write-and-synchronization-flow.md) — 非同期配信と復旧動作。
+- [現在の状態レビュー](docs/current-state-review.md) — 実装済みの基盤と意図的に
+  未完成の inbound 作業。
 - [開発ガイド](docs/development.md) — ローカル開発とテストコマンド。
 - [ベンチマーク記録](docs/sync-bulk-write-benchmark.md) — 日付ごとの測定結果と制約。
 

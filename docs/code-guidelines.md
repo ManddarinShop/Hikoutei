@@ -34,6 +34,11 @@ The honest boundary matters. Google Sheets has no native database transaction mo
 
 The first implementation should stay small and prove the SQLite-authoritative synchronization model.
 
+This section describes the target MVP contract. For what is implemented in the
+current branch, see [`current-state-review.md`](current-state-review.md).
+Inbound polling and conflict resolution may be specified here before their
+end-to-end runtime path is complete.
+
 Required MVP capabilities:
 
 - public `defineTypedSheetsEntity()` definitions
@@ -82,7 +87,6 @@ src/
         protocol/               # 서명·직렬화·응답 검증
         transport/              # HTTP operation client
         operations/
-          read/                 # 테이블 읽기
           write/                # fast append
           observation/           # snapshot·anchor 관측
           effect/               # update/delete effect
@@ -99,7 +103,9 @@ src/
 The domain should depend on adapter interfaces, not directly on Google Sheets
 SDKs.
 
-The first tests should use an in-memory fake adapter. Real Google integration tests can come later and should be opt-in because they require credentials and quota.
+Tests should use fake gateways and in-memory SQLite/provider fixtures where
+possible. Real Google integration tests should be opt-in because they require
+credentials and consume quota.
 
 ## Code Modification Rules
 
@@ -139,15 +145,20 @@ connection.
 - `adapter/sheets/providers/apps-script-gateway/`: the current signed Apps Script
   provider, separated into protocol, transport, and operation capabilities
 
-The adapter should expose sheet-level operations in terms the core needs, not Google-specific concepts. Raw `DatabaseSyncLike` helpers are recovery or migration implementation details and should not be part of the normal public workflow.
+The adapter should expose sheet-level operations in terms the core needs, not
+Google-specific concepts. The current gateway boundary covers projection
+provisioning, append-only System_State writes, guarded regular effects,
+postcondition reads, and normalized snapshot/anchor observation. Provider
+connections and raw SQL executors remain implementation details rather than
+normal public workflow objects.
 
 Suggested responsibilities:
 
-- read headers
-- read rows
-- append row
-- replace row by index or key
-- optionally re-read row before update
+- provision and validate registered projection routes
+- append new System_State rows in a bounded batch
+- apply guarded update/delete effects
+- read postconditions after uncertain writes
+- assign stable anchors and return normalized snapshots
 
 Do not leak Google SDK response objects into core repository logic.
 
@@ -174,6 +185,10 @@ SQLite is the authority for application reads and writes. A successful entity
 flush means that the entity table, sync metadata, and durable Sheet effect were
 committed in one SQLite transaction. It does not mean that Google Sheets has
 already converged.
+
+The inbound and conflict rules below are the target policy. The current branch
+contains the persistence and evaluation foundations, but not the complete
+public polling-to-resolution worker flow.
 
 User_Input observations use field-level compare-and-set evidence:
 
@@ -221,6 +236,10 @@ Add these only after the base repository model is tested and documented.
 ## Testing Standard
 
 Tests should prove behavior through realistic sheet states, not through shallow mocks.
+
+The inbound and conflict cases below are acceptance criteria for the planned
+inbound runtime. They should not be read as a claim that the current public
+runtime already implements every case end to end.
 
 Required test categories:
 

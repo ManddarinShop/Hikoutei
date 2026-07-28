@@ -115,6 +115,11 @@ Use a conventional database and direct Google APIs when you need:
 Keep the gateway secret on the server. Do not put it in browser code or commit
 it to Git.
 
+The current public runtime covers local entity lifecycle, SQLite transaction and
+outbox planning, outbound worker delivery, and gateway provisioning. User_Input
+polling and global Conflict checkbox resolution remain planned inbound features
+and are not yet complete end to end.
+
 ## Documentation
 
 - [Quick start](docs/quick-start.md) — installation, mapping, and gateway setup.
@@ -122,6 +127,8 @@ it to Git.
   fit together.
 - [Write and synchronization flow](docs/write-and-synchronization-flow.md) —
   asynchronous delivery and recovery behavior.
+- [Current state review](docs/current-state-review.md) — implemented foundations
+  and intentionally incomplete inbound work.
 - [Development](docs/development.md) — local development and test commands.
 - [Benchmark notes](docs/sync-bulk-write-benchmark.md) — dated measurements
   and their limitations.

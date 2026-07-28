@@ -3,6 +3,10 @@
 Hikoutei commits local SQLite state first and materializes Google Sheets
 changes asynchronously.
 
+The outbound flow below describes the current runtime. The inbound User_Input
+and Conflict sections are the agreed target flow; their end-to-end polling and
+resolution worker is not yet part of the current public release.
+
 ## Outbound application write
 
 ```text
@@ -42,10 +46,10 @@ The Sheet projection contains the foreign-key value, not a nested entity.
 Relation loading is explicit through `populate`; lazy loading and cascade
 operations are not part of the initial contract.
 
-## Inbound User_Input flow
+## Planned inbound User_Input flow
 
-User_Input is observed by polling in the first release. The application does
-not use the remote value directly:
+The first inbound release is intended to observe User_Input by polling. The
+application must not use the remote value directly:
 
 ```text
 User_Input polling
@@ -64,9 +68,9 @@ An accepted observation and its mapped entity mutation must commit through the
 same SQLite transaction. A conflict never changes the business entity until a
 user explicitly resolves it.
 
-## Conflict resolution flow
+## Planned Conflict resolution flow
 
-Each Conflict row exposes `use_system` and `use_user` controls.
+The target Conflict projection exposes `use_system` and `use_user` controls.
 
 ```text
 use_system

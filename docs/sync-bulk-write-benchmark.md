@@ -1,5 +1,16 @@
 # Sync bulk-write benchmark
 
+> Historical benchmark record. The measurements below are branch- and
+> deployment-specific and are not the current public API contract. The current
+> runtime treats SQLite as authoritative, sends durable outbox effects through
+> a separate worker, and calls the signed operation-based Apps Script gateway.
+> Older entries may mention retired HTTP routes, benchmark-only scripts, or
+> earlier snapshot/metadata strategies; keep those details as historical
+> evidence rather than implementation instructions. See
+> [`architecture.md`](architecture.md) and
+> [`write-and-synchronization-flow.md`](write-and-synchronization-flow.md) for
+> the current design.
+
 ## 2026-07-24 — raw Apps Script write
 
 - Branch: `benchmark/apps-script-bulk-write`

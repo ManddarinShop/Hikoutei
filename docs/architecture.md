@@ -4,6 +4,13 @@ Hikoutei owns a local SQLite entity store and exposes Google Sheets as an
 asynchronous human-facing projection. The public API belongs to Hikoutei;
 MikroORM is the current replaceable execution engine behind that API.
 
+> Current status: the local entity lifecycle, SQLite transaction boundary,
+> outbox, outbound worker, and gateway path are implemented. User_Input
+> polling and the global Conflict decision loop are target design foundations,
+> not a complete end-to-end public runtime yet. See
+> [`current-state-review.md`](current-state-review.md) for the implementation
+> matrix.
+
 ## System shape
 
 ```text
@@ -62,8 +69,9 @@ editable `User_Input` projection. The application never reads normal entity
 data from Sheets. It reads SQLite; the worker observes User_Input only to
 evaluate intentional human changes.
 
-There is one global `Conflict` projection. A conflict row contains one field-
-level decision and two mutually exclusive controls:
+The target design has one global `sync_conflicts` projection, conventionally
+represented by a `Sync_Conflicts` tab. A conflict row contains one field-level
+decision and two mutually exclusive controls:
 
 ```text
 conflict_id | entity_name | entity_id | field_name |
@@ -74,7 +82,9 @@ No checked control is a pending decision. Exactly one control creates a
 compare-and-set resolution command. Both checked controls are invalid and are
 reset. A stale command is reset and leaves the conflict visible for rebase.
 After a successful resolution, SQLite records the result first and a durable
-outbox effect removes the resolved row from the Conflict projection.
+outbox effect removes the resolved row from the Conflict projection. The
+projection contract is designed now; global registration and end-to-end
+checkbox consumption are still pending implementation.
 
 ## Transaction boundary
 
@@ -92,9 +102,9 @@ SQLite transaction
           ▼
 separate worker process
   ├─ drain outbound effects
-  ├─ poll User_Input
-  ├─ evaluate accepted fields and conflicts
-  └─ poll and apply Conflict decisions
+  ├─ [planned] poll User_Input
+  ├─ [planned] evaluate accepted fields and conflicts
+  └─ [planned] poll and apply Conflict decisions
           │
           ▼
 Google Sheets projection
@@ -106,9 +116,10 @@ write has completed.
 
 ## Worker responsibilities
 
-The initial inbound source is polling. `onEdit` can be added later as an
-optional lower-latency observation source, but it must enter the same evaluator
-and SQLite writer boundary.
+The planned initial inbound source is polling. The current runtime does not yet
+expose the complete polling-to-evaluation-to-SQLite path. `onEdit` can be added
+later as an optional lower-latency observation source, but it must enter the
+same evaluator and SQLite writer boundary.
 
 The worker claims leases, sends signed gateway operations, retries recoverable
 failures, and reconciles remote drift. The Apps Script gateway performs only

@@ -32,7 +32,9 @@ contains them if historical comparison is needed:
 - `docs/task-queue-write-model.md`
 
 The architecture, synchronization flow, code guidelines, README, and quick
-start now describe the SQLite-authoritative direction.
+start now describe the SQLite-authoritative direction. Their inbound and
+Conflict diagrams are explicitly target-flow documentation; they do not claim
+that polling or checkbox resolution is already complete in the public runtime.
 
 The public foundation now includes:
 
