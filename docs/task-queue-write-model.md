@@ -286,18 +286,23 @@ Repository cache entries must therefore represent confirmed canonical state
 only. A queued write must not update the confirmed cache with the submitted
 payload just because the task append succeeded.
 
-First implementation policy:
+Current implementation policy:
 
-- cache implementation is out of scope for the first task queue branches
+- queued repositories keep a repository-local confirmed snapshot cache with a
+  short configurable TTL; direct repositories do not use this cache
 - queued write success means the task was durably appended, not that canonical
   data changed
-- after a queued write is appended, invalidate cache entries for the affected
-  keys instead of mutating them optimistically
+- before a queued write is materialized, invalidate the confirmed snapshot
+  instead of mutating it optimistically
 - do not expose queued payload values as confirmed repository reads
-- a later read should refresh from the canonical sheet when the affected key was
-  invalidated
+- a later read should refresh from the canonical sheet after invalidation or
+  TTL expiry
 - failed transactions must not require cache rollback because pending payloads
   were never written into confirmed cache
+
+The cache is process-local and does not coordinate multiple Node.js instances.
+If the Apps Script processor runs outside the repository process, the TTL is
+the upper bound for observing a previously cached canonical snapshot.
 
 Future pending-aware APIs may keep a separate pending layer for user
 experience, but that layer must stay distinct from confirmed canonical cache.
@@ -533,9 +538,8 @@ Candidate strategies:
 3. Pending-task overlay when reading from the canonical sheet.
 4. Expose write operation status and let users choose when to wait.
 
-The first queue implementation should not silently change repository reads.
-Expose queue processing as an experimental path until read-your-writes behavior
-is implemented and documented.
+The cache does not provide read-your-writes behavior. Expose queue processing as
+an explicit operation and keep pending payloads separate from confirmed reads.
 
 ## Gateway Operations
 

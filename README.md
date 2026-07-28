@@ -1,294 +1,143 @@
-# typed-sheets
+[한국어](README.ko.md) | [日本語](README.ja.md)
 
-Typed repository and safe write layer for Google Sheets-backed MVPs.
+<div align="center">
 
-`typed-sheets` lets TypeScript apps use Google Sheets as a lightweight,
-editable repository for MVPs, internal tools, prototypes, and low-traffic admin
-workflows.
+# Hikoutei
 
-It is not a MySQL/Postgres replacement, a full ORM, or a general-purpose Google
-Sheets API wrapper. The goal is to make unsafe spreadsheet-backed data states
-fail clearly instead of passing silently.
+**Typed repository and safe write layer for Google Sheets-backed MVPs.**
 
-## Features
+<a href="https://www.npmjs.com/package/typed-sheets">npm package</a> ·
+<a href="https://github.com/ManddarinShop/google-sheets-orm/issues">Issues</a> ·
+<a href="apps-script/gateway/Code.gs">Apps Script gateway</a>
 
-- schema drift validation
-- typed row parsing
-- key-based `findAll` and `findById`
-- `insert`, `update`, and `deleteById`
-- `_version` based optimistic locking
-- `SchemaDriftError`, `ParseError`, and `ConflictError`
-- service-account and Apps Script gateway adapters
-- explicit queued repository transactions with stable retry identities
-- config-based repository creation with `typed-sheets setup`
+[![npm version](https://img.shields.io/npm/v/typed-sheets?style=flat-square)](https://www.npmjs.com/package/typed-sheets)
+[![license](https://img.shields.io/npm/l/typed-sheets?style=flat-square)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+
+</div>
+
+Hikoutei helps TypeScript and Node.js applications use Google Sheets as a
+human-friendly part of an MVP or internal workflow. Your application works
+with typed entities and local SQLite; changes can be delivered to Google
+Sheets asynchronously through the included Apps Script gateway.
+
+Hikoutei is intentionally focused. It is not a general-purpose database
+replacement, a Prisma/JPA clone, or a general Google Sheets API wrapper.
+
+## Why Hikoutei?
+
+- Entity-oriented lifecycle: create, find, mutate, persist, remove, and flush.
+- Typed field mappings with runtime validation for Sheet data.
+- Local SQLite reads for application workflows that should not wait on a remote
+  spreadsheet request.
+- Asynchronous Google Sheets views for human review and lightweight
+  collaboration.
+- Protection against common spreadsheet problems such as unexpected schema
+  changes and accidentally overwriting newer changes.
 
 ## Installation
 
-```sh
-npm install typed-sheets
-```
-
-## Quick Start
-
-Create a local config first:
+The project is called Hikoutei and its current npm package is `typed-sheets`.
 
 ```sh
-npx typed-sheets setup
+npm install typed-sheets @mikro-orm/core @mikro-orm/sql
 ```
 
-The setup command writes `.typed-sheets.json`. Choose one connection path:
+The MikroORM packages are optional peer dependencies of the root package, but
+are required when using Hikoutei's built-in SQLite adapter.
 
-- service account: best for servers, CI, and deployed apps that can use a
-  Google Cloud service account
-- Apps Script gateway: best when the spreadsheet owner wants to connect without
-  a service account or Google Cloud setup
+## Quick start
 
-For the Apps Script gateway path, deploy the shipped `Code.gs` script as a Web
-App before using the generated config. See
-[`templates/manual-apps-script-gateway/README.md`](templates/manual-apps-script-gateway/README.md).
-
-## Usage
+After defining an entity mapping, use a request-local manager to work with
+entities. A complete mapping and gateway setup are shown in the
+[Quick start guide](docs/quick-start.md).
 
 ```ts
-import {
-  boolean,
-  createRepositoryFromConfig,
-  number,
-  text,
-} from "typed-sheets";
+import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
+import { User } from "./entities/User.js";
+import { userMapping } from "./mappings/userMapping.js";
 
-interface User {
-  id: string;
-  email: string;
-  age: number | undefined;
-  active: boolean;
-  _version: number;
-}
-
-const users = await createRepositoryFromConfig<User>({
-  key: "id",
-  columns: {
-    id: text(),
-    email: text(),
-    age: number().optional(),
-    active: boolean(),
-    _version: number(),
-  },
+const hikoutei = await initializeMappedTypedSheetsOrm({
+  dbName: "./hikoutei.sqlite",
+  entities: [User],
+  mappings: [userMapping],
+  writer: { writerId: "users-service" },
 });
 
-await users.ensureSheet();
+const em = hikoutei.em.fork();
+const user = em.create(User, { id: "u1", name: "Ada" });
+em.persist(user);
+await em.flush();
 
-await users.insert({
-  id: "u1",
-  email: "a@test.com",
-  age: 20,
-  active: true,
-  _version: 1,
-});
-
-const allUsers = await users.findAll();
-const user = await users.findById("u1");
-
-const updated = await users.update("u1", current => ({
-  ...current,
-  age: 21,
-}));
-
-await users.deleteById("u1");
+user.name = "Ada Lovelace";
+await em.flush();
 ```
 
-`ensureSheet()` creates the configured sheet tab when it is missing and writes
-the schema header only when the header row is empty. Existing headers are
-validated, not automatically rewritten.
+`flush()` updates the local application state and schedules the configured
+Sheet view. Remote delivery is asynchronous, so start the sync worker
+and provision the gateway as described in the [setup guide](docs/quick-start.md).
 
-## Configuration
+## When to use Hikoutei
 
-`typed-sheets setup` writes one of these config shapes. You usually do not need
-to hand-write them.
+Hikoutei is a good fit for:
 
-Service account config:
+- MVPs and prototypes where a spreadsheet is part of the product workflow.
+- Internal tools and low-traffic administrative applications.
+- Teams that want typed application data while keeping Sheets easy for people
+  to inspect.
+- Services that can use SQLite locally and accept asynchronous Sheet updates.
 
-```json
-{
-  "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/your-spreadsheet-id/edit",
-  "defaultSheetName": "Users",
-  "auth": {
-    "type": "service-account",
-    "credentialsFile": "/absolute/path/to/service-account.json"
-  }
-}
-```
+## When to choose something else
 
-Apps Script gateway config:
+Use a conventional database and direct Google APIs when you need:
 
-```json
-{
-  "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/your-spreadsheet-id/edit",
-  "defaultSheetName": "Users",
-  "auth": {
-    "type": "apps-script-gateway",
-    "gatewayUrl": "https://script.google.com/macros/s/your-deployment-id/exec",
-    "gatewaySecret": "your-gateway-secret"
-  }
-}
-```
+- Strong transactions across many rows or services.
+- High write throughput or many concurrent writers.
+- Complex queries, joins, or reporting workloads.
+- Multi-server or multi-region coordination.
+- Immediate read-after-write consistency in Google Sheets.
+- Google Sheets to be the primary database for the application.
 
-For the Apps Script gateway path, `gatewayUrl` is the deployed Web App URL that
-ends with `/exec`. The setup flow asks you to paste that URL after deployment
-and then writes it into `.typed-sheets.json`.
+## Google Sheets setup
 
-`createRepositoryFromConfig()` reads `.typed-sheets.json` from the current
-working directory by default. Pass `cwd` or `configPath` to point at another
-config file.
+1. Define the entity-to-Sheet mapping in your server application.
+2. Deploy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) as a
+   Google Apps Script Web App.
+3. Provision the registered tabs and ranges from the server.
+4. Run the sync worker that delivers pending changes.
 
-```ts
-const users = await createRepositoryFromConfig<User>({
-  cwd: "/app",
-  configPath: "/app/.typed-sheets.json",
-  key: "id",
-  columns,
-});
-```
-
-## API
-
-```ts
-interface SheetRepository<T> {
-  ensureSheet(): Promise<void>;
-  findAll(): Promise<T[]>;
-  findById(id: string): Promise<T | null>;
-  insert(row: T): Promise<void>;
-  update(id: string, updater: (current: T) => T): Promise<T | null>;
-  deleteById(id: string): Promise<T | null>;
-}
-```
-
-Direct adapter construction is also supported when you want to manage
-authentication and adapter wiring yourself.
-
-```ts
-import {
-  GoogleSheetsAdapter,
-  boolean,
-  createSheetRepository,
-  number,
-  text,
-} from "typed-sheets";
-
-const adapter = new GoogleSheetsAdapter({
-  spreadsheetUrl: process.env.GOOGLE_SPREADSHEET_URL!,
-  auth,
-});
-
-const users = createSheetRepository<User>({
-  adapter,
-  sheetName: "Users",
-  key: "id",
-  columns: {
-    id: text(),
-    email: text(),
-    age: number().optional(),
-    active: boolean(),
-    _version: number(),
-  },
-});
-```
-
-### Queued repository
-
-Use the queued repository with the Apps Script gateway when writes should be
-appended as durable tasks and processed explicitly:
-
-```ts
-import {
-  AppsScriptGatewayAdapter,
-  createQueuedRepositoryQueueProcessor,
-  createQueuedSheetRepository,
-  number,
-  text,
-} from "typed-sheets";
-
-const adapter = new AppsScriptGatewayAdapter({
-  gatewayUrl: process.env.TYPED_SHEETS_GATEWAY_URL!,
-  gatewaySecret: process.env.TYPED_SHEETS_GATEWAY_SECRET!,
-});
-
-const orders = createQueuedSheetRepository({
-  adapter,
-  sheetName: "Orders",
-  key: "id",
-  columns: {
-    id: text(),
-    status: text(),
-    _version: number(),
-  },
-});
-
-// Creates the canonical sheet and task queue. Existing projection rows are
-// copied into an empty canonical sheet during this one-time initialization.
-await orders.ensureSheet();
-
-await orders.transaction(async (tx) => {
-  const order = await tx.findById("o1");
-
-  if (order) {
-    order.status = "paid";
-    tx.save(order);
-  }
-});
-
-const processor = createQueuedRepositoryQueueProcessor(adapter);
-const result = await processor.processTaskQueue({ maxTransactions: 1 });
-```
-
-The queued repository requires an explicit transaction boundary for entity
-operations. Use `tx.findAll()`, `tx.findById()`, `tx.save()`, and `tx.remove()`
-inside `repository.transaction()`. The callback is materialized as one queue
-transaction; it does not apply the change to the canonical sheet immediately.
-Queue draining is an independent infrastructure operation exposed by
-`createQueuedRepositoryQueueProcessor()`.
-
-Queued repository reads use the adapter's canonical read operation. The visible
-projection tab is seeded during initialization but is not automatically synced
-by the current gateway processor.
-
-Entity reads and writes are scoped to the transaction callback. Queue
-retry/materialization details are internal implementation concerns; the public
-API does not expose a transaction handle or queue task payload.
+Keep the gateway secret on the server. Do not put it in browser code or commit
+it to Git.
 
 ## Documentation
 
-- [Safety model and adapters](docs/safety-and-adapters.md)
-- [Manual Apps Script gateway setup](templates/manual-apps-script-gateway/README.md)
-- [Integration smoke test](docs/integration-smoke-test.md)
-- [Task queue write model](docs/task-queue-write-model.md)
-- [Setup layer plan](docs/setup-layer-plan.md)
-- [SQL layer plan](docs/sql-layer-plan.md)
+- [Quick start](docs/quick-start.md) — installation, mapping, and gateway setup.
+- [Architecture](docs/architecture.md) — how the local store and Sheet views
+  fit together.
+- [Write and synchronization flow](docs/write-and-synchronization-flow.md) —
+  asynchronous delivery and recovery behavior.
+- [Development](docs/development.md) — local development and test commands.
+- [Benchmark notes](docs/sync-bulk-write-benchmark.md) — dated measurements
+  and their limitations.
 
-## Current Limitations
+## Limitations
 
-This project currently does not support joins, relations, SQL execution,
-automatic retry/backoff, browser support, or automatic Apps Script gateway
-installation. Queued processing is explicit, queued transactions do not provide
-database-level atomicity across separate canonical sheets, and the visible
-projection is not automatically synchronized after processing.
+- Google Sheets has quota, latency, and Apps Script execution limits.
+- Sheet updates are asynchronous; the application should read its local state.
+- SQLite is local to the service and is not a distributed coordination layer.
+- Schema changes, manual edits, and conflicting updates still need an
+  operational policy from the application.
 
-When adopting queued writes for an existing sheet, run `ensureSheet()` once so
-the gateway can seed an empty canonical sheet from the existing projection.
-Queued repositories should then read and write through the canonical queue
-workflow rather than mixing direct writes against the projection tab.
+## Roadmap
 
-Apps Script and Google Sheets quotas apply. Keep live Google integration tests
-opt-in and use a test spreadsheet or test sheet tab.
+- Complete ingestion of intentional user edits from Google Sheets.
+- Improve update/delete conflict handling and presentation.
+- Add setup tooling for registry and Apps Script deployment.
+- Stabilize the public package release.
 
-## Development
+See the [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues)
+for current work.
 
-```sh
-npm test
-npm run typecheck
-npm run build
-npm run test:integration
-```
+## License
 
-`npm run test:integration` requires real Google credentials and is not part of
-the default verification path.
+Hikoutei is released under the [MIT License](LICENSE).
