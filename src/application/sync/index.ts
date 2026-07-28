@@ -35,10 +35,6 @@ export type {
   SyncEffectWorkerFullGateway,
   SyncSheetObservationGateway,
   SyncSheetGateway,
-  ReadSyncTableRowsRequest,
-  SyncSheetTableReaderGateway,
-  SyncTableRow,
-  SyncTableRowsResult,
 } from "./gateway/syncGateway.js";
 export { SYNC_GATEWAY_SNAPSHOT_READ_MODES } from "./gateway/constants.js";
 export type { SyncGatewaySnapshotReadMode } from "./gateway/constants.js";

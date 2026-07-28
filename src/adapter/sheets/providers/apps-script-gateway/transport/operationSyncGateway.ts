@@ -30,7 +30,6 @@ import type {
   FastAppendRowsRequest,
   FastAppendRowsResult,
   ReadSyncEffectPostconditionsRequest,
-  ReadSyncTableRowsRequest,
   ReadSyncSnapshotRequest,
   SyncEffectPostcondition,
   SyncGatewayEffect,
@@ -38,10 +37,8 @@ import type {
   SyncGatewaySnapshot,
   SyncObservedSnapshot,
   SyncSheetGateway,
-  SyncSheetTableReaderGateway,
   SyncSheetObservationBatchGateway,
   SyncEffectWorkerFullGateway,
-  SyncTableRowsResult,
 } from "../../../../../application/sync/gateway/syncGateway.js";
 import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import type {
@@ -49,7 +46,6 @@ import type {
   AppsScriptOperationGateway,
 } from "./operationClient.js";
 import { createFastAppendRowsOperation } from "../operations/write/fastAppendOperation.js";
-import { createReadTableRowsOperation } from "../operations/read/tableReadOperation.js";
 import {
   createApplyEffectsOperation,
   createReadEffectPostconditionOperation,
@@ -103,7 +99,6 @@ interface ReadProjectionArgs {
 export class AppsScriptOperationSyncGateway
   implements
     SyncSheetGateway,
-    SyncSheetTableReaderGateway,
     SyncSheetObservationBatchGateway,
     SyncEffectWorkerFullGateway,
     SyncGatewayProvisioner {
@@ -169,38 +164,6 @@ export class AppsScriptOperationSyncGateway
     });
     const [result] = await this.operationGateway.applyOperations([operation] as const);
     return result;
-  }
-
-  /** Reads one registered table with values only; no metadata, lock, or CAS work is performed. */
-  public async readRows(request: ReadSyncTableRowsRequest): Promise<SyncTableRowsResult> {
-    const [result] = await this.readRowsBatch([request]);
-    if (result === undefined) {
-      throw new SyncGatewayContractError(
-        SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-        "Apps Script table read returned no result",
-      );
-    }
-    return result;
-  }
-
-  /** Reads several registered tables through one signed Apps Script request. */
-  public async readRowsBatch(
-    requests: readonly ReadSyncTableRowsRequest[],
-  ): Promise<readonly SyncTableRowsResult[]> {
-    const operations = requests.map((request) => {
-      const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
-      validateRoute(request, definition);
-      return createReadTableRowsOperation({
-        sheetName: request.sheetName,
-        registeredRange: request.registeredRange,
-        headers: definition.headers,
-      });
-    });
-    if (operations.length === 0) return [];
-    const results = await this.operationGateway.applyOperations(
-      operations as readonly AppsScriptOperationDefinition<unknown, unknown>[],
-    );
-    return results as readonly SyncTableRowsResult[];
   }
 
   /** Applies regular update/delete effects through the full operation path. */

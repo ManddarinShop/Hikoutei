@@ -100,41 +100,6 @@ describe("AppsScriptOperationSyncGateway", () => {
     expect(operationGateway.calls).toHaveLength(0);
   });
 
-  it("reads table values without metadata, locks, or snapshot hashing", async () => {
-    const operationGateway = new StubOperationGateway([{
-      sheetName: "Orders",
-      registeredRange: "A:B",
-      headers: ["id", "status"],
-      rows: [{
-        rowNumber: 2,
-        fields: {
-          id: { kind: "string", value: "order-1" },
-          status: { kind: "string", value: "paid" },
-        },
-      }],
-    }]);
-    const adapter = new AppsScriptOperationSyncGateway({
-      operationGateway,
-      definitions: [createDefinition()],
-    });
-
-    const [result] = await adapter.readRowsBatch([{
-      physicalSheetId: "orders-state",
-      sheetName: "Orders",
-      registeredRange: "A:B",
-      projection: "system_state",
-      schemaVersion: 1,
-      headers: ["id", "status"],
-    }]);
-
-    expect(result?.rows[0]?.fields.id).toEqual({ kind: "string", value: "order-1" });
-    expect(operationGateway.calls).toHaveLength(1);
-    expect(operationGateway.calls[0]?.fn).toContain("getValues");
-    expect(operationGateway.calls[0]?.fn).not.toContain("LockService");
-    expect(operationGateway.calls[0]?.fn).not.toContain("DeveloperMetadata");
-    expect(operationGateway.calls[0]?.fn).not.toContain("computeDigest");
-  });
-
   it("routes regular effects and recovery reads through typed operations", async () => {
     const effect = createEffect();
     const operationGateway = new StubOperationGateway([
