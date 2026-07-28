@@ -366,7 +366,6 @@ function createObservedSnapshot(
   projection: "system_state" | "user_input",
 ): unknown {
   return {
-    anchors: { assigned: 0, existing: 1, duplicateAnchors: [] },
     snapshot: {
       protocolVersion: "typed-sheets-sync-v1",
       sheetName,

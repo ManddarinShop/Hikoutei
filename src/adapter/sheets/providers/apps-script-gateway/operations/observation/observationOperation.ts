@@ -175,7 +175,6 @@ function decodeObservedSnapshot(value: unknown): SyncObservedSnapshot {
   const record = requireRecord(value, "combined observation result");
   const timing = decodeOptionalSyncGatewayTiming(record.timing, "observation timing");
   const result: SyncObservedSnapshot = {
-    anchors: decodeEnsureRowAnchorsResult(record.anchors),
     snapshot: decodeSnapshot(record.snapshot),
   };
   return timing === undefined ? result : { ...result, timing };
@@ -497,7 +496,7 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var anchorsByRow = readAnchorIndex_(targetSheet);
     phase_("anchor_metadata_read", metadataReadStartedAt);
     var anchorAssignmentStartedAt = Date.now();
-    var anchorResult = ensureAnchorsFromValues_(
+    ensureAnchorsFromValues_(
       targetSheet,
       targetLayout,
       values.slice(1),
@@ -513,7 +512,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     });
     phase_("snapshot_build", snapshotStartedAt);
     return {
-      anchors: anchorResult,
       snapshot: snapshot,
     };
   }

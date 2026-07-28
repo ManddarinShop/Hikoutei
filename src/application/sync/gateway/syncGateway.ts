@@ -110,7 +110,6 @@ export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {
 
 /** Result of one combined anchor assignment and snapshot read. */
 export interface SyncObservedSnapshot {
-  readonly anchors: EnsureSyncRowAnchorsResult;
   readonly snapshot: SyncGatewaySnapshot;
   /** Optional diagnostic phases returned by newer observation gateways. */
   readonly timing?: SyncGatewayTiming;
@@ -141,9 +140,9 @@ export async function observeSyncSnapshot(
   if (isSyncSheetObservationBatchGateway(gateway)) {
     return gateway.observeSnapshot(request);
   }
-  const anchors = await gateway.ensureRowAnchors(request);
+  await gateway.ensureRowAnchors(request);
   const snapshot = await gateway.readSnapshot(request);
-  return { anchors, snapshot };
+  return { snapshot };
 }
 
 /** Reads several snapshots through one remote operation when available. */
