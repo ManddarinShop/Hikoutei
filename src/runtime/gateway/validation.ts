@@ -115,7 +115,7 @@ export function requireSyncGatewaySnapshotReadMode(
   errorCode: SyncGatewayErrorCode,
 ): SyncGatewaySnapshotReadMode {
   if (
-    !isString(value) ||
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
     !Object.values(SYNC_GATEWAY_SNAPSHOT_READ_MODES).includes(
       value as SyncGatewaySnapshotReadMode,
     )
