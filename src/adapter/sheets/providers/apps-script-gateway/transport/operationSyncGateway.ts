@@ -17,7 +17,6 @@ import {
 } from "../../../../../application/sync/gateway/errors.js";
 import {
   requireSyncGatewayNonEmptyList,
-  requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewayText,
@@ -64,14 +63,6 @@ export interface AppsScriptOperationSyncGatewayOptions {
   readonly definitions: readonly RegisteredSyncProjectionDefinition[];
 }
 
-/** Read-only status returned by the operational projection inspection helper. */
-export interface AppsScriptOperationProjectionStatus {
-  readonly sheetName: string;
-  readonly headers: readonly string[];
-  readonly rowCount: number;
-  readonly ids: readonly string[];
-}
-
 type ProvisionedRoute = Omit<SyncGatewayProvisionRoute, "headers">;
 
 interface ProvisionRegistryArgs {
@@ -86,10 +77,6 @@ interface ProvisionRegistrationWire {
   readonly headers: readonly string[];
   readonly identityField?: string;
   readonly checkboxHeaders?: readonly string[];
-}
-
-interface ReadProjectionArgs {
-  readonly sheetName: string;
 }
 
 /**
@@ -271,27 +258,6 @@ export class AppsScriptOperationSyncGateway
     return results as readonly SyncObservedSnapshot[];
   }
 
-  /**
-   * Reads a projection for setup checks and operational verification.
-   *
-   * This is intentionally not part of the old SyncSheetGateway contract; it
-   * is a small read operation for callers that need to verify row counts.
-   */
-  public async readProjection(
-    sheetName: string,
-  ): Promise<AppsScriptOperationProjectionStatus> {
-    const operation: AppsScriptOperationDefinition<
-      ReadProjectionArgs,
-      AppsScriptOperationProjectionStatus
-    > = {
-      fn: READ_PROJECTION_SOURCE,
-      args: { sheetName },
-      decode: decodeProjectionStatus,
-    };
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
-  }
-
   private definitionForPhysicalSheet(
     physicalSheetId: string,
   ): RegisteredSyncProjectionDefinition {
@@ -383,24 +349,6 @@ function decodeProvisionedRoute(value: unknown, index: number): ProvisionedRoute
     ),
     ...(identityField === undefined ? {} : { identityField }),
     ...(checkboxHeaders === undefined ? {} : { checkboxHeaders }),
-  };
-}
-
-function decodeProjectionStatus(value: unknown): AppsScriptOperationProjectionStatus {
-  const record = requireRecord(value, "projection result");
-  return {
-    sheetName: requireSyncGatewayText(
-      record.sheetName,
-      "projection result sheetName",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-    headers: requireStringArray(record.headers, "projection result headers"),
-    rowCount: requireSyncGatewayNonNegativeSafeInteger(
-      record.rowCount,
-      "projection result rowCount",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-    ids: requireStringArray(record.ids, "projection result ids"),
   };
 }
 
@@ -516,20 +464,5 @@ const PROVISION_SOURCE = [
   "    createdSheets: createdSheets,",
   "    initializedHeaders: initializedHeaders,",
   "  };",
-  "}",
-].join("\n");
-
-const READ_PROJECTION_SOURCE = [
-  "function (spreadsheet, args) {",
-  '  var sheet = spreadsheet.getSheetByName(args.sheetName);',
-  '  if (sheet === null) throw new Error("operational sheet was not found: " + args.sheetName);',
-  "  var lastRow = sheet.getLastRow();",
-  "  var lastColumn = sheet.getLastColumn();",
-  "  var headers = lastColumn === 0 ? [] : sheet.getRange(1, 1, 1, lastColumn).getValues()[0];",
-  "  var rowCount = Math.max(0, lastRow - 1);",
-  "  var ids = rowCount === 0",
-  "    ? []",
-  "    : sheet.getRange(2, 1, rowCount, 1).getValues().map(function (row) { return String(row[0]); });",
-  "  return { sheetName: args.sheetName, headers: headers, rowCount: rowCount, ids: ids };",
   "}",
 ].join("\n");

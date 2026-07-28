@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppsScriptOperationSyncGateway,
-  type AppsScriptOperationProjectionStatus,
 } from "../src/adapter/sheets/providers/apps-script-gateway/transport/operationSyncGateway.js";
 import type {
   AnyAppsScriptOperationDefinition,
@@ -21,7 +20,7 @@ import type {
 import type { SyncEffectWorkerGateway } from "../src/application/sync/gateway/syncGateway.js";
 
 describe("AppsScriptOperationSyncGateway", () => {
-  it("moves provisioning, fast append, and projection reads behind the library adapter", async () => {
+  it("moves provisioning and fast append behind the library adapter", async () => {
     const operationGateway = new StubOperationGateway([
       {
         registrations: [{
@@ -38,12 +37,6 @@ describe("AppsScriptOperationSyncGateway", () => {
         results: [{ effectId: "effect-1", status: "applied" }],
         hasMore: false,
       },
-      {
-        sheetName: "Orders",
-        headers: ["id", "status"],
-        rowCount: 1,
-        ids: ["order-1"],
-      } satisfies AppsScriptOperationProjectionStatus,
     ]);
     const adapter = new AppsScriptOperationSyncGateway({
       operationGateway,
@@ -66,17 +59,14 @@ describe("AppsScriptOperationSyncGateway", () => {
         },
       }],
     });
-    const projection = await adapter.readProjection("Orders");
 
     expect(provisioned.createdSheets).toEqual(["Orders"]);
     expect(fastGateway.fastAppendRows).toBeTypeOf("function");
     expect(appended.results[0]?.status).toBe("applied");
-    expect(projection.rowCount).toBe(1);
-    expect(operationGateway.calls).toHaveLength(3);
+    expect(operationGateway.calls).toHaveLength(2);
     expect(operationGateway.calls[0]?.fn).toContain("operational provisioning");
     expect(operationGateway.calls[1]?.fn).toContain("setValues");
     expect(operationGateway.calls[1]?.fn).not.toContain("getDeveloperMetadata");
-    expect(operationGateway.calls[2]?.fn).toContain("getLastRow");
   });
 
   it("rejects a route mismatch before sending a fast append", async () => {
