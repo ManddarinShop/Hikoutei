@@ -10,20 +10,12 @@
 import { applyResolution } from "../../../domain/index.js";
 import { CONFLICT_TRANSITION_KINDS } from "../../../domain/conflict/transitions.js";
 import {
-  JAVASCRIPT_TYPE_NAMES,
-  NORMALIZED_CELL_KINDS,
-} from "../../../shared/encoding/constants.js";
-import { isJavaScriptType } from "../../../shared/encoding/typeGuards.js";
-import { CONFLICT_STATUSES } from "../../../domain/model/constants.js";
-import {
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
 } from "../../../shared/state/constants.js";
 import type {
   ConflictStatus,
   LookupResult,
-  NormalizedCell,
-  Presence,
   ResolutionCommand,
   SyncConflict,
 } from "../../../domain/index.js";
@@ -41,245 +33,54 @@ import {
   type FencingContext,
 } from "../sync/writerLease.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+import {
+  PERSIST_RESOLUTION_RESULT_KINDS,
+  RESOLUTION_COMMAND_STATUSES,
+} from "./resolutionWriterContracts.js";
+import type {
+  ActiveCandidatePointer,
+  CommandRow,
+  ConflictRow,
+  EffectDedupeRow,
+  PersistResolutionCommandInput,
+  PersistResolutionCommandResult,
+  RegisteredProjectionRow,
+} from "./resolutionWriterContracts.js";
+import {
+  ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL,
+  CLEAR_ACTIVE_CANDIDATE_POINTER_SQL,
+  FIND_EXISTING_COMMAND_SQL,
+  INSERT_PROCESSING_COMMAND_SQL,
+  MARK_COMMAND_APPLIED_SQL,
+  MARK_COMMAND_REJECTED_SQL,
+  MARK_COMMAND_STALE_SQL,
+  MARK_CONFLICT_RESOLVED_SQL,
+  MARK_CONFLICT_STALE_SQL,
+  READ_ACTIVE_CANDIDATE_POINTER_SQL,
+  READ_CONFLICT_SQL,
+  READ_EFFECT_DEDUPE_SQL,
+  READ_REGISTERED_PROJECTION_SQL,
+} from "./resolutionWriterSql.js";
+import {
+  assertCurrentFence,
+  assertCurrentFenceWithSql,
+  FenceLostError,
+  fenceParameters,
+  fromSqlNullable,
+  parseNormalizedCell,
+  requireConflictStatus,
+} from "./resolutionWriterHelpers.js";
 
-const FENCE_EXISTS_SQL = `
-  SELECT 1 FROM writer_lease
-  WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until > ?
-`;
+export {
+  PERSIST_RESOLUTION_RESULT_KINDS,
+  RESOLUTION_COMMAND_STATUSES,
+} from "./resolutionWriterContracts.js";
+export type {
+  PersistResolutionCommandInput,
+  PersistResolutionCommandResult,
+} from "./resolutionWriterContracts.js";
 
-const FIND_EXISTING_COMMAND_SQL = `
-  SELECT command_id, request_key, action, actor_id, role, target_conflict_id,
-         expected_revision, active_candidate_hash, expected_candidate_epoch,
-         payload_hash, status
-  FROM resolution_command
-  WHERE command_id = ? OR request_key = ?
-`;
 
-const READ_CONFLICT_SQL = `
-  SELECT conflict_id, conflict_group_id, event_id, row_binding_id, entity_id, field_name,
-         user_value, user_base_revision, canonical_value_at_detection,
-         canonical_revision_at_detection, current_canonical_value,
-         current_canonical_revision, candidate_epoch, status, resolution_command_id
-  FROM sync_conflict
-  WHERE logical_sheet_id = ? AND conflict_id = ?
-`;
-
-const READ_ACTIVE_CANDIDATE_POINTER_SQL = `
-  SELECT physical_sheet_id, projection, candidate_epoch, active_candidate_hash
-  FROM sheet_visible_field_state
-  WHERE row_binding_id = ? AND field_name = ?
-    AND active_candidate_conflict_id = ?
-    AND active_candidate_hash IS NOT NULL
-`;
-
-const INSERT_PROCESSING_COMMAND_SQL = `
-  INSERT INTO resolution_command (
-    command_id, request_key, action, actor_id, role, target_conflict_id,
-    expected_revision, active_candidate_hash, expected_candidate_epoch,
-    payload_hash, status, issued_at
-  )
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?
-  WHERE EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const MARK_CONFLICT_RESOLVED_SQL = `
-  UPDATE sync_conflict
-  SET status = 'RESOLVED', resolution_command_id = ?, updated_at = ?
-  WHERE conflict_id = ? AND status IN ('OPEN', 'NEEDS_REBASE')
-    AND current_canonical_revision = ? AND candidate_epoch = ?
-    AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const CLEAR_ACTIVE_CANDIDATE_POINTER_SQL = `
-  UPDATE sheet_visible_field_state
-  SET active_candidate_conflict_id = NULL, active_candidate_hash = NULL,
-      candidate_epoch = candidate_epoch + 1
-  WHERE physical_sheet_id = ? AND projection = ?
-    AND row_binding_id = ? AND field_name = ?
-    AND active_candidate_conflict_id = ? AND candidate_epoch = ?
-    AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL = `
-  UPDATE row_binding
-  SET candidate_epoch = CASE
-    WHEN candidate_epoch <= ? THEN ?
-    ELSE candidate_epoch
-  END
-  WHERE row_binding_id = ? AND logical_sheet_id = ?
-    AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const MARK_COMMAND_APPLIED_SQL = `
-  UPDATE resolution_command
-  SET status = 'applied', applied_commit_id = ?
-  WHERE command_id = ? AND status = 'processing'
-    AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const MARK_CONFLICT_STALE_SQL = `
-  UPDATE sync_conflict
-  SET status = ?, updated_at = ?
-  WHERE conflict_id = ? AND status IN ('OPEN', 'NEEDS_REBASE')
-    AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const MARK_COMMAND_STALE_SQL = `
-  UPDATE resolution_command
-  SET status = 'stale'
-  WHERE command_id = ? AND status = 'processing'
-    AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const MARK_COMMAND_REJECTED_SQL = `
-  UPDATE resolution_command
-  SET status = 'rejected'
-  WHERE command_id = ? AND status = 'processing'
-    AND EXISTS (${FENCE_EXISTS_SQL})
-`;
-
-const READ_EFFECT_DEDUPE_SQL = `
-  SELECT effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
-         projection, target_kind, target_id, payload_hash
-  FROM sheet_effect_outbox
-  WHERE effect_dedupe_key = ?
-`;
-
-const READ_REGISTERED_PROJECTION_SQL = `
-  SELECT logical_sheet_id, projection, enabled
-  FROM physical_sheet_registry
-  WHERE physical_sheet_id = ?
-`;
-
-/** Runtime values for the durable resolution-command lifecycle. */
-const RESOLUTION_COMMAND_STATUSES = {
-  PROCESSING: "processing",
-  APPLIED: "applied",
-  STALE: "stale",
-  REJECTED: "rejected",
-  FAILED: "failed",
-} as const;
-
-/** Closed set of statuses stored for a resolution command. */
-export type ResolutionCommandStatus =
-  (typeof RESOLUTION_COMMAND_STATUSES)[keyof typeof RESOLUTION_COMMAND_STATUSES];
-
-/** Runtime values for results returned by the resolution writer. */
-const PERSIST_RESOLUTION_RESULT_KINDS = {
-  FENCED_OUT: "fenced_out",
-  APPLIED: "applied",
-  STALE: "stale",
-  REJECTED: "rejected",
-  DUPLICATE: "duplicate",
-} as const;
-
-/** Closed set of resolution-writer result kinds. */
-export type PersistResolutionCommandResultKind =
-  (typeof PERSIST_RESOLUTION_RESULT_KINDS)[keyof typeof PERSIST_RESOLUTION_RESULT_KINDS];
-
-/** Input required to durably process one trusted `acknowledge_system` request. */
-export interface PersistResolutionCommandInput {
-  readonly logicalSheetId: string;
-  readonly command: ResolutionCommand;
-  /** Durable transaction identity for effects created by this resolution. */
-  readonly commitId: string;
-  /** Effects to materialize after a successful acknowledge_system transition. */
-  readonly effects: readonly NewEffect[];
-  /**
-   * Effects to materialize when the request is stale. This normally consumes a
-   * checked control cell while projecting NEEDS_REBASE rather than retrying an
-   * old acknowledgement forever.
-   */
-  readonly staleEffects?: readonly NewEffect[];
-  /** Effects to materialize when a trusted request is rejected. */
-  readonly rejectedEffects?: readonly NewEffect[];
-  /**
-   * Effects to materialize when a replay reaches an already terminal command.
-   * This normally resets a still-checked one-shot control without reopening or
-   * reapplying the canonical resolution.
-   */
-  readonly duplicateEffects?: readonly NewEffect[];
-}
-
-/** Terminal or replay-visible result of a resolution command transaction. */
-export type PersistResolutionCommandResult =
-  | { readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.FENCED_OUT }
-  | {
-      readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.APPLIED;
-      readonly commandId: string;
-      readonly conflictId: string;
-    }
-  | {
-      readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.STALE;
-      readonly commandId: string;
-      readonly conflictId: string;
-    }
-  | {
-      readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.REJECTED;
-      readonly commandId: string;
-      readonly reason: string;
-    }
-  | {
-      readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.DUPLICATE;
-      readonly commandId: string;
-      readonly status: ResolutionCommandStatus;
-    };
-
-interface ConflictRow {
-  readonly conflict_id: string;
-  readonly conflict_group_id: string | null;
-  readonly event_id: string;
-  readonly row_binding_id: string;
-  readonly entity_id: string;
-  readonly field_name: string;
-  readonly user_value: string;
-  readonly user_base_revision: number;
-  readonly canonical_value_at_detection: string;
-  readonly canonical_revision_at_detection: number;
-  readonly current_canonical_value: string;
-  readonly current_canonical_revision: number;
-  readonly candidate_epoch: number;
-  readonly status: string;
-  readonly resolution_command_id: string | null;
-}
-
-interface CommandRow {
-  readonly command_id: string;
-  readonly request_key: string;
-  readonly action: string;
-  readonly actor_id: string;
-  readonly role: string;
-  readonly target_conflict_id: string;
-  readonly expected_revision: number;
-  readonly active_candidate_hash: string;
-  readonly expected_candidate_epoch: number;
-  readonly payload_hash: string;
-  readonly status: ResolutionCommandStatus;
-}
-
-interface ActiveCandidatePointer {
-  readonly physical_sheet_id: string;
-  readonly projection: string;
-  readonly candidate_epoch: number;
-  readonly active_candidate_hash: string;
-}
-
-interface EffectDedupeRow {
-  readonly effect_kind: string;
-  readonly commit_id: string;
-  readonly logical_sheet_id: string;
-  readonly physical_sheet_id: string;
-  readonly projection: string;
-  readonly target_kind: string;
-  readonly target_id: string;
-  readonly payload_hash: string;
-}
-
-interface RegisteredProjectionRow {
-  readonly logical_sheet_id: string;
-  readonly projection: string;
-  readonly enabled: number;
-}
 
 /**
  * Persists a resolution command at the writer-RPC boundary.
@@ -1046,97 +847,4 @@ function allResolutionEffects(input: PersistResolutionCommandInput): readonly Ne
     ...(input.rejectedEffects ?? []),
     ...(input.duplicateEffects ?? []),
   ];
-}
-
-function parseNormalizedCell(serialized: string, fieldName: string): NormalizedCell {
-  let value: unknown;
-  try {
-    value = JSON.parse(serialized) as unknown;
-  } catch {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_STORED_CONFLICT,
-      `stored ${fieldName} is not valid JSON`,
-    );
-  }
-  if (value === null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_STORED_CONFLICT,
-      `stored ${fieldName} is not a normalized cell`,
-    );
-  }
-  const cell = value as { readonly kind?: unknown; readonly value?: unknown };
-  if (
-    cell.kind === NORMALIZED_CELL_KINDS.STRING &&
-    isJavaScriptType(cell.value, JAVASCRIPT_TYPE_NAMES.STRING)
-  ) {
-    return { kind: NORMALIZED_CELL_KINDS.STRING, value: cell.value };
-  }
-  if (cell.kind === NORMALIZED_CELL_KINDS.NUMBER &&
-    isJavaScriptType(cell.value, JAVASCRIPT_TYPE_NAMES.NUMBER) && Number.isFinite(cell.value)) {
-    return { kind: NORMALIZED_CELL_KINDS.NUMBER, value: cell.value };
-  }
-  if (
-    cell.kind === NORMALIZED_CELL_KINDS.BOOLEAN &&
-    isJavaScriptType(cell.value, JAVASCRIPT_TYPE_NAMES.BOOLEAN)
-  ) {
-    return { kind: NORMALIZED_CELL_KINDS.BOOLEAN, value: cell.value };
-  }
-  if (cell.kind === NORMALIZED_CELL_KINDS.DATE &&
-    isJavaScriptType(cell.value, JAVASCRIPT_TYPE_NAMES.STRING) && isCanonicalDate(cell.value)) {
-    return { kind: NORMALIZED_CELL_KINDS.DATE, value: cell.value };
-  }
-  throw new StorageError(
-    STORAGE_ERROR_CODES.INVALID_STORED_CONFLICT,
-    `stored ${fieldName} is not a normalized cell`,
-  );
-}
-
-function isCanonicalDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
-}
-
-function requireConflictStatus(value: string): ConflictStatus {
-  if (
-    value === CONFLICT_STATUSES.OPEN ||
-    value === CONFLICT_STATUSES.NEEDS_REBASE ||
-    value === CONFLICT_STATUSES.RESOLVED
-  ) {
-    return value;
-  }
-  throw new StorageError(
-    STORAGE_ERROR_CODES.INVALID_STORED_CONFLICT,
-    `stored conflict has invalid status ${value}`,
-  );
-}
-
-/** Converts a nullable SQL column into the explicit internal presence contract. */
-function fromSqlNullable<T>(value: T | null): Presence<T> {
-  return value === null
-    ? { kind: PRESENCE_KINDS.ABSENT }
-    : { kind: PRESENCE_KINDS.PRESENT, value };
-}
-
-function assertCurrentFence(db: DatabaseSyncLike, fence: FencingContext): void {
-  if (!isFencingValid(db, fence)) throw new FenceLostError();
-}
-
-/** Requires the writer fence to remain current in the active async SQL transaction. */
-async function assertCurrentFenceWithSql(
-  sql: SqlExecutor,
-  fence: FencingContext,
-): Promise<void> {
-  if (!(await isFencingValidWithSql(sql, fence))) throw new FenceLostError();
-}
-
-function fenceParameters(fence: FencingContext): readonly [string, number, string, number] {
-  return [fence.role, fence.writerEpoch, fence.fencingToken, fence.now];
-}
-
-class FenceLostError extends StorageError {
-  constructor() {
-    super(STORAGE_ERROR_CODES.STALE_WRITER_FENCE, "writer fencing is stale or expired");
-  }
 }
