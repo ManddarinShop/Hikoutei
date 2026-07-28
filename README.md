@@ -1,3 +1,5 @@
+[English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
+
 <div align="center">
 
 # Hikoutei
@@ -26,39 +28,6 @@ administrative workflows where a spreadsheet is part of the product experience.
 It is intentionally **not** a general-purpose database replacement, a Prisma or
 JPA clone, or a general Google Sheets API wrapper.
 
-## Table of contents
-
-- [Why Hikoutei](#why-hikoutei)
-- [When to use it](#when-to-use-it)
-- [When not to use it](#when-not-to-use-it)
-- [Architecture](#architecture)
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [Google Sheets gateway](#google-sheets-gateway)
-- [Write and synchronization flow](#write-and-synchronization-flow)
-- [Earlier path vs. current path](#earlier-path-vs-current-path)
-- [Performance snapshot](#performance-snapshot)
-- [Limitations](#limitations)
-- [Roadmap](#roadmap)
-- [Development](#development)
-- [License](#license)
-
-## Why Hikoutei
-
-Google Sheets is easy for a team to inspect and edit, but it is a difficult
-place to enforce repository guarantees. Hikoutei keeps the authoritative state
-and write decisions in SQLite, then materializes safe, durable effects to a
-Google Sheet.
-
-The library focuses on the failure modes that matter in this setup:
-
-- schema drift from manual header changes
-- duplicate or missing key columns
-- invalid row values
-- stale writes and lost updates
-- durable retry state for remote writes
-- Apps Script and Google Sheets latency limits
-
 ## When to use it
 
 Hikoutei is a good fit when:
@@ -80,112 +49,13 @@ Choose a conventional database and direct Google APIs instead when you need:
 - immediate read-after-write consistency in Google Sheets
 - Google Sheets to behave like the primary database
 
-## Architecture
+## Documentation
 
-```text
-Application server
-  └─ Hikoutei EntityManager
-       └─ replaceable persistence adapter (currently MikroORM)
-            └─ SQLite canonical state + durable outbox
-                 └─ background effect worker
-                      └─ signed Apps Script operation gateway
-                           └─ Google Sheets projection
-```
-
-SQLite is the canonical read and write store. A successful entity flush commits
-local state and durable outbox work; it does not wait for Google Sheets to
-converge. The worker drains the outbox independently and retries recoverable
-remote failures.
-
-## Installation
-
-```sh
-npm install typed-sheets @mikro-orm/core @mikro-orm/sql
-```
-
-The MikroORM packages are optional peer dependencies of the root package. They
-are required only when the MikroORM persistence adapter is used.
-
-## Quick start
-
-The public API is entity-oriented: load an entity, mutate it, and flush the
-unit of work.
-
-```ts
-import { defineEntity, p } from "@mikro-orm/sql";
-import { defineTypedSheetsEntityMapping } from "typed-sheets/orm";
-import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
-
-const OrderSchema = defineEntity({
-  name: "Order",
-  tableName: "orders",
-  properties: {
-    id: p.string().primary(),
-    status: p.string(),
-  },
-});
-
-class Order extends OrderSchema.class {
-  declare id: string;
-  declare status: string;
-}
-
-OrderSchema.setClass(Order);
-
-const orderMapping = defineTypedSheetsEntityMapping({
-  entity: Order,
-  logicalSheetId: "orders",
-  primaryKey: "id",
-  businessKey: "id",
-  schemaVersion: 1,
-  fields: [
-    {
-      property: "id",
-      cellKind: "string",
-      ownership: "user",
-      required: true,
-      unique: true,
-    },
-    {
-      property: "status",
-      cellKind: "string",
-      ownership: "user",
-      required: true,
-    },
-  ],
-  projections: [
-    {
-      physicalSheetId: "orders-system",
-      spreadsheetId: process.env.GOOGLE_SHEET_ID!,
-      tabName: "Orders_System",
-      registeredRange: "A:C",
-      projection: "system_state",
-    },
-  ],
-});
-
-const typedSheetsOrm = await initializeMappedTypedSheetsOrm({
-  dbName: "./hikoutei.sqlite",
-  entities: [Order],
-  mappings: [orderMapping],
-  writer: { writerId: "orders-service" },
-});
-
-const em = typedSheetsOrm.em.fork();
-const order = em.create(Order, { id: "o-1", status: "pending" });
-em.persist(order);
-await em.flush();
-
-const loaded = await em.findOne(Order, { id: "o-1" });
-if (loaded !== null) {
-  loaded.status = "paid";
-  await em.flush();
-}
-```
-
-The current manager supports `fork()`, `create()`, `find()`, `findOne()`,
-`persist()`, `remove()`, `flush()`, `transactional()`, and `clear()`.
-Reads are served from SQLite and do not wait for a Google Sheets request.
+- [Architecture](docs/architecture.md)
+- [Quick start](docs/quick-start.md)
+- [Write and synchronization flow](docs/write-and-synchronization-flow.md)
+- [Development](docs/development.md)
+- [Full benchmark history](docs/sync-bulk-write-benchmark.md)
 
 ## Google Sheets gateway
 
@@ -203,31 +73,6 @@ gateway secret in browser code or commit it to Git.
 
 Provisioning is explicit. Initialize the local SQLite registry first, then use
 `provisionRegisteredSyncSheets()` through the operation-backed gateway.
-
-## Write and synchronization flow
-
-```text
-em.persist(entity) / em.remove(entity)
-          │
-          ▼
-SQLite transaction
-  ├─ canonical entity state
-  └─ durable outbox effect
-          │
-          ▼
-background worker
-  ├─ claim with a lease
-  ├─ send a signed operation batch
-  ├─ retry or recover an uncertain response
-  └─ mark the effect applied/failed
-          │
-          ▼
-Apps Script gateway ── fast range write ──▶ Google Sheets
-```
-
-The fast append path favors one contiguous range write and defers expensive
-repair work to reconciliation. This makes the common SQLite-to-Sheets path
-cheap while keeping a separate safety net for drift and response loss.
 
 ## Earlier path vs. current path
 
@@ -320,28 +165,12 @@ See the full dated measurements in
 For implementation notes and current issues, see the
 [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues).
 
-## Development
-
-```sh
-npm ci
-npm test
-npm run typecheck
-npm run typecheck:test
-npm run build
-npm pack --dry-run
-```
-
-The normal test suite uses fake gateways and SQLite/MikroORM fixtures. Live
-Google Sheets tests are opt-in because they require deployment credentials and
-consume external quota.
-
 ## Further reading
 
 - [MikroORM adapter and entity facade](docs/mikro-orm-adapter-spike.md)
 - [SQL layer plan](docs/sql-layer-plan.md)
 - [Task queue write model](docs/task-queue-write-model.md)
 - [Sync observability](docs/sync-observability.md)
-- [Full benchmark history](docs/sync-bulk-write-benchmark.md)
 - [Apps Script gateway source](apps-script/gateway/Code.gs)
 
 ## License
