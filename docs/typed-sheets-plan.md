@@ -170,22 +170,26 @@ Google Sheets는 spreadsheet이지 database가 아니다. 따라서 다음 한�
 - 비개발자가 직접 수정하는 운영 데이터
 - 프로토타입
 
-## 6. Core / Adapter 분리 구조
+## 6. Domain / Application / Adapter 분리 구조
 
 권장 구조:
 
 ```txt
 src/
   index.ts
-  adapter.ts
-  columns.ts
-  errors.ts
-  repository.ts
+  domain/                       # 정규화, 평가, 충돌, 상태 규칙
+  shared/                       # 공통 상수·인코딩·상태 계약
+  application/
+    orm/                        # 사용자 ORM facade와 mapping/flush
+    sync/                       # gateway, worker, reconciliation
+  adapter/                      # persistence와 Sheets provider 계약/구현
+  infrastructure/
+    storage/                    # SQLite schema, canonical state, outbox
 ```
 
-### Core 책임
+### Domain 책임
 
-`core`는 Google API를 몰라야 한다.
+`domain`은 Google API와 SQLite 구현을 몰라야 한다.
 
 책임:
 
@@ -199,6 +203,16 @@ src/
 - repository method 구현
 - `_version` optimistic locking
 - typed error throw
+
+### Application 책임
+
+application은 domain 규칙과 adapter/infrastructure를 조율한다.
+
+책임:
+
+- ORM entity lifecycle과 flush 계획
+- effect worker와 reconciliation 실행
+- Apps Script gateway operation 조합
 
 ### Adapter 책임
 

@@ -15,8 +15,8 @@ import {
   type TypedSheetsEntityMappingRegistry,
   type TypedSheetsEntityWriterOptions,
   type TypedSheetsOrm,
-} from "../../../../orm/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../runtime/gateway/SyncGatewayBootstrap.js";
+} from "../../../../application/orm/index.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../../application/sync/gateway/SyncGatewayBootstrap.js";
 import {
   createTypedSheetsOrm,
 } from "./MikroOrmTypedSheetsEngine.js";

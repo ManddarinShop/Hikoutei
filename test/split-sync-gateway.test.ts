@@ -9,8 +9,8 @@ import {
   type SyncGatewayEffect,
   type SyncGatewaySnapshot,
   type SyncSheetGateway,
-} from "../src/runtime/gateway/syncGateway.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../src/runtime/gateway/constants.js";
+} from "../src/application/sync/gateway/syncGateway.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../src/application/sync/gateway/constants.js";
 
 function requestBase() {
   return {

@@ -44,18 +44,18 @@ import {
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/runtime/gateway/syncGateway.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/runtime/effects/SyncEffectWorker.js";
+} from "../src/application/sync/gateway/syncGateway.js";
+import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 import {
   QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
   QUARANTINE_REPAIR_STATUSES,
   ROW_OUTCOMES,
-} from "../src/core/evaluate/constants.js";
+} from "../src/domain/evaluate/constants.js";
 import {
   CONFLICT_STATUSES,
   QUARANTINE_REASONS,
-} from "../src/core/model/constants.js";
+} from "../src/domain/model/constants.js";
 
 const OrderSchema = defineEntity({
   name: "MikroOrmAdapterOrder",

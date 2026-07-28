@@ -1,19 +1,19 @@
 /** Lightweight table reads for polling user-visible Sheet values. */
 
-import type { NormalizedCell } from "../../../../../../core/index.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../../../core/encoding/constants.js";
-import { isRecord } from "../../../../../../core/encoding/typeGuards.js";
+import type { NormalizedCell } from "../../../../../../shared/encoding/types.js";
+import { NORMALIZED_CELL_KINDS } from "../../../../../../shared/encoding/constants.js";
+import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-} from "../../../../../../runtime/gateway/errors.js";
+} from "../../../../../../application/sync/gateway/errors.js";
 import {
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayText,
-} from "../../../../../../runtime/gateway/validation.js";
+} from "../../../../../../application/sync/gateway/validation.js";
 import type {
   SyncTableRow,
   SyncTableRowsResult,
-} from "../../../../../../runtime/gateway/syncGateway.js";
+} from "../../../../../../application/sync/gateway/syncGateway.js";
 import type { AppsScriptOperationDefinition } from "../../transport/operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "../../protocol/timing.js";
 import { invalidOperationRequest, invalidOperationResponse } from "../../errors.js";

@@ -11,7 +11,7 @@ import {
   type SyncSheetTableReaderGateway,
   type SyncTableRowsResult,
 } from "../src/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/runtime/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
 
 const TestEntitySchema = defineEntity({
   name: "SimpleSheetPollingTestEntity",

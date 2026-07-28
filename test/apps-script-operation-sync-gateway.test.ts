@@ -12,13 +12,13 @@ import type {
 import type {
   ApplySyncEffectsRequest,
   SyncGatewayEffect,
-} from "../src/runtime/gateway/syncGateway.js";
-import { computeSyncVisibleHash } from "../src/runtime/gateway/syncGateway.js";
+} from "../src/application/sync/gateway/syncGateway.js";
+import { computeSyncVisibleHash } from "../src/application/sync/gateway/syncGateway.js";
 import type {
   RegisteredSyncProjectionDefinition,
   SyncGatewayProvisionRoute,
-} from "../src/runtime/gateway/SyncGatewayBootstrap.js";
-import type { SyncEffectWorkerGateway } from "../src/runtime/gateway/syncGateway.js";
+} from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
+import type { SyncEffectWorkerGateway } from "../src/application/sync/gateway/syncGateway.js";
 
 describe("AppsScriptOperationSyncGateway", () => {
   it("moves provisioning, fast append, and projection reads behind the library adapter", async () => {

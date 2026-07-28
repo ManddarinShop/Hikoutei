@@ -10,18 +10,18 @@ import type {
   RegisteredSyncProjectionDefinition,
   SyncGatewayProvisionRoute,
   SyncGatewayProvisioner,
-} from "../../../../../runtime/gateway/SyncGatewayBootstrap.js";
+} from "../../../../../application/sync/gateway/SyncGatewayBootstrap.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
-} from "../../../../../runtime/gateway/errors.js";
+} from "../../../../../application/sync/gateway/errors.js";
 import {
   requireSyncGatewayNonEmptyList,
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewayText,
-} from "../../../../../runtime/gateway/validation.js";
+} from "../../../../../application/sync/gateway/validation.js";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
@@ -42,8 +42,8 @@ import type {
   SyncSheetObservationBatchGateway,
   SyncEffectWorkerFullGateway,
   SyncTableRowsResult,
-} from "../../../../../runtime/gateway/syncGateway.js";
-import { isRecord } from "../../../../../core/encoding/typeGuards.js";
+} from "../../../../../application/sync/gateway/syncGateway.js";
+import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import type {
   AppsScriptOperationDefinition,
   AppsScriptOperationGateway,

@@ -4,8 +4,8 @@ import {
   type FastAppendRowResult,
   type FastAppendRowsResult,
   type FastAppendRow,
-} from "../../../../../../runtime/gateway/syncGateway.js";
-import { SYNC_GATEWAY_FAST_APPEND_STATUSES } from "../../../../../../runtime/gateway/constants.js";
+} from "../../../../../../application/sync/gateway/syncGateway.js";
+import { SYNC_GATEWAY_FAST_APPEND_STATUSES } from "../../../../../../application/sync/gateway/constants.js";
 import type {
   AppsScriptOperationDefinition,
 } from "../../transport/operationClient.js";
@@ -14,9 +14,9 @@ import {
   invalidOperationRequest,
   invalidOperationResponse,
 } from "../../errors.js";
-import type { NormalizedCell } from "../../../../../../core/encoding/types.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../../../core/encoding/constants.js";
-import { isRecord } from "../../../../../../core/encoding/typeGuards.js";
+import type { NormalizedCell } from "../../../../../../shared/encoding/types.js";
+import { NORMALIZED_CELL_KINDS } from "../../../../../../shared/encoding/constants.js";
+import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
 
 /** Arguments sent to the self-contained fast-append function in `Code.gs`. */
 export type AppsScriptFastAppendOperationArgs = {

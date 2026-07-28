@@ -15,15 +15,15 @@ import {
 import {
   runReconciliationScan,
   RECONCILIATION_DEFAULTS,
-} from "../src/runtime/operations/ReconciliationScanner.js";
+} from "../src/application/sync/operations/ReconciliationScanner.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
   listReadyEffectsWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/storage/index.js";
-import { createSystemProjectionEffect } from "../src/runtime/projection/ProjectionEffectFactory.js";
-import type { NormalizedCell } from "../src/core/index.js";
+} from "../src/infrastructure/storage/index.js";
+import { createSystemProjectionEffect } from "../src/application/sync/projection/ProjectionEffectFactory.js";
+import type { NormalizedCell } from "../src/domain/index.js";
 
 const EntitySchema = defineEntity({
   name: "ReconciliationEntity",

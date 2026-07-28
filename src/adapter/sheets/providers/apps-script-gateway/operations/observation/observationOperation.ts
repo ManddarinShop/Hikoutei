@@ -6,30 +6,30 @@ import type {
   ReadSyncSnapshotRequest,
   SyncObservedSnapshot,
   SyncGatewaySnapshot,
-} from "../../../../../../runtime/gateway/syncGateway.js";
+} from "../../../../../../application/sync/gateway/syncGateway.js";
 import {
   CELL_OBSERVATION_KINDS,
   NORMALIZED_CELL_KINDS,
   type CellObservationKind,
-} from "../../../../../../core/encoding/constants.js";
-import { PRESENCE_KINDS } from "../../../../../../core/state/constants.js";
-import type { NormalizedCell, Presence } from "../../../../../../core/index.js";
-import { isRecord } from "../../../../../../core/encoding/typeGuards.js";
+} from "../../../../../../shared/encoding/constants.js";
+import { PRESENCE_KINDS } from "../../../../../../shared/state/constants.js";
+import type { NormalizedCell, Presence } from "../../../../../../domain/index.js";
+import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-} from "../../../../../../runtime/gateway/errors.js";
+} from "../../../../../../application/sync/gateway/errors.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_PROTOCOL_VERSIONS,
   SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-} from "../../../../../../runtime/gateway/constants.js";
+} from "../../../../../../application/sync/gateway/constants.js";
 import {
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewaySnapshotReadMode,
   requireSyncGatewayText,
-} from "../../../../../../runtime/gateway/validation.js";
+} from "../../../../../../application/sync/gateway/validation.js";
 import type { AppsScriptOperationDefinition } from "../../transport/operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "../../protocol/timing.js";
 import {

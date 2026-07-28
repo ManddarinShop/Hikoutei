@@ -70,14 +70,18 @@ MVP exclusions:
 
 ## Architecture
 
-Keep the core repository logic separate from Google API details.
+Keep domain rules separate from application orchestration, infrastructure
+storage, and Google API details.
 
 Recommended package boundaries:
 
 ```txt
 src/
-  core/                         # 정규화 값, 평가, 상태 계약
-  orm/                          # 공개 ORM facade, mapping, flush 계획
+  domain/                       # 정규화 값, 평가, 충돌, 상태 규칙
+  shared/                       # 도메인 간 공유 상수·인코딩·상태 계약
+  application/
+    orm/                        # 공개 ORM facade, mapping, flush 계획
+    sync/                       # worker, reconciliation, gateway orchestration
   adapter/
     persistence/
       contracts/                # 저장소 공통 계약
@@ -91,12 +95,18 @@ src/
           write/                # fast append
           observation/           # snapshot·anchor 관측
           effect/               # update/delete effect
-  storage/                      # SQLite canonical state와 outbox
-  runtime/                      # worker, reconciliation, gateway 조율
+  infrastructure/
+    storage/                    # SQLite canonical state와 outbox
   index.ts
 ```
 
-The core should depend on an adapter interface, not directly on Google Sheets SDKs.
+`domain/`과 `shared/`는 외부 SDK를 몰라야 한다. `application/`은 use case와
+동기화 흐름을 조율하고, `infrastructure/`는 SQLite 같은 외부 저장 기술을
+담당한다. `adapter/`는 persistence와 Sheets provider를 각각 계약 뒤에
+격리한다.
+
+The domain should depend on adapter interfaces, not directly on Google Sheets
+SDKs.
 
 The first tests should use an in-memory fake adapter. Real Google integration tests can come later and should be opt-in because they require credentials and quota.
 

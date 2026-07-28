@@ -1,10 +1,10 @@
-import { CoreErrorException } from "../../../../core/errors/index.js";
-import { PRESENCE_KINDS } from "../../../../core/state/index.js";
-import type { Presence } from "../../../../core/state/index.js";
+import { CoreErrorException } from "../../../../domain/errors/index.js";
+import { PRESENCE_KINDS } from "../../../../shared/state/index.js";
+import type { Presence } from "../../../../shared/state/index.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
-} from "../../../../runtime/gateway/errors.js";
+} from "../../../../application/sync/gateway/errors.js";
 
 /** Stable error categories emitted by the signed gateway protocol. */
 export const SYNC_GATEWAY_PROTOCOL_ERROR_CODES = {

@@ -11,7 +11,7 @@ import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,
   type TypedSheetsEntityChangeKind,
-} from "../../../../orm/api/contracts.js";
+} from "../../../../application/orm/api/contracts.js";
 
 /**
  * Collects one effective change per entity from MikroORM's early and regular

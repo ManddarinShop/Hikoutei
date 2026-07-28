@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { PRESENCE_KINDS } from "../src/core/index.js";
+import { PRESENCE_KINDS } from "../src/shared/state/index.js";
 import {
   SyncEffectWorkerSupervisor,
-} from "../src/runtime/effects/SyncEffectSupervisor.js";
-import type { SyncEffectWorkerReport } from "../src/runtime/effects/SyncEffectWorker.js";
-import type { ReconciliationScanReport } from "../src/runtime/operations/ReconciliationScanner.js";
+} from "../src/application/sync/effects/SyncEffectSupervisor.js";
+import type { SyncEffectWorkerReport } from "../src/application/sync/effects/SyncEffectWorker.js";
+import type { ReconciliationScanReport } from "../src/application/sync/operations/ReconciliationScanner.js";
 
 describe("SyncEffectWorkerSupervisor", () => {
   it("coalesces concurrent manual and background passes", async () => {

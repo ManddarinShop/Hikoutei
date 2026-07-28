@@ -16,16 +16,16 @@ import {
 } from "../src/index.js";
 import {
   NORMALIZED_CELL_KINDS,
-} from "../src/core/encoding/constants.js";
-import { ROW_OUTCOMES } from "../src/core/evaluate/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../src/runtime/gateway/constants.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/runtime/effects/SyncEffectWorker.js";
+} from "../src/shared/encoding/constants.js";
+import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../src/application/sync/gateway/constants.js";
+import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 import {
   defineTypedSheetsEntityMapping,
   planMappedObservationEntityMutation,
   registerTypedSheetsEntityMappings,
-} from "../src/orm/index.js";
+} from "../src/application/orm/index.js";
 import {
   createMappedTypedSheetsOrm,
   createMikroOrmSqliteAdapter,
@@ -33,8 +33,8 @@ import {
   persistMappedObservedRowWithMikroOrm,
   type MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/index.js";
-import { parseSyncProjectionEffectPayload } from "../src/runtime/gateway/syncGateway.js";
-import type { PersistObservedRowInput } from "../src/storage/index.js";
+import { parseSyncProjectionEffectPayload } from "../src/application/sync/gateway/syncGateway.js";
+import type { PersistObservedRowInput } from "../src/infrastructure/storage/index.js";
 
 const OrderSchema = defineEntity({
   name: "MappedTypedSheetsOrder",

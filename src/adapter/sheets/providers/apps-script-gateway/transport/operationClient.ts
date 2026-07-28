@@ -19,10 +19,10 @@ import {
 } from "../errors.js";
 import { canonicalSyncJson } from "../protocol/syncProtocol.js";
 import type { SyncJsonValue } from "../protocol/types.js";
-import { JAVASCRIPT_TYPE_NAMES } from "../../../../../core/encoding/constants.js";
-import { isJavaScriptType, isRecord } from "../../../../../core/encoding/typeGuards.js";
-import { PRESENCE_KINDS } from "../../../../../core/state/constants.js";
-import type { Presence } from "../../../../../core/state/types.js";
+import { JAVASCRIPT_TYPE_NAMES } from "../../../../../shared/encoding/constants.js";
+import { isJavaScriptType, isRecord } from "../../../../../shared/encoding/typeGuards.js";
+import { PRESENCE_KINDS } from "../../../../../shared/state/constants.js";
+import type { Presence } from "../../../../../shared/state/types.js";
 
 /** One self-contained function call serialized for `Code.gs`. */
 export interface AppsScriptOperationDefinition<

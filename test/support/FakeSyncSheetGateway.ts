@@ -16,14 +16,14 @@ import {
   type LookupResult,
   type NormalizedCell,
   type Presence,
-} from "../../src/core/index.js";
-import { CELL_OBSERVATION_KINDS } from "../../src/core/encoding/constants.js";
+} from "../../src/domain/index.js";
+import { CELL_OBSERVATION_KINDS } from "../../src/shared/encoding/constants.js";
 import {
   APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../src/core/state/index.js";
-import { CoreErrorException } from "../../src/core/errors/index.js";
+} from "../../src/shared/state/index.js";
+import { CoreErrorException } from "../../src/domain/errors/index.js";
 import {
   computeSyncVisibleHash,
   type ApplySyncEffectsRequest,
@@ -45,7 +45,7 @@ import {
   type SyncSheetGateway,
   type SyncSnapshotCell,
   type SyncSnapshotRow,
-} from "../../src/runtime/gateway/syncGateway.js";
+} from "../../src/application/sync/gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_KINDS,
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
@@ -55,18 +55,18 @@ import {
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_PROTOCOL_VERSIONS,
-} from "../../src/runtime/gateway/constants.js";
+} from "../../src/application/sync/gateway/constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
-} from "../../src/runtime/gateway/errors.js";
+} from "../../src/application/sync/gateway/errors.js";
 import {
   requireSyncGatewayNonEmptyList,
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewayText,
-} from "../../src/runtime/gateway/validation.js";
+} from "../../src/application/sync/gateway/validation.js";
 
 const FAKE_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",

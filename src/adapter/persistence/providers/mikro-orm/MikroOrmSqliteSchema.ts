@@ -1,6 +1,6 @@
 import type { SqlExecutor, SqlStorageAdapter } from "../../contracts/sql.js";
 import type { MikroOrmSqliteAdapter } from "./MikroOrmSqliteAdapter.js";
-import { STORAGE_ERROR_CODES, StorageError } from "../../../../storage/errors.js";
+import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
 import {
   CURRENT_SCHEMA_VERSION,
   REQUIRED_V2_COLUMNS,
@@ -9,12 +9,12 @@ import {
   syncSchemaIndexesDdl,
   syncSchemaTablesDdl,
   type SchemaMigrationResult,
-} from "../../../../storage/sqlite/schema.js";
+} from "../../../../infrastructure/storage/sqlite/schema.js";
 import type {
   SchemaMigrationColumnName,
   SchemaMigrationTableName,
-} from "../../../../storage/sqlite/schemaTypes.js";
-import { executeSqlScript } from "../../../../storage/sqlite/sqlScript.js";
+} from "../../../../infrastructure/storage/sqlite/schemaTypes.js";
+import { executeSqlScript } from "../../../../infrastructure/storage/sqlite/sqlScript.js";
 
 /**
  * Migrates typed-sheets sync tables through the application-owned MikroORM

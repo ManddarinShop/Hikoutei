@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { APPLICABILITY_KINDS } from "../src/core/state/constants.js";
+import { APPLICABILITY_KINDS } from "../src/shared/state/constants.js";
 import {
   provisionRegisteredSyncSheets,
   type RegisteredSyncProjectionDefinition,
-} from "../src/runtime/gateway/SyncGatewayBootstrap.js";
+} from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
-} from "../src/runtime/gateway/errors.js";
+} from "../src/application/sync/gateway/errors.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
   serializeSyncProjectionEffectPayload,
   type SyncProjectionEffectPayload,
-} from "../src/runtime/gateway/syncGateway.js";
-import type { RegisteredSyncSheet } from "../src/storage/sync/syncRegistry.js";
+} from "../src/application/sync/gateway/syncGateway.js";
+import type { RegisteredSyncSheet } from "../src/infrastructure/storage/sync/syncRegistry.js";
 
 const fields = {
   active: { kind: "boolean" as const, value: true },

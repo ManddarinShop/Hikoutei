@@ -7,23 +7,23 @@ import type {
   SyncGatewayEffect,
   SyncGatewayEffectPostconditionResult,
   SyncGatewayEffectResult,
-} from "../../../../../../runtime/gateway/syncGateway.js";
+} from "../../../../../../application/sync/gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
   SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
-} from "../../../../../../runtime/gateway/constants.js";
+} from "../../../../../../application/sync/gateway/constants.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
-} from "../../../../../../runtime/gateway/errors.js";
+} from "../../../../../../application/sync/gateway/errors.js";
 import {
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayText,
-} from "../../../../../../runtime/gateway/validation.js";
-import { PRESENCE_KINDS } from "../../../../../../core/state/constants.js";
-import type { Presence } from "../../../../../../core/state/types.js";
-import { isRecord } from "../../../../../../core/encoding/typeGuards.js";
+} from "../../../../../../application/sync/gateway/validation.js";
+import { PRESENCE_KINDS } from "../../../../../../shared/state/constants.js";
+import type { Presence } from "../../../../../../shared/state/types.js";
+import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
 import type { AppsScriptOperationDefinition } from "../../transport/operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "../../protocol/timing.js";
 import {
