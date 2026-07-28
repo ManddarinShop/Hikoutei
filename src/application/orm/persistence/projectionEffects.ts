@@ -23,7 +23,7 @@ import {
   createCandidateReconcileEffect,
   createSystemProjectionEffect,
   createUserInputDeleteEffect,
-} from "../../../application/sync/projection/ProjectionEffectFactory.js";
+} from "../../../application/sync/outbound/projection/ProjectionEffectFactory.js";
 import { requireRegisteredSyncSheetWithSql } from "../../../infrastructure/storage/index.js";
 import type {
   NewEffect,

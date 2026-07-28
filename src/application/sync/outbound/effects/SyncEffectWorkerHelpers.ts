@@ -1,15 +1,15 @@
 /** Small value and error helpers shared by effect-worker modules. */
 
-import type { Applicability, LookupResult, Presence } from "../../../domain/index.js";
+import type { Applicability, LookupResult, Presence } from "../../../../domain/index.js";
 import {
   APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../../shared/state/constants.js";
+} from "../../../../shared/state/constants.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../../../infrastructure/storage/errors.js";
+} from "../../../../infrastructure/storage/errors.js";
 
 export function safeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 500) : "unknown sync gateway failure";
@@ -55,4 +55,3 @@ export function applicabilityFromSqlNullable<T>(value: T | null): Applicability<
 export function throwWorkerError(message: string): never {
   throw new StorageError(STORAGE_ERROR_CODES.INVALID_PENDING_EFFECT, message);
 }
-

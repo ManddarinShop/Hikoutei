@@ -17,7 +17,7 @@ import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
 } from "../src/application/sync/gateway/syncGateway.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/effects/SyncEffectWorker.js";
+import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 import {
   migrateMikroOrmSqliteSchema,

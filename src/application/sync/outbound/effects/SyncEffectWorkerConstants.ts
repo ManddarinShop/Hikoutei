@@ -1,9 +1,9 @@
 /** Constants and durable status contracts shared by the effect worker modules. */
 
-import type { EffectKind, EffectStatus, EffectTargetKind } from "../../../domain/index.js";
-import { CONFLICT_STATUSES } from "../../../domain/model/constants.js";
-import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../infrastructure/storage/sync/effectOutbox.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../gateway/constants.js";
+import type { EffectKind, EffectStatus, EffectTargetKind } from "../../../../domain/index.js";
+import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../../infrastructure/storage/sync/effectOutbox.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../../gateway/constants.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 export const DEFAULT_WRITER_LEASE_DURATION_MS = 60_000;
@@ -72,4 +72,3 @@ export const USER_INPUT_CANDIDATE_BLOCK_SQL = `
       ))
     LIMIT 1
   `;
-

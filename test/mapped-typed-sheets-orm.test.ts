@@ -19,7 +19,7 @@ import {
 } from "../src/shared/encoding/constants.js";
 import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
 import { SYNC_GATEWAY_PROJECTIONS } from "../src/application/sync/gateway/constants.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/effects/SyncEffectWorker.js";
+import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 import {
   defineTypedSheetsEntityMapping,

@@ -3,19 +3,19 @@
 export {
   createSyncEffectWorkerSupervisor,
   SyncEffectWorkerSupervisor,
-} from "./effects/SyncEffectSupervisor.js";
+} from "./outbound/effects/SyncEffectSupervisor.js";
 export type {
   CreateSyncEffectWorkerSupervisorOptions,
   SyncEffectWorkerSupervisorReconciliationOptions,
   SyncEffectWorkerSupervisorLoopOptions,
   SyncEffectWorkerSupervisorWait,
-} from "./effects/SyncEffectSupervisor.js";
-export { runReconciliationScan } from "./operations/ReconciliationScanner.js";
+} from "./outbound/effects/SyncEffectSupervisor.js";
+export { runReconciliationScan } from "./outbound/reconciliation/ReconciliationScanner.js";
 export type {
   ReconciliationIdFactory,
   ReconciliationScanReport,
   RunReconciliationScanOptions,
-} from "./operations/ReconciliationScanner.js";
+} from "./outbound/reconciliation/ReconciliationScanner.js";
 export { provisionRegisteredSyncSheets } from "./gateway/SyncGatewayBootstrap.js";
 export type {
   RegisteredSyncProjectionDefinition,
@@ -26,14 +26,14 @@ export {
   pollSimpleSheetRowsWithAdapter,
   SIMPLE_POLL_INVALID_REASONS,
   SIMPLE_POLL_ROW_KINDS,
-} from "./projection/SimpleSheetPolling.js";
+} from "./inbound/polling/SimpleSheetPolling.js";
 export type {
   SimplePollChangedRow,
   SimplePollInvalidReason,
   SimplePollRowKind,
   SimpleSheetPollingResult,
   SimpleSheetTablePollingResult,
-} from "./projection/SimpleSheetPolling.js";
+} from "./inbound/polling/SimpleSheetPolling.js";
 export {
   observeSyncSnapshot,
   observeSyncSnapshots,

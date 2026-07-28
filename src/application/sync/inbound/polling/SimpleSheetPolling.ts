@@ -8,22 +8,22 @@
  * returns only changed rows for the observation writer to persist.
  */
 
-import type { NormalizedCell } from "../../../domain/index.js";
+import type { NormalizedCell } from "../../../../domain/index.js";
 import {
   NORMALIZED_CELL_KINDS,
-} from "../../../shared/encoding/constants.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+} from "../../../../shared/encoding/constants.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../../../infrastructure/storage/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../gateway/SyncGatewayBootstrap.js";
+} from "../../../../infrastructure/storage/errors.js";
+import type { RegisteredSyncProjectionDefinition } from "../../gateway/SyncGatewayBootstrap.js";
 import type {
   ReadSyncTableRowsRequest,
   SyncSheetTableReaderGateway,
   SyncTableRow,
   SyncTableRowsResult,
-} from "../gateway/syncGateway.js";
+} from "../../gateway/syncGateway.js";
 
 const READ_CANONICAL_ROWS_SQL = `
   SELECT binding.logical_sheet_id, entity.entity_id, entity.status AS entity_status,

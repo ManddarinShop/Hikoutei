@@ -1,20 +1,20 @@
 /** Durable result transitions for gateway responses and response-loss recovery. */
 
-import { stableHash } from "../../../domain/index.js";
-import type { NewEffect } from "../../../infrastructure/storage/index.js";
-import type { FencingContext } from "../../../infrastructure/storage/sync/writerLease.js";
+import { stableHash } from "../../../../domain/index.js";
+import type { NewEffect } from "../../../../infrastructure/storage/index.js";
+import type { FencingContext } from "../../../../infrastructure/storage/sync/writerLease.js";
 import {
   LOOKUP_RESULT_KINDS,
-} from "../../../shared/state/constants.js";
-import type { Presence } from "../../../shared/state/types.js";
+} from "../../../../shared/state/constants.js";
+import type { Presence } from "../../../../shared/state/types.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
   SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
-} from "../gateway/constants.js";
+} from "../../gateway/constants.js";
 import type {
   SyncEffectPostcondition,
   SyncGatewayEffectResult,
-} from "../gateway/syncGateway.js";
+} from "../../gateway/syncGateway.js";
 import {
   OUTBOX_EFFECT_STATUSES,
   SYNC_EFFECT_KINDS,

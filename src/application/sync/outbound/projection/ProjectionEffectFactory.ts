@@ -17,26 +17,26 @@ import {
   type EffectTargetKind,
   type NormalizedCell,
   type Presence,
-} from "../../../domain/index.js";
+} from "../../../../domain/index.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../shared/state/index.js";
+} from "../../../../shared/state/index.js";
 import {
   SYNC_GATEWAY_EFFECT_KINDS,
   SYNC_GATEWAY_PROJECTIONS,
-} from "../gateway/constants.js";
+} from "../../gateway/constants.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncEffectKind,
   type SyncProjection,
-} from "../gateway/syncGateway.js";
+} from "../../gateway/syncGateway.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../../../infrastructure/storage/errors.js";
-import type { NewEffect } from "../../../infrastructure/storage/index.js";
+} from "../../../../infrastructure/storage/errors.js";
+import type { NewEffect } from "../../../../infrastructure/storage/index.js";
 
 const PROJECTION_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",

@@ -1,15 +1,15 @@
 /** Fast-append and unsupported-capability dispatch paths for the effect worker. */
 
-import type { FencingContext } from "../../../infrastructure/storage/sync/writerLease.js";
-import { LOOKUP_RESULT_KINDS } from "../../../shared/state/constants.js";
+import type { FencingContext } from "../../../../infrastructure/storage/sync/writerLease.js";
+import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
 import type {
   FastAppendRowsRequest,
   SyncEffectWorkerGateway,
-} from "../gateway/syncGateway.js";
+} from "../../gateway/syncGateway.js";
 import {
   SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
-} from "../telemetry/syncTiming.js";
+} from "../../telemetry/syncTiming.js";
 import { WORKER_ERROR_CODES } from "./SyncEffectWorkerConstants.js";
 import {
   isPresent,

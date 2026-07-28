@@ -6,26 +6,38 @@
  * row-level commit, so a partially accepted event cannot leak a partial state.
  */
 
-import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
+// Domain contract: canonical rows are the SQLite source of truth.
+import { ROW_OPERATIONS } from "../../../domain/model/constants.js";
+import type {
+  Applicability,
+  FieldOwnership,
+  NormalizedCell,
+  Presence,
+} from "../../../domain/index.js";
+
+// Shared state tags: these make applicability and presence explicit.
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
 } from "../../../shared/state/constants.js";
-import { ROW_OPERATIONS } from "../../../domain/model/constants.js";
-import type { Applicability, FieldOwnership, NormalizedCell, Presence } from "../../../domain/index.js";
+
+// Storage boundary: errors, transactions, fencing, and SQL adapters.
+import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
+import { rollbackSqlSavepoint } from "../sqlite/sqlTransaction.js";
+import { toSqlNullable } from "../sqlite/sqlState.js";
 import type { DatabaseSyncLike } from "../sqlite/sqliteBridge.js";
 import {
   isFencingValid,
   isFencingValidWithSql,
 } from "../sync/writerLease.js";
 import type { FencingContext } from "../sync/writerLease.js";
+
+// Outbound synchronization: accepted canonical changes become outbox effects.
 import {
   appendPendingEffectsWithSql,
   type NewEffect,
 } from "../sync/effectOutbox.js";
-import { toSqlNullable } from "../sqlite/sqlState.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
-import { rollbackSqlSavepoint } from "../sqlite/sqlTransaction.js";
 
 const FENCE_EXISTS_SQL = `
   SELECT 1 FROM writer_lease

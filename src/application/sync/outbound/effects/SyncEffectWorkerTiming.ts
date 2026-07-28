@@ -1,8 +1,8 @@
 /** Timing classification and diagnostics emission for one effect-worker pass. */
 
-import { NON_NEGATIVE_SAFE_INTEGER_MINIMUM } from "../../../domain/index.js";
-import type { PendingEffect } from "../../../infrastructure/storage/index.js";
-import type { SyncGatewayEffect } from "../gateway/syncGateway.js";
+import { NON_NEGATIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
+import type { PendingEffect } from "../../../../infrastructure/storage/index.js";
+import type { SyncGatewayEffect } from "../../gateway/syncGateway.js";
 import {
   SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
@@ -10,7 +10,7 @@ import {
   type SyncTimingEvent,
   type SyncTimingOperationCounts,
   type SyncTimingOperationKind,
-} from "../telemetry/syncTiming.js";
+} from "../../telemetry/syncTiming.js";
 import { SYNC_EFFECT_KINDS } from "./SyncEffectWorkerConstants.js";
 import { isPresent } from "./SyncEffectWorkerHelpers.js";
 import type {

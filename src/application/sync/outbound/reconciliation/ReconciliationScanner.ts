@@ -21,12 +21,12 @@ import {
   POSITIVE_SAFE_INTEGER_MINIMUM,
   stableHash,
   type NormalizedCell,
-} from "../../../domain/index.js";
+} from "../../../../domain/index.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../shared/state/index.js";
-import { NORMALIZED_CELL_KINDS } from "../../../shared/encoding/constants.js";
+} from "../../../../shared/state/index.js";
+import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -34,19 +34,19 @@ import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
   type NewEffect,
-} from "../../../infrastructure/storage/index.js";
-import { STORAGE_ERROR_CODES, StorageError } from "../../../infrastructure/storage/errors.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+} from "../../../../infrastructure/storage/index.js";
+import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshot,
   type SyncGatewaySnapshot,
   type SyncSheetGateway,
-} from "../gateway/syncGateway.js";
+} from "../../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_PROJECTIONS,
   SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-} from "../gateway/constants.js";
+} from "../../gateway/constants.js";
 import { createSystemProjectionEffect } from "../projection/ProjectionEffectFactory.js";
 
 const DEFAULT_RECONCILIATION_ROLE = "typed-sheets-reconciler";

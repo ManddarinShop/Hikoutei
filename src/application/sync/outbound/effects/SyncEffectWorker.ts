@@ -18,13 +18,13 @@ import {
   type EffectTargetKind,
   type LookupResult,
   type Presence,
-} from "../../../domain/index.js";
+} from "../../../../domain/index.js";
 import {
   APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../../shared/state/constants.js";
-import { CONFLICT_STATUSES } from "../../../domain/model/constants.js";
+} from "../../../../shared/state/constants.js";
+import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
 import {
   applyEffectResultWithAdapter,
   claimEffectWithAdapter,
@@ -45,13 +45,13 @@ import {
   type RetryClaimedEffectOptions,
   type WriterLease,
   type WriterLeaseClaimResult,
-} from "../../../infrastructure/storage/index.js";
+} from "../../../../infrastructure/storage/index.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../../../infrastructure/storage/errors.js";
-import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+} from "../../../../infrastructure/storage/errors.js";
+import { fromSqlNullable } from "../../../../infrastructure/storage/sqlite/sqlState.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   parseSyncProjectionEffectPayload,
   type ApplySyncEffectsRequest,
@@ -63,15 +63,15 @@ import {
   type SyncProjection,
   type SyncEffectWorkerGateway,
   type SyncEffectWorkerFullGateway,
-} from "../gateway/syncGateway.js";
+} from "../../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
   SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
   SYNC_GATEWAY_POSTCONDITION_MODES,
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
-} from "../gateway/constants.js";
-import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../infrastructure/storage/sync/writerLease.js";
+} from "../../gateway/constants.js";
+import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/writerLease.js";
 import {
   SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
@@ -80,7 +80,7 @@ import {
   type SyncTimingOperationCounts,
   type SyncTimingOperationKind,
   type SyncTimingSink,
-} from "../telemetry/syncTiming.js";
+} from "../../telemetry/syncTiming.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WORKER_ROLE,

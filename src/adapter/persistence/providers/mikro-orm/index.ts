@@ -22,11 +22,11 @@ export {
   migrateMikroOrmSqliteSchema,
   migrateMikroOrmSqliteStorageSchema,
 } from "./MikroOrmSqliteSchema.js";
-export { runSyncEffectWorkerWithAdapter } from "../../../../application/sync/effects/SyncEffectWorker.js";
+export { runSyncEffectWorkerWithAdapter } from "../../../../application/sync/outbound/effects/SyncEffectWorker.js";
 export {
   createSyncEffectWorkerSupervisor,
   SyncEffectWorkerSupervisor,
-} from "../../../../application/sync/effects/SyncEffectSupervisor.js";
+} from "../../../../application/sync/outbound/effects/SyncEffectSupervisor.js";
 export type {
   InitializeMikroOrmSqliteAdapterOptions,
   MikroOrmSqlite,
@@ -47,10 +47,10 @@ export type { CreateTypedSheetsOrmOptions } from "../../../../application/orm/in
 export type {
   SyncEffectWorkerReport,
   SyncEffectWorkerWithAdapterOptions,
-} from "../../../../application/sync/effects/SyncEffectWorker.js";
+} from "../../../../application/sync/outbound/effects/SyncEffectWorker.js";
 export type {
   CreateSyncEffectWorkerSupervisorOptions,
   SyncEffectWorkerSupervisorReconciliationOptions,
   SyncEffectWorkerSupervisorLoopOptions,
   SyncEffectWorkerSupervisorWait,
-} from "../../../../application/sync/effects/SyncEffectSupervisor.js";
+} from "../../../../application/sync/outbound/effects/SyncEffectSupervisor.js";

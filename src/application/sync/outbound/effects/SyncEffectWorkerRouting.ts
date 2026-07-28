@@ -1,14 +1,14 @@
 /** Effect conversion, request grouping, and routing predicates. */
 
-import { NON_NEGATIVE_SAFE_INTEGER_MINIMUM } from "../../../domain/index.js";
-import type { EffectTargetKind } from "../../../domain/index.js";
-import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
+import { NON_NEGATIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
+import type { EffectTargetKind } from "../../../../domain/index.js";
+import { fromSqlNullable } from "../../../../infrastructure/storage/sqlite/sqlState.js";
 import type {
   PendingEffect,
   WriterLease,
   FencingContext,
-} from "../../../infrastructure/storage/index.js";
-import { LOOKUP_RESULT_KINDS } from "../../../shared/state/constants.js";
+} from "../../../../infrastructure/storage/index.js";
+import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
 import type {
   ApplySyncEffectsRequest,
   FastAppendRowsRequest,
@@ -17,13 +17,13 @@ import type {
   SyncGatewayEffect,
   SyncGatewayEffectResult,
   SyncProjection,
-} from "../gateway/syncGateway.js";
-import { parseSyncProjectionEffectPayload } from "../gateway/syncGateway.js";
+} from "../../gateway/syncGateway.js";
+import { parseSyncProjectionEffectPayload } from "../../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_POSTCONDITION_MODES,
   SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
-} from "../gateway/constants.js";
+} from "../../gateway/constants.js";
 import { EFFECT_TARGET_KINDS, SYNC_EFFECT_KINDS } from "./SyncEffectWorkerConstants.js";
 import {
   isPresent,

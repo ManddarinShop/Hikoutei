@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { PRESENCE_KINDS } from "../src/shared/state/index.js";
 import {
   SyncEffectWorkerSupervisor,
-} from "../src/application/sync/effects/SyncEffectSupervisor.js";
-import type { SyncEffectWorkerReport } from "../src/application/sync/effects/SyncEffectWorker.js";
-import type { ReconciliationScanReport } from "../src/application/sync/operations/ReconciliationScanner.js";
+} from "../src/application/sync/outbound/effects/SyncEffectSupervisor.js";
+import type { SyncEffectWorkerReport } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
+import type { ReconciliationScanReport } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
 
 describe("SyncEffectWorkerSupervisor", () => {
   it("coalesces concurrent manual and background passes", async () => {
