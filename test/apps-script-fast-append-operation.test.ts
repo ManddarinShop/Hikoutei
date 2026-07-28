@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFastAppendRowsOperation,
 } from "../src/adapter/sheets/providers/apps-script-gateway/operations/write/fastAppendOperation.js";
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("thin Code.gs fast-append operation", () => {
-  it("builds a single setValues operation without metadata work", () => {
+  it("appends normalized values without metadata or flush work", () => {
     const operation = createFastAppendRowsOperation({
       sheetName: "LoadTest_Customers",
       headers: ["id", "name"],
@@ -18,13 +22,34 @@ describe("thin Code.gs fast-append operation", () => {
       }],
     });
 
-    expect(operation.fn).toContain("setValues");
-    expect(operation.fn).toContain('phase_("set_values"');
-    expect(operation.fn).toContain('operationKinds: ["append"]');
-    expect(operation.fn).not.toContain("getDeveloperMetadata");
-    expect(operation.fn).not.toContain("addDeveloperMetadata");
-    expect(operation.fn).not.toContain("flush");
-    expect(operation.args.rows).toHaveLength(1);
+    const setValues = vi.fn();
+    const getRange = vi.fn(() => ({ setValues }));
+    const sheet = {
+      getLastRow: vi.fn(() => 3),
+      getRange,
+      getDeveloperMetadata: vi.fn(),
+      addDeveloperMetadata: vi.fn(),
+    };
+    const spreadsheet = {
+      getSheetByName: vi.fn(() => sheet),
+    };
+    const flush = vi.fn();
+    vi.stubGlobal("SpreadsheetApp", { flush });
+
+    const result = executeAppsScriptSource(operation.fn, spreadsheet, operation.args) as {
+      readonly results: readonly { readonly effectId: string; readonly status: string }[];
+      readonly hasMore: boolean;
+      readonly startRow?: number;
+    };
+
+    expect(result.results).toEqual([{ effectId: "effect-1", status: "applied" }]);
+    expect(result.hasMore).toBe(false);
+    expect(result.startRow).toBe(4);
+    expect(getRange).toHaveBeenCalledWith(4, 1, 1, 2);
+    expect(setValues).toHaveBeenCalledWith([["customer-1", "Ada"]]);
+    expect(sheet.getDeveloperMetadata).not.toHaveBeenCalled();
+    expect(sheet.addDeveloperMetadata).not.toHaveBeenCalled();
+    expect(flush).not.toHaveBeenCalled();
   });
 
   it("decodes one applied result and rejects an incomplete response", () => {
@@ -62,3 +87,14 @@ describe("thin Code.gs fast-append operation", () => {
     );
   });
 });
+
+type AppsScriptOperationSource = (spreadsheet: unknown, args: unknown) => unknown;
+
+function executeAppsScriptSource(
+  source: string,
+  spreadsheet: unknown,
+  args: unknown,
+): unknown {
+  const factory = new Function(`return (${source});`) as () => AppsScriptOperationSource;
+  return factory()(spreadsheet, args);
+}
