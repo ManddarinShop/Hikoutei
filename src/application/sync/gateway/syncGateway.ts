@@ -9,7 +9,7 @@
 
 import {
   stableHash,
-  type CellObservation,
+  type CellObservationKind,
   type EffectKind,
   type EffectTargetKind,
   type NormalizedCell,
@@ -54,18 +54,16 @@ export type SyncProjection = RegisteredProjection;
 /** Effect classes whose compare-and-set behavior differs at the gateway. */
 export type SyncEffectKind = EffectKind;
 
-/** Literal/formula metadata retained by a normalized Sheet snapshot. */
-export interface SyncSnapshotCell extends CellObservation {
-  readonly stableHash: Presence<string>;
+/** Physical kind and normalized value for one observed Sheet cell. */
+export interface SyncSnapshotCell {
+  readonly cellKind: CellObservationKind;
+  readonly normalizedCell: NormalizedCell;
 }
 
 /** One physical row read from a registered projection. */
 export interface SyncSnapshotRow {
   readonly rowNumber: number;
   readonly physicalAnchor: Presence<string>;
-  /** Optional compatibility fields; the real gateway leaves visible state to SQLite. */
-  readonly visibleRevision: Presence<number>;
-  readonly visibleHash: Presence<string>;
   readonly cells: Readonly<Record<string, SyncSnapshotCell>>;
 }
 

@@ -250,14 +250,6 @@ function decodeSnapshotRows(value: unknown): SyncGatewaySnapshot["rows"] {
         record.physicalAnchor,
         "snapshot row[" + index + "].physicalAnchor",
       ),
-      visibleRevision: decodePresenceNonNegativeInteger(
-        record.visibleRevision,
-        "snapshot row[" + index + "].visibleRevision",
-      ),
-      visibleHash: decodePresenceString(
-        record.visibleHash,
-        "snapshot row[" + index + "].visibleHash",
-      ),
       cells: decodeSnapshotCells(record.cells, index),
     };
   });
@@ -285,10 +277,6 @@ function decodeSnapshotCells(
     cells[fieldName] = {
       cellKind,
       normalizedCell: decodeNormalizedCell(cell.normalizedCell, fieldName),
-      formulaHash: decodePresenceString(cell.formulaHash, fieldName + ".formulaHash"),
-      mergeRange: decodePresenceString(cell.mergeRange, fieldName + ".mergeRange"),
-      errorCode: decodePresenceString(cell.errorCode, fieldName + ".errorCode"),
-      stableHash: decodePresenceString(cell.stableHash, fieldName + ".stableHash"),
     };
   }
   return cells;
@@ -325,18 +313,6 @@ function decodePresenceString(value: unknown, label: string): Presence<string> {
   return {
     kind: PRESENCE_KINDS.PRESENT,
     value: requireSyncGatewayText(
-      value,
-      label,
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-  };
-}
-
-function decodePresenceNonNegativeInteger(value: unknown, label: string): Presence<number> {
-  if (value === null) return { kind: PRESENCE_KINDS.ABSENT };
-  return {
-    kind: PRESENCE_KINDS.PRESENT,
-    value: requireSyncGatewayNonNegativeSafeInteger(
       value,
       label,
       SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
@@ -589,14 +565,11 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
           lightweight ? "" : formulas[rowIndex][columnIndex],
           lightweight ? String(values[rowIndex][columnIndex]) : displayValues[rowIndex][columnIndex],
           lightweight ? null : merged[coordinate] || null,
-          lightweight,
         );
       });
       rows.push({
         rowNumber: rowNumber,
         physicalAnchor: anchor,
-        visibleRevision: null,
-        visibleHash: null,
         cells: cells,
       });
     }
@@ -693,19 +666,18 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     });
   }
 
-  function normalizeCellObservation_(rawValue, formula, displayValue, mergeRange, lightweight) {
-    var formulaHash = formula ? sha256Hex_(formula) : null;
-    if (mergeRange !== null) return { cellKind: "merged", normalizedCell: null, formulaHash: formulaHash, mergeRange: mergeRange, errorCode: null, stableHash: null };
-    if (isDisplayedSheetError_(displayValue)) return { cellKind: "error", normalizedCell: null, formulaHash: formulaHash, mergeRange: null, errorCode: String(displayValue), stableHash: null };
-    if (formula) return { cellKind: "formula", normalizedCell: null, formulaHash: formulaHash, mergeRange: null, errorCode: null, stableHash: null };
+  function normalizeCellObservation_(rawValue, formula, displayValue, mergeRange) {
+    if (mergeRange !== null) return { cellKind: "merged", normalizedCell: null };
+    if (isDisplayedSheetError_(displayValue)) return { cellKind: "error", normalizedCell: null };
+    if (formula) return { cellKind: "formula", normalizedCell: null };
     var normalized;
     if (rawValue === "" || rawValue === null) normalized = null;
     else if (isDate_(rawValue)) normalized = { kind: "date", value: rawValue.toISOString() };
     else if (typeof rawValue === "string") normalized = { kind: "string", value: normalizeScalarString_(rawValue) };
     else if (typeof rawValue === "number" && isFinite(rawValue)) normalized = { kind: "number", value: rawValue };
     else if (typeof rawValue === "boolean") normalized = { kind: "boolean", value: rawValue };
-    else return { cellKind: "error", normalizedCell: null, formulaHash: null, mergeRange: null, errorCode: "unsupported_cell_value", stableHash: null };
-    return { cellKind: normalized === null ? "blank" : "literal", normalizedCell: normalized, formulaHash: null, mergeRange: null, errorCode: null, stableHash: lightweight ? null : stableHash_(normalized) };
+    else return { cellKind: "error", normalizedCell: null };
+    return { cellKind: normalized === null ? "blank" : "literal", normalizedCell: normalized };
   }
 
   function mergedCellMap_(targetRange) {

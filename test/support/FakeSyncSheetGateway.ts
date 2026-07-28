@@ -262,8 +262,6 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
         rows: rows.map((row) => ({
           rowNumber: row.rowNumber,
           physicalAnchor: row.physicalAnchor,
-          visibleRevision: row.visibleRevision,
-          visibleHash: row.visibleHash,
           cells: Object.fromEntries(Object.entries(row.cells).map(([fieldName, cell]) => [
             fieldName,
             cell.normalizedCell,
@@ -865,18 +863,10 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
         ? {
           cellKind: CELL_OBSERVATION_KINDS.BLANK,
           normalizedCell: null,
-          formulaHash: absentValue(),
-          mergeRange: absentValue(),
-          errorCode: absentValue(),
-          stableHash: presentValue(stableHash(null)),
         }
         : {
           cellKind: CELL_OBSERVATION_KINDS.LITERAL,
           normalizedCell,
-          formulaHash: absentValue(),
-          mergeRange: absentValue(),
-          errorCode: absentValue(),
-          stableHash: presentValue(stableHash(normalizedCell)),
         };
     }
     return {
@@ -884,8 +874,6 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       physicalAnchor: row.physicalAnchorPresent
         ? presentValue(row.anchor)
         : absentValue(),
-      visibleRevision: presentValue(row.visibleRevision),
-      visibleHash: presentValue(row.visibleHash),
       cells,
     };
   }

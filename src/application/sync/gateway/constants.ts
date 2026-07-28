@@ -18,7 +18,7 @@ export type SyncGatewayProjection =
 
 /** Detail level used by normalized Sheet observation reads. */
 export const SYNC_GATEWAY_SNAPSHOT_READ_MODES = {
-  /** Reads formula, merge, error, and stable-cell metadata for reconciliation. */
+  /** Reads physical cell kinds and normalized values for reconciliation. */
   FULL: "full",
   /** Reads only user-editable literal values and row identity for polling. */
   USER_INPUT: "user_input",

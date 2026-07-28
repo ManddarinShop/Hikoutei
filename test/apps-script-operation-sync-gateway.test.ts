@@ -190,24 +190,14 @@ describe("AppsScriptOperationSyncGateway", () => {
         rows: [{
           rowNumber: 2,
           physicalAnchor: "anchor-1",
-          visibleRevision: null,
-          visibleHash: null,
           cells: {
             id: {
               cellKind: "literal",
               normalizedCell: { kind: "string", value: "order-1" },
-              formulaHash: null,
-              mergeRange: null,
-              errorCode: null,
-              stableHash: "cell-hash",
             },
             status: {
               cellKind: "blank",
               normalizedCell: null,
-              formulaHash: null,
-              mergeRange: null,
-              errorCode: null,
-              stableHash: "blank-hash",
             },
           },
         }],
