@@ -76,11 +76,6 @@ export interface SyncGatewaySnapshot {
   readonly schemaVersion: number;
   readonly headers: readonly string[];
   readonly rows: readonly SyncSnapshotRow[];
-  readonly unanchoredRows: readonly number[];
-  readonly duplicateAnchors: readonly {
-    readonly anchor: string;
-    readonly rowNumbers: readonly number[];
-  }[];
 }
 
 /** Request used to assign missing Developer Metadata anchors before a snapshot. */

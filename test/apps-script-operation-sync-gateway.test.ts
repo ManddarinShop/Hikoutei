@@ -187,8 +187,6 @@ describe("AppsScriptOperationSyncGateway", () => {
             },
           },
         }],
-        unanchoredRows: [],
-        duplicateAnchors: [],
       },
     ]);
     const adapter = new AppsScriptOperationSyncGateway({
@@ -364,8 +362,6 @@ function createObservedSnapshot(
       schemaVersion: 1,
       headers: ["id", "status"],
       rows: [],
-      unanchoredRows: [],
-      duplicateAnchors: [],
     },
   };
 }

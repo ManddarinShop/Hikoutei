@@ -220,8 +220,6 @@ function decodeSnapshot(value: unknown): SyncGatewaySnapshot {
     ),
     headers,
     rows,
-    unanchoredRows: decodePositiveIntegerArray(record.unanchoredRows, "snapshot unanchoredRows"),
-    duplicateAnchors: decodeDuplicateAnchors(record.duplicateAnchors),
   };
 }
 
@@ -314,7 +312,7 @@ function decodePresenceString(value: unknown, label: string): Presence<string> {
   };
 }
 
-function decodeDuplicateAnchors(value: unknown): SyncGatewaySnapshot["duplicateAnchors"] {
+function decodeDuplicateAnchors(value: unknown): EnsureSyncRowAnchorsResult["duplicateAnchors"] {
   if (!Array.isArray(value)) {
     return invalidOperationResponse(
       "Apps Script observation operation",
@@ -536,8 +534,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       ? prepared.anchorsByRow
       : readAnchorIndex_(targetSheet);
     var rows = [];
-    var unanchoredRows = [];
-    var anchorRows = Object.create(null);
     var rowNormalizationStartedAt = Date.now();
     for (var rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
       if (isBlankRow_(values[rowIndex], targetLayout.checkboxIndexes)) continue;
@@ -545,11 +541,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       var anchors = anchorsByRow[rowNumber] || [];
       var anchor = anchors.length === 1 ? anchors[0] : null;
       if (anchors.length > 1) throw new Error("row has multiple sync anchors: " + rowNumber);
-      if (anchor === null) unanchoredRows.push(rowNumber);
-      else {
-        if (!anchorRows[anchor]) anchorRows[anchor] = [];
-        anchorRows[anchor].push(rowNumber);
-      }
       var cells = Object.create(null);
       targetLayout.headers.forEach(function (header, columnIndex) {
         var coordinate = rowNumber + ":" + (targetLayout.startColumn + columnIndex);
@@ -567,12 +558,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       });
     }
     phase_("row_normalization", rowNormalizationStartedAt);
-    var duplicateAnchorStartedAt = Date.now();
-    var duplicateAnchors = [];
-    Object.keys(anchorRows).sort().forEach(function (anchor) {
-      if (anchorRows[anchor].length > 1) duplicateAnchors.push({ anchor: anchor, rowNumbers: anchorRows[anchor] });
-    });
-    phase_("duplicate_anchor_scan", duplicateAnchorStartedAt);
     var snapshot = {
       protocolVersion: "typed-sheets-sync-v1",
       sheetName: request.sheetName,
@@ -590,8 +575,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       schemaVersion: snapshot.schemaVersion,
       headers: snapshot.headers,
       rows: snapshot.rows,
-      unanchoredRows: unanchoredRows,
-      duplicateAnchors: duplicateAnchors,
     };
   }
 

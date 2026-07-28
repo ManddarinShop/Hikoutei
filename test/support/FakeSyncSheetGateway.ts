@@ -251,14 +251,6 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     };
     return {
       ...snapshotPayload,
-      unanchoredRows: rows
-        .filter((row) => row.physicalAnchor.kind === PRESENCE_KINDS.ABSENT)
-        .map((row) => row.rowNumber),
-      duplicateAnchors: groupDuplicateAnchors(rows.flatMap((row) =>
-        row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT
-          ? [row.physicalAnchor.value]
-          : [],
-      )),
     };
   }
 

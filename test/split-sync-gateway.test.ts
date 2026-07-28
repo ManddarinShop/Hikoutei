@@ -27,8 +27,6 @@ function snapshot(): SyncGatewaySnapshot {
     ...requestBase(),
     headers: ["id", "name"],
     rows: [],
-    unanchoredRows: [],
-    duplicateAnchors: [],
   };
 }
 
