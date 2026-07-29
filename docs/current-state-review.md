@@ -1,7 +1,7 @@
 # Current State Review
 
 Date: 2026-07-29
-Branch: `refactor/sqlite-authoritative-cleanup`
+Branch: `feature/inbound-polling`
 
 This document records the state found while aligning the repository with the
 agreed design. It separates implemented foundations from scaffolding that
@@ -32,9 +32,9 @@ contains them if historical comparison is needed:
 - `docs/task-queue-write-model.md`
 
 The architecture, synchronization flow, code guidelines, README, and quick
-start now describe the SQLite-authoritative direction. Their inbound and
-Conflict diagrams are explicitly target-flow documentation; they do not claim
-that polling or checkbox resolution is already complete in the public runtime.
+start now describe the SQLite-authoritative direction. The first provider-side
+User_Input polling path is implemented on this branch; Conflict projection and
+checkbox resolution remain target-flow documentation.
 
 The public foundation now includes:
 
@@ -64,12 +64,12 @@ supported application workflow is `defineTypedSheetsEntity()` plus
 | Public entity definition | Implemented and materialized by the current provider | Keep provider conversion private |
 | Entity flush transaction | Implemented for entity table, sync state, and outbox | Keep as the SQLite transaction boundary |
 | Outbound worker | Implemented with lease, retry, recovery, and reconciliation primitives | Keep in the separate worker process |
-| User_Input polling | The old simple comparison scaffold was removed; the complete polling vertical slice is isolated on the feature branch | Implement and merge only through the dedicated inbound-sync branch |
+| User_Input polling | Provider-side one-pass observation, evaluation, SQLite entity mutation, conflict ledgering, and idempotent receipts are implemented | Add the worker loop/public orchestration and keep the source limited to polling initially |
 | Conflict projection | Schema, effect kinds, and storage primitives exist | Finish global registration, two-checkbox observation, and field-level projection |
 | `use_system` | Domain/storage acknowledgement path exists | Preserve current SQLite value and delete the remote row through outbox |
 | `use_user` | Not implemented end to end | Apply candidate to the entity table with revision/CAS in the same SQLite transaction |
 | Persistence abstraction | Adapter-neutral contracts and async adapter-backed storage are the only runtime path | Keep provider-specific SQL behind the adapter boundary |
-| Tests | Public boundary and provider/domain contract tests are kept separate | Add inbound/conflict scenario tests before deleting lower-level coverage |
+| Tests | Public boundary and provider/domain contract tests plus accepted/conflict polling scenarios are present | Add deletion/invalid-cell/lease and Conflict checkbox scenarios before deleting lower-level coverage |
 
 ## Legacy code that should not be deleted yet
 
@@ -93,8 +93,8 @@ there is no second storage writer with a different contract.
 
 ## Next implementation order
 
-1. Define the normalized polling receipt contract, then connect polling to the
-   existing evaluator and accepted-observation writer.
+1. Add a one-pass polling entrypoint to the long-running worker and expose the
+   provider-neutral worker contract.
 2. Add a single global Conflict registration and field-level projection schema
    with `use_system` and `use_user` checkbox validation.
 3. Implement `use_user` resolution as one fenced SQLite transaction that

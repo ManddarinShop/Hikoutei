@@ -81,11 +81,12 @@ worker pass를 함께 확인해야 한다.
 
 ## 현재 범위의 한계
 
-현재 public runtime에서 User_Input polling과 global Conflict checkbox
-resolution은 end-to-end 기능이 아니다. 따라서 이 문서의 callback과 report는
-주로 SQLite outbox의 outbound worker와 Apps Script operation gateway 진단에
-사용된다. inbound 기능이 구현되면 관측 이벤트를 같은 `onTiming` 경계에
-연결한다.
+현재 provider runtime에는 User_Input polling의 one-pass report가 있지만,
+global Conflict checkbox resolution과 장기 실행 polling supervisor는 아직
+완성되지 않았다. 따라서 이 문서의 callback과 report는 주로 SQLite
+outbox의 outbound worker와 Apps Script operation gateway 진단에 사용되며,
+polling의 `elapsedMs`/행 분류 결과는 별도 inbound 관측 경계로 연결할
+후속 대상이다.
 
 실제 Google Sheets 요청을 관측하려면 배포된 Apps Script Gateway와 서버 쪽
 `onRequest`/`onTiming` 연결이 모두 필요하다. Gateway secret과 전체 payload는

@@ -5,9 +5,9 @@ asynchronous human-facing projection. The public API belongs to Hikoutei;
 MikroORM is the current replaceable execution engine behind that API.
 
 > Current status: the local entity lifecycle, SQLite transaction boundary,
-> outbox, outbound worker, and gateway path are implemented. User_Input
-> polling and the global Conflict decision loop are target design foundations,
-> not a complete end-to-end public runtime yet. See
+> outbox, outbound worker, gateway path, and the first provider-side User_Input
+> polling path are implemented. The global Conflict decision loop is still a
+> target design foundation, not a complete end-to-end public runtime yet. See
 > [`current-state-review.md`](current-state-review.md) for the implementation
 > matrix.
 
@@ -102,8 +102,8 @@ SQLite transaction
           ▼
 separate worker process
   ├─ drain outbound effects
-  ├─ [planned] poll User_Input
-  ├─ [planned] evaluate accepted fields and conflicts
+  ├─ poll User_Input
+  ├─ evaluate accepted fields and persist them through SQLite
   └─ [planned] poll and apply Conflict decisions
           │
           ▼
@@ -116,10 +116,23 @@ write has completed.
 
 ## Worker responsibilities
 
-The planned initial inbound source is polling. The current runtime does not yet
-expose the complete polling-to-evaluation-to-SQLite path. `onEdit` can be added
-later as an optional lower-latency observation source, but it must enter the
-same evaluator and SQLite writer boundary.
+The initial inbound source is polling. The current MikroORM provider exposes a
+worker-side one-pass polling entrypoint that observes `User_Input`, validates
+row identity and cells, evaluates field revisions, and persists accepted rows
+through the observation writer and mapped entity mutation transaction.
+`User_Input` row identity comes from the visible business-key column (normally
+`id`), which must be required and unique in SQLite. Its polling snapshot reads
+cell values only: it does not assign or scan Developer Metadata anchors. An
+unknown or duplicated business key is quarantined as invalid rather than being
+matched to a different entity. `System_State` and reconciliation continue to
+use projection-local Developer Metadata anchors where stable physical-row
+identity is required.
+The Sheet owner must treat this identity column as immutable/protected: without
+an anchor, the runtime cannot prove which old row a manually changed key came
+from.
+`onEdit` can be added later as an optional lower-latency observation source, but
+it must enter the same evaluator and SQLite writer boundary. Long-running loop
+ownership and Conflict checkbox consumption remain worker follow-up work.
 
 The worker claims leases, sends signed gateway operations, retries recoverable
 failures, and reconciles remote drift. The Apps Script gateway performs only

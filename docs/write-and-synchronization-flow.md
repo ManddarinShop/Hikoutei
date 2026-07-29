@@ -4,8 +4,8 @@ Hikoutei commits local SQLite state first and materializes Google Sheets
 changes asynchronously.
 
 The outbound flow below describes the current runtime. The inbound User_Input
-and Conflict sections are the agreed target flow; their end-to-end polling and
-resolution worker is not yet part of the current public release.
+section describes the implemented provider-side polling pass; the Conflict
+projection and resolution worker remain incomplete.
 
 ## Outbound application write
 
@@ -46,14 +46,15 @@ The Sheet projection contains the foreign-key value, not a nested entity.
 Relation loading is explicit through `populate`; lazy loading and cascade
 operations are not part of the initial contract.
 
-## Planned inbound User_Input flow
+## Inbound User_Input polling flow
 
-The first inbound release is intended to observe User_Input by polling. The
+The first inbound release observes User_Input by polling. The
 application must not use the remote value directly:
 
 ```text
-User_Input polling
-  -> normalized observed row
+User_Input polling (visible id/business key, values-only)
+  -> normalized observed row without Developer Metadata lookup
+  -> business-key lookup in SQLite
   -> structural and ownership validation
   -> field-level revision evaluation
   ├─ accepted field
@@ -61,12 +62,20 @@ User_Input polling
   │    -> System_State outbox effect
   └─ stale field
        -> sync_conflict row
-       -> Conflict projection outbox effect
+       -> Conflict projection work (not yet materialized end to end)
 ```
 
-An accepted observation and its mapped entity mutation must commit through the
-same SQLite transaction. A conflict never changes the business entity until a
-user explicitly resolves it.
+An accepted observation and its mapped entity mutation commit through the same
+SQLite transaction. A conflict never changes the business entity until a user
+explicitly resolves it. The current provider pass is one-shot; a durable
+long-running polling supervisor is still pending.
+
+The business-key column is an immutable row identity contract for this path and
+should be protected from manual edits in the Sheet. A missing, unknown, or
+duplicated key is rejected; without a physical anchor, the runtime cannot prove
+the origin of a key that was changed to another existing entity. Physical row
+movement after a Sheet row deletion is therefore safe as long as the remaining
+business-key values remain unique.
 
 ## Planned Conflict resolution flow
 

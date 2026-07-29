@@ -115,10 +115,11 @@ Use a conventional database and direct Google APIs when you need:
 Keep the gateway secret on the server. Do not put it in browser code or commit
 it to Git.
 
-The current public runtime covers local entity lifecycle, SQLite transaction and
-outbox planning, outbound worker delivery, and gateway provisioning. User_Input
-polling and global Conflict checkbox resolution remain planned inbound features
-and are not yet complete end to end.
+The current runtime covers local entity lifecycle, SQLite transaction and
+outbox planning, outbound worker delivery, gateway provisioning, and the first
+provider-side User_Input polling path. Polling evaluates edits against SQLite
+and applies accepted values locally; global Conflict checkbox resolution and
+the long-running worker supervisor remain incomplete.
 
 ## Documentation
 

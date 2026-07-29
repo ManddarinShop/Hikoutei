@@ -74,6 +74,7 @@ export async function projectionEffects(
   changedFields: readonly TypedSheetsEntityFieldMapping[],
   commitId: string,
   targetEntityRevision: number,
+  options: ProjectionEffectsOptions = {},
 ): Promise<readonly NewEffect[]> {
   const systemProjection = requireTypedSheetsEntityProjection(
     mapping,
@@ -122,6 +123,8 @@ export async function projectionEffects(
       streamSequence: systemBaseline.streamSequence,
     }),
   ];
+
+  if (options.includeUserProjection === false) return effects;
 
   const userProjection = mapping.projections.find(
     (projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
@@ -206,6 +209,12 @@ export async function projectionEffects(
     streamSequence: userBaseline.streamSequence,
   }));
   return effects;
+}
+
+/** Controls which projection effects are emitted for one canonical commit. */
+export interface ProjectionEffectsOptions {
+  /** Skip User_Input reconciliation when the change originated from User_Input. */
+  readonly includeUserProjection?: boolean;
 }
 
 /** Loads and validates the registered route for a mapped projection. */
