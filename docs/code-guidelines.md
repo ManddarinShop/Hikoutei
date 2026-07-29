@@ -44,7 +44,7 @@ Required MVP capabilities:
 - public `defineTypedSheetsEntity()` definitions
 - entity lifecycle operations through the typed-sheets EntityManager
 - `manyToOne` and `oneToMany` relation metadata
-- SQLite entity-table and sync-metadata initialization
+- SQLite entity-table and sync-state initialization
 - atomic entity, canonical sync state, and Sheet outbox commits
 - explicit Sheet provisioning for new or existing spreadsheets
 - separate worker processing for outbound effects
@@ -88,7 +88,7 @@ src/
         transport/              # HTTP operation client
         operations/
           write/                # fast append
-          observation/           # snapshot·anchor 관측
+          observation/           # visible ID 기반 snapshot 관측
           effect/               # update/delete effect
   infrastructure/
     storage/                    # SQLite canonical state와 outbox
@@ -148,7 +148,7 @@ connection.
 The adapter should expose sheet-level operations in terms the core needs, not
 Google-specific concepts. The current gateway boundary covers projection
 provisioning, append-only System_State writes, guarded regular effects,
-postcondition reads, and normalized snapshot/anchor observation. Provider
+postcondition reads, and normalized visible-ID snapshot observation. Provider
 connections and raw SQL executors remain implementation details rather than
 normal public workflow objects.
 
@@ -158,10 +158,10 @@ Suggested responsibilities:
 - append new System_State rows in a bounded batch
 - apply guarded update/delete effects
 - read postconditions after uncertain writes
-- assign stable anchors for System_State/reconciliation and return normalized
-  snapshots
-- read User_Input values by its visible business-key column without Developer
-  Metadata access
+- return normalized snapshots whose rows are matched through the registered
+  visible business-key column
+- read User_Input values by its visible business-key column without remote
+  metadata access
 
 Do not leak Google SDK response objects into core repository logic.
 
@@ -185,7 +185,7 @@ when its declared headers no longer match.
 ## SQLite and Conflict Policy
 
 SQLite is the authority for application reads and writes. A successful entity
-flush means that the entity table, sync metadata, and durable Sheet effect were
+flush means that the entity table, sync state, and durable Sheet effect were
 committed in one SQLite transaction. It does not mean that Google Sheets has
 already converged.
 

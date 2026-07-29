@@ -38,7 +38,6 @@ export {
   createReadEffectPostconditionsOperation,
 } from "./operations/effect/effectOperation.js";
 export {
-  createEnsureRowAnchorsOperation,
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
 } from "./operations/observation/observationOperation.js";
@@ -64,7 +63,6 @@ export type {
   AppsScriptReadEffectPostconditionsOperationArgs,
 } from "./operations/effect/effectOperation.js";
 export type {
-  AppsScriptEnsureRowAnchorsOperationArgs,
   AppsScriptObserveSnapshotOperationArgs,
   AppsScriptReadSnapshotOperationArgs,
 } from "./operations/observation/observationOperation.js";

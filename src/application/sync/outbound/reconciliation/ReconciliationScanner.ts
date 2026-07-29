@@ -110,7 +110,6 @@ export interface ReconciliationScanReport {
 interface DesiredRow {
   readonly entityId: string;
   readonly rowBindingId: string;
-  readonly anchorReference: string;
   readonly entityRevision: number;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
   readonly fieldRevisionHash: string;
@@ -195,8 +194,7 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     schemaVersion: sheet.schemaVersion,
     readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.FULL,
   } as const;
-  // Fast append intentionally skips metadata. Reconciliation is the lazy
-  // repair point that assigns stable anchors before comparing the snapshot.
+  // The snapshot is matched by the registered visible business-key field.
   const observed = await observeSyncSnapshot(context.gateway, snapshotRequest);
   const snapshot = observed.snapshot;
 
@@ -278,13 +276,9 @@ function computeDrifts(args: {
   readonly systemFields: readonly string[];
   readonly sheet: { readonly registeredRange: string; readonly businessKeyField: string };
 }): readonly DriftTarget[] {
-  const rowsByAnchor = new Map<string, SyncGatewaySnapshot["rows"][number]>();
   const rowsByIdentity = new Map<string, SyncGatewaySnapshot["rows"][number]>();
   const ambiguousIdentities = new Set<string>();
   for (const row of args.snapshot.rows) {
-    if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT) {
-      rowsByAnchor.set(row.physicalAnchor.value, row);
-    }
     const identity = snapshotIdentity(row, args.sheet.businessKeyField);
     if (identity === undefined || ambiguousIdentities.has(identity)) continue;
     if (rowsByIdentity.has(identity)) {
@@ -297,10 +291,9 @@ function computeDrifts(args: {
 
   const drifts: DriftTarget[] = [];
   for (const desiredRow of args.desired) {
-    const observed = rowsByAnchor.get(desiredRow.anchorReference) ??
-      (ambiguousIdentities.has(desiredRow.entityId)
-        ? undefined
-        : rowsByIdentity.get(desiredRow.entityId));
+    const observed = ambiguousIdentities.has(desiredRow.entityId)
+      ? undefined
+      : rowsByIdentity.get(desiredRow.entityId);
     if (observed === undefined) {
       drifts.push({ kind: "missing", desired: desiredRow });
       continue;
@@ -314,7 +307,7 @@ function computeDrifts(args: {
   return drifts;
 }
 
-/** Reads a business-key value from a snapshot row for unanchored fast appends. */
+/** Reads a business-key value from a visible snapshot row. */
 function snapshotIdentity(
   row: SyncGatewaySnapshot["rows"][number],
   identityField: string,
@@ -367,7 +360,6 @@ function buildDesiredSystemState(
       byEntity.set(row.entityId, {
         entityId: row.entityId,
         rowBindingId: row.rowBindingId,
-        anchorReference: row.anchorReference,
         entityRevision: row.entityRevision,
         fields,
         fieldRevisionHash: "",
@@ -451,7 +443,6 @@ async function buildCorrectionEffects(
       targetId: drift.desired.entityId,
       rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: drift.desired.rowBindingId },
       conflictId: { kind: PRESENCE_KINDS.ABSENT },
-      targetAnchor: drift.desired.anchorReference,
       fields: drift.desired.fields,
       createIfMissing: baseline.createIfMissing,
       expectedVisibleRevision: baseline.expectedVisibleRevision,
@@ -589,11 +580,9 @@ function countMatchedRows(
   desired: readonly DesiredRow[],
   identityField: string,
 ): number {
-  const anchors = new Set<string>();
   const identities = new Set<string>();
   const duplicateIdentities = new Set<string>();
   for (const row of snapshot.rows) {
-    if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT) anchors.add(row.physicalAnchor.value);
     const identity = snapshotIdentity(row, identityField);
     if (identity === undefined || duplicateIdentities.has(identity)) continue;
     if (identities.has(identity)) {
@@ -605,7 +594,7 @@ function countMatchedRows(
   }
   let matched = 0;
   for (const row of desired) {
-    if (anchors.has(row.anchorReference) || identities.has(row.entityId)) matched += 1;
+    if (identities.has(row.entityId)) matched += 1;
   }
   return matched;
 }
@@ -615,13 +604,9 @@ function countExtraRows(
   desired: readonly DesiredRow[],
   identityField: string,
 ): number {
-  const desiredAnchors = new Set(desired.map((row) => row.anchorReference));
   const desiredIdentities = new Set(desired.map((row) => row.entityId));
   let extra = 0;
   for (const row of snapshot.rows) {
-    if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT && desiredAnchors.has(row.physicalAnchor.value)) {
-      continue;
-    }
     const identity = snapshotIdentity(row, identityField);
     if (identity !== undefined && desiredIdentities.has(identity)) continue;
     extra += 1;

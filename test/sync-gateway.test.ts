@@ -30,7 +30,6 @@ function payload(
     sheetName: "User_Input",
     registeredRange: "A:Z",
     schemaVersion: 1,
-    targetAnchor: "row-1",
     fields,
     targetVisibleHash: computeSyncVisibleHash(fields),
     createIfMissing: true,
@@ -78,7 +77,7 @@ describe("sync gateway contract", () => {
       schemaVersion: 1,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
-      anchorMode: "developer_metadata",
+      anchorMode: "business_key",
     };
     const definition: RegisteredSyncProjectionDefinition = {
       sheet,
@@ -113,7 +112,7 @@ describe("sync gateway contract", () => {
       schemaVersion: 1,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
-      anchorMode: "developer_metadata",
+      anchorMode: "business_key",
     };
 
     await provisionRegisteredSyncSheets(

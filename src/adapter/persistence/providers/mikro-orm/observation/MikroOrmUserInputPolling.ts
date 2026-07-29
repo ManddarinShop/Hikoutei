@@ -855,7 +855,6 @@ async function createPersistInput(
       SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
     ).physicalSheetId,
     rowNumber: prepared.snapshotRow.rowNumber,
-    physicalAnchor: prepared.snapshotRow.physicalAnchor,
     row: prepared.row,
   };
   const payloadJson = auditJson(payload);
@@ -1013,7 +1012,6 @@ async function canonicalMutationFor(
     prepared.mapping,
     prepared.canonical.entityId,
     prepared.binding.rowBindingId,
-    prepared.binding.anchorReference,
     encodedEntity,
     "update",
     prepared.mapping.fields.filter((field) => acceptedByField.has(field.fieldName)),
@@ -1178,7 +1176,6 @@ function snapshotHash(snapshot: SyncGatewaySnapshot): string {
     headers: snapshot.headers,
     rows: snapshot.rows.map((row) => ({
       rowNumber: row.rowNumber,
-      physicalAnchor: row.physicalAnchor,
       cells: Object.entries(row.cells)
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([fieldName, cell]) => ({

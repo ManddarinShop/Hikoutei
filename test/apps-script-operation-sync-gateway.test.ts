@@ -182,13 +182,8 @@ describe("AppsScriptOperationSyncGateway", () => {
     });
   });
 
-  it("routes anchor assignment and normalized snapshots through typed operations", async () => {
+  it("routes normalized ID-based snapshots through typed operations", async () => {
     const operationGateway = new StubOperationGateway([
-      {
-        assigned: 1,
-        existing: 2,
-        duplicateAnchors: [{ anchor: "anchor-duplicate", rowNumbers: [2, 4] }],
-      },
       {
         protocolVersion: "typed-sheets-sync-v1",
         sheetName: "Orders",
@@ -198,7 +193,6 @@ describe("AppsScriptOperationSyncGateway", () => {
         headers: ["id", "status"],
         rows: [{
           rowNumber: 2,
-          physicalAnchor: "anchor-1",
           cells: {
             id: {
               cellKind: "literal",
@@ -217,13 +211,6 @@ describe("AppsScriptOperationSyncGateway", () => {
       definitions: [createDefinition()],
     });
 
-    const anchors = await adapter.ensureRowAnchors({
-      physicalSheetId: "orders-state",
-      sheetName: "Orders",
-      registeredRange: "A:B",
-      projection: "system_state",
-      schemaVersion: 1,
-    });
     const snapshot = await adapter.readSnapshot({
       physicalSheetId: "orders-state",
       sheetName: "Orders",
@@ -232,20 +219,12 @@ describe("AppsScriptOperationSyncGateway", () => {
       schemaVersion: 1,
     });
 
-    expect(anchors.assigned).toBe(1);
-    expect(anchors.duplicateAnchors[0]?.rowNumbers).toEqual([2, 4]);
     expect(snapshot.rows[0]?.cells.id?.normalizedCell).toEqual({
       kind: "string",
       value: "order-1",
     });
-    expect(snapshot.rows[0]?.physicalAnchor.kind).toBe("present");
-    expect(operationGateway.calls).toHaveLength(2);
+    expect(operationGateway.calls).toHaveLength(1);
     expect(operationGateway.calls[0]?.args).toMatchObject({
-      mode: "ensureRowAnchors",
-      physicalSheetId: "orders-state",
-      sheetName: "Orders",
-    });
-    expect(operationGateway.calls[1]?.args).toMatchObject({
       mode: "readSnapshot",
       physicalSheetId: "orders-state",
       sheetName: "Orders",
@@ -344,7 +323,7 @@ function createDefinition(): RegisteredSyncProjectionDefinition {
       schemaVersion: 1,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
-      anchorMode: "developer_metadata",
+      anchorMode: "business_key",
     },
     headers: ["id", "status"],
   };
@@ -373,7 +352,7 @@ function createUserInputDefinition(): RegisteredSyncProjectionDefinition {
       schemaVersion: 1,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
-      anchorMode: "developer_metadata",
+      anchorMode: "business_key",
     },
     headers: ["id", "status"],
   };
@@ -418,7 +397,6 @@ function createEffect(): SyncGatewayEffect {
       sheetName: "Orders",
       registeredRange: "A:B",
       schemaVersion: 1,
-      targetAnchor: "sync-anchor:order-1",
       fields,
       targetVisibleHash: computeSyncVisibleHash(fields),
       createIfMissing: false,

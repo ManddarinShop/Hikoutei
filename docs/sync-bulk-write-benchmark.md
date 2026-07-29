@@ -11,6 +11,13 @@
 > [`write-and-synchronization-flow.md`](write-and-synchronization-flow.md) for
 > the current design.
 
+## 2026-07-29 — current remote identity contract
+
+The active gateway resolves rows through the visible business-key column and
+does not read or write Google Sheets Developer Metadata. The anchor/metadata
+measurements below remain historical records and are not current runtime
+behavior or performance expectations.
+
 ## 2026-07-24 — raw Apps Script write
 
 - Branch: `benchmark/apps-script-bulk-write`

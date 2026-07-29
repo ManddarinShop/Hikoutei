@@ -31,8 +31,6 @@ import {
   type FastAppendRowResult,
   type FastAppendRowsRequest,
   type FastAppendRowsResult,
-  type EnsureSyncRowAnchorsRequest,
-  type EnsureSyncRowAnchorsResult,
   type ReadSyncEffectPostconditionsRequest,
   type ReadSyncSnapshotRequest,
   type SyncEffectPostcondition,
@@ -88,7 +86,6 @@ type FakeSyncGatewayErrorCode =
 /** Initial state for one fake projection row. */
 export interface FakeSyncRowInput {
   readonly targetId: string;
-  readonly physicalAnchor?: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
   readonly visibleRevision?: number;
   readonly activeCandidateHash?: Applicability<string>;
@@ -102,7 +99,7 @@ export interface FakeSyncSheetInput {
   readonly projection: SyncProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
-  /** Business-key header used to find rows appended without physical metadata. */
+  /** Business-key header used to find rows in the visible Sheet state. */
   readonly identityField?: string;
   readonly rows?: readonly FakeSyncRowInput[];
 }
@@ -115,8 +112,7 @@ export interface FakeSyncGatewayOptions {
 
 interface FakeRow {
   readonly targetId: string;
-  readonly anchor: string;
-  physicalAnchorPresent: boolean;
+  readonly storageKey: string;
   fields: Record<string, NormalizedCell>;
   visibleRevision: number;
   visibleHash: string;
@@ -131,7 +127,7 @@ interface FakeSheet {
   readonly schemaVersion: number;
   readonly headers: readonly string[];
   readonly identityField: string | undefined;
-  readonly rowsByAnchor: Map<string, FakeRow>;
+  readonly rowsByKey: Map<string, FakeRow>;
 }
 
 interface Receipt {
@@ -164,7 +160,6 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
   private readonly sheets = new Map<string, FakeSheet>();
   private readonly receipts = new Map<string, Receipt>();
   private readonly maxEffectsPerApply: Presence<number>;
-  private anchorSequence = 0;
   private dropResponse = false;
   private postconditionBatchReadCount = 0;
   private fastAppendCallCount = 0;
@@ -189,12 +184,12 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
   /** Simulates a user/collaborator edit without creating an effect receipt. */
   public mutateRow(
     physicalSheetId: string,
-    anchor: string,
+    targetId: string,
     fields: Readonly<Record<string, NormalizedCell>>,
     activeCandidateHash: Applicability<string> = notApplicableValue(),
   ): void {
     const sheet = this.requireSheet(physicalSheetId);
-    const row = this.requireRow(sheet, anchor);
+    const row = this.requireRow(sheet, targetId);
     row.fields = { ...fields };
     row.visibleHash = computeSyncVisibleHash(row.fields);
     row.visibleRevision += 1;
@@ -202,22 +197,22 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
   }
 
   /** Simulates a structural row disappearance without asserting delete evidence. */
-  public removeRow(physicalSheetId: string, anchor: string): void {
+  public removeRow(physicalSheetId: string, targetId: string): void {
     const sheet = this.requireSheet(physicalSheetId);
-    if (!sheet.rowsByAnchor.delete(anchor)) {
+    const row = this.requireRow(sheet, targetId);
+    if (!sheet.rowsByKey.delete(row.storageKey)) {
       throw new SyncGatewayContractError(
         SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
-        `fake row anchor does not exist: ${anchor}`,
+        `fake row targetId does not exist: ${targetId}`,
       );
     }
   }
 
   /** Returns a copy of a fake row for assertions without exposing mutable state. */
-  public readRow(physicalSheetId: string, anchor: string): FakeSyncRowInput & { readonly visibleHash: string } {
-    const row = this.requireRow(this.requireSheet(physicalSheetId), anchor);
+  public readRow(physicalSheetId: string, targetId: string): FakeSyncRowInput & { readonly visibleHash: string } {
+    const row = this.requireRow(this.requireSheet(physicalSheetId), targetId);
     return {
       targetId: row.targetId,
-      ...(row.physicalAnchorPresent ? { physicalAnchor: row.anchor } : {}),
       fields: { ...row.fields },
       visibleRevision: row.visibleRevision,
       activeCandidateHash: row.activeCandidateHash,
@@ -225,20 +220,10 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     };
   }
 
-  public async ensureRowAnchors(request: EnsureSyncRowAnchorsRequest): Promise<EnsureSyncRowAnchorsResult> {
-    const sheet = this.requireMatchingSheet(request);
-    const grouped = groupDuplicateAnchors([...sheet.rowsByAnchor.values()].map((row) => row.anchor));
-    return {
-      assigned: 0,
-      existing: sheet.rowsByAnchor.size,
-      duplicateAnchors: grouped,
-    };
-  }
-
   public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
     const sheet = this.requireMatchingSheet(request);
-    const rows = [...sheet.rowsByAnchor.values()]
-      .sort((left, right) => left.anchor.localeCompare(right.anchor))
+    const rows = [...sheet.rowsByKey.values()]
+      .sort((left, right) => left.storageKey.localeCompare(right.storageKey))
       .map((row, index) => this.toSnapshotRow(sheet, row, index + 2));
     const snapshotPayload = {
       protocolVersion: SYNC_GATEWAY_PROTOCOL_VERSIONS.V1,
@@ -310,9 +295,8 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       return unavailablePostcondition();
     }
     const sheet = sheetResult.value;
-    const row = this.findRowByAnchorOrIdentity(
+    const row = this.findRowByIdentity(
       sheet,
-      effect.payload.targetAnchor,
       effect.targetId,
       effect.payload.fields,
     );
@@ -452,30 +436,27 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
         `fake sheet headers[${index}]`,
         SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
       ));
-    const rowsByAnchor = new Map<string, FakeRow>();
+    const rowsByKey = new Map<string, FakeRow>();
     for (const initial of input.rows ?? []) {
-      const anchor = initial.physicalAnchor === undefined
-        ? this.nextAnchor()
-        : requireSyncGatewayText(
-          initial.physicalAnchor,
-          "fake row physicalAnchor",
-          SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
-        );
-      if (rowsByAnchor.has(anchor)) {
+      const storageKey = requireSyncGatewayText(
+        initial.targetId,
+        "fake row targetId",
+        SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
+      );
+      if (rowsByKey.has(storageKey)) {
         throw new SyncGatewayContractError(
           SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
-          `duplicate fake physical anchor: ${anchor}`,
+          `duplicate fake targetId: ${storageKey}`,
         );
       }
       const fields = { ...initial.fields };
-      rowsByAnchor.set(anchor, {
+      rowsByKey.set(storageKey, {
         targetId: requireSyncGatewayText(
           initial.targetId,
           "fake row targetId",
           SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
         ),
-        anchor,
-        physicalAnchorPresent: projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        storageKey,
         fields,
         visibleRevision: initial.visibleRevision === undefined
           ? NON_NEGATIVE_SAFE_INTEGER_MINIMUM
@@ -500,17 +481,16 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT) && headers.includes("id")
           ? "id"
           : undefined),
-      rowsByAnchor,
+      rowsByKey,
     });
   }
 
   private fastAppendOne(sheet: FakeSheet, row: FastAppendRow): FastAppendRowResult {
-    const anchor = this.nextAnchor();
+    const storageKey = row.effectId;
     const fields = { ...row.fields };
-    sheet.rowsByAnchor.set(anchor, {
+    sheet.rowsByKey.set(storageKey, {
       targetId: row.effectId,
-      anchor,
-      physicalAnchorPresent: false,
+      storageKey,
       fields,
       visibleRevision: 1,
       visibleHash: computeSyncVisibleHash(fields),
@@ -571,9 +551,8 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           presentValue("effect ID was reused with another payload"),
         );
       }
-      const row = this.findRowByAnchorOrIdentity(
+      const row = this.findRowByIdentity(
         sheet,
-        effect.payload.targetAnchor,
         effect.targetId,
         effect.payload.fields,
       );
@@ -617,9 +596,8 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       );
     }
 
-    const existingRow = this.findRowByAnchorOrIdentity(
+    const existingRow = this.findRowByIdentity(
       sheet,
-      effect.payload.targetAnchor,
       effect.targetId,
       effect.payload.fields,
     );
@@ -630,7 +608,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           effect,
           SYNC_GATEWAY_EFFECT_RESULT_STATUSES.GUARD_MISMATCH,
           existingRow,
-          presentValue("target anchor is missing"),
+          presentValue("target identity is missing"),
         );
       }
       if (
@@ -646,14 +624,13 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       }
       row = {
         targetId: effect.targetId,
-        anchor: effect.payload.targetAnchor,
-        physicalAnchorPresent: sheet.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        storageKey: effect.effectId,
         fields: {},
         visibleRevision: NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
         visibleHash: EMPTY_VISIBLE_HASH,
         activeCandidateHash: notApplicableValue(),
       };
-      sheet.rowsByAnchor.set(row.anchor, row);
+      sheet.rowsByKey.set(row.storageKey, row);
     } else {
       row = existingRow.value;
     }
@@ -686,7 +663,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
         targetVisibleHash: effect.payload.targetVisibleHash,
         visibleRevision: row.visibleRevision,
       };
-      sheet.rowsByAnchor.delete(row.anchor);
+      sheet.rowsByKey.delete(row.storageKey);
       this.receipts.set(effect.effectId, deletionReceipt);
       return this.result(
         effect,
@@ -774,7 +751,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     );
   }
 
-  /** Rejects broad or ambiguous delete effects before an anchor is ever removed. */
+  /** Rejects broad or ambiguous delete effects before a row is removed. */
   private projectionDeleteShapeError(
     sheet: FakeSheet,
     effect: SyncGatewayEffect,
@@ -852,9 +829,6 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     }
     return {
       rowNumber,
-      physicalAnchor: row.physicalAnchorPresent
-        ? presentValue(row.anchor)
-        : absentValue(),
       cells,
     };
   }
@@ -870,48 +844,44 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     return sheet.value;
   }
 
-  /** Finds a row by anchor first, then by the registered business key. */
-  private findRowByAnchorOrIdentity(
+  /** Finds a row by the registered visible business key. */
+  private findRowByIdentity(
     sheet: FakeSheet,
-    anchor: string,
     targetId: string,
     fields?: Readonly<Record<string, NormalizedCell>>,
   ): LookupResult<FakeRow> {
-    const anchoredRow = sheet.rowsByAnchor.get(anchor);
-    const anchored: LookupResult<FakeRow> = anchoredRow !== undefined && anchoredRow.physicalAnchorPresent
-      ? foundValue(anchoredRow)
-      : notFoundValue<FakeRow>();
-    if (anchored.kind === LOOKUP_RESULT_KINDS.FOUND || sheet.identityField === undefined) {
-      return anchored;
-    }
     const targetIdentity = fields === undefined
       ? undefined
       : normalizedCellIdentity(fields[sheet.identityField as string]);
-    const identity = targetIdentity ?? targetId;
-    const matches = [...sheet.rowsByAnchor.values()].filter((row) =>
-      normalizedCellIdentity(row.fields[sheet.identityField as string]) === identity,
-    );
+    const matches = [...sheet.rowsByKey.values()].filter((row) => {
+      if (sheet.identityField === undefined) return row.targetId === targetId;
+      const identity = targetIdentity ?? targetId;
+      return normalizedCellIdentity(row.fields[sheet.identityField]) === identity ||
+        row.targetId === targetId;
+    });
     if (matches.length > 1) {
       throw new SyncGatewayContractError(
         SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
-        `fake sync identity is duplicated: ${identity}`,
+        `fake sync identity is duplicated: ${targetIdentity ?? targetId}`,
       );
     }
     return matches[0] === undefined ? notFoundValue() : { kind: LOOKUP_RESULT_KINDS.FOUND, value: matches[0] };
   }
 
-  private requireRow(sheet: FakeSheet, anchor: string): FakeRow {
-    const row = lookupResult(sheet.rowsByAnchor.get(anchor));
+  private requireRow(sheet: FakeSheet, targetId: string): FakeRow {
+    const row = this.findRowByIdentity(sheet, targetId);
     if (row.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       throw new SyncGatewayContractError(
         SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
-        `fake row anchor does not exist: ${anchor}`,
+        `fake row targetId does not exist: ${targetId}`,
       );
     }
     return row.value;
   }
 
-  private requireMatchingSheet(request: EnsureSyncRowAnchorsRequest): FakeSheet {
+  private requireMatchingSheet(
+    request: Pick<ReadSyncSnapshotRequest, "physicalSheetId" | "sheetName" | "registeredRange" | "projection" | "schemaVersion">,
+  ): FakeSheet {
     const sheet = this.requireSheet(request.physicalSheetId);
     if (
       sheet.sheetName !== request.sheetName ||
@@ -927,10 +897,6 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     return sheet;
   }
 
-  private nextAnchor(): string {
-    this.anchorSequence += 1;
-    return "fake-anchor:" + this.anchorSequence;
-  }
 }
 
 function normalizedCellIdentity(cell: NormalizedCell | undefined): string | undefined {
@@ -996,19 +962,4 @@ function changedPostcondition(): SyncEffectPostcondition {
     visibleRevision: absentValue(),
     visibleHash: absentValue(),
   };
-}
-
-function groupDuplicateAnchors(anchors: readonly string[]): readonly {
-  readonly anchor: string;
-  readonly rowNumbers: readonly number[];
-}[] {
-  const grouped = new Map<string, number[]>();
-  anchors.forEach((anchor, index) => {
-    const rows = grouped.get(anchor) ?? [];
-    rows.push(index + 2);
-    grouped.set(anchor, rows);
-  });
-  return [...grouped.entries()]
-    .filter(([, rows]) => rows.length > 1)
-    .map(([anchor, rowNumbers]) => ({ anchor, rowNumbers }));
 }

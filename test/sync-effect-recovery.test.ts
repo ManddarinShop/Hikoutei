@@ -264,7 +264,6 @@ function createEffect(suffix = "recovery", streamSequence = 1): NewEffect {
       sheetName: "Orders",
       registeredRange: "A:B",
       schemaVersion: 1,
-      targetAnchor: `${suffix}-anchor`,
       fields: nextFields,
       targetVisibleHash: computeSyncVisibleHash(nextFields),
       createIfMissing: true,

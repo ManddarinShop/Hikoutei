@@ -64,7 +64,8 @@ export interface RegisterSyncSheetInput {
   readonly schemaVersion: number;
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
-  readonly anchorMode?: "developer_metadata";
+  /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
+  readonly anchorMode?: "business_key";
 }
 
 /** Registry row used for all gateway requests. */
@@ -78,7 +79,8 @@ export interface RegisteredSyncSheet {
   readonly schemaVersion: number;
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
-  readonly anchorMode: "developer_metadata";
+  /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
+  readonly anchorMode: "business_key";
 }
 
 /** Records whether a fenced registry request won the writer ownership check. */
@@ -112,7 +114,7 @@ export async function registerSyncSheetWithSql(
         normalizedInput.schemaVersion,
         normalizedInput.ownershipManifestJson,
         normalizedInput.businessKeyField,
-        normalizedInput.anchorMode ?? "developer_metadata",
+        normalizedInput.anchorMode ?? "business_key",
       ]);
       if (inserted.changes !== 1) {
         throw new StorageError(
@@ -139,7 +141,7 @@ export async function registerSyncSheetWithSql(
         normalizedInput.registeredRange,
         normalizedInput.projection,
         normalizedInput.schemaVersion,
-        normalizedInput.anchorMode ?? "developer_metadata",
+        normalizedInput.anchorMode ?? "business_key",
       ]);
       if (inserted.changes !== 1) {
         throw new StorageError(
@@ -256,10 +258,10 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
       "unsupported sync projection",
     );
   }
-  if (input.anchorMode !== undefined && input.anchorMode !== "developer_metadata") {
+  if (input.anchorMode !== undefined && input.anchorMode !== "business_key") {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
-      "v1 sync registry requires developer_metadata anchors",
+      "sync registry requires business-key row identity",
     );
   }
   try {
@@ -286,7 +288,7 @@ function sameLogicalRegistration(existing: LogicalRow, input: RegisterSyncSheetI
   return existing.schema_version === input.schemaVersion &&
     existing.ownership_manifest_json === input.ownershipManifestJson &&
     existing.business_key_field === input.businessKeyField &&
-    existing.anchor_mode === (input.anchorMode ?? "developer_metadata") &&
+    existing.anchor_mode === (input.anchorMode ?? "business_key") &&
     existing.enabled === 1;
 }
 
@@ -297,7 +299,7 @@ function samePhysicalRegistration(existing: PhysicalRow, input: RegisterSyncShee
     existing.registered_range === input.registeredRange &&
     existing.projection === input.projection &&
     existing.schema_version === input.schemaVersion &&
-    existing.anchor_mode === (input.anchorMode ?? "developer_metadata") &&
+    existing.anchor_mode === (input.anchorMode ?? "business_key") &&
     existing.enabled === 1;
 }
 
@@ -308,10 +310,10 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
       "physical sheet is not an enabled sync registry target",
     );
   }
-  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== "developer_metadata") {
+  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== "business_key") {
     throw new StorageError(
       STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
-      "physical sheet registry has an unsupported projection or anchor mode",
+      "physical sheet registry has an unsupported projection or identity mode",
     );
   }
   const registeredRange = normalizeRegisteredRange(
@@ -334,7 +336,7 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
     schemaVersion: row.schema_version,
     ownershipManifestJson: row.ownership_manifest_json,
     businessKeyField: row.business_key_field,
-    anchorMode: "developer_metadata",
+    anchorMode: "business_key",
   };
 }
 

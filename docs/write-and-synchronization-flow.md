@@ -15,7 +15,7 @@ em.persist(entity) / em.remove(entity)
           ▼
 SQLite transaction
   ├─ business entity table
-  ├─ sync metadata and revision state
+  ├─ SQLite sync state and revision state
   └─ durable Sheet effect outbox
           │
           ▼
@@ -53,7 +53,7 @@ application must not use the remote value directly:
 
 ```text
 User_Input polling (visible id/business key, values-only)
-  -> normalized observed row without Developer Metadata lookup
+  -> normalized observed row without remote metadata lookup
   -> business-key lookup in SQLite
   -> structural and ownership validation
   -> field-level revision evaluation
@@ -70,12 +70,35 @@ SQLite transaction. A conflict never changes the business entity until a user
 explicitly resolves it. The current provider pass is one-shot; a durable
 long-running polling supervisor is still pending.
 
-The business-key column is an immutable row identity contract for this path and
-should be protected from manual edits in the Sheet. A missing, unknown, or
-duplicated key is rejected; without a physical anchor, the runtime cannot prove
-the origin of a key that was changed to another existing entity. Physical row
-movement after a Sheet row deletion is therefore safe as long as the remaining
-business-key values remain unique.
+The business-key column is an immutable row identity contract and should be
+protected from manual edits in the Sheet. A missing, unknown, or duplicated key
+is rejected. Physical row movement after a Sheet row deletion is safe as long as
+the remaining business-key values remain unique.
+
+## Distinguishing a failed outbound write from a remote edit
+
+Each regular outbound effect carries three pieces of visible-state evidence:
+
+```text
+A = expected visible hash before the write (stored in SQLite outbox)
+B = target visible hash after the write (computed from the effect fields)
+C = visible hash observed during the read-back
+```
+
+The gateway classifies the comparison as follows:
+
+- `C == B`: the Sheet reflects the requested write; the effect can be applied.
+- `C == A`: the write was not observed; the effect is returned to pending for
+  retry.
+- `C != A` and `C != B`: the Sheet contains an unexpected remote state; the
+  effect is not silently overwritten and is recorded as changed/repair-needed.
+- no usable `C`: the gateway cannot decide, so the worker keeps the effect
+  recoverable instead of declaring success.
+
+This distinguishes “our write did not land” from “the visible state changed in
+another way.” Polling alone cannot prove that the latter was specifically a
+human edit; it can only classify it as an unexpected remote change. An optional
+`onEdit` source or an external audit trail is required for stronger attribution.
 
 ## Planned Conflict resolution flow
 

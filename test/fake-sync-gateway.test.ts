@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   APPLICABILITY_KINDS,
-  PRESENCE_KINDS,
 } from "../src/shared/state/index.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
@@ -34,7 +33,7 @@ function createSheetInput(): FakeSyncSheetInput {
 }
 
 describe("FakeSyncSheetGateway", () => {
-  it("returns values without metadata anchors for User_Input snapshots", async () => {
+  it("returns visible values without metadata state for User_Input snapshots", async () => {
     const gateway = new FakeSyncSheetGateway([createSheetInput()]);
 
     const snapshot = await gateway.readSnapshot({
@@ -46,7 +45,6 @@ describe("FakeSyncSheetGateway", () => {
     });
     const row = snapshot.rows[0];
 
-    expect(row?.physicalAnchor).toEqual({ kind: PRESENCE_KINDS.ABSENT });
     expect(row?.cells.id?.cellKind).toBe("literal");
     expect(row?.cells.id?.normalizedCell).toEqual({
       kind: "string",

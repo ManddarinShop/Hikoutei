@@ -214,12 +214,12 @@ describe("MikroOrmSqliteAdapter", () => {
     try {
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
         fromVersion: 0,
-        toVersion: 3,
-        appliedVersions: [3],
+        toVersion: 4,
+        appliedVersions: [4],
       });
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-        fromVersion: 3,
-        toVersion: 3,
+        fromVersion: 4,
+        toVersion: 4,
         appliedVersions: [],
       });
       await expect(adapter.read(({ sql }) => {
@@ -309,12 +309,12 @@ describe("MikroOrmSqliteAdapter", () => {
 
     expect(firstMigration).toEqual({
       fromVersion: 0,
-      toVersion: 3,
-      appliedVersions: [3],
+      toVersion: 4,
+      appliedVersions: [4],
     });
     expect(secondMigration).toEqual({
-      fromVersion: 3,
-      toVersion: 3,
+      fromVersion: 4,
+      toVersion: 4,
       appliedVersions: [],
     });
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
@@ -426,7 +426,7 @@ describe("MikroOrmSqliteAdapter", () => {
         schemaVersion: 1,
         ownershipManifestJson: "{}",
         businessKeyField: "id",
-        anchorMode: "developer_metadata",
+        anchorMode: "business_key",
       },
     });
     await expect(
@@ -558,7 +558,6 @@ describe("MikroOrmSqliteAdapter", () => {
         sheetName: "Orders",
         registeredRange: "A:Z",
         schemaVersion: 1,
-        targetAnchor: "order-anchor",
         fields: nextFields,
         targetVisibleHash: computeSyncVisibleHash(nextFields),
         createIfMissing: false,
@@ -580,7 +579,6 @@ describe("MikroOrmSqliteAdapter", () => {
         rows: [
           {
             targetId: "order-worker",
-            physicalAnchor: "order-anchor",
             fields: oldFields,
             visibleRevision: 0,
           },
@@ -601,7 +599,7 @@ describe("MikroOrmSqliteAdapter", () => {
       applied: 1,
       failed: 0,
     });
-    expect(gateway.readRow("physical-sheet", "order-anchor")).toMatchObject({
+    expect(gateway.readRow("physical-sheet", "order-worker")).toMatchObject({
       fields: nextFields,
       visibleRevision: 1,
     });

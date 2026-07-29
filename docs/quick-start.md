@@ -60,8 +60,8 @@ if (user !== null) {
 ```
 
 Application reads come from SQLite. `flush()` commits the entity row and, when
-sync routes are configured, the local sync metadata and Sheet outbox in the
-same SQLite transaction. It does not call Google Sheets synchronously.
+sync routes are configured, the local sync state and Sheet outbox in the same
+SQLite transaction. It does not call Google Sheets synchronously.
 
 ## Separate Sheet routes
 

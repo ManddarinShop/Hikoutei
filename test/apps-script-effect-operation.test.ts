@@ -132,7 +132,6 @@ describe("thin Code.gs effect operation", () => {
     if (operation.decode === undefined) throw new Error("observation decoder is missing");
     const result = operation.decode(rawResult);
 
-    expect(result.snapshot.rows[0]?.physicalAnchor).toEqual({ kind: "absent" });
     expect(result.timing?.phases.map((phase) => phase.phase)).not.toContain("anchor_metadata_read");
     expect(sheet.metadataReadCount).toBe(0);
     expect(sheet.metadataWriteCount).toBe(metadataWritesBefore);
@@ -179,7 +178,6 @@ function createEffect(options: {
       sheetName: SHEET_NAME,
       registeredRange: "A:B",
       schemaVersion: 1,
-      targetAnchor: "anchor:u1",
       fields: options.fields,
       targetVisibleHash: computeSyncVisibleHash(options.fields),
       createIfMissing: options.createIfMissing,

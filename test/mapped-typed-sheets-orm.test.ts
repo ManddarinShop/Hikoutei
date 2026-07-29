@@ -472,7 +472,7 @@ describe("mapped typed-sheets ORM", () => {
 
     gateway.mutateRow(
       "orders-input",
-      "entity:order-candidate-delete",
+      "order-candidate-delete",
       {
         id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-candidate-delete" },
         status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "edited-by-user" },
@@ -489,7 +489,7 @@ describe("mapped typed-sheets ORM", () => {
       now: 1_001,
       maxEffects: 8,
     })).resolves.toMatchObject({ applied: 1, blockedCandidate: 1, failed: 0 });
-    expect(gateway.readRow("orders-input", "entity:order-candidate-delete").fields.status).toEqual({
+    expect(gateway.readRow("orders-input", "order-candidate-delete").fields.status).toEqual({
       kind: NORMALIZED_CELL_KINDS.STRING,
       value: "edited-by-user",
     });
@@ -566,9 +566,12 @@ describe("mapped typed-sheets ORM", () => {
       now: 1_001,
       maxEffects: 8,
     })).resolves.toMatchObject({ applied: 2, failed: 0 });
-    expect(gateway.readRow("orders-input", "entity:order-polled").physicalAnchor).toBeUndefined();
+    expect(gateway.readRow("orders-input", "order-polled").fields.id).toEqual({
+      kind: NORMALIZED_CELL_KINDS.STRING,
+      value: "order-polled",
+    });
 
-    gateway.mutateRow("orders-input", "entity:order-polled", {
+    gateway.mutateRow("orders-input", "order-polled", {
       id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-polled" },
       status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "paid" },
     });
@@ -610,7 +613,7 @@ describe("mapped typed-sheets ORM", () => {
       duplicateRows: 0,
     });
 
-    gateway.mutateRow("orders-input", "entity:order-polled", {
+    gateway.mutateRow("orders-input", "order-polled", {
       id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "renamed-by-user" },
       status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "paid" },
     });
@@ -655,7 +658,7 @@ describe("mapped typed-sheets ORM", () => {
       maxEffects: 8,
     })).resolves.toMatchObject({ applied: 4, failed: 0 });
 
-    gateway.mutateRow("orders-input", "entity:order-duplicate-a", {
+    gateway.mutateRow("orders-input", "order-duplicate-a", {
       id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-duplicate-b" },
       status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "user-edit" },
     });
@@ -704,7 +707,7 @@ describe("mapped typed-sheets ORM", () => {
       maxEffects: 8,
     });
 
-    gateway.mutateRow("orders-input", "entity:order-conflict", {
+    gateway.mutateRow("orders-input", "order-conflict", {
       id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-conflict" },
       status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "user-edit" },
     });

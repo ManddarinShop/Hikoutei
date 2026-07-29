@@ -21,7 +21,7 @@ Application server
             └─ replaceable persistence engine
                  └─ MikroORM + SQLite (current provider)
                       ├─ business entity tables
-                      ├─ sync metadata and conflict ledger
+                      ├─ SQLite sync state and conflict ledger
                       └─ durable Sheet effect outbox
                            └─ separate sync worker
                                 └─ signed Apps Script gateway
@@ -51,10 +51,10 @@ Relations initially support `manyToOne` and `oneToMany`; the owning
 `manyToOne` side stores the foreign key. `manyToMany`, lazy loading, and
 cascade persistence are out of scope for the first release.
 
-### Sync metadata
+### SQLite sync state
 
-Sync tables record bindings, revisions, visible Sheet state, event evidence,
-conflicts, resolution commands, leases, and outbox effects. They are not
+SQLite sync tables record bindings, revisions, visible Sheet state, event
+evidence, conflicts, resolution commands, leases, and outbox effects. They are not
 additional business tables such as `Users_System` or `Users_Input`.
 
 The sync layer must not become a second source of application field values.
@@ -96,7 +96,7 @@ em.persist(entity) / em.remove(entity)
           ▼
 SQLite transaction
   ├─ business entity table
-  ├─ sync metadata and conflict state
+  ├─ SQLite sync state and conflict state
   └─ durable Sheet effect outbox
           │
           ▼
@@ -120,16 +120,13 @@ The initial inbound source is polling. The current MikroORM provider exposes a
 worker-side one-pass polling entrypoint that observes `User_Input`, validates
 row identity and cells, evaluates field revisions, and persists accepted rows
 through the observation writer and mapped entity mutation transaction.
-`User_Input` row identity comes from the visible business-key column (normally
-`id`), which must be required and unique in SQLite. Its polling snapshot reads
-cell values only: it does not assign or scan Developer Metadata anchors. An
-unknown or duplicated business key is quarantined as invalid rather than being
-matched to a different entity. `System_State` and reconciliation continue to
-use projection-local Developer Metadata anchors where stable physical-row
-identity is required.
-The Sheet owner must treat this identity column as immutable/protected: without
-an anchor, the runtime cannot prove which old row a manually changed key came
-from.
+Every remote projection is addressed through its registered visible business-key
+column (normally `id`), which must be required and unique in SQLite. Snapshot
+reads never assign or scan Developer Metadata. An unknown or duplicated business
+key is quarantined as invalid rather than being matched to a different entity.
+The Sheet owner should treat this identity column as immutable/protected: a
+polling-only runtime cannot prove which old row a manually changed key came from
+when the key is changed to another existing entity.
 `onEdit` can be added later as an optional lower-latency observation source, but
 it must enter the same evaluator and SQLite writer boundary. Long-running loop
 ownership and Conflict checkbox consumption remain worker follow-up work.

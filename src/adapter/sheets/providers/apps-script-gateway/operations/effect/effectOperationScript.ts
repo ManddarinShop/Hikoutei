@@ -3,7 +3,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var MAX_EFFECTS = 20;
   var RECEIPT_SHEET_NAME = "__typed_sheets_internal_effect_receipts";
   var RECEIPT_HEADERS = ["effectId", "payloadHash", "status", "visibleHash", "visibleRevision", "updatedAt"];
-  var ANCHOR_KEY = "typed_sheets_sync_anchor";
   var EFFECT_KINDS = {
     SYSTEM_PROJECTION: "system_projection",
     CANDIDATE_RECONCILE: "candidate_reconcile",
@@ -43,7 +42,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var layout = readLayout_(sheet, args.registeredRange);
   phase_("layout_read", layoutStartedAt);
   var contextStartedAt = Date.now();
-  var context = readContext_(sheet, layout, args.identityField, args.projection !== "user_input");
+  var context = readContext_(sheet, layout, args.identityField);
   phase_("context_read", contextStartedAt);
 
   if (args.mode === "readEffectPostcondition") {
@@ -95,7 +94,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       }
       var receiptRow = findRow_(
         context,
-        checked.payload.targetAnchor,
         checked.targetId,
         checked.targetIdentity,
       );
@@ -221,9 +219,8 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     return { startColumn: parsed.startColumn, columnCount: parsed.columnCount, headers: headers, positions: positions };
   }
 
-  function readContext_(targetSheet, layout, identityField, readAnchors) {
+  function readContext_(targetSheet, layout, identityField) {
     var rows = [];
-    var byAnchor = Object.create(null);
     var byIdentity = Object.create(null);
     if (identityField !== undefined && layout.positions[identityField] === undefined) {
       throw new Error("sync identity field is not a registered header: " + identityField);
@@ -237,23 +234,15 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       layout.headers.forEach(function (header, headerIndex) {
         cells[header] = normalizedCellFromSheetValue_(raw[headerIndex]);
       });
-      var anchors = readAnchors ? readAnchors_(targetSheet, rowNumber) : [];
-      if (anchors.length > 1) throw new Error("row has multiple sync anchors: " + rowNumber);
-      var anchor = anchors.length === 1 ? anchors[0] : null;
       var identity = identityField === undefined ? null : identityFromCell_(cells[identityField]);
       var row = {
         rowNumber: rowNumber,
-        physicalAnchor: anchor,
         targetId: identity,
         cells: cells,
         writeFields: Object.create(null),
         appended: false,
         deleted: false,
       };
-      if (anchor !== null) {
-        if (byAnchor[anchor] !== undefined) throw new Error("sync anchor is duplicated: " + anchor);
-        byAnchor[anchor] = row;
-      }
       if (identity !== null) {
         if (byIdentity[identity] !== undefined) throw new Error("sync identity is duplicated: " + identity);
         byIdentity[identity] = row;
@@ -263,19 +252,17 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     return {
       rows: rows,
       updatedRows: Object.create(null),
-      byAnchor: byAnchor,
       byIdentity: byIdentity,
       nextAppendRow: Math.max(lastRow + 1, 2),
       layout: layout,
     };
   }
 
-  function createRow_(targetContext, anchor, targetIdentity, fields) {
+  function createRow_(targetContext, targetIdentity, fields) {
     var cells = Object.create(null);
     targetContext.layout.headers.forEach(function (header) { cells[header] = null; });
     var row = {
       rowNumber: targetContext.nextAppendRow++,
-      physicalAnchor: anchor,
       targetId: targetIdentity,
       cells: cells,
       writeFields: Object.create(null),
@@ -283,17 +270,15 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       deleted: false,
     };
     targetContext.rows.push(row);
-    targetContext.byAnchor[anchor] = row;
     if (targetIdentity !== null) targetContext.byIdentity[targetIdentity] = row;
     setRowFields_(row, fields);
     return row;
   }
 
-  function findRow_(targetContext, anchor, targetId, targetIdentity) {
-    var row = targetContext.byAnchor[anchor] || null;
-    if (row === null && targetIdentity !== null && targetIdentity !== undefined) {
-      row = targetContext.byIdentity[targetIdentity] || null;
-    }
+  function findRow_(targetContext, targetId, targetIdentity) {
+    var row = targetIdentity !== null && targetIdentity !== undefined
+      ? targetContext.byIdentity[targetIdentity] || null
+      : null;
     if (row === null && targetId !== null && targetId !== undefined) {
       row = targetContext.byIdentity[targetId] || null;
     }
@@ -314,7 +299,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     // enter the existing-row compare-and-set path.
     var row = findRow_(
       targetContext,
-      checked.payload.targetAnchor,
       checked.targetId,
       checked.targetIdentity,
     );
@@ -326,14 +310,13 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function planAppend_(targetContext, checked) {
     // An insert owns its empty baseline and writes the requested cells directly.
     if (!checked.payload.createIfMissing) {
-      return resultPlan_(result_(checked, "guard_mismatch", null, "target_anchor_missing", null));
+      return resultPlan_(result_(checked, "guard_mismatch", null, "target_identity_missing", null));
     }
     if (checked.expectedVisibleRevision !== 0 || checked.expectedVisibleHash !== "") {
       return resultPlan_(result_(checked, "guard_mismatch", null, "insert_requires_empty_visible_baseline", null));
     }
     var row = createRow_(
       targetContext,
-      checked.payload.targetAnchor,
       checked.targetIdentity,
       checked.payload.fields,
     );
@@ -379,7 +362,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       if (missingDeletionError !== null) {
         return resultPlan_(result_(checked, "schema_error", null, missingDeletionError, null));
       }
-      return resultPlan_(result_(checked, "guard_mismatch", null, "target_anchor_missing", null));
+      return resultPlan_(result_(checked, "guard_mismatch", null, "target_identity_missing", null));
     }
     var deletionSchemaError = validateDeletion_(targetContext.layout, checked);
     if (deletionSchemaError !== null) {
@@ -432,7 +415,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var receipt = receiptsForRead[checked.effectId] || null;
     var row = findRow_(
       targetContext,
-      checked.payload.targetAnchor,
       checked.targetId,
       checked.targetIdentity,
     );
@@ -515,7 +497,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       expectedVisibleHash: expectedVisibleHash,
       repairGuardHash: rawEffect.repairGuardHash,
       payload: {
-        targetAnchor: string_(payload.targetAnchor, "targetAnchor"),
         targetVisibleHash: payload.targetVisibleHash,
         createIfMissing: payload.createIfMissing,
         expectedCandidateHash: payload.expectedCandidateHash,
@@ -605,11 +586,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     target.getRange(rows[0].rowNumber, targetLayout.startColumn, rows.length, targetLayout.columnCount).setValues(rows.map(function (row) {
       return targetLayout.headers.map(function (header) { return toSheetValue_(row.cells[header]); });
     }));
-    if (args.projection !== "user_input") {
-      rows.forEach(function (row) {
-        target.getRange(row.rowNumber + ":" + row.rowNumber).addDeveloperMetadata(ANCHOR_KEY, row.physicalAnchor, SpreadsheetApp.DeveloperMetadataVisibility.PROJECT);
-      });
-    }
     if (Array.isArray(checkboxHeaders)) checkboxHeaders.forEach(function (header) {
       var position = targetLayout.positions[header];
       if (position === undefined) throw new Error("checkbox header is not registered: " + header);
@@ -638,12 +614,6 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     target.getRange(row.rowNumber, targetLayout.positions[fields[0]], 1, fields.length).setValues([
       fields.map(function (fieldName) { return toSheetValue_(row.writeFields[fieldName]); }),
     ]);
-  }
-
-  function readAnchors_(target, rowNumber) {
-    return target.getRange(rowNumber + ":" + rowNumber).getDeveloperMetadata().filter(function (metadata) {
-      return metadata.getKey() === ANCHOR_KEY;
-    }).map(function (metadata) { return String(metadata.getValue()); });
   }
 
   function parseRange_(value) {
