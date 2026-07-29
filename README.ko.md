@@ -6,12 +6,12 @@
 
 **Google Sheets 기반 MVP를 위한 타입 안전 리포지토리 및 안전한 쓰기 계층**
 
-<a href="https://www.npmjs.com/package/typed-sheets">npm 패키지</a> ·
-<a href="https://github.com/ManddarinShop/google-sheets-orm/issues">이슈</a> ·
+<a href="https://www.npmjs.com/package/hikoutei">npm 패키지</a> ·
+<a href="https://github.com/ManddarinShop/Hikoutei/issues">이슈</a> ·
 <a href="apps-script/gateway/Code.gs">Apps Script Gateway</a>
 
-[![npm version](https://img.shields.io/npm/v/typed-sheets?style=flat-square)](https://www.npmjs.com/package/typed-sheets)
-[![license](https://img.shields.io/npm/l/typed-sheets?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
+[![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 </div>
@@ -34,10 +34,10 @@ Hikoutei의 범위는 의도적으로 작습니다. 범용 데이터베이스 �
 
 ## 설치
 
-프로젝트 이름은 Hikoutei이며, 현재 npm 패키지 이름은 `typed-sheets`입니다.
+프로젝트와 npm 패키지 이름은 모두 `hikoutei`입니다.
 
 ```sh
-npm install typed-sheets @mikro-orm/core @mikro-orm/sql
+npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
 MikroORM 패키지는 루트 패키지의 선택적 peer dependency이지만, Hikoutei의
@@ -49,7 +49,7 @@ MikroORM 패키지는 루트 패키지의 선택적 peer dependency이지만, Hi
 Gateway 설정은 [빠른 시작 가이드](docs/quick-start.md)에 있습니다.
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
+import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
 import { User } from "./entities/User.js";
 import { userMapping } from "./mappings/userMapping.js";
 
@@ -130,7 +130,7 @@ Gateway 시크릿은 서버에만 보관하세요. 브라우저 코드에 넣거
 - 레지스트리 및 Apps Script 배포를 위한 설정 도구 추가.
 - 공개 패키지 릴리스 안정화.
 
-현재 작업은 [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues)
+현재 작업은 [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
 에서 확인할 수 있습니다.
 
 ## 라이선스
