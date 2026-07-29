@@ -8,20 +8,18 @@
 
 import { stableHash, type NormalizedCell } from "../../../../domain/index.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import {
+  insertMappedActiveBusinessKeyWithSql,
+  readMappedActiveBusinessKeyWithSql,
+  readMappedBusinessKeyOwnerWithSql,
+  retireMappedActiveBusinessKeyWithSql,
+  retireMappedEntityBusinessKeysWithSql,
+} from "../../../../infrastructure/storage/index.js";
 import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
 } from "../../errors.js";
-import {
-  INSERT_ACTIVE_BUSINESS_KEY_SQL,
-  READ_ACTIVE_BUSINESS_KEY_SQL,
-  READ_BUSINESS_KEY_OWNER_SQL,
-  RETIRE_ACTIVE_BUSINESS_KEY_SQL,
-  RETIRE_ENTITY_BUSINESS_KEYS_SQL,
-  type ActiveBusinessKeySqlRow,
-  type BusinessKeyOwnerSqlRow,
-} from "./contracts.js";
 import { requireEncodedField } from "./helpers.js";
 
 /** Claims the mapped entity's normalized business key during creation. */
@@ -42,11 +40,12 @@ export async function rotateBusinessKey(
   entityId: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
 ): Promise<void> {
-  const current = await sql.get<ActiveBusinessKeySqlRow>(READ_ACTIVE_BUSINESS_KEY_SQL, [
+  const current = await readMappedActiveBusinessKeyWithSql(
+    sql,
     mapping.logicalSheetId,
     mapping.businessKey.fieldName,
     entityId,
-  ]);
+  );
   if (current === undefined) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
@@ -55,12 +54,13 @@ export async function rotateBusinessKey(
   }
   const nextNormalizedKey = businessKeyHash(mapping, encodedEntity);
   if (current.normalized_key === nextNormalizedKey) return;
-  const retired = await sql.run(RETIRE_ACTIVE_BUSINESS_KEY_SQL, [
+  const retired = await retireMappedActiveBusinessKeyWithSql(
+    sql,
     mapping.logicalSheetId,
     mapping.businessKey.fieldName,
     current.normalized_key,
     entityId,
-  ]);
+  );
   if (retired.changes !== 1) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
@@ -76,7 +76,11 @@ export async function retireEntityBusinessKeys(
   mapping: TypedSheetsEntityMapping,
   entityId: string,
 ): Promise<void> {
-  const retired = await sql.run(RETIRE_ENTITY_BUSINESS_KEYS_SQL, [mapping.logicalSheetId, entityId]);
+  const retired = await retireMappedEntityBusinessKeysWithSql(
+    sql,
+    mapping.logicalSheetId,
+    entityId,
+  );
   if (retired.changes !== 1) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
@@ -91,11 +95,12 @@ async function ensureBusinessKeyOwner(
   entityId: string,
   normalizedKey: string,
 ): Promise<void> {
-  const owner = await sql.get<BusinessKeyOwnerSqlRow>(READ_BUSINESS_KEY_OWNER_SQL, [
+  const owner = await readMappedBusinessKeyOwnerWithSql(
+    sql,
     mapping.logicalSheetId,
     mapping.businessKey.fieldName,
     normalizedKey,
-  ]);
+  );
   if (owner !== undefined) {
     if (owner.entity_id === entityId) return;
     throw new TypedSheetsOrmError(
@@ -103,12 +108,13 @@ async function ensureBusinessKeyOwner(
       `business key for ${mapping.entityName} is already owned by ${owner.entity_id}.`,
     );
   }
-  const inserted = await sql.run(INSERT_ACTIVE_BUSINESS_KEY_SQL, [
+  const inserted = await insertMappedActiveBusinessKeyWithSql(
+    sql,
     mapping.logicalSheetId,
     mapping.businessKey.fieldName,
     normalizedKey,
     entityId,
-  ]);
+  );
   if (inserted.changes !== 1) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
