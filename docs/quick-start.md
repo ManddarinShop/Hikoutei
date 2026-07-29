@@ -3,10 +3,10 @@
 The application-facing API owns entity definitions and the entity lifecycle.
 The current SQLite provider is an implementation detail behind that API.
 
-The current public runtime supports the local entity lifecycle, SQLite-backed
-outbox planning, outbound worker delivery, and gateway provisioning. The
-User_Input polling and global Conflict resolution flow described in the design
-documents is not yet complete end to end.
+The current runtime supports the local entity lifecycle, SQLite-backed outbox
+planning, outbound worker delivery, gateway provisioning, and the first
+provider-side User_Input polling path. Global Conflict resolution is not yet
+complete end to end.
 
 ## Installation
 
@@ -98,13 +98,15 @@ The route registration is stored in SQLite. If an
 registration definitions for Apps Script provisioning. Provisioning is still
 an explicit remote operation.
 
-## Worker boundary and planned inbound flow
+## Worker boundary and inbound flow
 
 Run the outbound sync worker in a separate process. Its current responsibility
 is to drain the SQLite outbox, claim leases, deliver signed gateway operations,
-and recover uncertain remote writes. The planned inbound loop will additionally
-poll `User_Input`, evaluate observations against SQLite state, and enqueue the
-next projection or a global Conflict row once that feature is implemented.
+and recover uncertain remote writes. The provider-side polling pass can also
+read `User_Input`, evaluate observations against SQLite state, apply accepted
+edits in the same SQLite transaction as their observation ledger, and enqueue
+the next `System_State` projection. A long-running polling supervisor and the
+global Conflict checkbox projection are still separate follow-up work.
 The application server should not read Google Sheets as its source of truth.
 
 ## Gateway setup

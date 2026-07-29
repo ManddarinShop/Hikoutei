@@ -104,8 +104,8 @@ or canonical state into Google Sheets while extending the gateway.
 Use semantic versioning. Before `1.0.0`, breaking changes are allowed but must
 be documented in the README or release notes. A release should describe which
 parts of the public entity API, SQLite provider, outbound worker, and inbound
-design are actually implemented; planned polling or conflict behavior must not
-be presented as a completed feature.
+design are actually implemented; provider-side polling must be distinguished
+from the still-planned public worker loop and Conflict resolution behavior.
 
 ## Pull Request Template
 

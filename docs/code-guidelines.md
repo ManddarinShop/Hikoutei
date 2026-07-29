@@ -158,7 +158,10 @@ Suggested responsibilities:
 - append new System_State rows in a bounded batch
 - apply guarded update/delete effects
 - read postconditions after uncertain writes
-- assign stable anchors and return normalized snapshots
+- assign stable anchors for System_State/reconciliation and return normalized
+  snapshots
+- read User_Input values by its visible business-key column without Developer
+  Metadata access
 
 Do not leak Google SDK response objects into core repository logic.
 
@@ -187,8 +190,8 @@ committed in one SQLite transaction. It does not mean that Google Sheets has
 already converged.
 
 The inbound and conflict rules below are the target policy. The current branch
-contains the persistence and evaluation foundations, but not the complete
-public polling-to-resolution worker flow.
+contains a provider-side one-pass polling-to-evaluation-to-SQLite flow, but not
+the complete public worker loop or Conflict checkbox resolution flow.
 
 User_Input observations use field-level compare-and-set evidence:
 
@@ -237,9 +240,9 @@ Add these only after the base repository model is tested and documented.
 
 Tests should prove behavior through realistic sheet states, not through shallow mocks.
 
-The inbound and conflict cases below are acceptance criteria for the planned
-inbound runtime. They should not be read as a claim that the current public
-runtime already implements every case end to end.
+The inbound and conflict cases below are acceptance criteria for the inbound
+runtime. The accepted-edit and stale-edit polling cases are covered by the
+current provider tests; the remaining Conflict cases are still pending.
 
 Required test categories:
 
