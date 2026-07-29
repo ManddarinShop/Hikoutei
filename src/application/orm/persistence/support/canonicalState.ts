@@ -9,16 +9,10 @@ import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
 import { ROW_BINDING_STATES } from "../../../../domain/model/constants.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
-  commitCanonicalChangesWithSql,
-  insertMappedActiveRowBindingWithSql,
-  readMappedActiveCanonicalEntityWithSql,
-  readMappedCanonicalFieldRevisionsWithSql,
-  readMappedRowBindingWithSql,
-  tombstoneMappedActiveRowBindingWithSql,
   type CanonicalCommitInput,
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { TypedSheetsPersistenceContext } from "../../api/contracts.js";
 import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
@@ -27,27 +21,26 @@ import {
 
 /** Creates the active row binding used by both physical projections. */
 export async function insertActiveRowBinding(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   mapping: TypedSheetsEntityMapping,
   rowBindingId: string,
   entityId: string,
   anchor: string,
 ): Promise<void> {
-  const existing = await readMappedRowBindingWithSql(sql, rowBindingId);
+  const existing = await persistence.readRowBinding(rowBindingId);
   if (existing !== undefined) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
       `row binding ${rowBindingId} already exists for ${mapping.entityName}:${entityId}.`,
     );
   }
-  const inserted = await insertMappedActiveRowBindingWithSql(
-    sql,
+  const inserted = await persistence.insertActiveRowBinding(
     rowBindingId,
     mapping.logicalSheetId,
     anchor,
     entityId,
   );
-  if (inserted.changes !== 1) {
+  if (!inserted) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
       `could not create the row binding for ${mapping.entityName}:${entityId}.`,
@@ -57,18 +50,18 @@ export async function insertActiveRowBinding(
 
 /** Requires the active binding to still match the mapped entity identity. */
 export async function requireActiveRowBinding(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   mapping: TypedSheetsEntityMapping,
   rowBindingId: string,
   entityId: string,
   anchor: string,
 ): Promise<void> {
-  const row = await readMappedRowBindingWithSql(sql, rowBindingId);
+  const row = await persistence.readRowBinding(rowBindingId);
   if (
     row === undefined ||
-    row.logical_sheet_id !== mapping.logicalSheetId ||
-    row.anchor_reference !== anchor ||
-    row.entity_id !== entityId ||
+    row.logicalSheetId !== mapping.logicalSheetId ||
+    row.anchorReference !== anchor ||
+    row.entityId !== entityId ||
     row.state !== ROW_BINDING_STATES.ACTIVE
   ) {
     throw new TypedSheetsOrmError(
@@ -80,30 +73,30 @@ export async function requireActiveRowBinding(
 
 /** Reads the current active canonical entity revision for an update or delete. */
 export async function requireActiveCanonicalEntityRevision(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   mapping: TypedSheetsEntityMapping,
   entityId: string,
 ): Promise<number> {
-  const entity = await readMappedActiveCanonicalEntityWithSql(sql, entityId);
-  if (entity === undefined || !isPositiveSafeInteger(entity.entity_revision)) {
+  const entityRevision = await persistence.readCanonicalEntityRevision(entityId);
+  if (entityRevision === undefined || !isPositiveSafeInteger(entityRevision)) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
       `active canonical state is unavailable for ${mapping.entityName}:${entityId}.`,
     );
   }
-  return entity.entity_revision;
+  return entityRevision;
 }
 
 /** Returns canonical field revisions indexed by field name for update CAS. */
 export async function canonicalFieldRevisions(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   entityId: string,
 ): Promise<ReadonlyMap<string, number>> {
-  const rows = await readMappedCanonicalFieldRevisionsWithSql(sql, entityId);
+  const rows = await persistence.readCanonicalFieldRevisions(entityId);
   const revisions = new Map<string, number>();
   for (const row of rows) {
-    if (isPositiveSafeInteger(row.field_revision)) {
-      revisions.set(row.field_name, row.field_revision);
+    if (isPositiveSafeInteger(row.fieldRevision)) {
+      revisions.set(row.fieldName, row.fieldRevision);
     }
   }
   return revisions;
@@ -111,11 +104,11 @@ export async function canonicalFieldRevisions(
 
 /** Applies a canonical commit or translates its stable result into an ORM error. */
 export async function requireAppliedCanonicalCommit(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   fence: FencingContext,
   commit: CanonicalCommitInput,
 ): Promise<void> {
-  const result = await commitCanonicalChangesWithSql(sql, fence, commit);
+  const result = await persistence.commitCanonicalChanges(fence, commit);
   if (result.kind === CANONICAL_COMMIT_RESULT_KINDS.APPLIED) return;
   if (result.kind === CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT) {
     throw new TypedSheetsOrmError(
@@ -137,18 +130,17 @@ export async function requireAppliedCanonicalCommit(
 
 /** Tombstones a mapped row binding after the canonical delete has committed. */
 export async function tombstoneActiveRowBinding(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   mapping: TypedSheetsEntityMapping,
   rowBindingId: string,
   entityId: string,
 ): Promise<void> {
-  const tombstoned = await tombstoneMappedActiveRowBindingWithSql(
-    sql,
+  const tombstoned = await persistence.tombstoneActiveRowBinding(
     rowBindingId,
     mapping.logicalSheetId,
     entityId,
   );
-  if (tombstoned.changes !== 1) {
+  if (!tombstoned) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
       `could not tombstone the row binding for ${mapping.entityName}:${entityId}.`,

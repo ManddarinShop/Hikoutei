@@ -23,7 +23,7 @@ import {
   claimWriterLeaseWithAdapter,
   recoverExpiredLeasesWithAdapter,
   listReadyEffectsWithAdapter,
-  hasActiveUserInputCandidateWithSql,
+  hasActiveUserInputCandidateWithAdapter,
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
@@ -487,14 +487,14 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
       const rowBindingId = effect.value.rowBindingId;
       const fieldNames = Object.keys(effect.value.payload.fields);
       if (fieldNames.length === 0) return Promise.resolve(true);
-      return storage.read(({ sql }) => hasActiveUserInputCandidateWithSql(sql, {
+      return hasActiveUserInputCandidateWithAdapter(storage, {
         physicalSheetId: effect.value.physicalSheetId,
         projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
         rowBindingId: rowBindingId.value,
         fieldNames,
         openConflictStatus: CONFLICT_STATUSES.OPEN,
         rebasedConflictStatus: CONFLICT_STATUSES.NEEDS_REBASE,
-      }));
+      });
     },
   };
 }

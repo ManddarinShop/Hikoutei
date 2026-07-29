@@ -81,6 +81,7 @@ export type {
   TypedSheetsForkOptions,
   TypedSheetsFlushContext,
   TypedSheetsFlushCoordinator,
+  TypedSheetsPersistenceContext,
   TypedSheetsUpdatedEntityChange,
 } from "./api/contracts.js";
 export type { CreateTypedSheetsOrmOptions } from "./api/TypedSheetsOrm.js";

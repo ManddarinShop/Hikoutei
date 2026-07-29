@@ -14,8 +14,7 @@ import {
 import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-  claimWriterLeaseWithSql,
-  registerSyncSheetWithSql,
+  registerTypedSheetsPersistenceRoutesWithAdapter,
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../sync/gateway/SyncGatewayBootstrap.js";
@@ -74,7 +73,7 @@ export function createMappedTypedSheetsFlushCoordinator(
       const operationCounts = countsForPlans(plans);
       const leaseStartedAt = Date.now();
       const now = writer.now();
-      const claim = await claimWriterLeaseWithSql(context.sql, {
+      const claim = await context.persistence.claimWriterLease({
         role: writer.role,
         writerId: writer.writerId,
         leaseDurationMs: writer.leaseDurationMs,
@@ -101,7 +100,7 @@ export function createMappedTypedSheetsFlushCoordinator(
         now,
       };
       for (const plan of plans) {
-        await applyMappedChange(context.sql, fence, writer, plan);
+        await applyMappedChange(context.persistence, fence, writer, plan);
       }
       emitTiming(writer, {
         scope: SYNC_TIMING_SCOPES.ORM_FLUSH,
@@ -130,43 +129,33 @@ export async function registerTypedSheetsEntityMappings(
   const writer = resolveWriterOptions(writerInput);
   const definitions = createTypedSheetsMappedProjectionDefinitions(mappings.mappings);
 
-  return storage.transaction(async ({ sql }) => {
-    const now = writer.now();
-    const claim = await claimWriterLeaseWithSql(sql, {
-      role: writer.role,
-      writerId: writer.writerId,
-      leaseDurationMs: writer.leaseDurationMs,
-      now,
-    });
-    if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+  const now = writer.now();
+  const result = await registerTypedSheetsPersistenceRoutesWithAdapter(storage, {
+    role: writer.role,
+    writerId: writer.writerId,
+    leaseDurationMs: writer.leaseDurationMs,
+    now,
+  }, definitions.map((definition) => definition.registration));
+  if (result.kind !== "registered") {
+    throw new TypedSheetsOrmError(
+      TYPED_SHEETS_ORM_ERROR_CODES.WRITER_LEASE_UNAVAILABLE,
+      "mapped projection registration lease is unavailable.",
+    );
+  }
+
+  return result.sheets.map((sheet, index) => {
+    const definition = definitions[index];
+    if (definition === undefined) {
       throw new TypedSheetsOrmError(
-        TYPED_SHEETS_ORM_ERROR_CODES.WRITER_LEASE_UNAVAILABLE,
-        `mapped projection registration lease is unavailable: ${claim.reason}.`,
+        TYPED_SHEETS_ORM_ERROR_CODES.INVALID_ENTITY_MAPPING,
+        "mapped projection registration result count does not match its definitions.",
       );
     }
-    const fence: FencingContext = {
-      role: claim.lease.role,
-      writerEpoch: claim.lease.writerEpoch,
-      fencingToken: claim.lease.fencingToken,
-      now,
+    return {
+      mapping: definition.mapping,
+      sheet,
+      headers: definition.headers,
     };
-
-    const registered: RegisteredTypedSheetsMappedProjection[] = [];
-    for (const definition of definitions) {
-      const result = await registerSyncSheetWithSql(sql, fence, definition.registration);
-      if (result.kind !== "registered") {
-        throw new TypedSheetsOrmError(
-          TYPED_SHEETS_ORM_ERROR_CODES.WRITER_LEASE_UNAVAILABLE,
-          `writer lease was lost while registering ${definition.projection.physicalSheetId}.`,
-        );
-      }
-      registered.push({
-        mapping: definition.mapping,
-        sheet: result.sheet,
-        headers: definition.headers,
-      });
-    }
-    return registered;
   });
 }
 

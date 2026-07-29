@@ -132,17 +132,36 @@ export type {
   MappedVisibleProjectionSqlRow,
   MappedLatestProjectionEffectSqlRow,
 } from "./state/mapped/mappedPersistenceSql.js";
+export {
+  createTypedSheetsPersistenceContext,
+  registerTypedSheetsPersistenceRoutesWithAdapter,
+} from "./state/mapped/mappedPersistenceContext.js";
+export type {
+  TypedSheetsPersistenceBusinessKey,
+  TypedSheetsPersistenceContext,
+  TypedSheetsPersistenceFieldRevision,
+  TypedSheetsPersistenceLatestEffect,
+  TypedSheetsPersistenceRegistrationResult,
+  TypedSheetsPersistenceRowBinding,
+  TypedSheetsPersistenceVisibleState,
+} from "./state/mapped/mappedPersistenceContext.js";
 
 export {
+  readReconciliationCorrectionStateWithAdapter,
+  readReconciliationDesiredSystemStateWithAdapter,
   readReconciliationDesiredSystemStateWithSql,
   readReconciliationVisibleStateWithSql,
   readReconciliationLatestEffectWithSql,
 } from "./sync/outbound/reconciliationSql.js";
 export type {
-  ReconciliationDesiredSystemStateSqlRow,
-  ReconciliationVisibleStateSqlRow,
-  ReconciliationLatestEffectSqlRow,
+  ReconciliationCorrectionState,
+  ReconciliationDesiredSystemStateRow,
+  ReconciliationLatestEffect,
+  ReconciliationVisibleState,
 } from "./sync/outbound/reconciliationSql.js";
 
-export { hasActiveUserInputCandidateWithSql } from "./sync/outbound/effectWorkerSql.js";
+export {
+  hasActiveUserInputCandidateWithAdapter,
+  hasActiveUserInputCandidateWithSql,
+} from "./sync/outbound/effectWorkerSql.js";
 export type { UserInputCandidateGuardQuery } from "./sync/outbound/effectWorkerSql.js";
