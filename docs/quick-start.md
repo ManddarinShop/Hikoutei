@@ -1,12 +1,12 @@
 # Hikoutei Quick Start
 
 The project is called Hikoutei and is currently published on npm as
-`typed-sheets`.
+`hikoutei`.
 
 ## Installation
 
 ```sh
-npm install typed-sheets @mikro-orm/core @mikro-orm/sql
+npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
 The MikroORM packages are optional peer dependencies of the root package. They
@@ -19,8 +19,8 @@ unit of work.
 
 ```ts
 import { defineEntity, p } from "@mikro-orm/sql";
-import { defineTypedSheetsEntityMapping } from "typed-sheets/orm";
-import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
+import { defineTypedSheetsEntityMapping } from "hikoutei/orm";
+import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
 
 const OrderSchema = defineEntity({
   name: "Order",
