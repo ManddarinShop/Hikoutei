@@ -175,7 +175,6 @@ function decodeObservedSnapshot(value: unknown): SyncObservedSnapshot {
   const record = requireRecord(value, "combined observation result");
   const timing = decodeOptionalSyncGatewayTiming(record.timing, "observation timing");
   const result: SyncObservedSnapshot = {
-    anchors: decodeEnsureRowAnchorsResult(record.anchors),
     snapshot: decodeSnapshot(record.snapshot),
   };
   return timing === undefined ? result : { ...result, timing };
@@ -221,13 +220,6 @@ function decodeSnapshot(value: unknown): SyncGatewaySnapshot {
     ),
     headers,
     rows,
-    snapshotHash: requireSyncGatewayText(
-      record.snapshotHash,
-      "snapshot snapshotHash",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-    unanchoredRows: decodePositiveIntegerArray(record.unanchoredRows, "snapshot unanchoredRows"),
-    duplicateAnchors: decodeDuplicateAnchors(record.duplicateAnchors),
   };
 }
 
@@ -249,14 +241,6 @@ function decodeSnapshotRows(value: unknown): SyncGatewaySnapshot["rows"] {
       physicalAnchor: decodePresenceString(
         record.physicalAnchor,
         "snapshot row[" + index + "].physicalAnchor",
-      ),
-      visibleRevision: decodePresenceNonNegativeInteger(
-        record.visibleRevision,
-        "snapshot row[" + index + "].visibleRevision",
-      ),
-      visibleHash: decodePresenceString(
-        record.visibleHash,
-        "snapshot row[" + index + "].visibleHash",
       ),
       cells: decodeSnapshotCells(record.cells, index),
     };
@@ -285,10 +269,6 @@ function decodeSnapshotCells(
     cells[fieldName] = {
       cellKind,
       normalizedCell: decodeNormalizedCell(cell.normalizedCell, fieldName),
-      formulaHash: decodePresenceString(cell.formulaHash, fieldName + ".formulaHash"),
-      mergeRange: decodePresenceString(cell.mergeRange, fieldName + ".mergeRange"),
-      errorCode: decodePresenceString(cell.errorCode, fieldName + ".errorCode"),
-      stableHash: decodePresenceString(cell.stableHash, fieldName + ".stableHash"),
     };
   }
   return cells;
@@ -332,19 +312,7 @@ function decodePresenceString(value: unknown, label: string): Presence<string> {
   };
 }
 
-function decodePresenceNonNegativeInteger(value: unknown, label: string): Presence<number> {
-  if (value === null) return { kind: PRESENCE_KINDS.ABSENT };
-  return {
-    kind: PRESENCE_KINDS.PRESENT,
-    value: requireSyncGatewayNonNegativeSafeInteger(
-      value,
-      label,
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-  };
-}
-
-function decodeDuplicateAnchors(value: unknown): SyncGatewaySnapshot["duplicateAnchors"] {
+function decodeDuplicateAnchors(value: unknown): EnsureSyncRowAnchorsResult["duplicateAnchors"] {
   if (!Array.isArray(value)) {
     return invalidOperationResponse(
       "Apps Script observation operation",
@@ -526,7 +494,7 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var anchorsByRow = readAnchorIndex_(targetSheet);
     phase_("anchor_metadata_read", metadataReadStartedAt);
     var anchorAssignmentStartedAt = Date.now();
-    var anchorResult = ensureAnchorsFromValues_(
+    ensureAnchorsFromValues_(
       targetSheet,
       targetLayout,
       values.slice(1),
@@ -542,7 +510,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     });
     phase_("snapshot_build", snapshotStartedAt);
     return {
-      anchors: anchorResult,
       snapshot: snapshot,
     };
   }
@@ -567,8 +534,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       ? prepared.anchorsByRow
       : readAnchorIndex_(targetSheet);
     var rows = [];
-    var unanchoredRows = [];
-    var anchorRows = Object.create(null);
     var rowNormalizationStartedAt = Date.now();
     for (var rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
       if (isBlankRow_(values[rowIndex], targetLayout.checkboxIndexes)) continue;
@@ -576,11 +541,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       var anchors = anchorsByRow[rowNumber] || [];
       var anchor = anchors.length === 1 ? anchors[0] : null;
       if (anchors.length > 1) throw new Error("row has multiple sync anchors: " + rowNumber);
-      if (anchor === null) unanchoredRows.push(rowNumber);
-      else {
-        if (!anchorRows[anchor]) anchorRows[anchor] = [];
-        anchorRows[anchor].push(rowNumber);
-      }
       var cells = Object.create(null);
       targetLayout.headers.forEach(function (header, columnIndex) {
         var coordinate = rowNumber + ":" + (targetLayout.startColumn + columnIndex);
@@ -589,24 +549,15 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
           lightweight ? "" : formulas[rowIndex][columnIndex],
           lightweight ? String(values[rowIndex][columnIndex]) : displayValues[rowIndex][columnIndex],
           lightweight ? null : merged[coordinate] || null,
-          lightweight,
         );
       });
       rows.push({
         rowNumber: rowNumber,
         physicalAnchor: anchor,
-        visibleRevision: null,
-        visibleHash: null,
         cells: cells,
       });
     }
     phase_("row_normalization", rowNormalizationStartedAt);
-    var duplicateAnchorStartedAt = Date.now();
-    var duplicateAnchors = [];
-    Object.keys(anchorRows).sort().forEach(function (anchor) {
-      if (anchorRows[anchor].length > 1) duplicateAnchors.push({ anchor: anchor, rowNumbers: anchorRows[anchor] });
-    });
-    phase_("duplicate_anchor_scan", duplicateAnchorStartedAt);
     var snapshot = {
       protocolVersion: "typed-sheets-sync-v1",
       sheetName: request.sheetName,
@@ -616,9 +567,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       headers: targetLayout.headers,
       rows: rows,
     };
-    var snapshotHashStartedAt = Date.now();
-    var snapshotHash = stableHash_(snapshot);
-    phase_("snapshot_hash", snapshotHashStartedAt);
     return {
       protocolVersion: snapshot.protocolVersion,
       sheetName: snapshot.sheetName,
@@ -627,9 +575,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       schemaVersion: snapshot.schemaVersion,
       headers: snapshot.headers,
       rows: snapshot.rows,
-      snapshotHash: snapshotHash,
-      unanchoredRows: unanchoredRows,
-      duplicateAnchors: duplicateAnchors,
     };
   }
 
@@ -693,19 +638,18 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     });
   }
 
-  function normalizeCellObservation_(rawValue, formula, displayValue, mergeRange, lightweight) {
-    var formulaHash = formula ? sha256Hex_(formula) : null;
-    if (mergeRange !== null) return { cellKind: "merged", normalizedCell: null, formulaHash: formulaHash, mergeRange: mergeRange, errorCode: null, stableHash: null };
-    if (isDisplayedSheetError_(displayValue)) return { cellKind: "error", normalizedCell: null, formulaHash: formulaHash, mergeRange: null, errorCode: String(displayValue), stableHash: null };
-    if (formula) return { cellKind: "formula", normalizedCell: null, formulaHash: formulaHash, mergeRange: null, errorCode: null, stableHash: null };
+  function normalizeCellObservation_(rawValue, formula, displayValue, mergeRange) {
+    if (mergeRange !== null) return { cellKind: "merged", normalizedCell: null };
+    if (isDisplayedSheetError_(displayValue)) return { cellKind: "error", normalizedCell: null };
+    if (formula) return { cellKind: "formula", normalizedCell: null };
     var normalized;
     if (rawValue === "" || rawValue === null) normalized = null;
     else if (isDate_(rawValue)) normalized = { kind: "date", value: rawValue.toISOString() };
     else if (typeof rawValue === "string") normalized = { kind: "string", value: normalizeScalarString_(rawValue) };
     else if (typeof rawValue === "number" && isFinite(rawValue)) normalized = { kind: "number", value: rawValue };
     else if (typeof rawValue === "boolean") normalized = { kind: "boolean", value: rawValue };
-    else return { cellKind: "error", normalizedCell: null, formulaHash: null, mergeRange: null, errorCode: "unsupported_cell_value", stableHash: null };
-    return { cellKind: normalized === null ? "blank" : "literal", normalizedCell: normalized, formulaHash: null, mergeRange: null, errorCode: null, stableHash: lightweight ? null : stableHash_(normalized) };
+    else return { cellKind: "error", normalizedCell: null };
+    return { cellKind: normalized === null ? "blank" : "literal", normalizedCell: normalized };
   }
 
   function mergedCellMap_(targetRange) {
@@ -728,26 +672,4 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function isObject_(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
   function requireObject_(value, label) { if (!isObject_(value)) throw new Error(label + " must be an object"); return value; }
   function normalizeScalarString_(value) { return value.normalize("NFC"); }
-  function sha256Hex_(value) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8).map(function (byte) { var unsigned = byte < 0 ? byte + 256 : byte; return ("0" + unsigned.toString(16)).slice(-2); }).join(""); }
-  function stableHash_(value) { return sha256Hex_(stableEncode_(value)); }
-  function stableEncode_(value) {
-    if (value === null) return "n";
-    if (value === true) return "b1";
-    if (value === false) return "b0";
-    if (typeof value === "number") return stableEncodeNumber_(value);
-    if (typeof value === "string") return stableEncodeString_(value);
-    if (isObject_(value) && value.kind === "date" && typeof value.value === "string") return "d24:" + value.value;
-    if (Array.isArray(value)) return "a" + value.length + "[" + value.map(stableEncode_).join("") + "]";
-    if (isObject_(value)) {
-      var entries = Object.keys(value).map(function (key) { var normalized = normalizeScalarString_(key); return { key: normalized, bytes: utf8Bytes_(normalized), value: value[key] }; });
-      entries.sort(function (left, right) { return compareBytes_(left.bytes, right.bytes); });
-      return "o" + entries.length + "{" + entries.map(function (entry) { return "s" + entry.bytes.length + ":" + entry.key + stableEncode_(entry.value); }).join("") + "}";
-    }
-    throw new Error("stable value is unsupported");
-  }
-  function stableEncodeNumber_(value) { if (!isFinite(value)) throw new Error("stable number is not finite"); var decimal = value === 0 ? "0" : String(value).replace(/e\+/, "e").replace(/e(-?)0+(\d+)/, "e$1$2"); return "f" + utf8ByteLength_(decimal) + ":" + decimal; }
-  function stableEncodeString_(value) { var normalized = normalizeScalarString_(value); return "s" + utf8ByteLength_(normalized) + ":" + normalized; }
-  function utf8Bytes_(value) { return Utilities.newBlob(value).getBytes(); }
-  function utf8ByteLength_(value) { return utf8Bytes_(value).length; }
-  function compareBytes_(left, right) { var count = Math.min(left.length, right.length); for (var index = 0; index < count; index += 1) { var a = left[index] < 0 ? left[index] + 256 : left[index]; var b = right[index] < 0 ? right[index] + 256 : right[index]; if (a !== b) return a - b; } return left.length - right.length; }
 }`;

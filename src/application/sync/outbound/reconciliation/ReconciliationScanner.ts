@@ -30,13 +30,18 @@ import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js"
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
+  readReconciliationCorrectionStateWithAdapter,
+  readReconciliationDesiredSystemStateWithAdapter,
   requireRegisteredSyncSheetWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
   type NewEffect,
+  type ReconciliationCorrectionState,
+  type ReconciliationDesiredSystemStateRow,
+  type ReconciliationVisibleState,
 } from "../../../../infrastructure/storage/index.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshot,
@@ -110,63 +115,6 @@ interface DesiredRow {
   readonly fields: Readonly<Record<string, NormalizedCell>>;
   readonly fieldRevisionHash: string;
 }
-
-interface DesiredRowSqlShape {
-  readonly entity_id: string;
-  readonly row_binding_id: string;
-  readonly anchor_reference: string;
-  readonly entity_revision: number;
-  readonly field_name: string;
-  readonly normalized_value: string;
-  readonly ownership: string;
-}
-
-interface LatestVisibleSqlShape {
-  readonly confirmed_visible_revision: number | null;
-  readonly confirmed_snapshot_hash: string | null;
-}
-
-interface LatestEffectSqlShape {
-  readonly stream_sequence: number | null;
-  readonly expected_visible_revision: number | null;
-  readonly expected_visible_hash: string | null;
-  readonly status: string;
-  readonly payload_json: string | null;
-}
-
-const READ_DESIRED_SYSTEM_STATE_SQL = `
-  SELECT
-    entity.entity_id              AS entity_id,
-    binding.row_binding_id        AS row_binding_id,
-    binding.anchor_reference      AS anchor_reference,
-    entity.entity_revision        AS entity_revision,
-    field.field_name              AS field_name,
-    field.normalized_value        AS normalized_value,
-    field.ownership               AS ownership
-  FROM entity_state AS entity
-  JOIN row_binding AS binding
-    ON binding.entity_id = entity.entity_id
-   AND binding.logical_sheet_id = ?
-   AND binding.state = 'active'
-  JOIN entity_field_state AS field
-    ON field.entity_id = entity.entity_id
-  WHERE entity.status = 'active'
-  ORDER BY entity.entity_id, field.field_name
-`;
-
-const READ_LATEST_VISIBLE_STATE_SQL = `
-  SELECT confirmed_visible_revision, confirmed_snapshot_hash
-  FROM sheet_visible_state
-  WHERE physical_sheet_id = ? AND projection = 'system_state' AND row_binding_id = ?
-`;
-
-const READ_LATEST_EFFECT_SQL = `
-  SELECT stream_sequence, expected_visible_revision, expected_visible_hash, status, payload_json
-  FROM sheet_effect_outbox
-  WHERE logical_sheet_id = ? AND target_kind = 'entity' AND target_id = ?
-  ORDER BY stream_sequence DESC
-  LIMIT 1
-`;
 
 /**
  * Runs one reconciliation scan and enqueues correction effects for drift.
@@ -283,7 +231,7 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     });
   }
 
-  const effects = await buildCorrectionEffects(context, sheet, drifts, fence);
+  const effects = await buildCorrectionEffects(context, sheet, drifts);
   if (effects.length === 0) {
     return freezeReport(context.physicalSheetId, snapshot, desired, {
       matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
@@ -398,35 +346,35 @@ function computeObservedHash(
 }
 
 async function readDesiredSystemState(context: ScanContext): Promise<readonly DesiredRow[]> {
-  return context.storage.read(({ sql }) => readDesiredSystemStateWithSql(sql, context));
+  const rows = await readReconciliationDesiredSystemStateWithAdapter(
+    context.storage,
+    context.logicalSheetId,
+  );
+  return buildDesiredSystemState(rows, context);
 }
 
-async function readDesiredSystemStateWithSql(
-  sql: SqlExecutor,
+function buildDesiredSystemState(
+  rows: readonly ReconciliationDesiredSystemStateRow[],
   context: ScanContext,
-): Promise<readonly DesiredRow[]> {
-  const rows = await sql.all<DesiredRowSqlShape>(READ_DESIRED_SYSTEM_STATE_SQL, [
-    context.logicalSheetId,
-  ]);
-
+): readonly DesiredRow[] {
   const byEntity = new Map<string, DesiredRow>();
   for (const row of rows) {
-    const existing = byEntity.get(row.entity_id);
-    const cell = decodeNormalizedCell(row.normalized_value);
+    const existing = byEntity.get(row.entityId);
+    const cell = decodeNormalizedCell(row.normalizedValue);
     if (existing === undefined) {
       const fields: Record<string, NormalizedCell> = {};
-      fields[row.field_name] = cell;
-      byEntity.set(row.entity_id, {
-        entityId: row.entity_id,
-        rowBindingId: row.row_binding_id,
-        anchorReference: row.anchor_reference,
-        entityRevision: row.entity_revision,
+      fields[row.fieldName] = cell;
+      byEntity.set(row.entityId, {
+        entityId: row.entityId,
+        rowBindingId: row.rowBindingId,
+        anchorReference: row.anchorReference,
+        entityRevision: row.entityRevision,
         fields,
         fieldRevisionHash: "",
       });
       continue;
     }
-    (existing.fields as Record<string, NormalizedCell>)[row.field_name] = cell;
+    (existing.fields as Record<string, NormalizedCell>)[row.fieldName] = cell;
   }
 
   const desired: DesiredRow[] = [];
@@ -483,7 +431,6 @@ async function buildCorrectionEffects(
   context: ScanContext,
   sheet: { readonly tabName: string; readonly registeredRange: string },
   drifts: readonly DriftTarget[],
-  fence: FencingContext,
 ): Promise<readonly NewEffect[]> {
   const effects: NewEffect[] = [];
   const commitId = "reconciliation:" + context.createId();
@@ -537,25 +484,25 @@ async function resolveCorrectionBaseline(
   context: ScanContext,
   desired: DesiredRow,
 ): Promise<CorrectionBaseline> {
-  return context.storage.read(({ sql }) =>
-    resolveCorrectionBaselineWithSql(sql, context, desired),
-  );
+  const state = await readReconciliationCorrectionStateWithAdapter(context.storage, {
+    logicalSheetId: context.logicalSheetId,
+    physicalSheetId: context.physicalSheetId,
+    entityId: desired.entityId,
+    rowBindingId: desired.rowBindingId,
+  });
+  return resolveCorrectionBaselineFromState(state, desired);
 }
 
-async function resolveCorrectionBaselineWithSql(
-  sql: SqlExecutor,
-  context: ScanContext,
+function resolveCorrectionBaselineFromState(
+  state: ReconciliationCorrectionState,
   desired: DesiredRow,
-): Promise<CorrectionBaseline> {
-  const latestEffect = await sql.get<LatestEffectSqlShape>(READ_LATEST_EFFECT_SQL, [
-    context.logicalSheetId,
-    desired.entityId,
-  ]);
+): CorrectionBaseline {
+  const latestEffect = state.latestEffect;
 
-  if (latestEffect !== undefined && latestEffect.stream_sequence !== null) {
-    const streamSequence = latestEffect.stream_sequence + 1;
+  if (latestEffect !== undefined && latestEffect.streamSequence !== null) {
+    const streamSequence = latestEffect.streamSequence + 1;
     if (latestEffect.status === "pending" || latestEffect.status === "processing") {
-      const payload = latestEffect.payload_json;
+      const payload = latestEffect.payloadJson;
       const expectedHash =
         payload === null ? "" : extractTargetVisibleHash(payload);
       if (expectedHash === computeSyncVisibleHash(desired.fields)) {
@@ -564,7 +511,7 @@ async function resolveCorrectionBaselineWithSql(
         // first item is waiting for the gateway or its recovery read-back.
         return {
           skip: true,
-          expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
+          expectedVisibleRevision: (latestEffect.expectedVisibleRevision ?? 0) + 1,
           expectedVisibleHash: expectedHash,
           createIfMissing: false,
           streamSequence,
@@ -572,35 +519,27 @@ async function resolveCorrectionBaselineWithSql(
       }
       return {
         skip: false,
-        expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
+        expectedVisibleRevision: (latestEffect.expectedVisibleRevision ?? 0) + 1,
         expectedVisibleHash: expectedHash,
         createIfMissing: false,
         streamSequence,
       };
     }
-    const visible = await sql.get<LatestVisibleSqlShape>(READ_LATEST_VISIBLE_STATE_SQL, [
-      context.physicalSheetId,
-      desired.rowBindingId,
-    ]);
-    return baselineFromVisible(visible, streamSequence);
+    return baselineFromVisible(state.visibleState, streamSequence);
   }
 
-  const visible = await sql.get<LatestVisibleSqlShape>(READ_LATEST_VISIBLE_STATE_SQL, [
-    context.physicalSheetId,
-    desired.rowBindingId,
-  ]);
-  return baselineFromVisible(visible, POSITIVE_SAFE_INTEGER_MINIMUM);
+  return baselineFromVisible(state.visibleState, POSITIVE_SAFE_INTEGER_MINIMUM);
 }
 
 function baselineFromVisible(
-  visible: LatestVisibleSqlShape | undefined,
+  visible: ReconciliationVisibleState | undefined,
   streamSequence: number,
 ): CorrectionBaseline {
   if (
     visible === undefined ||
-    visible.confirmed_visible_revision === null ||
-    visible.confirmed_snapshot_hash === null ||
-    visible.confirmed_snapshot_hash.length === 0
+    visible.confirmedVisibleRevision === null ||
+    visible.confirmedSnapshotHash === null ||
+    visible.confirmedSnapshotHash.length === 0
   ) {
     return {
       skip: false,
@@ -612,8 +551,8 @@ function baselineFromVisible(
   }
   return {
     skip: false,
-    expectedVisibleRevision: visible.confirmed_visible_revision,
-    expectedVisibleHash: visible.confirmed_snapshot_hash,
+    expectedVisibleRevision: visible.confirmedVisibleRevision,
+    expectedVisibleHash: visible.confirmedSnapshotHash,
     createIfMissing: false,
     streamSequence,
   };

@@ -1,9 +1,14 @@
-export { CURRENT_SCHEMA_VERSION, migrateSchema, schemaDdl } from "./sqlite/schema.js";
-export type { SchemaMigrationResult } from "./sqlite/schema.js";
+/**
+ * Internal adapter-backed storage surface.
+ *
+ * The application and worker layers use caller-owned SQL or an explicit
+ * SqlStorageAdapter transaction. Every exported storage operation is async
+ * and adapter-backed; provider-specific SQL details stay behind this barrel.
+ */
+
 export {
   CANONICAL_COMMIT_RESULT_KINDS,
   CANONICAL_COMMIT_STALE_TARGETS,
-  commitCanonicalChanges,
   commitCanonicalChangesWithAdapter,
   commitCanonicalChangesWithSql,
 } from "./state/canonical/canonicalCommit.js";
@@ -16,25 +21,14 @@ export type {
   CanonicalUpdateCommitInput,
   CanonicalDeleteCommitInput,
 } from "./state/canonical/canonicalCommit.js";
+
 export {
-  openDatabase,
-  openReadOnlyDatabase,
-  getDatabaseSync,
-  withImmediateTransaction,
-} from "./sqlite/sqliteBridge.js";
-export type { DatabaseSyncLike, StatementLike } from "./sqlite/sqliteBridge.js";
-export {
-  claimWriterLease,
   claimWriterLeaseWithAdapter,
   claimWriterLeaseWithSql,
-  readWriterLease,
   readWriterLeaseWithAdapter,
   readWriterLeaseWithSql,
-  isFencingValid,
   isFencingValidWithAdapter,
   isFencingValidWithSql,
-} from "./sync/shared/writerLease.js";
-export {
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "./sync/shared/writerLease.js";
@@ -46,37 +40,29 @@ export type {
   WriterLeaseClaimResult,
   WriterLeaseClaimResultKind,
 } from "./sync/shared/writerLease.js";
+
 export {
-  claimEffect,
   claimEffectWithAdapter,
   claimEffectWithSql,
-  applyEffectResult,
   applyEffectResultWithAdapter,
   applyEffectResultWithSql,
-  supersedeAndReplan,
   supersedeAndReplanWithAdapter,
   supersedeAndReplanWithSql,
-  recoverExpiredLeases,
   recoverExpiredLeasesWithAdapter,
   recoverExpiredLeasesWithSql,
-  releaseUnprocessedEffect,
   releaseUnprocessedEffectWithAdapter,
   releaseUnprocessedEffectWithSql,
-  retryClaimedEffect,
   retryClaimedEffectWithAdapter,
   retryClaimedEffectWithSql,
-  findPendingEffectsByTarget,
   findPendingEffectsByTargetWithAdapter,
   findPendingEffectsByTargetWithSql,
-  listReadyEffects,
   listReadyEffectsWithAdapter,
   listReadyEffectsWithSql,
-  hasPendingOrProcessingEffects,
   hasPendingOrProcessingEffectsWithAdapter,
   hasPendingOrProcessingEffectsWithSql,
-  appendPendingEffects,
   appendPendingEffectsWithAdapter,
   appendPendingEffectsWithSql,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES,
 } from "./sync/outbound/effectOutbox.js";
 export type {
   ClaimResult,
@@ -87,9 +73,8 @@ export type {
   PendingEffect,
   RetryClaimedEffectOptions,
 } from "./sync/outbound/effectOutbox.js";
-export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./sync/outbound/effectOutbox.js";
+
 export {
-  persistObservedRow,
   persistObservedRowWithAdapter,
   persistObservedRowWithSql,
 } from "./state/observation/observationWriter.js";
@@ -101,8 +86,8 @@ export type {
   PersistObservedRowInput,
   PersistObservedRowResult,
 } from "./state/observation/observationWriter.js";
+
 export {
-  persistResolutionCommand,
   persistResolutionCommandWithAdapter,
   persistResolutionCommandWithSql,
 } from "./state/resolution/resolutionWriter.js";
@@ -110,11 +95,10 @@ export type {
   PersistResolutionCommandInput,
   PersistResolutionCommandResult,
 } from "./state/resolution/resolutionWriter.js";
+
 export {
-  registerSyncSheet,
   registerSyncSheetWithAdapter,
   registerSyncSheetWithSql,
-  requireRegisteredSyncSheet,
   requireRegisteredSyncSheetWithAdapter,
   requireRegisteredSyncSheetWithSql,
 } from "./sync/shared/syncRegistry.js";
@@ -124,27 +108,60 @@ export type {
   RegisteredSyncSheet,
   RegisterSyncSheetResult,
 } from "./sync/shared/syncRegistry.js";
+
 export {
-  persistReadOnlySnapshotObservation,
-  persistReadOnlySnapshotObservationWithAdapter,
-  persistReadOnlySnapshotObservationWithSql,
-} from "./state/readonly/readOnlyObservation.js";
+  readMappedRowBindingWithSql,
+  insertMappedActiveRowBindingWithSql,
+  tombstoneMappedActiveRowBindingWithSql,
+  readMappedActiveCanonicalEntityWithSql,
+  readMappedCanonicalFieldRevisionsWithSql,
+  readMappedActiveBusinessKeyWithSql,
+  readMappedBusinessKeyOwnerWithSql,
+  insertMappedActiveBusinessKeyWithSql,
+  retireMappedActiveBusinessKeyWithSql,
+  retireMappedEntityBusinessKeysWithSql,
+  readMappedVisibleProjectionStateWithSql,
+  readMappedLatestProjectionEffectWithSql,
+} from "./state/mapped/mappedPersistenceSql.js";
 export type {
-  ReadOnlySnapshotObservationInput,
-  ReadOnlySnapshotObservationResult,
-} from "./state/readonly/readOnlyObservation.js";
+  MappedRowBindingSqlRow,
+  MappedCanonicalEntitySqlRow,
+  MappedCanonicalFieldRevisionSqlRow,
+  MappedActiveBusinessKeySqlRow,
+  MappedBusinessKeyOwnerSqlRow,
+  MappedVisibleProjectionSqlRow,
+  MappedLatestProjectionEffectSqlRow,
+} from "./state/mapped/mappedPersistenceSql.js";
 export {
-  inspectRestoredBackup,
-  beginRestoreReconciliation,
-  completeRestoreReconciliation,
-  requireRestoreAllowsSheetWrites,
-} from "./recovery/restoreRecovery.js";
+  createTypedSheetsPersistenceContext,
+  registerTypedSheetsPersistenceRoutesWithAdapter,
+} from "./state/mapped/mappedPersistenceContext.js";
 export type {
-  RestoreInspection,
-  BeginRestoreReconciliationOptions,
-  RestoreReconciliation,
-  RestoreEffectDisposition,
-  RestoreEffectReconciliation,
-  CompleteRestoreReconciliationOptions,
-  ReadyRestore,
-} from "./recovery/restoreRecovery.js";
+  TypedSheetsPersistenceBusinessKey,
+  TypedSheetsPersistenceContext,
+  TypedSheetsPersistenceFieldRevision,
+  TypedSheetsPersistenceLatestEffect,
+  TypedSheetsPersistenceRegistrationResult,
+  TypedSheetsPersistenceRowBinding,
+  TypedSheetsPersistenceVisibleState,
+} from "./state/mapped/mappedPersistenceContext.js";
+
+export {
+  readReconciliationCorrectionStateWithAdapter,
+  readReconciliationDesiredSystemStateWithAdapter,
+  readReconciliationDesiredSystemStateWithSql,
+  readReconciliationVisibleStateWithSql,
+  readReconciliationLatestEffectWithSql,
+} from "./sync/outbound/reconciliationSql.js";
+export type {
+  ReconciliationCorrectionState,
+  ReconciliationDesiredSystemStateRow,
+  ReconciliationLatestEffect,
+  ReconciliationVisibleState,
+} from "./sync/outbound/reconciliationSql.js";
+
+export {
+  hasActiveUserInputCandidateWithAdapter,
+  hasActiveUserInputCandidateWithSql,
+} from "./sync/outbound/effectWorkerSql.js";
+export type { UserInputCandidateGuardQuery } from "./sync/outbound/effectWorkerSql.js";

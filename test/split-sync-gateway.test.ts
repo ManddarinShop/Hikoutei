@@ -6,7 +6,6 @@ import {
   type ReadSyncEffectPostconditionsRequest,
   type ReadSyncSnapshotRequest,
   type SyncEffectPostcondition,
-  type SyncGatewayEffect,
   type SyncGatewaySnapshot,
   type SyncSheetGateway,
 } from "../src/application/sync/gateway/syncGateway.js";
@@ -28,9 +27,6 @@ function snapshot(): SyncGatewaySnapshot {
     ...requestBase(),
     headers: ["id", "name"],
     rows: [],
-    snapshotHash: "snapshot-1",
-    unanchoredRows: [],
-    duplicateAnchors: [],
   };
 }
 
@@ -38,12 +34,11 @@ function fullGateway(): SyncSheetGateway {
   return {
     ensureRowAnchors: vi.fn(async () => ({ assigned: 0, existing: 0, duplicateAnchors: [] })),
     readSnapshot: vi.fn(async () => snapshot()),
-    applyEffects: vi.fn(async () => ({ results: [], snapshotHash: { kind: "absent" as const }, hasMore: false })),
+    applyEffects: vi.fn(async () => ({ results: [], hasMore: false })),
     readEffectPostcondition: vi.fn(async (): Promise<SyncEffectPostcondition> => ({
       disposition: "unavailable",
       visibleRevision: { kind: "absent" },
       visibleHash: { kind: "absent" },
-      snapshotHash: { kind: "absent" },
     })),
     readEffectPostconditions: vi.fn(async () => []),
     fastAppendRows: vi.fn(async () => ({ results: [], hasMore: false })),

@@ -7,12 +7,9 @@
 
 import type {
   EditorActorSource,
-  FieldConflict,
   ObservedEditBatch,
-  ObservedRowChange,
   Applicability,
   Presence,
-  QuarantinePlan,
   RowBindingState,
   RowEvaluationResult,
   ConflictStatus,
@@ -142,17 +139,8 @@ export class FenceLostError extends Error {}
 /** Signals that a canonical CAS/binding transition became stale. */
 export class CanonicalStaleError extends Error {}
 
-/** Input type retained here for conflict-ledger helpers. */
-export type ObservationConflict = FieldConflict;
-
-/** Input type retained here for quarantine-ledger helpers. */
-export type ObservationQuarantine = QuarantinePlan;
-
 /** Applied canonical result used by canonical/conflict composition. */
 export type AppliedCanonicalCommit = Extract<
   CanonicalCommitResult,
   { readonly kind: typeof CANONICAL_COMMIT_RESULT_KINDS.APPLIED }
 >;
-
-/** The observed row type is re-exported for storage-private helper signatures. */
-export type ObservationRow = ObservedRowChange;

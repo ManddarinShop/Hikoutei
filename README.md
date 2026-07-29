@@ -43,25 +43,30 @@ The project is called Hikoutei and its current npm package is `typed-sheets`.
 npm install typed-sheets @mikro-orm/core @mikro-orm/sql
 ```
 
-The MikroORM packages are optional peer dependencies of the root package, but
-are required when using Hikoutei's built-in SQLite adapter.
+The application imports only `typed-sheets`. MikroORM is the current optional
+SQLite provider dependency and is not part of the application-facing entity
+definition API.
 
 ## Quick start
 
-After defining an entity mapping, use a request-local manager to work with
-entities. A complete mapping and gateway setup are shown in the
-[Quick start guide](docs/quick-start.md).
+Define entities through typed-sheets, then use a request-local manager. A
+complete route and gateway setup is shown in the [Quick start guide](docs/quick-start.md).
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "typed-sheets";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
 });
 
 const em = hikoutei.em.fork();
@@ -73,9 +78,10 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`flush()` updates the local application state and schedules the configured
-Sheet view. Remote delivery is asynchronous, so start the sync worker
-and provision the gateway as described in the [setup guide](docs/quick-start.md).
+`flush()` commits the local SQLite state. Add the separate `sync` route
+configuration when this entity should also produce a Google Sheets outbox;
+remote delivery remains asynchronous. Start the sync worker and provision the
+gateway as described in the [setup guide](docs/quick-start.md).
 
 ## When to use Hikoutei
 
@@ -109,6 +115,11 @@ Use a conventional database and direct Google APIs when you need:
 Keep the gateway secret on the server. Do not put it in browser code or commit
 it to Git.
 
+The current public runtime covers local entity lifecycle, SQLite transaction and
+outbox planning, outbound worker delivery, and gateway provisioning. User_Input
+polling and global Conflict checkbox resolution remain planned inbound features
+and are not yet complete end to end.
+
 ## Documentation
 
 - [Quick start](docs/quick-start.md) — installation, mapping, and gateway setup.
@@ -116,6 +127,8 @@ it to Git.
   fit together.
 - [Write and synchronization flow](docs/write-and-synchronization-flow.md) —
   asynchronous delivery and recovery behavior.
+- [Current state review](docs/current-state-review.md) — implemented foundations
+  and intentionally incomplete inbound work.
 - [Development](docs/development.md) — local development and test commands.
 - [Benchmark notes](docs/sync-bulk-write-benchmark.md) — dated measurements
   and their limitations.

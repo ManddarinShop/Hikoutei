@@ -14,11 +14,9 @@ import type {
 } from "../../../../domain/index.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
-  isFencingValid,
   isFencingValidWithSql,
   type FencingContext,
 } from "../../sync/shared/writerLease.js";
-import type { DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 
 /** Parses and validates a normalized cell stored as serialized JSON. */
@@ -98,11 +96,6 @@ export function fromSqlNullable<T>(value: T | null): Presence<T> {
   return value === null
     ? { kind: PRESENCE_KINDS.ABSENT }
     : { kind: PRESENCE_KINDS.PRESENT, value };
-}
-
-/** Requires the synchronous writer fence to remain current before a write. */
-export function assertCurrentFence(db: DatabaseSyncLike, fence: FencingContext): void {
-  if (!isFencingValid(db, fence)) throw new FenceLostError();
 }
 
 /** Requires the writer fence to remain current in the active async SQL transaction. */

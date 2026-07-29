@@ -8,6 +8,7 @@
 
 import type { FlushEventArgs } from "@mikro-orm/core";
 
+import { createTypedSheetsPersistenceContext } from "../../../../../infrastructure/storage/index.js";
 import type {
   TypedSheetsEntityData,
   TypedSheetsEntityEngineManager,
@@ -143,7 +144,9 @@ export class MikroOrmSqliteTypedSheetsEntityManager
     if (changes.length === 0) return;
     await listener({
       changes,
-      sql: this.storage.createSqlExecutor(this.entityManager),
+      persistence: createTypedSheetsPersistenceContext(
+        this.storage.createSqlExecutor(this.entityManager),
+      ),
     });
   }
 }

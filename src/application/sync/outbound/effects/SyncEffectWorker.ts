@@ -11,18 +11,10 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-  stableHash,
-  type Applicability,
-  type EffectKind,
-  type EffectStatus,
-  type EffectTargetKind,
-  type LookupResult,
   type Presence,
 } from "../../../../domain/index.js";
 import {
-  APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
-  PRESENCE_KINDS,
 } from "../../../../shared/state/constants.js";
 import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
 import {
@@ -31,10 +23,10 @@ import {
   claimWriterLeaseWithAdapter,
   recoverExpiredLeasesWithAdapter,
   listReadyEffectsWithAdapter,
+  hasActiveUserInputCandidateWithAdapter,
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
-  SYNC_EFFECT_RECOVERY_ERROR_CODES,
   type ApplyResultOptions,
   type ClaimEffectOptions,
   type ClaimLeaseOptions,
@@ -46,63 +38,38 @@ import {
   type WriterLease,
   type WriterLeaseClaimResult,
 } from "../../../../infrastructure/storage/index.js";
+import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
-  STORAGE_ERROR_CODES,
-  StorageError,
-} from "../../../../infrastructure/storage/errors.js";
-import { fromSqlNullable } from "../../../../infrastructure/storage/sqlite/sqlState.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import {
-  parseSyncProjectionEffectPayload,
-  type ApplySyncEffectsRequest,
-  type FastAppendRowsRequest,
-  type ReadSyncEffectPostconditionsRequest,
   type SyncEffectPostcondition,
   type SyncGatewayEffect,
   type SyncGatewayEffectResult,
-  type SyncProjection,
   type SyncEffectWorkerGateway,
   type SyncEffectWorkerFullGateway,
 } from "../../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
-  SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
-  SYNC_GATEWAY_POSTCONDITION_MODES,
-  SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
 } from "../../gateway/constants.js";
 import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
-  SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
-  type SyncGatewayTiming,
-  type SyncTimingEvent,
-  type SyncTimingOperationCounts,
-  type SyncTimingOperationKind,
   type SyncTimingSink,
 } from "../../telemetry/syncTiming.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
-  EFFECT_TARGET_KINDS,
   OUTBOX_EFFECT_STATUSES,
-  SYNC_EFFECT_KINDS,
-  USER_INPUT_CANDIDATE_BLOCK_SQL,
   WORKER_ERROR_CODES,
-  type SyncEffectWorkerErrorCode,
 } from "./SyncEffectWorkerConstants.js";
 import {
   absentValue,
-  applicabilityFromSqlNullable,
   isAbsent,
   isPresent,
   lookupResult,
   presentValue,
   safeErrorMessage,
   throwWorkerError,
-  type CandidateBlockSqlRow,
-  type PresentValue,
 } from "./SyncEffectWorkerHelpers.js";
 import {
   countsForItems,
@@ -115,7 +82,6 @@ import {
   operationKindsForCounts,
 } from "./SyncEffectWorkerTiming.js";
 import {
-  completeApplied,
   completeFailure,
   completeGatewayResult,
   recoverUnknownResults,
@@ -216,8 +182,8 @@ export interface EffectWorkerStorage {
 /**
  * Processes effects through an adapter-owned SQL connection.
  *
- * This is the MikroORM-compatible worker entrypoint. It never opens the
- * legacy synchronous `node:sqlite` database beside the ORM connection.
+ * This is the adapter-backed worker entrypoint. It uses the same connection as
+ * the entity and sync transaction boundaries.
  */
 export async function runSyncEffectWorkerWithAdapter(
   options: SyncEffectWorkerWithAdapterOptions,
@@ -510,33 +476,27 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
       return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
     },
     isUserInputCandidateBlocked: (item) => {
-      return storage.read(({ sql }) => isUserInputCandidateBlockedWithSql(sql, item));
+      const effect = item.gatewayEffect;
+      if (
+        !isPresent(effect) ||
+        !isCandidateProtectingUserInputEffect(effect.value) ||
+        !isPresent(effect.value.rowBindingId)
+      ) {
+        return Promise.resolve(false);
+      }
+      const rowBindingId = effect.value.rowBindingId;
+      const fieldNames = Object.keys(effect.value.payload.fields);
+      if (fieldNames.length === 0) return Promise.resolve(true);
+      return hasActiveUserInputCandidateWithAdapter(storage, {
+        physicalSheetId: effect.value.physicalSheetId,
+        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        rowBindingId: rowBindingId.value,
+        fieldNames,
+        openConflictStatus: CONFLICT_STATUSES.OPEN,
+        rebasedConflictStatus: CONFLICT_STATUSES.NEEDS_REBASE,
+      });
     },
   };
-}
-
-async function isUserInputCandidateBlockedWithSql(
-  sql: SqlExecutor,
-  item: ClaimedEffect,
-): Promise<boolean> {
-  const effect = item.gatewayEffect;
-  if (
-    !isPresent(effect) ||
-    !isCandidateProtectingUserInputEffect(effect.value) ||
-    !isPresent(effect.value.rowBindingId)
-  ) {
-    return false;
-  }
-  const fieldNames = Object.keys(effect.value.payload.fields);
-  if (fieldNames.length === 0) return true;
-  const placeholders = fieldNames.map(() => "?").join(", ");
-  const blockSql = USER_INPUT_CANDIDATE_BLOCK_SQL.replace("__FIELD_NAMES__", placeholders);
-  const row = await sql.get<CandidateBlockSqlRow>(blockSql, [
-    effect.value.physicalSheetId,
-    effect.value.rowBindingId.value,
-    ...fieldNames,
-  ]);
-  return row !== undefined;
 }
 
 

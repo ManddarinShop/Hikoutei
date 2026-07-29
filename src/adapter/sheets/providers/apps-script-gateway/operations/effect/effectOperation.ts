@@ -174,7 +174,6 @@ function decodeApplyEffectsResult(value: unknown, expectedCount: number): ApplyS
   const timing = decodeOptionalSyncGatewayTiming(record.timing, "effect timing");
   const result: ApplySyncEffectsResult = {
     results: record.results.map((entry, index) => decodeEffectResult(entry, index)),
-    snapshotHash: decodePresenceString(record.snapshotHash, "effect result snapshotHash"),
     hasMore: record.hasMore,
   };
   return timing === undefined ? result : { ...result, timing };
@@ -224,10 +223,6 @@ function decodeEffectResult(value: unknown, index: number): SyncGatewayEffectRes
     visibleHash: decodePresenceString(
       record.visibleHash,
       effectResultLabel(index, "visibleHash"),
-    ),
-    snapshotHash: decodePresenceString(
-      record.snapshotHash,
-      effectResultLabel(index, "snapshotHash"),
     ),
     reason: decodePresenceString(record.reason, effectResultLabel(index, "reason")),
     postcondition,
@@ -291,7 +286,6 @@ function decodePostcondition(value: unknown): SyncEffectPostcondition {
       "postcondition visibleRevision",
     ),
     visibleHash: decodePresenceString(record.visibleHash, "postcondition visibleHash"),
-    snapshotHash: decodePresenceString(record.snapshotHash, "postcondition snapshotHash"),
   };
 }
 

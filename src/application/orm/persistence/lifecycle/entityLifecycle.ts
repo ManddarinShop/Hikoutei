@@ -24,7 +24,7 @@ import {
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
 } from "../../mapping/entityMapping.js";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { TypedSheetsPersistenceContext } from "../../api/contracts.js";
 import type { FencingContext, CanonicalFieldWrite, CanonicalCommitInput } from "../support/contracts.js";
 import type { ResolvedWriterOptions, MappedChangePlan } from "../support/contracts.js";
 import {
@@ -59,7 +59,7 @@ import {
 
 /** Applies one mapped change and emits append/update/delete phase timings. */
 export async function applyMappedChange(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   fence: FencingContext,
   writer: ResolvedWriterOptions,
   plan: MappedChangePlan,
@@ -83,7 +83,7 @@ export async function applyMappedChange(
   const canonicalStartedAt = Date.now();
   if (change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE) {
     await createMappedEntity(
-      sql,
+      persistence,
       fence,
       writer,
       mapping,
@@ -94,7 +94,7 @@ export async function applyMappedChange(
     );
   } else if (change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE) {
     await updateMappedEntity(
-      sql,
+      persistence,
       fence,
       writer,
       mapping,
@@ -106,7 +106,7 @@ export async function applyMappedChange(
     );
   } else {
     await deleteMappedEntity(
-      sql,
+      persistence,
       fence,
       writer,
       mapping,
@@ -133,7 +133,7 @@ export async function applyMappedChange(
 }
 
 async function createMappedEntity(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   fence: FencingContext,
   writer: ResolvedWriterOptions,
   mapping: TypedSheetsEntityMapping,
@@ -142,10 +142,10 @@ async function createMappedEntity(
   anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
 ): Promise<void> {
-  await insertActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
+  await insertActiveRowBinding(persistence, mapping, rowBindingId, entityId, anchor);
   const commitId = identifiedValue("commit", writer);
   const effects = await projectionEffects(
-    sql,
+    persistence,
     writer,
     mapping,
     entityId,
@@ -169,12 +169,12 @@ async function createMappedEntity(
     })),
     effects,
   };
-  await requireAppliedCanonicalCommit(sql, fence, commit);
-  await claimBusinessKey(sql, mapping, entityId, encodedEntity);
+  await requireAppliedCanonicalCommit(persistence, fence, commit);
+  await claimBusinessKey(persistence, mapping, entityId, encodedEntity);
 }
 
 async function updateMappedEntity(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   fence: FencingContext,
   writer: ResolvedWriterOptions,
   mapping: TypedSheetsEntityMapping,
@@ -184,9 +184,9 @@ async function updateMappedEntity(
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
   changedFields: readonly TypedSheetsEntityFieldMapping[],
 ): Promise<void> {
-  await requireActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
-  const entityRevision = await requireActiveCanonicalEntityRevision(sql, mapping, entityId);
-  const fieldRevisions = await canonicalFieldRevisions(sql, entityId);
+  await requireActiveRowBinding(persistence, mapping, rowBindingId, entityId, anchor);
+  const entityRevision = await requireActiveCanonicalEntityRevision(persistence, mapping, entityId);
+  const fieldRevisions = await canonicalFieldRevisions(persistence, entityId);
   const fields: CanonicalFieldWrite[] = changedFields.map((field) => {
     const expectedFieldRevision = fieldRevisions.get(field.fieldName);
     if (expectedFieldRevision === undefined) {
@@ -205,7 +205,7 @@ async function updateMappedEntity(
   const nextEntityRevision = entityRevision + 1;
   const commitId = identifiedValue("commit", writer);
   const effects = await projectionEffects(
-    sql,
+    persistence,
     writer,
     mapping,
     entityId,
@@ -224,14 +224,14 @@ async function updateMappedEntity(
     fields,
     effects,
   };
-  await requireAppliedCanonicalCommit(sql, fence, commit);
+  await requireAppliedCanonicalCommit(persistence, fence, commit);
   if (changedFields.some((field) => field.fieldName === mapping.businessKey.fieldName)) {
-    await rotateBusinessKey(sql, mapping, entityId, encodedEntity);
+    await rotateBusinessKey(persistence, mapping, entityId, encodedEntity);
   }
 }
 
 async function deleteMappedEntity(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   fence: FencingContext,
   writer: ResolvedWriterOptions,
   mapping: TypedSheetsEntityMapping,
@@ -240,12 +240,12 @@ async function deleteMappedEntity(
   anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
 ): Promise<void> {
-  await requireActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
-  const entityRevision = await requireActiveCanonicalEntityRevision(sql, mapping, entityId);
+  await requireActiveRowBinding(persistence, mapping, rowBindingId, entityId, anchor);
+  const entityRevision = await requireActiveCanonicalEntityRevision(persistence, mapping, entityId);
   const nextEntityRevision = entityRevision + 1;
   const commitId = identifiedValue("commit", writer);
   const effects = await projectionEffects(
-    sql,
+    persistence,
     writer,
     mapping,
     entityId,
@@ -264,9 +264,9 @@ async function deleteMappedEntity(
     expectedEntityRevision: entityRevision,
     effects,
   };
-  await requireAppliedCanonicalCommit(sql, fence, commit);
-  await tombstoneActiveRowBinding(sql, mapping, rowBindingId, entityId);
-  await retireEntityBusinessKeys(sql, mapping, entityId);
+  await requireAppliedCanonicalCommit(persistence, fence, commit);
+  await tombstoneActiveRowBinding(persistence, mapping, rowBindingId, entityId);
+  await retireEntityBusinessKeys(persistence, mapping, entityId);
 }
 
 function acceptedSnapshotHash(

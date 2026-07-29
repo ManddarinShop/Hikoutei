@@ -34,7 +34,7 @@ function createSheetInput(): FakeSyncSheetInput {
 }
 
 describe("FakeSyncSheetGateway", () => {
-  it("returns the shared Presence contract for snapshot metadata", async () => {
+  it("returns anchors and normalized cell values for snapshots", async () => {
     const gateway = new FakeSyncSheetGateway([createSheetInput()]);
 
     const snapshot = await gateway.readSnapshot({
@@ -50,11 +50,11 @@ describe("FakeSyncSheetGateway", () => {
       kind: PRESENCE_KINDS.PRESENT,
       value: "fake-anchor:1",
     });
-    expect(row?.visibleRevision).toEqual({
-      kind: PRESENCE_KINDS.PRESENT,
-      value: 0,
+    expect(row?.cells.id?.cellKind).toBe("literal");
+    expect(row?.cells.id?.normalizedCell).toEqual({
+      kind: "string",
+      value: "entity-1",
     });
-    expect(row?.cells.id?.formulaHash).toEqual({ kind: PRESENCE_KINDS.ABSENT });
   });
 
   it("uses the common gateway error for invalid fake options", () => {
