@@ -1,7 +1,15 @@
 {
-  "name": "typed-sheets",
+  "name": "hikoutei",
   "version": "0.2.0",
   "description": "Hikoutei — typed repository and safe write layer for Google Sheets-backed MVPs.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

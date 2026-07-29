@@ -6,12 +6,12 @@
 
 **Typed repository and safe write layer for Google Sheets-backed MVPs.**
 
-<a href="https://www.npmjs.com/package/typed-sheets">npm package</a> ·
-<a href="https://github.com/ManddarinShop/google-sheets-orm/issues">Issues</a> ·
+<a href="https://www.npmjs.com/package/hikoutei">npm package</a> ·
+<a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a> ·
 <a href="apps-script/gateway/Code.gs">Apps Script gateway</a>
 
-[![npm version](https://img.shields.io/npm/v/typed-sheets?style=flat-square)](https://www.npmjs.com/package/typed-sheets)
-[![license](https://img.shields.io/npm/l/typed-sheets?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
+[![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 </div>
@@ -37,23 +37,23 @@ replacement, a Prisma/JPA clone, or a general Google Sheets API wrapper.
 
 ## Installation
 
-The project is called Hikoutei and its current npm package is `typed-sheets`.
+The project and npm package are both called `hikoutei`.
 
 ```sh
-npm install typed-sheets @mikro-orm/core @mikro-orm/sql
+npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
-The application imports only `typed-sheets`. MikroORM is the current optional
+The application imports only `hikoutei`. MikroORM is the current optional
 SQLite provider dependency and is not part of the application-facing entity
 definition API.
 
 ## Quick start
 
-Define entities through typed-sheets, then use a request-local manager. A
+Define entities through Hikoutei, then use a request-local manager. A
 complete route and gateway setup is shown in the [Quick start guide](docs/quick-start.md).
 
 ```ts
-import { createTypedSheets, defineTypedSheetsEntity } from "typed-sheets";
+import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
 
 const User = defineTypedSheetsEntity({
   name: "User",
@@ -148,7 +148,7 @@ and are not yet complete end to end.
 - Add setup tooling for registry and Apps Script deployment.
 - Stabilize the public package release.
 
-See the [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues)
+See the [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
 for current work.
 
 ## License
