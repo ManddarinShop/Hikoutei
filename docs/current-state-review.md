@@ -11,7 +11,7 @@ should not be mistaken for a complete inbound synchronization feature.
 
 - SQLite business entity tables are the application authority.
 - Google Sheets is an asynchronous projection and human input surface.
-- The public API belongs to typed-sheets; the current MikroORM + SQLite engine
+- The public API belongs to Hikoutei; the current MikroORM + SQLite engine
   is replaceable behind that boundary.
 - Entity definitions use explicit, immutable, non-empty string primary keys.
 - The first relation surface is `manyToOne` and `oneToMany`.

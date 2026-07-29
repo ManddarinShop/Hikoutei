@@ -33,7 +33,7 @@ Application server
 ### TypedSheets public API
 
 Applications define entities with `defineTypedSheetsEntity()` and use the
-typed-sheets EntityManager for `fork()`, `create()`, `find()`, `persist()`,
+Hikoutei EntityManager for `fork()`, `create()`, `find()`, `persist()`,
 `remove()`, `flush()`, and `transactional()`.
 
 Applications do not import `defineEntity`, `p`, `MikroORM`, or provider-specific

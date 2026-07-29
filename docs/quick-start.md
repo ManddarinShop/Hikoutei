@@ -11,7 +11,7 @@ complete end to end.
 ## Installation
 
 ```sh
-npm install typed-sheets @mikro-orm/core @mikro-orm/sql
+npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
 ## Define entities
@@ -21,7 +21,7 @@ surface supports `manyToOne` and `oneToMany`; relation loading is explicit and
 does not imply lazy loading or cascade behavior.
 
 ```ts
-import { defineTypedSheetsEntity } from "typed-sheets";
+import { defineTypedSheetsEntity } from "hikoutei";
 
 const User = defineTypedSheetsEntity({
   name: "User",
@@ -39,10 +39,10 @@ application code.
 ## Local SQLite lifecycle
 
 ```ts
-import { createTypedSheets } from "typed-sheets";
+import { createTypedSheets } from "hikoutei";
 
 const typedSheets = await createTypedSheets({
-  dbName: "./typed-sheets.sqlite",
+  dbName: "./hikoutei.sqlite",
   entities: [User],
 });
 
@@ -70,7 +70,7 @@ runtime construction time:
 
 ```ts
 const typedSheets = await createTypedSheets({
-  dbName: "./typed-sheets.sqlite",
+  dbName: "./hikoutei.sqlite",
   entities: [User],
   sync: {
     writerId: "users-service",

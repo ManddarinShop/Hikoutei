@@ -42,7 +42,7 @@ end-to-end runtime path is complete.
 Required MVP capabilities:
 
 - public `defineTypedSheetsEntity()` definitions
-- entity lifecycle operations through the typed-sheets EntityManager
+- entity lifecycle operations through the Hikoutei EntityManager
 - `manyToOne` and `oneToMany` relation metadata
 - SQLite entity-table and sync-state initialization
 - atomic entity, canonical sync state, and Sheet outbox commits
@@ -140,7 +140,7 @@ connection.
 - `adapter/persistence/contracts/`: SQL and persistence contracts independent of
   MikroORM, Prisma, or another future implementation
 - `adapter/persistence/providers/mikro-orm/`: the current MikroORM-backed
-  entity engine and SQLite storage bridge; it materializes typed-sheets entity
+  entity engine and SQLite storage bridge; it materializes Hikoutei entity
   definitions internally
 - `adapter/sheets/providers/apps-script-gateway/`: the current signed Apps Script
   provider, separated into protocol, transport, and operation capabilities
@@ -178,7 +178,7 @@ The library should fail clearly when:
 - a row contains a formula, merged cell, Sheet error, or invalid normalized value
 - a user edit does not identify one stable row
 
-Unexpected columns outside the registered range are not part of the typed-sheets
+Unexpected columns outside the registered range are not part of the Hikoutei
 contract. The gateway must validate only the registered range and fail closed
 when its declared headers no longer match.
 
@@ -228,7 +228,7 @@ This means the library should favor batch reads and avoid one API call per row w
 After the MVP is stable, possible extensions are:
 
 - `onEdit` as an optional lower-latency observation source
-- another persistence provider behind the typed-sheets engine contract
+- another persistence provider behind the Hikoutei engine contract
 - generated primary keys and Sheet-side insert ergonomics
 - `manyToMany` relations
 - cascade and advanced relation loading
