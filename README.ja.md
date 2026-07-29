@@ -6,12 +6,12 @@
 
 **Google Sheets を利用する MVP 向けの型付きリポジトリと安全な書き込みレイヤー**
 
-<a href="https://www.npmjs.com/package/typed-sheets">npm パッケージ</a> ·
-<a href="https://github.com/ManddarinShop/google-sheets-orm/issues">Issues</a> ·
+<a href="https://www.npmjs.com/package/hikoutei">npm パッケージ</a> ·
+<a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a> ·
 <a href="apps-script/gateway/Code.gs">Apps Script Gateway</a>
 
-[![npm version](https://img.shields.io/npm/v/typed-sheets?style=flat-square)](https://www.npmjs.com/package/typed-sheets)
-[![license](https://img.shields.io/npm/l/typed-sheets?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
+[![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 </div>
@@ -34,10 +34,10 @@ Prisma/JPA のクローン、汎用 Google Sheets API ラッパーを目的と�
 
 ## インストール
 
-プロジェクト名は Hikoutei で、現在の npm パッケージ名は `typed-sheets` です。
+プロジェクトと npm パッケージ名は `hikoutei` です。
 
 ```sh
-npm install typed-sheets @mikro-orm/core @mikro-orm/sql
+npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
 MikroORM パッケージはルートパッケージの optional peer dependency ですが、
@@ -50,7 +50,7 @@ Hikoutei の組み込み SQLite アダプターを使う場合は必要です。
 [クイックスタートガイド](docs/quick-start.md)を参照してください。
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "typed-sheets/mikro-orm";
+import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
 import { User } from "./entities/User.js";
 import { userMapping } from "./mappings/userMapping.js";
 
@@ -127,7 +127,7 @@ Gateway のシークレットはサーバーだけに保管してください。
 - レジストリと Apps Script デプロイ用のセットアップツールを追加する。
 - 公開パッケージのリリースを安定化する。
 
-現在の作業については [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues)
+現在の作業については [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
 を参照してください。
 
 ## ライセンス
