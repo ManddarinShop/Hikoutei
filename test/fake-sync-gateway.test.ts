@@ -34,7 +34,7 @@ function createSheetInput(): FakeSyncSheetInput {
 }
 
 describe("FakeSyncSheetGateway", () => {
-  it("returns anchors and normalized cell values for snapshots", async () => {
+  it("returns values without metadata anchors for User_Input snapshots", async () => {
     const gateway = new FakeSyncSheetGateway([createSheetInput()]);
 
     const snapshot = await gateway.readSnapshot({
@@ -46,10 +46,7 @@ describe("FakeSyncSheetGateway", () => {
     });
     const row = snapshot.rows[0];
 
-    expect(row?.physicalAnchor).toEqual({
-      kind: PRESENCE_KINDS.PRESENT,
-      value: "fake-anchor:1",
-    });
+    expect(row?.physicalAnchor).toEqual({ kind: PRESENCE_KINDS.ABSENT });
     expect(row?.cells.id?.cellKind).toBe("literal");
     expect(row?.cells.id?.normalizedCell).toEqual({
       kind: "string",

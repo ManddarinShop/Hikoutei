@@ -89,7 +89,7 @@ export function createReadSnapshotOperation(
   };
 }
 
-/** Builds one operation that assigns anchors and reads the snapshot under one lock. */
+/** Builds one operation that observes a snapshot under one lock and only assigns anchors where required. */
 export function createObserveSnapshotOperation(
   request: ReadSyncSnapshotRequest & ObservationOperationRouteOptions,
 ): AppsScriptOperationDefinition<
@@ -410,7 +410,9 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var layoutStartedAt = Date.now();
     var layout = readLayout_(sheet, args.registeredRange);
     phase_("layout_read", layoutStartedAt);
-    if (args.mode === MODES.ENSURE) return ensureAnchors_(sheet, layout, args.checkboxHeaders);
+    if (args.mode === MODES.ENSURE) {
+      return ensureAnchors_(sheet, layout, args.checkboxHeaders, args.projection);
+    }
     if (args.mode === MODES.SNAPSHOT) return readSnapshot_(sheet, layout, args.checkboxHeaders, args);
     if (args.mode === MODES.OBSERVE) {
       var observed = observeSnapshot_(sheet, layout, args.checkboxHeaders, args);
@@ -447,7 +449,10 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     return { startColumn: parsed.startColumn, columnCount: parsed.columnCount, headers: headers, positions: positions, checkboxIndexes: checkboxIndexes };
   }
 
-  function ensureAnchors_(targetSheet, targetLayout) {
+  function ensureAnchors_(targetSheet, targetLayout, unusedCheckboxHeaders, projection) {
+    if (projection === "user_input") {
+      return { assigned: 0, existing: 0, duplicateAnchors: [] };
+    }
     var lastRow = targetSheet.getLastRow();
     var anchorsByRow = readAnchorIndex_(targetSheet);
     var values = lastRow > 1
@@ -490,17 +495,25 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var range = targetSheet.getRange(1, targetLayout.startColumn, lastRow, targetLayout.columnCount);
     var values = range.getValues();
     phase_("values_read", valuesReadStartedAt);
-    var metadataReadStartedAt = Date.now();
-    var anchorsByRow = readAnchorIndex_(targetSheet);
-    phase_("anchor_metadata_read", metadataReadStartedAt);
-    var anchorAssignmentStartedAt = Date.now();
-    ensureAnchorsFromValues_(
-      targetSheet,
-      targetLayout,
-      values.slice(1),
-      anchorsByRow,
-    );
-    phase_("anchor_assignment", anchorAssignmentStartedAt);
+    var usesAnchors = request.projection !== "user_input";
+    var anchorsByRow;
+    if (usesAnchors) {
+      var metadataReadStartedAt = Date.now();
+      anchorsByRow = readAnchorIndex_(targetSheet);
+      phase_("anchor_metadata_read", metadataReadStartedAt);
+    } else {
+      anchorsByRow = Object.create(null);
+    }
+    if (usesAnchors) {
+      var anchorAssignmentStartedAt = Date.now();
+      ensureAnchorsFromValues_(
+        targetSheet,
+        targetLayout,
+        values.slice(1),
+        anchorsByRow,
+      );
+      phase_("anchor_assignment", anchorAssignmentStartedAt);
+    }
     var snapshotStartedAt = Date.now();
     var snapshot = readSnapshot_(targetSheet, targetLayout, unusedCheckboxHeaders, request, {
       lastRow: lastRow,
@@ -530,9 +543,12 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var mergedRangesStartedAt = Date.now();
     var merged = lightweight ? null : mergedCellMap_(range);
     phase_("merged_ranges_read", mergedRangesStartedAt);
-    var anchorsByRow = prepared && prepared.anchorsByRow
-      ? prepared.anchorsByRow
-      : readAnchorIndex_(targetSheet);
+    var usesAnchors = request.projection !== "user_input";
+    var anchorsByRow = usesAnchors
+      ? prepared && prepared.anchorsByRow
+        ? prepared.anchorsByRow
+        : readAnchorIndex_(targetSheet)
+      : Object.create(null);
     var rows = [];
     var rowNormalizationStartedAt = Date.now();
     for (var rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
