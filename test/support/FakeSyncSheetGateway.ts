@@ -217,7 +217,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     const row = this.requireRow(this.requireSheet(physicalSheetId), anchor);
     return {
       targetId: row.targetId,
-      physicalAnchor: row.anchor,
+      ...(row.physicalAnchorPresent ? { physicalAnchor: row.anchor } : {}),
       fields: { ...row.fields },
       visibleRevision: row.visibleRevision,
       activeCandidateHash: row.activeCandidateHash,
@@ -310,7 +310,12 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       return unavailablePostcondition();
     }
     const sheet = sheetResult.value;
-    const row = this.findRowByAnchorOrIdentity(sheet, effect.payload.targetAnchor, effect.targetId);
+    const row = this.findRowByAnchorOrIdentity(
+      sheet,
+      effect.payload.targetAnchor,
+      effect.targetId,
+      effect.payload.fields,
+    );
     if (isProjectionDeletionEffect(effect.effectKind)) {
       const receipt = this.receipts.get(effect.effectId);
       if (receipt !== undefined && receipt.payloadHash !== effect.payloadHash) {
@@ -470,7 +475,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
         ),
         anchor,
-        physicalAnchorPresent: true,
+        physicalAnchorPresent: projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
         fields,
         visibleRevision: initial.visibleRevision === undefined
           ? NON_NEGATIVE_SAFE_INTEGER_MINIMUM
@@ -491,7 +496,10 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       schemaVersion,
       headers,
       identityField: input.identityField ??
-        (projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE && headers.includes("id") ? "id" : undefined),
+        ((projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE ||
+          projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT) && headers.includes("id")
+          ? "id"
+          : undefined),
       rowsByAnchor,
     });
   }
@@ -563,7 +571,12 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
           presentValue("effect ID was reused with another payload"),
         );
       }
-      const row = this.findRowByAnchorOrIdentity(sheet, effect.payload.targetAnchor, effect.targetId);
+      const row = this.findRowByAnchorOrIdentity(
+        sheet,
+        effect.payload.targetAnchor,
+        effect.targetId,
+        effect.payload.fields,
+      );
       if (isProjectionDeletionEffect(effect.effectKind)) {
         if (row.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
           return this.result(
@@ -604,7 +617,12 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       );
     }
 
-    const existingRow = this.findRowByAnchorOrIdentity(sheet, effect.payload.targetAnchor, effect.targetId);
+    const existingRow = this.findRowByAnchorOrIdentity(
+      sheet,
+      effect.payload.targetAnchor,
+      effect.targetId,
+      effect.payload.fields,
+    );
     let row: FakeRow;
     if (existingRow.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       if (!effect.payload.createIfMissing) {
@@ -629,7 +647,7 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
       row = {
         targetId: effect.targetId,
         anchor: effect.payload.targetAnchor,
-        physicalAnchorPresent: true,
+        physicalAnchorPresent: sheet.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
         fields: {},
         visibleRevision: NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
         visibleHash: EMPTY_VISIBLE_HASH,
@@ -857,18 +875,26 @@ export class FakeSyncSheetGateway implements SyncSheetGateway {
     sheet: FakeSheet,
     anchor: string,
     targetId: string,
+    fields?: Readonly<Record<string, NormalizedCell>>,
   ): LookupResult<FakeRow> {
-    const anchored = lookupResult(sheet.rowsByAnchor.get(anchor));
+    const anchoredRow = sheet.rowsByAnchor.get(anchor);
+    const anchored: LookupResult<FakeRow> = anchoredRow !== undefined && anchoredRow.physicalAnchorPresent
+      ? foundValue(anchoredRow)
+      : notFoundValue<FakeRow>();
     if (anchored.kind === LOOKUP_RESULT_KINDS.FOUND || sheet.identityField === undefined) {
       return anchored;
     }
+    const targetIdentity = fields === undefined
+      ? undefined
+      : normalizedCellIdentity(fields[sheet.identityField as string]);
+    const identity = targetIdentity ?? targetId;
     const matches = [...sheet.rowsByAnchor.values()].filter((row) =>
-      normalizedCellIdentity(row.fields[sheet.identityField as string]) === targetId,
+      normalizedCellIdentity(row.fields[sheet.identityField as string]) === identity,
     );
     if (matches.length > 1) {
       throw new SyncGatewayContractError(
         SYNC_GATEWAY_ERROR_CODES.INVALID_FAKE_GATEWAY_INPUT,
-        `fake sync identity is duplicated: ${targetId}`,
+        `fake sync identity is duplicated: ${identity}`,
       );
     }
     return matches[0] === undefined ? notFoundValue() : { kind: LOOKUP_RESULT_KINDS.FOUND, value: matches[0] };
