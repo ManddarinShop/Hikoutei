@@ -7,13 +7,9 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  APPLICABILITY_KINDS,
-  FIELD_OWNERSHIPS,
-  PRESENCE_KINDS,
-  ROW_OPERATIONS,
-  claimWriterLeaseWithAdapter,
-} from "../src/index.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/index.js";
+import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "../src/domain/model/constants.js";
+import { claimWriterLeaseWithAdapter } from "../src/infrastructure/storage/sync/shared/writerLease.js";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../src/shared/encoding/constants.js";
@@ -31,10 +27,11 @@ import {
   createMikroOrmSqliteAdapter,
   migrateMikroOrmSqliteSchema,
   persistMappedObservedRowWithMikroOrm,
+  pollMappedUserInputWithMikroOrm,
   type MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/index.js";
 import { parseSyncProjectionEffectPayload } from "../src/application/sync/gateway/syncGateway.js";
-import type { PersistObservedRowInput } from "../src/infrastructure/storage/index.js";
+import type { PersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationWriter.js";
 
 const OrderSchema = defineEntity({
   name: "MappedTypedSheetsOrder",
@@ -393,7 +390,6 @@ describe("mapped typed-sheets ORM", () => {
       now: 1_000,
       maxEffects: 8,
     })).resolves.toMatchObject({ applied: 2, failed: 0 });
-
     em.remove(order);
     await em.flush();
     gateway.dropNextResponseAfterApply();
@@ -546,6 +542,197 @@ describe("mapped typed-sheets ORM", () => {
       return sql.all<OutboxRow>("SELECT physical_sheet_id, target_kind, target_id, expected_visible_revision, expected_visible_hash, stream_sequence, payload_json FROM sheet_effect_outbox");
     })).resolves.toEqual([]);
   });
+
+  it("polls an accepted User_Input edit into SQLite and queues only System_State", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(storage);
+    const writer = deterministicWriter("mapped-user-input-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
+      mappings: [orderMapping],
+      writer,
+    });
+    const gateway = createOrderGateway();
+    const em = typedSheetsOrm.em.fork();
+    const order = em.create(Order, { id: "order-polled", status: "pending" });
+    em.persist(order);
+    await em.flush();
+    await expect(runSyncEffectWorkerWithAdapter({
+      storage,
+      gateway,
+      workerId: "mapped-user-input-effect-worker",
+      now: 1_001,
+      maxEffects: 8,
+    })).resolves.toMatchObject({ applied: 2, failed: 0 });
+    expect(gateway.readRow("orders-input", "entity:order-polled").physicalAnchor).toBeUndefined();
+
+    gateway.mutateRow("orders-input", "entity:order-polled", {
+      id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-polled" },
+      status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "paid" },
+    });
+
+    await expect(pollMappedUserInputWithMikroOrm({
+      storage,
+      gateway,
+      mappings: [orderMapping],
+      writer,
+    })).resolves.toMatchObject({
+      changedRows: 1,
+      appliedRows: 1,
+      conflictRows: 0,
+      staleRows: 0,
+    });
+
+    await expect(orm.em.fork().findOne(Order, { id: "order-polled" })).resolves.toMatchObject({
+      id: "order-polled",
+      status: "paid",
+    });
+    await expect(storage.read(({ sql }) => sql.all<OutboxRow>(`
+      SELECT physical_sheet_id, effect_kind, target_kind, target_id,
+             expected_visible_revision, expected_visible_hash, stream_sequence, payload_json
+      FROM sheet_effect_outbox
+      WHERE status = 'pending'
+      ORDER BY stream_sequence
+    `))).resolves.toMatchObject([
+      { physical_sheet_id: "orders-system", effect_kind: "system_projection" },
+    ]);
+
+    await expect(pollMappedUserInputWithMikroOrm({
+      storage,
+      gateway,
+      mappings: [orderMapping],
+      writer,
+    })).resolves.toMatchObject({
+      changedRows: 0,
+      appliedRows: 0,
+      duplicateRows: 0,
+    });
+
+    gateway.mutateRow("orders-input", "entity:order-polled", {
+      id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "renamed-by-user" },
+      status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "paid" },
+    });
+    await expect(pollMappedUserInputWithMikroOrm({
+      storage,
+      gateway,
+      mappings: [orderMapping],
+      writer,
+    })).resolves.toMatchObject({
+      changedRows: 0,
+      invalidRows: 1,
+      unknownBusinessKeyRows: 1,
+    });
+    await expect(orm.em.fork().findOne(Order, { id: "order-polled" })).resolves.toMatchObject({
+      id: "order-polled",
+      status: "paid",
+    });
+  });
+
+  it("rejects duplicate User_Input business keys without applying either row", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(storage);
+    const writer = deterministicWriter("mapped-duplicate-user-input-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
+      mappings: [orderMapping],
+      writer,
+    });
+    const gateway = createOrderGateway();
+    const em = typedSheetsOrm.em.fork();
+    const first = em.create(Order, { id: "order-duplicate-a", status: "pending" });
+    const second = em.create(Order, { id: "order-duplicate-b", status: "pending" });
+    em.persist([first, second]);
+    await em.flush();
+    await expect(runSyncEffectWorkerWithAdapter({
+      storage,
+      gateway,
+      workerId: "mapped-duplicate-user-input-effect-worker",
+      now: 1_001,
+      maxEffects: 8,
+    })).resolves.toMatchObject({ applied: 4, failed: 0 });
+
+    gateway.mutateRow("orders-input", "entity:order-duplicate-a", {
+      id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-duplicate-b" },
+      status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "user-edit" },
+    });
+
+    await expect(pollMappedUserInputWithMikroOrm({
+      storage,
+      gateway,
+      mappings: [orderMapping],
+      writer,
+    })).resolves.toMatchObject({
+      changedRows: 0,
+      invalidRows: 2,
+      duplicateBusinessKeyRows: 2,
+    });
+    await expect(orm.em.fork().findOne(Order, { id: "order-duplicate-a" })).resolves.toMatchObject({
+      id: "order-duplicate-a",
+      status: "pending",
+    });
+    await expect(orm.em.fork().findOne(Order, { id: "order-duplicate-b" })).resolves.toMatchObject({
+      id: "order-duplicate-b",
+      status: "pending",
+    });
+  });
+
+  it("stores a User_Input edit as a conflict after SQLite advances", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(storage);
+    const writer = deterministicWriter("mapped-user-input-conflict-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
+      mappings: [orderMapping],
+      writer,
+    });
+    const gateway = createOrderGateway();
+    const em = typedSheetsOrm.em.fork();
+    const order = em.create(Order, { id: "order-conflict", status: "pending" });
+    em.persist(order);
+    await em.flush();
+    await runSyncEffectWorkerWithAdapter({
+      storage,
+      gateway,
+      workerId: "mapped-user-input-conflict-effect-worker",
+      now: 1_001,
+      maxEffects: 8,
+    });
+
+    gateway.mutateRow("orders-input", "entity:order-conflict", {
+      id: { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-conflict" },
+      status: { kind: NORMALIZED_CELL_KINDS.STRING, value: "user-edit" },
+    });
+    order.status = "server-edit";
+    await em.flush();
+
+    await expect(pollMappedUserInputWithMikroOrm({
+      storage,
+      gateway,
+      mappings: [orderMapping],
+      writer,
+    })).resolves.toMatchObject({
+      changedRows: 1,
+      appliedRows: 0,
+      conflictRows: 1,
+      staleRows: 0,
+    });
+    await expect(orm.em.fork().findOne(Order, { id: "order-conflict" })).resolves.toMatchObject({
+      id: "order-conflict",
+      status: "server-edit",
+    });
+    await expect(storage.read(({ sql }) => sql.get<{ readonly status: string; readonly user_value: string }>(`
+      SELECT status, user_value FROM sync_conflict WHERE logical_sheet_id = ?
+    `, ["orders"]))).resolves.toMatchObject({
+      status: "OPEN",
+      user_value: JSON.stringify({ kind: NORMALIZED_CELL_KINDS.STRING, value: "user-edit" }),
+    });
+  });
 });
 
 function deterministicWriter(role: string) {
@@ -586,6 +773,28 @@ function requireEffect(
   const effect = effects[index];
   if (effect === undefined) throw new Error(`Expected outbox effect ${index}.`);
   return effect;
+}
+
+function createOrderGateway(): FakeSyncSheetGateway {
+  return new FakeSyncSheetGateway([
+    {
+      physicalSheetId: "orders-system",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+      headers: ["id", "status", "__typed_sheets_deleted"],
+    },
+    {
+      physicalSheetId: "orders-input",
+      sheetName: "Orders_Input",
+      registeredRange: "A:B",
+      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+      headers: ["id", "status"],
+      identityField: "id",
+    },
+  ]);
 }
 
 function acceptedObservationInput(): PersistObservedRowInput {
