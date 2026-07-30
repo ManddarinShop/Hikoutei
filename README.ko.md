@@ -6,12 +6,12 @@
 
 **Google Sheets 기반 MVP를 위한 타입 안전 리포지토리 및 안전한 쓰기 계층**
 
-<a href="https://www.npmjs.com/package/hikoutei">npm 패키지</a> ·
-<a href="https://github.com/ManddarinShop/Hikoutei/issues">이슈</a> ·
+<a href="https://www.npmjs.com/package/typed-sheets">npm 패키지</a> ·
+<a href="https://github.com/ManddarinShop/google-sheets-orm/issues">이슈</a> ·
 <a href="apps-script/gateway/Code.gs">Apps Script Gateway</a>
 
-[![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
-[![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/typed-sheets?style=flat-square)](https://www.npmjs.com/package/typed-sheets)
+[![license](https://img.shields.io/npm/l/typed-sheets?style=flat-square)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 </div>
@@ -34,30 +34,36 @@ Hikoutei의 범위는 의도적으로 작습니다. 범용 데이터베이스 �
 
 ## 설치
 
-프로젝트와 npm 패키지 이름은 모두 `hikoutei`입니다.
+프로젝트 이름은 Hikoutei이며, 현재 npm 패키지 이름은 `typed-sheets`입니다.
 
 ```sh
-npm install hikoutei @mikro-orm/core @mikro-orm/sql
+npm install typed-sheets @mikro-orm/core @mikro-orm/sql
 ```
 
-MikroORM 패키지는 루트 패키지의 선택적 peer dependency이지만, Hikoutei의
-기본 SQLite 어댑터를 사용할 때는 필요합니다.
+애플리케이션은 `typed-sheets`만 import합니다. MikroORM은 현재 SQLite 실행
+프로바이더가 사용하는 선택적 의존성이며, 애플리케이션의 엔티티 정의 API에는
+노출되지 않습니다.
 
 ## 빠른 시작
 
-엔티티 매핑을 정의한 후 요청 단위 manager로 엔티티를 다룹니다. 전체 매핑과
-Gateway 설정은 [빠른 시작 가이드](docs/quick-start.md)에 있습니다.
+typed-sheets를 통해 엔티티를 정의한 후 요청 단위 manager로 엔티티를 다룹니다.
+전체 라우트와 Gateway 설정은 [빠른 시작 가이드](docs/quick-start.md)에 있습니다.
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "typed-sheets";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
 });
 
 const em = hikoutei.em.fork();
@@ -69,9 +75,10 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`flush()`는 로컬 애플리케이션 상태를 변경하고 설정된 Sheet 뷰에 반영할 작업을
-예약합니다. 원격 전달은 비동기이므로 [설정 가이드](docs/quick-start.md)에 따라
-sync worker를 실행하고 Gateway를 프로비저닝해야 합니다.
+`flush()`는 로컬 SQLite 상태를 커밋합니다. 해당 엔티티를 Google Sheets outbox와
+연결하려면 별도의 `sync` 라우트 설정을 추가합니다. 원격 전달은 비동기이므로
+[설정 가이드](docs/quick-start.md)에 따라 sync worker를 실행하고 Gateway를
+프로비저닝해야 합니다.
 
 ## Hikoutei를 사용하기 좋은 경우
 
@@ -105,12 +112,19 @@ sync worker를 실행하고 Gateway를 프로비저닝해야 합니다.
 Gateway 시크릿은 서버에만 보관하세요. 브라우저 코드에 넣거나 Git에 커밋하지
 마세요.
 
+현재 공개 런타임은 로컬 엔티티 생명주기, SQLite 트랜잭션과 outbox 계획,
+outbound worker 전달, Gateway 프로비저닝을 지원합니다. User_Input 폴링과
+전역 Conflict 체크박스 해결은 아직 end-to-end로 구현되지 않은 inbound
+기능이며 설계 대상으로 남아 있습니다.
+
 ## 문서
 
 - [빠른 시작](docs/quick-start.md) — 설치, 매핑, Gateway 설정.
 - [아키텍처](docs/architecture.md) — 로컬 저장소와 Sheet 화면의 관계.
 - [쓰기 및 동기화 흐름](docs/write-and-synchronization-flow.md) — 비동기 전달과
   복구 동작.
+- [현재 상태 검토](docs/current-state-review.md) — 구현된 기반과 의도적으로
+  미완성인 inbound 작업.
 - [개발 가이드](docs/development.md) — 로컬 개발 및 테스트 명령.
 - [벤치마크 기록](docs/sync-bulk-write-benchmark.md) — 날짜별 측정 결과와
   한계.
@@ -130,7 +144,7 @@ Gateway 시크릿은 서버에만 보관하세요. 브라우저 코드에 넣거
 - 레지스트리 및 Apps Script 배포를 위한 설정 도구 추가.
 - 공개 패키지 릴리스 안정화.
 
-현재 작업은 [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
+현재 작업은 [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues)
 에서 확인할 수 있습니다.
 
 ## 라이선스
