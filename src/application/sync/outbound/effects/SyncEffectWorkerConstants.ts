@@ -1,9 +1,7 @@
 /** Constants and durable status contracts shared by the effect worker modules. */
 
 import type { EffectKind, EffectStatus, EffectTargetKind } from "../../../../domain/index.js";
-import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
 import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../../infrastructure/storage/sync/outbound/effectOutbox.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../gateway/constants.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 export const DEFAULT_WRITER_LEASE_DURATION_MS = 60_000;
@@ -55,20 +53,3 @@ export const WORKER_ERROR_CODES = {
 
 export type SyncEffectWorkerErrorCode =
   (typeof WORKER_ERROR_CODES)[keyof typeof WORKER_ERROR_CODES];
-
-export const USER_INPUT_CANDIDATE_BLOCK_SQL = `
-    SELECT 1 AS blocked
-    FROM sheet_visible_field_state AS visible
-    LEFT JOIN sync_conflict AS conflict
-      ON conflict.conflict_id = visible.active_candidate_conflict_id
-    WHERE visible.physical_sheet_id = ?
-      AND visible.projection = '${SYNC_GATEWAY_PROJECTIONS.USER_INPUT}'
-      AND visible.row_binding_id = ?
-      AND visible.field_name IN (__FIELD_NAMES__)
-      AND visible.active_candidate_conflict_id IS NOT NULL
-      AND visible.active_candidate_hash IS NOT NULL
-      AND (conflict.conflict_id IS NULL OR conflict.status IN (
-        '${CONFLICT_STATUSES.OPEN}', '${CONFLICT_STATUSES.NEEDS_REBASE}'
-      ))
-    LIMIT 1
-  `;

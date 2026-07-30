@@ -11,18 +11,11 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-  stableHash,
-  type Applicability,
-  type EffectKind,
-  type EffectStatus,
-  type EffectTargetKind,
   type LookupResult,
   type Presence,
 } from "../../../../domain/index.js";
 import {
-  APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
-  PRESENCE_KINDS,
 } from "../../../../shared/state/constants.js";
 import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
 import {
@@ -31,10 +24,10 @@ import {
   claimWriterLeaseWithAdapter,
   recoverExpiredLeasesWithAdapter,
   listReadyEffectsWithAdapter,
+  hasActiveUserInputCandidateWithAdapter,
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
-  SYNC_EFFECT_RECOVERY_ERROR_CODES,
   type ApplyResultOptions,
   type ClaimEffectOptions,
   type ClaimLeaseOptions,
@@ -46,63 +39,38 @@ import {
   type WriterLease,
   type WriterLeaseClaimResult,
 } from "../../../../infrastructure/storage/index.js";
+import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
-  STORAGE_ERROR_CODES,
-  StorageError,
-} from "../../../../infrastructure/storage/errors.js";
-import { fromSqlNullable } from "../../../../infrastructure/storage/sqlite/sqlState.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import {
-  parseSyncProjectionEffectPayload,
-  type ApplySyncEffectsRequest,
-  type FastAppendRowsRequest,
-  type ReadSyncEffectPostconditionsRequest,
   type SyncEffectPostcondition,
   type SyncGatewayEffect,
   type SyncGatewayEffectResult,
-  type SyncProjection,
   type SyncEffectWorkerGateway,
   type SyncEffectWorkerFullGateway,
 } from "../../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
-  SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
-  SYNC_GATEWAY_POSTCONDITION_MODES,
-  SYNC_GATEWAY_POSTCONDITION_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
 } from "../../gateway/constants.js";
 import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
-  SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
-  type SyncGatewayTiming,
-  type SyncTimingEvent,
-  type SyncTimingOperationCounts,
-  type SyncTimingOperationKind,
   type SyncTimingSink,
 } from "../../telemetry/syncTiming.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
-  EFFECT_TARGET_KINDS,
   OUTBOX_EFFECT_STATUSES,
-  SYNC_EFFECT_KINDS,
-  USER_INPUT_CANDIDATE_BLOCK_SQL,
   WORKER_ERROR_CODES,
-  type SyncEffectWorkerErrorCode,
 } from "./SyncEffectWorkerConstants.js";
 import {
   absentValue,
-  applicabilityFromSqlNullable,
   isAbsent,
   isPresent,
   lookupResult,
   presentValue,
   safeErrorMessage,
   throwWorkerError,
-  type CandidateBlockSqlRow,
-  type PresentValue,
 } from "./SyncEffectWorkerHelpers.js";
 import {
   countsForItems,
@@ -115,7 +83,6 @@ import {
   operationKindsForCounts,
 } from "./SyncEffectWorkerTiming.js";
 import {
-  completeApplied,
   completeFailure,
   completeGatewayResult,
   recoverUnknownResults,
@@ -216,8 +183,8 @@ export interface EffectWorkerStorage {
 /**
  * Processes effects through an adapter-owned SQL connection.
  *
- * This is the MikroORM-compatible worker entrypoint. It never opens the
- * legacy synchronous `node:sqlite` database beside the ORM connection.
+ * This is the adapter-backed worker entrypoint. It uses the same connection as
+ * the entity and sync transaction boundaries.
  */
 export async function runSyncEffectWorkerWithAdapter(
   options: SyncEffectWorkerWithAdapterOptions,
@@ -230,10 +197,50 @@ async function runEffectWorker(
   storage: EffectWorkerStorage,
 ): Promise<SyncEffectWorkerReport> {
   const passStartedAt = Date.now();
+  const pass = await startWorkerPass(options, storage, passStartedAt);
+  if (pass.kind === "lease_unavailable") return freezeReport(pass.report);
+
+  const { fence, report } = pass;
+  const { claimed, recoveryCandidates } = await recoverAndClaimEffects(
+    options,
+    storage,
+    fence,
+    report,
+  );
+  const fullGateway = isFullEffectGateway(options.gateway);
+  await recoverClaimedFailures(options, storage, fence, fullGateway, recoveryCandidates, report);
+  const dispatchable = await prepareDispatchableEffects(options, storage, fence, claimed, report);
+  await dispatchEffects(options, storage, fence, fullGateway, dispatchable, report);
+
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "worker_total",
+    durationMs: Date.now() - passStartedAt,
+    operationKinds: operationKindsForItems(dispatchable),
+    operationCounts: countsForItems(dispatchable),
+  });
+  return freezeReport(report);
+}
+
+type WorkerPass =
+  | {
+    readonly kind: "lease_unavailable";
+    readonly report: MutableReport;
+  }
+  | {
+    readonly kind: "ready";
+    readonly fence: FencingContext;
+    readonly report: MutableReport;
+  };
+
+async function startWorkerPass(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  passStartedAt: number,
+): Promise<WorkerPass> {
   validateOptions(options);
   const role = options.writerRole ?? DEFAULT_WORKER_ROLE;
   const leaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
-  const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
   const leaseStartedAt = Date.now();
   const claimResult = await storage.claimWriterLease({
     role,
@@ -241,15 +248,15 @@ async function runEffectWorker(
     leaseDurationMs: leaseDuration,
     now: options.now,
   });
+  const leaseTiming = {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "writer_lease_claim" as const,
+    durationMs: Date.now() - leaseStartedAt,
+    operationKinds: [],
+    operationCounts: emptyOperationCounts(),
+  };
   if (claimResult.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
-    const report = mutableReport(absentValue<WriterLease>());
-    emitWorkerTiming(options, {
-      scope: SYNC_TIMING_SCOPES.WORKER,
-      phase: "writer_lease_claim",
-      durationMs: Date.now() - leaseStartedAt,
-      operationKinds: [],
-      operationCounts: emptyOperationCounts(),
-    });
+    emitWorkerTiming(options, leaseTiming);
     emitWorkerTiming(options, {
       scope: SYNC_TIMING_SCOPES.WORKER,
       phase: "worker_total",
@@ -257,17 +264,30 @@ async function runEffectWorker(
       operationKinds: [],
       operationCounts: emptyOperationCounts(),
     });
-    return freezeReport(report);
+    return {
+      kind: "lease_unavailable",
+      report: mutableReport(absentValue<WriterLease>()),
+    };
   }
-  const report = mutableReport(presentValue(claimResult.lease));
-  emitWorkerTiming(options, {
-    scope: SYNC_TIMING_SCOPES.WORKER,
-    phase: "writer_lease_claim",
-    durationMs: Date.now() - leaseStartedAt,
-    operationKinds: [],
-    operationCounts: emptyOperationCounts(),
-  });
-  const fence = fenceFromLease(claimResult.lease, options.now);
+  emitWorkerTiming(options, leaseTiming);
+  return {
+    kind: "ready",
+    fence: fenceFromLease(claimResult.lease, options.now),
+    report: mutableReport(presentValue(claimResult.lease)),
+  };
+}
+
+interface ClaimedEffects {
+  readonly claimed: readonly ClaimedEffect[];
+  readonly recoveryCandidates: readonly ClaimedEffect[];
+}
+
+async function recoverAndClaimEffects(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  report: MutableReport,
+): Promise<ClaimedEffects> {
   const selectStartedAt = Date.now();
   report.expiredLeasesRecovered = await storage.recoverExpiredLeases(fence);
   const selected = await storage.listReadyEffects(options.maxEffects);
@@ -283,6 +303,7 @@ async function runEffectWorker(
   const claimed: ClaimedEffect[] = [];
   const recoveryCandidates: ClaimedEffect[] = [];
   const claimEffectsStartedAt = Date.now();
+  const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
   for (const pending of selected) {
     const claimToken = "claim:" + randomUUID();
     const claim = await storage.claimEffect({
@@ -293,48 +314,70 @@ async function runEffectWorker(
     });
     if (!claim.success) continue;
     report.claimed += 1;
-    let gatewayEffect: Presence<SyncGatewayEffect>;
-    let invalidPayloadError: Presence<string>;
-    try {
-      gatewayEffect = presentValue(toGatewayEffect(pending));
-      invalidPayloadError = absentValue();
-    } catch (error: unknown) {
-      gatewayEffect = absentValue();
-      invalidPayloadError = presentValue(safeErrorMessage(error));
-    }
-    const item = { pending, claimToken, gatewayEffect, invalidPayloadError };
+    const item = claimedEffect(pending, claimToken);
     if (pending.status === OUTBOX_EFFECT_STATUSES.FAILED) {
       recoveryCandidates.push(item);
-      continue;
+    } else {
+      claimed.push(item);
     }
-    claimed.push(item);
   }
+  const allClaimed = [...claimed, ...recoveryCandidates];
   emitWorkerTiming(options, {
     scope: SYNC_TIMING_SCOPES.WORKER,
     phase: "effect_claims",
     durationMs: Date.now() - claimEffectsStartedAt,
-    operationKinds: operationKindsForItems([...claimed, ...recoveryCandidates]),
-    operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
+    operationKinds: operationKindsForItems(allClaimed),
+    operationCounts: countsForItems(allClaimed),
   });
+  return { claimed, recoveryCandidates };
+}
 
-  const fullGateway = isFullEffectGateway(options.gateway);
-  if (fullGateway === undefined) {
-    await rejectUnsupportedGatewayEffects(
-      storage,
-      fence,
-      recoveryCandidates,
-      report,
-    );
-  } else {
-    await recoverUnknownResults(
-      { ...options, gateway: fullGateway },
-      storage,
-      fence,
-      recoveryCandidates,
-      report,
-    );
+function claimedEffect(pending: PendingEffect, claimToken: string): ClaimedEffect {
+  try {
+    return {
+      pending,
+      claimToken,
+      gatewayEffect: presentValue(toGatewayEffect(pending)),
+      invalidPayloadError: absentValue(),
+    };
+  } catch (error: unknown) {
+    return {
+      pending,
+      claimToken,
+      gatewayEffect: absentValue(),
+      invalidPayloadError: presentValue(safeErrorMessage(error)),
+    };
   }
+}
 
+async function recoverClaimedFailures(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  fullGateway: SyncEffectWorkerFullGateway | undefined,
+  items: readonly ClaimedEffect[],
+  report: MutableReport,
+): Promise<void> {
+  if (fullGateway === undefined) {
+    await rejectUnsupportedGatewayEffects(storage, fence, items, report);
+    return;
+  }
+  await recoverUnknownResults(
+    { ...options, gateway: fullGateway },
+    storage,
+    fence,
+    items,
+    report,
+  );
+}
+
+async function prepareDispatchableEffects(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  claimed: readonly ClaimedEffect[],
+  report: MutableReport,
+): Promise<readonly ClaimedEffect[]> {
   const usable = claimed.filter((item) => isPresent(item.gatewayEffect));
   for (const invalid of claimed.filter((item) => isAbsent(item.gatewayEffect))) {
     await completeFailure(
@@ -376,125 +419,159 @@ async function runEffectWorker(
     operationKinds: operationKindsForItems(usable),
     operationCounts: countsForItems(usable),
   });
+  return dispatchable;
+}
 
-  const fastAppendItems = dispatchable.filter(isFastAppendCandidate);
-  const regularItems = dispatchable.filter((item) => !isFastAppendCandidate(item));
-
+async function dispatchEffects(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  fullGateway: SyncEffectWorkerFullGateway | undefined,
+  items: readonly ClaimedEffect[],
+  report: MutableReport,
+): Promise<void> {
+  const fastAppendItems = items.filter(isFastAppendCandidate);
+  const regularItems = items.filter((item) => !isFastAppendCandidate(item));
   for (const group of groupByFastAppendRequest(fastAppendItems)) {
     await dispatchFastAppendGroup(options, storage, fence, group, report);
   }
-
   if (fullGateway === undefined) {
     await rejectUnsupportedGatewayEffects(storage, fence, regularItems, report);
-  } else {
-    for (const group of groupByGatewayRequest(regularItems)) {
-      const deferredEffectIds = new Set<string>();
-      let response: Awaited<ReturnType<SyncEffectWorkerFullGateway["applyEffects"]>>;
-      const regularOperationCounts = countsForItems(group.items);
-      const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
-      const gatewayStartedAt = Date.now();
-      try {
-        response = await fullGateway.applyEffects(group.request);
-      } catch {
-        emitWorkerTiming(options, {
-          scope: SYNC_TIMING_SCOPES.WORKER,
-          phase: "regular_gateway_dispatch",
-          durationMs: Date.now() - gatewayStartedAt,
-          operationKinds: regularOperationKinds,
-          operationCounts: regularOperationCounts,
-        });
-        // Remote side may have written the effect before transport failed.
-        await recoverUnknownResults(
-          { ...options, gateway: fullGateway },
-          storage,
-          fence,
-          group.items,
-          report,
-        );
-        continue;
-      }
-      emitGatewayTiming(options, response.timing);
-      emitWorkerTiming(options, {
-        scope: SYNC_TIMING_SCOPES.WORKER,
-        phase: "regular_gateway_dispatch",
-        durationMs: Date.now() - gatewayStartedAt,
-        operationKinds: regularOperationKinds,
-        operationCounts: regularOperationCounts,
-      });
-
-      const resultPersistenceStartedAt = Date.now();
-      const byEffectId = new Map(response.results.map((result) => [result.effectId, result]));
-      for (const item of group.items) {
-        const result = lookupResult(byEffectId.get(item.pending.effect_id));
-        if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND && response.hasMore) {
-          if (await storage.releaseUnprocessedEffect({
-            ...fence,
-            effectId: item.pending.effect_id,
-            claimToken: item.claimToken,
-          })) {
-            report.deferred += 1;
-            deferredEffectIds.add(item.pending.effect_id);
-          }
-        }
-      }
-      const recoveryItems: ClaimedEffect[] = [];
-      for (const item of group.items) {
-        const result = lookupResult(byEffectId.get(item.pending.effect_id));
-        if (
-          result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND &&
-          deferredEffectIds.has(item.pending.effect_id)
-        ) continue;
-        if (
-          result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
-          result.value.payloadHash !== item.pending.payload_hash
-        ) {
-          recoveryItems.push(item);
-          continue;
-        }
-        if (
-          (result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
-            result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
-          (
-            !isSuccessfulGatewayPostcondition(result.value.postcondition) ||
-            !isPresent(result.value.visibleRevision) ||
-            !isPresent(result.value.visibleHash) ||
-            !isPresent(item.gatewayEffect) ||
-            result.value.visibleHash.value !== item.gatewayEffect.value.payload.targetVisibleHash
-          )
-        ) {
-          // A success label without the acknowledged target state is not enough
-          // to close a durable effect. Treat it like a lost response and read
-          // back first.
-          recoveryItems.push(item);
-          continue;
-        }
-        await completeGatewayResult(options, storage, fence, item, result.value, report);
-      }
-      await recoverUnknownResults(
-        { ...options, gateway: fullGateway },
-        storage,
-        fence,
-        recoveryItems,
-        report,
-      );
-      emitWorkerTiming(options, {
-        scope: SYNC_TIMING_SCOPES.WORKER,
-        phase: "regular_result_persistence",
-        durationMs: Date.now() - resultPersistenceStartedAt,
-        operationKinds: regularOperationKinds,
-        operationCounts: regularOperationCounts,
-      });
-    }
+    return;
   }
+  for (const group of groupByGatewayRequest(regularItems)) {
+    await dispatchRegularEffectGroup(options, storage, fence, fullGateway, group, report);
+  }
+}
 
+async function dispatchRegularEffectGroup(
+  options: SyncEffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  gateway: SyncEffectWorkerFullGateway,
+  group: ReturnType<typeof groupByGatewayRequest>[number],
+  report: MutableReport,
+): Promise<void> {
+  const regularOperationCounts = countsForItems(group.items);
+  const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
+  const gatewayStartedAt = Date.now();
+  let response: Awaited<ReturnType<SyncEffectWorkerFullGateway["applyEffects"]>>;
+  try {
+    response = await gateway.applyEffects(group.request);
+  } catch {
+    emitWorkerTiming(options, {
+      scope: SYNC_TIMING_SCOPES.WORKER,
+      phase: "regular_gateway_dispatch",
+      durationMs: Date.now() - gatewayStartedAt,
+      operationKinds: regularOperationKinds,
+      operationCounts: regularOperationCounts,
+    });
+    // Remote side may have written the effect before transport failed.
+    await recoverUnknownResults(
+      { ...options, gateway },
+      storage,
+      fence,
+      group.items,
+      report,
+    );
+    return;
+  }
+  emitGatewayTiming(options, response.timing);
   emitWorkerTiming(options, {
     scope: SYNC_TIMING_SCOPES.WORKER,
-    phase: "worker_total",
-    durationMs: Date.now() - passStartedAt,
-    operationKinds: operationKindsForItems(dispatchable),
-    operationCounts: countsForItems(dispatchable),
+    phase: "regular_gateway_dispatch",
+    durationMs: Date.now() - gatewayStartedAt,
+    operationKinds: regularOperationKinds,
+    operationCounts: regularOperationCounts,
   });
-  return freezeReport(report);
+
+  const resultPersistenceStartedAt = Date.now();
+  const byEffectId = new Map(response.results.map((result) => [result.effectId, result]));
+  const deferredEffectIds = await releaseDeferredRegularEffects(
+    storage,
+    fence,
+    group.items,
+    response.hasMore,
+    byEffectId,
+    report,
+  );
+  const recoveryItems: ClaimedEffect[] = [];
+  for (const item of group.items) {
+    const result = lookupResult(byEffectId.get(item.pending.effect_id));
+    if (
+      result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND &&
+      deferredEffectIds.has(item.pending.effect_id)
+    ) continue;
+    if (requiresRegularResultRecovery(item, result)) {
+      recoveryItems.push(item);
+      continue;
+    }
+    if (result.kind === LOOKUP_RESULT_KINDS.FOUND) {
+      await completeGatewayResult(options, storage, fence, item, result.value, report);
+    }
+  }
+  await recoverUnknownResults(
+    { ...options, gateway },
+    storage,
+    fence,
+    recoveryItems,
+    report,
+  );
+  emitWorkerTiming(options, {
+    scope: SYNC_TIMING_SCOPES.WORKER,
+    phase: "regular_result_persistence",
+    durationMs: Date.now() - resultPersistenceStartedAt,
+    operationKinds: regularOperationKinds,
+    operationCounts: regularOperationCounts,
+  });
+}
+
+async function releaseDeferredRegularEffects(
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  items: readonly ClaimedEffect[],
+  hasMore: boolean,
+  results: ReadonlyMap<string, SyncGatewayEffectResult>,
+  report: MutableReport,
+): Promise<ReadonlySet<string>> {
+  const deferredEffectIds = new Set<string>();
+  if (!hasMore) return deferredEffectIds;
+  for (const item of items) {
+    if (results.has(item.pending.effect_id)) continue;
+    if (await storage.releaseUnprocessedEffect({
+      ...fence,
+      effectId: item.pending.effect_id,
+      claimToken: item.claimToken,
+    })) {
+      report.deferred += 1;
+      deferredEffectIds.add(item.pending.effect_id);
+    }
+  }
+  return deferredEffectIds;
+}
+
+function requiresRegularResultRecovery(
+  item: ClaimedEffect,
+  result: LookupResult<SyncGatewayEffectResult>,
+): boolean {
+  if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) return true;
+  if (result.value.payloadHash !== item.pending.payload_hash) return true;
+  if (
+    result.value.status !== SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED &&
+    result.value.status !== SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED
+  ) return false;
+  return !isVerifiedGatewayResult(item, result.value);
+}
+
+function isVerifiedGatewayResult(
+  item: ClaimedEffect,
+  result: SyncGatewayEffectResult,
+): boolean {
+  return isSuccessfulGatewayPostcondition(result.postcondition) &&
+    isPresent(result.visibleRevision) &&
+    isPresent(result.visibleHash) &&
+    isPresent(item.gatewayEffect) &&
+    result.visibleHash.value === item.gatewayEffect.value.payload.targetVisibleHash;
 }
 
 function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWorkerStorage {
@@ -510,33 +587,27 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
       return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
     },
     isUserInputCandidateBlocked: (item) => {
-      return storage.read(({ sql }) => isUserInputCandidateBlockedWithSql(sql, item));
+      const effect = item.gatewayEffect;
+      if (
+        !isPresent(effect) ||
+        !isCandidateProtectingUserInputEffect(effect.value) ||
+        !isPresent(effect.value.rowBindingId)
+      ) {
+        return Promise.resolve(false);
+      }
+      const rowBindingId = effect.value.rowBindingId;
+      const fieldNames = Object.keys(effect.value.payload.fields);
+      if (fieldNames.length === 0) return Promise.resolve(true);
+      return hasActiveUserInputCandidateWithAdapter(storage, {
+        physicalSheetId: effect.value.physicalSheetId,
+        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        rowBindingId: rowBindingId.value,
+        fieldNames,
+        openConflictStatus: CONFLICT_STATUSES.OPEN,
+        rebasedConflictStatus: CONFLICT_STATUSES.NEEDS_REBASE,
+      });
     },
   };
-}
-
-async function isUserInputCandidateBlockedWithSql(
-  sql: SqlExecutor,
-  item: ClaimedEffect,
-): Promise<boolean> {
-  const effect = item.gatewayEffect;
-  if (
-    !isPresent(effect) ||
-    !isCandidateProtectingUserInputEffect(effect.value) ||
-    !isPresent(effect.value.rowBindingId)
-  ) {
-    return false;
-  }
-  const fieldNames = Object.keys(effect.value.payload.fields);
-  if (fieldNames.length === 0) return true;
-  const placeholders = fieldNames.map(() => "?").join(", ");
-  const blockSql = USER_INPUT_CANDIDATE_BLOCK_SQL.replace("__FIELD_NAMES__", placeholders);
-  const row = await sql.get<CandidateBlockSqlRow>(blockSql, [
-    effect.value.physicalSheetId,
-    effect.value.rowBindingId.value,
-    ...fieldNames,
-  ]);
-  return row !== undefined;
 }
 
 

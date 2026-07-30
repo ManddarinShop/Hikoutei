@@ -15,10 +15,6 @@ export function safeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message.slice(0, 500) : "unknown sync gateway failure";
 }
 
-export interface CandidateBlockSqlRow {
-  readonly blocked: number;
-}
-
 export type PresentValue<T> = {
   readonly kind: typeof PRESENCE_KINDS.PRESENT;
   readonly value: T;
