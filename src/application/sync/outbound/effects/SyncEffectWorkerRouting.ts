@@ -29,7 +29,7 @@ import {
   lookupResult,
   throwWorkerError,
 } from "./SyncEffectWorkerHelpers.js";
-import type { ClaimedEffect } from "./SyncEffectWorker.js";
+import type { ClaimedEffect } from "./SyncEffectWorkerContracts.js";
 
 /** Accepts either inline read-back or a flushed-write acknowledgement. */
 export function isSuccessfulGatewayPostcondition(

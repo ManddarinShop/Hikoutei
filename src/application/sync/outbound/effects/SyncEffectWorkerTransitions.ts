@@ -40,7 +40,7 @@ import type {
   RepairReplanRequest,
   SyncEffectWorkerBaseOptions,
   SyncEffectWorkerFullOptions,
-} from "./SyncEffectWorker.js";
+} from "./SyncEffectWorkerContracts.js";
 
 export async function completeGatewayResult(
   options: SyncEffectWorkerBaseOptions,

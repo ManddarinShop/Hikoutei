@@ -13,11 +13,11 @@ import {
   POSITIVE_SAFE_INTEGER_MINIMUM,
 } from "../../../../domain/index.js";
 import type { ReconciliationScanReport } from "../reconciliation/ReconciliationScanner.js";
-import {
-  runSyncEffectWorkerWithAdapter,
-  type SyncEffectWorkerReport,
-  type SyncEffectWorkerWithAdapterOptions,
-} from "./SyncEffectWorker.js";
+import { runSyncEffectWorkerWithAdapter } from "./SyncEffectWorker.js";
+import type {
+  SyncEffectWorkerReport,
+  SyncEffectWorkerWithAdapterOptions,
+} from "./SyncEffectWorkerContracts.js";
 
 const DEFAULT_MAX_EFFECTS = 20;
 const DEFAULT_IDLE_INTERVAL_MS = 1_000;

@@ -16,7 +16,7 @@ import { isPresent } from "./SyncEffectWorkerHelpers.js";
 import type {
   ClaimedEffect,
   SyncEffectWorkerBaseOptions,
-} from "./SyncEffectWorker.js";
+} from "./SyncEffectWorkerContracts.js";
 
 export function emptyOperationCounts(): SyncTimingOperationCounts {
   return { append: 0, update: 0, delete: 0 };

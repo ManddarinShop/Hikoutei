@@ -29,7 +29,7 @@ import type {
   EffectWorkerStorage,
   MutableReport,
   SyncEffectWorkerBaseOptions,
-} from "./SyncEffectWorker.js";
+} from "./SyncEffectWorkerContracts.js";
 
 /** Fails regular effects explicitly when the configured gateway is fast-only. */
 export async function rejectUnsupportedGatewayEffects(

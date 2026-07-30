@@ -7,54 +7,25 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-  EMPTY_STRING_LENGTH_ZERO,
-  NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
-  type LookupResult,
-  type Presence,
-} from "../../../../domain/index.js";
+import type { LookupResult } from "../../../../domain/index.js";
 import {
   LOOKUP_RESULT_KINDS,
 } from "../../../../shared/state/constants.js";
-import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
 import {
-  applyEffectResultWithAdapter,
-  claimEffectWithAdapter,
-  claimWriterLeaseWithAdapter,
-  recoverExpiredLeasesWithAdapter,
-  listReadyEffectsWithAdapter,
-  hasActiveUserInputCandidateWithAdapter,
-  releaseUnprocessedEffectWithAdapter,
-  retryClaimedEffectWithAdapter,
-  supersedeAndReplanWithAdapter,
-  type ApplyResultOptions,
-  type ClaimEffectOptions,
-  type ClaimLeaseOptions,
-  type ClaimResult,
   type FencingContext,
-  type NewEffect,
   type PendingEffect,
-  type RetryClaimedEffectOptions,
   type WriterLease,
-  type WriterLeaseClaimResult,
 } from "../../../../infrastructure/storage/index.js";
-import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
-  type SyncEffectPostcondition,
-  type SyncGatewayEffect,
   type SyncGatewayEffectResult,
-  type SyncEffectWorkerGateway,
   type SyncEffectWorkerFullGateway,
 } from "../../gateway/syncGateway.js";
 import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
-  SYNC_GATEWAY_PROJECTIONS,
 } from "../../gateway/constants.js";
 import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
   SYNC_TIMING_SCOPES,
-  type SyncTimingSink,
 } from "../../telemetry/syncTiming.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
@@ -70,7 +41,6 @@ import {
   lookupResult,
   presentValue,
   safeErrorMessage,
-  throwWorkerError,
 } from "./SyncEffectWorkerHelpers.js";
 import {
   countsForItems,
@@ -95,90 +65,33 @@ import {
   fenceFromLease,
   groupByFastAppendRequest,
   groupByGatewayRequest,
-  isCandidateProtectingUserInputEffect,
   isFastAppendCandidate,
   isSuccessfulGatewayPostcondition,
   toGatewayEffect,
 } from "./SyncEffectWorkerRouting.js";
-
-/** An effect plus evidence supplied to a writer-owned system-repair replanner. */
-export interface RepairReplanRequest {
-  readonly effect: PendingEffect;
-  readonly gatewayResult: Presence<SyncGatewayEffectResult>;
-  readonly postcondition: Presence<SyncEffectPostcondition>;
-}
-
-/** Callback that creates a fresh effect without mutating the old evidence. */
-export type RepairReplanFactory = (request: RepairReplanRequest) => Presence<NewEffect>;
-
-/** Shared construction options for a bounded effect-worker pass. */
-export interface SyncEffectWorkerBaseOptions {
-  readonly gateway: SyncEffectWorkerGateway;
-  readonly workerId: string;
-  readonly now: number;
-  readonly maxEffects: number;
-  readonly writerRole?: string;
-  readonly writerLeaseDurationMs?: number;
-  readonly effectLeaseDurationMs?: number;
-  readonly makeRepairReplan?: RepairReplanFactory;
-  /** Optional diagnostics sink for worker and gateway phases. */
-  readonly onTiming?: SyncTimingSink;
-}
-
-export type SyncEffectWorkerFullOptions = Omit<SyncEffectWorkerBaseOptions, "gateway"> & {
-  readonly gateway: SyncEffectWorkerFullGateway;
-};
-
-/** Construction options for a worker running through an async storage adapter. */
-export interface SyncEffectWorkerWithAdapterOptions extends SyncEffectWorkerBaseOptions {
-  readonly storage: SqlStorageAdapter;
-}
-
-/** Counters that make partial results and recovery visible to callers. */
-export interface SyncEffectWorkerReport {
-  readonly lease: Presence<WriterLease>;
-  readonly expiredLeasesRecovered: number;
-  readonly selected: number;
-  readonly claimed: number;
-  readonly applied: number;
-  readonly blockedCandidate: number;
-  readonly superseded: number;
-  readonly conflicted: number;
-  readonly failed: number;
-  readonly deferred: number;
-  readonly requeued: number;
-  readonly replanned: number;
-  readonly responseLossRecovered: number;
-}
-
-export interface ClaimedEffect {
-  readonly pending: PendingEffect;
-  readonly claimToken: string;
-  readonly gatewayEffect: Presence<SyncGatewayEffect>;
-  readonly invalidPayloadError: Presence<string>;
-}
-
-/** Persistence operations used by the shared effect-worker state machine. */
-export interface EffectWorkerStorage {
-  claimWriterLease(options: ClaimLeaseOptions): Promise<WriterLeaseClaimResult>;
-  recoverExpiredLeases(fence: FencingContext): Promise<number>;
-  listReadyEffects(limit: number): Promise<readonly PendingEffect[]>;
-  claimEffect(options: ClaimEffectOptions): Promise<ClaimResult>;
-  applyEffectResult(options: ApplyResultOptions): Promise<boolean>;
-  releaseUnprocessedEffect(
-    options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
-      readonly effectId: string;
-      readonly claimToken: string;
-    },
-  ): Promise<boolean>;
-  retryClaimedEffect(options: RetryClaimedEffectOptions): Promise<boolean>;
-  supersedeAndReplan(
-    fence: FencingContext,
-    oldEffectId: string,
-    newEffect: NewEffect,
-  ): Promise<void>;
-  isUserInputCandidateBlocked(item: ClaimedEffect): Promise<boolean>;
-}
+import { freezeReport, mutableReport } from "./SyncEffectWorkerReport.js";
+import { validateSyncEffectWorkerOptions } from "./SyncEffectWorkerValidation.js";
+import { createAdapterEffectWorkerStorage } from "./SyncEffectWorkerStorage.js";
+import { isFullEffectGateway } from "./SyncEffectWorkerGateway.js";
+import type {
+  ClaimedEffect,
+  EffectWorkerStorage,
+  MutableReport,
+  SyncEffectWorkerBaseOptions,
+  SyncEffectWorkerReport,
+  SyncEffectWorkerWithAdapterOptions,
+} from "./SyncEffectWorkerContracts.js";
+export type {
+  ClaimedEffect,
+  EffectWorkerStorage,
+  MutableReport,
+  RepairReplanFactory,
+  RepairReplanRequest,
+  SyncEffectWorkerBaseOptions,
+  SyncEffectWorkerFullOptions,
+  SyncEffectWorkerReport,
+  SyncEffectWorkerWithAdapterOptions,
+} from "./SyncEffectWorkerContracts.js";
 
 /**
  * Processes effects through an adapter-owned SQL connection.
@@ -238,7 +151,7 @@ async function startWorkerPass(
   storage: EffectWorkerStorage,
   passStartedAt: number,
 ): Promise<WorkerPass> {
-  validateOptions(options);
+  validateSyncEffectWorkerOptions(options);
   const role = options.writerRole ?? DEFAULT_WORKER_ROLE;
   const leaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
   const leaseStartedAt = Date.now();
@@ -572,126 +485,4 @@ function isVerifiedGatewayResult(
     isPresent(result.visibleHash) &&
     isPresent(item.gatewayEffect) &&
     result.visibleHash.value === item.gatewayEffect.value.payload.targetVisibleHash;
-}
-
-function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWorkerStorage {
-  return {
-    claimWriterLease: (options) => claimWriterLeaseWithAdapter(storage, options),
-    recoverExpiredLeases: (fence) => recoverExpiredLeasesWithAdapter(storage, fence),
-    listReadyEffects: (limit) => listReadyEffectsWithAdapter(storage, limit),
-    claimEffect: (options) => claimEffectWithAdapter(storage, options),
-    applyEffectResult: (options) => applyEffectResultWithAdapter(storage, options),
-    releaseUnprocessedEffect: (options) => releaseUnprocessedEffectWithAdapter(storage, options),
-    retryClaimedEffect: (options) => retryClaimedEffectWithAdapter(storage, options),
-    supersedeAndReplan: (fence, oldEffectId, newEffect) => {
-      return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
-    },
-    isUserInputCandidateBlocked: (item) => {
-      const effect = item.gatewayEffect;
-      if (
-        !isPresent(effect) ||
-        !isCandidateProtectingUserInputEffect(effect.value) ||
-        !isPresent(effect.value.rowBindingId)
-      ) {
-        return Promise.resolve(false);
-      }
-      const rowBindingId = effect.value.rowBindingId;
-      const fieldNames = Object.keys(effect.value.payload.fields);
-      if (fieldNames.length === 0) return Promise.resolve(true);
-      return hasActiveUserInputCandidateWithAdapter(storage, {
-        physicalSheetId: effect.value.physicalSheetId,
-        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
-        rowBindingId: rowBindingId.value,
-        fieldNames,
-        openConflictStatus: CONFLICT_STATUSES.OPEN,
-        rebasedConflictStatus: CONFLICT_STATUSES.NEEDS_REBASE,
-      });
-    },
-  };
-}
-
-
-/** Returns the full gateway only when every regular recovery capability exists. */
-function isFullEffectGateway(
-  gateway: SyncEffectWorkerGateway,
-): SyncEffectWorkerFullGateway | undefined {
-  const candidate = gateway as Partial<SyncEffectWorkerFullGateway>;
-  if (
-    typeof candidate.applyEffects !== "function" ||
-    typeof candidate.readEffectPostcondition !== "function" ||
-    typeof candidate.readEffectPostconditions !== "function"
-  ) {
-    return undefined;
-  }
-  return gateway as SyncEffectWorkerFullGateway;
-}
-
-
-
-
-export interface MutableReport {
-  lease: Presence<WriterLease>;
-  expiredLeasesRecovered: number;
-  selected: number;
-  claimed: number;
-  applied: number;
-  blockedCandidate: number;
-  superseded: number;
-  conflicted: number;
-  failed: number;
-  deferred: number;
-  requeued: number;
-  replanned: number;
-  responseLossRecovered: number;
-}
-
-function mutableReport(lease: Presence<WriterLease>): MutableReport {
-  return {
-    lease,
-    expiredLeasesRecovered: 0,
-    selected: 0,
-    claimed: 0,
-    applied: 0,
-    blockedCandidate: 0,
-    superseded: 0,
-    conflicted: 0,
-    failed: 0,
-    deferred: 0,
-    requeued: 0,
-    replanned: 0,
-    responseLossRecovered: 0,
-  };
-}
-
-function freezeReport(report: MutableReport): SyncEffectWorkerReport {
-  return { ...report };
-}
-
-function validateOptions(options: SyncEffectWorkerBaseOptions): void {
-  if (options.workerId.length === EMPTY_STRING_LENGTH_ZERO) {
-    throwWorkerError("effect worker ID is required");
-  }
-  if (
-    !Number.isSafeInteger(options.now) ||
-    options.now < NON_NEGATIVE_SAFE_INTEGER_MINIMUM
-  ) {
-    throwWorkerError("effect worker time must be a non-negative safe integer");
-  }
-  if (
-    !Number.isSafeInteger(options.maxEffects) ||
-    options.maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM
-  ) {
-    throwWorkerError("effect worker maxEffects must be a positive safe integer");
-  }
-  for (const [name, value] of [
-    ["writerLeaseDurationMs", options.writerLeaseDurationMs],
-    ["effectLeaseDurationMs", options.effectLeaseDurationMs],
-  ] as const) {
-    if (
-      value !== undefined &&
-      (!Number.isSafeInteger(value) || value < POSITIVE_SAFE_INTEGER_MINIMUM)
-    ) {
-      throwWorkerError(name + " must be a positive safe integer");
-    }
-  }
 }
