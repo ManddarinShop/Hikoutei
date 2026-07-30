@@ -7,59 +7,39 @@
  */
 
 import {
-  EMPTY_STRING_LENGTH_ZERO,
   FIELD_OWNERSHIPS,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
-  type EffectTargetKind,
   type NormalizedCell,
 } from "../../../../domain/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
 import { SYNC_GATEWAY_PROJECTIONS } from "../../../sync/gateway/constants.js";
 import {
   computeSyncVisibleHash,
-  parseSyncProjectionEffectPayload,
 } from "../../../sync/gateway/syncGateway.js";
 import {
   createCandidateReconcileEffect,
   createSystemProjectionEffect,
   createUserInputDeleteEffect,
 } from "../../../sync/outbound/projection/ProjectionEffectFactory.js";
-import { requireRegisteredSyncSheetWithSql } from "../../../../infrastructure/storage/index.js";
-import type {
-  NewEffect,
-  RegisteredSyncSheet,
-  SqlExecutor,
-} from "../support/contracts.js";
+import type { NewEffect } from "../support/contracts.js";
 import {
-  MAPPED_EFFECT_STATUSES,
   MAPPED_EFFECT_TARGET_KINDS,
-  READ_LATEST_PROJECTION_EFFECT_SQL,
-  READ_VISIBLE_PROJECTION_STATE_SQL,
-  type LatestProjectionEffectSqlRow,
-  type ProjectionBaseline,
   type ResolvedWriterOptions,
-  type VisibleProjectionSqlRow,
 } from "../support/contracts.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
+  type TypedSheetsPersistenceContext,
   type TypedSheetsEntityChange,
 } from "../../api/contracts.js";
 import {
   requireTypedSheetsEntityProjection,
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
-  type TypedSheetsEntityProjectionMapping,
 } from "../../mapping/entityMapping.js";
-import {
-  TYPED_SHEETS_ORM_ERROR_CODES,
-  TypedSheetsOrmError,
-} from "../../errors.js";
+import { requireMappedRoute, projectionBaseline } from "./projectionBaseline.js";
 import {
   absentValue,
   applicableValue,
   identifiedValue,
-  isNonNegativeSafeInteger,
-  isPositiveSafeInteger,
   projectionRowTargetId,
   requireEncodedField,
   throwProjectionBlocked,
@@ -68,29 +48,29 @@ import {
 
 /** Plans all projection effects required by one mapped entity lifecycle change. */
 export async function projectionEffects(
-  sql: SqlExecutor,
+  persistence: TypedSheetsPersistenceContext,
   writer: ResolvedWriterOptions,
   mapping: TypedSheetsEntityMapping,
   entityId: string,
   rowBindingId: string,
-  anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
   changeKind: TypedSheetsEntityChange["kind"],
   changedFields: readonly TypedSheetsEntityFieldMapping[],
   commitId: string,
   targetEntityRevision: number,
+  options: ProjectionEffectsOptions = {},
 ): Promise<readonly NewEffect[]> {
   const systemProjection = requireTypedSheetsEntityProjection(
     mapping,
     SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
   );
-  const systemRoute = await requireMappedRoute(sql, mapping, systemProjection);
+  const systemRoute = await requireMappedRoute(persistence, mapping, systemProjection);
   const systemTarget = {
     targetKind: MAPPED_EFFECT_TARGET_KINDS.ENTITY,
     targetId: entityId,
   } as const;
   const systemBaseline = await projectionBaseline(
-    sql,
+    persistence,
     mapping,
     systemProjection,
     rowBindingId,
@@ -118,7 +98,6 @@ export async function projectionEffects(
       targetId: systemTarget.targetId,
       rowBindingId: presentValue(rowBindingId),
       conflictId: absentValue(),
-      targetAnchor: anchor,
       fields: systemFields,
       createIfMissing: systemBaseline.createIfMissing,
       expectedVisibleRevision: systemBaseline.expectedVisibleRevision,
@@ -127,6 +106,8 @@ export async function projectionEffects(
       streamSequence: systemBaseline.streamSequence,
     }),
   ];
+
+  if (options.includeUserProjection === false) return effects;
 
   const userProjection = mapping.projections.find(
     (projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
@@ -141,7 +122,7 @@ export async function projectionEffects(
     !shouldReconcileUserInput
   ) return effects;
 
-  const userRoute = await requireMappedRoute(sql, mapping, userProjection);
+  const userRoute = await requireMappedRoute(persistence, mapping, userProjection);
   const userFields = Object.fromEntries(
     mapping.fields
       .filter((field) => field.ownership === FIELD_OWNERSHIPS.USER)
@@ -152,7 +133,7 @@ export async function projectionEffects(
     targetId: projectionRowTargetId(userProjection.physicalSheetId, rowBindingId),
   } as const;
   const userBaseline = await projectionBaseline(
-    sql,
+    persistence,
     mapping,
     userProjection,
     rowBindingId,
@@ -180,7 +161,6 @@ export async function projectionEffects(
       targetId: userTarget.targetId,
       rowBindingId: presentValue(rowBindingId),
       conflictId: absentValue(),
-      targetAnchor: anchor,
       fields: userFields,
       createIfMissing: false,
       expectedVisibleRevision: userBaseline.expectedVisibleRevision,
@@ -202,7 +182,6 @@ export async function projectionEffects(
     targetId: userTarget.targetId,
     rowBindingId: presentValue(rowBindingId),
     conflictId: absentValue(),
-    targetAnchor: anchor,
     fields: userFields,
     createIfMissing: userBaseline.createIfMissing,
     expectedVisibleRevision: userBaseline.expectedVisibleRevision,
@@ -213,123 +192,8 @@ export async function projectionEffects(
   return effects;
 }
 
-/** Loads and validates the registered route for a mapped projection. */
-export async function requireMappedRoute(
-  sql: SqlExecutor,
-  mapping: TypedSheetsEntityMapping,
-  projection: TypedSheetsEntityProjectionMapping,
-): Promise<RegisteredSyncSheet> {
-  const route = await requireRegisteredSyncSheetWithSql(sql, projection.physicalSheetId);
-  if (
-    route.logicalSheetId !== mapping.logicalSheetId ||
-    route.projection !== projection.projection ||
-    route.schemaVersion !== mapping.schemaVersion
-  ) {
-    throw new TypedSheetsOrmError(
-      TYPED_SHEETS_ORM_ERROR_CODES.INVALID_ENTITY_MAPPING,
-      `registered route ${projection.physicalSheetId} does not match ${mapping.entityName}'s mapping.`,
-    );
-  }
-  return route;
-}
-
-/** Derives the next visible revision/hash from queued or confirmed state. */
-export async function projectionBaseline(
-  sql: SqlExecutor,
-  mapping: TypedSheetsEntityMapping,
-  projection: TypedSheetsEntityProjectionMapping,
-  rowBindingId: string,
-  targetKind: EffectTargetKind,
-  targetId: string,
-): Promise<ProjectionBaseline> {
-  const latest = await sql.get<LatestProjectionEffectSqlRow>(READ_LATEST_PROJECTION_EFFECT_SQL, [
-    mapping.logicalSheetId,
-    targetKind,
-    targetId,
-  ]);
-  if (latest !== undefined) {
-    if (
-      latest.physical_sheet_id !== projection.physicalSheetId ||
-      latest.projection !== projection.projection ||
-      !isPositiveSafeInteger(latest.stream_sequence)
-    ) {
-      throwProjectionBlocked(mapping, projection, "latest target effect has incompatible routing");
-    }
-    const streamSequence = latest.stream_sequence + 1;
-    if (!isPositiveSafeInteger(streamSequence)) {
-      throwProjectionBlocked(mapping, projection, "projection stream sequence overflowed");
-    }
-    if (
-      latest.status === MAPPED_EFFECT_STATUSES.PENDING ||
-      latest.status === MAPPED_EFFECT_STATUSES.PROCESSING
-    ) {
-      if (!isNonNegativeSafeInteger(latest.expected_visible_revision)) {
-        throwProjectionBlocked(mapping, projection, "latest effect has an invalid expected visible revision");
-      }
-      const expectedVisibleRevision = latest.expected_visible_revision + 1;
-      if (!isNonNegativeSafeInteger(expectedVisibleRevision)) {
-        throwProjectionBlocked(mapping, projection, "projection visible revision overflowed");
-      }
-      const payload = parseSyncProjectionEffectPayload(latest.payload_json);
-      return {
-        expectedVisibleRevision,
-        expectedVisibleHash: payload.targetVisibleHash,
-        createIfMissing: false,
-        streamSequence,
-      };
-    }
-    if (latest.status !== MAPPED_EFFECT_STATUSES.APPLIED) {
-      throwProjectionBlocked(mapping, projection, `latest effect is ${latest.status}`);
-    }
-    return projectionBaselineFromConfirmedState(
-      sql,
-      mapping,
-      projection,
-      rowBindingId,
-      streamSequence,
-    );
-  }
-
-  return projectionBaselineFromConfirmedState(
-    sql,
-    mapping,
-    projection,
-    rowBindingId,
-    POSITIVE_SAFE_INTEGER_MINIMUM,
-  );
-}
-
-/** Reads the last confirmed visible state when no effect is currently queued. */
-export async function projectionBaselineFromConfirmedState(
-  sql: SqlExecutor,
-  mapping: TypedSheetsEntityMapping,
-  projection: TypedSheetsEntityProjectionMapping,
-  rowBindingId: string,
-  streamSequence: number,
-): Promise<ProjectionBaseline> {
-  const visible = await sql.get<VisibleProjectionSqlRow>(READ_VISIBLE_PROJECTION_STATE_SQL, [
-    projection.physicalSheetId,
-    projection.projection,
-    rowBindingId,
-  ]);
-  if (visible === undefined) {
-    return {
-      expectedVisibleRevision: 0,
-      expectedVisibleHash: "",
-      createIfMissing: true,
-      streamSequence,
-    };
-  }
-  if (
-    !isNonNegativeSafeInteger(visible.confirmed_visible_revision) ||
-    visible.confirmed_snapshot_hash.length === EMPTY_STRING_LENGTH_ZERO
-  ) {
-    throwProjectionBlocked(mapping, projection, "confirmed visible state is invalid");
-  }
-  return {
-    expectedVisibleRevision: visible.confirmed_visible_revision,
-    expectedVisibleHash: visible.confirmed_snapshot_hash,
-    createIfMissing: false,
-    streamSequence,
-  };
+/** Controls which projection effects are emitted for one canonical commit. */
+export interface ProjectionEffectsOptions {
+  /** Skip User_Input reconciliation when the change originated from User_Input. */
+  readonly includeUserProjection?: boolean;
 }
