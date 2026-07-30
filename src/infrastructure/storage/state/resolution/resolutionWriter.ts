@@ -2,28 +2,14 @@
  * Durable, fenced storage mapping for trusted conflict-resolution commands.
  *
  * The pure core decides whether an acknowledgement is resolved, stale, or
- * rejected. This module records that decision with the command receipt,
- * clears only the currently active candidate pointer, and queues any
- * resolution projection effect in one SQLite transaction.
+ * rejected. This module keeps that state-machine order visible and delegates
+ * validation, reads, and SQL mutations to focused boundary modules.
  */
 
 import { applyResolution } from "../../../../domain/index.js";
 import { CONFLICT_TRANSITION_KINDS } from "../../../../domain/conflict/transitions.js";
-import {
-  LOOKUP_RESULT_KINDS,
-  PRESENCE_KINDS,
-} from "../../../../shared/state/constants.js";
-import type {
-  ConflictStatus,
-  LookupResult,
-  ResolutionCommand,
-  SyncConflict,
-} from "../../../../domain/index.js";
+import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
-import {
-  appendPendingEffectsWithSql,
-  type NewEffect,
-} from "../../sync/outbound/effectOutbox.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import {
   isFencingValidWithSql,
@@ -35,37 +21,26 @@ import {
   RESOLUTION_COMMAND_STATUSES,
 } from "./resolutionWriterContracts.js";
 import type {
-  ActiveCandidatePointer,
-  CommandRow,
-  ConflictRow,
-  EffectDedupeRow,
   PersistResolutionCommandInput,
   PersistResolutionCommandResult,
-  RegisteredProjectionRow,
 } from "./resolutionWriterContracts.js";
 import {
-  ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL,
-  CLEAR_ACTIVE_CANDIDATE_POINTER_SQL,
-  FIND_EXISTING_COMMAND_SQL,
-  INSERT_PROCESSING_COMMAND_SQL,
-  MARK_COMMAND_APPLIED_SQL,
-  MARK_COMMAND_REJECTED_SQL,
-  MARK_COMMAND_STALE_SQL,
-  MARK_CONFLICT_RESOLVED_SQL,
-  MARK_CONFLICT_STALE_SQL,
-  READ_ACTIVE_CANDIDATE_POINTER_SQL,
-  READ_CONFLICT_SQL,
-  READ_EFFECT_DEDUPE_SQL,
-  READ_REGISTERED_PROJECTION_SQL,
-} from "./resolutionWriterSql.js";
+  applyResolvedCommandWithSql,
+  appendResolutionEffectsWithSql,
+  insertProcessingCommandWithSql,
+  markRejectedCommandWithSql,
+  markStaleCommandWithSql,
+} from "./resolutionWriterMutations.js";
+import {
+  findExistingCommandWithSql,
+  readActiveCandidatePointerWithSql,
+  readConflictWithSql,
+} from "./resolutionWriterLookup.js";
 import {
   assertCurrentFenceWithSql,
   FenceLostError,
-  fenceParameters,
-  fromSqlNullable,
-  parseNormalizedCell,
-  requireConflictStatus,
 } from "./resolutionWriterHelpers.js";
+import { validateResolutionCommandInput } from "./resolutionWriterValidation.js";
 
 export {
   PERSIST_RESOLUTION_RESULT_KINDS,
@@ -76,17 +51,13 @@ export type {
   PersistResolutionCommandResult,
 } from "./resolutionWriterContracts.js";
 
-/**
- * Persists one trusted resolution command through an already-active async SQL
- * transaction. A command receipt, its conflict transition, and any effects
- * remain atomic with an ORM-managed user-entity mutation.
- */
+/** Persists one trusted resolution command through an active SQL transaction. */
 export async function persistResolutionCommandWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
   input: PersistResolutionCommandInput,
 ): Promise<PersistResolutionCommandResult> {
-  validateInput(input);
+  validateResolutionCommandInput(input);
   if (!(await isFencingValidWithSql(sql, fence))) {
     return { kind: PERSIST_RESOLUTION_RESULT_KINDS.FENCED_OUT };
   }
@@ -97,8 +68,6 @@ export async function persistResolutionCommandWithSql(
       const duplicate = await findExistingCommandWithSql(sql, input.command);
       if (duplicate.kind === LOOKUP_RESULT_KINDS.FOUND) {
         const duplicateResult = duplicate.value;
-        // A durable processing receipt already owns the request. Only a terminal
-        // replay may consume a still-checked control with a reset projection.
         if (duplicateResult.status !== RESOLUTION_COMMAND_STATUSES.PROCESSING) {
           await appendResolutionEffectsWithSql(sql, fence, input.duplicateEffects ?? []);
         }
@@ -172,337 +141,4 @@ export async function persistResolutionCommandWithAdapter(
   input: PersistResolutionCommandInput,
 ): Promise<PersistResolutionCommandResult> {
   return storage.transaction(({ sql }) => persistResolutionCommandWithSql(sql, fence, input));
-}
-
-function validateInput(input: PersistResolutionCommandInput): void {
-  if (input.logicalSheetId.length === 0 || input.commitId.length === 0) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_RESOLUTION_COMMAND,
-      "logical sheet ID and resolution commit ID are required",
-    );
-  }
-  const command = input.command;
-  if (
-    command.commandId.length === 0 ||
-    command.requestKey.length === 0 ||
-    command.actorId.length === 0 ||
-    command.targetConflictId.length === 0 ||
-    command.activeCandidateHash.length === 0 ||
-    command.payloadHash.length === 0 ||
-    !Number.isSafeInteger(command.expectedRevision) ||
-    command.expectedRevision < 0 ||
-    !Number.isSafeInteger(command.expectedCandidateEpoch) ||
-    command.expectedCandidateEpoch < 0
-  ) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_RESOLUTION_COMMAND,
-      "resolution command has an invalid durable identity or CAS input",
-    );
-  }
-  for (const effect of allResolutionEffects(input)) {
-    const isConflictControlProjection =
-      effect.projection === "sync_conflicts" &&
-      effect.targetKind === "conflict" &&
-      effect.conflictId.kind === PRESENCE_KINDS.PRESENT &&
-      effect.conflictId.value === command.targetConflictId;
-    if (effect.logicalSheetId !== input.logicalSheetId && !isConflictControlProjection) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.INVALID_RESOLUTION_COMMAND,
-        "resolution effect belongs to a different logical sheet",
-      );
-    }
-  }
-}
-
-/** Finds a replayed resolution command through the active async SQL transaction. */
-async function findExistingCommandWithSql(
-  sql: SqlExecutor,
-  command: ResolutionCommand,
-): Promise<LookupResult<Extract<
-  PersistResolutionCommandResult,
-  { readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.DUPLICATE }
->>> {
-  const rows = await sql.all<CommandRow>(FIND_EXISTING_COMMAND_SQL, [
-    command.commandId,
-    command.requestKey,
-  ]);
-  if (rows.length === 0) return { kind: LOOKUP_RESULT_KINDS.NOT_FOUND };
-  if (rows.length !== 1) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_COMMAND_IDENTITY_CONFLICT,
-      "resolution command identity is internally inconsistent",
-    );
-  }
-  const existing = rows[0];
-  if (existing === undefined) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
-      "resolution command lookup unexpectedly lost its row",
-    );
-  }
-  if (!sameCommandIdentity(existing, command)) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_COMMAND_IDENTITY_CONFLICT,
-      "resolution command ID or request key was replayed with a different payload",
-    );
-  }
-  return {
-    kind: LOOKUP_RESULT_KINDS.FOUND,
-    value: {
-      kind: PERSIST_RESOLUTION_RESULT_KINDS.DUPLICATE,
-      commandId: existing.command_id,
-      status: existing.status,
-    },
-  };
-}
-
-function sameCommandIdentity(existing: CommandRow, command: ResolutionCommand): boolean {
-  return existing.command_id === command.commandId &&
-    existing.request_key === command.requestKey &&
-    existing.action === command.action &&
-    existing.actor_id === command.actorId &&
-    existing.role === command.role &&
-    existing.target_conflict_id === command.targetConflictId &&
-    existing.expected_revision === command.expectedRevision &&
-    existing.active_candidate_hash === command.activeCandidateHash &&
-    existing.expected_candidate_epoch === command.expectedCandidateEpoch &&
-    existing.payload_hash === command.payloadHash;
-}
-
-/** Reads and validates one conflict record through the active async SQL transaction. */
-async function readConflictWithSql(
-  sql: SqlExecutor,
-  logicalSheetId: string,
-  conflictId: string,
-): Promise<LookupResult<SyncConflict>> {
-  const row = await sql.get<ConflictRow>(READ_CONFLICT_SQL, [logicalSheetId, conflictId]);
-  if (row === undefined) return { kind: LOOKUP_RESULT_KINDS.NOT_FOUND };
-  return {
-    kind: LOOKUP_RESULT_KINDS.FOUND,
-    value: {
-      conflictId: row.conflict_id,
-      conflictGroupId: fromSqlNullable(row.conflict_group_id),
-      eventId: row.event_id,
-      rowBindingId: row.row_binding_id,
-      entityId: row.entity_id,
-      fieldName: row.field_name,
-      userValue: parseNormalizedCell(row.user_value, "user_value"),
-      userBaseRevision: row.user_base_revision,
-      canonicalValueAtDetection: parseNormalizedCell(
-        row.canonical_value_at_detection,
-        "canonical_value_at_detection",
-      ),
-      canonicalRevisionAtDetection: row.canonical_revision_at_detection,
-      currentCanonicalValue: parseNormalizedCell(row.current_canonical_value, "current_canonical_value"),
-      currentCanonicalRevision: row.current_canonical_revision,
-      candidateEpoch: row.candidate_epoch,
-      status: requireConflictStatus(row.status),
-      resolutionCommandId: fromSqlNullable(row.resolution_command_id),
-    },
-  };
-}
-
-/** Reads the unique active candidate pointer through the active async SQL transaction. */
-async function readActiveCandidatePointerWithSql(
-  sql: SqlExecutor,
-  conflict: SyncConflict,
-): Promise<LookupResult<ActiveCandidatePointer>> {
-  const rows = await sql.all<ActiveCandidatePointer>(READ_ACTIVE_CANDIDATE_POINTER_SQL, [
-    conflict.rowBindingId,
-    conflict.fieldName,
-    conflict.conflictId,
-  ]);
-  if (rows.length === 0) return { kind: LOOKUP_RESULT_KINDS.NOT_FOUND };
-  if (rows.length !== 1) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
-      "a conflict cannot be active in more than one physical projection",
-    );
-  }
-  const pointer = rows[0];
-  if (pointer === undefined) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
-      "active candidate lookup returned an empty result after reporting a row",
-    );
-  }
-  return { kind: LOOKUP_RESULT_KINDS.FOUND, value: pointer };
-}
-
-/** Inserts a processing command receipt through the active async SQL transaction. */
-async function insertProcessingCommandWithSql(
-  sql: SqlExecutor,
-  fence: FencingContext,
-  input: PersistResolutionCommandInput,
-): Promise<void> {
-  const command = input.command;
-  const result = await sql.run(INSERT_PROCESSING_COMMAND_SQL, [
-    command.commandId,
-    command.requestKey,
-    command.action,
-    command.actorId,
-    command.role,
-    command.targetConflictId,
-    command.expectedRevision,
-    command.activeCandidateHash,
-    command.expectedCandidateEpoch,
-    command.payloadHash,
-    fence.now,
-    ...fenceParameters(fence),
-  ]);
-  if (result.changes !== 1) throw new FenceLostError();
-}
-
-/** Applies a resolved transition, pointer clear, effects, and receipt through active async SQL. */
-async function applyResolvedCommandWithSql(
-  sql: SqlExecutor,
-  fence: FencingContext,
-  input: PersistResolutionCommandInput,
-  conflict: SyncConflict,
-  pointer: ActiveCandidatePointer,
-): Promise<void> {
-  const command = input.command;
-  const conflictResult = await sql.run(MARK_CONFLICT_RESOLVED_SQL, [
-    command.commandId,
-    fence.now,
-    conflict.conflictId,
-    command.expectedRevision,
-    command.expectedCandidateEpoch,
-    ...fenceParameters(fence),
-  ]);
-  if (conflictResult.changes !== 1) throw new FenceLostError();
-
-  const clearedPointer = await sql.run(CLEAR_ACTIVE_CANDIDATE_POINTER_SQL, [
-    pointer.physical_sheet_id,
-    pointer.projection,
-    conflict.rowBindingId,
-    conflict.fieldName,
-    conflict.conflictId,
-    command.expectedCandidateEpoch,
-    ...fenceParameters(fence),
-  ]);
-  if (clearedPointer.changes !== 1) throw new FenceLostError();
-
-  const binding = await sql.run(ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL, [
-    command.expectedCandidateEpoch,
-    command.expectedCandidateEpoch + 1,
-    conflict.rowBindingId,
-    input.logicalSheetId,
-    ...fenceParameters(fence),
-  ]);
-  if (binding.changes !== 1) throw new FenceLostError();
-
-  await appendResolutionEffectsWithSql(sql, fence, input.effects);
-  const commandResult = await sql.run(MARK_COMMAND_APPLIED_SQL, [
-    input.commitId,
-    command.commandId,
-    ...fenceParameters(fence),
-  ]);
-  if (commandResult.changes !== 1) throw new FenceLostError();
-}
-
-/** Marks a command stale and appends its stale branch effects through active async SQL. */
-async function markStaleCommandWithSql(
-  sql: SqlExecutor,
-  fence: FencingContext,
-  input: PersistResolutionCommandInput,
-  nextConflictStatus: ConflictStatus,
-): Promise<void> {
-  await sql.run(MARK_CONFLICT_STALE_SQL, [
-    nextConflictStatus,
-    fence.now,
-    input.command.targetConflictId,
-    ...fenceParameters(fence),
-  ]);
-  const command = await sql.run(MARK_COMMAND_STALE_SQL, [
-    input.command.commandId,
-    ...fenceParameters(fence),
-  ]);
-  if (command.changes !== 1) throw new FenceLostError();
-  await appendResolutionEffectsWithSql(sql, fence, input.staleEffects ?? []);
-}
-
-/** Marks a command rejected and appends its rejection effects through active async SQL. */
-async function markRejectedCommandWithSql(
-  sql: SqlExecutor,
-  fence: FencingContext,
-  input: PersistResolutionCommandInput,
-): Promise<void> {
-  const result = await sql.run(MARK_COMMAND_REJECTED_SQL, [
-    input.command.commandId,
-    ...fenceParameters(fence),
-  ]);
-  if (result.changes !== 1) throw new FenceLostError();
-  await appendResolutionEffectsWithSql(sql, fence, input.rejectedEffects ?? []);
-}
-
-/** Registers unseen resolution effects through the active async SQL transaction. */
-async function appendResolutionEffectsWithSql(
-  sql: SqlExecutor,
-  fence: FencingContext,
-  effects: readonly NewEffect[],
-): Promise<void> {
-  if (effects.length === 0) return;
-  await ensureResolutionEffectsRegisteredWithSql(sql, effects);
-  const unseen: NewEffect[] = [];
-  for (const effect of effects) {
-    const existing = await sql.get<EffectDedupeRow>(READ_EFFECT_DEDUPE_SQL, [
-      effect.effectDedupeKey,
-    ]);
-    if (existing === undefined) {
-      unseen.push(effect);
-      continue;
-    }
-    if (
-      existing.effect_kind !== effect.effectKind ||
-      existing.commit_id !== effect.commitId ||
-      existing.logical_sheet_id !== effect.logicalSheetId ||
-      existing.physical_sheet_id !== effect.physicalSheetId ||
-      existing.projection !== effect.projection ||
-      existing.target_kind !== effect.targetKind ||
-      existing.target_id !== effect.targetId ||
-      existing.payload_hash !== effect.payloadHash
-    ) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.RESOLUTION_EFFECT_CONFLICT,
-        "resolution effect dedupe key was reused with a different payload",
-      );
-    }
-  }
-  if (unseen.length > 0 && !(await appendPendingEffectsWithSql(sql, fence, unseen))) {
-    throw new FenceLostError();
-  }
-}
-
-/** Validates every resolution effect target through the active async SQL transaction. */
-async function ensureResolutionEffectsRegisteredWithSql(
-  sql: SqlExecutor,
-  effects: readonly NewEffect[],
-): Promise<void> {
-  for (const effect of effects) {
-    const target = await sql.get<RegisteredProjectionRow>(READ_REGISTERED_PROJECTION_SQL, [
-      effect.physicalSheetId,
-    ]);
-    if (
-      target === undefined ||
-      target.logical_sheet_id !== effect.logicalSheetId ||
-      target.projection !== effect.projection ||
-      target.enabled !== 1
-    ) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.RESOLUTION_TARGET_UNAVAILABLE,
-        "resolution effect targets an unregistered physical projection",
-      );
-    }
-  }
-}
-
-/** Returns every branch effect so structural validation remains uniform. */
-function allResolutionEffects(input: PersistResolutionCommandInput): readonly NewEffect[] {
-  return [
-    ...input.effects,
-    ...(input.staleEffects ?? []),
-    ...(input.rejectedEffects ?? []),
-    ...(input.duplicateEffects ?? []),
-  ];
 }
