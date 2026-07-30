@@ -10,7 +10,7 @@ import {
   PRESENCE_KINDS,
   type Presence,
 } from "../../../shared/state/index.js";
-import type { SqlExecutor } from "../../../adapter/persistence/contracts/sql.js";
+import type { TypedSheetsPersistenceContext } from "../../../infrastructure/storage/index.js";
 
 /** Constructor accepted by the initial entity-style public API. */
 export interface TypedSheetsEntityClass<Entity extends object> {
@@ -32,6 +32,8 @@ export type TypedSheetsEntityFilter<Entity extends object> = Readonly<Partial<En
 export interface TypedSheetsFindOptions {
   readonly limit?: number;
   readonly offset?: number;
+  /** Explicit relation property names to load; lazy loading is not implicit. */
+  readonly populate?: readonly string[];
 }
 
 /** Entity-manager fork behavior supported without leaking the underlying ORM. */
@@ -143,8 +145,8 @@ export type TypedSheetsEntityChange =
 export interface TypedSheetsFlushContext {
   /** All entity changes in the current Unit of Work(작업 단위). */
   readonly changes: readonly TypedSheetsEntityChange[];
-  /** SQL executor bound to the same transaction as the entity writes. */
-  readonly sql: SqlExecutor;
+  /** Semantic persistence operations bound to the entity write transaction. */
+  readonly persistence: TypedSheetsPersistenceContext;
 }
 
 /**
@@ -152,11 +154,13 @@ export interface TypedSheetsFlushContext {
  *
  * The coordinator runs before entity rows are flushed, but within the same
  * SQLite transaction. Throwing aborts both the entity write and every
- * typed-sheets write scheduled through `context.sql`.
+ * typed-sheets write scheduled through `context.persistence`.
  */
 export interface TypedSheetsFlushCoordinator {
   onFlush(context: TypedSheetsFlushContext): Promise<void>;
 }
+
+export type { TypedSheetsPersistenceContext };
 
 /** Converts a database-generated primary-key value into the public presence contract. */
 export function primaryKeyPresence(primaryKey: string | null): Presence<string> {
