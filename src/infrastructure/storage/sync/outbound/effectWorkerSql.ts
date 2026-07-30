@@ -1,6 +1,9 @@
 /** SQL reads used to preserve active User_Input candidates during delivery. */
 
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type {
+  SqlExecutor,
+  SqlStorageAdapter,
+} from "../../../../adapter/persistence/contracts/sql.js";
 
 /** Parameters for the active-candidate guard query. */
 export interface UserInputCandidateGuardQuery {
@@ -51,4 +54,12 @@ export async function hasActiveUserInputCandidateWithSql(
     query.rebasedConflictStatus,
   ]);
   return row !== undefined;
+}
+
+/** Checks the active-candidate guard through an adapter-owned read context. */
+export function hasActiveUserInputCandidateWithAdapter(
+  storage: SqlStorageAdapter,
+  query: UserInputCandidateGuardQuery,
+): Promise<boolean> {
+  return storage.read(({ sql }) => hasActiveUserInputCandidateWithSql(sql, query));
 }

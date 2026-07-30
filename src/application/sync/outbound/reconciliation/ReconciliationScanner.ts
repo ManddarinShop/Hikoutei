@@ -30,17 +30,18 @@ import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js"
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
+  readReconciliationCorrectionStateWithAdapter,
+  readReconciliationDesiredSystemStateWithAdapter,
   requireRegisteredSyncSheetWithAdapter,
-  readReconciliationDesiredSystemStateWithSql,
-  readReconciliationLatestEffectWithSql,
-  readReconciliationVisibleStateWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
   type NewEffect,
-  type ReconciliationVisibleStateSqlRow,
+  type ReconciliationCorrectionState,
+  type ReconciliationDesiredSystemStateRow,
+  type ReconciliationVisibleState,
 } from "../../../../infrastructure/storage/index.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshot,
@@ -345,33 +346,35 @@ function computeObservedHash(
 }
 
 async function readDesiredSystemState(context: ScanContext): Promise<readonly DesiredRow[]> {
-  return context.storage.read(({ sql }) => readDesiredSystemStateWithSql(sql, context));
+  const rows = await readReconciliationDesiredSystemStateWithAdapter(
+    context.storage,
+    context.logicalSheetId,
+  );
+  return buildDesiredSystemState(rows, context);
 }
 
-async function readDesiredSystemStateWithSql(
-  sql: SqlExecutor,
+function buildDesiredSystemState(
+  rows: readonly ReconciliationDesiredSystemStateRow[],
   context: ScanContext,
-): Promise<readonly DesiredRow[]> {
-  const rows = await readReconciliationDesiredSystemStateWithSql(sql, context.logicalSheetId);
-
+): readonly DesiredRow[] {
   const byEntity = new Map<string, DesiredRow>();
   for (const row of rows) {
-    const existing = byEntity.get(row.entity_id);
-    const cell = decodeNormalizedCell(row.normalized_value);
+    const existing = byEntity.get(row.entityId);
+    const cell = decodeNormalizedCell(row.normalizedValue);
     if (existing === undefined) {
       const fields: Record<string, NormalizedCell> = {};
-      fields[row.field_name] = cell;
-      byEntity.set(row.entity_id, {
-        entityId: row.entity_id,
-        rowBindingId: row.row_binding_id,
-        anchorReference: row.anchor_reference,
-        entityRevision: row.entity_revision,
+      fields[row.fieldName] = cell;
+      byEntity.set(row.entityId, {
+        entityId: row.entityId,
+        rowBindingId: row.rowBindingId,
+        anchorReference: row.anchorReference,
+        entityRevision: row.entityRevision,
         fields,
         fieldRevisionHash: "",
       });
       continue;
     }
-    (existing.fields as Record<string, NormalizedCell>)[row.field_name] = cell;
+    (existing.fields as Record<string, NormalizedCell>)[row.fieldName] = cell;
   }
 
   const desired: DesiredRow[] = [];
@@ -481,26 +484,25 @@ async function resolveCorrectionBaseline(
   context: ScanContext,
   desired: DesiredRow,
 ): Promise<CorrectionBaseline> {
-  return context.storage.read(({ sql }) =>
-    resolveCorrectionBaselineWithSql(sql, context, desired),
-  );
+  const state = await readReconciliationCorrectionStateWithAdapter(context.storage, {
+    logicalSheetId: context.logicalSheetId,
+    physicalSheetId: context.physicalSheetId,
+    entityId: desired.entityId,
+    rowBindingId: desired.rowBindingId,
+  });
+  return resolveCorrectionBaselineFromState(state, desired);
 }
 
-async function resolveCorrectionBaselineWithSql(
-  sql: SqlExecutor,
-  context: ScanContext,
+function resolveCorrectionBaselineFromState(
+  state: ReconciliationCorrectionState,
   desired: DesiredRow,
-): Promise<CorrectionBaseline> {
-  const latestEffect = await readReconciliationLatestEffectWithSql(
-    sql,
-    context.logicalSheetId,
-    desired.entityId,
-  );
+): CorrectionBaseline {
+  const latestEffect = state.latestEffect;
 
-  if (latestEffect !== undefined && latestEffect.stream_sequence !== null) {
-    const streamSequence = latestEffect.stream_sequence + 1;
+  if (latestEffect !== undefined && latestEffect.streamSequence !== null) {
+    const streamSequence = latestEffect.streamSequence + 1;
     if (latestEffect.status === "pending" || latestEffect.status === "processing") {
-      const payload = latestEffect.payload_json;
+      const payload = latestEffect.payloadJson;
       const expectedHash =
         payload === null ? "" : extractTargetVisibleHash(payload);
       if (expectedHash === computeSyncVisibleHash(desired.fields)) {
@@ -509,7 +511,7 @@ async function resolveCorrectionBaselineWithSql(
         // first item is waiting for the gateway or its recovery read-back.
         return {
           skip: true,
-          expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
+          expectedVisibleRevision: (latestEffect.expectedVisibleRevision ?? 0) + 1,
           expectedVisibleHash: expectedHash,
           createIfMissing: false,
           streamSequence,
@@ -517,37 +519,27 @@ async function resolveCorrectionBaselineWithSql(
       }
       return {
         skip: false,
-        expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
+        expectedVisibleRevision: (latestEffect.expectedVisibleRevision ?? 0) + 1,
         expectedVisibleHash: expectedHash,
         createIfMissing: false,
         streamSequence,
       };
     }
-    const visible = await readReconciliationVisibleStateWithSql(
-      sql,
-      context.physicalSheetId,
-      desired.rowBindingId,
-    );
-    return baselineFromVisible(visible, streamSequence);
+    return baselineFromVisible(state.visibleState, streamSequence);
   }
 
-  const visible = await readReconciliationVisibleStateWithSql(
-    sql,
-    context.physicalSheetId,
-    desired.rowBindingId,
-  );
-  return baselineFromVisible(visible, POSITIVE_SAFE_INTEGER_MINIMUM);
+  return baselineFromVisible(state.visibleState, POSITIVE_SAFE_INTEGER_MINIMUM);
 }
 
 function baselineFromVisible(
-  visible: ReconciliationVisibleStateSqlRow | undefined,
+  visible: ReconciliationVisibleState | undefined,
   streamSequence: number,
 ): CorrectionBaseline {
   if (
     visible === undefined ||
-    visible.confirmed_visible_revision === null ||
-    visible.confirmed_snapshot_hash === null ||
-    visible.confirmed_snapshot_hash.length === 0
+    visible.confirmedVisibleRevision === null ||
+    visible.confirmedSnapshotHash === null ||
+    visible.confirmedSnapshotHash.length === 0
   ) {
     return {
       skip: false,
@@ -559,8 +551,8 @@ function baselineFromVisible(
   }
   return {
     skip: false,
-    expectedVisibleRevision: visible.confirmed_visible_revision,
-    expectedVisibleHash: visible.confirmed_snapshot_hash,
+    expectedVisibleRevision: visible.confirmedVisibleRevision,
+    expectedVisibleHash: visible.confirmedSnapshotHash,
     createIfMissing: false,
     streamSequence,
   };

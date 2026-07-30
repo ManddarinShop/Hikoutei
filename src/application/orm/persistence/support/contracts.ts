@@ -21,7 +21,6 @@ import type {
   NewEffect,
   RegisteredSyncSheet,
 } from "../../../../infrastructure/storage/index.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,
@@ -118,8 +117,6 @@ export type {
   NewEffect,
   RegisteredSyncProjectionDefinition,
   RegisteredSyncSheet,
-  SqlExecutor,
-  SqlStorageAdapter,
 };
 
 export { TYPED_SHEETS_ENTITY_CHANGE_KINDS };
