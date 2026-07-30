@@ -37,7 +37,7 @@ export interface SyncGatewayProvisionRoute {
   readonly projection: RegisteredProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
-  /** Business-key header used to find append-only rows without metadata. */
+  /** Business-key header used to resolve rows in the visible Sheet state. */
   readonly identityField?: string;
   readonly checkboxHeaders?: readonly string[];
 }
@@ -132,7 +132,8 @@ export async function provisionRegisteredSyncSheets(
       "sync gateway provisioning schemaVersion",
       SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
     );
-    const identityField = definition.sheet.projection === "system_state"
+    const identityField = definition.sheet.projection === "system_state" ||
+      definition.sheet.projection === "user_input"
       ? requireSyncGatewayText(
         definition.sheet.businessKeyField,
         "sync gateway provisioning identityField",

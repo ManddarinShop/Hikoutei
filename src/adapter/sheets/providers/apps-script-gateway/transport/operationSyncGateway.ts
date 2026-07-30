@@ -17,7 +17,6 @@ import {
 } from "../../../../../application/sync/gateway/errors.js";
 import {
   requireSyncGatewayNonEmptyList,
-  requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewayText,
@@ -25,12 +24,9 @@ import {
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
-  EnsureSyncRowAnchorsRequest,
-  EnsureSyncRowAnchorsResult,
   FastAppendRowsRequest,
   FastAppendRowsResult,
   ReadSyncEffectPostconditionsRequest,
-  ReadSyncTableRowsRequest,
   ReadSyncSnapshotRequest,
   SyncEffectPostcondition,
   SyncGatewayEffect,
@@ -38,10 +34,8 @@ import type {
   SyncGatewaySnapshot,
   SyncObservedSnapshot,
   SyncSheetGateway,
-  SyncSheetTableReaderGateway,
   SyncSheetObservationBatchGateway,
   SyncEffectWorkerFullGateway,
-  SyncTableRowsResult,
 } from "../../../../../application/sync/gateway/syncGateway.js";
 import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import type {
@@ -49,14 +43,12 @@ import type {
   AppsScriptOperationGateway,
 } from "./operationClient.js";
 import { createFastAppendRowsOperation } from "../operations/write/fastAppendOperation.js";
-import { createReadTableRowsOperation } from "../operations/read/tableReadOperation.js";
 import {
   createApplyEffectsOperation,
   createReadEffectPostconditionOperation,
   createReadEffectPostconditionsOperation,
 } from "../operations/effect/effectOperation.js";
 import {
-  createEnsureRowAnchorsOperation,
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
 } from "../operations/observation/observationOperation.js";
@@ -66,14 +58,6 @@ import { invalidOperationResponse } from "../errors.js";
 export interface AppsScriptOperationSyncGatewayOptions {
   readonly operationGateway: AppsScriptOperationGateway;
   readonly definitions: readonly RegisteredSyncProjectionDefinition[];
-}
-
-/** Read-only status returned by the operational projection inspection helper. */
-export interface AppsScriptOperationProjectionStatus {
-  readonly sheetName: string;
-  readonly headers: readonly string[];
-  readonly rowCount: number;
-  readonly ids: readonly string[];
 }
 
 type ProvisionedRoute = Omit<SyncGatewayProvisionRoute, "headers">;
@@ -92,10 +76,6 @@ interface ProvisionRegistrationWire {
   readonly checkboxHeaders?: readonly string[];
 }
 
-interface ReadProjectionArgs {
-  readonly sheetName: string;
-}
-
 /**
  * Adapts the generic Apps Script operation transport to the sync worker's
  * fast and regular effect gateway boundaries.
@@ -103,7 +83,6 @@ interface ReadProjectionArgs {
 export class AppsScriptOperationSyncGateway
   implements
     SyncSheetGateway,
-    SyncSheetTableReaderGateway,
     SyncSheetObservationBatchGateway,
     SyncEffectWorkerFullGateway,
     SyncGatewayProvisioner {
@@ -171,38 +150,6 @@ export class AppsScriptOperationSyncGateway
     return result;
   }
 
-  /** Reads one registered table with values only; no metadata, lock, or CAS work is performed. */
-  public async readRows(request: ReadSyncTableRowsRequest): Promise<SyncTableRowsResult> {
-    const [result] = await this.readRowsBatch([request]);
-    if (result === undefined) {
-      throw new SyncGatewayContractError(
-        SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-        "Apps Script table read returned no result",
-      );
-    }
-    return result;
-  }
-
-  /** Reads several registered tables through one signed Apps Script request. */
-  public async readRowsBatch(
-    requests: readonly ReadSyncTableRowsRequest[],
-  ): Promise<readonly SyncTableRowsResult[]> {
-    const operations = requests.map((request) => {
-      const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
-      validateRoute(request, definition);
-      return createReadTableRowsOperation({
-        sheetName: request.sheetName,
-        registeredRange: request.registeredRange,
-        headers: definition.headers,
-      });
-    });
-    if (operations.length === 0) return [];
-    const results = await this.operationGateway.applyOperations(
-      operations as readonly AppsScriptOperationDefinition<unknown, unknown>[],
-    );
-    return results as readonly SyncTableRowsResult[];
-  }
-
   /** Applies regular update/delete effects through the full operation path. */
   public async applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
@@ -251,21 +198,7 @@ export class AppsScriptOperationSyncGateway
     return result;
   }
 
-  /** Assigns missing row anchors through the observation operation. */
-  public async ensureRowAnchors(
-    request: EnsureSyncRowAnchorsRequest,
-  ): Promise<EnsureSyncRowAnchorsResult> {
-    const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
-    validateRoute(request, definition);
-    const operation = createEnsureRowAnchorsOperation({
-      ...request,
-      ...observationRouteOptions(definition),
-    });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
-  }
-
-  /** Reads a normalized, anchor-aware snapshot for polling and reconciliation. */
+  /** Reads a normalized snapshot whose visible identity comes from the row cells. */
   public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
     validateRoute(request, definition);
@@ -277,7 +210,7 @@ export class AppsScriptOperationSyncGateway
     return result;
   }
 
-  /** Assigns anchors and reads one snapshot under one remote lock/request. */
+  /** Reads one snapshot under one remote lock/request. */
   public async observeSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot> {
     const [result] = await this.observeSnapshots([request]);
     if (result === undefined) {
@@ -306,27 +239,6 @@ export class AppsScriptOperationSyncGateway
       operations as readonly AppsScriptOperationDefinition<unknown, unknown>[],
     );
     return results as readonly SyncObservedSnapshot[];
-  }
-
-  /**
-   * Reads a projection for setup checks and operational verification.
-   *
-   * This is intentionally not part of the old SyncSheetGateway contract; it
-   * is a small read operation for callers that need to verify row counts.
-   */
-  public async readProjection(
-    sheetName: string,
-  ): Promise<AppsScriptOperationProjectionStatus> {
-    const operation: AppsScriptOperationDefinition<
-      ReadProjectionArgs,
-      AppsScriptOperationProjectionStatus
-    > = {
-      fn: READ_PROJECTION_SOURCE,
-      args: { sheetName },
-      decode: decodeProjectionStatus,
-    };
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
   }
 
   private definitionForPhysicalSheet(
@@ -423,24 +335,6 @@ function decodeProvisionedRoute(value: unknown, index: number): ProvisionedRoute
   };
 }
 
-function decodeProjectionStatus(value: unknown): AppsScriptOperationProjectionStatus {
-  const record = requireRecord(value, "projection result");
-  return {
-    sheetName: requireSyncGatewayText(
-      record.sheetName,
-      "projection result sheetName",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-    headers: requireStringArray(record.headers, "projection result headers"),
-    rowCount: requireSyncGatewayNonNegativeSafeInteger(
-      record.rowCount,
-      "projection result rowCount",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-    ids: requireStringArray(record.ids, "projection result ids"),
-  };
-}
-
 function requireStringArray(value: unknown, label: string): readonly string[] {
   if (!Array.isArray(value)) {
     return invalidOperationResponse("Apps Script operation", label + " must be an array");
@@ -491,9 +385,7 @@ function effectRouteOptions(
   readonly checkboxHeaders?: readonly string[];
 } {
   return {
-    ...(definition.sheet.projection === "system_state"
-      ? { identityField: definition.sheet.businessKeyField }
-      : {}),
+    identityField: definition.sheet.businessKeyField,
     ...(definition.checkboxHeaders === undefined
       ? {}
       : { checkboxHeaders: definition.checkboxHeaders }),
@@ -553,20 +445,5 @@ const PROVISION_SOURCE = [
   "    createdSheets: createdSheets,",
   "    initializedHeaders: initializedHeaders,",
   "  };",
-  "}",
-].join("\n");
-
-const READ_PROJECTION_SOURCE = [
-  "function (spreadsheet, args) {",
-  '  var sheet = spreadsheet.getSheetByName(args.sheetName);',
-  '  if (sheet === null) throw new Error("operational sheet was not found: " + args.sheetName);',
-  "  var lastRow = sheet.getLastRow();",
-  "  var lastColumn = sheet.getLastColumn();",
-  "  var headers = lastColumn === 0 ? [] : sheet.getRange(1, 1, 1, lastColumn).getValues()[0];",
-  "  var rowCount = Math.max(0, lastRow - 1);",
-  "  var ids = rowCount === 0",
-  "    ? []",
-  "    : sheet.getRange(2, 1, rowCount, 1).getValues().map(function (row) { return String(row[0]); });",
-  "  return { sheetName: args.sheetName, headers: headers, rowCount: rowCount, ids: ids };",
   "}",
 ].join("\n");

@@ -1,34 +1,20 @@
 /**
  * Shared gateway contract for the SQLite-authoritative sync runtime.
  *
- * The contract deliberately contains normalized values and stable anchors,
- * never Google SDK objects or physical row numbers.  Both the fake gateway and
- * the Apps Script client implement this boundary so fault tests exercise the
- * same compare-and-set semantics as a deployed gateway.
+ * The contract deliberately contains normalized values and visible business
+ * keys, never Google SDK objects or physical row numbers. Both the fake
+ * gateway and the Apps Script client implement this boundary so fault tests
+ * exercise the same compare-and-set semantics as a deployed gateway.
  */
 
 import {
-  stableHash,
-  type CellObservation,
+  type CellObservationKind,
   type EffectKind,
   type EffectTargetKind,
   type NormalizedCell,
 } from "../../../domain/index.js";
-import {
-  JAVASCRIPT_TYPE_NAMES,
-  NORMALIZED_CELL_KINDS,
-} from "../../../shared/encoding/constants.js";
-import {
-  isJavaScriptType,
-  isRecord,
-} from "../../../shared/encoding/typeGuards.js";
-import { APPLICABILITY_KINDS } from "../../../shared/state/constants.js";
-import type { Applicability, Presence } from "../../../shared/state/types.js";
+import type { Presence } from "../../../shared/state/types.js";
 import type { RegisteredProjection } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import {
-  EMPTY_ARRAY_LENGTH_ZERO,
-  EMPTY_STRING_LENGTH_ZERO,
-} from "../../../shared/constants.js";
 import {
   type SyncGatewayEffectResultStatus,
   type SyncGatewayFastAppendStatus,
@@ -38,15 +24,15 @@ import {
   type SyncGatewayProtocolVersion,
   type SyncGatewaySnapshotReadMode,
 } from "./constants.js";
-import {
-  SYNC_GATEWAY_ERROR_CODES,
-  SyncGatewayContractError,
-} from "./errors.js";
-import {
-  requireSyncGatewayPositiveSafeInteger,
-  requireSyncGatewayText,
-} from "./validation.js";
 import type { SyncGatewayTiming } from "../telemetry/syncTiming.js";
+import type { SyncProjectionEffectPayload } from "./syncGatewayEffectPayload.js";
+
+export {
+  computeSyncVisibleHash,
+  parseSyncProjectionEffectPayload,
+  serializeSyncProjectionEffectPayload,
+} from "./syncGatewayEffectPayload.js";
+export type { SyncProjectionEffectPayload } from "./syncGatewayEffectPayload.js";
 
 /** Projections supported by the v1 sync gateway. */
 export type SyncProjection = RegisteredProjection;
@@ -54,18 +40,15 @@ export type SyncProjection = RegisteredProjection;
 /** Effect classes whose compare-and-set behavior differs at the gateway. */
 export type SyncEffectKind = EffectKind;
 
-/** Literal/formula metadata retained by a normalized Sheet snapshot. */
-export interface SyncSnapshotCell extends CellObservation {
-  readonly stableHash: Presence<string>;
+/** Physical kind and normalized value for one observed Sheet cell. */
+export interface SyncSnapshotCell {
+  readonly cellKind: CellObservationKind;
+  readonly normalizedCell: NormalizedCell;
 }
 
-/** One physical row read from a registered projection. */
+/** One physical row read from a registered projection, matched by its ID cell. */
 export interface SyncSnapshotRow {
   readonly rowNumber: number;
-  readonly physicalAnchor: Presence<string>;
-  /** Optional compatibility fields; the real gateway leaves visible state to SQLite. */
-  readonly visibleRevision: Presence<number>;
-  readonly visibleHash: Presence<string>;
   readonly cells: Readonly<Record<string, SyncSnapshotCell>>;
 }
 
@@ -78,42 +61,21 @@ export interface SyncGatewaySnapshot {
   readonly schemaVersion: number;
   readonly headers: readonly string[];
   readonly rows: readonly SyncSnapshotRow[];
-  readonly snapshotHash: string;
-  readonly unanchoredRows: readonly number[];
-  readonly duplicateAnchors: readonly {
-    readonly anchor: string;
-    readonly rowNumbers: readonly number[];
-  }[];
 }
 
-/** Request used to assign missing Developer Metadata anchors before a snapshot. */
-export interface EnsureSyncRowAnchorsRequest {
+/** Lock-free snapshot request. */
+export interface ReadSyncSnapshotRequest {
   readonly physicalSheetId: string;
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly projection: SyncProjection;
   readonly schemaVersion: number;
-}
-
-/** Result of one anchor assignment pass. */
-export interface EnsureSyncRowAnchorsResult {
-  readonly assigned: number;
-  readonly existing: number;
-  readonly duplicateAnchors: readonly {
-    readonly anchor: string;
-    readonly rowNumbers: readonly number[];
-  }[];
-}
-
-/** Lock-free snapshot request. */
-export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {
-  /** Full metadata for reconciliation, or user-editable values for polling. */
+  /** Full cells for reconciliation, or literal values for polling. */
   readonly readMode?: SyncGatewaySnapshotReadMode;
 }
 
-/** Result of one combined anchor assignment and snapshot read. */
+/** Result of one combined projection observation. */
 export interface SyncObservedSnapshot {
-  readonly anchors: EnsureSyncRowAnchorsResult;
   readonly snapshot: SyncGatewaySnapshot;
   /** Optional diagnostic phases returned by newer observation gateways. */
   readonly timing?: SyncGatewayTiming;
@@ -144,9 +106,8 @@ export async function observeSyncSnapshot(
   if (isSyncSheetObservationBatchGateway(gateway)) {
     return gateway.observeSnapshot(request);
   }
-  const anchors = await gateway.ensureRowAnchors(request);
   const snapshot = await gateway.readSnapshot(request);
-  return { anchors, snapshot };
+  return { snapshot };
 }
 
 /** Reads several snapshots through one remote operation when available. */
@@ -164,25 +125,6 @@ export async function observeSyncSnapshots(
   return results;
 }
 
-/**
- * Serializable projection values written by one outbox effect.
- *
- * `targetVisibleHash` is computed over `fields` with
- * computeSyncVisibleHash().  The anchor is projection-local: User_Input and
- * System_State may represent the same row binding with different anchors.
- */
-export interface SyncProjectionEffectPayload {
-  readonly sheetName: string;
-  readonly registeredRange: string;
-  readonly schemaVersion: number;
-  readonly targetAnchor: string;
-  readonly fields: Readonly<Record<string, NormalizedCell>>;
-  readonly targetVisibleHash: string;
-  readonly createIfMissing: boolean;
-  /** A candidate reconcile must fail rather than overwrite an active candidate. */
-  readonly expectedCandidateHash: Applicability<string>;
-}
-
 /** Gateway-ready view of one durable outbox row. */
 export interface SyncGatewayEffect {
   readonly effectId: string;
@@ -193,7 +135,6 @@ export interface SyncGatewayEffect {
   readonly targetKind: EffectTargetKind;
   readonly targetId: string;
   readonly rowBindingId: Presence<string>;
-  readonly conflictId: Presence<string>;
   readonly expectedVisibleRevision: number;
   readonly expectedVisibleHash: string;
   readonly repairGuardHash: Presence<string>;
@@ -207,7 +148,6 @@ export interface SyncGatewayEffectResult {
   readonly status: SyncGatewayEffectResultStatus;
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
-  readonly snapshotHash: Presence<string>;
   readonly reason: Presence<string>;
   readonly postcondition: SyncGatewayPostconditionStatus;
 }
@@ -230,7 +170,6 @@ export interface ApplySyncEffectsRequest {
 /** A batch may intentionally return only a prefix when its budget is exhausted. */
 export interface ApplySyncEffectsResult {
   readonly results: readonly SyncGatewayEffectResult[];
-  readonly snapshotHash: Presence<string>;
   /** True only when the gateway intentionally stopped before the supplied suffix. */
   readonly hasMore: boolean;
   /** Optional phase timing returned by newer Code.gs deployments. */
@@ -242,7 +181,6 @@ export interface SyncEffectPostcondition {
   readonly disposition: SyncGatewayPostconditionDisposition;
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
-  readonly snapshotHash: Presence<string>;
 }
 
 /** One effect identity paired with its read-back result in a recovery batch. */
@@ -321,48 +259,14 @@ export interface SyncEffectWorkerFullGateway extends SyncEffectWorkerGateway {
 
 /** Read-only gateway capability used by polling and onEdit observation. */
 export interface SyncSheetObservationGateway {
-  ensureRowAnchors(request: EnsureSyncRowAnchorsRequest): Promise<EnsureSyncRowAnchorsResult>;
   readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot>;
-}
-
-/** Request for a lightweight table read used by simple polling. */
-export interface ReadSyncTableRowsRequest {
-  readonly physicalSheetId: string;
-  readonly sheetName: string;
-  readonly registeredRange: string;
-  readonly projection: SyncProjection;
-  readonly schemaVersion: number;
-  readonly headers: readonly string[];
-}
-
-/** One nonblank row returned by a lightweight table read. */
-export interface SyncTableRow {
-  readonly rowNumber: number;
-  readonly fields: Readonly<Record<string, NormalizedCell>>;
-}
-
-/** Result of a lightweight table read without Sheet metadata or CAS work. */
-export interface SyncTableRowsResult {
-  readonly sheetName: string;
-  readonly registeredRange: string;
-  readonly headers: readonly string[];
-  readonly rows: readonly SyncTableRow[];
-  readonly timing?: SyncGatewayTiming;
-}
-
-/** Gateway capability for reading literal table values without observation metadata. */
-export interface SyncSheetTableReaderGateway {
-  readRows(request: ReadSyncTableRowsRequest): Promise<SyncTableRowsResult>;
-  readRowsBatch(
-    requests: readonly ReadSyncTableRowsRequest[],
-  ): Promise<readonly SyncTableRowsResult[]>;
 }
 
 /**
  * Full gateway boundary used by observation and reconciliation.
  *
- * It includes the full effect-worker capabilities plus the metadata/snapshot
- * reads required to observe user edits and repair projection drift.
+ * It includes the full effect-worker capabilities plus the snapshot reads
+ * required to observe user edits and repair projection drift.
  */
 export interface SyncSheetGateway extends SyncEffectWorkerFullGateway, SyncSheetObservationGateway {}
 
@@ -418,13 +322,6 @@ export class SplitSyncGateway implements SyncSheetGateway {
     return this.fullGateway.readEffectPostconditions(request);
   }
 
-  /** Ensures row anchors through the full observation gateway. */
-  public ensureRowAnchors(
-    request: EnsureSyncRowAnchorsRequest,
-  ): Promise<EnsureSyncRowAnchorsResult> {
-    return this.fullGateway.ensureRowAnchors(request);
-  }
-
   /** Reads snapshots through the full observation gateway. */
   public readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
     return this.fullGateway.readSnapshot(request);
@@ -441,191 +338,4 @@ export class SplitSyncGateway implements SyncSheetGateway {
   ): Promise<readonly SyncObservedSnapshot[]> {
     return observeSyncSnapshots(this.fullGateway, requests);
   }
-}
-
-/** Computes the stable visible-state hash shared by fake and real gateways. */
-export function computeSyncVisibleHash(fields: Readonly<Record<string, NormalizedCell>>): string {
-  const entries = Object.entries(fields)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([fieldName, value]) => ({ fieldName, value }));
-  return stableHash({ fields: entries });
-}
-
-/** Validates and decodes the projection payload stored in a durable outbox row. */
-export function parseSyncProjectionEffectPayload(value: string): SyncProjectionEffectPayload {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value) as unknown;
-  } catch {
-    throw new SyncGatewayContractError(
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload is not valid JSON",
-    );
-  }
-  if (!isRecord(parsed)) {
-    throw new SyncGatewayContractError(
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload must be an object",
-    );
-  }
-
-  const sheetName = requireSyncGatewayText(
-    parsed.sheetName,
-    "effect payload sheetName",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const registeredRange = requireSyncGatewayText(
-    parsed.registeredRange,
-    "effect payload registeredRange",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const targetAnchor = requireSyncGatewayText(
-    parsed.targetAnchor,
-    "effect payload targetAnchor",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const targetVisibleHash = requireSyncGatewayText(
-    parsed.targetVisibleHash,
-    "effect payload targetVisibleHash",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const schemaVersion = requireSyncGatewayPositiveSafeInteger(
-    parsed.schemaVersion,
-    "effect payload schemaVersion",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  if (!isJavaScriptType(parsed.createIfMissing, JAVASCRIPT_TYPE_NAMES.BOOLEAN)) {
-    throw new SyncGatewayContractError(
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload createIfMissing must be boolean",
-    );
-  }
-  const expectedCandidateHash = parseNullableCandidateHash(parsed.expectedCandidateHash);
-  if (!isRecord(parsed.fields)) {
-    throw new SyncGatewayContractError(
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload fields must be an object",
-    );
-  }
-
-  const fields: Record<string, NormalizedCell> = {};
-  for (const [fieldName, cell] of Object.entries(parsed.fields)) {
-    if (
-      fieldName.length === EMPTY_STRING_LENGTH_ZERO ||
-      !isNormalizedCell(cell)
-    ) {
-      throw new SyncGatewayContractError(
-        SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-        "effect payload contains an invalid normalized field",
-      );
-    }
-    fields[fieldName] = cell;
-  }
-  if (Object.keys(fields).length === EMPTY_ARRAY_LENGTH_ZERO) {
-    throw new SyncGatewayContractError(
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload must contain a field",
-    );
-  }
-  if (computeSyncVisibleHash(fields) !== targetVisibleHash) {
-    throw new SyncGatewayContractError(
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload targetVisibleHash does not match its fields",
-    );
-  }
-
-  return {
-    sheetName,
-    registeredRange,
-    schemaVersion,
-    targetAnchor,
-    fields,
-    targetVisibleHash,
-    createIfMissing: parsed.createIfMissing,
-    expectedCandidateHash,
-  };
-}
-
-/** Serializes a checked projection payload in a stable key order for outbox use. */
-export function serializeSyncProjectionEffectPayload(payload: SyncProjectionEffectPayload): string {
-  // Validate before serialization so worker and gateway fail at the same boundary.
-  const checked = parseSyncProjectionEffectPayload(
-    JSON.stringify(toWireProjectionEffectPayload(payload)),
-  );
-  return JSON.stringify({
-    sheetName: checked.sheetName,
-    registeredRange: checked.registeredRange,
-    schemaVersion: checked.schemaVersion,
-    targetAnchor: checked.targetAnchor,
-    fields: Object.fromEntries(Object.entries(checked.fields).sort(([a], [b]) => a.localeCompare(b))),
-    targetVisibleHash: checked.targetVisibleHash,
-    createIfMissing: checked.createIfMissing,
-    expectedCandidateHash: toNullableCandidateHash(checked.expectedCandidateHash),
-  });
-}
-
-function parseNullableCandidateHash(value: unknown): Applicability<string> {
-  if (value === null) {
-    return { kind: APPLICABILITY_KINDS.NOT_APPLICABLE };
-  }
-  return {
-    kind: APPLICABILITY_KINDS.APPLICABLE,
-    value: requireSyncGatewayText(
-      value,
-      "effect payload expectedCandidateHash",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-    ),
-  };
-}
-
-interface SyncProjectionEffectPayloadWire {
-  readonly sheetName: string;
-  readonly registeredRange: string;
-  readonly schemaVersion: number;
-  readonly targetAnchor: string;
-  readonly fields: Readonly<Record<string, NormalizedCell>>;
-  readonly targetVisibleHash: string;
-  readonly createIfMissing: boolean;
-  /** `null` is retained only at the JSON transport boundary. */
-  readonly expectedCandidateHash: string | null;
-}
-
-function toWireProjectionEffectPayload(
-  payload: SyncProjectionEffectPayload,
-): SyncProjectionEffectPayloadWire {
-  return {
-    sheetName: payload.sheetName,
-    registeredRange: payload.registeredRange,
-    schemaVersion: payload.schemaVersion,
-    targetAnchor: payload.targetAnchor,
-    fields: payload.fields,
-    targetVisibleHash: payload.targetVisibleHash,
-    createIfMissing: payload.createIfMissing,
-    expectedCandidateHash: toNullableCandidateHash(payload.expectedCandidateHash),
-  };
-}
-
-function toNullableCandidateHash(value: Applicability<string>): string | null {
-  return value.kind === APPLICABILITY_KINDS.APPLICABLE ? value.value : null;
-}
-
-function isNormalizedCell(value: unknown): value is NormalizedCell {
-  if (value === null) return true;
-  if (!isRecord(value)) return false;
-  if (value.kind === NORMALIZED_CELL_KINDS.STRING) {
-    return typeof value.value === JAVASCRIPT_TYPE_NAMES.STRING;
-  }
-  if (value.kind === NORMALIZED_CELL_KINDS.NUMBER) {
-    return (
-      typeof value.value === JAVASCRIPT_TYPE_NAMES.NUMBER &&
-      Number.isFinite(value.value)
-    );
-  }
-  if (value.kind === NORMALIZED_CELL_KINDS.BOOLEAN) {
-    return typeof value.value === JAVASCRIPT_TYPE_NAMES.BOOLEAN;
-  }
-  return (
-    value.kind === NORMALIZED_CELL_KINDS.DATE &&
-    typeof value.value === JAVASCRIPT_TYPE_NAMES.STRING
-  );
 }

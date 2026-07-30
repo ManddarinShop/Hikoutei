@@ -32,14 +32,12 @@ export type {
 } from "./protocol/codeGsProtocol.js";
 export { AppsScriptOperationClient } from "./transport/operationClient.js";
 export { createFastAppendRowsOperation } from "./operations/write/fastAppendOperation.js";
-export { createReadTableRowsOperation } from "./operations/read/tableReadOperation.js";
 export {
   createApplyEffectsOperation,
   createReadEffectPostconditionOperation,
   createReadEffectPostconditionsOperation,
 } from "./operations/effect/effectOperation.js";
 export {
-  createEnsureRowAnchorsOperation,
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
 } from "./operations/observation/observationOperation.js";
@@ -65,14 +63,7 @@ export type {
   AppsScriptReadEffectPostconditionsOperationArgs,
 } from "./operations/effect/effectOperation.js";
 export type {
-  AppsScriptEnsureRowAnchorsOperationArgs,
   AppsScriptObserveSnapshotOperationArgs,
   AppsScriptReadSnapshotOperationArgs,
 } from "./operations/observation/observationOperation.js";
-export type {
-  AppsScriptReadTableRowsRequest,
-} from "./operations/read/tableReadOperation.js";
-export type {
-  AppsScriptOperationProjectionStatus,
-  AppsScriptOperationSyncGatewayOptions,
-} from "./transport/operationSyncGateway.js";
+export type { AppsScriptOperationSyncGatewayOptions } from "./transport/operationSyncGateway.js";
