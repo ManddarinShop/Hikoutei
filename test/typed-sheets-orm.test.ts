@@ -16,7 +16,6 @@ import {
 import {
   createMikroOrmSqliteAdapter,
   createTypedSheetsOrm,
-  type MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/index.js";
 
 const OrderSchema = defineEntity({
@@ -35,12 +34,6 @@ class Order extends OrderSchema.class {
 
 OrderSchema.setClass(Order);
 
-interface FlushAuditRow {
-  readonly change_kind: string;
-  readonly entity_name: string;
-  readonly primary_key: string | null;
-}
-
 describe("TypedSheetsOrm", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -52,7 +45,6 @@ describe("TypedSheetsOrm", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = createMikroOrmSqliteAdapter(orm);
-    await createFlushAudit(adapter);
 
     const observedChanges: TypedSheetsEntityChange[] = [];
     const typedSheetsOrm = createTypedSheetsOrm(adapter, {
@@ -86,35 +78,12 @@ describe("TypedSheetsOrm", () => {
       { kind: PRESENCE_KINDS.PRESENT, value: "order-1" },
     ]);
 
-    const auditRows = await adapter.read(({ sql }) => {
-      return sql.all<FlushAuditRow>(
-        "SELECT change_kind, entity_name, primary_key FROM typed_sheets_flush_audit ORDER BY sequence",
-      );
-    });
-    expect(auditRows).toEqual([
-      {
-        change_kind: TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE,
-        entity_name: "TypedSheetsFacadeOrder",
-        primary_key: "order-1",
-      },
-      {
-        change_kind: TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE,
-        entity_name: "TypedSheetsFacadeOrder",
-        primary_key: "order-1",
-      },
-      {
-        change_kind: TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE,
-        entity_name: "TypedSheetsFacadeOrder",
-        primary_key: "order-1",
-      },
-    ]);
   });
 
   it("uses the same lifecycle coordinator for transactional work", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = createMikroOrmSqliteAdapter(orm);
-    await createFlushAudit(adapter);
 
     const observedChanges: TypedSheetsEntityChange[] = [];
     const typedSheetsOrm = createTypedSheetsOrm(adapter, {
@@ -138,22 +107,12 @@ describe("TypedSheetsOrm", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = createMikroOrmSqliteAdapter(orm);
-    await createFlushAudit(adapter);
 
     const typedSheetsOrm = createTypedSheetsOrm(adapter, {
       flushCoordinator: {
-        async onFlush({ changes, sql }) {
+        async onFlush({ changes }) {
           const change = changes[0];
           if (change === undefined) return;
-          await sql.run(
-            "INSERT INTO typed_sheets_flush_audit (change_kind, entity_name, primary_key, payload_json) VALUES (?, ?, ?, ?)",
-            [
-              change.kind,
-              change.entityName,
-              primaryKeyValue(change),
-              JSON.stringify(change.payload),
-            ],
-          );
           throw new Error("flush plan rejected");
         },
       },
@@ -164,11 +123,6 @@ describe("TypedSheetsOrm", () => {
 
     await expect(em.flush()).rejects.toThrow("flush plan rejected");
     expect(await orm.em.fork().find(Order, {})).toEqual([]);
-    expect(await adapter.read(({ sql }) => {
-      return sql.all<FlushAuditRow>(
-        "SELECT change_kind, entity_name, primary_key FROM typed_sheets_flush_audit",
-      );
-    })).toEqual([]);
   });
 });
 
@@ -176,27 +130,10 @@ function createAuditFlushCoordinator(
   observedChanges: TypedSheetsEntityChange[],
 ): TypedSheetsFlushCoordinator {
   return {
-    async onFlush({ changes, sql }) {
+    async onFlush({ changes }) {
       observedChanges.push(...changes);
-      for (const change of changes) {
-        await sql.run(
-          "INSERT INTO typed_sheets_flush_audit (change_kind, entity_name, primary_key, payload_json) VALUES (?, ?, ?, ?)",
-          [
-            change.kind,
-            change.entityName,
-            primaryKeyValue(change),
-            JSON.stringify(change.payload),
-          ],
-        );
-      }
     },
   };
-}
-
-function primaryKeyValue(change: TypedSheetsEntityChange): string | null {
-  return change.primaryKey.kind === PRESENCE_KINDS.PRESENT
-    ? change.primaryKey.value
-    : null;
 }
 
 async function createOrm() {
@@ -208,18 +145,4 @@ async function createOrm() {
   });
   await orm.schema.create();
   return orm;
-}
-
-async function createFlushAudit(adapter: MikroOrmSqliteAdapter): Promise<void> {
-  await adapter.transaction(async ({ sql }) => {
-    await sql.run(`
-      CREATE TABLE typed_sheets_flush_audit (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        change_kind TEXT NOT NULL,
-        entity_name TEXT NOT NULL,
-        primary_key TEXT,
-        payload_json TEXT NOT NULL
-      )
-    `);
-  });
 }

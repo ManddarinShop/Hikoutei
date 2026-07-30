@@ -18,7 +18,6 @@ import {
 import { canonicalSyncJson, syncSha256Hex } from "../src/adapter/sheets/providers/apps-script-gateway/protocol/syncProtocol.js";
 import {
   SYNC_GATEWAY_CLIENT_ERROR_CODES,
-  SyncGatewayProtocolError,
 } from "../src/adapter/sheets/providers/apps-script-gateway/errors.js";
 
 afterEach(() => {

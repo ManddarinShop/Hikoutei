@@ -7,12 +7,9 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  APPLICABILITY_KINDS,
-  appendPendingEffectsWithAdapter,
-  claimWriterLeaseWithAdapter,
-  PRESENCE_KINDS,
-} from "../src/index.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/index.js";
+import { appendPendingEffectsWithAdapter } from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
+import { claimWriterLeaseWithAdapter } from "../src/infrastructure/storage/sync/shared/writerLease.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
@@ -23,7 +20,7 @@ import {
   migrateMikroOrmSqliteSchema,
   MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/index.js";
-import type { NewEffect } from "../src/infrastructure/storage/index.js";
+import type { NewEffect } from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
 
 const EntitySchema = defineEntity({
   name: "SyncEffectRecoveryEntity",
@@ -267,7 +264,6 @@ function createEffect(suffix = "recovery", streamSequence = 1): NewEffect {
       sheetName: "Orders",
       registeredRange: "A:B",
       schemaVersion: 1,
-      targetAnchor: `${suffix}-anchor`,
       fields: nextFields,
       targetVisibleHash: computeSyncVisibleHash(nextFields),
       createIfMissing: true,
