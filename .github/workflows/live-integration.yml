@@ -22,7 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
       TYPED_SHEETS_GATEWAY_URL: ${{ secrets.TYPED_SHEETS_GATEWAY_URL }}
       TYPED_SHEETS_GATEWAY_SHARED_SECRET: ${{ secrets.TYPED_SHEETS_GATEWAY_SHARED_SECRET }}
       TYPED_SHEETS_GATEWAY_SHEET_ID: ${{ secrets.TYPED_SHEETS_GATEWAY_SHEET_ID }}
