@@ -1,21 +1,14 @@
-import { withImmediateTransaction, type DatabaseSyncLike } from "./sqliteBridge.js";
-import type {
-  SchemaMigrationColumnName,
-  SchemaMigrationTableName,
-} from "./schemaTypes.js";
-import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
-
 /**
  * SQLite schema and migration DDL for the SQLite-authoritative sync storage layer.
  *
- * Implements the logical schema from design/packages/core/contracts/storage-schema.md.
- * All identity constraints, unique indexes, and foreign keys are fixed here.
+ * Implements the logical schema owned by this module. All identity constraints,
+ * unique indexes, and foreign keys are fixed here.
  *
  * Table creation order is parent-first. Deletion order is child-first.
  */
 
-/** Current durable schema version managed by migrateSchema(). */
-export const CURRENT_SCHEMA_VERSION = 3;
+/** Current durable schema version managed by the provider migration. */
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
@@ -79,83 +72,6 @@ export const REQUIRED_V3_COLUMNS: Readonly<Record<"sheet_effect_outbox", readonl
   sheet_effect_outbox: ["effect_id", "created_at"],
 };
 
-/**
- * Returns full DDL for an empty database or isolated test fixture.
- *
- * Durable runtime startup must call migrateSchema() instead: executing this
- * directly cannot safely evolve an already-populated database.
- */
-export function schemaDdl(): string {
-  return `${SQLITE_CONNECTION_PRAGMAS}\n${syncSchemaTablesDdl()}\n${syncSchemaIndexesDdl()}`;
-}
-
-/**
- * Upgrades a durable database under an immediate writer transaction.
- *
- * Version 1 represents the original one-shot schema. Version 2 persists the
- * candidate epoch needed to prevent a stale resolution request from resolving
- * an ABA candidate retry. Version 3 adds durable effect creation time so
- * operations can measure pending-age backpressure. Unversioned legacy
- * databases created by schemaDdl() are adopted only after verification.
- */
-export function migrateSchema(db: DatabaseSyncLike): SchemaMigrationResult {
-  db.exec(SQLITE_CONNECTION_PRAGMAS);
-  return withImmediateTransaction(db, () => {
-    const fromVersion = readSchemaVersion(db);
-    if (fromVersion > CURRENT_SCHEMA_VERSION) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SCHEMA_VERSION_TOO_NEW,
-        `SQLite schema version ${fromVersion} is newer than supported version ${CURRENT_SCHEMA_VERSION}.`,
-      );
-    }
-
-    const hasSchema = tableExists(db, "sheet_registry");
-    if (fromVersion === 0 && !hasSchema) {
-      db.exec(syncSchemaTablesDdl());
-      verifyRequiredColumns(db);
-      db.exec(syncSchemaIndexesDdl());
-      writeSchemaVersion(db, CURRENT_SCHEMA_VERSION);
-      verifyCurrentSchema(db);
-      return {
-        fromVersion,
-        toVersion: CURRENT_SCHEMA_VERSION,
-        appliedVersions: [CURRENT_SCHEMA_VERSION],
-      };
-    }
-
-    if (!hasSchema) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SCHEMA_TABLE_MISSING,
-        "SQLite schema is missing sheet_registry and cannot be migrated safely.",
-      );
-    }
-
-    // Create tables that were added after the original one-shot bootstrap,
-    // without changing existing table definitions implicitly.
-    db.exec(syncSchemaTablesDdl());
-    const appliedVersions: number[] = [];
-    if (fromVersion < 2) {
-      applyVersion2CandidateEpochMigration(db);
-      writeSchemaVersion(db, 2);
-      appliedVersions.push(2);
-    }
-    if (fromVersion < 3) {
-      applyVersion3EffectTimestampMigration(db);
-      writeSchemaVersion(db, 3);
-      appliedVersions.push(3);
-    }
-    verifyRequiredColumns(db);
-    db.exec(syncSchemaIndexesDdl());
-
-    verifyCurrentSchema(db);
-    return {
-      fromVersion,
-      toVersion: CURRENT_SCHEMA_VERSION,
-      appliedVersions,
-    };
-  });
-}
-
 /** Returns table DDL only, so migration transactions never change connection pragmas. */
 export function syncSchemaTablesDdl(): string {
   return [
@@ -168,7 +84,6 @@ export function syncSchemaTablesDdl(): string {
     BUSINESS_KEY_INDEX_DDL,
     EFFECT_OUTBOX_DDL,
     WRITER_LEASE_DDL,
-    CUTOVER_STATE_DDL,
   ].join("\n");
 }
 
@@ -183,122 +98,6 @@ export function syncSchemaIndexesDdl(): string {
   `;
 }
 
-/** Applies the first additive migration after the historical one-shot DDL. */
-function applyVersion2CandidateEpochMigration(db: DatabaseSyncLike): void {
-  addColumnIfMissing(db, "sync_conflict", "candidate_epoch", "INTEGER NOT NULL DEFAULT 0");
-  addColumnIfMissing(
-    db,
-    "resolution_command",
-    "expected_candidate_epoch",
-    "INTEGER NOT NULL DEFAULT 0",
-  );
-}
-
-/** Adds durable effect creation time without rewriting existing outbox evidence. */
-function applyVersion3EffectTimestampMigration(db: DatabaseSyncLike): void {
-  addColumnIfMissing(db, "sheet_effect_outbox", "created_at", "INTEGER NOT NULL DEFAULT 0");
-}
-
-/** Refuses to treat a user_version marker as authoritative when required columns are absent. */
-function verifyCurrentSchema(db: DatabaseSyncLike): void {
-  verifyRequiredColumns(db);
-  if (!indexExists(db, "sync_conflict_candidate_attempt_uq")) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.SCHEMA_INDEX_MISSING,
-      "SQLite schema is missing sync_conflict_candidate_attempt_uq.",
-    );
-  }
-}
-
-/** Verifies columns before a dependent unique index is created. */
-function verifyRequiredColumns(db: DatabaseSyncLike): void {
-  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_V2_COLUMNS) as Array<
-    ["sync_conflict" | "resolution_command", readonly string[]]
-  >) {
-    if (!tableExists(db, tableName)) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SCHEMA_TABLE_MISSING,
-        `SQLite schema is missing ${tableName}; refusing an unsafe migration marker.`,
-      );
-    }
-    for (const columnName of requiredColumns) {
-      if (!columnExists(db, tableName, columnName)) {
-        throw new StorageError(
-          STORAGE_ERROR_CODES.SCHEMA_COLUMN_MISSING,
-          `SQLite schema is missing ${tableName}.${columnName}; refusing an unsafe migration marker.`,
-        );
-      }
-    }
-  }
-  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_V3_COLUMNS) as Array<
-    ["sheet_effect_outbox", readonly string[]]
-  >) {
-    if (!tableExists(db, tableName)) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SCHEMA_TABLE_MISSING,
-        `SQLite schema is missing ${tableName}; refusing an unsafe migration marker.`,
-      );
-    }
-    for (const columnName of requiredColumns) {
-      if (!columnExists(db, tableName, columnName)) {
-        throw new StorageError(
-          STORAGE_ERROR_CODES.SCHEMA_COLUMN_MISSING,
-          `SQLite schema is missing ${tableName}.${columnName}; refusing an unsafe migration marker.`,
-        );
-      }
-    }
-  }
-}
-
-/** Adds one known additive column exactly once. Table and column names are internal constants. */
-function addColumnIfMissing(
-  db: DatabaseSyncLike,
-  tableName: SchemaMigrationTableName,
-  columnName: SchemaMigrationColumnName,
-  definition: string,
-): void {
-  if (columnExists(db, tableName, columnName)) return;
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
-}
-
-/** Reads SQLite's built-in durable schema marker. */
-function readSchemaVersion(db: DatabaseSyncLike): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  const version = row?.user_version;
-  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.SCHEMA_VERSION_INVALID,
-      "SQLite user_version must be a non-negative safe integer.",
-    );
-  }
-  return version;
-}
-
-/** Writes the schema marker only in the same transaction as its DDL changes. */
-function writeSchemaVersion(db: DatabaseSyncLike, version: number): void {
-  db.exec(`PRAGMA user_version = ${version}`);
-}
-
-/** Checks for one schema-owned table without interpolating external input. */
-function tableExists(db: DatabaseSyncLike, tableName: string): boolean {
-  return db.prepare(
-    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-  ).get(tableName) !== undefined;
-}
-
-/** Reads the schema-owned table definition to make an ALTER migration idempotent. */
-function columnExists(db: DatabaseSyncLike, tableName: string, columnName: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as readonly { name?: unknown }[];
-  return rows.some((row) => row.name === columnName);
-}
-
-/** Checks the immutable candidate-attempt index created by the current schema. */
-function indexExists(db: DatabaseSyncLike, indexName: string): boolean {
-  return db.prepare(
-    "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
-  ).get(indexName) !== undefined;
-}
-
 const REGISTRY_TABLES_DDL = `
   CREATE TABLE IF NOT EXISTS sheet_registry (
     sheet_id TEXT PRIMARY KEY,
@@ -307,7 +106,7 @@ const REGISTRY_TABLES_DDL = `
     business_key_field TEXT NOT NULL,
     locale TEXT,
     timezone TEXT,
-    anchor_mode TEXT NOT NULL DEFAULT 'developer_metadata',
+    anchor_mode TEXT NOT NULL DEFAULT 'business_key',
     stable_encode_version TEXT NOT NULL DEFAULT 'stable_encode_v1',
     enabled INTEGER NOT NULL DEFAULT 1
   );
@@ -320,7 +119,7 @@ const REGISTRY_TABLES_DDL = `
     registered_range TEXT NOT NULL,
     projection TEXT NOT NULL,
     schema_version INTEGER NOT NULL,
-    anchor_mode TEXT NOT NULL DEFAULT 'developer_metadata',
+    anchor_mode TEXT NOT NULL DEFAULT 'business_key',
     enabled INTEGER NOT NULL DEFAULT 1,
     UNIQUE(spreadsheet_id, tab_name, registered_range, projection)
   );
@@ -601,16 +400,5 @@ const WRITER_LEASE_DDL = `
     writer_epoch INTEGER NOT NULL,
     fencing_token TEXT NOT NULL,
     lease_until INTEGER NOT NULL
-  );
-`;
-
-const CUTOVER_STATE_DDL = `
-  CREATE TABLE IF NOT EXISTS cutover_state (
-    cutover_id TEXT PRIMARY KEY,
-    phase TEXT NOT NULL,
-    source_snapshot_hash TEXT,
-    marker TEXT,
-    status TEXT NOT NULL,
-    created_at INTEGER NOT NULL
   );
 `;
