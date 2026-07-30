@@ -47,6 +47,7 @@ import {
 import {
   AppsScriptOperationClient,
   AppsScriptOperationSyncGateway,
+  AppsScriptSyncGatewayError,
   pollSimpleSheetRowsWithAdapter,
   provisionRegisteredSyncSheets,
   stableHash,
@@ -350,10 +351,23 @@ class LiveSyncBackend {
   }
 
   async cleanup(sheetNames) {
-    await this.client.applyOperations([{
-      fn: cleanupSource,
-      args: { sheetNames },
-    }]);
+    // A timed-out Apps Script request may still be finishing remotely. Retry
+    // idempotent cleanup so the scenario does not report a false failure while
+    // the workflow's always-run cleanup step remains the final safety net.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await this.client.applyOperations([{
+          fn: cleanupSource,
+          args: { sheetNames },
+        }]);
+        return;
+      } catch (error) {
+        const retryable = error instanceof AppsScriptSyncGatewayError &&
+          error.code === "sync_gateway_timeout";
+        if (!retryable || attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 2_000));
+      }
+    }
   }
 
   readRequest(definition) {
