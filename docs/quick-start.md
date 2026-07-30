@@ -1,102 +1,116 @@
 # Hikoutei Quick Start
 
-The project is called Hikoutei and is currently published on npm as
-`hikoutei`.
+The application-facing API owns entity definitions and the entity lifecycle.
+The current SQLite provider is an implementation detail behind that API.
+
+The current runtime supports the local entity lifecycle, SQLite-backed outbox
+planning, outbound worker delivery, gateway provisioning, and the first
+provider-side User_Input polling path. Global Conflict resolution is not yet
+complete end to end.
 
 ## Installation
 
 ```sh
-npm install hikoutei @mikro-orm/core @mikro-orm/sql
+npm install typed-sheets @mikro-orm/core @mikro-orm/sql
 ```
 
-The MikroORM packages are optional peer dependencies of the root package. They
-are required only when the MikroORM persistence adapter is used.
+## Define entities
 
-## Entity lifecycle
-
-The public API is entity-oriented: load an entity, mutate it, and flush the
-unit of work.
+Use an explicit, immutable string primary key. The first public relation
+surface supports `manyToOne` and `oneToMany`; relation loading is explicit and
+does not imply lazy loading or cascade behavior.
 
 ```ts
-import { defineEntity, p } from "@mikro-orm/sql";
-import { defineTypedSheetsEntityMapping } from "hikoutei/orm";
-import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
+import { defineTypedSheetsEntity } from "typed-sheets";
 
-const OrderSchema = defineEntity({
-  name: "Order",
-  tableName: "orders",
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
   properties: {
-    id: p.string().primary(),
-    status: p.string(),
+    id: { type: "string", primary: true },
+    name: { type: "string" },
   },
 });
+```
 
-class Order extends OrderSchema.class {
-  declare id: string;
-  declare status: string;
-}
+Do not import `defineEntity`, `p`, or a provider-specific EntityManager in
+application code.
 
-OrderSchema.setClass(Order);
+## Local SQLite lifecycle
 
-const orderMapping = defineTypedSheetsEntityMapping({
-  entity: Order,
-  logicalSheetId: "orders",
-  primaryKey: "id",
-  businessKey: "id",
-  schemaVersion: 1,
-  fields: [
-    {
-      property: "id",
-      cellKind: "string",
-      ownership: "user",
-      required: true,
-      unique: true,
-    },
-    {
-      property: "status",
-      cellKind: "string",
-      ownership: "user",
-      required: true,
-    },
-  ],
-  projections: [
-    {
-      physicalSheetId: "orders-system",
-      spreadsheetId: process.env.GOOGLE_SHEET_ID!,
-      tabName: "Orders_System",
-      registeredRange: "A:C",
-      projection: "system_state",
-    },
-  ],
+```ts
+import { createTypedSheets } from "typed-sheets";
+
+const typedSheets = await createTypedSheets({
+  dbName: "./typed-sheets.sqlite",
+  entities: [User],
 });
 
-const typedSheetsOrm = await initializeMappedTypedSheetsOrm({
-  dbName: "./hikoutei.sqlite",
-  entities: [Order],
-  mappings: [orderMapping],
-  writer: { writerId: "orders-service" },
+const em = typedSheets.em.fork();
+await em.transactional(async (tx) => {
+  const user = tx.create(User, { id: "u1", name: "Ada" });
+  tx.persist(user);
 });
 
-const em = typedSheetsOrm.em.fork();
-const order = em.create(Order, { id: "o-1", status: "pending" });
-em.persist(order);
-await em.flush();
-
-const loaded = await em.findOne(Order, { id: "o-1" });
-if (loaded !== null) {
-  loaded.status = "paid";
+const user = await em.findOne(User, { id: "u1" });
+if (user !== null) {
+  user.name = "Ada Lovelace";
   await em.flush();
 }
 ```
 
-The current manager supports `fork()`, `create()`, `find()`, `findOne()`,
-`persist()`, `remove()`, `flush()`, `transactional()`, and `clear()`.
-Reads are served from SQLite and do not wait for a Google Sheets request.
+Application reads come from SQLite. `flush()` commits the entity row and, when
+sync routes are configured, the local sync state and Sheet outbox in the same
+SQLite transaction. It does not call Google Sheets synchronously.
+
+## Separate Sheet routes
+
+Physical Sheet names are not part of the entity definition. Add them at
+runtime construction time:
+
+```ts
+const typedSheets = await createTypedSheets({
+  dbName: "./typed-sheets.sqlite",
+  entities: [User],
+  sync: {
+    writerId: "users-service",
+    entities: {
+      User: {
+        systemState: {
+          spreadsheetId: process.env.GOOGLE_SHEET_ID!,
+          tabName: "Users_System",
+          registeredRange: "A:C",
+        },
+        userInput: {
+          spreadsheetId: process.env.GOOGLE_SHEET_ID!,
+          tabName: "Users_Input",
+          registeredRange: "A:B",
+        },
+        editableFields: ["id", "name"],
+      },
+    },
+  },
+});
+```
+
+The route registration is stored in SQLite. If an
+`onRegisteredProjections` callback is supplied, it receives the exact local
+registration definitions for Apps Script provisioning. Provisioning is still
+an explicit remote operation.
+
+## Worker boundary and inbound flow
+
+Run the outbound sync worker in a separate process. Its current responsibility
+is to drain the SQLite outbox, claim leases, deliver signed gateway operations,
+and recover uncertain remote writes. The provider-side polling pass can also
+read `User_Input`, evaluate observations against SQLite state, apply accepted
+edits in the same SQLite transaction as their observation ledger, and enqueue
+the next `System_State` projection. A long-running polling supervisor and the
+global Conflict checkbox projection are still separate follow-up work.
+The application server should not read Google Sheets as its source of truth.
 
 ## Gateway setup
 
 Deploy [`apps-script/gateway/Code.gs`](../apps-script/gateway/Code.gs) as a
-Google Apps Script Web App. Initialize the local SQLite registry first, then
-use `provisionRegisteredSyncSheets()` through the operation-backed gateway.
-
-Keep the shared gateway secret on the server and out of browser code and Git.
+Google Apps Script Web App. Keep the gateway secret on the server and out of
+browser code and Git.

@@ -6,12 +6,12 @@
 
 **Google Sheets を利用する MVP 向けの型付きリポジトリと安全な書き込みレイヤー**
 
-<a href="https://www.npmjs.com/package/hikoutei">npm パッケージ</a> ·
-<a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a> ·
+<a href="https://www.npmjs.com/package/typed-sheets">npm パッケージ</a> ·
+<a href="https://github.com/ManddarinShop/google-sheets-orm/issues">Issues</a> ·
 <a href="apps-script/gateway/Code.gs">Apps Script Gateway</a>
 
-[![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
-[![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/typed-sheets?style=flat-square)](https://www.npmjs.com/package/typed-sheets)
+[![license](https://img.shields.io/npm/l/typed-sheets?style=flat-square)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 </div>
@@ -34,10 +34,10 @@ Prisma/JPA のクローン、汎用 Google Sheets API ラッパーを目的と�
 
 ## インストール
 
-プロジェクトと npm パッケージ名は `hikoutei` です。
+プロジェクト名は Hikoutei で、現在の npm パッケージ名は `typed-sheets` です。
 
 ```sh
-npm install hikoutei @mikro-orm/core @mikro-orm/sql
+npm install typed-sheets @mikro-orm/core @mikro-orm/sql
 ```
 
 MikroORM パッケージはルートパッケージの optional peer dependency ですが、
@@ -45,20 +45,25 @@ Hikoutei の組み込み SQLite アダプターを使う場合は必要です。
 
 ## クイックスタート
 
-エンティティマッピングを定義したら、リクエスト単位の manager でエンティティを
-操作します。完全なマッピングと Gateway の設定は
-[クイックスタートガイド](docs/quick-start.md)を参照してください。
+typed-sheets でエンティティを定義し、リクエスト単位の manager でエンティティを
+操作します。Sheet の設定は [クイックスタートガイド](docs/quick-start.md) を
+参照してください。
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "typed-sheets";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
 });
 
 const em = hikoutei.em.fork();
@@ -66,8 +71,11 @@ const user = em.create(User, { id: "u1", name: "Ada" });
 em.persist(user);
 await em.flush();
 
-user.name = "Ada Lovelace";
-await em.flush();
+const loaded = await em.findOne(User, { id: "u1" });
+if (loaded !== null) {
+  loaded.name = "Ada Lovelace";
+  await em.flush();
+}
 ```
 
 `flush()` はローカルのアプリケーション状態を更新し、設定済みの Sheet ビューへ
@@ -104,11 +112,18 @@ await em.flush();
 Gateway のシークレットはサーバーだけに保管してください。ブラウザコードに
 含めたり、Git にコミットしたりしないでください。
 
+現在の公開ランタイムが対応するのは、ローカルエンティティのライフサイクル、
+SQLite トランザクションと outbox の計画、outbound worker による配信、Gateway
+のプロビジョニングです。User_Input のポーリングとグローバル Conflict の
+チェックボックス解決は、まだ end-to-end では実装されていない inbound 機能です。
+
 ## ドキュメント
 
 - [クイックスタート](docs/quick-start.md) — インストール、マッピング、Gateway 設定。
 - [アーキテクチャ](docs/architecture.md) — ローカルストアと Sheet ビューの関係。
 - [書き込みと同期の流れ](docs/write-and-synchronization-flow.md) — 非同期配信と復旧動作。
+- [現在の状態レビュー](docs/current-state-review.md) — 実装済みの基盤と意図的に
+  未完成の inbound 作業。
 - [開発ガイド](docs/development.md) — ローカル開発とテストコマンド。
 - [ベンチマーク記録](docs/sync-bulk-write-benchmark.md) — 日付ごとの測定結果と制約。
 
@@ -127,7 +142,7 @@ Gateway のシークレットはサーバーだけに保管してください。
 - レジストリと Apps Script デプロイ用のセットアップツールを追加する。
 - 公開パッケージのリリースを安定化する。
 
-現在の作業については [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
+現在の作業については [open issues](https://github.com/ManddarinShop/google-sheets-orm/issues)
 を参照してください。
 
 ## ライセンス
