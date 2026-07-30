@@ -78,45 +78,34 @@ Target size:
 
 Split larger changes by responsibility.
 
-Good PR sequence:
+For this repository, use the current work sequence below when splitting a
+larger change.
 
-1. project scaffold
-2. core schema and column parsers
-3. memory adapter
-4. repository read methods
-5. insert/update methods
-6. optimistic locking
-7. README and examples
-8. Google Sheets adapter
+## Current Work Sequence
 
-## First Milestone PR Plan
-
-Recommended first milestone:
+The repository already has the public entity API, the MikroORM + SQLite
+provider, the durable outbox, and the signed Apps Script gateway. Keep future
+changes aligned with that boundary:
 
 ```txt
-PR 1: project scaffold
-PR 2: schema and parser core
-PR 3: memory adapter and read repository
-PR 4: insert/update with version conflict
-PR 5: README quickstart and limitations
+1. public entity and relation contract
+2. SQLite transaction, canonical state, and outbox behavior
+3. outbound worker, gateway, recovery, and reconciliation
+4. inbound User_Input polling and field-level Conflict resolution
+5. optional persistence or Sheet provider implementations
 ```
 
-Do not start with Google OAuth or Apps Script. Those belong after the core model is stable.
+The current provider is replaceable behind the public API, but SQLite remains
+the authority for application reads and writes. Do not move business decisions
+or canonical state into Google Sheets while extending the gateway.
 
 ## Release Policy
 
-Use semantic versioning.
-
-Before `1.0.0`, breaking changes are allowed but should be documented.
-
-Suggested early versions:
-
-```txt
-0.1.0 core schema + memory adapter
-0.2.0 repository CRUD + optimistic locking
-0.3.0 Google Sheets adapter
-0.4.0 README, examples, CI hardening
-```
+Use semantic versioning. Before `1.0.0`, breaking changes are allowed but must
+be documented in the README or release notes. A release should describe which
+parts of the public entity API, SQLite provider, outbound worker, and inbound
+design are actually implemented; provider-side polling must be distinguished
+from the still-planned public worker loop and Conflict resolution behavior.
 
 ## Pull Request Template
 
@@ -199,12 +188,12 @@ Initial issues should be small and implementation-oriented.
 Examples:
 
 ```txt
-Add duplicate header detection
-Add missing key column error
-Add number parser
-Add memory adapter
-Add version conflict test
-Add README limitations section
+Add relation mapping validation
+Add SQLite/outbox transaction test
+Add Apps Script operation recovery test
+Add User_Input polling scenario
+Add Conflict resolution CAS test
+Clarify SQLite authority in the README
 ```
 
 Avoid opening vague issues such as:
@@ -219,6 +208,6 @@ Support everything
 
 The public project story should be:
 
-> Google Sheets is practical for early MVPs and internal tools, but manual edits introduce schema drift and stale writes. This library provides a typed repository layer that fails fast on schema drift and protects writes with version-based conflict detection.
+> Google Sheets is practical for early MVPs and internal tools, but manual edits introduce schema drift and stale writes. This library provides a typed entity and safe write layer with SQLite as the application authority, durable Sheet outbox effects, and field-level conflict protection at the synchronization boundary.
 
 Do not claim full database semantics.
