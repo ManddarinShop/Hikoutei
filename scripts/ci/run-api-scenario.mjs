@@ -1,3 +1,21 @@
+/**
+ * Internal sync/gateway end-to-end scenario (NOT a public API smoke test).
+ *
+ * This script drives Hikoutei's internal typed-sheets sync pipeline against a
+ * fake backend and, when live secrets are present, a real Google Sheets
+ * backend. It exercises projection registration, gateway provisioning, the
+ * bounded effect worker, polling, and the MikroORM-backed storage/CAS/hash
+ * machinery end to end.
+ *
+ * The entrypoints it imports are internal implementation surface — the
+ * gateway/polling/worker/storage providers plus the `hikoutei/orm` and
+ * `hikoutei/mikro-orm` modules — not the public contract. The public contract
+ * is the high-level `hikoutei` root API (Sheet configuration/registration and
+ * a MikroORM-style entity lifecycle), which has not yet received its final
+ * refactoring on `develop`. A dedicated public API CRUD smoke for that
+ * contract will be added separately once it lands; until then, do not read
+ * this scenario as public-contract coverage.
+ */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import {
@@ -518,7 +536,7 @@ async function main() {
     });
 
     // Keep the mapping in the result so a future scenario can report which
-    // public route was exercised without importing source-only test helpers.
+    // internal route was exercised without importing source-only test helpers.
     void mapping;
   } catch (error) {
     scenarioError = error;
@@ -716,7 +734,7 @@ function createReport({
   const steadyStateMs = sumStepDuration(steadyStateSteps);
   const status = scenarioError === undefined && cleanupError === undefined ? "passed" : "failed";
   return {
-    scenario: "public-api-lifecycle-and-polling",
+    scenario: "internal-sync-gateway-e2e-lifecycle-and-polling",
     scenarioVersion: SCENARIO_VERSION,
     backend,
     status,
@@ -736,7 +754,7 @@ function createReport({
 async function writeSummary(summaryPath, report) {
   if (summaryPath === undefined) return;
   const lines = [
-    `## Hikoutei public API scenario (${report.backend})`,
+    `## Hikoutei internal sync/gateway E2E (${report.backend})`,
     "",
     `- Status: **${report.status}**`,
     `- Total: ${report.durationMs} ms`,

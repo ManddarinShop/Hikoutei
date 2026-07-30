@@ -18,7 +18,7 @@ jobs:
     # Secrets are unavailable to forked pull requests. Never switch this to
     # pull_request_target: it would execute untrusted PR code with the secret.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    name: Installed-package Google Sheets API scenario
+    name: Installed-package Google Sheets internal sync/gateway E2E
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -42,7 +42,7 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run installed-package live API scenario
+      - name: Run installed-package internal sync/gateway E2E (live)
         shell: bash
         run: |
           set -euo pipefail
@@ -82,11 +82,11 @@ jobs:
             --cleanup-only \
             --manifest="$RUNNER_TEMP/hikoutei-live-manifest.json"
 
-      - name: Upload live API scenario report
+      - name: Upload internal sync/gateway E2E report (live)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hikoutei-live-api-scenario
+          name: hikoutei-live-sync-gateway-e2e
           path: |
             ${{ runner.temp }}/hikoutei-live-result.json
             ${{ runner.temp }}/hikoutei-live-manifest.json
