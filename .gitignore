@@ -1,5 +1,6 @@
 # Local-only agent and working notes
 .agents/
+.pi/
 *.local.md
 .local/
 review/
