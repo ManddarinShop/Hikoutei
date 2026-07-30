@@ -24,7 +24,11 @@ import {
   createSystemProjectionEffect,
   createUserInputDeleteEffect,
 } from "../../../sync/outbound/projection/ProjectionEffectFactory.js";
-import { requireRegisteredSyncSheetWithSql } from "../../../../infrastructure/storage/index.js";
+import {
+  readMappedLatestProjectionEffectWithSql,
+  readMappedVisibleProjectionStateWithSql,
+  requireRegisteredSyncSheetWithSql,
+} from "../../../../infrastructure/storage/index.js";
 import type {
   NewEffect,
   RegisteredSyncSheet,
@@ -33,12 +37,8 @@ import type {
 import {
   MAPPED_EFFECT_STATUSES,
   MAPPED_EFFECT_TARGET_KINDS,
-  READ_LATEST_PROJECTION_EFFECT_SQL,
-  READ_VISIBLE_PROJECTION_STATE_SQL,
-  type LatestProjectionEffectSqlRow,
   type ProjectionBaseline,
   type ResolvedWriterOptions,
-  type VisibleProjectionSqlRow,
 } from "../support/contracts.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
@@ -242,11 +242,12 @@ export async function projectionBaseline(
   targetKind: EffectTargetKind,
   targetId: string,
 ): Promise<ProjectionBaseline> {
-  const latest = await sql.get<LatestProjectionEffectSqlRow>(READ_LATEST_PROJECTION_EFFECT_SQL, [
+  const latest = await readMappedLatestProjectionEffectWithSql(
+    sql,
     mapping.logicalSheetId,
     targetKind,
     targetId,
-  ]);
+  );
   if (latest !== undefined) {
     if (
       latest.physical_sheet_id !== projection.physicalSheetId ||
@@ -307,11 +308,12 @@ export async function projectionBaselineFromConfirmedState(
   rowBindingId: string,
   streamSequence: number,
 ): Promise<ProjectionBaseline> {
-  const visible = await sql.get<VisibleProjectionSqlRow>(READ_VISIBLE_PROJECTION_STATE_SQL, [
+  const visible = await readMappedVisibleProjectionStateWithSql(
+    sql,
     projection.physicalSheetId,
     projection.projection,
     rowBindingId,
-  ]);
+  );
   if (visible === undefined) {
     return {
       expectedVisibleRevision: 0,

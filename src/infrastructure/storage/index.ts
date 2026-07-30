@@ -108,3 +108,41 @@ export type {
   RegisteredSyncSheet,
   RegisterSyncSheetResult,
 } from "./sync/shared/syncRegistry.js";
+
+export {
+  readMappedRowBindingWithSql,
+  insertMappedActiveRowBindingWithSql,
+  tombstoneMappedActiveRowBindingWithSql,
+  readMappedActiveCanonicalEntityWithSql,
+  readMappedCanonicalFieldRevisionsWithSql,
+  readMappedActiveBusinessKeyWithSql,
+  readMappedBusinessKeyOwnerWithSql,
+  insertMappedActiveBusinessKeyWithSql,
+  retireMappedActiveBusinessKeyWithSql,
+  retireMappedEntityBusinessKeysWithSql,
+  readMappedVisibleProjectionStateWithSql,
+  readMappedLatestProjectionEffectWithSql,
+} from "./state/mapped/mappedPersistenceSql.js";
+export type {
+  MappedRowBindingSqlRow,
+  MappedCanonicalEntitySqlRow,
+  MappedCanonicalFieldRevisionSqlRow,
+  MappedActiveBusinessKeySqlRow,
+  MappedBusinessKeyOwnerSqlRow,
+  MappedVisibleProjectionSqlRow,
+  MappedLatestProjectionEffectSqlRow,
+} from "./state/mapped/mappedPersistenceSql.js";
+
+export {
+  readReconciliationDesiredSystemStateWithSql,
+  readReconciliationVisibleStateWithSql,
+  readReconciliationLatestEffectWithSql,
+} from "./sync/outbound/reconciliationSql.js";
+export type {
+  ReconciliationDesiredSystemStateSqlRow,
+  ReconciliationVisibleStateSqlRow,
+  ReconciliationLatestEffectSqlRow,
+} from "./sync/outbound/reconciliationSql.js";
+
+export { hasActiveUserInputCandidateWithSql } from "./sync/outbound/effectWorkerSql.js";
+export type { UserInputCandidateGuardQuery } from "./sync/outbound/effectWorkerSql.js";
