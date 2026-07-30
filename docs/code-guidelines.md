@@ -2,18 +2,18 @@
 
 ## Project Identity
 
-This project is a TypeScript library that provides a typed entity and safe write layer for Google Sheets-backed MVP apps, internal tools, and low-traffic admin workflows. SQLite is the local authority; Google Sheets is an asynchronous human-facing projection.
+This project is a TypeScript library for using Google Sheets as a lightweight, typed repository layer for MVP apps, internal tools, and low-traffic admin workflows.
 
 The project is not a full database replacement, not a Prisma/JPA clone, and not a general-purpose Google Sheets API wrapper. Existing libraries such as `google-spreadsheet` and `@googleapis/sheets` already cover low-level Sheets access.
 
-The core value is safety around the local-to-Sheets synchronization boundary:
+The core value is safety around common Google Sheets-as-data-store failure modes:
 
-- atomic SQLite entity and outbox commits
-- stable entity and relation mappings
-- stale user edits and field-level conflict resolution
-- schema drift and invalid Sheet values
-- durable retries and recovery after remote response loss
-- API quota and Apps Script execution limits
+- schema drift caused by manual sheet edits
+- stale writes and lost updates
+- invalid row parsing
+- duplicate or missing key columns
+- API quota pressure
+- future write serialization through Apps Script
 
 ## Positioning
 
@@ -32,37 +32,41 @@ The honest boundary matters. Google Sheets has no native database transaction mo
 
 ## MVP Scope
 
-The first implementation should stay small and prove the SQLite-authoritative synchronization model.
-
-This section describes the target MVP contract. For what is implemented in the
-current branch, see [`current-state-review.md`](current-state-review.md).
-Inbound polling and conflict resolution may be specified here before their
-end-to-end runtime path is complete.
+The first implementation should stay small and prove the core safety model.
 
 Required MVP capabilities:
 
-- public `defineTypedSheetsEntity()` definitions
-- entity lifecycle operations through the typed-sheets EntityManager
-- `manyToOne` and `oneToMany` relation metadata
-- SQLite entity-table and sync-state initialization
-- atomic entity, canonical sync state, and Sheet outbox commits
-- explicit Sheet provisioning for new or existing spreadsheets
-- separate worker processing for outbound effects
-- initial polling-based User_Input observation
-- field-level Conflict Sheet rows with `use_system` and `use_user` controls
-- runtime validation at Sheet and gateway boundaries
+- schema definition API
+- adapter boundary for Sheets access
+- header/schema validation
+- required column detection
+- duplicate header detection
+- key column detection
+- row parsing
+- `text`, `number`, `boolean` basic column parsers
+- `findAll`
+- `findById`
+- `insert`
+- `update`
+- `_version` based optimistic locking
+- `SchemaDriftError`
+- `ConflictError`
+- `ParseError`
 
 MVP exclusions:
 
-- `manyToMany` relations
-- lazy loading and implicit remote reads
-- cascade persist/remove
+- relations and joins
 - SQL-like query language
-- Google Sheets as the application source of truth
-- automatic `onEdit` ingestion in the first polling release
-- distributed or multi-process SQLite coordination
-- generated primary keys in the first entity release
-- dashboard UI and browser support matrix
+- migration engine
+- lazy loading
+- multi-row atomic transactions
+- Apps Script automatic installation
+- Apps Script Web App gateway
+- caching
+- request collapse
+- retry/backoff
+- dashboard UI
+- browser support matrix
 
 ## Architecture
 
@@ -87,8 +91,9 @@ src/
         protocol/               # 서명·직렬화·응답 검증
         transport/              # HTTP operation client
         operations/
+          read/                 # 테이블 읽기
           write/                # fast append
-          observation/           # visible ID 기반 snapshot 관측
+          observation/           # snapshot·anchor 관측
           effect/               # update/delete effect
   infrastructure/
     storage/                    # SQLite canonical state와 outbox
@@ -103,9 +108,7 @@ src/
 The domain should depend on adapter interfaces, not directly on Google Sheets
 SDKs.
 
-Tests should use fake gateways and in-memory SQLite/provider fixtures where
-possible. Real Google integration tests should be opt-in because they require
-credentials and consume quota.
+The first tests should use an in-memory fake adapter. Real Google integration tests can come later and should be opt-in because they require credentials and quota.
 
 ## Code Modification Rules
 
@@ -133,79 +136,54 @@ If a production source issue blocks the requested work, describe the blocker and
 
 Adapters are split by capability and provider. A provider is a concrete
 implementation such as MikroORM or Apps Script; a contract is the stable
-boundary that core, ORM, storage, or runtime code consumes. The public package
-must not require callers to import a provider-specific entity schema or raw SQL
-connection.
+boundary that core, ORM, storage, or runtime code consumes.
 
 - `adapter/persistence/contracts/`: SQL and persistence contracts independent of
   MikroORM, Prisma, or another future implementation
 - `adapter/persistence/providers/mikro-orm/`: the current MikroORM-backed
-  entity engine and SQLite storage bridge; it materializes typed-sheets entity
-  definitions internally
+  entity engine and SQLite storage bridge
 - `adapter/sheets/providers/apps-script-gateway/`: the current signed Apps Script
   provider, separated into protocol, transport, and operation capabilities
 
-The adapter should expose sheet-level operations in terms the core needs, not
-Google-specific concepts. The current gateway boundary covers projection
-provisioning, append-only System_State writes, guarded regular effects,
-postcondition reads, and normalized visible-ID snapshot observation. Provider
-connections and raw SQL executors remain implementation details rather than
-normal public workflow objects.
+The adapter should expose sheet-level operations in terms the core needs, not Google-specific concepts.
 
 Suggested responsibilities:
 
-- provision and validate registered projection routes
-- append new System_State rows in a bounded batch
-- apply guarded update/delete effects
-- read postconditions after uncertain writes
-- return normalized snapshots whose rows are matched through the registered
-  visible business-key column
-- read User_Input values by its visible business-key column without remote
-  metadata access
+- read headers
+- read rows
+- append row
+- replace row by index or key
+- optionally re-read row before update
 
 Do not leak Google SDK response objects into core repository logic.
 
-## Sheet Schema and Observation Policy
+## Schema Drift Policy
 
-Sheet schema drift must not be silently accepted by the observation or effect
-worker.
+Schema drift must not be silently ignored.
 
 The library should fail clearly when:
 
-- a registered tab or range is missing
-- a required projection header is missing
-- headers are duplicated or reordered unexpectedly
-- a row contains a formula, merged cell, Sheet error, or invalid normalized value
-- a user edit does not identify one stable row
+- a required column is missing
+- the key column is missing
+- headers are duplicated
+- `_version` is required but missing
+- a row cannot be parsed into the declared type
 
-Unexpected columns outside the registered range are not part of the typed-sheets
-contract. The gateway must validate only the registered range and fail closed
-when its declared headers no longer match.
+Unexpected extra columns may be allowed by default, but the behavior should be explicit and configurable later.
 
-## SQLite and Conflict Policy
+## Stale Write Policy
 
-SQLite is the authority for application reads and writes. A successful entity
-flush means that the entity table, sync state, and durable Sheet effect were
-committed in one SQLite transaction. It does not mean that Google Sheets has
-already converged.
+MVP optimistic locking should be based on a version column.
 
-The inbound and conflict rules below are the target policy. The current branch
-contains a provider-side one-pass polling-to-evaluation-to-SQLite flow, but not
-the complete public worker loop or Conflict checkbox resolution flow.
+Expected behavior:
 
-User_Input observations use field-level compare-and-set evidence:
+- read current row
+- keep its `_version`
+- before update, re-check the current `_version`
+- if the version changed, throw `ConflictError`
+- if unchanged, write the updated row with incremented `_version`
 
-- an accepted field updates the canonical entity and queues a System_State effect
-- a stale field creates one Conflict row containing the current system value and
-  the user candidate
-- `use_system` keeps SQLite's current value
-- `use_user` commits the candidate value to SQLite and queues the next projection
-- either resolution is accepted only when revision, candidate hash, and epoch
-  still match
-- stale or ambiguous controls are reset and left visible for another decision
-
-Conflict resolution is a SQLite transaction. The remote Conflict-row deletion is
-an outbox effect and may be retried independently.
+This is not a true database transaction. Document it as stale-write protection, not full transactional safety.
 
 ## Google Sheets API Constraints
 
@@ -227,12 +205,16 @@ This means the library should favor batch reads and avoid one API call per row w
 
 After the MVP is stable, possible extensions are:
 
-- `onEdit` as an optional lower-latency observation source
-- another persistence provider behind the typed-sheets engine contract
-- generated primary keys and Sheet-side insert ergonomics
-- `manyToMany` relations
-- cascade and advanced relation loading
-- operational status dashboard and repair tooling
+- read cache
+- in-flight read collapse
+- retry/backoff for 429 and transient 5xx
+- Google Sheet template generator
+- schema drift report
+- Apps Script installer CLI
+- Apps Script `LockService` write gateway
+- audit log sheet
+- `_createdAt` and `_updatedAt` system columns
+- GitHub Action for schema verification
 
 Add these only after the base repository model is tested and documented.
 
@@ -240,22 +222,20 @@ Add these only after the base repository model is tested and documented.
 
 Tests should prove behavior through realistic sheet states, not through shallow mocks.
 
-The inbound and conflict cases below are acceptance criteria for the inbound
-runtime. The accepted-edit and stale-edit polling cases are covered by the
-current provider tests; the remaining Conflict cases are still pending.
-
 Required test categories:
 
-- public entity definitions materialize without exposing MikroORM types
-- `manyToOne` and `oneToMany` mappings persist the owning foreign key
-- entity flush commits entity state and outbox work together
-- worker retries and recovers uncertain Sheet writes
-- polling accepts a current user edit into SQLite
-- stale edits create a field-level conflict
-- each Conflict control is mutually exclusive and CAS-protected
-- `use_system` and `use_user` produce the correct SQLite outcome
-- stale resolution keeps the conflict visible and resets controls
-- malformed Sheet/gateway payloads fail closed
+- valid schema passes
+- missing required column fails
+- duplicate header fails
+- missing key column fails
+- invalid number/boolean parse fails
+- `findAll` returns typed rows
+- `findById` returns matching row
+- `findById` returns null/undefined for missing key, whichever API chooses
+- insert rejects duplicate key
+- update increments `_version`
+- update rejects stale version with `ConflictError`
+- extra column behavior is documented by test
 
 The fake adapter should be simple but should preserve enough behavior to expose row/header bugs.
 
