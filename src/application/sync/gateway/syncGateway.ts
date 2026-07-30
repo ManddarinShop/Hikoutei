@@ -325,39 +325,6 @@ export interface SyncSheetObservationGateway {
   readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot>;
 }
 
-/** Request for a lightweight table read used by simple polling. */
-export interface ReadSyncTableRowsRequest {
-  readonly physicalSheetId: string;
-  readonly sheetName: string;
-  readonly registeredRange: string;
-  readonly projection: SyncProjection;
-  readonly schemaVersion: number;
-  readonly headers: readonly string[];
-}
-
-/** One nonblank row returned by a lightweight table read. */
-export interface SyncTableRow {
-  readonly rowNumber: number;
-  readonly fields: Readonly<Record<string, NormalizedCell>>;
-}
-
-/** Result of a lightweight table read without Sheet metadata or CAS work. */
-export interface SyncTableRowsResult {
-  readonly sheetName: string;
-  readonly registeredRange: string;
-  readonly headers: readonly string[];
-  readonly rows: readonly SyncTableRow[];
-  readonly timing?: SyncGatewayTiming;
-}
-
-/** Gateway capability for reading literal table values without observation metadata. */
-export interface SyncSheetTableReaderGateway {
-  readRows(request: ReadSyncTableRowsRequest): Promise<SyncTableRowsResult>;
-  readRowsBatch(
-    requests: readonly ReadSyncTableRowsRequest[],
-  ): Promise<readonly SyncTableRowsResult[]>;
-}
-
 /**
  * Full gateway boundary used by observation and reconciliation.
  *

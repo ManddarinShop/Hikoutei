@@ -216,8 +216,8 @@ export interface EffectWorkerStorage {
 /**
  * Processes effects through an adapter-owned SQL connection.
  *
- * This is the MikroORM-compatible worker entrypoint. It never opens the
- * legacy synchronous `node:sqlite` database beside the ORM connection.
+ * This is the adapter-backed worker entrypoint. It uses the same connection as
+ * the entity and sync transaction boundaries.
  */
 export async function runSyncEffectWorkerWithAdapter(
   options: SyncEffectWorkerWithAdapterOptions,

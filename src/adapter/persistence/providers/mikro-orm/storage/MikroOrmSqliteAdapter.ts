@@ -59,8 +59,7 @@ export interface MikroOrmSqliteTransaction extends SqlStorageContext {
 /**
  * Connects typed-sheets storage SQL to one MikroORM-managed SQLite database.
  *
- * The adapter never opens a second `node:sqlite` connection. Raw storage SQL
- * and MikroORM entity changes therefore share the same transaction context.
+ * Entity changes and storage SQL therefore share the same transaction context.
  */
 export class MikroOrmSqliteAdapter implements SqlStorageAdapter {
   constructor(private readonly orm: MikroOrmSqlite) {}

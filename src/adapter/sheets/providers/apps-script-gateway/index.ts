@@ -32,7 +32,6 @@ export type {
 } from "./protocol/codeGsProtocol.js";
 export { AppsScriptOperationClient } from "./transport/operationClient.js";
 export { createFastAppendRowsOperation } from "./operations/write/fastAppendOperation.js";
-export { createReadTableRowsOperation } from "./operations/read/tableReadOperation.js";
 export {
   createApplyEffectsOperation,
   createReadEffectPostconditionOperation,
@@ -69,9 +68,6 @@ export type {
   AppsScriptObserveSnapshotOperationArgs,
   AppsScriptReadSnapshotOperationArgs,
 } from "./operations/observation/observationOperation.js";
-export type {
-  AppsScriptReadTableRowsRequest,
-} from "./operations/read/tableReadOperation.js";
 export type {
   AppsScriptOperationProjectionStatus,
   AppsScriptOperationSyncGatewayOptions,

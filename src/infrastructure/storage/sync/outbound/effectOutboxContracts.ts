@@ -36,11 +36,8 @@ export interface ApplyResultOptions extends FencingContext {
   readonly status: "applied" | "blocked_candidate" | "superseded" | "conflict" | "failed";
   readonly lastErrorCode: Presence<string>;
   readonly lastErrorMessage: Presence<string>;
-  /**
-   * Gateway read-back evidence that advances confirmed projection state in the
-   * same savepoint as an applied outbox result.  It is intentionally optional
-   * for legacy callers that do not materialize a projection row.
-   */
+  /** Gateway read-back evidence that advances confirmed projection state in the
+   * same savepoint as an applied outbox result. */
   readonly projectionConfirmation?: EffectProjectionConfirmation;
 }
 
