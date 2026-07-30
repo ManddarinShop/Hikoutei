@@ -6,8 +6,10 @@ on:
       - main
       - develop
 
+# All live runs share one deployed gateway and spreadsheet, so serialize them
+# across pull requests to avoid quota and SpreadsheetApp contention.
 concurrency:
-  group: live-google-sheets-${{ github.ref }}
+  group: live-google-sheets
   cancel-in-progress: false
 
 permissions:

@@ -326,6 +326,8 @@ class LiveSyncBackend {
       secret,
       sheetId,
       actorId: `hikoutei-ci-${process.env.GITHUB_RUN_ID ?? "local"}`,
+      // Live Apps Script calls can exceed the default client timeout during quota or network latency.
+      requestTimeoutMs: 120_000,
       onRequest: (event) => this.events.push(event),
     });
   }
