@@ -282,6 +282,15 @@ Do not treat a benchmark as complete if the result only appears in chat.
 
 Follow `docs/git-workflow.md`.
 
+**Git approval rule:** Git-related operations that change repository state or
+remote state require explicit user approval immediately before execution. This
+includes creating, switching, deleting, rebasing, merging, cherry-picking, or
+resetting branches; staging or committing; pushing or force-pushing; and
+creating, editing, closing, reverting, or merging pull requests. Do not infer
+approval from a request to implement code or from an earlier approval for a
+different Git operation. Read-only inspection such as `git status`, `git log`,
+and `git diff` is allowed, but ask before any state-changing Git command.
+
 - Before making changes, check the current branch and create a new task branch
   unless the user explicitly asks to work on the current branch.
 - Branch names: English kebab-case such as `feature/core-schema` or
