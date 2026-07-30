@@ -8,7 +8,6 @@
 
 import {
   createMappedTypedSheetsFlushCoordinator,
-  createTypedSheetsEntityMappingRegistry,
   registeredTypedSheetsProjectionDefinitions,
   registerTypedSheetsEntityMappings,
   type TypedSheetsEntityMapping,
@@ -16,6 +15,7 @@ import {
   type TypedSheetsEntityWriterOptions,
   type TypedSheetsOrm,
 } from "../../../../../application/orm/index.js";
+import { resolveTypedSheetsEntityMappingRegistry } from "../../../../../application/orm/persistence/flush/mappedMappingRegistry.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/gateway/SyncGatewayBootstrap.js";
 import {
   createTypedSheetsOrm,
@@ -55,7 +55,7 @@ export function createMappedTypedSheetsOrm(
   storage: MikroOrmSqliteAdapter,
   options: CreateMappedTypedSheetsOrmOptions,
 ): TypedSheetsOrm {
-  const mappings = mappingRegistry(options.mappings);
+  const mappings = resolveTypedSheetsEntityMappingRegistry(options.mappings);
   return createTypedSheetsOrm(storage, {
     flushCoordinator: createMappedTypedSheetsFlushCoordinator({
       mappings,
@@ -80,7 +80,7 @@ export async function initializeMappedTypedSheetsOrm(
     onRegisteredProjections,
     ...adapterOptions
   } = options;
-  const mappings = mappingRegistry(mappingsInput);
+  const mappings = resolveTypedSheetsEntityMappingRegistry(mappingsInput);
   const storage = await initializeMikroOrmSqliteAdapter(adapterOptions);
   try {
     await migrateMikroOrmSqliteStorageSchema(storage);
@@ -93,11 +93,4 @@ export async function initializeMappedTypedSheetsOrm(
     await storage.close(true);
     throw error;
   }
-}
-
-function mappingRegistry(
-  input: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[],
-): TypedSheetsEntityMappingRegistry {
-  if ("findByEntityName" in input) return input;
-  return createTypedSheetsEntityMappingRegistry(input);
 }
