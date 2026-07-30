@@ -1,63 +1,47 @@
 /**
- * Public surface for the SQLite-authoritative sync foundation.
+ * Application-facing typed-sheets API.
  *
- * The SQLite-authoritative sync bootstrap is explicitly service-side: it uses
- * a secret-bearing Apps Script client and must never be bundled into a browser.
+ * Persistence engines, storage helpers, and gateway implementations stay
+ * behind provider or internal module boundaries. Applications should define
+ * entities and open the SQLite-authoritative runtime through this surface.
  */
 
-export * from "./domain/index.js";
-export * from "./application/index.js";
-export * from "./infrastructure/index.js";
-export type {
-  SqlExecutor,
-  SqlGeneratedId,
-  SqlMutationResult,
-  SqlParameter,
-  SqlStorageAdapter,
-  SqlStorageContext,
-} from "./adapter/persistence/index.js";
+export { TypedSheetsEntityManager, TypedSheetsOrm } from "./application/orm/api/TypedSheetsOrm.js";
+export { createTypedSheets } from "./application/orm/api/createTypedSheets.js";
 export {
-  AppsScriptSyncGatewayError,
-  APPS_SCRIPT_OPERATION_NAMES,
-  AppsScriptOperationClient,
-  createApplyEffectsOperation,
-  createEnsureRowAnchorsOperation,
-  createObserveSnapshotOperation,
-  createFastAppendRowsOperation,
-  createReadEffectPostconditionOperation,
-  createReadEffectPostconditionsOperation,
-  createReadSnapshotOperation,
-  createReadTableRowsOperation,
-  AppsScriptOperationSyncGateway,
-} from "./adapter/sheets/providers/apps-script-gateway/index.js";
+  defineTypedSheetsEntity,
+  TYPED_SHEETS_RELATION_KINDS,
+  TYPED_SHEETS_SCALAR_TYPES,
+} from "./application/orm/api/entityDefinition.js";
+export {
+  TYPED_SHEETS_ORM_ERROR_CODES,
+  TypedSheetsOrmError,
+} from "./application/orm/errors.js";
+
 export type {
-  AppsScriptOperationDefinition,
-  AnyAppsScriptOperationDefinition,
-  AppsScriptOperationGateway,
-  AppsScriptOperationResult,
-  AppsScriptOperationResults,
-  AppsScriptOperationClientOptions,
-  AppsScriptOperationRequestEvent,
-  AppsScriptOperationName,
-} from "./adapter/sheets/providers/apps-script-gateway/index.js";
+  CreateTypedSheetsOptions,
+  TypedSheetsEntitySyncOptions,
+  TypedSheetsSheetRouteOptions,
+  TypedSheetsSyncOptions,
+} from "./application/orm/api/factoryContracts.js";
 export type {
-  AppsScriptFastAppendOperationArgs,
-  AppsScriptFastAppendOperationRequest,
-  AppsScriptFastAppendOperation,
-} from "./adapter/sheets/providers/apps-script-gateway/index.js";
+  DefineTypedSheetsEntityInput,
+  InferTypedSheetsEntity,
+  TypedSheetsEntityDefinition,
+  TypedSheetsManyToOnePropertyDefinition,
+  TypedSheetsOneToManyPropertyDefinition,
+  TypedSheetsPropertyDefinition,
+  TypedSheetsPropertyValue,
+  TypedSheetsRelationKind,
+  TypedSheetsScalarPropertyDefinition,
+  TypedSheetsScalarType,
+} from "./application/orm/api/entityDefinition.js";
 export type {
-  AppsScriptApplyEffectsOperationArgs,
-  AppsScriptApplyEffectsOperationRequest,
-  AppsScriptReadEffectPostconditionOperationArgs,
-  AppsScriptReadEffectPostconditionsOperationArgs,
-} from "./adapter/sheets/providers/apps-script-gateway/index.js";
-export type {
-  AppsScriptEnsureRowAnchorsOperationArgs,
-  AppsScriptObserveSnapshotOperationArgs,
-  AppsScriptReadSnapshotOperationArgs,
-  AppsScriptReadTableRowsRequest,
-} from "./adapter/sheets/providers/apps-script-gateway/index.js";
-export type {
-  AppsScriptOperationProjectionStatus,
-  AppsScriptOperationSyncGatewayOptions,
-} from "./adapter/sheets/providers/apps-script-gateway/index.js";
+  TypedSheetsEntityClass,
+  TypedSheetsEntityData,
+  TypedSheetsEntityFilter,
+  TypedSheetsEntityReference,
+  TypedSheetsFindOptions,
+  TypedSheetsForkOptions,
+} from "./application/orm/api/contracts.js";
+export type { TypedSheetsOrmErrorCode } from "./application/orm/errors.js";
