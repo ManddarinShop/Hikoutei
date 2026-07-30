@@ -7,34 +7,51 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "../src/shared/state/index.js";
+import { stableHash } from "../src/shared/encoding/index.js";
 import {
-  APPLICABILITY_KINDS,
+  FIELD_OWNERSHIPS,
+  ROW_OPERATIONS,
+  CONFLICT_STATUSES,
+  QUARANTINE_REASONS,
+} from "../src/domain/model/constants.js";
+import {
+  QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
+  QUARANTINE_REPAIR_STATUSES,
+  ROW_OUTCOMES,
+} from "../src/domain/evaluate/constants.js";
+import {
   applyEffectResultWithAdapter,
   appendPendingEffectsWithSql,
-  CANONICAL_COMMIT_RESULT_KINDS,
   claimEffectWithAdapter,
-  claimWriterLeaseWithAdapter,
-  commitCanonicalChangesWithSql,
-  FIELD_OWNERSHIPS,
-  isFencingValidWithAdapter,
-  LOOKUP_RESULT_KINDS,
   listReadyEffectsWithAdapter,
-  PRESENCE_KINDS,
-  persistObservedRowWithAdapter,
+} from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
+import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import {
+  claimWriterLeaseWithAdapter,
+  isFencingValidWithAdapter,
   readWriterLeaseWithAdapter,
-  registerSyncSheetWithAdapter,
-  ROW_OPERATIONS,
-  requireRegisteredSyncSheetWithAdapter,
-  persistResolutionCommandWithAdapter,
-  stableHash,
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/index.js";
+} from "../src/infrastructure/storage/sync/shared/writerLease.js";
+import {
+  CANONICAL_COMMIT_RESULT_KINDS,
+  commitCanonicalChangesWithSql,
+} from "../src/infrastructure/storage/state/canonical/canonicalCommit.js";
+import {
+  registerSyncSheetWithAdapter,
+  requireRegisteredSyncSheetWithAdapter,
+} from "../src/infrastructure/storage/sync/shared/syncRegistry.js";
+import { persistResolutionCommandWithAdapter } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
 import type {
   NewEffect,
+} from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
+import type {
   PersistObservedRowInput,
+} from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import type {
   PersistResolutionCommandInput,
-} from "../src/index.js";
+} from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
 import {
   initializeMikroOrmSqliteAdapter,
   migrateMikroOrmSqliteSchema,
@@ -47,15 +64,6 @@ import {
 } from "../src/application/sync/gateway/syncGateway.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
-import {
-  QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
-  QUARANTINE_REPAIR_STATUSES,
-  ROW_OUTCOMES,
-} from "../src/domain/evaluate/constants.js";
-import {
-  CONFLICT_STATUSES,
-  QUARANTINE_REASONS,
-} from "../src/domain/model/constants.js";
 
 const OrderSchema = defineEntity({
   name: "MikroOrmAdapterOrder",
@@ -206,12 +214,12 @@ describe("MikroOrmSqliteAdapter", () => {
     try {
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
         fromVersion: 0,
-        toVersion: 3,
-        appliedVersions: [3],
+        toVersion: 4,
+        appliedVersions: [4],
       });
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-        fromVersion: 3,
-        toVersion: 3,
+        fromVersion: 4,
+        toVersion: 4,
         appliedVersions: [],
       });
       await expect(adapter.read(({ sql }) => {
@@ -301,12 +309,12 @@ describe("MikroOrmSqliteAdapter", () => {
 
     expect(firstMigration).toEqual({
       fromVersion: 0,
-      toVersion: 3,
-      appliedVersions: [3],
+      toVersion: 4,
+      appliedVersions: [4],
     });
     expect(secondMigration).toEqual({
-      fromVersion: 3,
-      toVersion: 3,
+      fromVersion: 4,
+      toVersion: 4,
       appliedVersions: [],
     });
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
@@ -418,7 +426,7 @@ describe("MikroOrmSqliteAdapter", () => {
         schemaVersion: 1,
         ownershipManifestJson: "{}",
         businessKeyField: "id",
-        anchorMode: "developer_metadata",
+        anchorMode: "business_key",
       },
     });
     await expect(
@@ -550,7 +558,6 @@ describe("MikroOrmSqliteAdapter", () => {
         sheetName: "Orders",
         registeredRange: "A:Z",
         schemaVersion: 1,
-        targetAnchor: "order-anchor",
         fields: nextFields,
         targetVisibleHash: computeSyncVisibleHash(nextFields),
         createIfMissing: false,
@@ -572,7 +579,6 @@ describe("MikroOrmSqliteAdapter", () => {
         rows: [
           {
             targetId: "order-worker",
-            physicalAnchor: "order-anchor",
             fields: oldFields,
             visibleRevision: 0,
           },
@@ -593,7 +599,7 @@ describe("MikroOrmSqliteAdapter", () => {
       applied: 1,
       failed: 0,
     });
-    expect(gateway.readRow("physical-sheet", "order-anchor")).toMatchObject({
+    expect(gateway.readRow("physical-sheet", "order-worker")).toMatchObject({
       fields: nextFields,
       visibleRevision: 1,
     });
