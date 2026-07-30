@@ -1,6 +1,6 @@
 # CI API scenarios
 
-Hikoutei's CI exercises the package as an installed consumer. The scenario is
+Hikoutei's  CI exercises the package as an installed consumer. The scenario is
 not allowed to import `src/**` or the source-only test fake; it imports the
 published package entrypoints after `npm pack`:
 
