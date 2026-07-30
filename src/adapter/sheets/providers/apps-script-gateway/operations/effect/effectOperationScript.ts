@@ -43,7 +43,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var layout = readLayout_(sheet, args.registeredRange);
   phase_("layout_read", layoutStartedAt);
   var contextStartedAt = Date.now();
-  var context = readContext_(sheet, layout, args.identityField);
+  var context = readContext_(sheet, layout, args.identityField, args.projection !== "user_input");
   phase_("context_read", contextStartedAt);
 
   if (args.mode === "readEffectPostcondition") {
@@ -93,7 +93,12 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
         results[index] = result_(checked, "schema_error", null, "effect_id_reused_with_different_payload", null);
         continue;
       }
-      var receiptRow = findRow_(context, checked.payload.targetAnchor, checked.targetId);
+      var receiptRow = findRow_(
+        context,
+        checked.payload.targetAnchor,
+        checked.targetId,
+        checked.targetIdentity,
+      );
       if (isDeletion_(checked.effectKind)) {
         results[index] = receiptRow === null
           ? result_(checked, "already_applied", null, null, existingReceipt)
@@ -123,78 +128,24 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       continue;
     }
 
-    var row = findRow_(context, checked.payload.targetAnchor, checked.targetId);
-    var created = false;
-    if (row === null) {
-      if (!checked.payload.createIfMissing) {
-        results[index] = result_(checked, "guard_mismatch", null, "target_anchor_missing", null);
-        continue;
-      }
-      if (checked.expectedVisibleRevision !== 0 || checked.expectedVisibleHash !== "") {
-        results[index] = result_(checked, "guard_mismatch", null, "insert_requires_empty_visible_baseline", null);
-        continue;
-      }
-      row = createRow_(context, checked.payload.targetAnchor, checked.targetId);
-      appendRows.push(row);
-      created = true;
-    }
-
-    if (isDeletion_(checked.effectKind)) {
-      var deletionSchemaError = validateDeletion_(layout, checked);
-      if (deletionSchemaError !== null) {
-        results[index] = result_(checked, "schema_error", row.rowNumber, deletionSchemaError, null);
-        continue;
-      }
-      var deletionHash = currentHash_(row, checked.payload.fields);
-      if (deletionHash !== checked.expectedVisibleHash) {
-        results[index] = result_(checked, "guard_mismatch", row.rowNumber, "visible_guard_mismatch", null);
-        continue;
-      }
-      var deletionReceipt = makeReceipt_(checked, deletionHash, checked.expectedVisibleRevision);
-      row.deleted = true;
-      deleteRows.push(row);
-      queueReceipt_(receipts, pendingReceipts, pendingReceiptsById, deletionReceipt);
-      deferred.push({ index: index, checked: checked, row: row, receipt: deletionReceipt, deletion: true });
+    var plan = planEffect_(context, checked);
+    if (plan.kind === "result") {
+      if (plan.receipt !== null) queueReceipt_(receipts, pendingReceipts, pendingReceiptsById, plan.receipt);
+      results[index] = plan.result;
       continue;
     }
-
-    var currentHash = currentHash_(row, checked.payload.fields);
-    var expectedCandidateHash = optionalWireText_(checked.payload.expectedCandidateHash);
-    if (checked.effectKind === EFFECT_KINDS.CANDIDATE_RECONCILE &&
-        expectedCandidateHash !== null && currentHash !== checked.expectedVisibleHash) {
-      results[index] = result_(checked, "guard_mismatch", row.rowNumber, "candidate_guard_mismatch", null);
-      continue;
+    if (plan.kind === "append") appendRows.push(plan.row);
+    if (plan.kind === "update") context.updatedRows[plan.row.rowNumber] = plan.row;
+    if (plan.kind === "delete") {
+      deleteRows.push(plan.row);
+      queueReceipt_(receipts, pendingReceipts, pendingReceiptsById, plan.receipt);
     }
-    if (currentHash === checked.payload.targetVisibleHash) {
-      var alreadyReceipt = makeReceipt_(checked, currentHash, checked.expectedVisibleRevision + 1);
-      queueReceipt_(receipts, pendingReceipts, pendingReceiptsById, alreadyReceipt);
-      results[index] = result_(checked, created ? "applied" : "already_applied", row.rowNumber, null, alreadyReceipt);
-      continue;
-    }
-    var repairGuardHash = optionalWireText_(checked.repairGuardHash);
-    if (checked.effectKind === EFFECT_KINDS.SYSTEM_REPAIR) {
-      if (repairGuardHash === null || currentHash !== repairGuardHash) {
-        results[index] = result_(checked, "repair_reobserve", row.rowNumber, "repair_guard_mismatch", null);
-        continue;
-      }
-    } else if (currentHash !== checked.expectedVisibleHash) {
-      results[index] = result_(checked, "guard_mismatch", row.rowNumber, "visible_guard_mismatch", null);
-      continue;
-    }
-
-    Object.keys(checked.payload.fields).forEach(function (fieldName) {
-      row.cells[fieldName] = checked.payload.fields[fieldName];
-      if (!row.appended) {
-        row.writeFields[fieldName] = checked.payload.fields[fieldName];
-        context.updatedRows[row.rowNumber] = row;
-      }
-    });
     deferred.push({
       index: index,
       checked: checked,
-      row: row,
-      receipt: makeReceipt_(checked, checked.payload.targetVisibleHash, checked.expectedVisibleRevision + 1),
-      deletion: false,
+      row: plan.row,
+      receipt: plan.receipt,
+      deletion: plan.kind === "delete",
     });
   }
   phase_("effect_plan", planStartedAt);
@@ -270,10 +221,13 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     return { startColumn: parsed.startColumn, columnCount: parsed.columnCount, headers: headers, positions: positions };
   }
 
-  function readContext_(targetSheet, layout, identityField) {
+  function readContext_(targetSheet, layout, identityField, readAnchors) {
     var rows = [];
     var byAnchor = Object.create(null);
     var byIdentity = Object.create(null);
+    if (identityField !== undefined && layout.positions[identityField] === undefined) {
+      throw new Error("sync identity field is not a registered header: " + identityField);
+    }
     var lastRow = targetSheet.getLastRow();
     var rawRows = lastRow < 2 ? [] : targetSheet.getRange(2, layout.startColumn, lastRow - 1, layout.columnCount).getValues();
     rawRows.forEach(function (raw, offset) {
@@ -283,7 +237,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       layout.headers.forEach(function (header, headerIndex) {
         cells[header] = normalizedCellFromSheetValue_(raw[headerIndex]);
       });
-      var anchors = readAnchors_(targetSheet, rowNumber);
+      var anchors = readAnchors ? readAnchors_(targetSheet, rowNumber) : [];
       if (anchors.length > 1) throw new Error("row has multiple sync anchors: " + rowNumber);
       var anchor = anchors.length === 1 ? anchors[0] : null;
       var identity = identityField === undefined ? null : identityFromCell_(cells[identityField]);
@@ -316,13 +270,13 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     };
   }
 
-  function createRow_(targetContext, anchor, targetId) {
+  function createRow_(targetContext, anchor, targetIdentity, fields) {
     var cells = Object.create(null);
     targetContext.layout.headers.forEach(function (header) { cells[header] = null; });
     var row = {
       rowNumber: targetContext.nextAppendRow++,
       physicalAnchor: anchor,
-      targetId: targetId,
+      targetId: targetIdentity,
       cells: cells,
       writeFields: Object.create(null),
       appended: true,
@@ -330,13 +284,19 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     };
     targetContext.rows.push(row);
     targetContext.byAnchor[anchor] = row;
-    if (targetId !== null) targetContext.byIdentity[targetId] = row;
+    if (targetIdentity !== null) targetContext.byIdentity[targetIdentity] = row;
+    setRowFields_(row, fields);
     return row;
   }
 
-  function findRow_(targetContext, anchor, targetId) {
+  function findRow_(targetContext, anchor, targetId, targetIdentity) {
     var row = targetContext.byAnchor[anchor] || null;
-    if (row === null && targetId !== null && targetId !== undefined) row = targetContext.byIdentity[targetId] || null;
+    if (row === null && targetIdentity !== null && targetIdentity !== undefined) {
+      row = targetContext.byIdentity[targetIdentity] || null;
+    }
+    if (row === null && targetId !== null && targetId !== undefined) {
+      row = targetContext.byIdentity[targetId] || null;
+    }
     return row !== null && row.deleted ? null : row;
   }
 
@@ -347,6 +307,108 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       values[fieldName] = row.cells[fieldName];
     });
     return visibleHash_(values);
+  }
+
+  function planEffect_(targetContext, checked) {
+    // Plan the physical operation from row existence first; absent rows never
+    // enter the existing-row compare-and-set path.
+    var row = findRow_(
+      targetContext,
+      checked.payload.targetAnchor,
+      checked.targetId,
+      checked.targetIdentity,
+    );
+    if (isDeletion_(checked.effectKind)) return planDeletion_(targetContext, checked, row);
+    if (row === null) return planAppend_(targetContext, checked);
+    return planExisting_(targetContext, checked, row);
+  }
+
+  function planAppend_(targetContext, checked) {
+    // An insert owns its empty baseline and writes the requested cells directly.
+    if (!checked.payload.createIfMissing) {
+      return resultPlan_(result_(checked, "guard_mismatch", null, "target_anchor_missing", null));
+    }
+    if (checked.expectedVisibleRevision !== 0 || checked.expectedVisibleHash !== "") {
+      return resultPlan_(result_(checked, "guard_mismatch", null, "insert_requires_empty_visible_baseline", null));
+    }
+    var row = createRow_(
+      targetContext,
+      checked.payload.targetAnchor,
+      checked.targetIdentity,
+      checked.payload.fields,
+    );
+    return writePlan_("append", row, makeReceipt_(
+      checked,
+      checked.payload.targetVisibleHash,
+      checked.expectedVisibleRevision + 1,
+    ));
+  }
+
+  function planExisting_(targetContext, checked, row) {
+    // Existing rows retain candidate, idempotency, repair, and visible guards.
+    var currentHash = currentHash_(row, checked.payload.fields);
+    var expectedCandidateHash = optionalWireText_(checked.payload.expectedCandidateHash);
+    if (checked.effectKind === EFFECT_KINDS.CANDIDATE_RECONCILE &&
+        expectedCandidateHash !== null && currentHash !== checked.expectedVisibleHash) {
+      return resultPlan_(result_(checked, "guard_mismatch", row.rowNumber, "candidate_guard_mismatch", null));
+    }
+    if (currentHash === checked.payload.targetVisibleHash) {
+      var alreadyReceipt = makeReceipt_(checked, currentHash, checked.expectedVisibleRevision + 1);
+      return resultPlan_(result_(checked, "already_applied", row.rowNumber, null, alreadyReceipt), alreadyReceipt);
+    }
+    var repairGuardHash = optionalWireText_(checked.repairGuardHash);
+    if (checked.effectKind === EFFECT_KINDS.SYSTEM_REPAIR) {
+      if (repairGuardHash === null || currentHash !== repairGuardHash) {
+        return resultPlan_(result_(checked, "repair_reobserve", row.rowNumber, "repair_guard_mismatch", null));
+      }
+    } else if (currentHash !== checked.expectedVisibleHash) {
+      return resultPlan_(result_(checked, "guard_mismatch", row.rowNumber, "visible_guard_mismatch", null));
+    }
+    setRowFields_(row, checked.payload.fields);
+    return writePlan_("update", row, makeReceipt_(
+      checked,
+      checked.payload.targetVisibleHash,
+      checked.expectedVisibleRevision + 1,
+    ));
+  }
+
+  function planDeletion_(targetContext, checked, row) {
+    // Deletes require a complete, present row and a full-row visible compare.
+    if (row === null) {
+      var missingDeletionError = validateDeletion_(targetContext.layout, checked);
+      if (missingDeletionError !== null) {
+        return resultPlan_(result_(checked, "schema_error", null, missingDeletionError, null));
+      }
+      return resultPlan_(result_(checked, "guard_mismatch", null, "target_anchor_missing", null));
+    }
+    var deletionSchemaError = validateDeletion_(targetContext.layout, checked);
+    if (deletionSchemaError !== null) {
+      return resultPlan_(result_(checked, "schema_error", row.rowNumber, deletionSchemaError, null));
+    }
+    var deletionHash = currentHash_(row, checked.payload.fields);
+    if (deletionHash !== checked.expectedVisibleHash) {
+      return resultPlan_(result_(checked, "guard_mismatch", row.rowNumber, "visible_guard_mismatch", null));
+    }
+    row.deleted = true;
+    return writePlan_("delete", row, makeReceipt_(checked, deletionHash, checked.expectedVisibleRevision));
+  }
+
+  function resultPlan_(result, receipt) {
+    return { kind: "result", result: result, receipt: receipt === undefined ? null : receipt };
+  }
+
+  function writePlan_(kind, row, receipt) {
+    return { kind: kind, row: row, receipt: receipt };
+  }
+
+  function setRowFields_(row, fields) {
+    Object.keys(fields).forEach(function (fieldName) {
+      if (!Object.prototype.hasOwnProperty.call(row.cells, fieldName)) {
+        throw new Error("effect field is not a registered header: " + fieldName);
+      }
+      row.cells[fieldName] = fields[fieldName];
+      if (!row.appended) row.writeFields[fieldName] = fields[fieldName];
+    });
   }
 
   function physicalHash_(targetSheet, targetLayout, rowNumber, fields) {
@@ -368,7 +430,12 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function classifyPostcondition_(targetContext, rawEffect, receiptsForRead) {
     var checked = requireEffect_(rawEffect, args);
     var receipt = receiptsForRead[checked.effectId] || null;
-    var row = findRow_(targetContext, checked.payload.targetAnchor, checked.targetId);
+    var row = findRow_(
+      targetContext,
+      checked.payload.targetAnchor,
+      checked.targetId,
+      checked.targetIdentity,
+    );
     if (isDeletion_(checked.effectKind)) {
       if (receipt !== null && row === null) return postcondition_("applied", receipt.visibleRevision, receipt.visibleHash);
       if (row === null) return postcondition_("unavailable", null, null);
@@ -432,11 +499,18 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     ) {
       throw new Error("empty expectedVisibleHash is only valid for a new row");
     }
+    var targetIdentity = request.identityField === undefined
+      ? null
+      : identityFromCell_(fields[request.identityField]);
+    if (request.projection === "user_input" && targetIdentity === null) {
+      throw new Error("user_input effect fields must contain a non-empty identity field");
+    }
     return {
       effectId: string_(rawEffect.effectId, "effectId"),
       payloadHash: string_(rawEffect.payloadHash, "payloadHash"),
       effectKind: effectKind,
       targetId: typeof rawEffect.targetId === "string" && rawEffect.targetId.length > 0 ? rawEffect.targetId : null,
+      targetIdentity: targetIdentity,
       expectedVisibleRevision: expectedVisibleRevision,
       expectedVisibleHash: expectedVisibleHash,
       repairGuardHash: rawEffect.repairGuardHash,
@@ -531,9 +605,11 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     target.getRange(rows[0].rowNumber, targetLayout.startColumn, rows.length, targetLayout.columnCount).setValues(rows.map(function (row) {
       return targetLayout.headers.map(function (header) { return toSheetValue_(row.cells[header]); });
     }));
-    rows.forEach(function (row) {
-      target.getRange(row.rowNumber + ":" + row.rowNumber).addDeveloperMetadata(ANCHOR_KEY, row.physicalAnchor, SpreadsheetApp.DeveloperMetadataVisibility.PROJECT);
-    });
+    if (args.projection !== "user_input") {
+      rows.forEach(function (row) {
+        target.getRange(row.rowNumber + ":" + row.rowNumber).addDeveloperMetadata(ANCHOR_KEY, row.physicalAnchor, SpreadsheetApp.DeveloperMetadataVisibility.PROJECT);
+      });
+    }
     if (Array.isArray(checkboxHeaders)) checkboxHeaders.forEach(function (header) {
       var position = targetLayout.positions[header];
       if (position === undefined) throw new Error("checkbox header is not registered: " + header);

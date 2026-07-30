@@ -227,7 +227,7 @@ export class AppsScriptOperationSyncGateway
     return result;
   }
 
-  /** Assigns anchors and reads one snapshot under one remote lock/request. */
+  /** Reads one snapshot under one remote lock/request; User_Input skips metadata anchors. */
   public async observeSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot> {
     const [result] = await this.observeSnapshots([request]);
     if (result === undefined) {
@@ -402,7 +402,8 @@ function effectRouteOptions(
   readonly checkboxHeaders?: readonly string[];
 } {
   return {
-    ...(definition.sheet.projection === "system_state"
+    ...(definition.sheet.projection === "system_state" ||
+      definition.sheet.projection === "user_input"
       ? { identityField: definition.sheet.businessKeyField }
       : {}),
     ...(definition.checkboxHeaders === undefined
