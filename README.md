@@ -4,7 +4,7 @@
 
 # Hikoutei
 
-**Typed repository and safe write layer for Google Sheets-backed MVPs.**
+**Typed  repository and safe write layer for Google Sheets-backed MVPs.**
 
 <a href="https://www.npmjs.com/package/hikoutei">npm package</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a> ·
