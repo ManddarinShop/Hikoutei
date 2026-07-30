@@ -317,6 +317,18 @@ describe("MikroOrmSqliteAdapter", () => {
       toVersion: 4,
       appliedVersions: [],
     });
+
+    await adapter.transaction(async ({ sql }) => {
+      await sql.run("PRAGMA user_version = 3");
+    });
+    await expect(migrateMikroOrmSqliteSchema(adapter)).resolves.toEqual({
+      fromVersion: 3,
+      toVersion: 4,
+      appliedVersions: [4],
+    });
+    await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
+      .resolves.toEqual({ user_version: 4 });
+
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
     expect(tables.map((table) => table.name)).toContain("sheet_effect_outbox");
   });

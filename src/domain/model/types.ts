@@ -61,7 +61,8 @@ export type CanonicalResolution =
 // Projection types
 // ---------------------------------------------------------------------------
 
-export type Projection = "user_input" | "system_state";
+/** Legacy value retained for compatibility; new registrations use explicit projections. */
+export type Projection = "user_input" | "system_state" | "legacy_combined";
 
 // ---------------------------------------------------------------------------
 // Normalized row

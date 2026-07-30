@@ -71,6 +71,13 @@ export async function migrateMikroOrmSqliteSchema(
       await writeSchemaVersion(sql, 3);
       appliedVersions.push(3);
     }
+    if (fromVersion < 4) {
+      // Version 4 moves schema ownership to this adapter and uses the
+      // business-key anchor default. Existing tables need no destructive DDL;
+      // persist the marker so the next startup cannot report a false version.
+      await writeSchemaVersion(sql, 4);
+      appliedVersions.push(4);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
     await verifyCurrentSchema(sql);
