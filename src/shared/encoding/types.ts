@@ -33,9 +33,8 @@ export type NormalizedCell =
   | DateValue;
 
 /**
- * Metadata describing the physical state of a Sheet cell, separate from its
- * normalized value. Used by observation to decide whether a cell can be
- * processed or must be quarantined.
+ * Physical Sheet metadata retained by the internal observation/gateway path.
+ * This compatibility type is intentionally not part of the public root API.
  */
 export interface CellObservation {
   readonly cellKind: CellObservationKind;

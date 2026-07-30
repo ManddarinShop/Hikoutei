@@ -6,12 +6,10 @@
  * passing it to the gateway client.
  */
 
-import { withImmediateTransaction, type DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../../errors.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
-  isFencingValid,
   isFencingValidWithSql,
   type FencingContext,
 } from "./writerLease.js";
@@ -66,7 +64,9 @@ export interface RegisterSyncSheetInput {
   readonly schemaVersion: number;
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
-  readonly anchorMode?: "developer_metadata";
+  /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
+  /** Compatibility with the pre-foundation developer-metadata fixture path. */
+  readonly anchorMode?: "business_key" | "developer_metadata";
 }
 
 /** Registry row used for all gateway requests. */
@@ -80,7 +80,8 @@ export interface RegisteredSyncSheet {
   readonly schemaVersion: number;
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
-  readonly anchorMode: "developer_metadata";
+  /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
+  readonly anchorMode: "business_key" | "developer_metadata";
 }
 
 /** Records whether a fenced registry request won the writer ownership check. */
@@ -89,82 +90,10 @@ export type RegisterSyncSheetResult =
   | { readonly kind: "fenced_out" };
 
 /**
- * Registers one logical sheet/projection pair under the current writer fence.
- *
- * Repeating an identical registration is idempotent.  Any attempt to reuse a
- * logical or physical ID with different immutable routing data fails closed.
- */
-export function registerSyncSheet(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  input: RegisterSyncSheetInput,
-): RegisterSyncSheetResult {
-  const normalizedInput = normalizeRegistrationInput(input);
-  validateRegistration(normalizedInput);
-  if (!isFencingValid(db, fence)) return { kind: "fenced_out" };
-  return withImmediateTransaction(db, () => {
-    if (!isFencingValid(db, fence)) return { kind: "fenced_out" };
-    const logical = db.prepare(READ_LOGICAL_SHEET_REGISTRATION_SQL)
-      .get(normalizedInput.logicalSheetId) as LogicalRow | undefined;
-    if (logical === undefined) {
-      const inserted = db.prepare(INSERT_LOGICAL_SHEET_REGISTRATION_SQL).run(
-        normalizedInput.logicalSheetId,
-        normalizedInput.schemaVersion,
-        normalizedInput.ownershipManifestJson,
-        normalizedInput.businessKeyField,
-        normalizedInput.anchorMode ?? "developer_metadata",
-      );
-      if (inserted.changes !== 1) {
-        throw new StorageError(
-          STORAGE_ERROR_CODES.SYNC_REGISTRATION_WRITE_FAILED,
-          "could not register logical sheet",
-        );
-      }
-    } else if (!sameLogicalRegistration(logical, normalizedInput)) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SYNC_REGISTRATION_CONFLICT,
-        "logical sync sheet registration does not match the existing allowlist",
-      );
-    }
-
-    const physical = db.prepare(READ_PHYSICAL_SHEET_REGISTRATION_SQL)
-      .get(normalizedInput.physicalSheetId) as PhysicalRow | undefined;
-    if (physical === undefined) {
-      const inserted = db.prepare(INSERT_PHYSICAL_SHEET_REGISTRATION_SQL).run(
-        normalizedInput.physicalSheetId,
-        normalizedInput.logicalSheetId,
-        normalizedInput.spreadsheetId,
-        normalizedInput.tabName,
-        normalizedInput.registeredRange,
-        normalizedInput.projection,
-        normalizedInput.schemaVersion,
-        normalizedInput.anchorMode ?? "developer_metadata",
-      );
-      if (inserted.changes !== 1) {
-        throw new StorageError(
-          STORAGE_ERROR_CODES.SYNC_REGISTRATION_WRITE_FAILED,
-          "could not register physical sheet",
-        );
-      }
-    } else if (!samePhysicalRegistration(physical, normalizedInput)) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SYNC_REGISTRATION_CONFLICT,
-        "physical sync sheet registration does not match the existing allowlist",
-      );
-    }
-    return {
-      kind: "registered",
-      sheet: requireRegisteredSyncSheet(db, normalizedInput.physicalSheetId),
-    };
-  });
-}
-
-/**
  * Registers one logical sheet/projection pair through an active async SQL context.
  *
  * Call this from the same MikroORM transaction as any related setup state. The
- * registration and its writer-fence check then use the ORM-owned connection
- * instead of opening a second SQLite connection.
+ * registration and its writer-fence check use the same transaction boundary.
  */
 export async function registerSyncSheetWithSql(
   sql: SqlExecutor,
@@ -186,7 +115,7 @@ export async function registerSyncSheetWithSql(
         normalizedInput.schemaVersion,
         normalizedInput.ownershipManifestJson,
         normalizedInput.businessKeyField,
-        normalizedInput.anchorMode ?? "developer_metadata",
+        normalizedInput.anchorMode ?? "business_key",
       ]);
       if (inserted.changes !== 1) {
         throw new StorageError(
@@ -213,7 +142,7 @@ export async function registerSyncSheetWithSql(
         normalizedInput.registeredRange,
         normalizedInput.projection,
         normalizedInput.schemaVersion,
-        normalizedInput.anchorMode ?? "developer_metadata",
+        normalizedInput.anchorMode ?? "business_key",
       ]);
       if (inserted.changes !== 1) {
         throw new StorageError(
@@ -242,22 +171,6 @@ export async function registerSyncSheetWithAdapter(
   input: RegisterSyncSheetInput,
 ): Promise<RegisterSyncSheetResult> {
   return storage.transaction(({ sql }) => registerSyncSheetWithSql(sql, fence, input));
-}
-
-/** Reads one enabled physical registry entry or rejects any unregistered target. */
-export function requireRegisteredSyncSheet(
-  db: DatabaseSyncLike,
-  physicalSheetId: string,
-): RegisteredSyncSheet {
-  if (physicalSheetId.length === 0) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
-      "physical sheet ID is required",
-    );
-  }
-  const row = db.prepare(READ_REGISTERED_SYNC_SHEET_SQL)
-    .get(physicalSheetId) as RegisteredRow | undefined;
-  return registeredSyncSheetFromRow(row);
 }
 
 /** Reads one enabled physical registry entry through an active async SQL context. */
@@ -346,10 +259,10 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
       "unsupported sync projection",
     );
   }
-  if (input.anchorMode !== undefined && input.anchorMode !== "developer_metadata") {
+  if (input.anchorMode !== undefined && input.anchorMode !== "business_key") {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
-      "v1 sync registry requires developer_metadata anchors",
+      "sync registry requires business-key row identity",
     );
   }
   try {
@@ -376,7 +289,7 @@ function sameLogicalRegistration(existing: LogicalRow, input: RegisterSyncSheetI
   return existing.schema_version === input.schemaVersion &&
     existing.ownership_manifest_json === input.ownershipManifestJson &&
     existing.business_key_field === input.businessKeyField &&
-    existing.anchor_mode === (input.anchorMode ?? "developer_metadata") &&
+    existing.anchor_mode === (input.anchorMode ?? "business_key") &&
     existing.enabled === 1;
 }
 
@@ -387,7 +300,7 @@ function samePhysicalRegistration(existing: PhysicalRow, input: RegisterSyncShee
     existing.registered_range === input.registeredRange &&
     existing.projection === input.projection &&
     existing.schema_version === input.schemaVersion &&
-    existing.anchor_mode === (input.anchorMode ?? "developer_metadata") &&
+    existing.anchor_mode === (input.anchorMode ?? "business_key") &&
     existing.enabled === 1;
 }
 
@@ -398,10 +311,10 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
       "physical sheet is not an enabled sync registry target",
     );
   }
-  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== "developer_metadata") {
+  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== "business_key") {
     throw new StorageError(
       STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
-      "physical sheet registry has an unsupported projection or anchor mode",
+      "physical sheet registry has an unsupported projection or identity mode",
     );
   }
   const registeredRange = normalizeRegisteredRange(
@@ -424,7 +337,7 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
     schemaVersion: row.schema_version,
     ownershipManifestJson: row.ownership_manifest_json,
     businessKeyField: row.business_key_field,
-    anchorMode: "developer_metadata",
+    anchorMode: "business_key",
   };
 }
 

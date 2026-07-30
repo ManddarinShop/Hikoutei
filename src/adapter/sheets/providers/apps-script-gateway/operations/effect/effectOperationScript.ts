@@ -158,10 +158,14 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       continue;
     }
 
-    var currentHash = currentHash_(row, checked.payload.fields);
+    // A newly created row is still the empty visible baseline. Its in-memory
+    // cells are blank, so hashing them would incorrectly turn the first
+    // candidate reconcile into a guard mismatch before the requested fields
+    // are written.
+    var currentHash = created ? checked.expectedVisibleHash : currentHash_(row, checked.payload.fields);
     var expectedCandidateHash = optionalWireText_(checked.payload.expectedCandidateHash);
     if (checked.effectKind === EFFECT_KINDS.CANDIDATE_RECONCILE &&
-        expectedCandidateHash !== null && currentHash !== checked.expectedVisibleHash) {
+        !created && expectedCandidateHash !== null && currentHash !== checked.expectedVisibleHash) {
       results[index] = result_(checked, "guard_mismatch", row.rowNumber, "candidate_guard_mismatch", null);
       continue;
     }

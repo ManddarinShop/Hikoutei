@@ -22,8 +22,6 @@ jobs:
     name: Unit, type, build, and packed internal sync/gateway E2E
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
