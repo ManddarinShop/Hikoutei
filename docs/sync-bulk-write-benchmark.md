@@ -1,5 +1,16 @@
 # Sync bulk-write benchmark
 
+> Historical benchmark record. The measurements below are branch- and
+> deployment-specific and are not the current public API contract. The current
+> runtime treats SQLite as authoritative, sends durable outbox effects through
+> a separate worker, and calls the signed operation-based Apps Script gateway.
+> Older entries may mention retired HTTP routes, benchmark-only scripts, or
+> earlier snapshot/metadata strategies; keep those details as historical
+> evidence rather than implementation instructions. See
+> [`architecture.md`](architecture.md) and
+> [`write-and-synchronization-flow.md`](write-and-synchronization-flow.md) for
+> the current design.
+
 ## 2026-07-24 — raw Apps Script write
 
 - Branch: `benchmark/apps-script-bulk-write`
@@ -136,8 +147,8 @@ of a batch:
   sheet's last row.
 - The final full snapshot read was removed from the write response. SQLite is
   authoritative for visible revision/hash state, while each changed effect is
-  still verified from raw Sheet cells before its receipt is written. The
-  optional `snapshotHash` in an apply response is therefore `null`.
+  still verified from raw Sheet cells before its receipt is written. Apply
+  responses now contain only per-effect results and bounded-batch state.
 - Stable row anchors and the receipt sheet remain unchanged because they are
   still required for row identity and response-loss recovery.
 
@@ -1023,6 +1034,226 @@ poll (27,652 ms for the same 66-row shape), the lightweight path was roughly
 12 times faster. This is a read/compare benchmark: changed rows are returned
 to the caller, but this pass does not yet turn them into evaluated user-edit
 events or canonical writes.
+
+## 2026-07-29 — live User_Input polling benchmark blocked by Web App access
+
+- Branch: `feature/inbound-polling`
+- Harness: `.local/user-input-polling-live.mjs`
+- Command: `npm run build`, then `node --env-file=.env .local/user-input-polling-live.mjs`
+- Backend: MikroORM with an in-memory SQLite database
+- Intended dataset: one entity row across System_State and User_Input
+- Intended scenario: provision temporary tabs, insert and deliver one row, run
+  initial polling, edit User_Input remotely, run changed polling, repeat steady
+  polling, then update and delete the entity
+- Gateway credentials: supplied through ignored `.env`; URL, shared secret, and
+  spreadsheet ID are intentionally not recorded
+
+The benchmark did not reach provisioning. The `/exec` request redirected to a
+Google `ServiceLogin` page and the followed POST ended with HTTP 401 and a
+non-JSON response. A metadata-only probe confirmed the redirect target was
+`accounts.google.com/ServiceLogin`, so this is a Web App deployment access-policy
+failure rather than a polling or signature result. No temporary tabs were
+created by the harness; its scoped cleanup request also failed before it could
+find any tab.
+
+No operation timings are reported for this attempt. Re-run after the deployed
+Apps Script Web App allows the Node process to call the `/exec` endpoint without
+interactive Google login and after confirming the deployment uses the current
+`apps-script/gateway/Code.gs`.
+
+## 2026-07-29 — Gateway access restored; User_Input materialization exposed a guard defect
+
+- Branch: `feature/inbound-polling`
+- Harness: `.local/user-input-polling-live.mjs`
+- Command: `npm run build`, then `node --env-file=.env .local/user-input-polling-live.mjs`
+- Backend: MikroORM with an in-memory SQLite database
+- Gateway: the newly supplied deployment; credentials and spreadsheet ID are
+  intentionally not recorded
+- Dataset: one entity row and two projection tabs created with unique temporary
+  names; cleanup removed the temporary tabs after each attempt
+
+The new deployment was reachable and provisioning completed, but the first
+entity insert did not materialize the User_Input row:
+
+| Phase | Result |
+| --- | ---: |
+| Provisioning | 3,769.52 ms |
+| SQLite insert flush | 8.59 ms |
+| Outbound worker pass | 5,847.94 ms |
+| Initial User_Input poll | 2,118.24 ms |
+
+The worker selected two effects. The System_State effect was applied, while
+the User_Input `candidate_reconcile` effect became `blocked_candidate` with
+`candidate_guard_mismatch / visible_guard_mismatch`. The remote User_Input tab
+contained headers but zero data rows; the System_State tab contained the one
+expected row. Consequently, remote edit polling, update, and delete timings
+were not measured in this run.
+
+This is a real thin-Gateway integration defect, not a Web App access or secret
+problem. The candidate effect has `createIfMissing: true` and an empty visible
+baseline. The current `EFFECT_OPERATION_SOURCE` creates a blank row and then
+applies the existing-row visible-hash guard to that newly created row, so the
+blank row cannot pass the guard and the effect is rejected. Existing unit tests
+use the fake Sheet gateway and therefore did not exercise this Apps Script
+operation path.
+
+The next fix should special-case a newly created row in the thin Gateway effect
+operation: after `createIfMissing` succeeds, it should write the requested
+fields without comparing the blank row against the empty existing-row hash,
+then verify the target postcondition. The benchmark should be rerun only after
+that fix; this result must not be presented as a completed CRUD/polling
+benchmark.
+
+## 2026-07-29 — structural effect planning fixed append materialization
+
+- Branch: `feature/inbound-polling`
+- Source change: separate `append`, `update`, and `delete` plans in the thin
+  Gateway effect operation; an append is populated before its first physical
+  write and is not passed through an existing-row visible guard
+- Verification: `npm test`, `npm run typecheck`, `npm run build`, plus the
+  serialized Apps Script source regression test in
+  `test/apps-script-effect-operation.test.ts`
+- Backend: MikroORM with an in-memory SQLite database
+- Gateway: the supplied deployment; credentials and spreadsheet ID are not
+  recorded
+- Dataset: one temporary entity row across System_State and User_Input
+
+The live CRUD-only run completed successfully. Provisioning is shown separately
+because it is one-time setup rather than an operation throughput result:
+
+| Scenario | Setup / provision (excluded) | SQLite flush | Gateway worker / polling | Result |
+| --- | ---: | ---: | ---: | --- |
+| Insert | 4,421.71 ms | 6.94 ms | 14,374.88 ms | 2 effects applied |
+| Update | — | 6.30 ms | 6,676.13 ms | 2 effects applied |
+| Delete | — | 3.44 ms | 6,557.05 ms | 2 effects applied |
+
+The independent polling run also completed successfully:
+
+| Step | Elapsed | Result |
+| --- | ---: | --- |
+| Provisioning (setup, excluded) | 3,940.01 ms | completed |
+| Insert delivery | 10,987.65 ms | 2 effects applied |
+| Initial poll | 3,413 ms | 1 row scanned, unchanged |
+| Remote User_Input edit | 4,607.52 ms | completed |
+| Changed poll | 4,373 ms | 1 row changed and applied, 0 conflicts |
+
+The live polling check read the entity through a fresh EntityManager after the
+poll and confirmed the SQLite value was `approved`. The harness had to use a
+fresh EntityManager because MikroORM's identity map otherwise returns the
+pre-poll `pending` object; that was a test-harness issue, not a storage write
+failure.
+
+The combined sequence “remote User_Input edit → polling → local update/delete
+of the same entity” remains a separate design issue and is not included in the
+CRUD result above. After polling accepts `approved`, a later local update to
+`completed` creates a User_Input `candidate_reconcile` effect that is blocked by
+`visible_guard_mismatch`; a subsequent delete is refused because the latest
+User_Input effect is `blocked_candidate`. The current evidence is that polling
+updates `last_observed_hash`, while `projectionBaselineFromConfirmedState()`
+continues to use the older `confirmed_snapshot_hash` (`pending`) for the next
+outbound compare-and-set. This should be discussed and fixed separately from
+the append-plan defect.
+
+## 2026-07-29 — progressive append regression check
+
+- Branch: `feature/inbound-polling`
+- Command: `node --env-file=.env .local/append-regression-load-test.mjs`
+- Harness: direct `AppsScriptOperationClient` calls to the supplied Gateway;
+  SQLite, the outbox, the worker, and reconciliation were not included
+- Dataset: six columns (`id`, `name`, `status`, `email`, `age`, `active`),
+  fresh temporary tab per stage, setup/provisioning excluded
+- The regular-effect run used `createApplyEffectsOperation` with a
+  User_Input `candidate_reconcile` append. The fast-append run used
+  `createFastAppendRowsOperation` and is the comparable path to the earlier
+  raw append benchmark.
+
+The regular effect path is materially more expensive as the batch grows. It
+performs layout/context and receipt work, metadata writes, locking, guarded
+materialization, postcondition checks, and receipt writes; it is not equivalent
+to a raw `setValues()` append.
+
+| Regular effect rows | Gateway elapsed | Applied effects |
+| ---: | ---: | ---: |
+| 1 | 5,048.44 ms | 1 |
+| 2 | 4,197.58 ms | 2 |
+| 5 | 6,031.67 ms | 5 |
+| 10 | 8,932.31 ms | 10 |
+| 20 | 14,961.42 ms | 20 |
+
+The comparable fast-append path did not regress against the previous raw
+Gateway benchmark:
+
+| Rows | Previous (2026-07-26) | Current | Delta |
+| ---: | ---: | ---: | ---: |
+| 20 | 3,309.04 ms | 2,042.12 ms | -38.3% |
+| 50 | 2,766.91 ms | 2,969.11 ms | +7.3% |
+| 100 | 2,506.87 ms | 1,881.14 ms | -25.0% |
+| 200 | 5,459.14 ms | 4,764.00 ms | -12.7% |
+
+Therefore the cleanup did not make the old fast-append path slower. The
+earlier live two-effect insert total of 14,374.88 ms is a worker-level mixed
+measurement containing one fast System_State effect and one regular User_Input
+effect, plus per-request and worker overhead. A direct current two-row regular
+request completed in 4,197.58 ms, so the 14-second observation was not
+reproduced as the intrinsic cost of a two-row Gateway append. It should be
+treated as request/Apps Script latency variance until the worker's individual
+Gateway request timings are compared across repeated runs.
+
+The raw fast-append source timing still shows `setValues()` in the millisecond
+range. The dominant cost is Gateway invocation, Apps Script dispatch/flush,
+locking, and—on the regular path—the additional guarded effect protocol. This
+benchmark is a regression diagnosis, not a claim that the regular effect path
+is already suitable for high-throughput bulk writes.
+
+## 2026-07-29 — ID-based 1,000-row User_Input polling attempt
+
+- Branch: `feature/inbound-polling`
+- Command: `npm run build && node --env-file=.env .local/polling-load-test.mjs`
+- Dataset: 1,000 User_Input rows; the harness seeds visible `id` and `status`
+  cells with `setValues()` and does not create Developer Metadata anchors
+- Intended scenarios: unchanged poll by default, with `POLL_SCENARIO=changed-1`,
+  `changed-100`, or `changed-1000` available for changed-row measurements
+
+| Phase | Setup/provisioning | Steady-state poll | Result |
+| --- | ---: | ---: | --- |
+| Live Gateway attempt | HTTP 404 | not reached | blocked before polling |
+
+The external Apps Script deployment returned HTTP 404 during provisioning, so
+this run did not measure ID-based polling. No setup-excluded or steady-state
+performance value is inferred from this attempt. The code and local tests do
+exercise the values-only, no-metadata path; a valid deployment URL is required
+for the live 1,000-row benchmark.
+
+## 2026-07-29 — ID-based 1,000-row User_Input polling succeeded
+
+- Branch: `feature/inbound-polling`
+- Harness: `.local/polling-load-test.mjs`
+- Command: `npm run build`, then `node --env-file=.env .local/polling-load-test.mjs`
+  or `POLL_SCENARIO=changed-1 node --env-file=.env .local/polling-load-test.mjs`
+  or `POLL_SCENARIO=changed-100 node --env-file=.env .local/polling-load-test.mjs`
+- Backend: deployed Apps Script Gateway, MikroORM, and in-memory SQLite
+- Dataset: 1,000 User_Input rows; visible `id` and `status` values only, no
+  Developer Metadata anchors
+- Setup: temporary tabs, provisioning, local entity seed, SQLite baseline, and
+  remote cell seed are excluded from the poll column
+
+| Scenario | Rows scanned | Changed | Applied | Invalid | Poll elapsed | Gateway request |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Unchanged | 1,000 | 0 | 0 | 0 | 2,269.46 ms | 2,172 ms |
+| One remote edit | 1,000 | 1 | 1 | 0 | 11,248.09 ms | 11,143 ms |
+| 100 remote edits | 1,000 | 100 | 100 | 0 | 3,480.54 ms | 3,257 ms |
+
+All three runs completed successfully with zero unknown or duplicate business keys.
+The unchanged pass demonstrates the values-only ID scan at roughly 2.3 seconds
+for 1,000 rows. The one-edit pass was substantially slower because the remote
+Apps Script request itself took roughly 11.1 seconds; it is a single live
+measurement and should be repeated before treating that latency as a stable
+polling cost. The 100-edit pass scanned the same 1,000 rows and applied all 100
+changes in roughly 3.5 seconds, so the result is not monotonically proportional
+to the number of changed rows; the remote Gateway request/Apps Script latency
+is the dominant variable in these live runs. The earlier 404 was transient at
+the deployment endpoint: the same URL later returned HTTP 302/200 and all
+scenarios completed.
 
 ## Caveats
 

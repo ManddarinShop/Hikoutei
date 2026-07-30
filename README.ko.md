@@ -40,24 +40,30 @@ Hikoutei의 범위는 의도적으로 작습니다. 범용 데이터베이스 �
 npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
-MikroORM 패키지는 루트 패키지의 선택적 peer dependency이지만, Hikoutei의
-기본 SQLite 어댑터를 사용할 때는 필요합니다.
+애플리케이션은 `hikoutei`만 import합니다. MikroORM은 현재 SQLite 실행
+프로바이더가 사용하는 선택적 의존성이며, 애플리케이션의 엔티티 정의 API에는
+노출되지 않습니다.
 
 ## 빠른 시작
 
-엔티티 매핑을 정의한 후 요청 단위 manager로 엔티티를 다룹니다. 전체 매핑과
-Gateway 설정은 [빠른 시작 가이드](docs/quick-start.md)에 있습니다.
+Hikoutei를 통해 엔티티를 정의한 후 요청 단위 manager로 엔티티를 다룹니다.
+전체 라우트와 Gateway 설정은 [빠른 시작 가이드](docs/quick-start.md)에 있습니다.
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
 });
 
 const em = hikoutei.em.fork();
@@ -69,9 +75,10 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`flush()`는 로컬 애플리케이션 상태를 변경하고 설정된 Sheet 뷰에 반영할 작업을
-예약합니다. 원격 전달은 비동기이므로 [설정 가이드](docs/quick-start.md)에 따라
-sync worker를 실행하고 Gateway를 프로비저닝해야 합니다.
+`flush()`는 로컬 SQLite 상태를 커밋합니다. 해당 엔티티를 Google Sheets outbox와
+연결하려면 별도의 `sync` 라우트 설정을 추가합니다. 원격 전달은 비동기이므로
+[설정 가이드](docs/quick-start.md)에 따라 sync worker를 실행하고 Gateway를
+프로비저닝해야 합니다.
 
 ## Hikoutei를 사용하기 좋은 경우
 
@@ -105,12 +112,19 @@ sync worker를 실행하고 Gateway를 프로비저닝해야 합니다.
 Gateway 시크릿은 서버에만 보관하세요. 브라우저 코드에 넣거나 Git에 커밋하지
 마세요.
 
+현재 공개 런타임은 로컬 엔티티 생명주기, SQLite 트랜잭션과 outbox 계획,
+outbound worker 전달, Gateway 프로비저닝을 지원합니다. User_Input 폴링과
+전역 Conflict 체크박스 해결은 아직 end-to-end로 구현되지 않은 inbound
+기능이며 설계 대상으로 남아 있습니다.
+
 ## 문서
 
 - [빠른 시작](docs/quick-start.md) — 설치, 매핑, Gateway 설정.
 - [아키텍처](docs/architecture.md) — 로컬 저장소와 Sheet 화면의 관계.
 - [쓰기 및 동기화 흐름](docs/write-and-synchronization-flow.md) — 비동기 전달과
   복구 동작.
+- [현재 상태 검토](docs/current-state-review.md) — 구현된 기반과 의도적으로
+  미완성인 inbound 작업.
 - [개발 가이드](docs/development.md) — 로컬 개발 및 테스트 명령.
 - [벤치마크 기록](docs/sync-bulk-write-benchmark.md) — 날짜별 측정 결과와
   한계.
