@@ -1,11 +1,7 @@
 /** Validation, projection confirmation, fencing, and SQL parameter helpers. */
 
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
-import type { DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
-import {
-  isFencingValid,
-  isFencingValidWithSql,
-} from "../shared/writerLease.js";
+import { isFencingValidWithSql } from "../shared/writerLease.js";
 import type { FencingContext } from "../shared/writerLease.js";
 import { toSqlNullable } from "../../sqlite/sqlState.js";
 import {
@@ -77,46 +73,6 @@ export function validateReadyEffectLimit(limit: number): void {
   }
 }
 
-/** Writes row and field confirmation only after the outbox effect has won its claim CAS. */
-export function writeProjectionConfirmation(
-  db: DatabaseSyncLike,
-  confirmation: EffectProjectionConfirmation,
-): void {
-  const row = db.prepare(UPSERT_VISIBLE_STATE_SQL).run(
-    confirmation.physicalSheetId,
-    confirmation.projection,
-    confirmation.rowBindingId,
-    confirmation.visibleHash,
-    confirmation.visibleRevision,
-    toSqlNullable(confirmation.entityRevision),
-    confirmation.visibleHash,
-  );
-  if (row.changes !== 1) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.PROJECTION_CONFIRMATION_REGRESSION,
-      "projection confirmation would move visible state backwards",
-    );
-  }
-
-  for (const [fieldName, hash] of Object.entries(confirmation.fieldHashes)) {
-    const field = db.prepare(UPSERT_VISIBLE_FIELD_STATE_SQL).run(
-      confirmation.physicalSheetId,
-      confirmation.projection,
-      confirmation.rowBindingId,
-      fieldName,
-      hash,
-      confirmation.visibleRevision,
-      hash,
-    );
-    if (field.changes !== 1) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.PROJECTION_CONFIRMATION_REGRESSION,
-        "projection confirmation would move a field visible state backwards",
-      );
-    }
-  }
-}
-
 /** Writes confirmed row and field state through the active async SQL context. */
 export async function writeProjectionConfirmationWithSql(
   sql: SqlExecutor,
@@ -154,15 +110,6 @@ export async function writeProjectionConfirmationWithSql(
         "projection confirmation would move a field visible state backwards",
       );
     }
-  }
-}
-
-export function requireCurrentFence(db: DatabaseSyncLike, fence: FencingContext): void {
-  if (!isFencingValid(db, fence)) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.STALE_WRITER_FENCE,
-      "writer fencing is stale or expired",
-    );
   }
 }
 

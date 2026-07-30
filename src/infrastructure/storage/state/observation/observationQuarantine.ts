@@ -12,7 +12,6 @@ import {
   ROW_OUTCOMES,
 } from "../../../../domain/evaluate/constants.js";
 import { QUARANTINE_REASONS, ROW_OPERATIONS } from "../../../../domain/model/constants.js";
-import type { DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
 import { toSqlNullable } from "../../sqlite/sqlState.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import { auditJson } from "./observationAudit.js";
@@ -28,18 +27,6 @@ const INSERT_QUARANTINE_RECORD_SQL = `
   ON CONFLICT(quarantine_id) DO NOTHING
 `;
 
-/** Persists a deterministic quarantine for incompatible receipt or event identity. */
-export function persistIntegrityQuarantine(
-  db: DatabaseSyncLike,
-  input: PersistObservedRowInput,
-  row: ObservedRowChange,
-  eventId: Presence<string>,
-  discriminator: ObservationIntegrityDiscriminator,
-): string {
-  const quarantine = makeIntegrityQuarantine(input, row, discriminator);
-  return persistQuarantine(db, input, quarantine, eventId);
-}
-
 /** Persists an integrity quarantine through the active async SQL transaction. */
 export async function persistIntegrityQuarantineWithSql(
   sql: SqlExecutor,
@@ -50,42 +37,6 @@ export async function persistIntegrityQuarantineWithSql(
 ): Promise<string> {
   const quarantine = makeIntegrityQuarantine(input, row, discriminator);
   return persistQuarantineWithSql(sql, input, quarantine, eventId);
-}
-
-/** Inserts a core-provided quarantine plan once and retains its raw evidence. */
-export function persistQuarantine(
-  db: DatabaseSyncLike,
-  input: PersistObservedRowInput,
-  quarantine: QuarantinePlan,
-  eventId: Presence<string>,
-): string {
-  const beforeRow = quarantine.operation === ROW_OPERATIONS.INSERT
-    ? null
-    : quarantine.beforeRow;
-  const afterRow = quarantine.operation === ROW_OPERATIONS.DELETE
-    ? null
-    : quarantine.afterRow;
-  const repairState = input.evaluation.outcome === ROW_OUTCOMES.QUARANTINE &&
-      input.evaluation.repair.status === QUARANTINE_REPAIR_STATUSES.PLANNED
-    ? "pending"
-    : null;
-  db.prepare(INSERT_QUARANTINE_RECORD_SQL).run(
-    quarantine.quarantineId,
-    toSqlNullable(eventId),
-    input.observation.observationId,
-    input.batch.sheetId,
-    quarantine.rowBindingId,
-    quarantine.reason,
-    auditJson(beforeRow),
-    auditJson(afterRow),
-    auditJson(quarantine.fields),
-    auditJson(quarantine.repairFields),
-    repairState,
-    input.observation.payloadJson,
-    input.observation.receivedAt,
-    input.observation.receivedAt,
-  );
-  return quarantine.quarantineId;
 }
 
 /** Inserts a core-provided quarantine plan through the active async SQL transaction. */

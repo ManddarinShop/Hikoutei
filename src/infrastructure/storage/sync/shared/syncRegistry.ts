@@ -6,12 +6,10 @@
  * passing it to the gateway client.
  */
 
-import { withImmediateTransaction, type DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../../errors.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
-  isFencingValid,
   isFencingValidWithSql,
   type FencingContext,
 } from "./writerLease.js";
@@ -89,82 +87,10 @@ export type RegisterSyncSheetResult =
   | { readonly kind: "fenced_out" };
 
 /**
- * Registers one logical sheet/projection pair under the current writer fence.
- *
- * Repeating an identical registration is idempotent.  Any attempt to reuse a
- * logical or physical ID with different immutable routing data fails closed.
- */
-export function registerSyncSheet(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  input: RegisterSyncSheetInput,
-): RegisterSyncSheetResult {
-  const normalizedInput = normalizeRegistrationInput(input);
-  validateRegistration(normalizedInput);
-  if (!isFencingValid(db, fence)) return { kind: "fenced_out" };
-  return withImmediateTransaction(db, () => {
-    if (!isFencingValid(db, fence)) return { kind: "fenced_out" };
-    const logical = db.prepare(READ_LOGICAL_SHEET_REGISTRATION_SQL)
-      .get(normalizedInput.logicalSheetId) as LogicalRow | undefined;
-    if (logical === undefined) {
-      const inserted = db.prepare(INSERT_LOGICAL_SHEET_REGISTRATION_SQL).run(
-        normalizedInput.logicalSheetId,
-        normalizedInput.schemaVersion,
-        normalizedInput.ownershipManifestJson,
-        normalizedInput.businessKeyField,
-        normalizedInput.anchorMode ?? "developer_metadata",
-      );
-      if (inserted.changes !== 1) {
-        throw new StorageError(
-          STORAGE_ERROR_CODES.SYNC_REGISTRATION_WRITE_FAILED,
-          "could not register logical sheet",
-        );
-      }
-    } else if (!sameLogicalRegistration(logical, normalizedInput)) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SYNC_REGISTRATION_CONFLICT,
-        "logical sync sheet registration does not match the existing allowlist",
-      );
-    }
-
-    const physical = db.prepare(READ_PHYSICAL_SHEET_REGISTRATION_SQL)
-      .get(normalizedInput.physicalSheetId) as PhysicalRow | undefined;
-    if (physical === undefined) {
-      const inserted = db.prepare(INSERT_PHYSICAL_SHEET_REGISTRATION_SQL).run(
-        normalizedInput.physicalSheetId,
-        normalizedInput.logicalSheetId,
-        normalizedInput.spreadsheetId,
-        normalizedInput.tabName,
-        normalizedInput.registeredRange,
-        normalizedInput.projection,
-        normalizedInput.schemaVersion,
-        normalizedInput.anchorMode ?? "developer_metadata",
-      );
-      if (inserted.changes !== 1) {
-        throw new StorageError(
-          STORAGE_ERROR_CODES.SYNC_REGISTRATION_WRITE_FAILED,
-          "could not register physical sheet",
-        );
-      }
-    } else if (!samePhysicalRegistration(physical, normalizedInput)) {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.SYNC_REGISTRATION_CONFLICT,
-        "physical sync sheet registration does not match the existing allowlist",
-      );
-    }
-    return {
-      kind: "registered",
-      sheet: requireRegisteredSyncSheet(db, normalizedInput.physicalSheetId),
-    };
-  });
-}
-
-/**
  * Registers one logical sheet/projection pair through an active async SQL context.
  *
  * Call this from the same MikroORM transaction as any related setup state. The
- * registration and its writer-fence check then use the ORM-owned connection
- * instead of opening a second SQLite connection.
+ * registration and its writer-fence check use the same transaction boundary.
  */
 export async function registerSyncSheetWithSql(
   sql: SqlExecutor,
@@ -242,22 +168,6 @@ export async function registerSyncSheetWithAdapter(
   input: RegisterSyncSheetInput,
 ): Promise<RegisterSyncSheetResult> {
   return storage.transaction(({ sql }) => registerSyncSheetWithSql(sql, fence, input));
-}
-
-/** Reads one enabled physical registry entry or rejects any unregistered target. */
-export function requireRegisteredSyncSheet(
-  db: DatabaseSyncLike,
-  physicalSheetId: string,
-): RegisteredSyncSheet {
-  if (physicalSheetId.length === 0) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
-      "physical sheet ID is required",
-    );
-  }
-  const row = db.prepare(READ_REGISTERED_SYNC_SHEET_SQL)
-    .get(physicalSheetId) as RegisteredRow | undefined;
-  return registeredSyncSheetFromRow(row);
 }
 
 /** Reads one enabled physical registry entry through an active async SQL context. */

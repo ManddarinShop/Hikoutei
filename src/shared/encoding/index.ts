@@ -11,7 +11,6 @@ export type {
   NormalizedCell,
   NormalizedCellKind,
   DateValue,
-  CellObservation,
   StableValue,
 } from "./types.js";
 export type {

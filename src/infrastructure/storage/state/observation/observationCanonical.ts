@@ -28,17 +28,14 @@ import {
 import { fromSqlNullable, toSqlNullable } from "../../sqlite/sqlState.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
-  commitCanonicalChanges,
   commitCanonicalChangesWithSql,
   type CanonicalCommitInput,
 } from "../canonical/canonicalCommit.js";
-import type { DatabaseSyncLike } from "../../sqlite/sqliteBridge.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import type { FencingContext } from "../../sync/shared/writerLease.js";
 import { auditJson } from "./observationAudit.js";
 import {
   candidateHash,
-  readActiveCandidate,
   readActiveCandidateWithSql,
 } from "./observationLedger.js";
 import type {
@@ -164,46 +161,6 @@ function makeConflictId(
 }
 
 /**
- * Applies a validated canonical change, then updates bindings, key ownership,
- * and any unresolved conflicts rebased by that change.
- */
-export function applyCanonicalMutation(
-  db: DatabaseSyncLike,
-  fence: FencingContext,
-  input: PersistObservedRowInput,
-  row: ObservedRowChange,
-  binding: RowBindingRow,
-): Presence<AppliedCanonicalCommit> {
-  const needsCanonical = input.evaluation.acceptedFields.length > 0 ||
-    (row.operation === ROW_OPERATIONS.DELETE &&
-      input.evaluation.outcome === ROW_OUTCOMES.ACCEPTED);
-  if (!needsCanonical) return { kind: PRESENCE_KINDS.ABSENT };
-
-  if (input.canonical.kind === PRESENCE_KINDS.ABSENT) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_OBSERVATION_INPUT,
-      "canonical mutation disappeared after validation",
-    );
-  }
-  const mutation = input.canonical.value;
-  assertCanonicalBinding(binding, mutation.commit);
-  const result = commitCanonicalChanges(db, fence, mutation.commit);
-  if (result.kind === CANONICAL_COMMIT_RESULT_KINDS.FENCED_OUT) throw new FenceLostError();
-  if (result.kind === CANONICAL_COMMIT_RESULT_KINDS.STALE) throw new CanonicalStaleError();
-  if (result.kind === CANONICAL_COMMIT_RESULT_KINDS.INVALID) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.INVALID_OBSERVATION_INPUT,
-      `canonical mutation was invalid: ${result.reason}`,
-    );
-  }
-
-  transitionBindingAfterCanonicalCommit(db, input.batch.sheetId, row.rowBindingId, mutation.commit);
-  applyBusinessKeyChanges(db, input.batch.sheetId, mutation);
-  rebaseActiveConflicts(db, input, row, mutation, result);
-  return { kind: PRESENCE_KINDS.PRESENT, value: result };
-}
-
-/**
  * Applies canonical state and related binding/key/conflict changes through
  * the active async SQL transaction.
  */
@@ -246,97 +203,6 @@ export async function applyCanonicalMutationWithSql(
   await applyBusinessKeyChangesWithSql(sql, input.batch.sheetId, mutation);
   await rebaseActiveConflictsWithSql(sql, input, row, mutation, result);
   return { kind: PRESENCE_KINDS.PRESENT, value: result };
-}
-
-/** Writes new field candidates unless an equivalent unresolved candidate is active. */
-export function persistConflictAttempts(
-  db: DatabaseSyncLike,
-  input: PersistObservedRowInput,
-  row: ObservedRowChange,
-  binding: RowBindingRow,
-  eventId: string,
-): readonly string[] {
-  if (input.evaluation.conflicts.length === EMPTY_ARRAY_LENGTH_ZERO) return [];
-  if (
-    binding.state !== ROW_BINDING_STATES.ACTIVE ||
-    binding.entity_id.kind !== PRESENCE_KINDS.PRESENT
-  ) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
-      "a conflict requires an active entity binding",
-    );
-  }
-
-  const conflictIds: string[] = [];
-  const conflictGroupId: Presence<string> = input.evaluation.conflicts.length > 1
-    ? { kind: PRESENCE_KINDS.PRESENT, value: `conflict-group:${eventId}` }
-    : { kind: PRESENCE_KINDS.ABSENT };
-  for (const conflict of input.evaluation.conflicts) {
-    const active = readActiveCandidate(
-      db,
-      input.physicalSheetId,
-      input.batch.projection,
-      row.rowBindingId,
-      conflict.fieldName,
-    );
-    const hash = candidateHash(conflict);
-    if (
-      active.kind === LOOKUP_RESULT_KINDS.FOUND &&
-      (active.value.status === CONFLICT_STATUSES.OPEN ||
-        active.value.status === CONFLICT_STATUSES.NEEDS_REBASE) &&
-      active.value.active_candidate_hash === hash
-    ) {
-      continue;
-    }
-
-    const previousEpoch = Math.max(
-      active.kind === LOOKUP_RESULT_KINDS.FOUND
-        ? active.value.candidate_epoch
-        : INITIAL_CANDIDATE_EPOCH,
-      maxCandidateEpoch(db, row.rowBindingId, conflict.fieldName),
-    );
-    const candidateEpoch = previousEpoch + 1;
-    const conflictId = makeConflictId(
-      eventId,
-      row.rowBindingId,
-      conflict.fieldName,
-      candidateEpoch,
-    );
-    db.prepare(INSERT_SYNC_CONFLICT_SQL).run(
-      conflictId,
-      toSqlNullable(conflictGroupId),
-      eventId,
-      input.batch.sheetId,
-      binding.entity_id.value,
-      row.rowBindingId,
-      conflict.fieldName,
-      auditJson(conflict.userValue),
-      conflict.userBaseRevision,
-      auditJson(conflict.canonicalValue),
-      conflict.canonicalRevision,
-      auditJson(conflict.canonicalValue),
-      conflict.canonicalRevision,
-      candidateEpoch,
-      input.observation.receivedAt,
-      input.observation.receivedAt,
-    );
-    db.prepare(UPSERT_VISIBLE_FIELD_STATE_SQL).run(
-      input.physicalSheetId,
-      input.batch.projection,
-      row.rowBindingId,
-      conflict.fieldName,
-      stableHash(conflict.canonicalValue),
-      row.baseVisibleRevision,
-      conflictId,
-      hash,
-      candidateEpoch,
-      stableHash(conflict.userValue),
-    );
-    db.prepare(ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL)
-      .run(candidateEpoch, candidateEpoch, row.rowBindingId, input.batch.sheetId);
-    conflictIds.push(conflictId);
-  }
-  return conflictIds;
 }
 
 /** Writes new field candidates through the active async SQL transaction. */
@@ -466,23 +332,6 @@ function assertCanonicalBinding(binding: RowBindingRow, commit: CanonicalCommitI
   }
 }
 
-function transitionBindingAfterCanonicalCommit(
-  db: DatabaseSyncLike,
-  logicalSheetId: string,
-  rowBindingId: string,
-  commit: CanonicalCommitInput,
-): void {
-  if (commit.kind === ROW_OPERATIONS.UPDATE) return;
-  const result = commit.kind === ROW_OPERATIONS.INSERT
-    ? db.prepare(ACTIVATE_INSERTED_ROW_BINDING_SQL)
-      .run(commit.entityId, rowBindingId, logicalSheetId)
-    : db.prepare(TOMBSTONE_DELETED_ROW_BINDING_SQL)
-      .run(rowBindingId, logicalSheetId, commit.entityId);
-  if (result.changes !== EXPECTED_SINGLE_ROW_CHANGE_COUNT) {
-    throw new CanonicalStaleError();
-  }
-}
-
 /** Transitions an inserted or deleted binding through the active async SQL transaction. */
 async function transitionBindingAfterCanonicalCommitWithSql(
   sql: SqlExecutor,
@@ -496,46 +345,6 @@ async function transitionBindingAfterCanonicalCommitWithSql(
     : await sql.run(TOMBSTONE_DELETED_ROW_BINDING_SQL, [rowBindingId, logicalSheetId, commit.entityId]);
   if (result.changes !== EXPECTED_SINGLE_ROW_CHANGE_COUNT) {
     throw new CanonicalStaleError();
-  }
-}
-
-function applyBusinessKeyChanges(
-  db: DatabaseSyncLike,
-  logicalSheetId: string,
-  mutation: CanonicalRowMutation,
-): void {
-  const commit = mutation.commit;
-  if (commit.kind === ROW_OPERATIONS.DELETE) {
-    db.prepare(DEACTIVATE_ENTITY_BUSINESS_KEYS_SQL).run(logicalSheetId, commit.entityId);
-    return;
-  }
-
-  for (const change of mutation.businessKeyChanges) {
-    if (
-      change.previousNormalizedKey.kind === PRESENCE_KINDS.PRESENT &&
-      (change.nextNormalizedKey.kind === PRESENCE_KINDS.ABSENT ||
-        change.previousNormalizedKey.value !== change.nextNormalizedKey.value)
-    ) {
-      const retired = db.prepare(RETIRE_BUSINESS_KEY_SQL).run(
-        logicalSheetId,
-        change.fieldName,
-        change.previousNormalizedKey.value,
-        commit.entityId,
-      );
-      if (retired.changes !== EXPECTED_SINGLE_ROW_CHANGE_COUNT) {
-        throw new CanonicalStaleError();
-      }
-    }
-
-    if (change.nextNormalizedKey.kind === PRESENCE_KINDS.PRESENT) {
-      ensureActiveBusinessKey(
-        db,
-        logicalSheetId,
-        change.fieldName,
-        change.nextNormalizedKey.value,
-        commit.entityId,
-      );
-    }
   }
 }
 
@@ -580,23 +389,6 @@ async function applyBusinessKeyChangesWithSql(
   }
 }
 
-function ensureActiveBusinessKey(
-  db: DatabaseSyncLike,
-  logicalSheetId: string,
-  fieldName: string,
-  normalizedKey: string,
-  entityId: string,
-): void {
-  const existing = db.prepare(READ_ACTIVE_BUSINESS_KEY_SQL)
-    .get<ActiveBusinessKeyRow>(logicalSheetId, fieldName, normalizedKey);
-  if (existing !== undefined) {
-    if (existing.entity_id !== entityId) throw new CanonicalStaleError();
-    return;
-  }
-  db.prepare(INSERT_ACTIVE_BUSINESS_KEY_SQL)
-    .run(logicalSheetId, fieldName, normalizedKey, entityId);
-}
-
 /** Ensures one business key is owned by the expected entity through active async SQL. */
 async function ensureActiveBusinessKeyWithSql(
   sql: SqlExecutor,
@@ -620,38 +412,6 @@ async function ensureActiveBusinessKeyWithSql(
     normalizedKey,
     entityId,
   ]);
-}
-
-function rebaseActiveConflicts(
-  db: DatabaseSyncLike,
-  input: PersistObservedRowInput,
-  row: ObservedRowChange,
-  mutation: CanonicalRowMutation,
-  result: AppliedCanonicalCommit,
-): void {
-  if (mutation.commit.kind === ROW_OPERATIONS.DELETE) return;
-  for (const field of mutation.commit.fields) {
-    const nextRevision = result.fieldRevisions.get(field.fieldName);
-    if (nextRevision === undefined) continue;
-    const active = readActiveCandidate(
-      db,
-      input.physicalSheetId,
-      input.batch.projection,
-      row.rowBindingId,
-      field.fieldName,
-    );
-    if (
-      active.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
-      active.value.status === CONFLICT_STATUSES.RESOLVED
-    ) continue;
-    db.prepare(REBASE_ACTIVE_CONFLICT_SQL).run(
-      auditJson(field.value),
-      nextRevision,
-      mutation.commitId,
-      input.observation.receivedAt,
-      active.value.active_candidate_conflict_id,
-    );
-  }
 }
 
 /** Rebases unresolved candidates affected by a canonical commit through active async SQL. */
@@ -685,25 +445,6 @@ async function rebaseActiveConflictsWithSql(
       active.value.active_candidate_conflict_id,
     ]);
   }
-}
-
-function maxCandidateEpoch(
-  db: DatabaseSyncLike,
-  rowBindingId: string,
-  fieldName: string,
-): number {
-  const row = db.prepare(READ_MAX_CANDIDATE_EPOCH_SQL)
-    .get<MaxCandidateEpochRow>(rowBindingId, fieldName);
-  if (row === undefined) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
-      "candidate epoch aggregate query returned no row",
-    );
-  }
-  const maxEpoch = fromSqlNullable(row.max_epoch);
-  return maxEpoch.kind === PRESENCE_KINDS.PRESENT
-    ? maxEpoch.value
-    : INITIAL_CANDIDATE_EPOCH;
 }
 
 /** Reads the maximum conflict candidate epoch through the active async SQL transaction. */
