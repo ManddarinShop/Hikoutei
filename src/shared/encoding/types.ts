@@ -8,6 +8,8 @@
 import {
   NORMALIZED_CELL_KINDS,
 } from "./constants.js";
+import type { CellObservationKind, NormalizedCellKind } from "./constants.js";
+import type { Presence } from "../state/types.js";
 
 export type { CellObservationKind, NormalizedCellKind } from "./constants.js";
 
@@ -29,6 +31,18 @@ export type NormalizedCell =
   | { readonly kind: typeof NORMALIZED_CELL_KINDS.NUMBER; readonly value: number }
   | { readonly kind: typeof NORMALIZED_CELL_KINDS.BOOLEAN; readonly value: boolean }
   | DateValue;
+
+/**
+ * Physical Sheet metadata retained by the internal observation/gateway path.
+ * This compatibility type is intentionally not part of the public root API.
+ */
+export interface CellObservation {
+  readonly cellKind: CellObservationKind;
+  readonly normalizedCell: NormalizedCell;
+  readonly formulaHash: Presence<string>;
+  readonly mergeRange: Presence<string>;
+  readonly errorCode: Presence<string>;
+}
 
 /**
  * Any value that stable_encode_v1 can encode: scalars, arrays, dates, and

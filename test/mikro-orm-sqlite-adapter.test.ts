@@ -558,6 +558,7 @@ describe("MikroOrmSqliteAdapter", () => {
         sheetName: "Orders",
         registeredRange: "A:Z",
         schemaVersion: 1,
+        targetAnchor: "order-anchor",
         fields: nextFields,
         targetVisibleHash: computeSyncVisibleHash(nextFields),
         createIfMissing: false,
@@ -579,6 +580,7 @@ describe("MikroOrmSqliteAdapter", () => {
         rows: [
           {
             targetId: "order-worker",
+            physicalAnchor: "order-anchor",
             fields: oldFields,
             visibleRevision: 0,
           },
@@ -599,7 +601,7 @@ describe("MikroOrmSqliteAdapter", () => {
       applied: 1,
       failed: 0,
     });
-    expect(gateway.readRow("physical-sheet", "order-worker")).toMatchObject({
+    expect(gateway.readRow("physical-sheet", "order-anchor")).toMatchObject({
       fields: nextFields,
       visibleRevision: 1,
     });

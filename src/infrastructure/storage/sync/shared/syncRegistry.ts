@@ -65,7 +65,8 @@ export interface RegisterSyncSheetInput {
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
   /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
-  readonly anchorMode?: "business_key";
+  /** Compatibility with the pre-foundation developer-metadata fixture path. */
+  readonly anchorMode?: "business_key" | "developer_metadata";
 }
 
 /** Registry row used for all gateway requests. */
@@ -80,7 +81,7 @@ export interface RegisteredSyncSheet {
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
   /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
-  readonly anchorMode: "business_key";
+  readonly anchorMode: "business_key" | "developer_metadata";
 }
 
 /** Records whether a fenced registry request won the writer ownership check. */
