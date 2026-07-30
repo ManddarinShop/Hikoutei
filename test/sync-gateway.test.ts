@@ -3,6 +3,7 @@ import { APPLICABILITY_KINDS } from "../src/shared/state/constants.js";
 import {
   provisionRegisteredSyncSheets,
   type RegisteredSyncProjectionDefinition,
+  type SyncGatewayProvisionRoute,
 } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
@@ -29,7 +30,6 @@ function payload(
     sheetName: "User_Input",
     registeredRange: "A:Z",
     schemaVersion: 1,
-    targetAnchor: "row-1",
     fields,
     targetVisibleHash: computeSyncVisibleHash(fields),
     createIfMissing: true,
@@ -77,7 +77,7 @@ describe("sync gateway contract", () => {
       schemaVersion: 1,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
-      anchorMode: "developer_metadata",
+      anchorMode: "business_key",
     };
     const definition: RegisteredSyncProjectionDefinition = {
       sheet,
@@ -98,5 +98,33 @@ describe("sync gateway contract", () => {
     ).rejects.toMatchObject({
       code: SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
     });
+  });
+
+  it("provisions the User_Input business key as its gateway identity field", async () => {
+    let registrations: readonly SyncGatewayProvisionRoute[] = [];
+    const sheet: RegisteredSyncSheet = {
+      logicalSheetId: "logical-1",
+      physicalSheetId: "physical-1",
+      spreadsheetId: "spreadsheet-1",
+      tabName: "User_Input",
+      registeredRange: "A:Z",
+      projection: "user_input",
+      schemaVersion: 1,
+      ownershipManifestJson: "{}",
+      businessKeyField: "id",
+      anchorMode: "business_key",
+    };
+
+    await provisionRegisteredSyncSheets(
+      {
+        provisionRegistry: async (input) => {
+          registrations = input;
+          return { registrations: [], createdSheets: [], initializedHeaders: [] };
+        },
+      },
+      [{ sheet, headers: ["id", "status"] }],
+    );
+
+    expect(registrations).toMatchObject([{ projection: "user_input", identityField: "id" }]);
   });
 });

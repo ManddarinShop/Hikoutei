@@ -60,7 +60,6 @@ describe("runReconciliationScan", () => {
       sheetRows: [
         {
           targetId: "order-1",
-          physicalAnchor: "anchor-1",
           fields: {
             id: { kind: "string", value: "order-1" },
             status: { kind: "string", value: "paid" },
@@ -110,7 +109,6 @@ describe("runReconciliationScan", () => {
       sheetRows: [
         {
           targetId: "order-1",
-          physicalAnchor: "anchor-1",
           fields: {
             id: { kind: "string", value: "order-1" },
             status: { kind: "string", value: "paid" },
@@ -157,7 +155,6 @@ describe("runReconciliationScan", () => {
       sheetRows: [
         {
           targetId: "order-1",
-          physicalAnchor: "anchor-1",
           fields: {
             id: { kind: "string", value: "order-1" },
             status: { kind: "string", value: "shipped" },
@@ -253,7 +250,6 @@ describe("runReconciliationScan", () => {
       sheetRows: [
         {
           targetId: "order-1",
-          physicalAnchor: "anchor-1",
           fields: {
             id: { kind: "string", value: "order-1" },
             status: { kind: "string", value: "shipped" },
@@ -285,7 +281,6 @@ describe("runReconciliationScan", () => {
       targetId: "order-1",
       rowBindingId: { kind: "present", value: "binding-1" },
       conflictId: { kind: "absent" },
-      targetAnchor: "anchor-1",
       fields: {
         id: { kind: "string", value: "order-1" },
         status: { kind: "string", value: "paid" },
@@ -343,7 +338,6 @@ describe("runReconciliationScan", () => {
       sheetRows: [
         {
           targetId: "order-1",
-          physicalAnchor: "anchor-1",
           fields: {
             id: { kind: "string", value: "order-1" },
             status: { kind: "string", value: "paid" },
@@ -352,7 +346,6 @@ describe("runReconciliationScan", () => {
         },
         {
           targetId: "orphan",
-          physicalAnchor: "anchor-orphan",
           fields: {
             id: { kind: "string", value: "orphan" },
             status: { kind: "string", value: "stale" },
@@ -400,7 +393,6 @@ describe("runReconciliationScan", () => {
       sheetRows: [
         {
           targetId: "order-1",
-          physicalAnchor: "anchor-1",
           fields: {
             id: { kind: "string", value: "order-1" },
             status: { kind: "string", value: "shipped" },
@@ -446,7 +438,6 @@ interface DesiredEntityInput {
 
 interface SheetRowInput {
   readonly targetId: string;
-  readonly physicalAnchor: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
 }
 
@@ -474,7 +465,6 @@ async function bootstrap(args: {
       headers: [...SYSTEM_HEADERS],
       rows: args.sheetRows.map((row) => ({
         targetId: row.targetId,
-        physicalAnchor: row.physicalAnchor,
         fields: row.fields,
       })),
     },

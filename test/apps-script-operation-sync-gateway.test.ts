@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppsScriptOperationSyncGateway,
-  type AppsScriptOperationProjectionStatus,
 } from "../src/adapter/sheets/providers/apps-script-gateway/transport/operationSyncGateway.js";
 import type {
   AnyAppsScriptOperationDefinition,
@@ -18,10 +17,9 @@ import type {
   RegisteredSyncProjectionDefinition,
   SyncGatewayProvisionRoute,
 } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
-import type { SyncEffectWorkerGateway } from "../src/application/sync/gateway/syncGateway.js";
 
 describe("AppsScriptOperationSyncGateway", () => {
-  it("moves provisioning, fast append, and projection reads behind the library adapter", async () => {
+  it("moves provisioning and fast append behind the library adapter", async () => {
     const operationGateway = new StubOperationGateway([
       {
         registrations: [{
@@ -38,18 +36,11 @@ describe("AppsScriptOperationSyncGateway", () => {
         results: [{ effectId: "effect-1", status: "applied" }],
         hasMore: false,
       },
-      {
-        sheetName: "Orders",
-        headers: ["id", "status"],
-        rowCount: 1,
-        ids: ["order-1"],
-      } satisfies AppsScriptOperationProjectionStatus,
     ]);
     const adapter = new AppsScriptOperationSyncGateway({
       operationGateway,
       definitions: [createDefinition()],
     });
-    const fastGateway: SyncEffectWorkerGateway = adapter;
 
     const provisioned = await adapter.provisionRegistry([createRoute()]);
     const appended = await adapter.fastAppendRows({
@@ -66,17 +57,30 @@ describe("AppsScriptOperationSyncGateway", () => {
         },
       }],
     });
-    const projection = await adapter.readProjection("Orders");
 
     expect(provisioned.createdSheets).toEqual(["Orders"]);
-    expect(fastGateway.fastAppendRows).toBeTypeOf("function");
     expect(appended.results[0]?.status).toBe("applied");
-    expect(projection.rowCount).toBe(1);
-    expect(operationGateway.calls).toHaveLength(3);
-    expect(operationGateway.calls[0]?.fn).toContain("operational provisioning");
-    expect(operationGateway.calls[1]?.fn).toContain("setValues");
-    expect(operationGateway.calls[1]?.fn).not.toContain("getDeveloperMetadata");
-    expect(operationGateway.calls[2]?.fn).toContain("getLastRow");
+    expect(operationGateway.calls).toHaveLength(2);
+    expect(operationGateway.calls[0]?.args).toMatchObject({
+      registrations: [{
+        sheetName: "Orders",
+        registeredRange: "A:B",
+        projection: "system_state",
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      }],
+    });
+    expect(operationGateway.calls[1]?.args).toMatchObject({
+      sheetName: "Orders",
+      headers: ["id", "status"],
+      rows: [{
+        effectId: "effect-1",
+        fields: {
+          id: { kind: "string", value: "order-1" },
+          status: { kind: "string", value: "paid" },
+        },
+      }],
+    });
   });
 
   it("rejects a route mismatch before sending a fast append", async () => {
@@ -100,41 +104,6 @@ describe("AppsScriptOperationSyncGateway", () => {
     expect(operationGateway.calls).toHaveLength(0);
   });
 
-  it("reads table values without metadata, locks, or snapshot hashing", async () => {
-    const operationGateway = new StubOperationGateway([{
-      sheetName: "Orders",
-      registeredRange: "A:B",
-      headers: ["id", "status"],
-      rows: [{
-        rowNumber: 2,
-        fields: {
-          id: { kind: "string", value: "order-1" },
-          status: { kind: "string", value: "paid" },
-        },
-      }],
-    }]);
-    const adapter = new AppsScriptOperationSyncGateway({
-      operationGateway,
-      definitions: [createDefinition()],
-    });
-
-    const [result] = await adapter.readRowsBatch([{
-      physicalSheetId: "orders-state",
-      sheetName: "Orders",
-      registeredRange: "A:B",
-      projection: "system_state",
-      schemaVersion: 1,
-      headers: ["id", "status"],
-    }]);
-
-    expect(result?.rows[0]?.fields.id).toEqual({ kind: "string", value: "order-1" });
-    expect(operationGateway.calls).toHaveLength(1);
-    expect(operationGateway.calls[0]?.fn).toContain("getValues");
-    expect(operationGateway.calls[0]?.fn).not.toContain("LockService");
-    expect(operationGateway.calls[0]?.fn).not.toContain("DeveloperMetadata");
-    expect(operationGateway.calls[0]?.fn).not.toContain("computeDigest");
-  });
-
   it("routes regular effects and recovery reads through typed operations", async () => {
     const effect = createEffect();
     const operationGateway = new StubOperationGateway([
@@ -145,11 +114,9 @@ describe("AppsScriptOperationSyncGateway", () => {
           status: "applied",
           visibleRevision: 2,
           visibleHash: effect.payload.targetVisibleHash,
-          snapshotHash: null,
           reason: null,
           postcondition: "acknowledged",
         }],
-        snapshotHash: null,
         hasMore: false,
         timing: {
           operationKinds: ["update"],
@@ -162,7 +129,6 @@ describe("AppsScriptOperationSyncGateway", () => {
         disposition: "applied",
         visibleRevision: 2,
         visibleHash: effect.payload.targetVisibleHash,
-        snapshotHash: null,
       },
       {
         results: [{
@@ -172,7 +138,6 @@ describe("AppsScriptOperationSyncGateway", () => {
             disposition: "applied",
             visibleRevision: 2,
             visibleHash: effect.payload.targetVisibleHash,
-            snapshotHash: null,
           },
         }],
       },
@@ -203,18 +168,22 @@ describe("AppsScriptOperationSyncGateway", () => {
     expect(one.disposition).toBe("applied");
     expect(many[0]?.postcondition.disposition).toBe("applied");
     expect(operationGateway.calls).toHaveLength(3);
-    expect(operationGateway.calls[0]?.fn).toContain("deleteRow");
-    expect(operationGateway.calls[0]?.fn).toContain("getDeveloperMetadata");
-    expect(operationGateway.calls[0]?.fn).toContain("postcondition_hash_mismatch");
+    expect(operationGateway.calls[0]?.args).toMatchObject({
+      mode: "applyEffects",
+      effects: [effect],
+    });
+    expect(operationGateway.calls[1]?.args).toMatchObject({
+      mode: "readEffectPostcondition",
+      effect,
+    });
+    expect(operationGateway.calls[2]?.args).toMatchObject({
+      mode: "readEffectPostconditions",
+      effects: [effect],
+    });
   });
 
-  it("routes anchor assignment and normalized snapshots through typed operations", async () => {
+  it("routes normalized ID-based snapshots through typed operations", async () => {
     const operationGateway = new StubOperationGateway([
-      {
-        assigned: 1,
-        existing: 2,
-        duplicateAnchors: [{ anchor: "anchor-duplicate", rowNumbers: [2, 4] }],
-      },
       {
         protocolVersion: "typed-sheets-sync-v1",
         sheetName: "Orders",
@@ -224,31 +193,17 @@ describe("AppsScriptOperationSyncGateway", () => {
         headers: ["id", "status"],
         rows: [{
           rowNumber: 2,
-          physicalAnchor: "anchor-1",
-          visibleRevision: null,
-          visibleHash: null,
           cells: {
             id: {
               cellKind: "literal",
               normalizedCell: { kind: "string", value: "order-1" },
-              formulaHash: null,
-              mergeRange: null,
-              errorCode: null,
-              stableHash: "cell-hash",
             },
             status: {
               cellKind: "blank",
               normalizedCell: null,
-              formulaHash: null,
-              mergeRange: null,
-              errorCode: null,
-              stableHash: "blank-hash",
             },
           },
         }],
-        snapshotHash: "snapshot-hash",
-        unanchoredRows: [],
-        duplicateAnchors: [],
       },
     ]);
     const adapter = new AppsScriptOperationSyncGateway({
@@ -256,13 +211,6 @@ describe("AppsScriptOperationSyncGateway", () => {
       definitions: [createDefinition()],
     });
 
-    const anchors = await adapter.ensureRowAnchors({
-      physicalSheetId: "orders-state",
-      sheetName: "Orders",
-      registeredRange: "A:B",
-      projection: "system_state",
-      schemaVersion: 1,
-    });
     const snapshot = await adapter.readSnapshot({
       physicalSheetId: "orders-state",
       sheetName: "Orders",
@@ -271,21 +219,16 @@ describe("AppsScriptOperationSyncGateway", () => {
       schemaVersion: 1,
     });
 
-    expect(anchors.assigned).toBe(1);
-    expect(anchors.duplicateAnchors[0]?.rowNumbers).toEqual([2, 4]);
     expect(snapshot.rows[0]?.cells.id?.normalizedCell).toEqual({
       kind: "string",
       value: "order-1",
     });
-    expect(snapshot.rows[0]?.physicalAnchor.kind).toBe("present");
-    expect(operationGateway.calls).toHaveLength(2);
-    expect(operationGateway.calls[0]?.fn).toContain("addDeveloperMetadata");
-    expect(operationGateway.calls[0]?.fn).toContain("createDeveloperMetadataFinder");
-    expect(operationGateway.calls[0]?.fn).toContain("getLocation().getRow");
-    expect(operationGateway.calls[1]?.fn).toContain("getMergedRanges");
-    expect(operationGateway.calls[1]?.fn).toContain("getFormulas");
-    expect(operationGateway.calls[1]?.fn).toContain("createDeveloperMetadataFinder");
-    expect(operationGateway.calls[1]?.fn).not.toContain("getDeveloperMetadata");
+    expect(operationGateway.calls).toHaveLength(1);
+    expect(operationGateway.calls[0]?.args).toMatchObject({
+      mode: "readSnapshot",
+      physicalSheetId: "orders-state",
+      sheetName: "Orders",
+    });
   });
 
   it("combines several projection observations into one Apps Script request", async () => {
@@ -320,9 +263,13 @@ describe("AppsScriptOperationSyncGateway", () => {
     expect(results).toHaveLength(2);
     expect(operationGateway.batches).toHaveLength(1);
     expect(operationGateway.batches[0]).toHaveLength(2);
-    expect(operationGateway.batches[0]?.[0]?.fn).toContain("observeSnapshot");
+    expect(operationGateway.batches[0]?.[0]?.args).toMatchObject({
+      mode: "observeSnapshot",
+      physicalSheetId: "orders-state",
+    });
     expect(operationGateway.batches[0]?.[1]?.args).toMatchObject({
       mode: "observeSnapshot",
+      physicalSheetId: "orders-input",
       readMode: "user_input",
     });
   });
@@ -376,7 +323,7 @@ function createDefinition(): RegisteredSyncProjectionDefinition {
       schemaVersion: 1,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
-      anchorMode: "developer_metadata",
+      anchorMode: "business_key",
     },
     headers: ["id", "status"],
   };
@@ -405,7 +352,7 @@ function createUserInputDefinition(): RegisteredSyncProjectionDefinition {
       schemaVersion: 1,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
-      anchorMode: "developer_metadata",
+      anchorMode: "business_key",
     },
     headers: ["id", "status"],
   };
@@ -416,7 +363,6 @@ function createObservedSnapshot(
   projection: "system_state" | "user_input",
 ): unknown {
   return {
-    anchors: { assigned: 0, existing: 1, duplicateAnchors: [] },
     snapshot: {
       protocolVersion: "typed-sheets-sync-v1",
       sheetName,
@@ -425,9 +371,6 @@ function createObservedSnapshot(
       schemaVersion: 1,
       headers: ["id", "status"],
       rows: [],
-      snapshotHash: "snapshot-hash-" + projection,
-      unanchoredRows: [],
-      duplicateAnchors: [],
     },
   };
 }
@@ -445,7 +388,6 @@ function createEffect(): SyncGatewayEffect {
     targetKind: "entity",
     targetId: "order-1",
     rowBindingId: { kind: "present", value: "row-1" },
-    conflictId: { kind: "absent" },
     expectedVisibleRevision: 1,
     expectedVisibleHash: computeSyncVisibleHash({
       status: { kind: "string", value: "pending" },
@@ -455,7 +397,6 @@ function createEffect(): SyncGatewayEffect {
       sheetName: "Orders",
       registeredRange: "A:B",
       schemaVersion: 1,
-      targetAnchor: "sync-anchor:order-1",
       fields,
       targetVisibleHash: computeSyncVisibleHash(fields),
       createIfMissing: false,

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   APPLICABILITY_KINDS,
-  PRESENCE_KINDS,
 } from "../src/shared/state/index.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
@@ -34,7 +33,7 @@ function createSheetInput(): FakeSyncSheetInput {
 }
 
 describe("FakeSyncSheetGateway", () => {
-  it("returns the shared Presence contract for snapshot metadata", async () => {
+  it("returns visible values without metadata state for User_Input snapshots", async () => {
     const gateway = new FakeSyncSheetGateway([createSheetInput()]);
 
     const snapshot = await gateway.readSnapshot({
@@ -46,15 +45,11 @@ describe("FakeSyncSheetGateway", () => {
     });
     const row = snapshot.rows[0];
 
-    expect(row?.physicalAnchor).toEqual({
-      kind: PRESENCE_KINDS.PRESENT,
-      value: "fake-anchor:1",
+    expect(row?.cells.id?.cellKind).toBe("literal");
+    expect(row?.cells.id?.normalizedCell).toEqual({
+      kind: "string",
+      value: "entity-1",
     });
-    expect(row?.visibleRevision).toEqual({
-      kind: PRESENCE_KINDS.PRESENT,
-      value: 0,
-    });
-    expect(row?.cells.id?.formulaHash).toEqual({ kind: PRESENCE_KINDS.ABSENT });
   });
 
   it("uses the common gateway error for invalid fake options", () => {
