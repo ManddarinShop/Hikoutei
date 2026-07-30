@@ -32,6 +32,8 @@ export type TypedSheetsEntityFilter<Entity extends object> = Readonly<Partial<En
 export interface TypedSheetsFindOptions {
   readonly limit?: number;
   readonly offset?: number;
+  /** Explicit relation property names to load; lazy loading is not implicit. */
+  readonly populate?: readonly string[];
 }
 
 /** Entity-manager fork behavior supported without leaking the underlying ORM. */

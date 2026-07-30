@@ -7,6 +7,31 @@ export {
   TypedSheetsEntityManager,
   TypedSheetsOrm,
 } from "./api/TypedSheetsOrm.js";
+export { createTypedSheets } from "./api/createTypedSheets.js";
+export {
+  defineTypedSheetsEntity,
+  TYPED_SHEETS_RELATION_KINDS,
+  TYPED_SHEETS_SCALAR_TYPES,
+} from "./api/entityDefinition.js";
+export type { CreateTypedSheetsOptions } from "./api/factoryContracts.js";
+export type {
+  TypedSheetsEntitySyncOptions,
+  TypedSheetsSheetRouteOptions,
+  TypedSheetsSyncOptions,
+} from "./api/factoryContracts.js";
+export type {
+  DefineTypedSheetsEntityInput,
+  InferTypedSheetsEntity,
+  TypedSheetsEntityDefinition,
+  TypedSheetsEntityDefinitionMetadata,
+  TypedSheetsManyToOnePropertyDefinition,
+  TypedSheetsOneToManyPropertyDefinition,
+  TypedSheetsPropertyDefinition,
+  TypedSheetsPropertyValue,
+  TypedSheetsRelationKind,
+  TypedSheetsScalarPropertyDefinition,
+  TypedSheetsScalarType,
+} from "./api/entityDefinition.js";
 export {
   createTypedSheetsEntityMappingRegistry,
   createTypedSheetsEntityOwnershipManifest,
@@ -24,6 +49,7 @@ export {
   typedSheetsEntityProjectionHeaders,
   typedSheetsEntityRowBindingId,
 } from "./mapping/entityMapping.js";
+export { createTypedSheetsEntityMappings } from "./mapping/publicDefinitionMapping.js";
 export {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
