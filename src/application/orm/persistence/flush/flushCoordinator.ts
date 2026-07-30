@@ -62,7 +62,7 @@ export function createMappedTypedSheetsFlushCoordinator(
   options: CreateMappedTypedSheetsFlushCoordinatorOptions,
 ): TypedSheetsFlushCoordinator {
   const mappings = mappingRegistry(options.mappings);
-  const writer = resolveWriterOptions(options.writer);
+  const writer = resolveTypedSheetsEntityWriterOptions(options.writer);
 
   return {
     async onFlush(context: TypedSheetsFlushContext): Promise<void> {
@@ -126,7 +126,7 @@ export async function registerTypedSheetsEntityMappings(
   writerInput: TypedSheetsEntityWriterOptions,
 ): Promise<readonly RegisteredTypedSheetsMappedProjection[]> {
   const mappings = mappingRegistry(mappingsInput);
-  const writer = resolveWriterOptions(writerInput);
+  const writer = resolveTypedSheetsEntityWriterOptions(writerInput);
   const definitions = createTypedSheetsMappedProjectionDefinitions(mappings.mappings);
 
   const now = writer.now();
@@ -209,7 +209,10 @@ function mappingRegistry(
   return createTypedSheetsEntityMappingRegistry(input);
 }
 
-function resolveWriterOptions(options: TypedSheetsEntityWriterOptions): ResolvedWriterOptions {
+/** Resolves and validates writer identity/options shared by flush and inbound polling. */
+export function resolveTypedSheetsEntityWriterOptions(
+  options: TypedSheetsEntityWriterOptions,
+): ResolvedWriterOptions {
   if (options.writerId.length === EMPTY_STRING_LENGTH_ZERO) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.INVALID_ENTITY_MAPPING,

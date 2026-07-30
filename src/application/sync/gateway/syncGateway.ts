@@ -30,6 +30,7 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
 } from "../../../shared/constants.js";
 import {
+  SYNC_GATEWAY_PROJECTIONS,
   type SyncGatewayEffectResultStatus,
   type SyncGatewayFastAppendStatus,
   type SyncGatewayPostconditionMode,
@@ -63,6 +64,7 @@ export interface SyncSnapshotCell {
 /** One physical row read from a registered projection. */
 export interface SyncSnapshotRow {
   readonly rowNumber: number;
+  /** Present for anchor-aware projections; User_Input value polling leaves it absent. */
   readonly physicalAnchor: Presence<string>;
   readonly cells: Readonly<Record<string, SyncSnapshotCell>>;
 }
@@ -78,7 +80,7 @@ export interface SyncGatewaySnapshot {
   readonly rows: readonly SyncSnapshotRow[];
 }
 
-/** Request used to assign missing Developer Metadata anchors before a snapshot. */
+/** Request used to observe one registered projection; anchor assignment is projection-specific. */
 export interface EnsureSyncRowAnchorsRequest {
   readonly physicalSheetId: string;
   readonly sheetName: string;
@@ -103,7 +105,7 @@ export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {
   readonly readMode?: SyncGatewaySnapshotReadMode;
 }
 
-/** Result of one combined anchor assignment and snapshot read. */
+/** Result of one combined projection observation and optional anchor assignment. */
 export interface SyncObservedSnapshot {
   readonly snapshot: SyncGatewaySnapshot;
   /** Optional diagnostic phases returned by newer observation gateways. */
@@ -135,7 +137,11 @@ export async function observeSyncSnapshot(
   if (isSyncSheetObservationBatchGateway(gateway)) {
     return gateway.observeSnapshot(request);
   }
-  await gateway.ensureRowAnchors(request);
+  // User_Input rows are matched by their visible business key, so the
+  // fallback path must not reintroduce a metadata write before polling.
+  if (request.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT) {
+    await gateway.ensureRowAnchors(request);
+  }
   const snapshot = await gateway.readSnapshot(request);
   return { snapshot };
 }

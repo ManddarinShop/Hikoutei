@@ -11,6 +11,7 @@ export {
 } from "./engine/MikroOrmTypedSheetsEngine.js";
 export { createTypedSheets } from "./engine/TypedSheetsFactory.js";
 export { persistMappedObservedRowWithMikroOrm } from "./observation/MikroOrmMappedObservation.js";
+export { pollMappedUserInputWithMikroOrm } from "./observation/MikroOrmUserInputPolling.js";
 export {
   createMappedTypedSheetsOrm,
   initializeMappedTypedSheetsOrm,
@@ -40,6 +41,11 @@ export type {
   InitializeTypedSheetsOrmOptions,
 } from "./engine/MikroOrmTypedSheetsEngine.js";
 export type { PersistMappedObservedRowOptions } from "./observation/MikroOrmMappedObservation.js";
+export type {
+  MappedUserInputPollingReport,
+  MappedUserInputPollingSheetReport,
+  PollMappedUserInputWithMikroOrmOptions,
+} from "./observation/MikroOrmUserInputPolling.js";
 export type {
   CreateMappedTypedSheetsOrmOptions,
   InitializeMappedTypedSheetsOrmOptions,
