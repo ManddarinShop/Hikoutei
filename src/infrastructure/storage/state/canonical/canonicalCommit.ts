@@ -84,10 +84,6 @@ export const CANONICAL_COMMIT_RESULT_KINDS = {
   INVALID: "invalid",
 } as const;
 
-/** Closed set of canonical commit result kinds. */
-export type CanonicalCommitResultKind =
-  (typeof CANONICAL_COMMIT_RESULT_KINDS)[keyof typeof CANONICAL_COMMIT_RESULT_KINDS];
-
 /** Runtime values describing which canonical target became stale. */
 export const CANONICAL_COMMIT_STALE_TARGETS = {
   ENTITY: "entity",

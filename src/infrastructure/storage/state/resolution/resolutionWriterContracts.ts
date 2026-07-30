@@ -25,10 +25,6 @@ export const PERSIST_RESOLUTION_RESULT_KINDS = {
   DUPLICATE: "duplicate",
 } as const;
 
-/** Closed set of resolution-writer result kinds. */
-export type PersistResolutionCommandResultKind =
-  (typeof PERSIST_RESOLUTION_RESULT_KINDS)[keyof typeof PERSIST_RESOLUTION_RESULT_KINDS];
-
 /** Input required to durably process one trusted `acknowledge_system` request. */
 export interface PersistResolutionCommandInput {
   readonly logicalSheetId: string;

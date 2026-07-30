@@ -12,7 +12,6 @@ import {
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
 } from "../../../../domain/index.js";
-import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import type { ReconciliationScanReport } from "../reconciliation/ReconciliationScanner.js";
 import {
   runSyncEffectWorkerWithAdapter,

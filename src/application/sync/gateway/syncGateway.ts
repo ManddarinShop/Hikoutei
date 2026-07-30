@@ -9,7 +9,7 @@
 
 import {
   stableHash,
-  type CellObservation,
+  type CellObservationKind,
   type EffectKind,
   type EffectTargetKind,
   type NormalizedCell,
@@ -54,18 +54,16 @@ export type SyncProjection = RegisteredProjection;
 /** Effect classes whose compare-and-set behavior differs at the gateway. */
 export type SyncEffectKind = EffectKind;
 
-/** Literal/formula metadata retained by a normalized Sheet snapshot. */
-export interface SyncSnapshotCell extends CellObservation {
-  readonly stableHash: Presence<string>;
+/** Physical kind and normalized value for one observed Sheet cell. */
+export interface SyncSnapshotCell {
+  readonly cellKind: CellObservationKind;
+  readonly normalizedCell: NormalizedCell;
 }
 
 /** One physical row read from a registered projection. */
 export interface SyncSnapshotRow {
   readonly rowNumber: number;
   readonly physicalAnchor: Presence<string>;
-  /** Optional compatibility fields; the real gateway leaves visible state to SQLite. */
-  readonly visibleRevision: Presence<number>;
-  readonly visibleHash: Presence<string>;
   readonly cells: Readonly<Record<string, SyncSnapshotCell>>;
 }
 
@@ -78,12 +76,6 @@ export interface SyncGatewaySnapshot {
   readonly schemaVersion: number;
   readonly headers: readonly string[];
   readonly rows: readonly SyncSnapshotRow[];
-  readonly snapshotHash: string;
-  readonly unanchoredRows: readonly number[];
-  readonly duplicateAnchors: readonly {
-    readonly anchor: string;
-    readonly rowNumbers: readonly number[];
-  }[];
 }
 
 /** Request used to assign missing Developer Metadata anchors before a snapshot. */
@@ -113,7 +105,6 @@ export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {
 
 /** Result of one combined anchor assignment and snapshot read. */
 export interface SyncObservedSnapshot {
-  readonly anchors: EnsureSyncRowAnchorsResult;
   readonly snapshot: SyncGatewaySnapshot;
   /** Optional diagnostic phases returned by newer observation gateways. */
   readonly timing?: SyncGatewayTiming;
@@ -144,9 +135,9 @@ export async function observeSyncSnapshot(
   if (isSyncSheetObservationBatchGateway(gateway)) {
     return gateway.observeSnapshot(request);
   }
-  const anchors = await gateway.ensureRowAnchors(request);
+  await gateway.ensureRowAnchors(request);
   const snapshot = await gateway.readSnapshot(request);
-  return { anchors, snapshot };
+  return { snapshot };
 }
 
 /** Reads several snapshots through one remote operation when available. */
@@ -193,7 +184,6 @@ export interface SyncGatewayEffect {
   readonly targetKind: EffectTargetKind;
   readonly targetId: string;
   readonly rowBindingId: Presence<string>;
-  readonly conflictId: Presence<string>;
   readonly expectedVisibleRevision: number;
   readonly expectedVisibleHash: string;
   readonly repairGuardHash: Presence<string>;
@@ -207,7 +197,6 @@ export interface SyncGatewayEffectResult {
   readonly status: SyncGatewayEffectResultStatus;
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
-  readonly snapshotHash: Presence<string>;
   readonly reason: Presence<string>;
   readonly postcondition: SyncGatewayPostconditionStatus;
 }
@@ -230,7 +219,6 @@ export interface ApplySyncEffectsRequest {
 /** A batch may intentionally return only a prefix when its budget is exhausted. */
 export interface ApplySyncEffectsResult {
   readonly results: readonly SyncGatewayEffectResult[];
-  readonly snapshotHash: Presence<string>;
   /** True only when the gateway intentionally stopped before the supplied suffix. */
   readonly hasMore: boolean;
   /** Optional phase timing returned by newer Code.gs deployments. */
@@ -242,7 +230,6 @@ export interface SyncEffectPostcondition {
   readonly disposition: SyncGatewayPostconditionDisposition;
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
-  readonly snapshotHash: Presence<string>;
 }
 
 /** One effect identity paired with its read-back result in a recovery batch. */

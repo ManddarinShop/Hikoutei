@@ -68,7 +68,4 @@ export type {
   AppsScriptObserveSnapshotOperationArgs,
   AppsScriptReadSnapshotOperationArgs,
 } from "./operations/observation/observationOperation.js";
-export type {
-  AppsScriptOperationProjectionStatus,
-  AppsScriptOperationSyncGatewayOptions,
-} from "./transport/operationSyncGateway.js";
+export type { AppsScriptOperationSyncGatewayOptions } from "./transport/operationSyncGateway.js";

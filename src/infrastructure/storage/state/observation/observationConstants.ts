@@ -44,10 +44,6 @@ export const OBSERVATION_WRITE_RESULT_KINDS = {
   PERSISTED: "persisted",
 } as const;
 
-/** Closed set of one-row observation write result kinds. */
-export type ObservationWriteResultKind =
-  (typeof OBSERVATION_WRITE_RESULT_KINDS)[keyof typeof OBSERVATION_WRITE_RESULT_KINDS];
-
 /** Runtime reasons why one observation was identified as a duplicate. */
 export const OBSERVATION_DUPLICATE_REASONS = {
   OBSERVATION: "observation",

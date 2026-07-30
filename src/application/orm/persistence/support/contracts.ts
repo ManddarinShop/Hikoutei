@@ -7,11 +7,8 @@
  */
 
 import {
-  type Applicability,
   type EffectStatus,
   type EffectTargetKind,
-  type NormalizedCell,
-  type Presence,
 } from "../../../../domain/index.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../sync/gateway/SyncGatewayBootstrap.js";
 import type {

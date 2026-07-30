@@ -11,7 +11,7 @@ import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
 } from "../../../../shared/state/constants.js";
-import type { Applicability, Presence } from "../../../../shared/state/types.js";
+import type { Applicability } from "../../../../shared/state/types.js";
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import { ROW_OPERATIONS } from "../../../../domain/model/constants.js";
 import { EMPTY_STRING_LENGTH_ZERO } from "../../constants.js";
