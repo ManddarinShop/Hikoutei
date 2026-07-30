@@ -1,10 +1,10 @@
 /**
  * Shared gateway contract for the SQLite-authoritative sync runtime.
  *
- * The contract deliberately contains normalized values and stable anchors,
- * never Google SDK objects or physical row numbers.  Both the fake gateway and
- * the Apps Script client implement this boundary so fault tests exercise the
- * same compare-and-set semantics as a deployed gateway.
+ * The contract deliberately contains normalized values and visible business
+ * keys, never Google SDK objects or physical row numbers. Both the fake
+ * gateway and the Apps Script client implement this boundary so fault tests
+ * exercise the same compare-and-set semantics as a deployed gateway.
  */
 
 import {
@@ -30,7 +30,6 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
 } from "../../../shared/constants.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
   type SyncGatewayEffectResultStatus,
   type SyncGatewayFastAppendStatus,
   type SyncGatewayPostconditionMode,
@@ -61,11 +60,9 @@ export interface SyncSnapshotCell {
   readonly normalizedCell: NormalizedCell;
 }
 
-/** One physical row read from a registered projection. */
+/** One physical row read from a registered projection, matched by its ID cell. */
 export interface SyncSnapshotRow {
   readonly rowNumber: number;
-  /** Present for anchor-aware projections; User_Input value polling leaves it absent. */
-  readonly physicalAnchor: Presence<string>;
   readonly cells: Readonly<Record<string, SyncSnapshotCell>>;
 }
 
@@ -80,32 +77,18 @@ export interface SyncGatewaySnapshot {
   readonly rows: readonly SyncSnapshotRow[];
 }
 
-/** Request used to observe one registered projection; anchor assignment is projection-specific. */
-export interface EnsureSyncRowAnchorsRequest {
+/** Lock-free snapshot request. */
+export interface ReadSyncSnapshotRequest {
   readonly physicalSheetId: string;
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly projection: SyncProjection;
   readonly schemaVersion: number;
-}
-
-/** Result of one anchor assignment pass. */
-export interface EnsureSyncRowAnchorsResult {
-  readonly assigned: number;
-  readonly existing: number;
-  readonly duplicateAnchors: readonly {
-    readonly anchor: string;
-    readonly rowNumbers: readonly number[];
-  }[];
-}
-
-/** Lock-free snapshot request. */
-export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {
-  /** Full metadata for reconciliation, or user-editable values for polling. */
+  /** Full cells for reconciliation, or literal values for polling. */
   readonly readMode?: SyncGatewaySnapshotReadMode;
 }
 
-/** Result of one combined projection observation and optional anchor assignment. */
+/** Result of one combined projection observation. */
 export interface SyncObservedSnapshot {
   readonly snapshot: SyncGatewaySnapshot;
   /** Optional diagnostic phases returned by newer observation gateways. */
@@ -137,11 +120,6 @@ export async function observeSyncSnapshot(
   if (isSyncSheetObservationBatchGateway(gateway)) {
     return gateway.observeSnapshot(request);
   }
-  // User_Input rows are matched by their visible business key, so the
-  // fallback path must not reintroduce a metadata write before polling.
-  if (request.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT) {
-    await gateway.ensureRowAnchors(request);
-  }
   const snapshot = await gateway.readSnapshot(request);
   return { snapshot };
 }
@@ -165,14 +143,14 @@ export async function observeSyncSnapshots(
  * Serializable projection values written by one outbox effect.
  *
  * `targetVisibleHash` is computed over `fields` with
- * computeSyncVisibleHash().  The anchor is projection-local: User_Input and
- * System_State may represent the same row binding with different anchors.
+ * computeSyncVisibleHash(). The gateway resolves the row through the
+ * registered identity field; the physical row number is never part of the
+ * payload.
  */
 export interface SyncProjectionEffectPayload {
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly schemaVersion: number;
-  readonly targetAnchor: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
   readonly targetVisibleHash: string;
   readonly createIfMissing: boolean;
@@ -314,15 +292,14 @@ export interface SyncEffectWorkerFullGateway extends SyncEffectWorkerGateway {
 
 /** Read-only gateway capability used by polling and onEdit observation. */
 export interface SyncSheetObservationGateway {
-  ensureRowAnchors(request: EnsureSyncRowAnchorsRequest): Promise<EnsureSyncRowAnchorsResult>;
   readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot>;
 }
 
 /**
  * Full gateway boundary used by observation and reconciliation.
  *
- * It includes the full effect-worker capabilities plus the metadata/snapshot
- * reads required to observe user edits and repair projection drift.
+ * It includes the full effect-worker capabilities plus the snapshot reads
+ * required to observe user edits and repair projection drift.
  */
 export interface SyncSheetGateway extends SyncEffectWorkerFullGateway, SyncSheetObservationGateway {}
 
@@ -376,13 +353,6 @@ export class SplitSyncGateway implements SyncSheetGateway {
     request: ReadSyncEffectPostconditionsRequest,
   ): Promise<readonly SyncGatewayEffectPostconditionResult[]> {
     return this.fullGateway.readEffectPostconditions(request);
-  }
-
-  /** Ensures row anchors through the full observation gateway. */
-  public ensureRowAnchors(
-    request: EnsureSyncRowAnchorsRequest,
-  ): Promise<EnsureSyncRowAnchorsResult> {
-    return this.fullGateway.ensureRowAnchors(request);
   }
 
   /** Reads snapshots through the full observation gateway. */
@@ -439,11 +409,6 @@ export function parseSyncProjectionEffectPayload(value: string): SyncProjectionE
     "effect payload registeredRange",
     SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
   );
-  const targetAnchor = requireSyncGatewayText(
-    parsed.targetAnchor,
-    "effect payload targetAnchor",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
   const targetVisibleHash = requireSyncGatewayText(
     parsed.targetVisibleHash,
     "effect payload targetVisibleHash",
@@ -498,7 +463,6 @@ export function parseSyncProjectionEffectPayload(value: string): SyncProjectionE
     sheetName,
     registeredRange,
     schemaVersion,
-    targetAnchor,
     fields,
     targetVisibleHash,
     createIfMissing: parsed.createIfMissing,
@@ -516,7 +480,6 @@ export function serializeSyncProjectionEffectPayload(payload: SyncProjectionEffe
     sheetName: checked.sheetName,
     registeredRange: checked.registeredRange,
     schemaVersion: checked.schemaVersion,
-    targetAnchor: checked.targetAnchor,
     fields: Object.fromEntries(Object.entries(checked.fields).sort(([a], [b]) => a.localeCompare(b))),
     targetVisibleHash: checked.targetVisibleHash,
     createIfMissing: checked.createIfMissing,
@@ -542,7 +505,6 @@ interface SyncProjectionEffectPayloadWire {
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly schemaVersion: number;
-  readonly targetAnchor: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
   readonly targetVisibleHash: string;
   readonly createIfMissing: boolean;
@@ -557,7 +519,6 @@ function toWireProjectionEffectPayload(
     sheetName: payload.sheetName,
     registeredRange: payload.registeredRange,
     schemaVersion: payload.schemaVersion,
-    targetAnchor: payload.targetAnchor,
     fields: payload.fields,
     targetVisibleHash: payload.targetVisibleHash,
     createIfMissing: payload.createIfMissing,

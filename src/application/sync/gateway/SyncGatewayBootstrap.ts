@@ -37,7 +37,7 @@ export interface SyncGatewayProvisionRoute {
   readonly projection: RegisteredProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
-  /** Business-key header used to resolve rows when physical metadata is unavailable. */
+  /** Business-key header used to resolve rows in the visible Sheet state. */
   readonly identityField?: string;
   readonly checkboxHeaders?: readonly string[];
 }

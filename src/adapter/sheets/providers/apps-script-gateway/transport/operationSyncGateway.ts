@@ -24,8 +24,6 @@ import {
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
-  EnsureSyncRowAnchorsRequest,
-  EnsureSyncRowAnchorsResult,
   FastAppendRowsRequest,
   FastAppendRowsResult,
   ReadSyncEffectPostconditionsRequest,
@@ -51,7 +49,6 @@ import {
   createReadEffectPostconditionsOperation,
 } from "../operations/effect/effectOperation.js";
 import {
-  createEnsureRowAnchorsOperation,
   createObserveSnapshotOperation,
   createReadSnapshotOperation,
 } from "../operations/observation/observationOperation.js";
@@ -201,21 +198,7 @@ export class AppsScriptOperationSyncGateway
     return result;
   }
 
-  /** Assigns missing row anchors through the observation operation. */
-  public async ensureRowAnchors(
-    request: EnsureSyncRowAnchorsRequest,
-  ): Promise<EnsureSyncRowAnchorsResult> {
-    const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
-    validateRoute(request, definition);
-    const operation = createEnsureRowAnchorsOperation({
-      ...request,
-      ...observationRouteOptions(definition),
-    });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
-  }
-
-  /** Reads a normalized, anchor-aware snapshot for polling and reconciliation. */
+  /** Reads a normalized snapshot whose visible identity comes from the row cells. */
   public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
     validateRoute(request, definition);
@@ -227,7 +210,7 @@ export class AppsScriptOperationSyncGateway
     return result;
   }
 
-  /** Reads one snapshot under one remote lock/request; User_Input skips metadata anchors. */
+  /** Reads one snapshot under one remote lock/request. */
   public async observeSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot> {
     const [result] = await this.observeSnapshots([request]);
     if (result === undefined) {
@@ -402,10 +385,7 @@ function effectRouteOptions(
   readonly checkboxHeaders?: readonly string[];
 } {
   return {
-    ...(definition.sheet.projection === "system_state" ||
-      definition.sheet.projection === "user_input"
-      ? { identityField: definition.sheet.businessKeyField }
-      : {}),
+    identityField: definition.sheet.businessKeyField,
     ...(definition.checkboxHeaders === undefined
       ? {}
       : { checkboxHeaders: definition.checkboxHeaders }),

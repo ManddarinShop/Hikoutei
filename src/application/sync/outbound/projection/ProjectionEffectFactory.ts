@@ -71,7 +71,6 @@ export interface ProjectionEffectInput {
   readonly targetId: string;
   readonly rowBindingId: Presence<string>;
   readonly conflictId: Presence<string>;
-  readonly targetAnchor: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
   readonly createIfMissing: boolean;
   readonly expectedVisibleRevision: number;
@@ -123,7 +122,6 @@ export function createProjectionEffect(input: ProjectionEffectInput): NewEffect 
     sheetName: input.sheetName,
     registeredRange: input.registeredRange,
     schemaVersion: input.schemaVersion,
-    targetAnchor: input.targetAnchor,
     fields: input.fields,
     targetVisibleHash,
     createIfMissing: input.createIfMissing,
@@ -258,7 +256,6 @@ function validateInput(input: ProjectionEffectInput): void {
     ["sheet name", input.sheetName],
     ["registered range", input.registeredRange],
     ["target ID", input.targetId],
-    ["target anchor", input.targetAnchor],
   ] as const) {
     requireNonEmptyText(value, label);
   }

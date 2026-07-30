@@ -8,7 +8,7 @@
  */
 
 /** Current durable schema version managed by the provider migration. */
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
@@ -106,7 +106,7 @@ const REGISTRY_TABLES_DDL = `
     business_key_field TEXT NOT NULL,
     locale TEXT,
     timezone TEXT,
-    anchor_mode TEXT NOT NULL DEFAULT 'developer_metadata',
+    anchor_mode TEXT NOT NULL DEFAULT 'business_key',
     stable_encode_version TEXT NOT NULL DEFAULT 'stable_encode_v1',
     enabled INTEGER NOT NULL DEFAULT 1
   );
@@ -119,7 +119,7 @@ const REGISTRY_TABLES_DDL = `
     registered_range TEXT NOT NULL,
     projection TEXT NOT NULL,
     schema_version INTEGER NOT NULL,
-    anchor_mode TEXT NOT NULL DEFAULT 'developer_metadata',
+    anchor_mode TEXT NOT NULL DEFAULT 'business_key',
     enabled INTEGER NOT NULL DEFAULT 1,
     UNIQUE(spreadsheet_id, tab_name, registered_range, projection)
   );

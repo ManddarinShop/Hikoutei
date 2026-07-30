@@ -71,6 +71,11 @@ export async function migrateMikroOrmSqliteSchema(
       await writeSchemaVersion(sql, 3);
       appliedVersions.push(3);
     }
+    if (fromVersion < 4) {
+      await applyVersion4BusinessKeyRegistryMigration(sql);
+      await writeSchemaVersion(sql, 4);
+      appliedVersions.push(4);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
     await verifyCurrentSchema(sql);
@@ -109,6 +114,16 @@ async function applyVersion2CandidateEpochMigration(sql: SqlExecutor): Promise<v
 
 async function applyVersion3EffectTimestampMigration(sql: SqlExecutor): Promise<void> {
   await addColumnIfMissing(sql, "sheet_effect_outbox", "created_at", "INTEGER NOT NULL DEFAULT 0");
+}
+
+/** Reclassifies existing registrations after removing remote Developer Metadata identity. */
+async function applyVersion4BusinessKeyRegistryMigration(sql: SqlExecutor): Promise<void> {
+  await sql.run(
+    "UPDATE sheet_registry SET anchor_mode = 'business_key' WHERE anchor_mode = 'developer_metadata'",
+  );
+  await sql.run(
+    "UPDATE physical_sheet_registry SET anchor_mode = 'business_key' WHERE anchor_mode = 'developer_metadata'",
+  );
 }
 
 async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {

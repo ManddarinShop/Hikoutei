@@ -1,8 +1,6 @@
-/** Thin-Gateway operations for anchors and normalized Sheet snapshots. */
+/** Thin-Gateway operations for normalized, ID-addressable Sheet snapshots. */
 
 import type {
-  EnsureSyncRowAnchorsRequest,
-  EnsureSyncRowAnchorsResult,
   ReadSyncSnapshotRequest,
   SyncObservedSnapshot,
   SyncGatewaySnapshot,
@@ -12,8 +10,7 @@ import {
   NORMALIZED_CELL_KINDS,
   type CellObservationKind,
 } from "../../../../../../shared/encoding/constants.js";
-import { PRESENCE_KINDS } from "../../../../../../shared/state/constants.js";
-import type { NormalizedCell, Presence } from "../../../../../../domain/index.js";
+import type { NormalizedCell } from "../../../../../../domain/index.js";
 import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
@@ -24,7 +21,6 @@ import {
   SYNC_GATEWAY_SNAPSHOT_READ_MODES,
 } from "../../../../../../application/sync/gateway/constants.js";
 import {
-  requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
   requireSyncGatewaySnapshotReadMode,
@@ -38,7 +34,6 @@ import {
 } from "../../errors.js";
 
 const OBSERVATION_OPERATION_MODES = {
-  ENSURE_ANCHORS: "ensureRowAnchors",
   READ_SNAPSHOT: "readSnapshot",
   OBSERVE_SNAPSHOT: "observeSnapshot",
 } as const;
@@ -47,12 +42,7 @@ interface ObservationOperationRouteOptions {
   readonly checkboxHeaders?: readonly string[];
 }
 
-type ObservationOperationRequest =
-  (EnsureSyncRowAnchorsRequest | ReadSyncSnapshotRequest) & ObservationOperationRouteOptions;
-
-export type AppsScriptEnsureRowAnchorsOperationArgs = {
-  readonly mode: typeof OBSERVATION_OPERATION_MODES.ENSURE_ANCHORS;
-} & ObservationOperationRequest;
+type ObservationOperationRequest = ReadSyncSnapshotRequest & ObservationOperationRouteOptions;
 
 export type AppsScriptReadSnapshotOperationArgs = {
   readonly mode: typeof OBSERVATION_OPERATION_MODES.READ_SNAPSHOT;
@@ -61,21 +51,6 @@ export type AppsScriptReadSnapshotOperationArgs = {
 export type AppsScriptObserveSnapshotOperationArgs = {
   readonly mode: typeof OBSERVATION_OPERATION_MODES.OBSERVE_SNAPSHOT;
 } & ObservationOperationRequest;
-
-/** Builds the metadata-anchor assignment operation used before observation. */
-export function createEnsureRowAnchorsOperation(
-  request: EnsureSyncRowAnchorsRequest & ObservationOperationRouteOptions,
-): AppsScriptOperationDefinition<
-  AppsScriptEnsureRowAnchorsOperationArgs,
-  EnsureSyncRowAnchorsResult
-> {
-  validateObservationRequest(request);
-  return {
-    fn: OBSERVATION_OPERATION_SOURCE,
-    args: { mode: OBSERVATION_OPERATION_MODES.ENSURE_ANCHORS, ...request },
-    decode: decodeEnsureRowAnchorsResult,
-  };
-}
 
 /** Builds the normalized, read-only Sheet snapshot operation. */
 export function createReadSnapshotOperation(
@@ -89,7 +64,7 @@ export function createReadSnapshotOperation(
   };
 }
 
-/** Builds one operation that observes a snapshot under one lock and only assigns anchors where required. */
+/** Builds one operation that observes a snapshot under one lock. */
 export function createObserveSnapshotOperation(
   request: ReadSyncSnapshotRequest & ObservationOperationRouteOptions,
 ): AppsScriptOperationDefinition<
@@ -152,23 +127,6 @@ function validateObservationRequest(request: ObservationOperationRequest): void 
       );
     }
   }
-}
-
-function decodeEnsureRowAnchorsResult(value: unknown): EnsureSyncRowAnchorsResult {
-  const record = requireRecord(value, "anchor result");
-  return {
-    assigned: requireSyncGatewayNonNegativeSafeInteger(
-      record.assigned,
-      "anchor result assigned",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-    existing: requireSyncGatewayNonNegativeSafeInteger(
-      record.existing,
-      "anchor result existing",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-    duplicateAnchors: decodeDuplicateAnchors(record.duplicateAnchors),
-  };
 }
 
 function decodeObservedSnapshot(value: unknown): SyncObservedSnapshot {
@@ -238,10 +196,6 @@ function decodeSnapshotRows(value: unknown): SyncGatewaySnapshot["rows"] {
         "snapshot row[" + index + "].rowNumber",
         SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
       ),
-      physicalAnchor: decodePresenceString(
-        record.physicalAnchor,
-        "snapshot row[" + index + "].physicalAnchor",
-      ),
       cells: decodeSnapshotCells(record.cells, index),
     };
   });
@@ -300,56 +254,6 @@ function decodeNormalizedCell(value: unknown, label: string): NormalizedCell {
   );
 }
 
-function decodePresenceString(value: unknown, label: string): Presence<string> {
-  if (value === null) return { kind: PRESENCE_KINDS.ABSENT };
-  return {
-    kind: PRESENCE_KINDS.PRESENT,
-    value: requireSyncGatewayText(
-      value,
-      label,
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-  };
-}
-
-function decodeDuplicateAnchors(value: unknown): EnsureSyncRowAnchorsResult["duplicateAnchors"] {
-  if (!Array.isArray(value)) {
-    return invalidOperationResponse(
-      "Apps Script observation operation",
-      "duplicateAnchors must be an array",
-    );
-  }
-  return value.map((entry, index) => {
-    const record = requireRecord(entry, "duplicateAnchors[" + index + "]");
-    return {
-      anchor: requireSyncGatewayText(
-        record.anchor,
-        "duplicateAnchors[" + index + "].anchor",
-        SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-      ),
-      rowNumbers: decodePositiveIntegerArray(
-        record.rowNumbers,
-        "duplicateAnchors[" + index + "].rowNumbers",
-      ),
-    };
-  });
-}
-
-function decodePositiveIntegerArray(value: unknown, label: string): readonly number[] {
-  if (!Array.isArray(value)) {
-    return invalidOperationResponse(
-      "Apps Script observation operation",
-      label + " must be an array",
-    );
-  }
-  return value.map((entry, index) =>
-    requireSyncGatewayPositiveSafeInteger(
-      entry,
-      label + "[" + index + "]",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ));
-}
-
 function decodeStringArray(value: unknown, label: string): readonly string[] {
   if (!Array.isArray(value)) {
     return invalidOperationResponse(
@@ -388,11 +292,10 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 /**
  * Self-contained V8 operation source. Observation only reads the registered
- * range, while anchor assignment is the sole metadata mutation in this path.
+ * range; row identity comes from visible cells, never Developer Metadata.
  */
 const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
-  var ANCHOR_KEY = "typed_sheets_sync_anchor";
-  var MODES = { ENSURE: "ensureRowAnchors", SNAPSHOT: "readSnapshot", OBSERVE: "observeSnapshot" };
+  var MODES = { SNAPSHOT: "readSnapshot", OBSERVE: "observeSnapshot" };
   var phases = [];
   var operationStartedAt = Date.now();
   var lockStartedAt = Date.now();
@@ -410,9 +313,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var layoutStartedAt = Date.now();
     var layout = readLayout_(sheet, args.registeredRange);
     phase_("layout_read", layoutStartedAt);
-    if (args.mode === MODES.ENSURE) {
-      return ensureAnchors_(sheet, layout, args.checkboxHeaders, args.projection);
-    }
     if (args.mode === MODES.SNAPSHOT) return readSnapshot_(sheet, layout, args.checkboxHeaders, args);
     if (args.mode === MODES.OBSERVE) {
       var observed = observeSnapshot_(sheet, layout, args.checkboxHeaders, args);
@@ -449,44 +349,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     return { startColumn: parsed.startColumn, columnCount: parsed.columnCount, headers: headers, positions: positions, checkboxIndexes: checkboxIndexes };
   }
 
-  function ensureAnchors_(targetSheet, targetLayout, unusedCheckboxHeaders, projection) {
-    if (projection === "user_input") {
-      return { assigned: 0, existing: 0, duplicateAnchors: [] };
-    }
-    var lastRow = targetSheet.getLastRow();
-    var anchorsByRow = readAnchorIndex_(targetSheet);
-    var values = lastRow > 1
-      ? targetSheet.getRange(2, targetLayout.startColumn, lastRow - 1, targetLayout.columnCount).getValues()
-      : [];
-    return ensureAnchorsFromValues_(targetSheet, targetLayout, values, anchorsByRow);
-  }
-
-  function ensureAnchorsFromValues_(targetSheet, targetLayout, values, anchorsByRow) {
-    var assigned = 0;
-    var existing = 0;
-    values.forEach(function (row, offset) {
-      if (isBlankRow_(row, targetLayout.checkboxIndexes)) return;
-      var rowNumber = offset + 2;
-      var anchors = anchorsByRow[rowNumber] || [];
-      if (anchors.length > 1) throw new Error("row has multiple sync anchors: " + rowNumber);
-      if (anchors.length === 0) {
-        var anchor = "sync-anchor:" + Utilities.getUuid();
-        targetSheet.getRange(rowNumber + ":" + rowNumber).addDeveloperMetadata(
-          ANCHOR_KEY, anchor, SpreadsheetApp.DeveloperMetadataVisibility.PROJECT,
-        );
-        anchorsByRow[rowNumber] = [anchor];
-        assigned += 1;
-      } else {
-        existing += 1;
-      }
-    });
-    return {
-      assigned: assigned,
-      existing: existing,
-      duplicateAnchors: duplicateAnchorsForRows_(values, targetLayout.checkboxIndexes, anchorsByRow),
-    };
-  }
-
   function observeSnapshot_(targetSheet, targetLayout, unusedCheckboxHeaders, request) {
     var lastRowStartedAt = Date.now();
     var lastRow = Math.max(targetSheet.getLastRow(), 1);
@@ -495,31 +357,11 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var range = targetSheet.getRange(1, targetLayout.startColumn, lastRow, targetLayout.columnCount);
     var values = range.getValues();
     phase_("values_read", valuesReadStartedAt);
-    var usesAnchors = request.projection !== "user_input";
-    var anchorsByRow;
-    if (usesAnchors) {
-      var metadataReadStartedAt = Date.now();
-      anchorsByRow = readAnchorIndex_(targetSheet);
-      phase_("anchor_metadata_read", metadataReadStartedAt);
-    } else {
-      anchorsByRow = Object.create(null);
-    }
-    if (usesAnchors) {
-      var anchorAssignmentStartedAt = Date.now();
-      ensureAnchorsFromValues_(
-        targetSheet,
-        targetLayout,
-        values.slice(1),
-        anchorsByRow,
-      );
-      phase_("anchor_assignment", anchorAssignmentStartedAt);
-    }
     var snapshotStartedAt = Date.now();
     var snapshot = readSnapshot_(targetSheet, targetLayout, unusedCheckboxHeaders, request, {
       lastRow: lastRow,
       range: range,
       values: values,
-      anchorsByRow: anchorsByRow,
     });
     phase_("snapshot_build", snapshotStartedAt);
     return {
@@ -543,20 +385,11 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     var mergedRangesStartedAt = Date.now();
     var merged = lightweight ? null : mergedCellMap_(range);
     phase_("merged_ranges_read", mergedRangesStartedAt);
-    var usesAnchors = request.projection !== "user_input";
-    var anchorsByRow = usesAnchors
-      ? prepared && prepared.anchorsByRow
-        ? prepared.anchorsByRow
-        : readAnchorIndex_(targetSheet)
-      : Object.create(null);
     var rows = [];
     var rowNormalizationStartedAt = Date.now();
     for (var rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
       if (isBlankRow_(values[rowIndex], targetLayout.checkboxIndexes)) continue;
       var rowNumber = rowIndex + 1;
-      var anchors = anchorsByRow[rowNumber] || [];
-      var anchor = anchors.length === 1 ? anchors[0] : null;
-      if (anchors.length > 1) throw new Error("row has multiple sync anchors: " + rowNumber);
       var cells = Object.create(null);
       targetLayout.headers.forEach(function (header, columnIndex) {
         var coordinate = rowNumber + ":" + (targetLayout.startColumn + columnIndex);
@@ -569,7 +402,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       });
       rows.push({
         rowNumber: rowNumber,
-        physicalAnchor: anchor,
         cells: cells,
       });
     }
@@ -592,40 +424,6 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       headers: snapshot.headers,
       rows: snapshot.rows,
     };
-  }
-
-  function duplicateAnchorsForRows_(values, checkboxIndexes, anchorsByRow) {
-    var grouped = Object.create(null);
-    values.forEach(function (row, offset) {
-      if (isBlankRow_(row, checkboxIndexes)) return;
-      var anchors = anchorsByRow[offset + 2] || [];
-      anchors.forEach(function (anchor) {
-        if (!grouped[anchor]) grouped[anchor] = [];
-        grouped[anchor].push(offset + 2);
-      });
-    });
-    return Object.keys(grouped).sort().filter(function (anchor) { return grouped[anchor].length > 1; }).map(function (anchor) {
-      return { anchor: anchor, rowNumbers: grouped[anchor] };
-    });
-  }
-
-  function readAnchorIndex_(targetSheet) {
-    var anchorsByRow = Object.create(null);
-    targetSheet.createDeveloperMetadataFinder()
-      .withKey(ANCHOR_KEY)
-      .withLocationType(SpreadsheetApp.DeveloperMetadataLocationType.ROW)
-      .find()
-      .forEach(function (metadata) {
-        var row = metadata.getLocation().getRow();
-        if (row === null) return;
-        var rowNumber = row.getRow();
-        if (!anchorsByRow[rowNumber]) anchorsByRow[rowNumber] = [];
-        anchorsByRow[rowNumber].push(String(metadata.getValue()));
-      });
-    Object.keys(anchorsByRow).forEach(function (rowNumber) {
-      anchorsByRow[rowNumber].sort();
-    });
-    return anchorsByRow;
   }
 
   function phase_(name, phaseStartedAt) {
