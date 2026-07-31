@@ -12,7 +12,7 @@ import type { NormalizedCell } from "../../../../domain/index.js";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../../../../shared/encoding/constants.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,

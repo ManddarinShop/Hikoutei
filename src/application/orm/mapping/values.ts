@@ -11,7 +11,6 @@ import {
 } from "../../../domain/index.js";
 import {
   NORMALIZED_CELL_KINDS,
-  type NormalizedCellKind,
 } from "../../../shared/encoding/constants.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
