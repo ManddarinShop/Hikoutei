@@ -9,7 +9,6 @@ import type {
   ScalarEntityPersistenceProvider,
   ScalarEntityQuery,
   ScalarEntityRow,
-  ScalarEntityTableDefinition,
   ScalarEntityTransaction,
   ScalarEntityUpdate,
   ScalarEntityValue,
@@ -23,16 +22,11 @@ import type {
  * node:sqlite, MikroORM, or raw-SQL type is referenced anywhere in the path.
  */
 class FakeScalarPersistenceProvider implements ScalarEntityPersistenceProvider {
-  readonly appliedTables: string[] = [];
   readonly recordedChanges: Array<{ readonly kind: string; readonly table: string }> = [];
-  private readonly rows = new Map<string, Map<string, Record<string, ScalarEntityValue>>>();
+  private readonly rows = new Map<string, Map<string, Record<string, ScalarEntityValue>>>([
+    ["products", new Map()],
+  ]);
 
-  async ensureEntityTables(tables: readonly ScalarEntityTableDefinition[]): Promise<void> {
-    for (const table of tables) {
-      this.appliedTables.push(table.tableName);
-      this.rows.set(table.tableName, new Map());
-    }
-  }
 
   async beginTransaction<Result>(
     work: (transaction: ScalarEntityTransaction) => Promise<Result>,
@@ -90,20 +84,6 @@ const Product = defineTypedSheetsEntity({
   },
 });
 
-function productTable(): ScalarEntityTableDefinition {
-  const descriptor = getEntityDescriptor(Product);
-  return {
-    tableName: descriptor.tableName,
-    primaryKeyColumn: descriptor.primaryKey,
-    columns: descriptor.properties.map((property) => ({
-      name: property.name,
-      storageType: property.storageType,
-      nullable: property.nullable,
-      primaryKey: property.primary,
-    })),
-  };
-}
-
 function buildManager() {
   const provider = new FakeScalarPersistenceProvider();
   const descriptor = getEntityDescriptor(Product);
@@ -113,16 +93,8 @@ function buildManager() {
 }
 
 describe("EntityManager provider-neutral semantics", () => {
-  it("creates declared entity tables through the provider contract", async () => {
-    const { provider, em } = buildManager();
-    await provider.ensureEntityTables([productTable()]);
-    expect(provider.appliedTables).toEqual(["products"]);
-    expect(typeof em.fork).toBe("function");
-  });
-
   it("emits one insert for a new entity and one update for a dirty field", async () => {
     const { provider, em } = buildManager();
-    await provider.ensureEntityTables([productTable()]);
 
     const product = em.create(Product, { id: "p1", label: "first", price: 10 });
     await em.flush();
@@ -140,7 +112,6 @@ describe("EntityManager provider-neutral semantics", () => {
 
   it("emits a delete for a removed managed entity", async () => {
     const { provider, em } = buildManager();
-    await provider.ensureEntityTables([productTable()]);
 
     const product = em.create(Product, { id: "p2", label: "doomed", price: 1 });
     await em.flush();
@@ -158,7 +129,6 @@ describe("EntityManager provider-neutral semantics", () => {
     // The fake provider implements only ScalarEntityPersistenceProvider; if the
     // manager required SqlExecutor/MikroORM types this would not typecheck.
     const { provider, em } = buildManager();
-    await provider.ensureEntityTables([productTable()]);
     em.persist(em.create(Product, { id: "x", label: "l", price: 1 }));
     await em.flush();
     expect(await em.findOne(Product, { id: "x" })).toMatchObject({ id: "x" });

@@ -103,6 +103,24 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("table name must be a SQL identifier");
   });
 
+  it("rejects a table name owned by the internal sync schema", () => {
+    const error = expectDescriptorError({
+      name: "State",
+      tableName: "entity_state",
+      properties: { id: { type: "string", primary: true } },
+    });
+    expect(error.message).toContain("reserved by Hikoutei");
+  });
+
+  it("rejects every SQLite-internal table-name prefix", () => {
+    const error = expectDescriptorError({
+      name: "SQLiteOwned",
+      tableName: "sqlite_application_table",
+      properties: { id: { type: "string", primary: true } },
+    });
+    expect(error.message).toContain("reserved by Hikoutei");
+  });
+
   it("rejects a descriptor with no primary key", () => {
     const error = expectDescriptorError({
       name: "User",

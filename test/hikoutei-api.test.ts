@@ -49,6 +49,18 @@ const Event = defineTypedSheetsEntity({
   },
 });
 
+const ColonEntityA = defineTypedSheetsEntity({
+  name: "A",
+  tableName: "colon_entity_a",
+  properties: { id: { type: "string", primary: true }, value: { type: "string" } },
+});
+
+const ColonEntityAB = defineTypedSheetsEntity({
+  name: "A:B",
+  tableName: "colon_entity_ab",
+  properties: { id: { type: "string", primary: true }, value: { type: "string" } },
+});
+
 describe("createTypedSheets public lifecycle", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -151,6 +163,62 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await em.findOne(Counter, { id: "tx-counter" })).toMatchObject({ value: 7 });
   });
 
+  it("reads its own writes inside a transactional callback", async () => {
+    const hikoutei = await openRuntime();
+    const em = hikoutei.em.fork();
+
+    await em.transactional(async (transactionalEm) => {
+      transactionalEm.persist(
+        transactionalEm.create(User, { id: "transaction-read", name: "Read", age: 1, active: true }),
+      );
+      await transactionalEm.flush();
+      expect(await transactionalEm.findOne(User, { id: "transaction-read" })).toMatchObject({
+        name: "Read",
+      });
+    });
+  });
+
+  it("allows the same primary key in different entity tables", async () => {
+    const hikoutei = await openRuntime();
+
+    await hikoutei.em.transactional(async (em) => {
+      em.persist(em.create(User, { id: "shared-id", name: "User", age: 1, active: true }));
+      em.persist(em.create(Counter, { id: "shared-id", value: 7 }));
+    });
+
+    expect(await hikoutei.em.fork().findOne(User, { id: "shared-id" })).toMatchObject({
+      name: "User",
+    });
+    expect(await hikoutei.em.fork().findOne(Counter, { id: "shared-id" })).toMatchObject({
+      value: 7,
+    });
+  });
+
+  it("keeps identity-map keys unambiguous when names and IDs contain colons", async () => {
+    const hikoutei = await createTypedSheets({
+      dbName: ":memory:",
+      entities: [ColonEntityA, ColonEntityAB],
+      sheets: {
+        spreadsheetId: "spreadsheet-test",
+        routes: {
+          A: { systemState: { tabName: "A_System", registeredRange: "A:Z" } },
+          "A:B": { systemState: { tabName: "AB_System", registeredRange: "A:Z" } },
+        },
+      },
+    });
+    runtimes.push(hikoutei);
+    const em = hikoutei.em.fork();
+    em.persist(em.create(ColonEntityA, { id: "B:C", value: "first" }));
+    em.persist(em.create(ColonEntityAB, { id: "C", value: "second" }));
+    await em.flush();
+
+    const first = await em.findOne(ColonEntityA, { id: "B:C" });
+    const second = await em.findOne(ColonEntityAB, { id: "C" });
+    expect(first).toMatchObject({ value: "first" });
+    expect(second).toMatchObject({ value: "second" });
+    expect(first).not.toBe(second);
+  });
+
   it("rolls back a transactional unit of work when the callback rejects", async () => {
     const hikoutei = await openRuntime();
 
@@ -249,11 +317,11 @@ describe("createTypedSheets public lifecycle", () => {
       try {
         const state = await storage.read(({ sql }) => sql.get<{ readonly status: string }>(
           "SELECT status FROM entity_state WHERE entity_id = ?",
-          ["atomic"],
+          ["entity:users:atomic"],
         ));
         const effect = await storage.read(({ sql }) => sql.get<{ readonly status: string }>(
           "SELECT status FROM sheet_effect_outbox WHERE target_id = ?",
-          ["atomic"],
+          ["entity:users:atomic"],
         ));
         expect(state?.status).toBe("active");
         expect(effect?.status).toBe("pending");
@@ -266,6 +334,24 @@ describe("createTypedSheets public lifecycle", () => {
       await unlink(`${dbName}-wal`).catch(() => undefined);
       await unlink(`${dbName}-shm`).catch(() => undefined);
     }
+  });
+
+  it("rejects duplicate physical Sheet tabs before opening the runtime", async () => {
+    await expect(createTypedSheets({
+      dbName: ":memory:",
+      entities: [User, Counter],
+      sheets: {
+        spreadsheetId: "spreadsheet-test",
+        routes: {
+          User: {
+            systemState: { tabName: "Shared", registeredRange: "A:Z" },
+          },
+          Counter: {
+            systemState: { tabName: "Shared", registeredRange: "A:Z" },
+          },
+        },
+      },
+    })).rejects.toMatchObject({ code: HIKOUTEI_ERROR_CODES.INVALID_SHEET_ROUTE });
   });
 
   it("provisions registered routes only when setupSheets is explicitly called", async () => {
@@ -312,6 +398,100 @@ describe("createTypedSheets public lifecycle", () => {
     expect((await em.findOne(Event, { id: "e1" }))?.createdAt).toEqual(
       new Date("2026-01-03T03:04:05.000Z"),
     );
+  });
+
+  it("rejects non-finite numbers and empty primary keys at flush", async () => {
+    const hikoutei = await openRuntime();
+    const em = hikoutei.em.fork();
+
+    em.persist(em.create(User, { id: "nan", name: "NaN", age: Number.NaN, active: true }));
+    await expect(em.flush()).rejects.toMatchObject({ code: HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE });
+
+    const emptyKeyManager = hikoutei.em.fork();
+    emptyKeyManager.persist(emptyKeyManager.create(User, {
+      id: "",
+      name: "Empty",
+      age: 1,
+      active: true,
+    }));
+    await expect(emptyKeyManager.flush()).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+    });
+  });
+
+  it("validates nullable and undefined filters", async () => {
+    const hikoutei = await openRuntime();
+    const em = hikoutei.em.fork();
+    em.persist(em.create(User, { id: "filter", name: "Filter", age: 1, active: true }));
+    await em.flush();
+
+    await expect(em.find(User, { name: null as never })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+    });
+    await expect(em.find(User, { nickname: undefined as never })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+    });
+  });
+
+  it("rejects a non-canonical stored date instead of normalizing it", async () => {
+    const dbName = join(tmpdir(), `hikoutei-invalid-date-${randomUUID()}.sqlite`);
+    const hikoutei = await createTypedSheets({
+      dbName,
+      entities: [Event],
+      sheets: {
+        spreadsheetId: "spreadsheet-test",
+        routes: {
+          Event: {
+            systemState: { tabName: "Events_System", registeredRange: "A:Z" },
+          },
+        },
+      },
+    });
+    let reopened: Hikoutei | undefined;
+    try {
+      const em = hikoutei.em.fork();
+      em.persist(em.create(Event, {
+        id: "bad-date",
+        createdAt: new Date("2026-01-02T03:04:05.000Z"),
+      }));
+      await em.flush();
+      await hikoutei.close();
+
+      const storage = await initializeMikroOrmSqliteAdapter({
+        dbName,
+        entities: [InspectionSchema],
+      });
+      try {
+        await storage.transaction(({ sql }) => sql.run(
+          "UPDATE events SET created_at = ? WHERE id = ?",
+          ["2024-02-30T00:00:00.000Z", "bad-date"],
+        ));
+      } finally {
+        await storage.close(true);
+      }
+
+      reopened = await createTypedSheets({
+        dbName,
+        entities: [Event],
+        sheets: {
+          spreadsheetId: "spreadsheet-test",
+          routes: {
+            Event: {
+              systemState: { tabName: "Events_System", registeredRange: "A:Z" },
+            },
+          },
+        },
+      });
+      await expect(reopened.em.fork().findOne(Event, { id: "bad-date" })).rejects.toMatchObject({
+        code: HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      });
+    } finally {
+      await reopened?.close().catch(() => undefined);
+      await hikoutei.close().catch(() => undefined);
+      await unlink(dbName).catch(() => undefined);
+      await unlink(`${dbName}-wal`).catch(() => undefined);
+      await unlink(`${dbName}-shm`).catch(() => undefined);
+    }
   });
 
   it("stores and reads booleans and nullable scalars faithfully", async () => {
