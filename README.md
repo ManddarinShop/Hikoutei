@@ -43,25 +43,39 @@ The project and npm package are both called `hikoutei`.
 npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
-The MikroORM packages are optional peer dependencies of the root package, but
-are required when using Hikoutei's built-in SQLite adapter.
+The root API does not expose MikroORM types. The current built-in provider uses
+those optional peer dependencies internally; a future provider can replace it
+without changing the entity lifecycle API.
 
 ## Quick start
 
-After defining an entity mapping, use a request-local manager to work with
-entities. A complete mapping and gateway setup are shown in the
-[Quick start guide](docs/quick-start.md).
+Define a scalar entity and configure its environment-specific Sheet route
+separately. The application reads and writes the local SQLite authority through
+a request-local manager.
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
+  sheets: {
+    spreadsheetId: process.env.SHEET_ID!,
+    routes: {
+      User: {
+        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
+      },
+    },
+  },
 });
 
 const em = hikoutei.em.fork();
@@ -73,9 +87,11 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`flush()` updates the local application state and schedules the configured
-Sheet view. Remote delivery is asynchronous, so start the sync worker
-and provision the gateway as described in the [setup guide](docs/quick-start.md).
+`createTypedSheets()` only opens SQLite and registers local sync state. Call
+`hikoutei.setupSheets(provisioner)` explicitly when a deployment is ready to
+provision or validate remote tabs and headers. `flush()` commits the entity,
+canonical sync state, and durable Sheet outbox locally; remote delivery remains
+asynchronous.
 
 ## When to use Hikoutei
 
@@ -100,14 +116,25 @@ Use a conventional database and direct Google APIs when you need:
 
 ## Google Sheets setup
 
-1. Define the entity-to-Sheet mapping in your server application.
-2. Deploy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) as a
-   Google Apps Script Web App.
-3. Provision the registered tabs and ranges from the server.
-4. Run the sync worker that delivers pending changes.
+1. Define scalar entities and environment-specific routes in
+   `createTypedSheets()`.
+2. Follow the [Quick start](docs/quick-start.md#sheet-setup-and-delivery) to
+   copy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) into a
+   spreadsheet-bound Apps Script project, deploy it as a Web App, set the
+   `/exec` URL, and run `setupSyncGateway()`.
+3. Keep the generated `TYPED_SHEETS_GATEWAY_URL`,
+   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`, and
+   `TYPED_SHEETS_GATEWAY_SHEET_ID` values in an untracked server environment or
+   secret store. Never put the shared secret in browser code or Git.
+4. Call `hikoutei.setupSheets(provisioner)` explicitly to provision and verify
+   the registered tabs and headers, then run the worker that delivers pending
+   outbox effects.
 
-Keep the gateway secret on the server. Do not put it in browser code or commit
-it to Git.
+The gateway must be deployed with an access audience that can reach the
+service; an external server normally requires **Anyone**. Use the deployed
+`/exec` URL, not the editor-only `/dev` URL. When `Code.gs` changes, update the
+existing Web App deployment with a new version before relying on the change.
+The detailed setup and troubleshooting steps are in the [Quick start](docs/quick-start.md).
 
 ## Documentation
 

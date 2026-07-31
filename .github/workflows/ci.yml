@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit, type, build, and packed internal sync/gateway E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck production code
+        run: npm run typecheck
+
+      - name: Typecheck tests
+        run: npm run typecheck:test
+
+      - name: Run unit and contract tests
+        run: npm test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Run installed-package internal sync/gateway E2E (fake)
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_dir="$RUNNER_TEMP/hikoutei-consumer"
+          mkdir -p "$consumer_dir"
+          pack_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          pack_path="$RUNNER_TEMP/$pack_file"
+
+          (
+            cd "$consumer_dir"
+            npm init -y >/dev/null
+            npm install --no-audit --no-fund --ignore-scripts \
+              "$pack_path" \
+              "@mikro-orm/core@7.1.7" \
+              "@mikro-orm/sql@7.1.7"
+          )
+
+          cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
+          node "$consumer_dir/run-api-scenario.mjs" \
+            --backend=fake \
+            --output="$RUNNER_TEMP/hikoutei-fake-result.json" \
+            --manifest="$RUNNER_TEMP/hikoutei-fake-manifest.json"
+
+      - name: Upload internal sync/gateway E2E report (fake)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hikoutei-fake-sync-gateway-e2e
+          path: ${{ runner.temp }}/hikoutei-fake-result.json
+          if-no-files-found: ignore

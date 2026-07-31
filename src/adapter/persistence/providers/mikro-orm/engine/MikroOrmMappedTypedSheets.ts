@@ -7,15 +7,17 @@
  */
 
 import {
-  createMappedTypedSheetsFlushCoordinator,
-  createTypedSheetsEntityMappingRegistry,
   registeredTypedSheetsProjectionDefinitions,
   registerTypedSheetsEntityMappings,
+  createMappedTypedSheetsFlushCoordinator,
+} from "../../../../../application/orm/persistence/flush/flushCoordinator.js";
+import {
+  createTypedSheetsEntityMappingRegistry,
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
-  type TypedSheetsEntityWriterOptions,
-  type TypedSheetsOrm,
-} from "../../../../../application/orm/index.js";
+} from "../../../../../application/orm/mapping/entityMapping.js";
+import type { TypedSheetsEntityWriterOptions } from "../../../../../application/orm/persistence/support/contracts.js";
+import type { TypedSheetsOrm } from "../../../../../application/orm/api/TypedSheetsOrm.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/gateway/SyncGatewayBootstrap.js";
 import {
   createTypedSheetsOrm,

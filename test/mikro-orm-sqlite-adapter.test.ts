@@ -7,55 +7,65 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "../src/shared/state/index.js";
+import { stableHash } from "../src/shared/encoding/index.js";
 import {
-  APPLICABILITY_KINDS,
-  applyEffectResultWithAdapter,
-  appendPendingEffectsWithSql,
-  CANONICAL_COMMIT_RESULT_KINDS,
-  claimEffectWithAdapter,
-  claimWriterLeaseWithAdapter,
-  commitCanonicalChangesWithSql,
   FIELD_OWNERSHIPS,
-  isFencingValidWithAdapter,
-  LOOKUP_RESULT_KINDS,
-  listReadyEffectsWithAdapter,
-  PRESENCE_KINDS,
-  persistObservedRowWithAdapter,
-  readWriterLeaseWithAdapter,
-  registerSyncSheetWithAdapter,
   ROW_OPERATIONS,
-  requireRegisteredSyncSheetWithAdapter,
-  persistResolutionCommandWithAdapter,
-  stableHash,
-  WRITER_LEASE_CLAIM_FAILURE_REASONS,
-  WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/index.js";
-import type {
-  NewEffect,
-  PersistObservedRowInput,
-  PersistResolutionCommandInput,
-} from "../src/index.js";
-import {
-  initializeMikroOrmSqliteAdapter,
-  migrateMikroOrmSqliteSchema,
-  migrateMikroOrmSqliteStorageSchema,
-  MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/index.js";
-import {
-  computeSyncVisibleHash,
-  serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/gateway/syncGateway.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
-import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+  CONFLICT_STATUSES,
+  QUARANTINE_REASONS,
+} from "../src/domain/model/constants.js";
 import {
   QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
   QUARANTINE_REPAIR_STATUSES,
   ROW_OUTCOMES,
 } from "../src/domain/evaluate/constants.js";
 import {
-  CONFLICT_STATUSES,
-  QUARANTINE_REASONS,
-} from "../src/domain/model/constants.js";
+  applyEffectResultWithAdapter,
+  appendPendingEffectsWithSql,
+  claimEffectWithAdapter,
+  listReadyEffectsWithAdapter,
+} from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
+import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import {
+  claimWriterLeaseWithAdapter,
+  isFencingValidWithAdapter,
+  readWriterLeaseWithAdapter,
+  WRITER_LEASE_CLAIM_FAILURE_REASONS,
+  WRITER_LEASE_CLAIM_RESULT_KINDS,
+} from "../src/infrastructure/storage/sync/shared/writerLease.js";
+import {
+  CANONICAL_COMMIT_RESULT_KINDS,
+  commitCanonicalChangesWithSql,
+} from "../src/infrastructure/storage/state/canonical/canonicalCommit.js";
+import {
+  registerSyncSheetWithAdapter,
+  requireRegisteredSyncSheetWithAdapter,
+} from "../src/infrastructure/storage/sync/shared/syncRegistry.js";
+import { persistResolutionCommandWithAdapter } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+import type {
+  NewEffect,
+} from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
+import type {
+  PersistObservedRowInput,
+} from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import type {
+  PersistResolutionCommandInput,
+} from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+import {
+  initializeMikroOrmSqliteAdapter,
+  MikroOrmSqliteAdapter,
+} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import {
+  migrateMikroOrmSqliteSchema,
+  migrateMikroOrmSqliteStorageSchema,
+} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import {
+  computeSyncVisibleHash,
+  serializeSyncProjectionEffectPayload,
+} from "../src/application/sync/gateway/syncGateway.js";
+import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
+import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
 
 const OrderSchema = defineEntity({
   name: "MikroOrmAdapterOrder",
@@ -206,12 +216,12 @@ describe("MikroOrmSqliteAdapter", () => {
     try {
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
         fromVersion: 0,
-        toVersion: 3,
-        appliedVersions: [3],
+        toVersion: 4,
+        appliedVersions: [4],
       });
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-        fromVersion: 3,
-        toVersion: 3,
+        fromVersion: 4,
+        toVersion: 4,
         appliedVersions: [],
       });
       await expect(adapter.read(({ sql }) => {
@@ -301,14 +311,26 @@ describe("MikroOrmSqliteAdapter", () => {
 
     expect(firstMigration).toEqual({
       fromVersion: 0,
-      toVersion: 3,
-      appliedVersions: [3],
+      toVersion: 4,
+      appliedVersions: [4],
     });
     expect(secondMigration).toEqual({
-      fromVersion: 3,
-      toVersion: 3,
+      fromVersion: 4,
+      toVersion: 4,
       appliedVersions: [],
     });
+
+    await adapter.transaction(async ({ sql }) => {
+      await sql.run("PRAGMA user_version = 3");
+    });
+    await expect(migrateMikroOrmSqliteSchema(adapter)).resolves.toEqual({
+      fromVersion: 3,
+      toVersion: 4,
+      appliedVersions: [4],
+    });
+    await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
+      .resolves.toEqual({ user_version: 4 });
+
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
     expect(tables.map((table) => table.name)).toContain("sheet_effect_outbox");
   });
@@ -418,7 +440,7 @@ describe("MikroOrmSqliteAdapter", () => {
         schemaVersion: 1,
         ownershipManifestJson: "{}",
         businessKeyField: "id",
-        anchorMode: "developer_metadata",
+        anchorMode: "business_key",
       },
     });
     await expect(

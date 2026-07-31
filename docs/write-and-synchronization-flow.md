@@ -1,7 +1,8 @@
 # Write and Synchronization Flow
 
 Hikoutei commits local state first and materializes Google Sheets changes
-asynchronously.
+asynchronously. `createTypedSheets()` is local-only; remote tab/header
+provisioning happens only through the explicit `setupSheets()` boundary.
 
 ## Outbound flow: SQLite to Google Sheets
 

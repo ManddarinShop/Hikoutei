@@ -1,0 +1,201 @@
+name: Publish stable package
+
+# Triggered by a numeric release tag such as v0.2.0. The tag must exactly match
+# the version in package.json and package-lock.json; CI never bumps versions.
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+concurrency:
+  # Never cancel an in-flight stable publish for the same tag.
+  group: stable-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify stable package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate release tag matches package versions
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          else
+            echo "Release tag must be a numeric vX.Y.Z semver: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          pkg_version="$(node -p "require('./package.json').version")"
+          lock_version="$(node -p "require('./package-lock.json').version")"
+          lock_root_version="$(node -p "require('./package-lock.json').packages[''].version")"
+          echo "tag=$TAG_NAME expected_version=$expected_version package.json=$pkg_version package-lock.json=$lock_version"
+
+          if [[ "$pkg_version" != "$expected_version" ]]; then
+            echo "package.json version ($pkg_version) does not match tag ($TAG_NAME)" >&2
+            exit 1
+          fi
+          if [[ "$lock_version" != "$expected_version" ]]; then
+            echo "package-lock.json top-level version ($lock_version) does not match tag ($TAG_NAME)" >&2
+            exit 1
+          fi
+          if [[ "$lock_root_version" != "$expected_version" ]]; then
+            echo "package-lock.json root packages version ($lock_root_version) does not match tag ($TAG_NAME)" >&2
+            exit 1
+          fi
+          test "$(node -p "require('./package.json').name")" = "hikoutei"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck production code
+        run: npm run typecheck
+
+      - name: Typecheck tests
+        run: npm run typecheck:test
+
+      - name: Run unit and contract tests
+        run: npm test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify package name and contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p "require('./package.json').name")" = "hikoutei"
+          npm pack --dry-run
+
+      - name: Pack stable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          package_path="$RUNNER_TEMP/$package_file"
+          test -f "$package_path"
+          tar -xOf "$package_path" package/package.json > "$RUNNER_TEMP/hikoutei-stable-package.json"
+          node -e '
+            const pkg = require(process.argv[1]);
+            const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
+            if (pkg.name !== "hikoutei" || !isStable) process.exit(1);
+          ' "$RUNNER_TEMP/hikoutei-stable-package.json"
+          (cd "$RUNNER_TEMP" && sha256sum "$package_file" > hikoutei-stable-package.sha256)
+          echo "Packed $package_path"
+
+      - name: Run installed-package internal sync/gateway E2E (fake)
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_dir="$RUNNER_TEMP/hikoutei-stable-consumer"
+          mkdir -p "$consumer_dir"
+          package_file="$(find "$RUNNER_TEMP" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
+          test -n "$package_file"
+
+          (
+            cd "$consumer_dir"
+            npm init -y >/dev/null
+            npm install --no-audit --no-fund --ignore-scripts \
+              "$package_file" \
+              "@mikro-orm/core@7.1.7" \
+              "@mikro-orm/sql@7.1.7"
+          )
+
+          cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
+          node "$consumer_dir/run-api-scenario.mjs" \
+            --backend=fake \
+            --output="$RUNNER_TEMP/hikoutei-stable-fake-result.json" \
+            --manifest="$RUNNER_TEMP/hikoutei-stable-fake-manifest.json"
+
+      - name: Upload stable fake E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hikoutei-stable-fake-sync-gateway-e2e
+          path: ${{ runner.temp }}/hikoutei-stable-fake-result.json
+          if-no-files-found: ignore
+
+      - name: Upload stable package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hikoutei-stable-package
+          path: |
+            ${{ runner.temp }}/hikoutei-*.tgz
+            ${{ runner.temp }}/hikoutei-stable-package.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish stable package
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download stable package
+        uses: actions/download-artifact@v4
+        with:
+          name: hikoutei-stable-package
+          path: ${{ runner.temp }}/hikoutei-stable-package
+
+      - name: Publish stable package
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NPM_TOKEN secret is required to publish the stable package." >&2
+            exit 1
+          fi
+          if [[ "$TAG_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          else
+            echo "Release tag must be a numeric vX.Y.Z semver: $TAG_NAME" >&2
+            exit 1
+          fi
+          package_dir="$RUNNER_TEMP/hikoutei-stable-package"
+          mapfile -t packages < <(find "$package_dir" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print)
+          if [[ "${#packages[@]}" -ne 1 ]]; then
+            echo "expected exactly one stable package, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          package_file="${packages[0]}"
+          (cd "$package_dir" && sha256sum --check hikoutei-stable-package.sha256)
+          tar -xOf "$package_file" package/package.json > "$RUNNER_TEMP/hikoutei-stable-package.json"
+          node -e '
+            const pkg = require(process.argv[1]);
+            const expected = process.argv[2];
+            const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
+            if (pkg.name !== "hikoutei" || !isStable || pkg.version !== expected) process.exit(1);
+          ' "$RUNNER_TEMP/hikoutei-stable-package.json" "$expected_version"
+          npm publish "$package_file" --tag latest --access public --provenance

@@ -8,7 +8,7 @@
 import {
   NORMALIZED_CELL_KINDS,
 } from "./constants.js";
-import type { CellObservationKind, NormalizedCellKind } from "./constants.js";
+import type { CellObservationKind } from "./constants.js";
 import type { Presence } from "../state/types.js";
 
 export type { CellObservationKind, NormalizedCellKind } from "./constants.js";
@@ -33,9 +33,8 @@ export type NormalizedCell =
   | DateValue;
 
 /**
- * Metadata describing the physical state of a Sheet cell, separate from its
- * normalized value. Used by observation to decide whether a cell can be
- * processed or must be quarantined.
+ * Physical Sheet metadata retained by the internal observation/gateway path.
+ * This compatibility type is intentionally not part of the public root API.
  */
 export interface CellObservation {
   readonly cellKind: CellObservationKind;

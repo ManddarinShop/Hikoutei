@@ -174,7 +174,11 @@ export async function registerTypedSheetsEntityMappings(
 export function registeredTypedSheetsProjectionDefinitions(
   registrations: readonly RegisteredTypedSheetsMappedProjection[],
 ): readonly RegisteredSyncProjectionDefinition[] {
-  return registrations.map(({ sheet, headers }) => ({ sheet, headers }));
+  return registrations.map(({ mapping, sheet, headers }) => ({
+    sheet,
+    headers,
+    entityIdForBusinessKey: mapping.canonicalEntityIdFor,
+  }));
 }
 
 function collectMappedChanges(

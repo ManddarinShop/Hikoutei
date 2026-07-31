@@ -12,12 +12,12 @@ import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,
   type TypedSheetsFlushCoordinator,
-} from "../src/application/orm/index.js";
+} from "../src/application/orm/api/contracts.js";
+import { createTypedSheetsOrm } from "../src/adapter/persistence/providers/mikro-orm/engine/MikroOrmTypedSheetsEngine.js";
 import {
   createMikroOrmSqliteAdapter,
-  createTypedSheetsOrm,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 
 const OrderSchema = defineEntity({
   name: "TypedSheetsFacadeOrder",

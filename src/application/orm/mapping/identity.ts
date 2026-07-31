@@ -53,6 +53,28 @@ export function typedSheetsEntityId(
   return value;
 }
 
+/** Converts a visible entity ID into the canonical ID used by sync state. */
+export function typedSheetsCanonicalEntityId(
+  mapping: TypedSheetsEntityMapping,
+  entityId: string,
+): string {
+  requireText(entityId, "entity ID");
+  const canonical = mapping.canonicalEntityIdFor(entityId);
+  requireText(canonical, "canonical entity ID");
+  return canonical;
+}
+
+/** Converts a canonical sync identity back to the entity-table primary key. */
+export function typedSheetsEntityIdFromCanonical(
+  mapping: TypedSheetsEntityMapping,
+  entityId: string,
+): string {
+  requireText(entityId, "canonical entity ID");
+  const visible = mapping.entityIdFromCanonical(entityId);
+  requireText(visible, "entity ID");
+  return visible;
+}
+
 function requireText(value: string, label: string): void {
   if (value.length === EMPTY_STRING_LENGTH_ZERO) {
     throw new TypedSheetsOrmError(

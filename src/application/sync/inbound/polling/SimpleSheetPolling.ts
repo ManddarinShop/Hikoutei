@@ -12,7 +12,7 @@ import type { NormalizedCell } from "../../../../domain/index.js";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../../../../shared/encoding/constants.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
@@ -228,7 +228,21 @@ async function readCanonicalRows(
     fieldsByEntity.set(row.entity_id, existing);
     entitiesByLogicalSheet.set(row.logical_sheet_id, fieldsByEntity);
   }
-  return entitiesByLogicalSheet;
+
+  const canonicalByBusinessKey = new Map<string, Map<string, CanonicalEntity>>();
+  for (const [logicalSheetId, entities] of entitiesByLogicalSheet) {
+    const definition = definitions.find(
+      (candidate) => candidate.sheet.logicalSheetId === logicalSheetId,
+    );
+    if (definition === undefined) continue;
+    const byBusinessKey = new Map<string, CanonicalEntity>();
+    for (const entity of entities.values()) {
+      const businessKey = identityFromCell(entity.fields.get(definition.sheet.businessKeyField));
+      if (businessKey !== undefined) byBusinessKey.set(businessKey, entity);
+    }
+    canonicalByBusinessKey.set(logicalSheetId, byBusinessKey);
+  }
+  return canonicalByBusinessKey;
 }
 
 function compareTable(
@@ -251,10 +265,11 @@ function compareTable(
   const changedRows: SimplePollChangedRow[] = [];
   const seenCanonicalIds = new Set<string>();
   for (const row of remote.rows) {
-    const result = compareRow(row, identityField, identityCounts, canonical, definition.headers);
+    const visibleEntityId = identityFromCell(row.fields[identityField]);
+    const result = compareRow(row, identityField, identityCounts, canonical, definition);
     if (result.kind === SIMPLE_POLL_ROW_KINDS.UNCHANGED) {
       unchangedRows += 1;
-      seenCanonicalIds.add(result.entityId);
+      if (visibleEntityId !== undefined) seenCanonicalIds.add(visibleEntityId);
     } else if (result.kind === SIMPLE_POLL_ROW_KINDS.CHANGED) {
       changedRows.push({
         entityId: result.entityId,
@@ -262,7 +277,7 @@ function compareTable(
         fields: row.fields,
         changedFields: result.changedFields,
       });
-      seenCanonicalIds.add(result.entityId);
+      if (visibleEntityId !== undefined) seenCanonicalIds.add(visibleEntityId);
     } else if (result.kind === SIMPLE_POLL_ROW_KINDS.UNKNOWN) {
       unknownRows += 1;
     } else {
@@ -290,7 +305,7 @@ function compareRow(
   identityField: string,
   identityCounts: ReadonlyMap<string, number>,
   canonical: ReadonlyMap<string, CanonicalEntity>,
-  headers: readonly string[],
+  definition: RegisteredSyncProjectionDefinition,
 ): SimplePollRowResult {
   const identity = identityFromCell(row.fields[identityField]);
   if (identity === undefined) {
@@ -300,16 +315,21 @@ function compareRow(
     return { kind: SIMPLE_POLL_ROW_KINDS.INVALID, reason: SIMPLE_POLL_INVALID_REASONS.DUPLICATE_IDENTITY };
   }
   const expected = canonical.get(identity);
-  if (expected === undefined) return { kind: SIMPLE_POLL_ROW_KINDS.UNKNOWN, entityId: identity };
-  const changedFields = headers.filter((fieldName) => {
+  if (expected === undefined) {
+    return {
+      kind: SIMPLE_POLL_ROW_KINDS.UNKNOWN,
+      entityId: definition.entityIdForBusinessKey?.(identity) ?? identity,
+    };
+  }
+  const changedFields = definition.headers.filter((fieldName) => {
     const expectedCell = fieldName === DEFAULT_TOMBSTONE_FIELD_NAME
       ? { kind: NORMALIZED_CELL_KINDS.BOOLEAN, value: expected.status === "tombstoned" }
       : expected.fields.get(fieldName) ?? null;
     return !sameCell(row.fields[fieldName] ?? null, expectedCell);
   });
   return changedFields.length === 0
-    ? { kind: SIMPLE_POLL_ROW_KINDS.UNCHANGED, entityId: identity }
-    : { kind: SIMPLE_POLL_ROW_KINDS.CHANGED, entityId: identity, changedFields };
+    ? { kind: SIMPLE_POLL_ROW_KINDS.UNCHANGED, entityId: expected.entityId }
+    : { kind: SIMPLE_POLL_ROW_KINDS.CHANGED, entityId: expected.entityId, changedFields };
 }
 
 function validateRemoteResult(

@@ -283,7 +283,7 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     });
   }
 
-  const effects = await buildCorrectionEffects(context, sheet, drifts, fence);
+  const effects = await buildCorrectionEffects(context, sheet, drifts);
   if (effects.length === 0) {
     return freezeReport(context.physicalSheetId, snapshot, desired, {
       matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
@@ -349,10 +349,11 @@ function computeDrifts(args: {
 
   const drifts: DriftTarget[] = [];
   for (const desiredRow of args.desired) {
+    const identity = desiredRowIdentity(desiredRow, args.sheet.businessKeyField);
     const observed = rowsByAnchor.get(desiredRow.anchorReference) ??
-      (ambiguousIdentities.has(desiredRow.entityId)
+      (identity === undefined || ambiguousIdentities.has(identity)
         ? undefined
-        : rowsByIdentity.get(desiredRow.entityId));
+        : rowsByIdentity.get(identity));
     if (observed === undefined) {
       drifts.push({ kind: "missing", desired: desiredRow });
       continue;
@@ -371,7 +372,15 @@ function snapshotIdentity(
   row: SyncGatewaySnapshot["rows"][number],
   identityField: string,
 ): string | undefined {
-  const cell = row.cells[identityField]?.normalizedCell;
+  return normalizedCellIdentity(row.cells[identityField]?.normalizedCell);
+}
+
+/** Reads the same visible business-key value from canonical desired state. */
+function desiredRowIdentity(row: DesiredRow, identityField: string): string | undefined {
+  return normalizedCellIdentity(row.fields[identityField]) ?? row.entityId;
+}
+
+function normalizedCellIdentity(cell: NormalizedCell | undefined): string | undefined {
   if (cell === undefined || cell === null) return undefined;
   switch (cell.kind) {
     case NORMALIZED_CELL_KINDS.STRING:
@@ -483,7 +492,6 @@ async function buildCorrectionEffects(
   context: ScanContext,
   sheet: { readonly tabName: string; readonly registeredRange: string },
   drifts: readonly DriftTarget[],
-  fence: FencingContext,
 ): Promise<readonly NewEffect[]> {
   const effects: NewEffect[] = [];
   const commitId = "reconciliation:" + context.createId();
@@ -666,7 +674,10 @@ function countMatchedRows(
   }
   let matched = 0;
   for (const row of desired) {
-    if (anchors.has(row.anchorReference) || identities.has(row.entityId)) matched += 1;
+    const identity = desiredRowIdentity(row, identityField);
+    if (anchors.has(row.anchorReference) || (identity !== undefined && identities.has(identity))) {
+      matched += 1;
+    }
   }
   return matched;
 }
@@ -677,7 +688,11 @@ function countExtraRows(
   identityField: string,
 ): number {
   const desiredAnchors = new Set(desired.map((row) => row.anchorReference));
-  const desiredIdentities = new Set(desired.map((row) => row.entityId));
+  const desiredIdentities = new Set(
+    desired
+      .map((row) => desiredRowIdentity(row, identityField))
+      .filter((identity): identity is string => identity !== undefined),
+  );
   let extra = 0;
   for (const row of snapshot.rows) {
     if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT && desiredAnchors.has(row.physicalAnchor.value)) {

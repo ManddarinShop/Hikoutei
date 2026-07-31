@@ -26,6 +26,8 @@ import {
 export interface RegisteredSyncProjectionDefinition {
   readonly sheet: RegisteredSyncSheet;
   readonly headers: readonly string[];
+  /** Converts a visible business key into the canonical entity identity. */
+  readonly entityIdForBusinessKey?: (businessKey: string) => string;
   /** Optional user-editable boolean control fields for a Sync_Conflicts tab. */
   readonly checkboxHeaders?: readonly string[];
 }

@@ -7,22 +7,19 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
 import {
-  APPLICABILITY_KINDS,
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
-  PRESENCE_KINDS,
-} from "../src/index.js";
+} from "../src/infrastructure/storage/index.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
 } from "../src/application/sync/gateway/syncGateway.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
-import {
-  migrateMikroOrmSqliteSchema,
-  MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/index.js";
+import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import type { NewEffect } from "../src/infrastructure/storage/index.js";
 
 const EntitySchema = defineEntity({

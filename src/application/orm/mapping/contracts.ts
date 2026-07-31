@@ -66,7 +66,7 @@ export interface TypedSheetsEntityMappingInput<Entity extends object> {
   readonly entityName?: string;
   /** Stable logical Sheets identifier shared by its physical projections. */
   readonly logicalSheetId: string;
-  /** String primary-key property used as SQLite/canonical entity identity. */
+  /** String primary-key property used as the public entity identity. */
   readonly primaryKey: TypedSheetsEntityProperty<Entity>;
   /** Required unique property used by the v1 business-key index. */
   readonly businessKey: TypedSheetsEntityProperty<Entity>;
@@ -78,8 +78,12 @@ export interface TypedSheetsEntityMappingInput<Entity extends object> {
   readonly projections: readonly TypedSheetsEntityProjectionMappingInput[];
   /** System-only marker projected when `em.remove()` tombstones an entity. */
   readonly tombstoneFieldName?: string;
-  /** Builds a deterministic projection-local row anchor from canonical identity. */
+  /** Builds a deterministic projection-local row anchor from visible identity. */
   readonly anchorForEntity?: (entityId: string) => string;
+  /** Converts a visible entity ID into the globally unique canonical identity. */
+  readonly canonicalEntityIdFor?: (entityId: string) => string;
+  /** Converts a canonical identity back to the visible entity ID. */
+  readonly entityIdFromCanonical?: (entityId: string) => string;
 }
 
 /** Validated mapping metadata for one canonical entity. */
@@ -113,6 +117,8 @@ export interface TypedSheetsEntityMapping {
   readonly projections: readonly TypedSheetsEntityProjectionMapping[];
   readonly tombstoneFieldName: string;
   readonly anchorForEntity: (entityId: string) => string;
+  readonly canonicalEntityIdFor: (entityId: string) => string;
+  readonly entityIdFromCanonical: (entityId: string) => string;
 }
 
 /** An indexed collection of validated mappings used by one typed-sheets runtime. */

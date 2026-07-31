@@ -7,11 +7,11 @@ export {
   STABLE_ENCODING_ERROR_CODES,
 } from "./constants.js";
 export type {
+  CellObservation,
   CellObservationKind,
   NormalizedCell,
   NormalizedCellKind,
   DateValue,
-  CellObservation,
   StableValue,
 } from "./types.js";
 export type {

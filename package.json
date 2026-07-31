@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hikoutei — typed repository and safe write layer for Google Sheets-backed MVPs.",
   "repository": {
     "type": "git",
@@ -17,14 +17,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./orm": {
-      "types": "./dist/application/orm/index.d.ts",
-      "import": "./dist/application/orm/index.js"
-    },
-    "./mikro-orm": {
-      "types": "./dist/adapter/persistence/providers/mikro-orm/index.d.ts",
-      "import": "./dist/adapter/persistence/providers/mikro-orm/index.js"
     }
   },
   "files": [
