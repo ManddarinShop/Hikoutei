@@ -10,7 +10,7 @@ import {
   pollSimpleSheetRowsWithAdapter,
   type SyncSheetTableReaderGateway,
   type SyncTableRowsResult,
-} from "../src/index.js";
+} from "../src/application/sync/index.js";
 import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
 
 const TestEntitySchema = defineEntity({

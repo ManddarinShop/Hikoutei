@@ -7,13 +7,9 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  APPLICABILITY_KINDS,
-  FIELD_OWNERSHIPS,
-  PRESENCE_KINDS,
-  ROW_OPERATIONS,
-  claimWriterLeaseWithAdapter,
-} from "../src/index.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
+import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "../src/domain/model/constants.js";
+import { claimWriterLeaseWithAdapter } from "../src/infrastructure/storage/index.js";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../src/shared/encoding/constants.js";
