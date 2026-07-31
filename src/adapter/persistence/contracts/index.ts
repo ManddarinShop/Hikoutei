@@ -8,3 +8,16 @@ export type {
   SqlStorageAdapter,
   SqlStorageContext,
 } from "./sql.js";
+export type {
+  ScalarEntityColumnDefinition,
+  ScalarEntityDelete,
+  ScalarEntityInsert,
+  ScalarEntityPersistenceProvider,
+  ScalarEntityQuery,
+  ScalarEntityRow,
+  ScalarEntityStorageType,
+  ScalarEntityTableDefinition,
+  ScalarEntityTransaction,
+  ScalarEntityUpdate,
+  ScalarEntityValue,
+} from "./scalar.js";
