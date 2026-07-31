@@ -63,8 +63,7 @@ jobs:
             echo "package version must be a numeric semver: $base_version" >&2
             exit 1
           fi
-          next_patch=$((patch + 1))
-          beta_version="${major}.${minor}.${next_patch}-beta.b${RUN_ID}.${RUN_ATTEMPT}"
+          beta_version="${major}.${minor}.${patch}-beta.b${RUN_ID}.${RUN_ATTEMPT}"
           npm version "$beta_version" --no-git-tag-version
           echo "Publishing hikoutei@$beta_version"
 
