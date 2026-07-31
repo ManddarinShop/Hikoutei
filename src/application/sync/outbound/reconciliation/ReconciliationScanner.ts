@@ -283,7 +283,7 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     });
   }
 
-  const effects = await buildCorrectionEffects(context, sheet, drifts, fence);
+  const effects = await buildCorrectionEffects(context, sheet, drifts);
   if (effects.length === 0) {
     return freezeReport(context.physicalSheetId, snapshot, desired, {
       matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
@@ -492,7 +492,6 @@ async function buildCorrectionEffects(
   context: ScanContext,
   sheet: { readonly tabName: string; readonly registeredRange: string },
   drifts: readonly DriftTarget[],
-  fence: FencingContext,
 ): Promise<readonly NewEffect[]> {
   const effects: NewEffect[] = [];
   const commitId = "reconciliation:" + context.createId();

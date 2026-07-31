@@ -54,10 +54,12 @@ import type {
 } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
 import {
   initializeMikroOrmSqliteAdapter,
+  MikroOrmSqliteAdapter,
+} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import {
   migrateMikroOrmSqliteSchema,
   migrateMikroOrmSqliteStorageSchema,
-  MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,

@@ -190,7 +190,7 @@ export async function createTypedSheets(
   // Load the current provider only when a runtime is opened. Importing the
   // root package alone must not require MikroORM or expose its module graph.
   const [mappedRuntime, providerModule, runtimeModule] = await Promise.all([
-    import("../adapter/persistence/providers/mikro-orm/index.js"),
+    import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js"),
     import("../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js"),
     import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarRuntime.js"),
   ]);

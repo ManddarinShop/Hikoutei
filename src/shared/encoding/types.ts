@@ -8,7 +8,7 @@
 import {
   NORMALIZED_CELL_KINDS,
 } from "./constants.js";
-import type { CellObservationKind, NormalizedCellKind } from "./constants.js";
+import type { CellObservationKind } from "./constants.js";
 import type { Presence } from "../state/types.js";
 
 export type { CellObservationKind, NormalizedCellKind } from "./constants.js";
