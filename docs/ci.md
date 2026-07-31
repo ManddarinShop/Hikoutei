@@ -63,11 +63,15 @@ provenance. The token must never be committed to the repository. The publish
 job also checks that `develop` still points at the workflow commit so an older
 run cannot publish after a newer commit has landed.
 
-The workflow does not commit a generated version back to `develop`. It publishes
-an ephemeral version in the next patch line with the GitHub run ID and attempt,
-for example `0.2.1-beta.b30560831639.1`. The stable `package.json` version is
+The workflow does not commit a generated version back to `develop`. It
+publishes an ephemeral prerelease on the current numeric `package.json` version
+line with the GitHub run ID and attempt. For example, `0.3.0` produces
+`0.3.0-beta.b30560831639.1`, and starting the next development cycle at
+`0.3.1` produces `0.3.1-beta...`. The stable `package.json` version is
 therefore unchanged by CI. A full workflow rerun receives a new version;
 rerunning only the publish job intentionally reuses its verified artifact.
+An already published beta version is not deleted; after a corrected run, the
+`beta` dist-tag points to the new package on the current version line.
 
 Install the newest beta package explicitly:
 
@@ -91,7 +95,9 @@ Release procedure:
    `0.3.0`). Document intentional pre-1.0 compatibility breaks.
 3. Create and push the matching `vX.Y.Z` tag.
 4. The tag workflow reruns the checks and installed-consumer fake E2E, then
-   publishes the verified package with the `latest` dist-tag.
+   publishes the verified package with the `latest` dist-tag. A `develop` push
+   does not change `latest`; for example, the `0.3.0` stable package is
+   published only after the `v0.3.0` tag is pushed.
 
 A stable package is immutable on npm, so reusing a published version fails
 instead of replacing the existing package. Normal users can install the
