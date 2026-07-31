@@ -101,6 +101,8 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
     projections,
     tombstoneFieldName,
     anchorForEntity: input.anchorForEntity ?? defaultAnchorForEntity,
+    canonicalEntityIdFor: input.canonicalEntityIdFor ?? identityEntityId,
+    entityIdFromCanonical: input.entityIdFromCanonical ?? identityEntityId,
   };
 }
 
@@ -168,6 +170,10 @@ function assertDistinct(values: readonly string[], label: string): void {
 
 function defaultAnchorForEntity(entityId: string): string {
   return `entity:${entityId}`;
+}
+
+function identityEntityId(entityId: string): string {
+  return entityId;
 }
 
 function isNormalizedCellKind(value: unknown): value is NormalizedCellKind {
