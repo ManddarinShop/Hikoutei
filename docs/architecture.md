@@ -4,21 +4,21 @@ Hikoutei owns a local SQLite entity store and exposes Google Sheets as an
 asynchronous human-facing projection. The public API belongs to Hikoutei;
 MikroORM is the current replaceable execution engine behind that API.
 
-> Current status: the local entity lifecycle, SQLite transaction boundary,
+> Current status: the scalar entity lifecycle, SQLite transaction boundary,
 > outbox, outbound worker, gateway path, and the first provider-side User_Input
 > polling path are implemented. The global Conflict decision loop is still a
-> target design foundation, not a complete end-to-end public runtime yet. See
-> [`current-state-review.md`](current-state-review.md) for the implementation
-> matrix.
+> target design foundation, not a complete end-to-end public runtime yet. The
+> root public API is provider-neutral; MikroORM is only the current adapter and
+> Prisma is a future provider target.
 
 ## System shape
 
 ```text
 Application server
-  └─ TypedSheets entity API
-       ├─ entity definitions and relations
-       └─ TypedSheets EntityManager
-            └─ replaceable persistence engine
+  └─ Hikoutei scalar entity API
+       ├─ entity descriptors and Sheet routes
+       └─ Hikoutei Unit of Work / EntityManager
+            └─ provider-neutral persistence contract
                  └─ MikroORM + SQLite (current provider)
                       ├─ business entity tables
                       ├─ SQLite sync state and conflict ledger
@@ -36,9 +36,12 @@ Applications define entities with `defineTypedSheetsEntity()` and use the
 typed-sheets EntityManager for `fork()`, `create()`, `find()`, `persist()`,
 `remove()`, `flush()`, and `transactional()`.
 
-Applications do not import `defineEntity`, `p`, `MikroORM`, or provider-specific
-SQL types. The public entity definition is materialized by the current
-MikroORM adapter and can later be materialized by another engine.
+Applications import only `defineTypedSheetsEntity()` and
+`createTypedSheets()` from the root package. They do not import `defineEntity`,
+`p`, `MikroORM`, Prisma, or provider-specific SQL types. The public Unit of Work
+owns identity maps, snapshots, dirty diffs, and flush semantics; the current
+MikroORM adapter materializes those plans and a future Prisma adapter must use
+the same provider contract.
 
 ### Business entity tables
 
@@ -46,10 +49,10 @@ The ORM entity tables are the authoritative application data. A successful
 SQLite transaction commits the entity mutation together with the sync work
 needed to project it to Sheets.
 
-Primary keys are explicit, string-valued, and immutable in the initial release.
-Relations initially support `manyToOne` and `oneToMany`; the owning
-`manyToOne` side stores the foreign key. `manyToMany`, lazy loading, and
-cascade persistence are out of scope for the first release.
+Primary keys are explicit, string-valued, and immutable in the scalar release.
+The primary `id` is also the visible business key by default. Relations,
+provider-specific query operators, lazy loading, and cascade persistence are
+out of scope for this release.
 
 ### SQLite sync state
 
@@ -110,9 +113,11 @@ separate worker process
 Google Sheets projection
 ```
 
-`flush()` returning successfully means that SQLite accepted the local change
-and the corresponding remote work is durable. It does not mean that a Sheet
-write has completed.
+`flush()` returning successfully means that SQLite accepted the local entity
+change, canonical sync mutation, and durable outbox effect in one transaction.
+It does not mean that a Sheet write has completed. Remote provisioning is also
+separate: `createTypedSheets()` is local-only and `setupSheets()` is the
+explicit external setup call.
 
 ## Worker responsibilities
 
