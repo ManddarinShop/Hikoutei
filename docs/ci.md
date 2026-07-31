@@ -4,16 +4,15 @@ Hikoutei's CI includes an **internal sync/gateway end-to-end scenario**. It is
 not a public API smoke test. The scenario drives the internal typed-sheets sync
 pipeline — projection registration, gateway provisioning, the bounded effect
 worker, polling, and the MikroORM-backed storage/CAS/hash machinery — and
-imports internal implementation entrypoints (the gateway, polling, worker, and
-storage providers, plus the `hikoutei/orm` and `hikoutei/mikro-orm` modules).
-Those modules are implementation surface, not the public contract.
+loads implementation modules directly from the packed `dist/` tree. The
+`hikoutei/orm` and `hikoutei/mikro-orm` package subpaths are intentionally not
+published.
 
 The public contract is the high-level `hikoutei` root API: Sheet
-configuration/registration and a MikroORM-style entity lifecycle. The current
-`develop` branch has not yet received the final root API refactoring, so there
-is **no public API CRUD smoke in CI yet**. It will be added as a separate
-scenario once that refactoring lands in `develop`. Until then, do not read the
-existing internal sync/gateway scenario as coverage for the public contract.
+configuration/registration and a MikroORM-style entity lifecycle. Root API
+coverage lives in the unit/provider tests; this installed-consumer scenario
+intentionally remains focused on the internal sync/gateway pipeline and should
+not be read as public API CRUD coverage.
 
 ## Internal sync/gateway E2E
 

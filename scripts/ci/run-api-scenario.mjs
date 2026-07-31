@@ -7,14 +7,11 @@
  * bounded effect worker, polling, and the MikroORM-backed storage/CAS/hash
  * machinery end to end.
  *
- * The entrypoints it imports are internal implementation surface — the
- * gateway/polling/worker/storage providers plus the `hikoutei/orm` and
- * `hikoutei/mikro-orm` modules — not the public contract. The public contract
- * is the high-level `hikoutei` root API (Sheet configuration/registration and
- * a MikroORM-style entity lifecycle), which has not yet received its final
- * refactoring on `develop`. A dedicated public API CRUD smoke for that
- * contract will be added separately once it lands; until then, do not read
- * this scenario as public-contract coverage.
+ * The scenario loads implementation modules directly from the installed
+ * package's `dist/` tree. The `hikoutei/orm` and `hikoutei/mikro-orm` package
+ * subpaths are intentionally rejected; the public contract is the high-level
+ * `hikoutei` root API. This scenario remains focused on internal sync/gateway
+ * behavior rather than public API CRUD coverage.
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -32,38 +29,49 @@ import process from "node:process";
 import { performance } from "node:perf_hooks";
 
 import { defineEntity, p } from "@mikro-orm/sql";
-import {
-  defineTypedSheetsEntityMapping,
-  registeredTypedSheetsProjectionDefinitions,
-  registerTypedSheetsEntityMappings,
-} from "hikoutei/orm";
-import {
-  createMappedTypedSheetsOrm,
-  initializeMikroOrmSqliteAdapter,
-  initializeMappedTypedSheetsOrm,
-  migrateMikroOrmSqliteStorageSchema,
-  runSyncEffectWorkerWithAdapter,
-} from "hikoutei/mikro-orm";
 // This is an internal package-consumer harness, not application code. Resolve
-// the built internal modules from the installed package without reopening the
-// root public API that PR #138 intentionally narrows.
+// the implementation modules directly from the installed package; only the
+// root `hikoutei` entrypoint is an application-facing export.
 const packageEntry = import.meta.resolve("hikoutei");
 const packageDist = new URL("./", packageEntry);
-const [gateway, sync, encoding] = await Promise.all([
-  import(new URL("./adapter/sheets/providers/apps-script-gateway/index.js", packageDist).href),
-  import(new URL("./application/sync/index.js", packageDist).href),
-  import(new URL("./shared/encoding/index.js", packageDist).href),
-]);
+const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, provisioning, worker, gateway, encoding] =
+  await Promise.all([
+    import(new URL("./application/orm/mapping/entityMapping.js", packageDist).href),
+    import(new URL("./application/orm/persistence/flush/flushCoordinator.js", packageDist).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js", packageDist).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", packageDist).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", packageDist).href),
+    import(new URL("./application/sync/inbound/polling/SimpleSheetPolling.js", packageDist).href),
+    import(new URL("./application/sync/gateway/SyncGatewayBootstrap.js", packageDist).href),
+    import(new URL("./application/sync/outbound/effects/SyncEffectWorker.js", packageDist).href),
+    import(new URL("./adapter/sheets/providers/apps-script-gateway/index.js", packageDist).href),
+    import(new URL("./shared/encoding/index.js", packageDist).href),
+  ]);
+const { defineTypedSheetsEntityMapping } = mapping;
+const { registeredTypedSheetsProjectionDefinitions, registerTypedSheetsEntityMappings } = flush;
+const { createMappedTypedSheetsOrm, initializeMappedTypedSheetsOrm } = mappedRuntime;
+const { initializeMikroOrmSqliteAdapter } = sqliteAdapter;
+const { migrateMikroOrmSqliteStorageSchema } = sqliteSchema;
+const { pollSimpleSheetRowsWithAdapter } = polling;
+const { provisionRegisteredSyncSheets } = provisioning;
+const { runSyncEffectWorkerWithAdapter } = worker;
+const { stableHash } = encoding;
 const {
   AppsScriptOperationClient,
   AppsScriptOperationSyncGateway,
   AppsScriptSyncGatewayError,
 } = gateway;
-const {
-  pollSimpleSheetRowsWithAdapter,
-  provisionRegisteredSyncSheets,
-} = sync;
-const { stableHash } = encoding;
+
+await assertLegacyPackageSubpathsUnavailable();
+
+async function assertLegacyPackageSubpathsUnavailable() {
+  for (const subpath of ["orm", "mikro-orm"]) {
+    await assert.rejects(
+      () => import(`hikoutei/${subpath}`),
+      (error) => error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED",
+    );
+  }
+}
 
 const SCENARIO_VERSION = "v1";
 const INTERNAL_RECEIPT_SHEET = "__typed_sheets_internal_effect_receipts";
