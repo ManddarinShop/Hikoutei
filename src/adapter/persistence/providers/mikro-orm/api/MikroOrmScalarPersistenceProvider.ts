@@ -27,9 +27,11 @@ import type {
   TypedSheetsEntityReference,
   TypedSheetsFindOptions,
   TypedSheetsEntityFilter,
-  TypedSheetsOrm,
+} from "../../../../../application/orm/api/contracts.js";
+import type {
   TypedSheetsEntityManager,
-} from "../../../../../application/orm/index.js";
+  TypedSheetsOrm,
+} from "../../../../../application/orm/api/TypedSheetsOrm.js";
 
 /** Internal mapping from a public descriptor to its generated MikroORM entity. */
 export interface MikroOrmScalarEntityBinding {
