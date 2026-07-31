@@ -6,12 +6,9 @@
  * single set of contracts.
  */
 
-import {
-  type Applicability,
-  type EffectStatus,
-  type EffectTargetKind,
-  type NormalizedCell,
-  type Presence,
+import type {
+  EffectStatus,
+  EffectTargetKind,
 } from "../../../../domain/index.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../sync/gateway/SyncGatewayBootstrap.js";
 import type {

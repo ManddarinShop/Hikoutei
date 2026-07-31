@@ -23,7 +23,6 @@ import type {
 import {
   readEntityValues,
   ScalarEntityUnitOfWork,
-  type PlannedScalarChange,
   type ScalarEntityFlushPlan,
 } from "../application/orm/persistence/scalar/unitOfWork.js";
 

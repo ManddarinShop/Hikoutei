@@ -13,7 +13,6 @@ import type {
   ApplySyncEffectsRequest,
   FastAppendRowsRequest,
   ReadSyncEffectPostconditionsRequest,
-  SyncEffectPostcondition,
   SyncGatewayEffect,
   SyncGatewayEffectResult,
   SyncProjection,

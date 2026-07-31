@@ -96,7 +96,7 @@ describe("EntityManager provider-neutral semantics", () => {
   it("emits one insert for a new entity and one update for a dirty field", async () => {
     const { provider, em } = buildManager();
 
-    const product = em.create(Product, { id: "p1", label: "first", price: 10 });
+    em.create(Product, { id: "p1", label: "first", price: 10 });
     await em.flush();
     expect(provider.recordedChanges).toEqual([{ kind: "insert", table: "products" }]);
 
@@ -128,7 +128,7 @@ describe("EntityManager provider-neutral semantics", () => {
   it("does not depend on any SQL executor or ORM type", async () => {
     // The fake provider implements only ScalarEntityPersistenceProvider; if the
     // manager required SqlExecutor/MikroORM types this would not typecheck.
-    const { provider, em } = buildManager();
+    const { em } = buildManager();
     em.persist(em.create(Product, { id: "x", label: "l", price: 1 }));
     await em.flush();
     expect(await em.findOne(Product, { id: "x" })).toMatchObject({ id: "x" });

@@ -18,10 +18,8 @@ import {
 } from "../src/application/sync/gateway/syncGateway.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
-import {
-  migrateMikroOrmSqliteSchema,
-  MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/index.js";
+import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import type { NewEffect } from "../src/infrastructure/storage/index.js";
 
 const EntitySchema = defineEntity({
