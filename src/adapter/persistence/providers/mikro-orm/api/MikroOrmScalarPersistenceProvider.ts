@@ -18,7 +18,6 @@ import type {
   ScalarEntityPersistenceProvider,
   ScalarEntityQuery,
   ScalarEntityRow,
-  ScalarEntityTableDefinition,
   ScalarEntityTransaction,
   ScalarEntityUpdate,
   ScalarEntityValue,
@@ -54,11 +53,6 @@ export class MikroOrmScalarPersistenceProvider implements ScalarEntityPersistenc
     bindings: readonly MikroOrmScalarEntityBinding[],
   ) {
     this.bindings = new Map(bindings.map((binding) => [binding.descriptor.name, binding]));
-  }
-
-  /** Entity schemas are migrated by the mapped runtime before construction. */
-  async ensureEntityTables(_tables: readonly ScalarEntityTableDefinition[]): Promise<void> {
-    // The generated MikroORM schemas are passed to initializeMappedTypedSheetsOrm().
   }
 
   /** Reads through a fresh internal manager so public identity maps stay local. */
@@ -230,12 +224,26 @@ function fromInternalEntity(
   const record = entity as Readonly<Record<string, unknown>>;
   for (const property of descriptor.properties) {
     const value = record[property.name];
-    if (property.type === "date" && typeof value === "string") {
-      const date = new Date(value);
-      if (Number.isFinite(date.getTime())) {
-        values[property.name] = date;
+    if (property.type === "date") {
+      if (value === null || value === undefined) {
+        values[property.name] = null;
         continue;
       }
+      if (typeof value !== "string") {
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+          `${property.name} returned a non-string stored date.`,
+        );
+      }
+      const date = new Date(value);
+      if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) {
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+          `${property.name} contains a non-canonical stored date.`,
+        );
+      }
+      values[property.name] = date;
+      continue;
     }
     values[property.name] = value === undefined ? null : value as ScalarEntityValue;
   }

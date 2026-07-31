@@ -141,6 +141,23 @@ function createMapping(
     primaryKey: descriptor.primaryKey,
     businessKey: descriptor.primaryKey,
     schemaVersion: 1,
+    canonicalEntityIdFor: (entityId: string) => `entity:${descriptor.tableName}:${entityId}`,
+    entityIdFromCanonical: (entityId: string) => {
+      const prefix = `entity:${descriptor.tableName}:`;
+      if (!entityId.startsWith(prefix)) {
+        // Existing databases may still contain the pre-namespace identity.
+        // Lifecycle writes resolve their row binding first, so this fallback
+        // keeps observations for those legacy rows readable during migration.
+        return entityId;
+      }
+      const visibleEntityId = entityId.slice(prefix.length);
+      if (visibleEntityId.length === 0) {
+        // A legacy raw ID may itself equal the namespace prefix. New IDs cannot
+        // produce this form because the public primary key is non-empty.
+        return entityId;
+      }
+      return visibleEntityId;
+    },
     fields: descriptor.properties.map((property) => ({
       property: property.name,
       cellKind: toCellKind(property),

@@ -100,8 +100,6 @@ export type ScalarEntityRow = Readonly<Record<string, ScalarEntityValue>>;
  * it rejects.
  */
 export interface ScalarEntityPersistenceProvider {
-  /** Creates the entity tables for the runtime if they do not already exist. */
-  ensureEntityTables(tables: readonly ScalarEntityTableDefinition[]): Promise<void>;
   /** Runs one atomic transaction and rolls back every write on rejection. */
   beginTransaction<Result>(
     work: (transaction: ScalarEntityTransaction) => Promise<Result>,

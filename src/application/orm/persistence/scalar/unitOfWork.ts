@@ -181,13 +181,15 @@ export class ScalarEntityUnitOfWork {
 function planChange(entry: ManagedEntity): PlannedScalarChange | undefined {
   const { descriptor } = entry;
   if (entry.state === "new") {
+    const values = readEntityValues(descriptor, entry.entity);
+    requirePrimaryKeyValue(descriptor, values[descriptor.primaryKey]);
     return {
       kind: "insert",
       entry,
       row: {
         tableName: descriptor.tableName,
         primaryKeyColumn: descriptor.primaryKey,
-        values: readEntityValues(descriptor, entry.entity),
+        values,
       },
     };
   }
@@ -249,6 +251,9 @@ function collectChangedValues(
 }
 
 function sameScalarValue(before: ScalarEntityValue, after: ScalarEntityValue): boolean {
+  if (before instanceof Date && after instanceof Date) {
+    return before.getTime() === after.getTime();
+  }
   return before === after;
 }
 
@@ -314,8 +319,22 @@ function readScalarValue(
   const expected = expectedValueType(property.type);
   if (typeof value !== expected) {
     throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      property.primary
+        ? HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE
+        : HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
       `${property.name} expected ${expected} but received ${typeof value}.`,
+    );
+  }
+  if (property.primary && typeof value === "string" && value.length === 0) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+      `${property.name} must be a non-empty string before flush.`,
+    );
+  }
+  if (expected === "number" && !Number.isFinite(value)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      `${property.name} must be a finite number.`,
     );
   }
   return value as ScalarEntityValue;
