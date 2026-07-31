@@ -7,12 +7,11 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
 import {
-  APPLICABILITY_KINDS,
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
-  PRESENCE_KINDS,
-} from "../src/index.js";
+} from "../src/infrastructure/storage/index.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,

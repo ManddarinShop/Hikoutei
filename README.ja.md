@@ -40,25 +40,37 @@ Prisma/JPA のクローン、汎用 Google Sheets API ラッパーを目的と�
 npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
-MikroORM パッケージはルートパッケージの optional peer dependency ですが、
-Hikoutei の組み込み SQLite アダプターを使う場合は必要です。
+MikroORM パッケージはルートパッケージの optional peer dependency です。現在の
+SQLite provider が内部で利用しますが、ルート public API に MikroORM 型は公開
+されません。
 
 ## クイックスタート
 
-エンティティマッピングを定義したら、リクエスト単位の manager でエンティティを
-操作します。完全なマッピングと Gateway の設定は
-[クイックスタートガイド](docs/quick-start.md)を参照してください。
+エンティティ定義と環境ごとの Sheet route を分離し、ルート API だけを使います。
 
 ```ts
-import { initializeMappedTypedSheetsOrm } from "hikoutei/mikro-orm";
-import { User } from "./entities/User.js";
-import { userMapping } from "./mappings/userMapping.js";
+import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
 
-const hikoutei = await initializeMappedTypedSheetsOrm({
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  mappings: [userMapping],
-  writer: { writerId: "users-service" },
+  sheets: {
+    spreadsheetId: process.env.SHEET_ID!,
+    routes: {
+      User: {
+        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
+      },
+    },
+  },
 });
 
 const em = hikoutei.em.fork();
@@ -70,9 +82,10 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`flush()` はローカルのアプリケーション状態を更新し、設定済みの Sheet ビューへ
-反映する作業を予約します。リモートへの配信は非同期なので、[設定ガイド](docs/quick-start.md)
-に従って sync worker を実行し、Gateway をプロビジョニングしてください。
+`createTypedSheets()` は SQLite とローカル canonical/outbox だけを準備します。
+リモートのタブとヘッダーは `hikoutei.setupSheets(provisioner)` を明示的に呼び出して
+プロビジョニングします。`flush()` の成功は SQLite と durable outbox のコミットを
+意味し、リモート Sheet への配信は別の worker が非同期に行います。
 
 ## Hikoutei が適しているケース
 
@@ -95,11 +108,12 @@ await em.flush();
 
 ## Google Sheets の設定
 
-1. サーバーアプリケーションでエンティティと Sheet のマッピングを定義します。
+1. `createTypedSheets()` で scalar entity と環境ごとの Sheet route を定義します。
 2. [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) を Google Apps
    Script Web App としてデプロイします。
-3. サーバーから登録済みのタブと範囲をプロビジョニングします。
-4. 保留中の変更を配信する sync worker を実行します。
+3. provider-neutral な `provisioner` で
+   `hikoutei.setupSheets(provisioner)` を明示的に呼び出します。
+4. 保留中の outbox effect を配信する sync worker を実行します。
 
 Gateway のシークレットはサーバーだけに保管してください。ブラウザコードに
 含めたり、Git にコミットしたりしないでください。
