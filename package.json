@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hikoutei — typed repository and safe write layer for Google Sheets-backed MVPs.",
   "repository": {
     "type": "git",

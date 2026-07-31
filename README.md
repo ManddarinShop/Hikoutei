@@ -116,19 +116,25 @@ Use a conventional database and direct Google APIs when you need:
 
 ## Google Sheets setup
 
-1. Define scalar entities and environment-specific routes in `createTypedSheets()`.
-2. Deploy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) as a
-   Google Apps Script Web App.
-3. Call `hikoutei.setupSheets(provisioner)` explicitly to provision and verify
-   the registered tabs and headers.
-4. Run the internal sync worker that delivers pending outbox effects.
+1. Define scalar entities and environment-specific routes in
+   `createTypedSheets()`.
+2. Follow the [Quick start](docs/quick-start.md#sheet-setup-and-delivery) to
+   copy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) into a
+   spreadsheet-bound Apps Script project, deploy it as a Web App, set the
+   `/exec` URL, and run `setupSyncGateway()`.
+3. Keep the generated `TYPED_SHEETS_GATEWAY_URL`,
+   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`, and
+   `TYPED_SHEETS_GATEWAY_SHEET_ID` values in an untracked server environment or
+   secret store. Never put the shared secret in browser code or Git.
+4. Call `hikoutei.setupSheets(provisioner)` explicitly to provision and verify
+   the registered tabs and headers, then run the worker that delivers pending
+   outbox effects.
 
-The root package accepts a provider-neutral `HikouteiSheetProvisioner`; the
-Apps Script signing and operation protocol remain internal implementation
-details and should not be part of application code.
-
-Keep the gateway secret on the server. Do not put it in browser code or commit
-it to Git.
+The gateway must be deployed with an access audience that can reach the
+service; an external server normally requires **Anyone**. Use the deployed
+`/exec` URL, not the editor-only `/dev` URL. When `Code.gs` changes, update the
+existing Web App deployment with a new version before relying on the change.
+The detailed setup and troubleshooting steps are in the [Quick start](docs/quick-start.md).
 
 ## Documentation
 
