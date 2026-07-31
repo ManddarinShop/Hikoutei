@@ -60,6 +60,28 @@ export async function insertActiveRowBinding(
   }
 }
 
+/** Reads an existing binding's canonical identity for legacy-compatible updates. */
+export async function existingCanonicalEntityId(
+  sql: SqlExecutor,
+  mapping: TypedSheetsEntityMapping,
+  rowBindingId: string,
+  anchor: string,
+): Promise<string | undefined> {
+  const row = await sql.get<RowBindingSqlRow>(READ_ROW_BINDING_SQL, [rowBindingId]);
+  if (row === undefined) return undefined;
+  if (
+    row.logical_sheet_id !== mapping.logicalSheetId ||
+    row.anchor_reference !== anchor ||
+    row.entity_id === null
+  ) {
+    throw new TypedSheetsOrmError(
+      TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
+      `row binding ${rowBindingId} does not match ${mapping.entityName}.`,
+    );
+  }
+  return row.entity_id;
+}
+
 /** Requires the active binding to still match the mapped entity identity. */
 export async function requireActiveRowBinding(
   sql: SqlExecutor,

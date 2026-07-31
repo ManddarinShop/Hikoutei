@@ -19,6 +19,7 @@ import {
 } from "../../api/contracts.js";
 import {
   encodeTypedSheetsEntity,
+  typedSheetsCanonicalEntityId,
   typedSheetsEntityAnchor,
   typedSheetsEntityRowBindingId,
   type TypedSheetsEntityFieldMapping,
@@ -34,6 +35,7 @@ import {
 } from "../support/businessKeys.js";
 import {
   canonicalFieldRevisions,
+  existingCanonicalEntityId,
   insertActiveRowBinding,
   requireActiveCanonicalEntityRevision,
   requireActiveRowBinding,
@@ -67,9 +69,13 @@ export async function applyMappedChange(
   const changeStartedAt = Date.now();
   const { mapping, change, changedFields } = plan;
   const operationKind = timingOperationKind(change.kind);
-  const entityId = requireChangeEntityId(mapping, change);
-  const rowBindingId = typedSheetsEntityRowBindingId(mapping, entityId);
-  const anchor = typedSheetsEntityAnchor(mapping, entityId);
+  const visibleEntityId = requireChangeEntityId(mapping, change);
+  const proposedCanonicalEntityId = typedSheetsCanonicalEntityId(mapping, visibleEntityId);
+  const rowBindingId = typedSheetsEntityRowBindingId(mapping, visibleEntityId);
+  const anchor = typedSheetsEntityAnchor(mapping, visibleEntityId);
+  const entityId = change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE
+    ? proposedCanonicalEntityId
+    : await existingCanonicalEntityId(sql, mapping, rowBindingId, anchor) ?? proposedCanonicalEntityId;
   const preparationStartedAt = Date.now();
   const encodedEntity = encodeTypedSheetsEntity(mapping, change.entity);
   emitTiming(writer, {

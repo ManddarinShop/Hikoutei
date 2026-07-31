@@ -141,6 +141,59 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  it("matches an unanchored row by visible business key when canonical IDs are namespaced", async () => {
+    const { adapter, gateway } = await bootstrap({
+      entities: [
+        {
+          entityId: "entity:orders:order-1",
+          rowBindingId: "binding-1",
+          anchor: "anchor-1",
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+          },
+        },
+      ],
+      sheetRows: [],
+    });
+
+    await gateway.fastAppendRows({
+      physicalSheetId: "physical-recon",
+      sheetName: "Orders",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      rows: [{
+        effectId: "append-1",
+        fields: {
+          id: { kind: "string", value: "order-1" },
+          status: { kind: "string", value: "paid" },
+          _deleted: { kind: "boolean", value: false },
+        },
+      }],
+    });
+
+    const report = await runReconciliationScan({
+      storage: adapter,
+      gateway,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
+    });
+
+    expect(report).toMatchObject({
+      matchedRows: 1,
+      driftedRows: 0,
+      missingRows: 0,
+      effectsEnqueued: 0,
+    });
+    await expect(noPendingEffects(adapter)).resolves.toBe(0);
+  });
+
   it("enqueues a correction effect when the sheet drifted from canonical", async () => {
     const { adapter, gateway } = await bootstrap({
       entities: [

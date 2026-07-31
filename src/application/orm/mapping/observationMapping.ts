@@ -13,6 +13,7 @@ import type { CanonicalCommitInput } from "../../../infrastructure/storage/index
 import {
   decodeTypedSheetsEntityField,
   requireTypedSheetsEntityField,
+  typedSheetsEntityIdFromCanonical,
   type TypedSheetsEntityMapping,
 } from "./entityMapping.js";
 import {
@@ -53,24 +54,26 @@ export type MappedObservationEntityMutation =
 export function planMappedObservationEntityMutation(
   mapping: TypedSheetsEntityMapping,
   commit: CanonicalCommitInput,
+  entityIdOverride?: string,
 ): MappedObservationEntityMutation {
+  const entityId = entityIdOverride ?? typedSheetsEntityIdFromCanonical(mapping, commit.entityId);
   if (commit.kind === ROW_OPERATIONS.DELETE) {
     return {
       kind: MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.DELETE,
-      entityId: commit.entityId,
+      entityId,
     };
   }
 
   const data: Record<string, unknown> = {};
   if (commit.kind === ROW_OPERATIONS.INSERT) {
-    data[mapping.primaryKey] = commit.entityId;
+    data[mapping.primaryKey] = entityId;
   }
 
   for (const write of commit.fields) {
     const field = requireTypedSheetsEntityField(mapping, write.fieldName);
     const value = decodeTypedSheetsEntityField(mapping, field, write.value);
     if (field.property === mapping.primaryKey) {
-      if (value !== commit.entityId) {
+      if (value !== entityId) {
         throw new TypedSheetsOrmError(
           TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
           `${mapping.entityName}.${mapping.primaryKey} does not match the canonical entity ID.`,
@@ -85,7 +88,7 @@ export function planMappedObservationEntityMutation(
   if (commit.kind === ROW_OPERATIONS.INSERT) {
     return {
       kind: MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.INSERT,
-      entityId: commit.entityId,
+      entityId,
       data,
     };
   }
@@ -93,7 +96,7 @@ export function planMappedObservationEntityMutation(
     ? { kind: MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.NONE }
     : {
         kind: MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.UPDATE,
-        entityId: commit.entityId,
+        entityId,
         data,
       };
 }
