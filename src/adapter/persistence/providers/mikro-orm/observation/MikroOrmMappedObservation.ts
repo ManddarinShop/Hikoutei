@@ -10,6 +10,7 @@
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import {
   persistObservedRowWithSql,
+  type CanonicalCommitInput,
   type FencingContext,
   type PersistObservedRowInput,
   type PersistObservedRowResult,
@@ -17,6 +18,10 @@ import {
 import { OBSERVATION_WRITE_RESULT_KINDS } from "../../../../../infrastructure/storage/state/observation/observationConstants.js";
 import {
   createTypedSheetsEntityMappingRegistry,
+  decodeTypedSheetsEntityField,
+  requireTypedSheetsEntityField,
+  typedSheetsCanonicalEntityId,
+  typedSheetsEntityIdFromCanonical,
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
 } from "../../../../../application/orm/mapping/entityMapping.js";
@@ -38,6 +43,7 @@ export interface PersistMappedObservedRowOptions {
 }
 
 interface MikroOrmNativeEntityWriter {
+  findOne(entityName: unknown, where: Record<string, unknown>): Promise<object | null>;
   insert(entityName: unknown, data: Record<string, unknown>): Promise<unknown>;
   nativeUpdate(
     entityName: unknown,
@@ -78,17 +84,72 @@ export async function persistMappedObservedRowWithMikroOrm(
       return result;
     }
 
-    const mutation = planMappedObservationEntityMutation(
+    const nativeWriter = entityManager as unknown as MikroOrmNativeEntityWriter;
+    const entityId = await resolveObservationEntityId(
+      nativeWriter,
       mapping,
       canonical.value.commit,
     );
+    const mutation = planMappedObservationEntityMutation(
+      mapping,
+      canonical.value.commit,
+      entityId,
+    );
     await applyMappedMutation(
-      entityManager as unknown as MikroOrmNativeEntityWriter,
+      nativeWriter,
       mapping,
       mutation,
     );
     return result;
   });
+}
+
+async function resolveObservationEntityId(
+  entityManager: MikroOrmNativeEntityWriter,
+  mapping: TypedSheetsEntityMapping,
+  commit: CanonicalCommitInput,
+): Promise<string> {
+  if (commit.kind === "insert") {
+    const primaryField = commit.fields.find((field) => field.fieldName === mapping.primaryKey);
+    if (primaryField === undefined) {
+      return typedSheetsEntityIdFromCanonical(mapping, commit.entityId);
+    }
+    const field = requireTypedSheetsEntityField(mapping, primaryField.fieldName);
+    const value = decodeTypedSheetsEntityField(mapping, field, primaryField.value);
+    if (typeof value !== "string" || value.length === 0) {
+      throw new TypedSheetsOrmError(
+        TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
+        `insert observation has an invalid ${mapping.entityName}.${mapping.primaryKey}.`,
+      );
+    }
+    const expectedCanonical = typedSheetsCanonicalEntityId(mapping, value);
+    if (commit.entityId !== value && commit.entityId !== expectedCanonical) {
+      throw new TypedSheetsOrmError(
+        TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
+        `${mapping.entityName}.${mapping.primaryKey} does not match the canonical entity ID.`,
+      );
+    }
+    return value;
+  }
+
+  const candidate = typedSheetsEntityIdFromCanonical(mapping, commit.entityId);
+  const canonical = commit.entityId;
+  const candidateEntity = await entityManager.findOne(
+    mapping.entity,
+    { [mapping.primaryKey]: candidate },
+  );
+  const canonicalEntity = candidate === canonical
+    ? candidateEntity
+    : await entityManager.findOne(mapping.entity, { [mapping.primaryKey]: canonical });
+  if (candidateEntity !== null && canonicalEntity !== null && candidate !== canonical) {
+    throw new TypedSheetsOrmError(
+      TYPED_SHEETS_ORM_ERROR_CODES.OBSERVATION_ENTITY_MUTATION_FAILED,
+      `canonical identity ${canonical} is ambiguous for ${mapping.entityName}.`,
+    );
+  }
+  if (candidateEntity !== null) return candidate;
+  if (canonicalEntity !== null) return canonical;
+  return candidate;
 }
 
 async function applyMappedMutation(
