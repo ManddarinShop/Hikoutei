@@ -111,14 +111,24 @@ await em.flush();
 ## Google Sheets 설정
 
 1. `createTypedSheets()`에서 scalar entity와 환경별 Sheet route를 정의합니다.
-2. [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs)를 Google Apps
-   Script Web App으로 배포합니다.
-3. provider-neutral `provisioner`를 사용해 `hikoutei.setupSheets(provisioner)`를
-   명시적으로 호출합니다.
-4. 대기 중인 outbox effect를 전달하는 sync worker를 실행합니다.
+2. [빠른 시작](docs/quick-start.md#sheet-setup-and-delivery)을 따라
+   [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs)를 대상
+   Spreadsheet에 bound된 Apps Script 프로젝트에 복사하고 Web App으로
+   배포한 뒤 `/exec` URL을 입력하고 `setupSyncGateway()`를 실행합니다.
+3. 생성된 `TYPED_SHEETS_GATEWAY_URL`,
+   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`,
+   `TYPED_SHEETS_GATEWAY_SHEET_ID`를 추적하지 않는 서버 환경 파일이나
+   secret store에 보관합니다. shared secret은 브라우저 코드나 Git에 넣지
+   마세요.
+4. `hikoutei.setupSheets(provisioner)`를 명시적으로 호출해 등록된 탭과
+   헤더를 provisioning한 뒤, 대기 중인 outbox effect를 전달하는 sync worker를
+   실행합니다.
 
-Gateway 시크릿은 서버에만 보관하세요. 브라우저 코드에 넣거나 Git에 커밋하지
-마세요.
+외부 서버에서 접근하려면 Web App의 액세스 범위가 서버를 허용해야 하며,
+일반적으로 **Anyone** 설정이 필요합니다. 편집기 전용 `/dev`가 아니라 배포용
+`/exec` URL을 사용하세요. `Code.gs`를 변경하면 Web App deployment를 새
+버전으로 갱신해야 합니다. 상세한 설정과 문제 해결 방법은
+[빠른 시작](docs/quick-start.md)에 설명되어 있습니다.
 
 ## 문서
 

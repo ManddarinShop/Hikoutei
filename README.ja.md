@@ -109,14 +109,22 @@ await em.flush();
 ## Google Sheets の設定
 
 1. `createTypedSheets()` で scalar entity と環境ごとの Sheet route を定義します。
-2. [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) を Google Apps
-   Script Web App としてデプロイします。
-3. provider-neutral な `provisioner` で
-   `hikoutei.setupSheets(provisioner)` を明示的に呼び出します。
-4. 保留中の outbox effect を配信する sync worker を実行します。
+2. [クイックスタート](docs/quick-start.md#sheet-setup-and-delivery) に従い、
+   [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) を対象の
+   Spreadsheet にバインドした Apps Script プロジェクトへコピーし、Web App として
+   デプロイします。その後 `/exec` URL を入力して `setupSyncGateway()` を実行します。
+3. 生成された `TYPED_SHEETS_GATEWAY_URL`、
+   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`、
+   `TYPED_SHEETS_GATEWAY_SHEET_ID` を、追跡対象外のサーバー環境ファイルまたは
+   secret store に保管します。shared secret をブラウザコードや Git に入れないでください。
+4. `hikoutei.setupSheets(provisioner)` を明示的に呼び出して登録済みのタブとヘッダーを
+   プロビジョニングし、保留中の outbox effect を配信する sync worker を実行します。
 
-Gateway のシークレットはサーバーだけに保管してください。ブラウザコードに
-含めたり、Git にコミットしたりしないでください。
+外部サーバーからアクセスするには、Web App のアクセス範囲でサーバーを許可する必要が
+あり、通常は **Anyone** が必要です。エディタ専用の `/dev` ではなく、デプロイ用の
+`/exec` URL を使用してください。`Code.gs` を変更した場合は、Web App deployment を
+新しいバージョンに更新してから利用します。詳しい設定とトラブルシューティングは
+[クイックスタート](docs/quick-start.md)を参照してください。
 
 ## ドキュメント
 

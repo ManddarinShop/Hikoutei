@@ -82,18 +82,70 @@ query operators are not part of the scalar release.
 
 ## Sheet setup and delivery
 
-Provisioning is an explicit external operation. Supply a provider-neutral
-`HikouteiSheetProvisioner` to `setupSheets()` from the service/deployment layer:
+`createTypedSheets()` opens the local SQLite authority and validates the
+registered routes, but it does not contact Google Sheets. Provisioning is an
+explicit service/deployment operation, and the included
+[`apps-script/gateway/Code.gs`](../apps-script/gateway/Code.gs) must be deployed
+before the server can deliver Sheet effects.
+
+### Deploy the Apps Script gateway
+
+Complete these steps once for the spreadsheet that the service will use:
+
+1. Create or open the target Google Spreadsheet. From **Extensions → Apps
+   Script**, create a **bound** Apps Script project for that spreadsheet.
+2. Copy the complete `apps-script/gateway/Code.gs` file from this repository or
+   from `node_modules/hikoutei/apps-script/gateway/Code.gs` into the Apps Script
+   editor, then save it.
+3. Choose **Deploy → New deployment**, select **Web app**, and deploy it with
+   **Execute as: Me**. Choose the narrowest access audience that can reach the
+   server. A server outside the Workspace normally requires **Anyone**; the
+   signed request secret still authenticates every useful POST.
+4. Copy the deployed URL ending in `/exec`. Do not use the editor-only `/dev`
+   URL. Paste the URL into the constant near the top of `Code.gs` and save:
+
+   ```js
+   var TYPED_SHEETS_GATEWAY_URL =
+     "https://script.google.com/macros/s/DEPLOYMENT_ID/exec";
+   ```
+
+5. In the **bound** Apps Script editor, select `setupSyncGateway` in the
+   function menu and click **Run**. Approve the requested Google permissions.
+   The helper reads the active spreadsheet ID, stores the ID and shared secret
+   in Script Properties, and logs a copyable local environment block. Running
+   it from a standalone Apps Script project cannot identify the spreadsheet.
+6. Open the execution log and copy the printed values into an untracked server
+   environment file or secret store:
+
+   ```dotenv
+   TYPED_SHEETS_GATEWAY_URL="https://script.google.com/macros/s/DEPLOYMENT_ID/exec"
+   TYPED_SHEETS_GATEWAY_SHARED_SECRET="generated-secret"
+   TYPED_SHEETS_GATEWAY_SHEET_ID="spreadsheet-id"
+   ```
+
+   The sheet ID is derived from the bound spreadsheet; it is not a second
+   spreadsheet to configure. Never put the shared secret in browser code or
+   commit it to Git.
+7. If `Code.gs` changes, use **Deploy → Manage deployments**, edit the Web App
+   deployment, and create a new version before relying on the changed gateway.
+   The `/exec` URL stays the same when an existing deployment is updated.
+
+### Provision and deliver Sheets
+
+Provide a server-side, provider-neutral `HikouteiSheetProvisioner` using the
+server credentials, then explicitly provision the registered tabs and headers:
 
 ```ts
 await hikoutei.setupSheets(provisioner);
 ```
 
-The provisioner creates or verifies tabs and headers idempotently. Apps Script
-signing, transport, operation definitions, and the outbound worker remain
-internal implementation details.
+The operation is idempotent and rejects schema drift instead of silently
+rewriting headers. After setup, run the sync worker that delivers pending
+outbox effects. A successful `flush()` commits the entity table, canonical sync
+state, and durable Sheet effect outbox in one SQLite transaction; it does not
+mean that the remote Sheet has already been updated.
 
-A successful `flush()` commits the entity table, canonical sync state, and
-durable Sheet effect outbox in one SQLite transaction. It does not mean the
-remote Sheet has already been updated; a separate worker delivers the outbox.
-Keep the gateway secret on the server and out of browser code and Git.
+If `setupSyncGateway()` reports that it must run from a bound project, reopen
+Apps Script from the spreadsheet's **Extensions → Apps Script** menu. If the
+server receives `gateway_not_configured`, run the setup helper again and make
+sure the three environment variables are available to the service.
