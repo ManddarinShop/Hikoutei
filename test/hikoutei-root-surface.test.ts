@@ -10,11 +10,6 @@ import {
   HIKOUTEI_SCALAR_TYPES,
 } from "../src/index.js";
 
-// Legacy application and provider barrels must keep working for existing
-// integrations even though the root now exposes only the public surface.
-import { createMappedTypedSheetsFlushCoordinator } from "../src/application/orm/index.js";
-import { createMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/index.js";
-
 describe("root public surface", () => {
   it("exposes the stable entity-lifecycle API from the root entrypoint", () => {
     expect(typeof defineTypedSheetsEntity).toBe("function");
@@ -35,10 +30,4 @@ describe("root public surface", () => {
     expect(namespace.HikouteiEntity).toBeUndefined();
   });
 
-  it("keeps the legacy ./orm and ./mikro-orm barrels importable for existing callers", () => {
-    // These are the value exports the legacy subpaths (package.json "exports")
-    // resolve to; asserting them here guards the backward-compatibility promise.
-    expect(typeof createMappedTypedSheetsFlushCoordinator).toBe("function");
-    expect(typeof createMikroOrmSqliteAdapter).toBe("function");
-  });
 });

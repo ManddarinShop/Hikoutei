@@ -8,10 +8,8 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
-import {
-  migrateMikroOrmSqliteSchema,
-  MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/index.js";
+import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import {
   runReconciliationScan,
   RECONCILIATION_DEFAULTS,

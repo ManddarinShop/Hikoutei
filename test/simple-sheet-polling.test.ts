@@ -3,14 +3,14 @@ import { defineEntity, p } from "@mikro-orm/sql";
 
 import {
   initializeMikroOrmSqliteAdapter,
-  migrateMikroOrmSqliteStorageSchema,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/index.js";
-import {
-  pollSimpleSheetRowsWithAdapter,
-  type SyncSheetTableReaderGateway,
-  type SyncTableRowsResult,
-} from "../src/application/sync/index.js";
+} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { pollSimpleSheetRowsWithAdapter } from "../src/application/sync/inbound/polling/SimpleSheetPolling.js";
+import type {
+  SyncSheetTableReaderGateway,
+  SyncTableRowsResult,
+} from "../src/application/sync/gateway/syncGateway.js";
 import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
 
 const TestEntitySchema = defineEntity({
