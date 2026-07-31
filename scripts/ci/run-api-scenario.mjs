@@ -44,14 +44,26 @@ import {
   migrateMikroOrmSqliteStorageSchema,
   runSyncEffectWorkerWithAdapter,
 } from "hikoutei/mikro-orm";
-import {
+// This is an internal package-consumer harness, not application code. Resolve
+// the built internal modules from the installed package without reopening the
+// root public API that PR #138 intentionally narrows.
+const packageEntry = import.meta.resolve("hikoutei");
+const packageDist = new URL("./", packageEntry);
+const [gateway, sync, encoding] = await Promise.all([
+  import(new URL("./adapter/sheets/providers/apps-script-gateway/index.js", packageDist).href),
+  import(new URL("./application/sync/index.js", packageDist).href),
+  import(new URL("./shared/encoding/index.js", packageDist).href),
+]);
+const {
   AppsScriptOperationClient,
   AppsScriptOperationSyncGateway,
   AppsScriptSyncGatewayError,
+} = gateway;
+const {
   pollSimpleSheetRowsWithAdapter,
   provisionRegisteredSyncSheets,
-  stableHash,
-} from "hikoutei";
+} = sync;
+const { stableHash } = encoding;
 
 const SCENARIO_VERSION = "v1";
 const INTERNAL_RECEIPT_SHEET = "__typed_sheets_internal_effect_receipts";
