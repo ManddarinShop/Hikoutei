@@ -30,6 +30,8 @@ export const HIKOUTEI_ERROR_CODES = {
   INVALID_SHEET_ROUTE: "invalid_sheet_route",
   /** A remote setup call was requested without a configured provisioner. */
   SHEET_SETUP_UNAVAILABLE: "sheet_setup_unavailable",
+  /** An internal entity-to-sync mapping is inconsistent with the runtime. */
+  INVALID_ENTITY_MAPPING: "invalid_entity_mapping",
 } as const;
 
 /** Closed set of Hikoutei API error codes. */

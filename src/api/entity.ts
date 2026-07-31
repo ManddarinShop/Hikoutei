@@ -314,6 +314,35 @@ function isHikouteiScalarType(value: unknown): value is HikouteiScalarType {
 
 const SQL_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** Names owned by Hikoutei's SQLite sync schema and SQLite itself. */
+const RESERVED_TABLE_NAMES = new Set([
+  "sheet_registry",
+  "physical_sheet_registry",
+  "row_binding",
+  "projection_row_binding",
+  "entity_state",
+  "entity_field_state",
+  "sheet_visible_state",
+  "sheet_visible_field_state",
+  "event_batch",
+  "event_log",
+  "event_observation",
+  "observation_receipt",
+  "event_row",
+  "event_field",
+  "sync_conflict",
+  "quarantine_record",
+  "resolution_command",
+  "business_key_index",
+  "sheet_effect_outbox",
+  "writer_lease",
+  "sqlite_master",
+  "sqlite_schema",
+  "sqlite_sequence",
+  "sqlite_temp_master",
+  "sqlite_temp_schema",
+]);
+
 function requireIdentifier(value: unknown, label: string): void {
   if (typeof value !== "string" || !SQL_IDENTIFIER_PATTERN.test(value)) {
     throwInvalid(`${label} must be a SQL identifier matching ${SQL_IDENTIFIER_PATTERN}.`);
@@ -322,7 +351,14 @@ function requireIdentifier(value: unknown, label: string): void {
 
 function requireTableName(value: unknown): string {
   requireIdentifier(value, "table name");
-  return value as string;
+  const tableName = value as string;
+  if (
+    RESERVED_TABLE_NAMES.has(tableName.toLowerCase()) ||
+    tableName.toLowerCase().startsWith("sqlite_")
+  ) {
+    throwInvalid(`table name "${tableName}" is reserved by Hikoutei or SQLite.`);
+  }
+  return tableName;
 }
 
 function requireNonEmptyString(value: unknown, label: string): string {

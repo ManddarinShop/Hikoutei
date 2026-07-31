@@ -277,6 +277,7 @@ function validateSheetsOptions(
     );
   }
   const routeNames = Object.keys(options.routes);
+  const physicalTabs = new Set<string>();
   for (const entityName of descriptors.keys()) {
     if (options.routes[entityName] === undefined) {
       throw new HikouteiError(
@@ -294,10 +295,30 @@ function validateSheetsOptions(
     }
     const route = options.routes[routeName];
     if (route === undefined) continue;
-    validateRoute(routeName, "systemState", route.systemState);
-    if (route.userInput !== undefined) validateRoute(routeName, "userInput", route.userInput);
+    registerPhysicalTab(routeName, "systemState", route.systemState, physicalTabs, options.spreadsheetId);
+    if (route.userInput !== undefined) {
+      registerPhysicalTab(routeName, "userInput", route.userInput, physicalTabs, options.spreadsheetId);
+    }
   }
   return options;
+}
+
+function registerPhysicalTab(
+  entityName: string,
+  projection: string,
+  route: HikouteiSheetRoute,
+  physicalTabs: Set<string>,
+  spreadsheetId: string,
+): void {
+  validateRoute(entityName, projection, route);
+  const key = JSON.stringify([spreadsheetId, route.tabName.trim()]);
+  if (physicalTabs.has(key)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_SHEET_ROUTE,
+      `sheets.routes.${entityName}.${projection} reuses the Sheet tab "${route.tabName}".`,
+    );
+  }
+  physicalTabs.add(key);
 }
 
 function validateRoute(

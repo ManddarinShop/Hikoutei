@@ -76,7 +76,10 @@ class EntityManagerImpl implements EntityManager {
     options?: HikouteiFindOptions,
   ): Promise<readonly Entity[]> {
     const descriptor = this.requireDescriptor(entity);
-    const rows = await this.provider.read(toQuery(descriptor, where, options));
+    const query = toQuery(descriptor, where, options);
+    const rows = this.activeTransaction === undefined
+      ? await this.provider.read(query)
+      : await this.activeTransaction.read(query);
     return rows.map((row) => this.materialize(descriptor, row)) as Entity[];
   }
 
@@ -290,7 +293,7 @@ function toQuery(
         `"${key}" is not a declared property of entity "${descriptor.name}".`,
       );
     }
-    filter[key] = requireFilterValue(descriptor, key, property.type, value);
+    filter[key] = requireFilterValue(descriptor, key, property, value);
   }
   requirePageValue(options?.limit, "limit");
   requirePageValue(options?.offset, "offset");
@@ -306,21 +309,39 @@ function toQuery(
 function requireFilterValue(
   descriptor: ResolvedHikouteiEntityDescriptor,
   key: string,
-  type: string,
+  property: ResolvedHikouteiEntityDescriptor["properties"][number],
   value: unknown,
 ): ScalarEntityValue {
-  if (value === null || value === undefined) return null;
-  if (type === "date") {
+  if (value === undefined) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      `filter "${key}" must not be undefined in entity "${descriptor.name}".`,
+    );
+  }
+  if (value === null) {
+    if (property.nullable) return null;
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      `filter "${key}" cannot be null in non-nullable entity "${descriptor.name}".`,
+    );
+  }
+  if (property.type === "date") {
     if (value instanceof Date && Number.isFinite(value.getTime())) return value;
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
       `filter "${key}" expected a valid Date in entity "${descriptor.name}".`,
     );
   }
-  if (typeof value !== type) {
+  if (typeof value !== property.type) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `filter "${key}" expected ${type} but received ${typeof value}.`,
+      `filter "${key}" expected ${property.type} but received ${typeof value}.`,
+    );
+  }
+  if (property.type === "number" && !Number.isFinite(value)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      `filter "${key}" must be a finite number.`,
     );
   }
   return value as ScalarEntityValue;
@@ -368,5 +389,8 @@ function identityKey(
   descriptor: ResolvedHikouteiEntityDescriptor,
   entity: Readonly<Record<string, unknown>>,
 ): string {
-  return `${descriptor.name}:${String(entity[descriptor.primaryKey])}`;
+  return JSON.stringify([
+    descriptor.name,
+    String(entity[descriptor.primaryKey]),
+  ]);
 }
