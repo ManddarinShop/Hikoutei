@@ -81,7 +81,7 @@ jobs:
           (cd "$package_dir" && sha256sum "$package_file" > hikoutei-beta-package.sha256)
           echo "Packed $package_path"
 
-      - name: Run installed-package internal sync/gateway E2E (fake)
+      - name: Run installed-package internal sync/gateway E2E and root API smoke (fake)
         shell: bash
         run: |
           set -euo pipefail
@@ -99,18 +99,29 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
+          # Internal sync/gateway E2E: loads dist modules directly and exercises
+          # projection registration, provisioning, the worker, and polling.
           cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
           node "$consumer_dir/run-api-scenario.mjs" \
             --backend=fake \
             --output="$RUNNER_TEMP/hikoutei-beta-fake-result.json" \
             --manifest="$RUNNER_TEMP/hikoutei-beta-fake-manifest.json"
 
-      - name: Upload beta fake E2E report
+          # Installed root API smoke: imports ONLY the installed `hikoutei` root
+          # entrypoint and drives the public entity-lifecycle contract.
+          cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
+          cp scripts/ci/root-api-options.mjs "$consumer_dir/root-api-options.mjs"
+          node "$consumer_dir/run-root-api-scenario.mjs" \
+            --output="$RUNNER_TEMP/hikoutei-beta-root-api-smoke-result.json"
+
+      - name: Upload beta installed-consumer reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: hikoutei-beta-fake-sync-gateway-e2e
-          path: ${{ runner.temp }}/hikoutei-beta-fake-result.json
+          name: hikoutei-beta-fake-installed-consumer
+          path: |
+            ${{ runner.temp }}/hikoutei-beta-fake-result.json
+            ${{ runner.temp }}/hikoutei-beta-root-api-smoke-result.json
           if-no-files-found: ignore
 
       - name: Upload beta package
