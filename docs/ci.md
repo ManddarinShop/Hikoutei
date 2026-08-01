@@ -32,11 +32,11 @@ the same lifecycle:
 ## Backends and triggers
 
 The fake backend runs when a pull request targets `main` or `develop`, and when
-those branches receive a push. The live workflow runs for pull requests
-targeting `main` or `develop`. Live is skipped for forked pull requests because
-GitHub does not expose repository secrets to them; using `pull_request_target`
-would expose the secret to untrusted PR code. It uses a dedicated test
-spreadsheet and the following GitHub Actions secrets:
+those branches receive a push. The live workflow is opt-in via
+`workflow_dispatch`: a maintainer with write access dispatches it manually for a
+trusted ref. It does not run automatically for pull requests or pushes, so
+there is no forked-PR secret-exposure path and no `pull_request_target` path.
+It uses a dedicated test spreadsheet and the following GitHub Actions secrets:
 
 - `TYPED_SHEETS_GATEWAY_URL`
 - `TYPED_SHEETS_GATEWAY_SHARED_SECRET`
@@ -59,13 +59,19 @@ before publishing to npm with the `beta` dist-tag. Pull requests do not publish
 beta packages; the workflow runs after the commit reaches `develop`.
 
 The workflow requires the GitHub repository `NPM_TOKEN` secret and uses npm
-provenance. The token must never be committed to the repository. The publish
-job also checks that `develop` still points at the workflow commit so an older
-run cannot publish after a newer commit has landed.
+provenance. The token must never be committed to the repository. Immediately
+before publishing, the publish job checks that `develop` still points at the
+workflow commit, so it rejects a run that was stale as observed at that
+check. The check and the npm publish that follows are not atomic: `develop`
+can advance between the check and the publish, so the check reduces but does
+not eliminate the chance of publishing a superseded commit.
 
 The workflow does not commit a generated version back to `develop`. It
 publishes an ephemeral prerelease on the current numeric `package.json` version
-line with the GitHub run ID and attempt. For example, `0.3.0` produces
+line with the GitHub run ID and attempt. The calculation lives in
+`scripts/ci/beta-version.mjs` (tested by `test/beta-version.test.ts`); the
+workflow reads `package.json`, calls that helper, and then runs
+`npm version --no-git-tag-version` in CI. For example, `0.3.0` produces
 `0.3.0-beta.b30560831639.1`, and starting the next development cycle at
 `0.3.1` produces `0.3.1-beta...`. The stable `package.json` version is
 therefore unchanged by CI. A full workflow rerun receives a new version;
@@ -110,3 +116,26 @@ runs, a step summary. The beta and stable publication workflows upload their
 fake E2E reports and verified package artifacts when available. Setup time and
 steady-state time are reported separately so spreadsheet creation and header
 provisioning do not distort the internal sync/gateway measurements.
+
+## Action versions
+
+Every workflow pins `actions/checkout`, `actions/setup-node`,
+`actions/upload-artifact`, and `actions/download-artifact` to the current
+Node 24-compatible major (`v5`) so the JavaScript actions run on the runner's
+Node 24 runtime:
+
+| Action | Major | Runtime |
+| --- | --- | --- |
+| `actions/checkout` | `v5` | Node 24 |
+| `actions/setup-node` | `v5` | Node 24 |
+| `actions/upload-artifact` | `v5` | Node 24 |
+| `actions/download-artifact` | `v5` | Node 24 |
+
+All four are on the same major, so there is no exception to record. The pin
+preserves behavior: artifacts are downloaded by name (not by artifact ID);
+`upload-artifact` still zips by default; `setup-node` `cache: npm` is set
+explicitly (the package has no `packageManager` field, so the auto-cache
+shortcut never applies); and the publish steps set `NODE_AUTH_TOKEN` in their
+own `env`, so npm provenance and the `id-token: write` permission are
+unchanged. This major is the action's own runtime version; the build and
+test job still uses `node-version: 22`.
