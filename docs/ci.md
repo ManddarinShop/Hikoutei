@@ -1,18 +1,28 @@
 # CI scenarios
 
-Hikoutei's CI includes an **internal sync/gateway end-to-end scenario**. It is
-not a public API smoke test. The scenario drives the internal typed-sheets sync
-pipeline — projection registration, gateway provisioning, the bounded effect
-worker, polling, and the MikroORM-backed storage/CAS/hash machinery — and
-loads implementation modules directly from the packed `dist/` tree. The
-`hikoutei/orm` and `hikoutei/mikro-orm` package subpaths are intentionally not
-published.
+Hikoutei's CI runs two installed-consumer scenarios against the packed
+package. Each is built as an installed consumer: after `npm pack` it imports
+from the packed tarball rather than from `src/**` or the source-only test
+fake, and neither is allowed to import those.
+
+1. **Internal sync/gateway E2E** (`scripts/ci/run-api-scenario.mjs`) drives the
+   internal typed-sheets sync pipeline — projection registration, gateway
+   provisioning, the bounded effect worker, polling, and the MikroORM-backed
+   storage/CAS/hash machinery — and loads implementation modules directly from
+   the packed `dist/` tree.
+2. **Installed root API smoke** (`scripts/ci/run-root-api-scenario.mjs`)
+   imports ONLY the installed package root entrypoint `hikoutei` (no internal
+   package subpaths and no source imports) and exercises the public
+   entity-lifecycle contract an application is meant to use.
 
 The public contract is the high-level `hikoutei` root API: Sheet
-configuration/registration and a MikroORM-style entity lifecycle. Root API
-coverage lives in the unit/provider tests; this installed-consumer scenario
-intentionally remains focused on the internal sync/gateway pipeline and should
-not be read as public API CRUD coverage.
+configuration/registration and a MikroORM-style entity lifecycle. The
+`hikoutei/orm` and `hikoutei/mikro-orm` package subpaths are intentionally not
+published; the root smoke performs those dynamic imports only as negative
+boundary assertions (they must be rejected with `ERR_PACKAGE_PATH_NOT_EXPORTED`)
+while the lifecycle itself imports only the root `hikoutei` entrypoint. This
+guards the boundary directly in an installed consumer in addition to the
+source-level tests.
 
 ## Internal sync/gateway E2E
 
@@ -29,14 +39,60 @@ the same lifecycle:
 5. edit a User_Input value and verify that polling reports the changed row;
 6. restore the value, delete the entity, and verify the final projection state.
 
+## Installed root API smoke
+
+The root smoke imports only the installed `hikoutei` root entrypoint and drives
+the stable public lifecycle end to end against an in-memory SQLite authority
+(`dbName: ":memory:"`):
+
+1. define a scalar entity with `defineTypedSheetsEntity()`;
+2. open the runtime with `createTypedSheets()` and a valid local Sheet route;
+3. obtain a request-local manager with `em.fork()`;
+4. `create()` / `persist()` / `flush()` one entity and `findOne()`-verify it;
+5. mutate the loaded entity, `flush()`, and re-read it through a fresh fork to
+   confirm the mutation committed locally;
+6. `remove()` / `flush()` and verify the entity is gone through a fresh fork;
+7. close the runtime.
+
+It uses assertions and writes a JSON report plus a clear pass summary. It never
+contacts Google Sheets, never needs credentials, and never provisions remote
+tabs, so it runs as a packed consumer only in the normal CI, beta, and stable
+verify jobs and has no live counterpart. It is local-only — an in-memory SQLite
+authority with no backend concept — not a fake-backend scenario like the
+internal sync/gateway E2E. Its entity lifecycle imports only the
+root `hikoutei` package; the `hikoutei/orm` and `hikoutei/mikro-orm` dynamic
+imports it performs are negative boundary assertions that must be rejected,
+not part of the lifecycle.
+
 ## Backends and triggers
 
-The fake backend runs when a pull request targets `main` or `develop`, and when
-those branches receive a push. The live workflow is opt-in via
-`workflow_dispatch`: a maintainer with write access dispatches it manually for a
-trusted ref. It does not run automatically for pull requests or pushes, so
-there is no forked-PR secret-exposure path and no `pull_request_target` path.
-It uses a dedicated test spreadsheet and the following GitHub Actions secrets:
+The normal CI, beta, and stable verification jobs run **both** installed-consumer
+scenarios — the internal sync/gateway E2E and the installed root API smoke. The
+internal E2E uses the **fake** backend (no Google Sheets contact, no
+credentials); the root API smoke is local-only, an in-memory SQLite authority
+(`:memory:`) with no backend concept. The workflows are:
+
+- `.github/workflows/ci.yml` runs on pull requests and pushes to `main` and
+  `develop`.
+- `.github/workflows/beta-publish.yml` runs the same verification on a
+  `develop` push before publishing the beta package.
+- `.github/workflows/stable-publish.yml` runs the same verification on a
+  `vX.Y.Z` tag before publishing the stable package.
+
+Only the internal sync/gateway E2E has a live variant, in the separate
+`.github/workflows/live-integration.yml` workflow. It is opt-in via
+`workflow_dispatch` — a maintainer with write access dispatches it explicitly;
+it never runs automatically on pull requests or pushes — and exercises
+that single scenario against real Google Sheets with `--backend=live`. The installed root API smoke has no live
+counterpart: it is a local-only lifecycle smoke against an in-memory SQLite
+authority, so it never runs there.
+
+Because live is opt-in via `workflow_dispatch`, it is triggered manually by a
+maintainer with write access rather than automatically on pull requests, so
+there is no forked-PR secret-exposure path. The three gateway secrets are
+scoped to the live execution and cleanup steps only, not the whole job, so
+checkout/setup/install/build never see them. The live run uses a dedicated test
+spreadsheet and the following GitHub Actions secrets:
 
 - `TYPED_SHEETS_GATEWAY_URL`
 - `TYPED_SHEETS_GATEWAY_SHARED_SECRET`
@@ -54,8 +110,9 @@ spreadsheet; cleanup is intentionally scoped to the dedicated CI spreadsheet.
 ## Beta publication
 
 A push to `develop` runs `.github/workflows/beta-publish.yml`. It repeats the
-unit/type/build/package checks and the installed-package fake sync/gateway E2E
-before publishing to npm with the `beta` dist-tag. Pull requests do not publish
+unit/type/build/package checks, the installed-package internal sync/gateway
+E2E, and the installed root API smoke before publishing to npm with the
+`beta` dist-tag. Pull requests do not publish
 beta packages; the workflow runs after the commit reaches `develop`.
 
 The workflow requires the GitHub repository `NPM_TOKEN` secret and uses npm
@@ -100,8 +157,9 @@ Release procedure:
    `0.2.1`) or a new minor version for a new public API/feature (for example
    `0.3.0`). Document intentional pre-1.0 compatibility breaks.
 3. Create and push the matching `vX.Y.Z` tag.
-4. The tag workflow reruns the checks and installed-consumer fake E2E, then
-   publishes the verified package with the `latest` dist-tag. A `develop` push
+4. The tag workflow reruns the checks, the installed-package internal
+   sync/gateway E2E, and the installed root API smoke, then publishes the
+   verified package with the `latest` dist-tag. A `develop` push
    does not change `latest`; for example, the `0.3.0` stable package is
    published only after the `v0.3.0` tag is pushed.
 
@@ -111,11 +169,21 @@ instead of replacing the existing package. Normal users can install the
 
 ## Artifacts
 
-The internal sync/gateway CI workflows emit a JSON artifact and, for live
-runs, a step summary. The beta and stable publication workflows upload their
-fake E2E reports and verified package artifacts when available. Setup time and
-steady-state time are reported separately so spreadsheet creation and header
-provisioning do not distort the internal sync/gateway measurements.
+The CI, beta, and stable jobs each emit a JSON report for **both**
+scenarios (internal sync/gateway E2E and installed root API smoke). The live
+job emits a JSON report only for the internal sync/gateway E2E, the single
+scenario it runs. Both runner scripts (`run-api-scenario.mjs` and
+`run-root-api-scenario.mjs`) default their `--summary` option to
+`GITHUB_STEP_SUMMARY`, so in GitHub Actions every CI/beta/stable invocation
+writes a step summary even though none passes `--summary` explicitly. The live
+internal E2E run is the only invocation that passes `--summary` explicitly
+(`--summary="$GITHUB_STEP_SUMMARY"`), which resolves to the same default but
+documents the intent. The beta and stable verify jobs upload their two
+installed-consumer scenario reports as a dedicated reports artifact
+(`if: always()`), separate from the package artifact (`if: success()`) that the
+publish job consumes. Setup time and steady-state time are reported separately
+for the internal E2E so spreadsheet creation and header provisioning do not
+distort the internal sync/gateway measurements.
 
 The beta and stable package artifacts are each a single directory that holds
 the npm tarball and its `sha256` checksum together under
