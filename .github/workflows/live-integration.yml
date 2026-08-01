@@ -1,13 +1,15 @@
 name: Live Google Sheets integration
 
+# Opt-in only. The live scenario contacts real Google Sheets using repository
+# secrets, so it never runs automatically on pull requests or pushes; a
+# maintainer with write access dispatches it explicitly. Manual dispatch is the
+# only trigger, so there is no forked-PR secret-exposure path and no need for
+# the pull_request/pull_request_target distinction.
 on:
-  pull_request:
-    branches:
-      - main
-      - develop
+  workflow_dispatch:
 
-# All live runs share one deployed gateway and spreadsheet, so serialize them
-# across pull requests to avoid quota and SpreadsheetApp contention.
+# All live runs share one deployed gateway and spreadsheet, so serialize manual
+# dispatches to avoid quota and SpreadsheetApp contention.
 concurrency:
   group: live-google-sheets
   cancel-in-progress: false
@@ -17,22 +19,15 @@ permissions:
 
 jobs:
   live:
-    # Secrets are unavailable to forked pull requests. Never switch this to
-    # pull_request_target: it would execute untrusted PR code with the secret.
-    if: github.event.pull_request.head.repo.full_name == github.repository
     name: Installed-package Google Sheets internal sync/gateway E2E
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      TYPED_SHEETS_GATEWAY_URL: ${{ secrets.TYPED_SHEETS_GATEWAY_URL }}
-      TYPED_SHEETS_GATEWAY_SHARED_SECRET: ${{ secrets.TYPED_SHEETS_GATEWAY_SHARED_SECRET }}
-      TYPED_SHEETS_GATEWAY_SHEET_ID: ${{ secrets.TYPED_SHEETS_GATEWAY_SHEET_ID }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -44,6 +39,12 @@ jobs:
         run: npm run build
 
       - name: Run installed-package internal sync/gateway E2E (live)
+        # The gateway secrets are scoped to this step and the cleanup step only,
+        # not the whole job, so checkout/setup/install/build never see them.
+        env:
+          TYPED_SHEETS_GATEWAY_URL: ${{ secrets.TYPED_SHEETS_GATEWAY_URL }}
+          TYPED_SHEETS_GATEWAY_SHARED_SECRET: ${{ secrets.TYPED_SHEETS_GATEWAY_SHARED_SECRET }}
+          TYPED_SHEETS_GATEWAY_SHEET_ID: ${{ secrets.TYPED_SHEETS_GATEWAY_SHEET_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -69,7 +70,12 @@ jobs:
             --summary="$GITHUB_STEP_SUMMARY"
 
       - name: Clean up live fixture
+        # Cleanup also talks to the live gateway, so it needs the same secrets.
         if: always()
+        env:
+          TYPED_SHEETS_GATEWAY_URL: ${{ secrets.TYPED_SHEETS_GATEWAY_URL }}
+          TYPED_SHEETS_GATEWAY_SHARED_SECRET: ${{ secrets.TYPED_SHEETS_GATEWAY_SHARED_SECRET }}
+          TYPED_SHEETS_GATEWAY_SHEET_ID: ${{ secrets.TYPED_SHEETS_GATEWAY_SHEET_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -85,7 +91,7 @@ jobs:
 
       - name: Upload internal sync/gateway E2E report (live)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: hikoutei-live-sync-gateway-e2e
           path: |
