@@ -22,10 +22,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload stable fake E2E report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: hikoutei-stable-fake-sync-gateway-e2e
           path: ${{ runner.temp }}/hikoutei-stable-fake-result.json
@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload stable package
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: hikoutei-stable-package
           path: |
@@ -152,16 +152,16 @@ jobs:
       id-token: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       - name: Download stable package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: hikoutei-stable-package
           path: ${{ runner.temp }}/hikoutei-stable-package
