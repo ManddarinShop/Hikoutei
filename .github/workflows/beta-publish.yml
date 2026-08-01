@@ -68,12 +68,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
-          package_path="$RUNNER_TEMP/$package_file"
+          # Keep the tarball and its checksum together in a dedicated directory so
+          # the artifact and publish job reason about a single, self-contained path.
+          package_dir="$RUNNER_TEMP/hikoutei-beta-package"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir"
+          package_file="$(npm pack --silent --pack-destination "$package_dir")"
+          package_path="$package_dir/$package_file"
           test -f "$package_path"
           tar -xOf "$package_path" package/package.json > "$RUNNER_TEMP/hikoutei-beta-package.json"
           node -e 'const p=require(process.argv[1]); if(p.name!=="hikoutei" || !p.version.includes("-beta.")) process.exit(1)' "$RUNNER_TEMP/hikoutei-beta-package.json"
-          (cd "$RUNNER_TEMP" && sha256sum "$package_file" > hikoutei-beta-package.sha256)
+          (cd "$package_dir" && sha256sum "$package_file" > hikoutei-beta-package.sha256)
           echo "Packed $package_path"
 
       - name: Run installed-package internal sync/gateway E2E (fake)
@@ -82,7 +87,7 @@ jobs:
           set -euo pipefail
           consumer_dir="$RUNNER_TEMP/hikoutei-beta-consumer"
           mkdir -p "$consumer_dir"
-          package_file="$(find "$RUNNER_TEMP" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
+          package_file="$(find "$RUNNER_TEMP/hikoutei-beta-package" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
           test -n "$package_file"
 
           (
@@ -113,9 +118,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: hikoutei-beta-package
-          path: |
-            ${{ runner.temp }}/hikoutei-*.tgz
-            ${{ runner.temp }}/hikoutei-beta-package.sha256
+          path: ${{ runner.temp }}/hikoutei-beta-package
           if-no-files-found: error
 
   publish:
@@ -159,6 +162,19 @@ jobs:
             exit 1
           fi
           package_file="${packages[0]}"
+          checksum_file="$package_dir/hikoutei-beta-package.sha256"
+          if [[ ! -f "$checksum_file" ]]; then
+            echo "missing beta checksum file $checksum_file" >&2
+            exit 1
+          fi
+          # Assert the checksum line names the tarball we actually publish, not
+          # merely any file that sha256sum --check happens to find in the dir.
+          expected_name="$(basename "$package_file")"
+          recorded_name="$(awk 'NR==1{n=$2; sub(/^\*/,"",n); print n}' "$checksum_file")"
+          if [[ "$recorded_name" != "$expected_name" ]]; then
+            echo "beta checksum names '$recorded_name' but tarball is '$expected_name'" >&2
+            exit 1
+          fi
           (cd "$package_dir" && sha256sum --check hikoutei-beta-package.sha256)
           tar -xOf "$package_file" package/package.json > "$RUNNER_TEMP/hikoutei-beta-package.json"
           node -e 'const p=require(process.argv[1]); if(p.name!=="hikoutei" || !p.version.includes("-beta.")) process.exit(1)' "$RUNNER_TEMP/hikoutei-beta-package.json"

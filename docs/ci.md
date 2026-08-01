@@ -117,6 +117,15 @@ fake E2E reports and verified package artifacts when available. Setup time and
 steady-state time are reported separately so spreadsheet creation and header
 provisioning do not distort the internal sync/gateway measurements.
 
+The beta and stable package artifacts are each a single directory that holds
+the npm tarball and its `sha256` checksum together under
+`$RUNNER_TEMP/hikoutei-{beta,stable}-package`. The publish job downloads that
+directory, asserts it contains exactly one `hikoutei-*.tgz` and the checksum
+file, verifies the checksum line names that exact tarball (not merely any file
+present in the directory), and only then runs `sha256sum --check` before
+publishing. Name/version validation, npm provenance, the `beta`/`latest`
+dist-tags, and the beta stale-`develop` check are unchanged.
+
 ## Action versions
 
 Every workflow pins `actions/checkout`, `actions/setup-node`,
