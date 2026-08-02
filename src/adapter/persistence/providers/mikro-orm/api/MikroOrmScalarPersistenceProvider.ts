@@ -23,10 +23,8 @@ import type {
   ScalarEntityValue,
 } from "../../../contracts/scalar.js";
 import type {
-  TypedSheetsEntityData,
   TypedSheetsEntityReference,
   TypedSheetsFindOptions,
-  TypedSheetsEntityFilter,
 } from "../../../../../application/orm/api/contracts.js";
 import type {
   TypedSheetsEntityManager,
@@ -38,7 +36,7 @@ import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 /** Internal mapping from a public descriptor to its generated MikroORM entity. */
 export interface MikroOrmScalarEntityBinding {
   readonly descriptor: ResolvedHikouteiEntityDescriptor;
-  readonly entity: TypedSheetsEntityReference<object>;
+  readonly entity: TypedSheetsEntityReference<Record<string, unknown>>;
 }
 
 /**
@@ -103,7 +101,7 @@ class MikroOrmScalarTransaction implements ScalarEntityTransaction {
     const binding = this.requireBindingByTable(row.tableName);
     const entity = this.manager.create(
       binding.entity,
-      toInternalData(binding.descriptor, row.values) as TypedSheetsEntityData<object>,
+      toInternalData(binding.descriptor, row.values),
     );
     this.manager.persist(entity);
   }
@@ -150,7 +148,7 @@ class MikroOrmScalarTransaction implements ScalarEntityTransaction {
   ): Promise<object | null> {
     const result = await this.manager.findOne(
       binding.entity,
-      { [primaryKeyColumn]: toInternalValue(binding.descriptor, primaryKeyColumn, primaryKeyValue) } as TypedSheetsEntityFilter<object>,
+      { [primaryKeyColumn]: toInternalValue(binding.descriptor, primaryKeyColumn, primaryKeyValue) },
     );
     return result;
   }
@@ -173,7 +171,7 @@ async function readRows(
 ): Promise<readonly ScalarEntityRow[]> {
   const entities = await manager.find(
     binding.entity,
-    toInternalFilter(binding.descriptor, query.where) as TypedSheetsEntityFilter<object>,
+    toInternalFilter(binding.descriptor, query.where),
     toFindOptions(query),
   );
   return entities.map((entity) => fromInternalEntity(binding.descriptor, entity));

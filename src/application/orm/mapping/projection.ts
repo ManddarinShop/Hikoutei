@@ -7,6 +7,7 @@
 
 import {
   FIELD_OWNERSHIPS,
+  REGISTERED_PROJECTION_KINDS,
   type FieldManifestEntry,
   type OwnershipManifest,
 } from "../../../domain/index.js";
@@ -94,11 +95,22 @@ export function createTypedSheetsEntityProjectionRegistration(
     spreadsheetId: projection.spreadsheetId,
     tabName: projection.tabName,
     registeredRange: projection.registeredRange,
-    projection: projection.projection as RegisteredProjection,
+    projection: toRegisteredProjection(projection.projection),
     schemaVersion: mapping.schemaVersion,
     ownershipManifestJson: serializeTypedSheetsEntityOwnershipManifest(mapping),
     businessKeyField: mapping.businessKey.fieldName,
   };
+}
+
+function toRegisteredProjection(
+  projection: TypedSheetsEntityProjection,
+): RegisteredProjection {
+  switch (projection) {
+    case SYNC_GATEWAY_PROJECTIONS.USER_INPUT:
+      return REGISTERED_PROJECTION_KINDS.USER_INPUT;
+    case SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE:
+      return REGISTERED_PROJECTION_KINDS.SYSTEM_STATE;
+  }
 }
 
 /** Returns every setup definition necessary to register and provision a mapping collection. */

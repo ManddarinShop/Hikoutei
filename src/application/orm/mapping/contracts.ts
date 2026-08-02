@@ -27,9 +27,9 @@ export type TypedSheetsEntityProperty<Entity extends object> = Extract<keyof Ent
 /** Optional codec used when a TypeScript property needs custom cell conversion. */
 export interface TypedSheetsEntityFieldCodec<Value = unknown> {
   /** Converts one entity property value into a normalized Sheet cell. */
-  readonly encode?: (value: Value) => NormalizedCell;
+  encode?(value: Value): NormalizedCell;
   /** Converts one accepted canonical cell into an entity property value. */
-  readonly decode?: (value: NormalizedCell) => Value;
+  decode?(value: NormalizedCell): Value;
 }
 
 /** Input declaration for one entity property stored as a canonical field. */

@@ -86,7 +86,7 @@ export function requireTypedSheetsEntityField(
 }
 
 function readEntityProperty(entity: object, property: string): unknown {
-  return (entity as Readonly<Record<string, unknown>>)[property];
+  return Reflect.get(entity, property);
 }
 
 function defaultEncode(field: TypedSheetsEntityFieldMapping, value: unknown): NormalizedCell {

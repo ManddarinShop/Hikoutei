@@ -39,10 +39,10 @@ export function createMikroOrmScalarEntityRuntime(
       name: descriptor.name,
       tableName: descriptor.tableName,
       properties: createMikroProperties(descriptor.properties),
-    } as never);
+    });
     const GeneratedEntity = class extends schema.class {};
     schema.setClass(GeneratedEntity);
-    const reference = GeneratedEntity as unknown as TypedSheetsEntityReference<object>;
+    const reference: TypedSheetsEntityReference<Record<string, unknown>> = GeneratedEntity;
     generatedEntities.push(schema);
     bindings.push({ descriptor, entity: reference });
   }
@@ -50,31 +50,39 @@ export function createMikroOrmScalarEntityRuntime(
   return { entities: generatedEntities, bindings };
 }
 
+interface ScalarPropertyBuilder {
+  primary(): ScalarPropertyBuilder;
+  nullable(): ScalarPropertyBuilder;
+}
+
 function createMikroProperties(
   properties: readonly ResolvedHikouteiProperty[],
-): Record<string, unknown> {
-  return Object.fromEntries(properties.map((property) => {
-    let builder: unknown;
-    switch (property.type) {
-      case "number":
-        builder = p.float();
-        break;
-      case "boolean":
-        builder = p.boolean();
-        break;
-      case "string":
-      case "date":
-        // Dates use canonical ISO text in the provider bridge. This avoids
-        // provider-specific Date conversion while the public value remains Date.
-        builder = p.string();
-        break;
-    }
-    if (property.primary) {
-      builder = (builder as { primary(): unknown }).primary();
-    }
-    if (property.nullable) {
-      builder = (builder as { nullable(): unknown }).nullable();
-    }
-    return [property.name, builder];
-  }));
+): Record<string, ScalarPropertyBuilder> {
+  return Object.fromEntries(properties.map((property) => [
+    property.name,
+    createMikroProperty(property),
+  ]));
+}
+
+function createMikroProperty(property: ResolvedHikouteiProperty): ScalarPropertyBuilder {
+  switch (property.type) {
+    case "number":
+      return applyMikroPropertyFlags(p.float(), property);
+    case "boolean":
+      return applyMikroPropertyFlags(p.boolean(), property);
+    case "string":
+    case "date":
+      // Dates use canonical ISO text in the provider bridge. This avoids
+      // provider-specific Date conversion while the public value remains Date.
+      return applyMikroPropertyFlags(p.string(), property);
+  }
+}
+
+function applyMikroPropertyFlags(
+  builder: ScalarPropertyBuilder,
+  property: ResolvedHikouteiProperty,
+): ScalarPropertyBuilder {
+  if (property.primary) return builder.primary();
+  if (property.nullable) return builder.nullable();
+  return builder;
 }

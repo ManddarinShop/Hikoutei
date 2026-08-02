@@ -99,7 +99,7 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
   }
 
   return {
-    entity: input.entity as unknown as TypedSheetsEntityMapping["entity"],
+    entity: input.entity,
     entityName,
     logicalSheetId: input.logicalSheetId,
     primaryKey: input.primaryKey,
@@ -163,7 +163,7 @@ function normalizeFieldMapping<Entity extends object>(
 function eraseFieldCodec<Entity extends object>(
   field: TypedSheetsEntityFieldMappingInputForEntity<Entity>,
 ): TypedSheetsEntityFieldCodec<unknown> {
-  const codec = field as unknown as TypedSheetsEntityFieldCodec<unknown>;
+  const codec: TypedSheetsEntityFieldCodec<unknown> = field;
   return {
     ...(codec.encode === undefined ? {} : { encode: codec.encode }),
     ...(codec.decode === undefined ? {} : { decode: codec.decode }),
@@ -223,10 +223,11 @@ function isNormalizedCellKind(value: unknown): value is NormalizedCellKind {
     value === NORMALIZED_CELL_KINDS.DATE;
 }
 
-function requireText(value: unknown, label: string): asserts value is string {
+function requireText(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === EMPTY_STRING_LENGTH_ZERO) {
     throwInvalidMapping(`${label} is required`);
   }
+  return value;
 }
 
 function throwInvalidMapping(message: string): never {
