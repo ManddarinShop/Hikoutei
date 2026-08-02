@@ -1,36 +1,27 @@
 /** Constants and durable status contracts shared by the effect worker modules. */
 
 import type { EffectKind, EffectStatus, EffectTargetKind } from "../../../../domain/index.js";
-import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
+import {
+  EFFECT_KINDS as CANONICAL_EFFECT_KINDS,
+  EFFECT_STATUSES as CANONICAL_EFFECT_STATUSES,
+  EFFECT_TARGET_KINDS as CANONICAL_EFFECT_TARGET_KINDS,
+} from "../../../../domain/model/constants.js";
 import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../../infrastructure/storage/sync/outbound/effectOutbox.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../gateway/constants.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 export const DEFAULT_WRITER_LEASE_DURATION_MS = 60_000;
 export const DEFAULT_EFFECT_LEASE_DURATION_MS = 30_000;
 
-export const SYNC_EFFECT_KINDS = {
-  SYSTEM_PROJECTION: "system_projection",
-  CANDIDATE_RECONCILE: "candidate_reconcile",
-  SYSTEM_REPAIR: "system_repair",
-  RESOLUTION_PROJECTION: "resolution_projection",
-  RESOLUTION_DELETE: "resolution_delete",
-  USER_INPUT_DELETE: "user_input_delete",
-} as const satisfies Record<string, EffectKind>;
+export const SYNC_EFFECT_KINDS = CANONICAL_EFFECT_KINDS satisfies Record<string, EffectKind>;
 
-export const EFFECT_TARGET_KINDS = {
-  ENTITY: "entity",
-  ROW_BINDING: "row_binding",
-  PROJECTION_ROW: "projection_row",
-  CONFLICT: "conflict",
-} as const satisfies Record<string, EffectTargetKind>;
+export const EFFECT_TARGET_KINDS = CANONICAL_EFFECT_TARGET_KINDS satisfies Record<string, EffectTargetKind>;
 
 export const OUTBOX_EFFECT_STATUSES = {
-  FAILED: "failed",
-  APPLIED: "applied",
-  BLOCKED_CANDIDATE: "blocked_candidate",
-  SUPERSEDED: "superseded",
-  CONFLICT: "conflict",
+  FAILED: CANONICAL_EFFECT_STATUSES.FAILED,
+  APPLIED: CANONICAL_EFFECT_STATUSES.APPLIED,
+  BLOCKED_CANDIDATE: CANONICAL_EFFECT_STATUSES.BLOCKED_CANDIDATE,
+  SUPERSEDED: CANONICAL_EFFECT_STATUSES.SUPERSEDED,
+  CONFLICT: CANONICAL_EFFECT_STATUSES.CONFLICT,
 } as const satisfies Record<string, EffectStatus>;
 
 export const WORKER_ERROR_CODES = {
@@ -55,20 +46,3 @@ export const WORKER_ERROR_CODES = {
 
 export type SyncEffectWorkerErrorCode =
   (typeof WORKER_ERROR_CODES)[keyof typeof WORKER_ERROR_CODES];
-
-export const USER_INPUT_CANDIDATE_BLOCK_SQL = `
-    SELECT 1 AS blocked
-    FROM sheet_visible_field_state AS visible
-    LEFT JOIN sync_conflict AS conflict
-      ON conflict.conflict_id = visible.active_candidate_conflict_id
-    WHERE visible.physical_sheet_id = ?
-      AND visible.projection = '${SYNC_GATEWAY_PROJECTIONS.USER_INPUT}'
-      AND visible.row_binding_id = ?
-      AND visible.field_name IN (__FIELD_NAMES__)
-      AND visible.active_candidate_conflict_id IS NOT NULL
-      AND visible.active_candidate_hash IS NOT NULL
-      AND (conflict.conflict_id IS NULL OR conflict.status IN (
-        '${CONFLICT_STATUSES.OPEN}', '${CONFLICT_STATUSES.NEEDS_REBASE}'
-      ))
-    LIMIT 1
-  `;

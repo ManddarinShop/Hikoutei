@@ -10,11 +10,16 @@
 
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
-import { isFencingValidWithSql } from "../shared/writerLease.js";
+import {
+  fenceParameters,
+  isFencingValidWithSql,
+} from "../shared/writerLease.js";
 import type { FencingContext } from "../shared/writerLease.js";
-import type {
-  SqlExecutor,
-  SqlStorageAdapter,
+import {
+  decodeSqlRows,
+  type SqlExecutor,
+  type SqlRow,
+  type SqlStorageAdapter,
 } from "../../../../adapter/persistence/contracts/sql.js";
 import type {
   ApplyResultOptions,
@@ -39,9 +44,10 @@ import {
 } from "./effectOutboxSql.js";
 import {
   applyEffectResultParameters,
+  assertProjectionConfirmationTargetWithSql,
   AsyncFenceLostError,
   claimEffectParameters,
-  fenceParameters,
+  decodePendingEffectRow,
   pendingEffectParameters,
   replannedEffectParameters,
   requireCurrentFenceWithSql,
@@ -52,9 +58,11 @@ import {
 } from "./effectOutboxSupport.js";
 export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./effectOutboxContracts.js";
 export type {
+  AppliedEffectResultOptions,
   ApplyResultOptions,
   ClaimEffectOptions,
   ClaimResult,
+  NonAppliedEffectResultOptions,
   EffectProjectionConfirmation,
   NewEffect,
   PendingEffect,
@@ -75,22 +83,26 @@ export async function claimEffectWithSql(
     return {
       effectId: options.effectId,
       claimToken: options.claimToken,
-      success: false,
+      status: "not_claimed",
       reason: "stale_fencing",
     };
   }
   validateEffectLeaseDuration(options.leaseDurationMs);
 
   const result = await sql.run(CLAIM_EFFECT_SQL, claimEffectParameters(options));
-  const success = result.changes > 0;
+  if (result.changes > 0) {
+    return {
+      effectId: options.effectId,
+      claimToken: options.claimToken,
+      status: "claimed",
+    };
+  }
 
   return {
     effectId: options.effectId,
     claimToken: options.claimToken,
-    success,
-    reason: success
-      ? "claimed"
-      : await isFencingValidWithSql(sql, options) ? "not_claimable" : "stale_fencing",
+    status: "not_claimed",
+    reason: await isFencingValidWithSql(sql, options) ? "not_claimable" : "stale_fencing",
   };
 }
 
@@ -171,6 +183,14 @@ export async function applyEffectResultWithSql(
 ): Promise<boolean> {
   if (!(await isFencingValidWithSql(sql, options))) return false;
   validateApplyResultOptions(options);
+  if (options.projectionConfirmation !== undefined) {
+    await assertProjectionConfirmationTargetWithSql(
+      sql,
+      options.effectId,
+      options.claimToken,
+      options.projectionConfirmation,
+    );
+  }
 
   return withSqlSavepoint(sql, "apply_effect_result", async () => {
     const result = await sql.run(APPLY_EFFECT_RESULT_SQL, applyEffectResultParameters(options));
@@ -346,11 +366,12 @@ export async function findPendingEffectsByTargetWithSql(
   targetKind: string,
   targetId: string,
 ): Promise<readonly PendingEffect[]> {
-  return sql.all<PendingEffect>(SELECT_PENDING_EFFECTS_BY_TARGET_SQL, [
+  const rows = await sql.all<SqlRow>(SELECT_PENDING_EFFECTS_BY_TARGET_SQL, [
     logicalSheetId,
     targetKind,
     targetId,
   ]);
+  return decodeSqlRows(rows, decodePendingEffectRow, "pending effects");
 }
 
 /** Reads one target stream through a fresh adapter read context. */
@@ -377,7 +398,8 @@ export async function listReadyEffectsWithSql(
   limit: number,
 ): Promise<readonly PendingEffect[]> {
   validateReadyEffectLimit(limit);
-  return sql.all<PendingEffect>(SELECT_READY_EFFECTS_SQL, [limit]);
+  const rows = await sql.all<SqlRow>(SELECT_READY_EFFECTS_SQL, [limit]);
+  return decodeSqlRows(rows, decodePendingEffectRow, "ready effects");
 }
 
 /** Reads bounded head-of-line effects through a fresh adapter read context. */

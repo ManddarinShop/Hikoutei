@@ -14,15 +14,17 @@ import {
   type EffectTargetKind,
   type NormalizedCell,
 } from "../../../domain/index.js";
-import {
-  JAVASCRIPT_TYPE_NAMES,
-  NORMALIZED_CELL_KINDS,
-} from "../../../shared/encoding/constants.js";
+import { JAVASCRIPT_TYPE_NAMES } from "../../../shared/encoding/constants.js";
 import {
   isJavaScriptType,
+  isNormalizedCell,
   isRecord,
-} from "../../../shared/encoding/typeGuards.js";
+} from "../../../shared/encoding/index.js";
 import { APPLICABILITY_KINDS } from "../../../shared/state/constants.js";
+import {
+  applicableValue,
+  notApplicableValue,
+} from "../../../shared/state/index.js";
 import type { Applicability, Presence } from "../../../shared/state/types.js";
 import type { RegisteredProjection } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import {
@@ -566,16 +568,15 @@ export function serializeSyncProjectionEffectPayload(payload: SyncProjectionEffe
 
 function parseNullableCandidateHash(value: unknown): Applicability<string> {
   if (value === null) {
-    return { kind: APPLICABILITY_KINDS.NOT_APPLICABLE };
+    return notApplicableValue();
   }
-  return {
-    kind: APPLICABILITY_KINDS.APPLICABLE,
-    value: requireSyncGatewayText(
+  return applicableValue(
+    requireSyncGatewayText(
       value,
       "effect payload expectedCandidateHash",
       SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
     ),
-  };
+  );
 }
 
 interface SyncProjectionEffectPayloadWire {
@@ -607,25 +608,4 @@ function toWireProjectionEffectPayload(
 
 function toNullableCandidateHash(value: Applicability<string>): string | null {
   return value.kind === APPLICABILITY_KINDS.APPLICABLE ? value.value : null;
-}
-
-function isNormalizedCell(value: unknown): value is NormalizedCell {
-  if (value === null) return true;
-  if (!isRecord(value)) return false;
-  if (value.kind === NORMALIZED_CELL_KINDS.STRING) {
-    return typeof value.value === JAVASCRIPT_TYPE_NAMES.STRING;
-  }
-  if (value.kind === NORMALIZED_CELL_KINDS.NUMBER) {
-    return (
-      typeof value.value === JAVASCRIPT_TYPE_NAMES.NUMBER &&
-      Number.isFinite(value.value)
-    );
-  }
-  if (value.kind === NORMALIZED_CELL_KINDS.BOOLEAN) {
-    return typeof value.value === JAVASCRIPT_TYPE_NAMES.BOOLEAN;
-  }
-  return (
-    value.kind === NORMALIZED_CELL_KINDS.DATE &&
-    typeof value.value === JAVASCRIPT_TYPE_NAMES.STRING
-  );
 }

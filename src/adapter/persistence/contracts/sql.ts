@@ -12,6 +12,33 @@ export type SqlParameter = string | number | bigint | boolean | Uint8Array | nul
 /** A generated identifier returned by a database mutation when one exists. */
 export type SqlGeneratedId = string | number | bigint;
 
+/** Untrusted row shape returned by a SQL driver before column promotion. */
+export type SqlRow = Readonly<Record<string, unknown>>;
+
+/** Decoder used to promote one untrusted SQL row into a storage contract. */
+export type SqlRowDecoder<Row extends object> = (row: SqlRow, index?: number) => Row;
+
+/** Promotes a raw SQL result through an explicit row decoder. */
+export function decodeSqlRow<Row extends object>(
+  value: unknown,
+  decoder: SqlRowDecoder<Row>,
+  label = "SQL row",
+): Row {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return decoder(value as SqlRow);
+}
+
+/** Promotes every raw SQL result through one explicit row decoder. */
+export function decodeSqlRows<Row extends object>(
+  values: readonly unknown[],
+  decoder: SqlRowDecoder<Row>,
+  label = "SQL rows",
+): readonly Row[] {
+  return values.map((value, index) => decodeSqlRow(value, decoder, `${label}[${index}]`));
+}
+
 /** Observable outcome of one SQL data-definition or data-mutation statement. */
 export interface SqlMutationResult {
   /** Number of rows changed by the statement. */
@@ -27,10 +54,16 @@ export interface SqlMutationResult {
  * keeps this executor bound to the current transaction when one exists.
  */
 export interface SqlExecutor {
-  /** Returns every row produced by a query. */
+  /**
+   * Returns every raw object row produced by a query.
+   *
+   * Callers should request `SqlRow` and use `decodeSqlRows()` before passing
+   * values into storage/domain contracts; the generic is retained for adapter
+   * compatibility while migrations move callers to explicit promotion.
+   */
   all<Row extends object>(sql: string, parameters?: readonly SqlParameter[]): Promise<readonly Row[]>;
 
-  /** Returns the first query row, or undefined when no row matches. */
+  /** Returns the first raw object row, or undefined when no row matches. */
   get<Row extends object>(sql: string, parameters?: readonly SqlParameter[]): Promise<Row | undefined>;
 
   /** Runs a statement that changes schema or persisted state. */

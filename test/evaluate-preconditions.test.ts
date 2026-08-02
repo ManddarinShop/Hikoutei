@@ -67,6 +67,48 @@ describe("structural preconditions", () => {
     });
   });
 
+  it("rejects non-finite or negative visible revisions at the raw boundary", () => {
+    for (const baseVisibleRevision of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      const result = validateStructuralPreconditions({
+        rowBindingId: "binding-1",
+        operation: ROW_OPERATIONS.INSERT,
+        afterRow: snapshot,
+        baseVisibleRevision,
+        fields: [
+          {
+            fieldName: "name",
+            previousValue: null,
+            nextValue: { kind: "string", value: "Ada" },
+          },
+        ],
+      });
+      expect(result).toEqual({
+        status: PRECONDITION_RESULTS.INVALID,
+        reason: QUARANTINE_REASONS.INVALID_EVENT,
+      });
+    }
+  });
+
+  it("rejects a snapshot whose fields are not a normalized row map", () => {
+    const result = validateStructuralPreconditions({
+      rowBindingId: "binding-1",
+      operation: ROW_OPERATIONS.INSERT,
+      afterRow: { rowBindingId: "binding-1", fields: {} },
+      baseVisibleRevision: 1,
+      fields: [
+        {
+          fieldName: "name",
+          previousValue: null,
+          nextValue: { kind: "string", value: "Ada" },
+        },
+      ],
+    });
+    expect(result).toEqual({
+      status: PRECONDITION_RESULTS.INVALID,
+      reason: QUARANTINE_REASONS.INVALID_EVENT,
+    });
+  });
+
   it("keeps delete evidence as an explicit state instead of null", () => {
     const rawRow: RawObservedRowChange = {
       rowBindingId: "binding-1",

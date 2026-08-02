@@ -7,6 +7,10 @@
  */
 
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../../errors.js";
+import {
+  REGISTERED_PROJECTION_KINDS,
+  type RegisteredProjectionKind,
+} from "../../../../domain/model/constants.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
@@ -51,7 +55,7 @@ const READ_REGISTERED_SYNC_SHEET_SQL = `
 `;
 
 /** The only projection labels accepted by the v1 runtime registry. */
-export type RegisteredProjection = "user_input" | "system_state" | "sync_conflicts";
+export type RegisteredProjection = RegisteredProjectionKind;
 
 /** Immutable logical/physical registration supplied by deployment setup. */
 export interface RegisterSyncSheetInput {
@@ -342,7 +346,9 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
 }
 
 function isRegisteredProjection(value: string): value is RegisteredProjection {
-  return value === "user_input" || value === "system_state" || value === "sync_conflicts";
+  return value === REGISTERED_PROJECTION_KINDS.USER_INPUT ||
+    value === REGISTERED_PROJECTION_KINDS.SYSTEM_STATE ||
+    value === REGISTERED_PROJECTION_KINDS.SYNC_CONFLICTS;
 }
 
 /** Normalizes the v1 whole-column gateway boundary to the form accepted by Apps Script. */

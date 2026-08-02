@@ -108,9 +108,14 @@ export type HikouteiEntityInstance<
  */
 const ENTITY_DESCRIPTORS = new WeakMap<object, ResolvedHikouteiEntityDescriptor>();
 
-export class HikouteiEntity<Entity extends object = object> {
+export class HikouteiEntity<
+  Entity extends object = object,
+  Name extends string = string,
+> {
   /** @internal phantom marker that carries the inferred entity type. */
   private declare readonly __entityType: Entity;
+  /** @internal phantom marker that preserves the descriptor name. */
+  private declare readonly __entityName: Name;
 
   constructor(descriptor: ResolvedHikouteiEntityDescriptor) {
     ENTITY_DESCRIPTORS.set(this, descriptor);
@@ -118,8 +123,11 @@ export class HikouteiEntity<Entity extends object = object> {
 }
 
 /** Reads an opaque token's descriptor for internal runtime/provider wiring. */
-export function getEntityDescriptor(
-  entity: HikouteiEntity,
+export function getEntityDescriptor<
+  Entity extends object,
+  Name extends string,
+>(
+  entity: HikouteiEntity<Entity, Name>,
 ): ResolvedHikouteiEntityDescriptor {
   const descriptor = ENTITY_DESCRIPTORS.get(entity);
   if (descriptor === undefined) {
@@ -150,8 +158,8 @@ export function defineTypedSheetsEntity<
   Properties extends HikouteiPropertyDescriptorMap,
 >(
   input: HikouteiEntityDescriptorInput<Name, Properties>,
-): HikouteiEntity<HikouteiEntityInstance<Properties>> {
-  return new HikouteiEntity<HikouteiEntityInstance<Properties>>(
+): HikouteiEntity<HikouteiEntityInstance<Properties>, Name> {
+  return new HikouteiEntity<HikouteiEntityInstance<Properties>, Name>(
     resolveEntityDescriptor(input),
   );
 }

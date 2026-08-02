@@ -11,9 +11,11 @@ import {
 } from "@mikro-orm/sql";
 import type { Options, SqlEntityManager } from "@mikro-orm/sql";
 
+import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import type {
   SqlExecutor,
   SqlGeneratedId,
+  SqlRow,
   SqlMutationResult,
   SqlParameter,
   SqlStorageAdapter,
@@ -167,8 +169,11 @@ class MikroOrmSqlExecutor implements SqlExecutor {
     sql: string,
     parameters: readonly SqlParameter[] = [],
   ): Promise<readonly Row[]> {
-    const rows = await this.entityManager.execute(sql, [...parameters], "all");
-    return rows as unknown as readonly Row[];
+    const rows = await this.entityManager.execute<readonly SqlRow[]>(sql, [...parameters], "all");
+    if (!Array.isArray(rows) || !rows.every(isRecord)) {
+      throw new TypeError("SQL all result must be an array of object rows");
+    }
+    return rows as readonly Row[];
   }
 
   async get<Row extends object>(
@@ -176,7 +181,10 @@ class MikroOrmSqlExecutor implements SqlExecutor {
     parameters: readonly SqlParameter[] = [],
   ): Promise<Row | undefined> {
     const row = await this.entityManager.execute(sql, [...parameters], "get");
-    return row as unknown as Row | undefined;
+    if (row !== undefined && !isRecord(row)) {
+      throw new TypeError("SQL get result must be an object row");
+    }
+    return row as Row | undefined;
   }
 
   async run(

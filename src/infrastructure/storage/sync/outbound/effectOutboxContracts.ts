@@ -3,10 +3,19 @@
 import type {
   Applicability,
   EffectKind,
+  EffectStatus,
   EffectTargetKind,
   Presence,
 } from "../../../../domain/index.js";
 import type { FencingContext } from "../shared/writerLease.js";
+import type {
+  HikouteiEffectDedupeKey,
+  HikouteiEffectId,
+  HikouteiPayloadHash,
+  HikouteiPhysicalSheetId,
+  HikouteiRowBindingId,
+  HikouteiVisibleHash,
+} from "../../../../shared/identity/types.js";
 
 export const SYNC_EFFECT_RECOVERY_ERROR_CODES = {
   LEASE_EXPIRED_REQUIRES_POSTCONDITION: "lease_expired_requires_postcondition",
@@ -16,12 +25,18 @@ export const SYNC_EFFECT_RECOVERY_ERROR_CODES = {
   POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE: "postcondition_unapplied_requires_redrive",
 } as const;
 
-export interface ClaimResult {
-  readonly effectId: string;
-  readonly claimToken: string;
-  readonly success: boolean;
-  readonly reason: "claimed" | "stale_fencing" | "not_claimable";
-}
+export type ClaimResult =
+  | {
+      readonly effectId: string;
+      readonly claimToken: string;
+      readonly status: "claimed";
+    }
+  | {
+      readonly effectId: string;
+      readonly claimToken: string;
+      readonly status: "not_claimed";
+      readonly reason: "stale_fencing" | "not_claimable";
+    };
 
 /** Input required to claim an effect with the current worker fence. */
 export interface ClaimEffectOptions extends FencingContext {
@@ -30,16 +45,30 @@ export interface ClaimEffectOptions extends FencingContext {
   readonly leaseDurationMs: number;
 }
 
-export interface ApplyResultOptions extends FencingContext {
+interface ApplyResultOptionsBase extends FencingContext {
   readonly effectId: string;
   readonly claimToken: string;
-  readonly status: "applied" | "blocked_candidate" | "superseded" | "conflict" | "failed";
   readonly lastErrorCode: Presence<string>;
   readonly lastErrorMessage: Presence<string>;
-  /** Gateway read-back evidence that advances confirmed projection state in the
-   * same savepoint as an applied outbox result. */
+}
+
+/** A result that may advance confirmed projection state. */
+export interface AppliedEffectResultOptions extends ApplyResultOptionsBase {
+  readonly status: "applied";
+  /** Gateway read-back evidence committed with the applied outbox result. */
   readonly projectionConfirmation?: EffectProjectionConfirmation;
 }
+
+/** A result that closes an effect without advancing confirmed projection state. */
+export interface NonAppliedEffectResultOptions extends ApplyResultOptionsBase {
+  readonly status: "blocked_candidate" | "superseded" | "conflict" | "failed";
+  readonly projectionConfirmation?: never;
+}
+
+/** Operation-specific apply input with impossible confirmation/status pairs removed. */
+export type ApplyResultOptions =
+  | AppliedEffectResultOptions
+  | NonAppliedEffectResultOptions;
 
 /** Confirmed projection state returned only after a gateway postcondition read. */
 export interface EffectProjectionConfirmation {
@@ -86,27 +115,27 @@ export interface RetryClaimedEffectOptions
 }
 
 export interface PendingEffect {
-  readonly effect_id: string;
-  readonly effect_kind: string;
+  readonly effect_id: HikouteiEffectId;
+  readonly effect_kind: EffectKind;
   readonly commit_id: string;
   readonly logical_sheet_id: string;
-  readonly physical_sheet_id: string;
+  readonly physical_sheet_id: HikouteiPhysicalSheetId;
   readonly projection: string;
-  readonly row_binding_id: string | null;
+  readonly row_binding_id: HikouteiRowBindingId | null;
   readonly conflict_id: string | null;
-  readonly target_kind: string;
+  readonly target_kind: EffectTargetKind;
   readonly target_id: string;
   readonly target_entity_revision: number | null;
   readonly target_field_revision_hash: string | null;
   readonly target_canonical_commit_id: string | null;
   readonly expected_visible_revision: number;
-  readonly expected_visible_hash: string;
+  readonly expected_visible_hash: HikouteiVisibleHash | "";
   readonly repair_guard_hash: string | null;
   readonly source_quarantine_id: string | null;
   readonly payload_json: string;
-  readonly payload_hash: string;
-  readonly effect_dedupe_key: string;
+  readonly payload_hash: HikouteiPayloadHash;
+  readonly effect_dedupe_key: HikouteiEffectDedupeKey;
   readonly stream_sequence: number;
   readonly created_at: number;
-  readonly status: string;
+  readonly status: EffectStatus;
 }

@@ -506,8 +506,7 @@ describe("MikroOrmSqliteAdapter", () => {
     })).resolves.toMatchObject({
       effectId: effect.effectId,
       claimToken: "claim-1",
-      success: true,
-      reason: "claimed",
+      status: "claimed",
     });
     await expect(applyEffectResultWithAdapter(adapter, {
       ...fence,

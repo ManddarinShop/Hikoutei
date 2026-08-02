@@ -2,6 +2,8 @@ import {
   isNonEmptyString,
   isPositiveSafeInteger,
 } from "../../../../../shared/validation.js";
+import { requireSemanticString } from "../../../../../shared/identity/types.js";
+import type { HikouteiRequestId } from "../../../../../shared/identity/types.js";
 import {
   SYNC_GATEWAY_DEFAULTS,
   SYNC_GATEWAY_REQUEST_ID_PATTERN,
@@ -51,7 +53,7 @@ export function requireSyncGatewayExpiry(value: unknown): number {
 }
 
 /** Requires a request ID accepted by both gateway implementations. */
-export function requireSyncGatewayRequestId(value: unknown): string {
+export function requireSyncGatewayRequestId(value: unknown): HikouteiRequestId {
   const requestId = requireSyncGatewayText(
     value,
     "sync gateway requestId",
@@ -63,5 +65,5 @@ export function requireSyncGatewayRequestId(value: unknown): string {
       "sync gateway requestId must be 8-128 URL-safe characters",
     );
   }
-  return requestId;
+  return requireSemanticString<"request-id">(requestId, "sync gateway requestId");
 }

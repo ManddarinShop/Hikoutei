@@ -66,6 +66,21 @@ describe("sync gateway contract", () => {
     );
   });
 
+  it("rejects a non-canonical date cell at the payload boundary", () => {
+    const invalidFields = {
+      createdAt: { kind: "date" as const, value: "2026-01-02T03:04:05Z" },
+    };
+    const serialized = JSON.stringify({
+      ...payload({ kind: APPLICABILITY_KINDS.NOT_APPLICABLE }),
+      fields: invalidFields,
+      targetVisibleHash: "not-used-because-date-is-invalid",
+    });
+
+    expect(() => parseSyncProjectionEffectPayload(serialized)).toThrowError(
+      expect.objectContaining({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD }),
+    );
+  });
+
   it("rejects duplicate provisioning headers with the common gateway error", async () => {
     const sheet: RegisteredSyncSheet = {
       logicalSheetId: "logical-1",

@@ -74,13 +74,7 @@ export function groupByGatewayRequest(items: readonly ClaimedEffect[]): readonly
   for (const item of items) {
     const effect = item.gatewayEffect;
     if (!isPresent(effect)) continue;
-    const key = [
-      effect.value.physicalSheetId,
-      effect.value.payload.sheetName,
-      effect.value.payload.registeredRange,
-      effect.value.projection,
-      effect.value.payload.schemaVersion,
-    ].join("\u0000");
+    const key = gatewayRouteKey(effect.value);
     const existing = lookupResult(groups.get(key));
     if (existing.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       groups.set(key, {
@@ -116,13 +110,7 @@ export function groupByFastAppendRequest(items: readonly ClaimedEffect[]): reado
   for (const item of items) {
     const effect = item.gatewayEffect;
     if (!isPresent(effect)) continue;
-    const key = [
-      effect.value.physicalSheetId,
-      effect.value.payload.sheetName,
-      effect.value.payload.registeredRange,
-      effect.value.projection,
-      effect.value.payload.schemaVersion,
-    ].join("\u0000");
+    const key = gatewayRouteKey(effect.value);
     const row = {
       effectId: effect.value.effectId,
       fields: effect.value.payload.fields,
@@ -163,13 +151,7 @@ export function groupByGatewayPostconditionRequest(items: readonly ClaimedEffect
   for (const item of items) {
     const effect = item.gatewayEffect;
     if (!isPresent(effect)) continue;
-    const key = [
-      effect.value.physicalSheetId,
-      effect.value.payload.sheetName,
-      effect.value.payload.registeredRange,
-      effect.value.projection,
-      effect.value.payload.schemaVersion,
-    ].join("\u0000");
+    const key = gatewayRouteKey(effect.value);
     const existing = lookupResult(groups.get(key));
     if (existing.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       groups.set(key, {
@@ -192,6 +174,17 @@ export function groupByGatewayPostconditionRequest(items: readonly ClaimedEffect
     }
   }
   return [...groups.values()];
+}
+
+/** Builds the stable grouping key shared by all gateway operations on one route. */
+function gatewayRouteKey(effect: SyncGatewayEffect): string {
+  return [
+    effect.physicalSheetId,
+    effect.payload.sheetName,
+    effect.payload.registeredRange,
+    effect.projection,
+    effect.payload.schemaVersion,
+  ].join("\u0000");
 }
 
 export function isSyncEffectKind(value: string): value is SyncGatewayEffect["effectKind"] {

@@ -22,7 +22,9 @@ import type { SyncJsonValue } from "../protocol/types.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../../../../shared/encoding/constants.js";
 import { isJavaScriptType, isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import { PRESENCE_KINDS } from "../../../../../shared/state/constants.js";
+import { absentValue, presentValue } from "../../../../../shared/state/index.js";
 import type { Presence } from "../../../../../shared/state/types.js";
+import type { HikouteiRequestId } from "../../../../../shared/identity/types.js";
 
 /** One self-contained function call serialized for `Code.gs`. */
 export interface AppsScriptOperationDefinition<
@@ -76,7 +78,7 @@ export interface AppsScriptOperationClientOptions {
 
 /** Redacted transport event for diagnosing a Code.gs invocation. */
 export interface AppsScriptOperationRequestEvent {
-  readonly requestId: string;
+  readonly requestId: HikouteiRequestId;
   readonly operation: AppsScriptOperationName;
   readonly operationCount: number;
   readonly startedAt: number;
@@ -176,19 +178,19 @@ export class AppsScriptOperationClient implements AppsScriptOperationGateway {
       httpStatus = response.status;
       const responseText = await response.text();
       responseBytes = Buffer.byteLength(responseText, "utf8");
-      const decoded = parseCodeGsResponse(responseText, present(httpStatus));
+      const decoded = parseCodeGsResponse(responseText, presentValue(httpStatus));
 
       if (!response.ok) {
         if (decoded.ok) {
           throw new AppsScriptSyncGatewayError(
             SYNC_GATEWAY_CLIENT_ERROR_CODES.HTTP_ERROR,
             `Code.gs returned HTTP ${response.status}`,
-            present(httpStatus),
+            presentValue(httpStatus),
           );
         }
-        throw remoteError(decoded.error, present(httpStatus));
+        throw remoteError(decoded.error, presentValue(httpStatus));
       }
-      if (!decoded.ok) throw remoteError(decoded.error, present(httpStatus));
+      if (!decoded.ok) throw remoteError(decoded.error, presentValue(httpStatus));
 
       this.notifyRequest({
         requestId: envelope.requestId,
@@ -273,7 +275,7 @@ function requireOperationBatchResult(
     throw new AppsScriptSyncGatewayError(
       SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_RESPONSE,
       "Code.gs result must contain one result for every submitted operation",
-      { kind: PRESENCE_KINDS.ABSENT },
+      absentValue(),
     );
   }
   return value.results;
@@ -330,7 +332,7 @@ function remoteError(
     SYNC_GATEWAY_CLIENT_ERROR_CODES.REMOTE_ERROR,
     error.message,
     status,
-    present(error.code),
+    presentValue(error.code),
   );
 }
 
@@ -362,14 +364,8 @@ function requireRequestTimeout(value: unknown): number {
   return value;
 }
 
-function present<T>(value: T): Presence<T> {
-  return { kind: PRESENCE_KINDS.PRESENT, value };
-}
-
 function presentOrAbsent(value: number | null): Presence<number> {
-  return value === null
-    ? { kind: PRESENCE_KINDS.ABSENT }
-    : present(value);
+  return value === null ? absentValue() : presentValue(value);
 }
 
 function safeMessage(error: unknown): string {

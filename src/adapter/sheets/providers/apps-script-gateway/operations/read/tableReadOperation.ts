@@ -1,8 +1,7 @@
 /** Lightweight table reads for polling user-visible Sheet values. */
 
 import type { NormalizedCell } from "../../../../../../shared/encoding/types.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../../../shared/encoding/constants.js";
-import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
+import { isNormalizedCell } from "../../../../../../shared/encoding/normalizedCell.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
 } from "../../../../../../application/sync/gateway/errors.js";
@@ -17,6 +16,7 @@ import type {
 import type { AppsScriptOperationDefinition } from "../../transport/operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "../../protocol/timing.js";
 import { invalidOperationRequest, invalidOperationResponse } from "../../errors.js";
+import { requireOperationRecord } from "../../validation.js";
 
 /** Request for one registered table's raw values. */
 export interface AppsScriptReadTableRowsRequest {
@@ -191,37 +191,11 @@ function decodeRow(value: unknown, index: number, headers: readonly string[]): S
 }
 
 function decodeCell(value: unknown, header: string, rowIndex: number): NormalizedCell {
-  if (value === null) return null;
-  const record = requireRecord(value, "table read row[" + rowIndex + "]." + header);
-  const kind = requireSyncGatewayText(
-    record.kind,
-    "table read cell kind",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+  if (isNormalizedCell(value)) return value;
+  return invalidOperationResponse(
+    "Apps Script table read",
+    "table read row[" + rowIndex + "]." + header + " is not a normalized cell",
   );
-  if (kind === NORMALIZED_CELL_KINDS.STRING || kind === NORMALIZED_CELL_KINDS.DATE) {
-    const textValue = requireSyncGatewayText(
-      record.value,
-      "table read cell value",
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    );
-    return kind === NORMALIZED_CELL_KINDS.STRING
-      ? { kind: NORMALIZED_CELL_KINDS.STRING, value: textValue }
-      : { kind: NORMALIZED_CELL_KINDS.DATE, value: textValue };
-  }
-  if (kind === NORMALIZED_CELL_KINDS.NUMBER) {
-    const number = record.value;
-    if (typeof number !== "number" || !Number.isFinite(number)) {
-      return invalidOperationResponse("Apps Script table read", "table read number cell is invalid");
-    }
-    return { kind, value: number };
-  }
-  if (kind === NORMALIZED_CELL_KINDS.BOOLEAN) {
-    if (typeof record.value !== "boolean") {
-      return invalidOperationResponse("Apps Script table read", "table read boolean cell is invalid");
-    }
-    return { kind, value: record.value };
-  }
-  return invalidOperationResponse("Apps Script table read", "table read cell kind is unsupported");
 }
 
 function decodeHeaders(value: unknown): readonly string[] {
@@ -236,8 +210,5 @@ function decodeHeaders(value: unknown): readonly string[] {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    return invalidOperationResponse("Apps Script table read", label + " must be an object");
-  }
-  return value as Record<string, unknown>;
+  return requireOperationRecord(value, label, "Apps Script table read");
 }

@@ -1,4 +1,9 @@
 import { JAVASCRIPT_TYPE_NAMES } from "../../../shared/encoding/constants.js";
+import {
+  absentValue,
+  presentValue,
+} from "../../../shared/state/index.js";
+import type { Presence } from "../../../shared/state/types.js";
 import { isJavaScriptType } from "../../../shared/encoding/typeGuards.js";
 import {
   isNonEmptyList,
@@ -15,6 +20,7 @@ import {
   type SyncGatewaySnapshotReadMode,
 } from "./constants.js";
 import {
+  SYNC_GATEWAY_ERROR_CODES,
   SyncGatewayContractError,
   type SyncGatewayErrorCode,
 } from "./errors.js";
@@ -59,6 +65,26 @@ export function requireSyncGatewayNonNegativeSafeInteger(
     );
   }
   return value;
+}
+
+/** Decodes an optional text value returned by the runtime gateway. */
+export function decodeSyncGatewayPresenceString(
+  value: unknown,
+  label: string,
+  errorCode: SyncGatewayErrorCode = SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+): Presence<string> {
+  if (value === null) return absentValue();
+  return presentValue(requireSyncGatewayText(value, label, errorCode));
+}
+
+/** Decodes an optional non-negative revision returned by the runtime gateway. */
+export function decodeSyncGatewayPresenceNonNegativeSafeInteger(
+  value: unknown,
+  label: string,
+  errorCode: SyncGatewayErrorCode = SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+): Presence<number> {
+  if (value === null) return absentValue();
+  return presentValue(requireSyncGatewayNonNegativeSafeInteger(value, label, errorCode));
 }
 
 /** Requires a protocol version returned by the runtime gateway. */

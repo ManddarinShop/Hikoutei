@@ -66,9 +66,11 @@ export {
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
 } from "./sync/outbound/effectOutbox.js";
 export type {
+  AppliedEffectResultOptions,
   ClaimResult,
   ClaimEffectOptions,
   ApplyResultOptions,
+  NonAppliedEffectResultOptions,
   EffectProjectionConfirmation,
   NewEffect,
   PendingEffect,

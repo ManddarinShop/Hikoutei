@@ -20,8 +20,13 @@ export class CoreErrorException<
   readonly domain: TDomain;
   readonly code: TCode;
 
-  protected constructor(domain: TDomain, code: TCode, message: string) {
-    super(message);
+  protected constructor(
+    domain: TDomain,
+    code: TCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
     this.name = new.target.name;
     this.domain = domain;
     this.code = code;

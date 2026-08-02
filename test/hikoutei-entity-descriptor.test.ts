@@ -4,6 +4,7 @@ import {
   defineTypedSheetsEntity,
   HIKOUTEI_ERROR_CODES,
   HIKOUTEI_SCALAR_TYPES,
+  type HikouteiEntity,
 } from "../src/index.js";
 import { getEntityDescriptor, resolveEntityDescriptor } from "../src/api/entity.js";
 
@@ -37,6 +38,9 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
         active: { type: "boolean" },
       },
     });
+
+    const typedToken: HikouteiEntity<{ id: string; name: string; age: number; active: boolean }, "User"> = User;
+    expect(typedToken).toBe(User);
 
     const descriptor = getEntityDescriptor(User);
     expect(descriptor.name).toBe("User");

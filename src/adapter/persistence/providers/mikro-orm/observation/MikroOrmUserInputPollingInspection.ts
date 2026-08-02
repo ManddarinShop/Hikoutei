@@ -30,6 +30,7 @@ import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
 } from "../../../../../application/orm/errors.js";
+import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";
 import {
   type EntityStateRecord,
   type MappedPollingState,
@@ -344,7 +345,7 @@ function validateSnapshotCell(
     case NORMALIZED_CELL_KINDS.BOOLEAN:
       return undefined;
     case NORMALIZED_CELL_KINDS.DATE:
-      return isCanonicalDate(value.value) ? undefined : MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL;
+      return isCanonicalUtcIsoDate(value.value) ? undefined : MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL;
   }
 }
 
@@ -411,10 +412,4 @@ export function snapshotHash(snapshot: SyncGatewaySnapshot): string {
         })),
     })),
   });
-}
-
-function isCanonicalDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }

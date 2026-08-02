@@ -9,12 +9,10 @@ import type {
 } from "../../../../../../application/sync/gateway/syncGateway.js";
 import {
   CELL_OBSERVATION_KINDS,
-  NORMALIZED_CELL_KINDS,
   type CellObservationKind,
 } from "../../../../../../shared/encoding/constants.js";
-import { PRESENCE_KINDS } from "../../../../../../shared/state/constants.js";
-import type { NormalizedCell, Presence } from "../../../../../../domain/index.js";
-import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
+import type { NormalizedCell } from "../../../../../../domain/index.js";
+import { isNormalizedCell } from "../../../../../../shared/encoding/normalizedCell.js";
 import {
   SYNC_GATEWAY_ERROR_CODES,
 } from "../../../../../../application/sync/gateway/errors.js";
@@ -24,6 +22,8 @@ import {
   SYNC_GATEWAY_SNAPSHOT_READ_MODES,
 } from "../../../../../../application/sync/gateway/constants.js";
 import {
+  decodeSyncGatewayPresenceNonNegativeSafeInteger as decodePresenceNonNegativeInteger,
+  decodeSyncGatewayPresenceString as decodePresenceString,
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayProjection,
@@ -36,6 +36,7 @@ import {
   invalidOperationRequest,
   invalidOperationResponse,
 } from "../../errors.js";
+import { requireOperationRecord } from "../../validation.js";
 
 const OBSERVATION_OPERATION_MODES = {
   ENSURE_ANCHORS: "ensureRowAnchors",
@@ -45,6 +46,8 @@ const OBSERVATION_OPERATION_MODES = {
 
 interface ObservationOperationRouteOptions {
   readonly checkboxHeaders?: readonly string[];
+  /** Local-only schema evidence used to validate decoded snapshot headers. */
+  readonly expectedHeaders?: readonly string[];
 }
 
 type ObservationOperationRequest =
@@ -70,9 +73,10 @@ export function createEnsureRowAnchorsOperation(
   EnsureSyncRowAnchorsResult
 > {
   validateObservationRequest(request);
+  const { expectedHeaders: _expectedHeaders, ...wireRequest } = request;
   return {
     fn: OBSERVATION_OPERATION_SOURCE,
-    args: { mode: OBSERVATION_OPERATION_MODES.ENSURE_ANCHORS, ...request },
+    args: { mode: OBSERVATION_OPERATION_MODES.ENSURE_ANCHORS, ...wireRequest },
     decode: decodeEnsureRowAnchorsResult,
   };
 }
@@ -82,10 +86,11 @@ export function createReadSnapshotOperation(
   request: ReadSyncSnapshotRequest & ObservationOperationRouteOptions,
 ): AppsScriptOperationDefinition<AppsScriptReadSnapshotOperationArgs, SyncGatewaySnapshot> {
   validateObservationRequest(request);
+  const { expectedHeaders, ...wireRequest } = request;
   return {
     fn: OBSERVATION_OPERATION_SOURCE,
-    args: { mode: OBSERVATION_OPERATION_MODES.READ_SNAPSHOT, ...request },
-    decode: decodeSnapshot,
+    args: { mode: OBSERVATION_OPERATION_MODES.READ_SNAPSHOT, ...wireRequest },
+    decode: (value) => decodeSnapshot(value, request, expectedHeaders),
   };
 }
 
@@ -97,10 +102,11 @@ export function createObserveSnapshotOperation(
   SyncObservedSnapshot
 > {
   validateObservationRequest(request);
+  const { expectedHeaders, ...wireRequest } = request;
   return {
     fn: OBSERVATION_OPERATION_SOURCE,
-    args: { mode: OBSERVATION_OPERATION_MODES.OBSERVE_SNAPSHOT, ...request },
-    decode: decodeObservedSnapshot,
+    args: { mode: OBSERVATION_OPERATION_MODES.OBSERVE_SNAPSHOT, ...wireRequest },
+    decode: (value) => decodeObservedSnapshot(value, request, expectedHeaders),
   };
 }
 
@@ -171,17 +177,25 @@ function decodeEnsureRowAnchorsResult(value: unknown): EnsureSyncRowAnchorsResul
   };
 }
 
-function decodeObservedSnapshot(value: unknown): SyncObservedSnapshot {
+function decodeObservedSnapshot(
+  value: unknown,
+  expectedRoute: ReadSyncSnapshotRequest,
+  expectedHeaders?: readonly string[],
+): SyncObservedSnapshot {
   const record = requireRecord(value, "combined observation result");
   const timing = decodeOptionalSyncGatewayTiming(record.timing, "observation timing");
   const result: SyncObservedSnapshot = {
     anchors: decodeEnsureRowAnchorsResult(record.anchors),
-    snapshot: decodeSnapshot(record.snapshot),
+    snapshot: decodeSnapshot(record.snapshot, expectedRoute, expectedHeaders),
   };
   return timing === undefined ? result : { ...result, timing };
 }
 
-function decodeSnapshot(value: unknown): SyncGatewaySnapshot {
+function decodeSnapshot(
+  value: unknown,
+  expectedRoute?: ReadSyncSnapshotRequest,
+  expectedHeaders?: readonly string[],
+): SyncGatewaySnapshot {
   const record = requireRecord(value, "snapshot result");
   const protocolVersion = requireSyncGatewayText(
     record.protocolVersion,
@@ -199,7 +213,28 @@ function decodeSnapshot(value: unknown): SyncGatewaySnapshot {
     "snapshot projection",
     SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
   );
+  if (
+    expectedRoute !== undefined &&
+    (record.sheetName !== expectedRoute.sheetName ||
+      record.registeredRange !== expectedRoute.registeredRange ||
+      record.projection !== expectedRoute.projection ||
+      record.schemaVersion !== expectedRoute.schemaVersion)
+  ) {
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      "snapshot route does not match the requested registered projection",
+    );
+  }
   const headers = decodeStringArray(record.headers, "snapshot headers");
+  if (
+    expectedHeaders !== undefined &&
+    (headers.length !== expectedHeaders.length || headers.some((header, index) => header !== expectedHeaders[index]))
+  ) {
+    return invalidOperationResponse(
+      "Apps Script observation operation",
+      "snapshot headers do not match the registered schema",
+    );
+  }
   const rows = decodeSnapshotRows(record.rows);
   return {
     protocolVersion,
@@ -295,54 +330,13 @@ function decodeSnapshotCells(
 }
 
 function decodeNormalizedCell(value: unknown, label: string): NormalizedCell {
-  if (value === null) return null;
-  const record = requireRecord(value, label + " normalizedCell");
-  const kind = requireSyncGatewayText(
-    record.kind,
-    label + ".kind",
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-  );
-  if (kind === NORMALIZED_CELL_KINDS.STRING && typeof record.value === "string") {
-    return { kind: NORMALIZED_CELL_KINDS.STRING, value: record.value };
-  }
-  if (kind === NORMALIZED_CELL_KINDS.NUMBER && typeof record.value === "number" && Number.isFinite(record.value)) {
-    return { kind: NORMALIZED_CELL_KINDS.NUMBER, value: record.value };
-  }
-  if (kind === NORMALIZED_CELL_KINDS.BOOLEAN && typeof record.value === "boolean") {
-    return { kind: NORMALIZED_CELL_KINDS.BOOLEAN, value: record.value };
-  }
-  if (kind === NORMALIZED_CELL_KINDS.DATE && typeof record.value === "string") {
-    return { kind: NORMALIZED_CELL_KINDS.DATE, value: record.value };
-  }
+  if (isNormalizedCell(value)) return value;
   return invalidOperationResponse(
     "Apps Script observation operation",
     label + " normalizedCell is invalid",
   );
 }
 
-function decodePresenceString(value: unknown, label: string): Presence<string> {
-  if (value === null) return { kind: PRESENCE_KINDS.ABSENT };
-  return {
-    kind: PRESENCE_KINDS.PRESENT,
-    value: requireSyncGatewayText(
-      value,
-      label,
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-  };
-}
-
-function decodePresenceNonNegativeInteger(value: unknown, label: string): Presence<number> {
-  if (value === null) return { kind: PRESENCE_KINDS.ABSENT };
-  return {
-    kind: PRESENCE_KINDS.PRESENT,
-    value: requireSyncGatewayNonNegativeSafeInteger(
-      value,
-      label,
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-  };
-}
 
 function decodeDuplicateAnchors(value: unknown): SyncGatewaySnapshot["duplicateAnchors"] {
   if (!Array.isArray(value)) {
@@ -409,13 +403,7 @@ function isCellObservationKind(value: string): value is CellObservationKind {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    return invalidOperationResponse(
-      "Apps Script observation operation",
-      label + " must be an object",
-    );
-  }
-  return value as Record<string, unknown>;
+  return requireOperationRecord(value, label, "Apps Script observation operation");
 }
 
 /**
@@ -725,6 +713,7 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
 
   function isDisplayedSheetError_(value) { return typeof value === "string" && /^#(REF!|DIV\/0!|N\/A|VALUE!|NAME\?|NUM!|ERROR!|NULL!)$/.test(value); }
   function isDate_(value) { return Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime()); }
+  function isCanonicalDate_(value) { if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false; var parsed = new Date(value); return !isNaN(parsed.getTime()) && parsed.toISOString() === value; }
   function isObject_(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
   function requireObject_(value, label) { if (!isObject_(value)) throw new Error(label + " must be an object"); return value; }
   function normalizeScalarString_(value) { return value.normalize("NFC"); }
@@ -736,7 +725,7 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     if (value === false) return "b0";
     if (typeof value === "number") return stableEncodeNumber_(value);
     if (typeof value === "string") return stableEncodeString_(value);
-    if (isObject_(value) && value.kind === "date" && typeof value.value === "string") return "d24:" + value.value;
+    if (isObject_(value) && value.kind === "date" && isCanonicalDate_(value.value)) return "d24:" + value.value;
     if (Array.isArray(value)) return "a" + value.length + "[" + value.map(stableEncode_).join("") + "]";
     if (isObject_(value)) {
       var entries = Object.keys(value).map(function (key) { var normalized = normalizeScalarString_(key); return { key: normalized, bytes: utf8Bytes_(normalized), value: value[key] }; });

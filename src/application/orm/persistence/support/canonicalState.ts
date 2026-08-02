@@ -5,11 +5,16 @@
  * storage commit helper mutates canonical state and appends projection effects.
  */
 
-import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
 import { ROW_BINDING_STATES } from "../../../../domain/model/constants.js";
+import { isPositiveSafeInteger } from "../../../../shared/validation.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
   commitCanonicalChangesWithSql,
+  insertMappedActiveRowBindingWithSql,
+  readMappedActiveCanonicalEntityWithSql,
+  readMappedCanonicalFieldRevisionsWithSql,
+  readMappedRowBindingWithSql,
+  tombstoneMappedActiveRowBindingWithSql,
   type CanonicalCommitInput,
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
@@ -19,16 +24,6 @@ import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
 } from "../../errors.js";
-import {
-  READ_ACTIVE_CANONICAL_ENTITY_SQL,
-  READ_CANONICAL_FIELD_REVISIONS_SQL,
-  READ_ROW_BINDING_SQL,
-  INSERT_ACTIVE_ROW_BINDING_SQL,
-  TOMBSTONE_ACTIVE_ROW_BINDING_SQL,
-  type CanonicalEntitySqlRow,
-  type CanonicalFieldRevisionSqlRow,
-  type RowBindingSqlRow,
-} from "./contracts.js";
 
 /** Creates the active row binding used by both physical projections. */
 export async function insertActiveRowBinding(
@@ -38,20 +33,20 @@ export async function insertActiveRowBinding(
   entityId: string,
   anchor: string,
 ): Promise<void> {
-  const existing = await sql.get<RowBindingSqlRow>(READ_ROW_BINDING_SQL, [rowBindingId]);
+  const existing = await readMappedRowBindingWithSql(sql, rowBindingId);
   if (existing !== undefined) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
       `row binding ${rowBindingId} already exists for ${mapping.entityName}:${entityId}.`,
     );
   }
-  const inserted = await sql.run(INSERT_ACTIVE_ROW_BINDING_SQL, [
+  const inserted = await insertMappedActiveRowBindingWithSql(
+    sql,
     rowBindingId,
     mapping.logicalSheetId,
     anchor,
     entityId,
-    ROW_BINDING_STATES.ACTIVE,
-  ]);
+  );
   if (inserted.changes !== 1) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
@@ -67,7 +62,7 @@ export async function existingCanonicalEntityId(
   rowBindingId: string,
   anchor: string,
 ): Promise<string | undefined> {
-  const row = await sql.get<RowBindingSqlRow>(READ_ROW_BINDING_SQL, [rowBindingId]);
+  const row = await readMappedRowBindingWithSql(sql, rowBindingId);
   if (row === undefined) return undefined;
   if (
     row.logical_sheet_id !== mapping.logicalSheetId ||
@@ -90,7 +85,7 @@ export async function requireActiveRowBinding(
   entityId: string,
   anchor: string,
 ): Promise<void> {
-  const row = await sql.get<RowBindingSqlRow>(READ_ROW_BINDING_SQL, [rowBindingId]);
+  const row = await readMappedRowBindingWithSql(sql, rowBindingId);
   if (
     row === undefined ||
     row.logical_sheet_id !== mapping.logicalSheetId ||
@@ -111,7 +106,7 @@ export async function requireActiveCanonicalEntityRevision(
   mapping: TypedSheetsEntityMapping,
   entityId: string,
 ): Promise<number> {
-  const entity = await sql.get<CanonicalEntitySqlRow>(READ_ACTIVE_CANONICAL_ENTITY_SQL, [entityId]);
+  const entity = await readMappedActiveCanonicalEntityWithSql(sql, entityId);
   if (entity === undefined || !isPositiveSafeInteger(entity.entity_revision)) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
@@ -126,7 +121,7 @@ export async function canonicalFieldRevisions(
   sql: SqlExecutor,
   entityId: string,
 ): Promise<ReadonlyMap<string, number>> {
-  const rows = await sql.all<CanonicalFieldRevisionSqlRow>(READ_CANONICAL_FIELD_REVISIONS_SQL, [entityId]);
+  const rows = await readMappedCanonicalFieldRevisionsWithSql(sql, entityId);
   const revisions = new Map<string, number>();
   for (const row of rows) {
     if (isPositiveSafeInteger(row.field_revision)) {
@@ -169,21 +164,16 @@ export async function tombstoneActiveRowBinding(
   rowBindingId: string,
   entityId: string,
 ): Promise<void> {
-  const tombstoned = await sql.run(TOMBSTONE_ACTIVE_ROW_BINDING_SQL, [
-    ROW_BINDING_STATES.TOMBSTONED,
+  const tombstoned = await tombstoneMappedActiveRowBindingWithSql(
+    sql,
     rowBindingId,
     mapping.logicalSheetId,
     entityId,
-    ROW_BINDING_STATES.ACTIVE,
-  ]);
+  );
   if (tombstoned.changes !== 1) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
       `could not tombstone the row binding for ${mapping.entityName}:${entityId}.`,
     );
   }
-}
-
-function isPositiveSafeInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= POSITIVE_SAFE_INTEGER_MINIMUM;
 }
