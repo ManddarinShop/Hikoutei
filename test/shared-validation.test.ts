@@ -40,6 +40,7 @@ describe("shared validation predicates", () => {
     expect(isNormalizedCell({ kind: "date", value: "2026-01-02T03:04:05Z" })).toBe(false);
     expect(isNormalizedCell({ kind: "unknown", value: "text" })).toBe(false);
     expect(isNormalizedCell({ kind: "string" })).toBe(false);
+    expect(isNormalizedCell({ kind: "string", value: "text", extra: true })).toBe(false);
   });
 
   it("recognizes canonical UTC dates", () => {

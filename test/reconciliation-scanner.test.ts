@@ -92,6 +92,40 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  it("rejects malformed canonical cells before scheduling a correction", async () => {
+    const { adapter, gateway } = await bootstrap({
+      entities: [
+        {
+          entityId: "order-1",
+          rowBindingId: "binding-1",
+          anchor: "anchor-1",
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+          },
+        },
+      ],
+      sheetRows: [],
+    });
+    await adapter.transaction(({ sql }) => sql.run(
+      "UPDATE entity_field_state SET normalized_value = ? WHERE entity_id = ? AND field_name = ?",
+      [JSON.stringify({ kind: "string", value: 42 }), "order-1", "status"],
+    ));
+
+    await expect(runReconciliationScan({
+      storage: adapter,
+      gateway,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
+    })).rejects.toThrow("entity_field_state.normalized_value is not a normalized cell");
+    await expect(noPendingEffects(adapter)).resolves.toBe(0);
+  });
+
   it("matches a fast-appended row by business key without creating a duplicate", async () => {
     const { adapter, gateway } = await bootstrap({
       entities: [

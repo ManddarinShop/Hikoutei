@@ -151,6 +151,24 @@ describe("thin Code.gs operation client", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects non-JSON operation arguments before signing", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new AppsScriptOperationClient({
+      url: "https://example.test/apps-script-gateway",
+      secret: "secret",
+      sheetId: "sheet-1",
+    }).applyOperations([{
+      fn: "(spreadsheet, args) => args",
+      args: { createdAt: new Date() },
+    }])).rejects.toMatchObject({
+      name: "SyncGatewayProtocolError",
+      code: "invalid_sync_gateway_json_value",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps a Code.gs error as a typed remote transport error", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
