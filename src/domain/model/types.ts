@@ -17,6 +17,11 @@ import type {
   RowOperation,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
+  ProjectionKind,
+  RegisteredProjectionKind,
+  EffectKind as DomainEffectKind,
+  EffectTargetKind as DomainEffectTargetKind,
+  EffectStatus as DomainEffectStatus,
 } from "./constants.js";
 
 export type {
@@ -24,6 +29,8 @@ export type {
   ConflictStatus,
   DeleteEvidence,
   FieldOwnership,
+  ProjectionKind,
+  RegisteredProjectionKind,
   QuarantineReason,
   RowBindingState,
   RowOperation,
@@ -62,7 +69,7 @@ export type CanonicalResolution =
 // ---------------------------------------------------------------------------
 
 /** Legacy value retained for compatibility; new registrations use explicit projections. */
-export type Projection = "user_input" | "system_state" | "legacy_combined";
+export type Projection = ProjectionKind;
 
 // ---------------------------------------------------------------------------
 // Normalized row
@@ -442,26 +449,14 @@ export interface ResolutionCommand {
 // Effect model
 // ---------------------------------------------------------------------------
 
-export type EffectKind =
-  | "system_projection"
-  | "candidate_reconcile"
-  | "system_repair"
-  | "resolution_projection"
-  /** Removes a resolved system-owned Sync_Conflicts row after a visible CAS. */
-  | "resolution_delete"
-  /** Removes one candidate-free User_Input row after a full-row visible CAS. */
-  | "user_input_delete";
+/** Durable outbox effect operation, derived from the canonical constants. */
+export type EffectKind = DomainEffectKind;
 
-export type EffectTargetKind = "entity" | "row_binding" | "projection_row" | "conflict";
+/** Durable outbox target kind, derived from the canonical constants. */
+export type EffectTargetKind = DomainEffectTargetKind;
 
-export type EffectStatus =
-  | "pending"
-  | "processing"
-  | "applied"
-  | "blocked_candidate"
-  | "superseded"
-  | "conflict"
-  | "failed";
+/** Durable outbox lifecycle status, derived from the canonical constants. */
+export type EffectStatus = DomainEffectStatus;
 
 /** A sheet effect to be dispatched by the outbox worker. */
 export interface SheetEffect {

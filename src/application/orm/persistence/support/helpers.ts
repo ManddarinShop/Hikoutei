@@ -7,14 +7,14 @@
  */
 
 import {
-  APPLICABILITY_KINDS,
   EMPTY_STRING_LENGTH_ZERO,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
   PRESENCE_KINDS,
-  type Applicability,
   type NormalizedCell,
-  type Presence,
 } from "../../../../domain/index.js";
+import {
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+} from "../../../../shared/validation.js";
 import type {
   TypedSheetsEntityChange,
 } from "../../api/contracts.js";
@@ -29,21 +29,6 @@ import {
   TypedSheetsOrmError,
 } from "../../errors.js";
 import type { ResolvedWriterOptions } from "./contracts.js";
-
-/** Wraps a value in the validated presence contract used by storage writes. */
-export function presentValue<T>(value: T): Presence<T> {
-  return { kind: PRESENCE_KINDS.PRESENT, value };
-}
-
-/** Represents a value that is intentionally not applicable to an operation. */
-export function absentValue<T>(): Presence<T> {
-  return { kind: PRESENCE_KINDS.ABSENT };
-}
-
-/** Wraps a value in the validated applicability contract used by storage writes. */
-export function applicableValue<T>(value: T): Applicability<T> {
-  return { kind: APPLICABILITY_KINDS.APPLICABLE, value };
-}
 
 /** Returns a namespaced ID and rejects an invalid injected ID source. */
 export function identifiedValue(prefix: string, writer: ResolvedWriterOptions): string {
@@ -96,16 +81,6 @@ export function requireChangeEntityId(
 /** Builds the stable target ID used by a physical projection row effect. */
 export function projectionRowTargetId(physicalSheetId: string, rowBindingId: string): string {
   return `projection-row:${physicalSheetId}:${rowBindingId}`;
-}
-
-/** Checks a positive SQLite revision or stream sequence. */
-export function isPositiveSafeInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= POSITIVE_SAFE_INTEGER_MINIMUM;
-}
-
-/** Checks a revision that may validly start at zero. */
-export function isNonNegativeSafeInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= 0;
 }
 
 /** Throws the common error used when a projection cannot safely be planned. */

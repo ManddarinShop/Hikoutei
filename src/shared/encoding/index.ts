@@ -1,3 +1,4 @@
+export { isNormalizedCell } from "./normalizedCell.js";
 export { stableEncode, stableHash } from "./stableEncode.js";
 export { isJavaScriptType, isRecord } from "./typeGuards.js";
 export {

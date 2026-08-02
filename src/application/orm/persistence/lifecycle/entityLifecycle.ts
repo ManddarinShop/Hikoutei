@@ -50,10 +50,10 @@ import {
 } from "../support/timing.js";
 import {
   identifiedValue,
-  presentValue,
   requireChangeEntityId,
   requireEncodedField,
 } from "../support/helpers.js";
+import { presentValue } from "../../../../shared/state/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,

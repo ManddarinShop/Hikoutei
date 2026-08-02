@@ -10,8 +10,10 @@ import {
   type NormalizedCell,
 } from "../../../domain/index.js";
 import {
+  isNormalizedCell,
   NORMALIZED_CELL_KINDS,
-} from "../../../shared/encoding/constants.js";
+} from "../../../shared/encoding/index.js";
+import { isCanonicalUtcIsoDate } from "../../../shared/validation.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -114,7 +116,7 @@ function defaultDateCell(field: TypedSheetsEntityFieldMapping, value: unknown): 
     }
     return { kind: NORMALIZED_CELL_KINDS.DATE, value: value.toISOString() };
   }
-  if (typeof value === "string" && isCanonicalIsoDate(value)) {
+  if (typeof value === "string" && isCanonicalUtcIsoDate(value)) {
     return { kind: NORMALIZED_CELL_KINDS.DATE, value };
   }
   return invalidMappedFieldValue(field, "must be a valid Date or canonical ISO date string");
@@ -131,7 +133,7 @@ function requireValidMappedCell(
     }
     return cell;
   }
-  if (!isNonNullNormalizedCell(cell)) {
+  if (!isNormalizedCell(cell)) {
     throwInvalidFieldValue(mapping, field, "must encode as a normalized cell or null");
   }
   if (cell.kind !== field.cellKind) {
@@ -144,39 +146,7 @@ function requireValidMappedCell(
   ) {
     throwInvalidFieldValue(mapping, field, "cannot be an empty string");
   }
-  if (cell.kind === NORMALIZED_CELL_KINDS.NUMBER && !Number.isFinite(cell.value)) {
-    throwInvalidFieldValue(mapping, field, "must be a finite number");
-  }
-  if (cell.kind === NORMALIZED_CELL_KINDS.DATE && !isCanonicalIsoDate(cell.value)) {
-    throwInvalidFieldValue(mapping, field, "must be a canonical ISO date string");
-  }
   return cell;
-}
-
-function isCanonicalIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
-}
-
-function isNonNullNormalizedCell(value: unknown): value is Exclude<NormalizedCell, null> {
-  if (!isRecord(value)) return false;
-  switch (value.kind) {
-    case NORMALIZED_CELL_KINDS.STRING:
-    case NORMALIZED_CELL_KINDS.DATE:
-      return typeof value.value === "string";
-    case NORMALIZED_CELL_KINDS.NUMBER:
-      return typeof value.value === "number";
-    case NORMALIZED_CELL_KINDS.BOOLEAN:
-      return typeof value.value === "boolean";
-    default:
-      return false;
-  }
-}
-
-/** Promotes unknown codec output to a non-array record before tag inspection. */
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function invalidMappedFieldValue(

@@ -33,6 +33,18 @@ export function isNonNegativeSafeInteger(value: unknown): value is number {
   );
 }
 
+/** Checks whether a string is the canonical UTC ISO representation of a date. */
+export function isCanonicalUtcIsoDate(value: unknown): value is string {
+  if (
+    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+  ) {
+    return false;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
 /** Checks whether a list contains at least one item. */
 export function isNonEmptyList<T>(values: readonly T[]): boolean {
   return values.length !== EMPTY_ARRAY_LENGTH_ZERO;

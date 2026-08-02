@@ -31,6 +31,8 @@ import {
   STABLE_ENCODING_ERROR_CODES,
 } from "./constants.js";
 import { isJavaScriptType } from "./typeGuards.js";
+import type { HikouteiStableHash } from "../identity/types.js";
+import { isCanonicalUtcIsoDate } from "../validation.js";
 import type { DateValue, StableValue } from "./types.js";
 import { StableEncodingError } from "../../domain/errors/stableEncoding.js";
 
@@ -45,8 +47,8 @@ export function stableEncode(value: StableValue): Uint8Array {
 }
 
 /** SHA-256 hex of the stable encoding. This is the canonical fingerprint. */
-export function stableHash(value: StableValue): string {
-  return createHash("sha256").update(stableEncode(value)).digest("hex");
+export function stableHash(value: StableValue): HikouteiStableHash {
+  return createHash("sha256").update(stableEncode(value)).digest("hex") as HikouteiStableHash;
 }
 
 function encodeValue(value: StableValue, chunks: Uint8Array[]): void {
@@ -110,7 +112,7 @@ function encodeString(value: string, chunks: Uint8Array[]): void {
 }
 
 function encodeDate(iso: string, chunks: Uint8Array[]): void {
-  if (!DATE_REGEX.test(iso) || !isCanonicalDate(iso)) {
+  if (!isCanonicalUtcIsoDate(iso)) {
     throw new StableEncodingError(
       STABLE_ENCODING_ERROR_CODES.INVALID_DATE_FORMAT,
       `stable_encode: invalid date format: ${iso}`,
@@ -178,8 +180,6 @@ function shortestRoundTripDecimal(value: number): string {
   }).replace(/e\+/, "e");
 }
 
-const DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-
 function isDateValue(value: unknown): value is DateValue {
   return (
     isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT) &&
@@ -217,11 +217,6 @@ function normalizeScalarString(value: string): string {
     }
   }
   return value.normalize("NFC");
-}
-
-function isCanonicalDate(value: string): boolean {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function ascii(s: string): Uint8Array {

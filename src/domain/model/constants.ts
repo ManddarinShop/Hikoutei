@@ -90,3 +90,63 @@ export const CONFLICT_STATUSES = {
 /** Closed set of canonical conflict lifecycle states. */
 export type ConflictStatus =
   (typeof CONFLICT_STATUSES)[keyof typeof CONFLICT_STATUSES];
+
+/** Runtime values for projections persisted and materialized by the sync engine. */
+export const PROJECTION_KINDS = {
+  USER_INPUT: "user_input",
+  SYSTEM_STATE: "system_state",
+  LEGACY_COMBINED: "legacy_combined",
+} as const;
+
+/** Closed set of projection values, including the legacy decode value. */
+export type ProjectionKind = (typeof PROJECTION_KINDS)[keyof typeof PROJECTION_KINDS];
+
+/** Runtime values allowed in the registered physical Sheet allowlist. */
+export const REGISTERED_PROJECTION_KINDS = {
+  USER_INPUT: PROJECTION_KINDS.USER_INPUT,
+  SYSTEM_STATE: PROJECTION_KINDS.SYSTEM_STATE,
+  SYNC_CONFLICTS: "sync_conflicts",
+} as const;
+
+/** Projection values accepted by registry and gateway routing. */
+export type RegisteredProjectionKind =
+  (typeof REGISTERED_PROJECTION_KINDS)[keyof typeof REGISTERED_PROJECTION_KINDS];
+
+/** Runtime values for durable outbox effect operations. */
+export const EFFECT_KINDS = {
+  SYSTEM_PROJECTION: "system_projection",
+  CANDIDATE_RECONCILE: "candidate_reconcile",
+  SYSTEM_REPAIR: "system_repair",
+  RESOLUTION_PROJECTION: "resolution_projection",
+  RESOLUTION_DELETE: "resolution_delete",
+  USER_INPUT_DELETE: "user_input_delete",
+} as const;
+
+/** Closed set of durable outbox effect operations. */
+export type EffectKind = (typeof EFFECT_KINDS)[keyof typeof EFFECT_KINDS];
+
+/** Runtime values for the target domain of one durable effect. */
+export const EFFECT_TARGET_KINDS = {
+  ENTITY: "entity",
+  ROW_BINDING: "row_binding",
+  PROJECTION_ROW: "projection_row",
+  CONFLICT: "conflict",
+} as const;
+
+/** Closed set of durable effect targets. */
+export type EffectTargetKind =
+  (typeof EFFECT_TARGET_KINDS)[keyof typeof EFFECT_TARGET_KINDS];
+
+/** Runtime values for durable effect lifecycle status. */
+export const EFFECT_STATUSES = {
+  PENDING: "pending",
+  PROCESSING: "processing",
+  APPLIED: "applied",
+  BLOCKED_CANDIDATE: "blocked_candidate",
+  SUPERSEDED: "superseded",
+  CONFLICT: "conflict",
+  FAILED: "failed",
+} as const;
+
+/** Closed set of durable effect lifecycle status values. */
+export type EffectStatus = (typeof EFFECT_STATUSES)[keyof typeof EFFECT_STATUSES];

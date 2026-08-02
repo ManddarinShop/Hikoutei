@@ -11,8 +11,17 @@ import {
   JAVASCRIPT_TYPE_NAMES,
   NORMALIZED_CELL_KINDS,
 } from "../../shared/encoding/constants.js";
-import { isJavaScriptType, isRecord } from "../../shared/encoding/typeGuards.js";
+import { APPLICABILITY_KINDS } from "../../shared/state/constants.js";
+import {
+  isJavaScriptType,
+  isNormalizedCell,
+  isRecord,
+} from "../../shared/encoding/index.js";
 import { stableHash } from "../../shared/encoding/stableEncode.js";
+import {
+  isSemanticRevision,
+  type HikouteiRevision,
+} from "../../shared/identity/types.js";
 import {
   CANONICAL_RESOLUTION_STATUSES,
   DELETE_EVIDENCE,
@@ -31,6 +40,7 @@ import type {
   ObservedInsertRowChange,
   ObservedVersionedFieldChange,
   NormalizedRow,
+  NormalizedRowField,
   RawObservedRowChange,
   RawObservedInsertFieldChange,
   RawObservedVersionedFieldChange,
@@ -203,7 +213,7 @@ function parseRawObservedRow(input: unknown): RawObservedRowParseResult {
   }
   if (
     !isJavaScriptType(input.rowBindingId, JAVASCRIPT_TYPE_NAMES.STRING) ||
-    !isJavaScriptType(input.baseVisibleRevision, JAVASCRIPT_TYPE_NAMES.NUMBER) ||
+    !isValidRevision(input.baseVisibleRevision) ||
     !Array.isArray(input.fields)
   ) {
     return invalidRawObservedRowResult();
@@ -383,10 +393,8 @@ function promoteVersionedFields(
 }
 
 /** Narrows an external revision to a safe non-negative revision. */
-function isValidRevision(value: unknown): value is number {
-  return isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER) &&
-    Number.isSafeInteger(value) &&
-    value >= 0;
+function isValidRevision(value: unknown): value is HikouteiRevision {
+  return isSemanticRevision(value);
 }
 
 function isValidOperation(operation: unknown): operation is RowOperation {
@@ -417,7 +425,29 @@ function isRawVersionedFieldChange(value: unknown): value is RawObservedVersione
 }
 
 function isPresentNormalizedRow(value: unknown): value is NormalizedRow {
-  return isRecord(value) && isJavaScriptType(value.rowBindingId, JAVASCRIPT_TYPE_NAMES.STRING);
+  if (
+    !isRecord(value) ||
+    !isJavaScriptType(value.rowBindingId, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    !(value.fields instanceof Map)
+  ) {
+    return false;
+  }
+  return [...value.fields.entries()].every(
+    ([fieldName, field]) => isJavaScriptType(fieldName, JAVASCRIPT_TYPE_NAMES.STRING) &&
+      isNormalizedRowField(field),
+  );
+}
+
+function isNormalizedRowField(value: unknown): value is NormalizedRowField {
+  if (!isRecord(value) || !isJavaScriptType(value.fieldName, JAVASCRIPT_TYPE_NAMES.STRING)) {
+    return false;
+  }
+  if (!isNormalizedCell(value.cell)) return false;
+  if (!isRecord(value.baseFieldRevision)) return false;
+  if (value.baseFieldRevision.kind === APPLICABILITY_KINDS.APPLICABLE) {
+    return isValidRevision(value.baseFieldRevision.value);
+  }
+  return value.baseFieldRevision.kind === APPLICABILITY_KINDS.NOT_APPLICABLE;
 }
 
 function isDeleteEvidence(value: unknown): value is DeleteEvidence {
@@ -493,30 +523,4 @@ function invalidStructuralResult(
 function hasRequiredValue(value: NormalizedCell): boolean {
   return value !== null &&
     !(value.kind === NORMALIZED_CELL_KINDS.STRING && value.value.length === 0);
-}
-
-/** Narrows untrusted adapter input to the versioned normalized-cell contract. */
-function isNormalizedCell(value: unknown): value is NormalizedCell {
-  if (value === null) return true;
-  if (!isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT) || Array.isArray(value)) return false;
-
-  const candidate = value as { readonly kind?: unknown; readonly value?: unknown };
-  switch (candidate.kind) {
-    case NORMALIZED_CELL_KINDS.STRING:
-      return isJavaScriptType(candidate.value, JAVASCRIPT_TYPE_NAMES.STRING);
-    case NORMALIZED_CELL_KINDS.NUMBER:
-      return isJavaScriptType(candidate.value, JAVASCRIPT_TYPE_NAMES.NUMBER) && Number.isFinite(candidate.value);
-    case NORMALIZED_CELL_KINDS.BOOLEAN:
-      return isJavaScriptType(candidate.value, JAVASCRIPT_TYPE_NAMES.BOOLEAN);
-    case NORMALIZED_CELL_KINDS.DATE:
-      return isJavaScriptType(candidate.value, JAVASCRIPT_TYPE_NAMES.STRING) && isCanonicalDate(candidate.value);
-    default:
-      return false;
-  }
-}
-
-function isCanonicalDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
