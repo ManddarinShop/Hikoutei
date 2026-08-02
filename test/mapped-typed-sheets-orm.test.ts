@@ -128,6 +128,64 @@ describe("mapped typed-sheets ORM", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  it("retains shared identity metadata and promotes property codecs", () => {
+    const mapping = defineTypedSheetsEntityMapping({
+      entity: Order,
+      entityName: "TypedCodecOrder",
+      logicalSheetId: "typed-codec-orders",
+      primaryKey: "id",
+      businessKey: "id",
+      schemaVersion: 1,
+      fields: [
+        {
+          property: "id",
+          cellKind: NORMALIZED_CELL_KINDS.STRING,
+          ownership: FIELD_OWNERSHIPS.USER,
+          required: true,
+          unique: true,
+        },
+        {
+          property: "status",
+          cellKind: NORMALIZED_CELL_KINDS.STRING,
+          ownership: FIELD_OWNERSHIPS.USER,
+          required: true,
+          encode: (value) => ({ kind: NORMALIZED_CELL_KINDS.STRING, value: value.toUpperCase() }),
+          decode: (value) => value?.kind === NORMALIZED_CELL_KINDS.STRING ? value.value : "",
+        },
+      ],
+      projections: [{
+        physicalSheetId: "typed-codec-orders-system",
+        spreadsheetId: "spreadsheet-orders",
+        tabName: "Orders_System",
+        registeredRange: "A:C",
+        projection: "system_state",
+      }],
+    });
+
+    expect(mapping.identity.primaryProperty).toBe("id");
+    expect(mapping.identity.businessKey).toBe(mapping.businessKey);
+    expect(mapping.fields.find((field) => field.property === "status")?.encode?.("pending"))
+      .toEqual({ kind: NORMALIZED_CELL_KINDS.STRING, value: "PENDING" });
+  });
+
+  it("rejects malformed mapping input before reading its fields", () => {
+    expect(() => defineTypedSheetsEntityMapping(null as never)).toThrow(
+      "entity mapping must be an object",
+    );
+    expect(() => defineTypedSheetsEntityMapping({ fields: null, projections: [] } as never)).toThrow(
+      "entity mapping fields and projections must be arrays",
+    );
+    expect(() => defineTypedSheetsEntityMapping({
+      ...orderMapping,
+      entity: Order,
+      primaryKey: "id",
+      businessKey: "id",
+      fields: orderMapping.fields.map((field, index) => index === 0
+        ? { ...field, encode: "not-a-function" }
+        : field),
+    } as never)).toThrow("encode must be a function");
+  });
+
   it("rejects a User_Input mapping whose business key is system-owned", () => {
     expect(() => defineTypedSheetsEntityMapping({
       entity: Order,

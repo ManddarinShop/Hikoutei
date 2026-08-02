@@ -4,6 +4,7 @@ import {
   AppsScriptOperationSyncGateway,
   type AppsScriptOperationProjectionStatus,
 } from "../src/adapter/sheets/providers/apps-script-gateway/transport/operationSyncGateway.js";
+import { createApplyEffectsOperation } from "../src/adapter/sheets/providers/apps-script-gateway/operations/effect/effectOperation.js";
 import type {
   AnyAppsScriptOperationDefinition,
   AppsScriptOperationGateway,
@@ -208,6 +209,36 @@ describe("AppsScriptOperationSyncGateway", () => {
     expect(operationGateway.calls[0]?.fn).toContain("postcondition_hash_mismatch");
   });
 
+  it("rejects swapped effect result evidence at the operation boundary", () => {
+    const first = createEffect();
+    const second = { ...first, effectId: "effect-2", payloadHash: "payload-hash-2" };
+    const operation = createApplyEffectsOperation({
+      physicalSheetId: "orders-state",
+      sheetName: "Orders",
+      registeredRange: "A:B",
+      projection: "system_state",
+      schemaVersion: 1,
+      effects: [first, second],
+      postconditionMode: "inline",
+    });
+    const result = (effect: SyncGatewayEffect) => ({
+      effectId: effect.effectId,
+      payloadHash: effect.payloadHash,
+      status: "applied",
+      visibleRevision: null,
+      visibleHash: null,
+      snapshotHash: null,
+      reason: null,
+      postcondition: "acknowledged",
+    });
+
+    expect(() => operation.decode?.({
+      results: [result(second), result(first)],
+      snapshotHash: null,
+      hasMore: false,
+    })).toThrow("does not match the submitted effect order or evidence");
+  });
+
   it("routes anchor assignment and normalized snapshots through typed operations", async () => {
     const operationGateway = new StubOperationGateway([
       {
@@ -286,6 +317,33 @@ describe("AppsScriptOperationSyncGateway", () => {
     expect(operationGateway.calls[1]?.fn).toContain("getFormulas");
     expect(operationGateway.calls[1]?.fn).toContain("createDeveloperMetadataFinder");
     expect(operationGateway.calls[1]?.fn).not.toContain("getDeveloperMetadata");
+  });
+
+  it("rejects full snapshot schema drift before polling consumes the rows", async () => {
+    const operationGateway = new StubOperationGateway([{
+      protocolVersion: "typed-sheets-sync-v1",
+      sheetName: "Orders",
+      registeredRange: "A:B",
+      projection: "system_state",
+      schemaVersion: 1,
+      headers: ["wrong", "status"],
+      rows: [],
+      snapshotHash: "snapshot-hash",
+      unanchoredRows: [],
+      duplicateAnchors: [],
+    }]);
+    const adapter = new AppsScriptOperationSyncGateway({
+      operationGateway,
+      definitions: [createDefinition()],
+    });
+
+    await expect(adapter.readSnapshot({
+      physicalSheetId: "orders-state",
+      sheetName: "Orders",
+      registeredRange: "A:B",
+      projection: "system_state",
+      schemaVersion: 1,
+    })).rejects.toMatchObject({ code: "invalid_sync_gateway_response" });
   });
 
   it("combines several projection observations into one Apps Script request", async () => {

@@ -8,6 +8,7 @@ describe("thin Code.gs fast-append operation", () => {
   it("builds a single setValues operation without metadata work", () => {
     const operation = createFastAppendRowsOperation({
       sheetName: "LoadTest_Customers",
+      registeredRange: "A:B",
       headers: ["id", "name"],
       rows: [{
         effectId: "effect-1",
@@ -19,6 +20,7 @@ describe("thin Code.gs fast-append operation", () => {
     });
 
     expect(operation.fn).toContain("setValues");
+    expect(operation.fn).toContain("range.startColumn");
     expect(operation.fn).toContain('phase_("set_values"');
     expect(operation.fn).toContain('operationKinds: ["append"]');
     expect(operation.fn).not.toContain("getDeveloperMetadata");
@@ -27,9 +29,29 @@ describe("thin Code.gs fast-append operation", () => {
     expect(operation.args.rows).toHaveLength(1);
   });
 
+  it("rejects range/header drift and non-canonical date cells before transport", () => {
+    expect(() => createFastAppendRowsOperation({
+      sheetName: "LoadTest_Customers",
+      registeredRange: "B:C",
+      headers: ["id"],
+      rows: [],
+    })).toThrow("headers must match registeredRange");
+
+    expect(() => createFastAppendRowsOperation({
+      sheetName: "LoadTest_Customers",
+      registeredRange: "A:A",
+      headers: ["createdAt"],
+      rows: [{
+        effectId: "effect-1",
+        fields: { createdAt: { kind: "date", value: "2026-01-02T03:04:05Z" } },
+      }],
+    })).toThrow("unsupported normalized cell");
+  });
+
   it("decodes one applied result and rejects an incomplete response", () => {
     const operation = createFastAppendRowsOperation({
       sheetName: "LoadTest_Customers",
+      registeredRange: "A:A",
       headers: ["id"],
       rows: [{
         effectId: "effect-1",
