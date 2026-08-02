@@ -341,23 +341,28 @@ function decodePostcondition(value: unknown): SyncEffectPostcondition {
 
 
 function isEffectResultStatus(value: string): value is SyncGatewayEffectResult["status"] {
-  return Object.values(SYNC_GATEWAY_EFFECT_RESULT_STATUSES).includes(
-    value as SyncGatewayEffectResult["status"],
-  );
+  return value === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
+    value === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED ||
+    value === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.SUPERSEDED ||
+    value === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.GUARD_MISMATCH ||
+    value === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.REPAIR_REOBSERVE ||
+    value === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.SCHEMA_ERROR ||
+    value === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.RETRYABLE_ERROR;
 }
 
 function isPostconditionStatus(value: string): value is SyncGatewayEffectResult["postcondition"] {
-  return Object.values(SYNC_GATEWAY_POSTCONDITION_STATUSES).includes(
-    value as SyncGatewayEffectResult["postcondition"],
-  );
+  return value === SYNC_GATEWAY_POSTCONDITION_STATUSES.VERIFIED ||
+    value === SYNC_GATEWAY_POSTCONDITION_STATUSES.ACKNOWLEDGED ||
+    value === SYNC_GATEWAY_POSTCONDITION_STATUSES.UNAVAILABLE;
 }
 
 function isPostconditionDisposition(
   value: string,
 ): value is SyncEffectPostcondition["disposition"] {
-  return Object.values(SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS).includes(
-    value as SyncEffectPostcondition["disposition"],
-  );
+  return value === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.APPLIED ||
+    value === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAPPLIED ||
+    value === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED ||
+    value === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

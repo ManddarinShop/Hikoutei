@@ -77,9 +77,9 @@ function requireCount(value: unknown, label: string): number {
 }
 
 function isTimingOperationKind(value: string): value is SyncTimingOperationKind {
-  return Object.values(SYNC_TIMING_OPERATION_KINDS).includes(
-    value as SyncTimingOperationKind,
-  );
+  return value === SYNC_TIMING_OPERATION_KINDS.APPEND ||
+    value === SYNC_TIMING_OPERATION_KINDS.UPDATE ||
+    value === SYNC_TIMING_OPERATION_KINDS.DELETE;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

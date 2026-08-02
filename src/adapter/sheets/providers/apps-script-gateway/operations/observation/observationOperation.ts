@@ -235,7 +235,7 @@ function decodeSnapshot(
       "snapshot headers do not match the registered schema",
     );
   }
-  const rows = decodeSnapshotRows(record.rows);
+  const rows = decodeSnapshotRows(record.rows, expectedHeaders);
   return {
     protocolVersion,
     sheetName: requireSyncGatewayText(
@@ -266,7 +266,10 @@ function decodeSnapshot(
   };
 }
 
-function decodeSnapshotRows(value: unknown): SyncGatewaySnapshot["rows"] {
+function decodeSnapshotRows(
+  value: unknown,
+  expectedHeaders?: readonly string[],
+): SyncGatewaySnapshot["rows"] {
   if (!Array.isArray(value)) {
     return invalidOperationResponse(
       "Apps Script observation operation",
@@ -293,7 +296,7 @@ function decodeSnapshotRows(value: unknown): SyncGatewaySnapshot["rows"] {
         record.visibleHash,
         "snapshot row[" + index + "].visibleHash",
       ),
-      cells: decodeSnapshotCells(record.cells, index),
+      cells: decodeSnapshotCells(record.cells, index, expectedHeaders),
     };
   });
 }
@@ -301,8 +304,19 @@ function decodeSnapshotRows(value: unknown): SyncGatewaySnapshot["rows"] {
 function decodeSnapshotCells(
   value: unknown,
   rowIndex: number,
+  expectedHeaders?: readonly string[],
 ): Readonly<Record<string, SyncGatewaySnapshot["rows"][number]["cells"][string]>> {
   const record = requireRecord(value, "snapshot row[" + rowIndex + "].cells");
+  if (expectedHeaders !== undefined) {
+    const expected = new Set(expectedHeaders);
+    const actual = Object.keys(record);
+    if (actual.length !== expected.size || actual.some((fieldName) => !expected.has(fieldName))) {
+      return invalidOperationResponse(
+        "Apps Script observation operation",
+        "snapshot row[" + rowIndex + "].cells do not match the registered schema",
+      );
+    }
+  }
   const cells: Record<string, SyncGatewaySnapshot["rows"][number]["cells"][string]> = {};
   for (const [fieldName, rawCell] of Object.entries(record)) {
     const cell = requireRecord(rawCell, "snapshot cell " + fieldName);
@@ -399,7 +413,11 @@ function decodeStringArray(value: unknown, label: string): readonly string[] {
 }
 
 function isCellObservationKind(value: string): value is CellObservationKind {
-  return Object.values(CELL_OBSERVATION_KINDS).includes(value as CellObservationKind);
+  return value === CELL_OBSERVATION_KINDS.BLANK ||
+    value === CELL_OBSERVATION_KINDS.LITERAL ||
+    value === CELL_OBSERVATION_KINDS.FORMULA ||
+    value === CELL_OBSERVATION_KINDS.MERGED ||
+    value === CELL_OBSERVATION_KINDS.ERROR;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

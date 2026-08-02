@@ -17,7 +17,7 @@ import {
   AppsScriptSyncGatewayError,
   SYNC_GATEWAY_CLIENT_ERROR_CODES,
 } from "../errors.js";
-import { canonicalSyncJson } from "../protocol/syncProtocol.js";
+import { requireSyncJsonValue } from "../protocol/syncProtocol.js";
 import type { SyncJsonValue } from "../protocol/types.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../../../../shared/encoding/constants.js";
 import { isJavaScriptType, isRecord } from "../../../../../shared/encoding/typeGuards.js";
@@ -153,10 +153,13 @@ export class AppsScriptOperationClient implements AppsScriptOperationGateway {
       actorId: this.actorId,
     });
     const result = requireOperationBatchResult(await this.post(envelope), operations.length);
-    return operations.map((operation, index) => {
+    const decoded = operations.map((operation, index) => {
       const value = result[index];
       return operation.decode === undefined ? value : operation.decode(value);
-    }) as AppsScriptOperationResults<Operations>;
+    });
+    // The response-length check plus each operation decoder establish the
+    // runtime invariant that the mapped tuple type represents.
+    return decoded as AppsScriptOperationResults<Operations>;
   }
 
   private async post(envelope: AppsScriptOperationEnvelope): Promise<unknown> {
@@ -260,11 +263,8 @@ function toWireOperation(
       "Apps Script operation fn must be a non-empty function source",
     );
   }
-  // The canonical encoder performs the runtime JSON-value check for args.
-  canonicalSyncJson(operation.args);
-  // canonicalSyncJson has already promoted the value through the runtime
-  // JSON boundary; the cast keeps typed operation argument shapes ergonomic.
-  return { fn: operation.fn, args: operation.args as SyncJsonValue };
+  const args = requireSyncJsonValue(operation.args);
+  return { fn: operation.fn, args };
 }
 
 function requireOperationBatchResult(
@@ -291,7 +291,7 @@ function parseCodeGsResponse(
 ): CodeGsResponse {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(responseText) as unknown;
+    parsed = JSON.parse(responseText);
   } catch {
     throw new AppsScriptSyncGatewayError(
       SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_RESPONSE,
