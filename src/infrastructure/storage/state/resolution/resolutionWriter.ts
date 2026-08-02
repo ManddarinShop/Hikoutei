@@ -24,8 +24,10 @@ import {
   appendPendingEffectsWithSql,
   type NewEffect,
 } from "../../sync/outbound/effectOutbox.js";
+import { fromSqlNullable } from "../../sqlite/sqlState.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import {
+  fenceParameters,
   isFencingValidWithSql,
   type FencingContext,
 } from "../../sync/shared/writerLease.js";
@@ -61,8 +63,6 @@ import {
 import {
   assertCurrentFenceWithSql,
   FenceLostError,
-  fenceParameters,
-  fromSqlNullable,
   parseNormalizedCell,
   requireConflictStatus,
 } from "./resolutionWriterHelpers.js";

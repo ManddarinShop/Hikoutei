@@ -16,10 +16,11 @@ import { QUARANTINE_REASONS, ROW_OPERATIONS } from "../../../../domain/model/con
 import { toSqlNullable } from "../../sqlite/sqlState.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import {
+  FENCE_EXISTS_SQL,
+  fenceParameters,
   isFencingValidWithSql,
   type FencingContext,
 } from "../../sync/shared/writerLease.js";
-import { FENCE_EXISTS_SQL } from "../../sync/outbound/effectOutboxSql.js";
 import { auditJson } from "./observationAudit.js";
 import type { ObservationIntegrityDiscriminator } from "./observationConstants.js";
 import type { PersistObservedRowInput } from "./observationTypes.js";
@@ -152,10 +153,7 @@ export async function persistPollingQuarantineWithSql(
     input.payloadJson,
     input.detectedAt,
     input.detectedAt,
-    fence.role,
-    fence.writerEpoch,
-    fence.fencingToken,
-    fence.now,
+    ...fenceParameters(fence),
   ]);
   if (result.changes === 1) {
     return { kind: POLLING_QUARANTINE_WRITE_RESULT_KINDS.INSERTED, quarantineId };

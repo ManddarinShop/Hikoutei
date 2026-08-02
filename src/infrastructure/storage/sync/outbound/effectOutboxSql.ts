@@ -1,6 +1,9 @@
 /** SQL statements used by the effect outbox state machine. */
 
 import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./effectOutboxContracts.js";
+import { FENCE_EXISTS_SQL } from "../shared/writerLease.js";
+
+export { FENCE_EXISTS_SQL } from "../shared/writerLease.js";
 
 export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
   SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
@@ -10,11 +13,6 @@ export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
   SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
 ].map((code) => `'${code}'`)
   .join(", ");
-
-export const FENCE_EXISTS_SQL = `
-  SELECT 1 FROM writer_lease
-  WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until > ?
-`;
 
 export const CLAIM_EFFECT_SQL = `
   UPDATE sheet_effect_outbox AS candidate

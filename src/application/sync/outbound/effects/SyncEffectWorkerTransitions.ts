@@ -21,12 +21,11 @@ import {
   WORKER_ERROR_CODES,
   type SyncEffectWorkerErrorCode,
 } from "./SyncEffectWorkerConstants.js";
+import { absentValue, presentValue } from "../../../../shared/state/index.js";
 import {
-  absentValue,
   applicabilityFromSqlNullable,
   isPresent,
   lookupResult,
-  presentValue,
   safeErrorMessage,
 } from "./SyncEffectWorkerHelpers.js";
 import {
@@ -215,15 +214,16 @@ export async function settleUnknownPostcondition(
     isPresent(postcondition.visibleRevision) &&
     isPresent(postcondition.visibleHash)
   ) {
-    await completeApplied(
+    if (await completeApplied(
       storage,
       fence,
       item,
       postcondition.visibleRevision,
       postcondition.visibleHash,
       report,
-    );
-    report.responseLossRecovered += 1;
+    )) {
+      report.responseLossRecovered += 1;
+    }
     return;
   }
   if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.APPLIED) {
@@ -291,9 +291,35 @@ export async function completeApplied(
   visibleRevision: Presence<number>,
   visibleHash: Presence<string>,
   report: MutableReport,
-): Promise<void> {
+): Promise<boolean> {
   const gatewayEffect = item.gatewayEffect;
-  const confirmation = isPresent(gatewayEffect) &&
+  if (!isPresent(gatewayEffect)) {
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      item.invalidPayloadError,
+      report,
+    );
+    return false;
+  }
+  if (
+    isPresent(visibleHash) &&
+    visibleHash.value !== gatewayEffect.value.payload.targetVisibleHash
+  ) {
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
+      presentValue("Gateway postcondition visible hash does not match the effect target."),
+      report,
+    );
+    return false;
+  }
+  const confirmation =
+    isPresent(gatewayEffect) &&
     isPresent(gatewayEffect.value.rowBindingId) &&
     isPresent(visibleRevision) &&
     isPresent(visibleHash)
@@ -320,6 +346,7 @@ export async function completeApplied(
     ...(confirmation === undefined ? {} : { projectionConfirmation: confirmation }),
   });
   if (applied) report.applied += 1;
+  return applied;
 }
 
 export async function replanOrFail(

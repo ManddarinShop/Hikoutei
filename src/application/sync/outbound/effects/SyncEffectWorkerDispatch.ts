@@ -1,7 +1,7 @@
 /** Fast-append and unsupported-capability dispatch paths for the effect worker. */
 
 import type { FencingContext } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
-import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
+import { LOOKUP_RESULT_KINDS, presentValue } from "../../../../shared/state/index.js";
 import type {
   FastAppendRowsRequest,
   SyncEffectWorkerGateway,
@@ -14,7 +14,6 @@ import { WORKER_ERROR_CODES } from "./SyncEffectWorkerConstants.js";
 import {
   isPresent,
   lookupResult,
-  presentValue,
 } from "./SyncEffectWorkerHelpers.js";
 import {
   completeApplied,

@@ -21,6 +21,9 @@ import {
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
+  absentValue,
+  applicableValue,
+  notApplicableValue,
 } from "../../../../shared/state/index.js";
 import {
   SYNC_GATEWAY_EFFECT_KINDS,
@@ -345,18 +348,6 @@ function requireConflictTarget(
   const value = requireNonEmptyPresence(conflictId, message);
   if (targetId !== value) throwEffectError(message);
   return value;
-}
-
-function applicableValue<T>(value: T): Applicability<T> {
-  return { kind: APPLICABILITY_KINDS.APPLICABLE, value };
-}
-
-function notApplicableValue<T>(): Applicability<T> {
-  return { kind: APPLICABILITY_KINDS.NOT_APPLICABLE };
-}
-
-function absentValue<T>(): Presence<T> {
-  return { kind: PRESENCE_KINDS.ABSENT };
 }
 
 function stableApplicabilityValue<T>(value: Applicability<T>): T | null {

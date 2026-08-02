@@ -1,9 +1,8 @@
 /** SQL statements for the fenced resolution-command state machine. */
 
-export const FENCE_EXISTS_SQL = `
-  SELECT 1 FROM writer_lease
-  WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until > ?
-`;
+import { FENCE_EXISTS_SQL } from "../../sync/shared/writerLease.js";
+
+export { FENCE_EXISTS_SQL } from "../../sync/shared/writerLease.js";
 
 export const FIND_EXISTING_COMMAND_SQL = `
   SELECT command_id, request_key, action, actor_id, role, target_conflict_id,

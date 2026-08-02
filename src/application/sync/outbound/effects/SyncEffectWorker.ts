@@ -13,7 +13,12 @@ import {
   POSITIVE_SAFE_INTEGER_MINIMUM,
   type Presence,
 } from "../../../../domain/index.js";
-import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
+import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
+import {
+  LOOKUP_RESULT_KINDS,
+  absentValue,
+  presentValue,
+} from "../../../../shared/state/index.js";
 import {
   applyEffectResultWithAdapter,
   claimEffectWithAdapter,
@@ -23,6 +28,7 @@ import {
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
+  hasActiveUserInputCandidateWithSql,
   type ApplyResultOptions,
   type ClaimEffectOptions,
   type ClaimLeaseOptions,
@@ -34,7 +40,7 @@ import {
   type WriterLease,
   type WriterLeaseClaimResult,
 } from "../../../../infrastructure/storage/index.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import type {
   SyncEffectPostcondition,
   SyncGatewayEffect,
@@ -42,7 +48,10 @@ import type {
   SyncEffectWorkerGateway,
   SyncEffectWorkerFullGateway,
 } from "../../gateway/syncGateway.js";
-import { SYNC_GATEWAY_EFFECT_RESULT_STATUSES } from "../../gateway/constants.js";
+import {
+  SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
+  SYNC_GATEWAY_PROJECTIONS,
+} from "../../gateway/constants.js";
 import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
   SYNC_TIMING_SCOPES,
@@ -53,18 +62,14 @@ import {
   DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
   OUTBOX_EFFECT_STATUSES,
-  USER_INPUT_CANDIDATE_BLOCK_SQL,
   WORKER_ERROR_CODES,
 } from "./SyncEffectWorkerConstants.js";
 import {
-  absentValue,
   isAbsent,
   isPresent,
   lookupResult,
-  presentValue,
   safeErrorMessage,
   throwWorkerError,
-  type CandidateBlockSqlRow,
 } from "./SyncEffectWorkerHelpers.js";
 import {
   countsForItems,
@@ -252,7 +257,7 @@ async function runEffectWorker(
       claimToken,
       leaseDurationMs: effectLeaseDuration,
     });
-    if (!claim.success) continue;
+    if (claim.status !== "claimed") continue;
     report.claimed += 1;
     let gatewayEffect: Presence<SyncGatewayEffect>;
     let invalidPayloadError: Presence<string>;
@@ -471,35 +476,29 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
       return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
     },
     isUserInputCandidateBlocked: (item) => {
-      return storage.read(({ sql }) => isUserInputCandidateBlockedWithSql(sql, item));
+      const effect = item.gatewayEffect;
+      if (
+        !isPresent(effect) ||
+        !isCandidateProtectingUserInputEffect(effect.value)
+      ) {
+        return Promise.resolve(false);
+      }
+      const rowBinding = effect.value.rowBindingId;
+      if (!isPresent(rowBinding)) return Promise.resolve(false);
+      const gatewayEffect = effect.value;
+      const rowBindingId = rowBinding.value;
+      const fieldNames = Object.keys(gatewayEffect.payload.fields);
+      return storage.read(({ sql }) => hasActiveUserInputCandidateWithSql(sql, {
+        physicalSheetId: gatewayEffect.physicalSheetId,
+        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        rowBindingId,
+        fieldNames,
+        openConflictStatus: CONFLICT_STATUSES.OPEN,
+        rebasedConflictStatus: CONFLICT_STATUSES.NEEDS_REBASE,
+      }));
     },
   };
 }
-
-async function isUserInputCandidateBlockedWithSql(
-  sql: SqlExecutor,
-  item: ClaimedEffect,
-): Promise<boolean> {
-  const effect = item.gatewayEffect;
-  if (
-    !isPresent(effect) ||
-    !isCandidateProtectingUserInputEffect(effect.value) ||
-    !isPresent(effect.value.rowBindingId)
-  ) {
-    return false;
-  }
-  const fieldNames = Object.keys(effect.value.payload.fields);
-  if (fieldNames.length === 0) return true;
-  const placeholders = fieldNames.map(() => "?").join(", ");
-  const blockSql = USER_INPUT_CANDIDATE_BLOCK_SQL.replace("__FIELD_NAMES__", placeholders);
-  const row = await sql.get<CandidateBlockSqlRow>(blockSql, [
-    effect.value.physicalSheetId,
-    effect.value.rowBindingId.value,
-    ...fieldNames,
-  ]);
-  return row !== undefined;
-}
-
 
 /** Returns the full gateway only when every regular recovery capability exists. */
 function isFullEffectGateway(
