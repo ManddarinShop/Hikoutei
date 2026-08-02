@@ -43,7 +43,6 @@ import type {
   SyncEffectWorkerFullGateway,
   SyncTableRowsResult,
 } from "../../../../../application/sync/gateway/syncGateway.js";
-import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import type {
   AppsScriptOperationDefinition,
   AppsScriptOperationGateway,
@@ -61,6 +60,7 @@ import {
   createReadSnapshotOperation,
 } from "../operations/observation/observationOperation.js";
 import { invalidOperationResponse } from "../errors.js";
+import { requireOperationRecord } from "../validation.js";
 
 /** Configuration required to bind the operation client to SQLite projections. */
 export interface AppsScriptOperationSyncGatewayOptions {
@@ -164,6 +164,7 @@ export class AppsScriptOperationSyncGateway
     validateRoute(request, definition);
     const operation = createFastAppendRowsOperation({
       sheetName: request.sheetName,
+      registeredRange: request.registeredRange,
       headers: definition.headers,
       rows: request.rows,
     });
@@ -502,17 +503,20 @@ function effectRouteOptions(
 
 function observationRouteOptions(
   definition: RegisteredSyncProjectionDefinition,
-): { readonly checkboxHeaders?: readonly string[] } {
-  return definition.checkboxHeaders === undefined
-    ? {}
-    : { checkboxHeaders: definition.checkboxHeaders };
+): {
+  readonly checkboxHeaders?: readonly string[];
+  readonly expectedHeaders: readonly string[];
+} {
+  return {
+    expectedHeaders: definition.headers,
+    ...(definition.checkboxHeaders === undefined
+      ? {}
+      : { checkboxHeaders: definition.checkboxHeaders }),
+  };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    return invalidOperationResponse("Apps Script operation", label + " must be an object");
-  }
-  return value as Record<string, unknown>;
+  return requireOperationRecord(value, label, "Apps Script operation");
 }
 
 const PROVISION_SOURCE = [
@@ -528,18 +532,33 @@ const PROVISION_SOURCE = [
   "      sheet = spreadsheet.insertSheet(registration.sheetName);",
   "      createdSheets.push(registration.sheetName);",
   "    }",
+  "    var range = parseRange_(registration.registeredRange);",
+  "    if (range.columnCount !== registration.headers.length) throw new Error(\"operational provisioning headers do not match registeredRange\");",
   "    if (sheet.getLastRow() === 0 && sheet.getLastColumn() === 0) {",
-  "      sheet.getRange(1, 1, 1, registration.headers.length).setValues([registration.headers]);",
+  "      sheet.getRange(1, range.startColumn, 1, range.columnCount).setValues([registration.headers]);",
   "      initializedHeaders.push(registration.sheetName);",
   "      return;",
   "    }",
-  "    var actual = sheet.getRange(1, 1, 1, registration.headers.length).getValues()[0];",
+  "    var actual = sheet.getRange(1, range.startColumn, 1, range.columnCount).getValues()[0];",
   "    for (var index = 0; index < registration.headers.length; index += 1) {",
   '      if (String(actual[index]) !== String(registration.headers[index])) {',
   '        throw new Error("operational provisioning header mismatch: " + registration.sheetName);',
   "      }",
   "    }",
   "  });",
+  "  function parseRange_(value) {",
+  "    if (typeof value !== \"string\" || !/^[A-Z]+:[A-Z]+$/.test(value)) throw new Error(\"registeredRange must be an uppercase whole-column range\");",
+  "    var parts = value.split(\":\");",
+  "    var startColumn = columnNumber_(parts[0]);",
+  "    var endColumn = columnNumber_(parts[1]);",
+  "    if (endColumn < startColumn) throw new Error(\"registeredRange end precedes start\");",
+  "    return { startColumn: startColumn, columnCount: endColumn - startColumn + 1 };",
+  "  }",
+  "  function columnNumber_(letters) {",
+  "    var result = 0;",
+  "    for (var index = 0; index < letters.length; index += 1) result = result * 26 + letters.charCodeAt(index) - 64;",
+  "    return result;",
+  "  }",
   "  return {",
   "    registrations: args.registrations.map(function (registration) {",
   "      return {",

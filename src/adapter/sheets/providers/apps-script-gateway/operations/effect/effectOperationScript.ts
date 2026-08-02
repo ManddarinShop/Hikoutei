@@ -341,7 +341,16 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
 
   function findRow_(targetContext, anchor, targetId) {
     var row = targetContext.byAnchor[anchor] || null;
-    if (row === null && targetId !== null && targetId !== undefined) row = targetContext.byIdentity[targetId] || null;
+    if (row === null && targetId !== null && targetId !== undefined) {
+      row = targetContext.byIdentity[targetId] || null;
+      if (row === null && typeof targetId === "string") {
+        var separator = targetId.lastIndexOf(":");
+        var visibleIdentity = separator < 0 ? null : targetId.slice(separator + 1);
+        if (visibleIdentity !== null && visibleIdentity.length > 0) {
+          row = targetContext.byIdentity[visibleIdentity] || null;
+        }
+      }
+    }
     return row !== null && row.deleted ? null : row;
   }
 
@@ -591,11 +600,17 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     return value;
   }
 
+  function isCanonicalDate_(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+    var parsed = new Date(value);
+    return !isNaN(parsed.getTime()) && parsed.toISOString() === value;
+  }
+
   function normalizeCell_(value) {
     if (value === null) return null;
     requireObject_(value, "normalized cell");
     if (value.kind === "string" && typeof value.value === "string") return { kind: "string", value: normalizeScalarString_(value.value) };
-    if (value.kind === "date" && typeof value.value === "string") return { kind: "date", value: value.value };
+    if (value.kind === "date" && isCanonicalDate_(value.value)) return { kind: "date", value: value.value };
     if (value.kind === "number" && typeof value.value === "number" && isFinite(value.value)) return { kind: "number", value: value.value };
     if (value.kind === "boolean" && typeof value.value === "boolean") return { kind: "boolean", value: value.value };
     throw new Error("normalized cell is invalid");
@@ -610,7 +625,10 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     throw new Error("Sheet cell cannot be normalized");
   }
 
-  function toSheetValue_(value) { return value === null ? "" : value.value; }
+  function toSheetValue_(value) {
+    if (value === null) return "";
+    return value.kind === "date" ? new Date(value.value) : value.value;
+  }
   function identityFromCell_(value) {
     if (value === null || value === undefined) return null;
     if (typeof value.value === "string" && value.value.length > 0) return value.value;
@@ -676,7 +694,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     if (value === false) return "b0";
     if (typeof value === "number") return stableEncodeNumber_(value);
     if (typeof value === "string") return stableEncodeString_(value);
-    if (isObject_(value) && value.kind === "date" && typeof value.value === "string") return "d24:" + value.value;
+    if (isObject_(value) && value.kind === "date" && isCanonicalDate_(value.value)) return "d24:" + value.value;
     if (Array.isArray(value)) return "a" + value.length + "[" + value.map(stableEncode_).join("") + "]";
     if (isObject_(value)) {
       var entries = Object.keys(value).map(function (key) { var normalized = normalizeScalarString_(key); return { key: normalized, bytes: utf8Bytes_(normalized), value: value[key] }; });

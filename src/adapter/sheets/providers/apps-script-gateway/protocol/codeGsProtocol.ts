@@ -20,6 +20,7 @@ import {
   requireSyncGatewayText,
 } from "./validation.js";
 import { canonicalSyncJson, syncSha256Hex } from "./syncProtocol.js";
+import type { HikouteiRequestId } from "../../../../../shared/identity/types.js";
 import type { SyncJsonValue } from "./types.js";
 
 /** The thin dispatcher reuses the data-plane protocol version. */
@@ -39,7 +40,7 @@ export interface AppsScriptOperationPayload {
 /** Fields authenticated by the current `Code.gs` implementation. */
 export interface AppsScriptOperationSigningFields {
   readonly protocolVersion: typeof APPS_SCRIPT_OPERATION_PROTOCOL_VERSION;
-  readonly requestId: string;
+  readonly requestId: HikouteiRequestId;
   readonly operation: AppsScriptOperationName;
   readonly keyId: string;
   readonly issuedAt: number;

@@ -17,19 +17,19 @@ import {
   SYNC_GATEWAY_ERROR_CODES,
 } from "../../../../../../application/sync/gateway/errors.js";
 import {
+  decodeSyncGatewayPresenceNonNegativeSafeInteger as decodePresenceNonNegativeInteger,
+  decodeSyncGatewayPresenceString as decodePresenceString,
   requireSyncGatewayNonNegativeSafeInteger,
   requireSyncGatewayPositiveSafeInteger,
   requireSyncGatewayText,
 } from "../../../../../../application/sync/gateway/validation.js";
-import { PRESENCE_KINDS } from "../../../../../../shared/state/constants.js";
-import type { Presence } from "../../../../../../shared/state/types.js";
-import { isRecord } from "../../../../../../shared/encoding/typeGuards.js";
 import type { AppsScriptOperationDefinition } from "../../transport/operationClient.js";
 import { decodeOptionalSyncGatewayTiming } from "../../protocol/timing.js";
 import {
   invalidOperationRequest,
   invalidOperationResponse,
 } from "../../errors.js";
+import { requireOperationRecord } from "../../validation.js";
 import { EFFECT_OPERATION_SOURCE } from "./effectOperationScript.js";
 
 const EFFECT_OPERATION_MODES = {
@@ -78,7 +78,7 @@ export function createApplyEffectsOperation(
   return {
     fn: EFFECT_OPERATION_SOURCE,
     args: { mode: EFFECT_OPERATION_MODES.APPLY, ...request },
-    decode: (value) => decodeApplyEffectsResult(value, request.effects.length),
+    decode: (value) => decodeApplyEffectsResult(value, request.effects),
   };
 }
 
@@ -108,7 +108,7 @@ export function createReadEffectPostconditionsOperation(
   return {
     fn: EFFECT_OPERATION_SOURCE,
     args: { mode: EFFECT_OPERATION_MODES.READ_BATCH, ...request },
-    decode: decodePostconditionBatch,
+    decode: (value) => decodePostconditionBatch(value, request.effects),
   };
 }
 
@@ -153,7 +153,10 @@ function validateEffectRequest(
   }
 }
 
-function decodeApplyEffectsResult(value: unknown, expectedCount: number): ApplySyncEffectsResult {
+function decodeApplyEffectsResult(
+  value: unknown,
+  expectedEffects: readonly SyncGatewayEffect[],
+): ApplySyncEffectsResult {
   const record = requireRecord(value, "effect result");
   if (!Array.isArray(record.results) || typeof record.hasMore !== "boolean") {
     return invalidOperationResponse(
@@ -162,9 +165,9 @@ function decodeApplyEffectsResult(value: unknown, expectedCount: number): ApplyS
     );
   }
   if (
-    record.results.length > expectedCount ||
-    (!record.hasMore && record.results.length !== expectedCount) ||
-    (record.hasMore && record.results.length >= expectedCount)
+    record.results.length > expectedEffects.length ||
+    (!record.hasMore && record.results.length !== expectedEffects.length) ||
+    (record.hasMore && record.results.length >= expectedEffects.length)
   ) {
     return invalidOperationResponse(
       "Apps Script effect operation",
@@ -172,8 +175,10 @@ function decodeApplyEffectsResult(value: unknown, expectedCount: number): ApplyS
     );
   }
   const timing = decodeOptionalSyncGatewayTiming(record.timing, "effect timing");
+  const results = record.results.map((entry, index) => decodeEffectResult(entry, index));
+  assertOrderedEffectEvidence(results, expectedEffects, "effect result");
   const result: ApplySyncEffectsResult = {
-    results: record.results.map((entry, index) => decodeEffectResult(entry, index)),
+    results,
     snapshotHash: decodePresenceString(record.snapshotHash, "effect result snapshotHash"),
     hasMore: record.hasMore,
   };
@@ -234,7 +239,10 @@ function decodeEffectResult(value: unknown, index: number): SyncGatewayEffectRes
   };
 }
 
-function decodePostconditionBatch(value: unknown): readonly SyncGatewayEffectPostconditionResult[] {
+function decodePostconditionBatch(
+  value: unknown,
+  expectedEffects: readonly SyncGatewayEffect[],
+): readonly SyncGatewayEffectPostconditionResult[] {
   const record = requireRecord(value, "postcondition batch result");
   if (!Array.isArray(record.results)) {
     return invalidOperationResponse(
@@ -242,7 +250,13 @@ function decodePostconditionBatch(value: unknown): readonly SyncGatewayEffectPos
       "postcondition batch result must contain results",
     );
   }
-  return record.results.map((entry, index) => {
+  if (record.results.length !== expectedEffects.length) {
+    return invalidOperationResponse(
+      "Apps Script effect operation",
+      "postcondition batch result count does not match the submitted effects",
+    );
+  }
+  const results = record.results.map((entry, index) => {
     const resultLabel = postconditionResultLabel(index);
     const result = requireRecord(entry, resultLabel);
     return {
@@ -258,6 +272,36 @@ function decodePostconditionBatch(value: unknown): readonly SyncGatewayEffectPos
       ),
       postcondition: decodePostcondition(result.postcondition),
     };
+  });
+  assertOrderedEffectEvidence(results, expectedEffects, "postcondition result");
+  return results;
+}
+
+interface OrderedEffectEvidence {
+  readonly effectId: string;
+  readonly payloadHash: string;
+}
+
+function assertOrderedEffectEvidence<T extends OrderedEffectEvidence>(
+  results: readonly T[],
+  expectedEffects: readonly SyncGatewayEffect[],
+  label: string,
+): void {
+  const seen = new Set<string>();
+  results.forEach((result, index) => {
+    const expected = expectedEffects[index];
+    if (
+      expected === undefined ||
+      result.effectId !== expected.effectId ||
+      result.payloadHash !== expected.payloadHash ||
+      seen.has(result.effectId)
+    ) {
+      invalidOperationResponse(
+        "Apps Script effect operation",
+        `${label}[${index}] does not match the submitted effect order or evidence`,
+      );
+    }
+    seen.add(result.effectId);
   });
 }
 
@@ -295,29 +339,6 @@ function decodePostcondition(value: unknown): SyncEffectPostcondition {
   };
 }
 
-function decodePresenceString(value: unknown, label: string): Presence<string> {
-  if (value === null) return { kind: PRESENCE_KINDS.ABSENT };
-  return {
-    kind: PRESENCE_KINDS.PRESENT,
-    value: requireSyncGatewayText(
-      value,
-      label,
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-  };
-}
-
-function decodePresenceNonNegativeInteger(value: unknown, label: string): Presence<number> {
-  if (value === null) return { kind: PRESENCE_KINDS.ABSENT };
-  return {
-    kind: PRESENCE_KINDS.PRESENT,
-    value: requireSyncGatewayNonNegativeSafeInteger(
-      value,
-      label,
-      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
-    ),
-  };
-}
 
 function isEffectResultStatus(value: string): value is SyncGatewayEffectResult["status"] {
   return Object.values(SYNC_GATEWAY_EFFECT_RESULT_STATUSES).includes(
@@ -340,11 +361,5 @@ function isPostconditionDisposition(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    return invalidOperationResponse(
-      "Apps Script effect operation",
-      label + " must be an object",
-    );
-  }
-  return value as Record<string, unknown>;
+  return requireOperationRecord(value, label, "Apps Script effect operation");
 }

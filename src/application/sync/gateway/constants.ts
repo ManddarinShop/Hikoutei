@@ -1,3 +1,6 @@
+import { REGISTERED_PROJECTION_KINDS } from "../../../domain/model/constants.js";
+import type { RegisteredProjectionKind } from "../../../domain/model/constants.js";
+
 /** Protocol versions understood by the sync gateway contract. */
 export const SYNC_GATEWAY_PROTOCOL_VERSIONS = {
   V1: "typed-sheets-sync-v1",
@@ -8,13 +11,12 @@ export type SyncGatewayProtocolVersion =
 
 /** Projection labels accepted by the runtime gateway contract. */
 export const SYNC_GATEWAY_PROJECTIONS = {
-  USER_INPUT: "user_input",
-  SYSTEM_STATE: "system_state",
-  SYNC_CONFLICTS: "sync_conflicts",
-} as const;
+  USER_INPUT: REGISTERED_PROJECTION_KINDS.USER_INPUT,
+  SYSTEM_STATE: REGISTERED_PROJECTION_KINDS.SYSTEM_STATE,
+  SYNC_CONFLICTS: REGISTERED_PROJECTION_KINDS.SYNC_CONFLICTS,
+} as const satisfies Record<string, RegisteredProjectionKind>;
 
-export type SyncGatewayProjection =
-  (typeof SYNC_GATEWAY_PROJECTIONS)[keyof typeof SYNC_GATEWAY_PROJECTIONS];
+export type SyncGatewayProjection = RegisteredProjectionKind;
 
 /** Detail level used by normalized Sheet observation reads. */
 export const SYNC_GATEWAY_SNAPSHOT_READ_MODES = {
