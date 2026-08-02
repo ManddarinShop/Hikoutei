@@ -20,7 +20,6 @@ import {
   type MikroOrmSqliteAdapter,
 } from "../storage/MikroOrmSqliteAdapter.js";
 import { MikroOrmSqliteTypedSheetsEntityManager } from "../api/MikroOrmTypedSheetsEntityManager.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../storage/MikroOrmSqliteSchema.js";
 
 /** Options for initializing a dedicated typed-sheets SQLite ORM instance. */
 export interface InitializeTypedSheetsOrmOptions extends InitializeMikroOrmSqliteAdapterOptions {
@@ -76,7 +75,10 @@ export async function initializeTypedSheetsOrm(
   const { flushCoordinator, ...adapterOptions } = options;
   const storage = await initializeMikroOrmSqliteAdapter(adapterOptions);
   try {
-    await migrateMikroOrmSqliteStorageSchema(storage);
+    // The root ORM path owns only entity tables. The mapped sync path calls
+    // initializeMappedTypedSheetsRuntime(), which explicitly migrates the
+    // canonical/observation/outbox schema before registering projections.
+    await storage.migrateEntitySchema();
     return createTypedSheetsOrm(storage, { flushCoordinator });
   } catch (error: unknown) {
     await storage.close(true);

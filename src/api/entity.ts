@@ -2,9 +2,9 @@
  * Public scalar entity descriptor and the `defineTypedSheetsEntity()` builder.
  *
  * The descriptor is intentionally scalar-only and provider-neutral: it describes
- * a local SQLite-backed entity table without referencing any ORM, Sheets route,
- * or storage-execution type. Sheet route configuration is a separate concern
- * (see `setupSheets`), so descriptor validation never depends on it.
+ * a local entity table without referencing any ORM, Sheet route, or storage-
+ * execution type. Remote projection configuration is an internal service concern,
+ * so descriptor validation never depends on it.
  *
  * The returned `HikouteiEntity` token carries the runtime descriptor and a
  * phantom entity type so `em.create(User, { ... })` infers the entity shape.
@@ -38,8 +38,6 @@ export interface HikouteiPropertyOptions {
   readonly nullable?: boolean;
   /** Equivalent positive spelling for callers that prefer required fields. */
   readonly required?: boolean;
-  /** Marks this field as the human-editable part of a User_Input projection. */
-  readonly editable?: boolean;
   /** v1 permits uniqueness only on the primary/business key. */
   readonly unique?: boolean;
 }
@@ -52,7 +50,7 @@ export interface HikouteiEntityDescriptorInput<
   Name extends string = string,
   Properties extends HikouteiPropertyDescriptorMap = HikouteiPropertyDescriptorMap,
 > {
-  /** Stable entity name used by the manager and by future Sheet routes. */
+  /** Stable entity name used by the manager and internal service mappings. */
   readonly name: Name;
   /** SQLite table name that stores this entity's rows. */
   readonly tableName: string;
@@ -67,7 +65,6 @@ export interface ResolvedHikouteiProperty {
   readonly storageType: HikouteiScalarStorageType;
   readonly primary: boolean;
   readonly nullable: boolean;
-  readonly editable: boolean;
   readonly unique: boolean;
 }
 
@@ -137,7 +134,6 @@ const ALLOWED_PROPERTY_OPTION_KEYS: ReadonlySet<string> = new Set([
   "primary",
   "nullable",
   "required",
-  "editable",
   "unique",
 ]);
 
@@ -240,7 +236,6 @@ function resolveProperty(
   }
   const primary = descriptor.primary === true;
   const nullable = descriptor.nullable === true || descriptor.required === false;
-  const editable = descriptor.editable === true;
   const unique = descriptor.unique === true || primary;
   if (primary && nullable) {
     throwInvalid(`property "${propertyName}" cannot be both primary and nullable.`);
@@ -253,9 +248,6 @@ function resolveProperty(
   }
   if (descriptor.primary !== undefined && typeof descriptor.primary !== "boolean") {
     throwInvalid(`property "${propertyName}" primary must be a boolean.`);
-  }
-  if (descriptor.editable !== undefined && typeof descriptor.editable !== "boolean") {
-    throwInvalid(`property "${propertyName}" editable must be a boolean.`);
   }
   if (descriptor.unique !== undefined && typeof descriptor.unique !== "boolean") {
     throwInvalid(`property "${propertyName}" unique must be a boolean.`);
@@ -274,7 +266,6 @@ function resolveProperty(
     storageType: toStorageType(descriptor.type),
     primary,
     nullable,
-    editable,
     unique,
   };
 }
