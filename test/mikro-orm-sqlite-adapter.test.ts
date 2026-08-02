@@ -27,6 +27,7 @@ import {
   listReadyEffectsWithAdapter,
 } from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
 import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
 import {
   claimWriterLeaseWithAdapter,
   isFencingValidWithAdapter,
@@ -161,6 +162,18 @@ interface ActiveCandidateStateRow {
 }
 
 describe("MikroOrmSqliteAdapter", () => {
+  it("requires an exact baseline for explicit synthetic observation evidence", () => {
+    const input = createQuarantinedObservationInput();
+    expect(() => validatePersistObservedRowInput({
+      ...input,
+      observedProjection: {
+        source: "synthetic",
+        visibleRevision: 1,
+        visibleHash: "observed-hash",
+      },
+    })).toThrow("observed projection evidence must contain valid revision, hash, and baseline data");
+  });
+
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
   afterEach(async () => {

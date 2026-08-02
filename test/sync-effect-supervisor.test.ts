@@ -33,6 +33,28 @@ describe("SyncEffectWorkerSupervisor", () => {
     ]);
   });
 
+  it("drains an externally triggered pass before stop resolves", async () => {
+    let resolvePass!: (report: SyncEffectWorkerReport) => void;
+    const pendingPass = new Promise<SyncEffectWorkerReport>((resolve) => {
+      resolvePass = resolve;
+    });
+    const supervisor = new SyncEffectWorkerSupervisor({ runPass: () => pendingPass });
+    const pass = supervisor.runOnce();
+    await Promise.resolve();
+
+    let stopped = false;
+    const stopping = supervisor.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    resolvePass(createReport());
+    await expect(pass).resolves.toEqual(createReport());
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it("continues bounded passes until the outbox reports idle", async () => {
     let calls = 0;
     let stopPromise: Promise<void> | undefined;

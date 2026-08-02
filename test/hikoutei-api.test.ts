@@ -72,17 +72,6 @@ describe("createTypedSheets public lifecycle", () => {
     const runtime = await createTypedSheets({
       dbName: ":memory:",
       entities: [User, Counter],
-      sheets: {
-        spreadsheetId: "spreadsheet-test",
-        routes: {
-          User: {
-            systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-          },
-          Counter: {
-            systemState: { tabName: "Counters_System", registeredRange: "A:Z" },
-          },
-        },
-      },
     });
     runtimes.push(runtime);
     return runtime;
@@ -198,13 +187,6 @@ describe("createTypedSheets public lifecycle", () => {
     const hikoutei = await createTypedSheets({
       dbName: ":memory:",
       entities: [ColonEntityA, ColonEntityAB],
-      sheets: {
-        spreadsheetId: "spreadsheet-test",
-        routes: {
-          A: { systemState: { tabName: "A_System", registeredRange: "A:Z" } },
-          "A:B": { systemState: { tabName: "AB_System", registeredRange: "A:Z" } },
-        },
-      },
     });
     runtimes.push(hikoutei);
     const em = hikoutei.em.fork();
@@ -288,25 +270,18 @@ describe("createTypedSheets public lifecycle", () => {
     const hikoutei = await openRuntime();
     expect(hikoutei.em).toBeDefined();
     expect(typeof hikoutei.em.fork).toBe("function");
+    expect("setupSheets" in hikoutei).toBe(false);
   });
 
-  it("commits the entity row, canonical state, and outbox effect together", async () => {
+  it("keeps public writes in SQLite without creating sync state", async () => {
     const dbName = join(tmpdir(), `hikoutei-public-${randomUUID()}.sqlite`);
     const hikoutei = await createTypedSheets({
       dbName,
       entities: [User],
-      sheets: {
-        spreadsheetId: "spreadsheet-test",
-        routes: {
-          User: {
-            systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-          },
-        },
-      },
     });
     try {
       const em = hikoutei.em.fork();
-      em.persist(em.create(User, { id: "atomic", name: "Atomic", age: 1, active: true }));
+      em.persist(em.create(User, { id: "local-only", name: "Local", age: 1, active: true }));
       await em.flush();
       await hikoutei.close();
 
@@ -315,16 +290,15 @@ describe("createTypedSheets public lifecycle", () => {
         entities: [InspectionSchema],
       });
       try {
-        const state = await storage.read(({ sql }) => sql.get<{ readonly status: string }>(
-          "SELECT status FROM entity_state WHERE entity_id = ?",
-          ["entity:users:atomic"],
+        const row = await storage.read(({ sql }) => sql.get<{ readonly id: string }>(
+          "SELECT id FROM users WHERE id = ?",
+          ["local-only"],
         ));
-        const effect = await storage.read(({ sql }) => sql.get<{ readonly status: string }>(
-          "SELECT status FROM sheet_effect_outbox WHERE target_id = ?",
-          ["entity:users:atomic"],
+        const syncTables = await storage.read(({ sql }) => sql.all<{ readonly name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('entity_state', 'sheet_effect_outbox')",
         ));
-        expect(state?.status).toBe("active");
-        expect(effect?.status).toBe("pending");
+        expect(row?.id).toBe("local-only");
+        expect(syncTables).toEqual([]);
       } finally {
         await storage.close(true);
       }
@@ -336,54 +310,10 @@ describe("createTypedSheets public lifecycle", () => {
     }
   });
 
-  it("rejects duplicate physical Sheet tabs before opening the runtime", async () => {
-    await expect(createTypedSheets({
-      dbName: ":memory:",
-      entities: [User, Counter],
-      sheets: {
-        spreadsheetId: "spreadsheet-test",
-        routes: {
-          User: {
-            systemState: { tabName: "Shared", registeredRange: "A:Z" },
-          },
-          Counter: {
-            systemState: { tabName: "Shared", registeredRange: "A:Z" },
-          },
-        },
-      },
-    })).rejects.toMatchObject({ code: HIKOUTEI_ERROR_CODES.INVALID_SHEET_ROUTE });
-  });
-
-  it("provisions registered routes only when setupSheets is explicitly called", async () => {
-    const hikoutei = await openRuntime();
-    let callCount = 0;
-    const result = await hikoutei.setupSheets({
-      provisionRegistry: async (registrations) => {
-        callCount += 1;
-        return {
-          registrations: registrations.map(({ headers: _headers, ...registration }) => registration),
-          createdSheets: registrations.map((registration) => registration.sheetName),
-          initializedHeaders: registrations.flatMap((registration) => registration.headers),
-        };
-      },
-    });
-
-    expect(callCount).toBe(1);
-    expect(result.createdSheets).toEqual(["Users_System", "Counters_System"]);
-  });
-
   it("round-trips date scalars through the provider-neutral contract", async () => {
     const hikoutei = await createTypedSheets({
       dbName: ":memory:",
       entities: [Event],
-      sheets: {
-        spreadsheetId: "spreadsheet-test",
-        routes: {
-          Event: {
-            systemState: { tabName: "Events_System", registeredRange: "A:Z" },
-          },
-        },
-      },
     });
     runtimes.push(hikoutei);
     const em = hikoutei.em.fork();
@@ -438,16 +368,7 @@ describe("createTypedSheets public lifecycle", () => {
     const hikoutei = await createTypedSheets({
       dbName,
       entities: [Event],
-      sheets: {
-        spreadsheetId: "spreadsheet-test",
-        routes: {
-          Event: {
-            systemState: { tabName: "Events_System", registeredRange: "A:Z" },
-          },
-        },
-      },
-    });
-    let reopened: Hikoutei | undefined;
+    });    let reopened: Hikoutei | undefined;
     try {
       const em = hikoutei.em.fork();
       em.persist(em.create(Event, {
@@ -473,16 +394,7 @@ describe("createTypedSheets public lifecycle", () => {
       reopened = await createTypedSheets({
         dbName,
         entities: [Event],
-        sheets: {
-          spreadsheetId: "spreadsheet-test",
-          routes: {
-            Event: {
-              systemState: { tabName: "Events_System", registeredRange: "A:Z" },
-            },
-          },
-        },
-      });
-      await expect(reopened.em.fork().findOne(Event, { id: "bad-date" })).rejects.toMatchObject({
+      });      await expect(reopened.em.fork().findOne(Event, { id: "bad-date" })).rejects.toMatchObject({
         code: HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
       });
     } finally {

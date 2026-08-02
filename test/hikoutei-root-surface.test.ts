@@ -29,5 +29,27 @@ describe("root public surface", () => {
     expect(namespace.resolveEntityDescriptor).toBeUndefined();
     expect(namespace.HikouteiEntity).toBeUndefined();
   });
-
 });
+
+const publicOptions: import("../src/index.js").CreateTypedSheetsOptions = {
+  dbName: ":memory:",
+  entities: [],
+};
+void publicOptions;
+
+// Sheet routes and provisioning are deliberately not part of the root contract.
+const removedSheetOptions: import("../src/index.js").CreateTypedSheetsOptions = {
+  dbName: ":memory:",
+  entities: [],
+  // @ts-expect-error `sheets` belongs to the internal sync service.
+  sheets: {},
+};
+void removedSheetOptions;
+
+// User_Input ownership is internal sync configuration.
+const removedOwnershipOption: import("../src/index.js").HikouteiPropertyOptions = {
+  type: "string",
+  // @ts-expect-error `editable` belongs to the internal sync service.
+  editable: true,
+};
+void removedOwnershipOption;
