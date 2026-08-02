@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { JAVASCRIPT_TYPE_NAMES } from "../../../../../shared/encoding/constants.js";
-import { isJavaScriptType } from "../../../../../shared/encoding/typeGuards.js";
+import { isJavaScriptType, isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import {
   SYNC_GATEWAY_ENCODINGS,
   SYNC_GATEWAY_HASH_ALGORITHMS,
@@ -12,7 +12,27 @@ import {
   SYNC_GATEWAY_PROTOCOL_ERROR_CODES,
   SyncGatewayProtocolError,
 } from "../errors.js";
+import type { SyncJsonValue } from "./types.js";
 export type { SyncJsonValue } from "./types.js";
+
+/** Checks whether an unknown value is safe to send through the signed JSON boundary. */
+export function isSyncJsonValue(value: unknown): value is SyncJsonValue {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isSyncJsonValue);
+  return isRecord(value) && isPlainObject(value) && Object.values(value).every(isSyncJsonValue);
+}
+
+/** Promotes a JSON-compatible value or throws the protocol error used by signing. */
+export function requireSyncJsonValue(value: unknown): SyncJsonValue {
+  if (!isSyncJsonValue(value)) {
+    throw new SyncGatewayProtocolError(
+      SYNC_GATEWAY_PROTOCOL_ERROR_CODES.INVALID_JSON_VALUE,
+      "sync gateway payload must contain JSON values only",
+    );
+  }
+  return value;
+}
 
 /** Canonical JSON used for payload hashes and cross-runtime HMAC inputs. */
 export function canonicalSyncJson(value: unknown): string {
@@ -22,14 +42,10 @@ export function canonicalSyncJson(value: unknown): string {
   if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING)) return JSON.stringify(value);
   if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER)) return canonicalNumber(value);
   if (Array.isArray(value)) return `[${value.map((item) => canonicalSyncJson(item)).join(",")}]`;
-  if (
-    isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT) &&
-    value !== null &&
-    isPlainObject(value)
-  ) {
+  if (isRecord(value) && isPlainObject(value)) {
     const entries = Object.keys(value)
       .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalSyncJson((value as Record<string, unknown>)[key])}`);
+      .map((key) => `${JSON.stringify(key)}:${canonicalSyncJson(value[key])}`);
     return `{${entries.join(",")}}`;
   }
   throw new SyncGatewayProtocolError(

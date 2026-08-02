@@ -96,7 +96,7 @@ export interface InternalSyncService {
   readonly storage: MikroOrmSqliteAdapter;
   readonly projectionDefinitions: readonly RegisteredSyncProjectionDefinition[];
   readonly effectSupervisor: SyncEffectWorkerSupervisor;
-  readonly pollingSupervisor: SyncPollingSupervisor;
+  readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
   stop(): Promise<void>;
   close(): Promise<void>;
 }
@@ -139,7 +139,7 @@ export async function createInternalSyncService(
         writer,
       }),
       ...(options.pollingIntervalMs === undefined ? {} : { intervalMs: options.pollingIntervalMs }),
-      onReport: (report) => options.onPollingReport?.(report as MappedUserInputPollingReport),
+      onReport: (report) => options.onPollingReport?.(report),
       ...(options.onPollingError === undefined ? {} : { onError: options.onPollingError }),
     });
 
@@ -337,7 +337,14 @@ function createRemoteGateway(
     return { gateway: options.gateway, provisioner };
   }
 
-  const client = new AppsScriptOperationClient(options.appsScript!);
+  const appsScript = options.appsScript;
+  if (appsScript === undefined) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
+      "Apps Script client settings are required when no gateway is injected.",
+    );
+  }
+  const client = new AppsScriptOperationClient(appsScript);
   const gateway = new AppsScriptOperationSyncGateway({
     operationGateway: client,
     definitions,
@@ -346,10 +353,11 @@ function createRemoteGateway(
 }
 
 function asProvisioner(value: object): SyncGatewayProvisioner | undefined {
-  const candidate = value as Partial<SyncGatewayProvisioner>;
-  return typeof candidate.provisionRegistry === "function"
-    ? candidate as SyncGatewayProvisioner
-    : undefined;
+  return isSyncGatewayProvisioner(value) ? value : undefined;
+}
+
+function isSyncGatewayProvisioner(value: object): value is SyncGatewayProvisioner {
+  return "provisionRegistry" in value && typeof value.provisionRegistry === "function";
 }
 
 function requireText(value: string, label: string): void {

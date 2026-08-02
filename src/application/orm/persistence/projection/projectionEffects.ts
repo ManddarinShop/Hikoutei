@@ -151,8 +151,11 @@ export async function projectionEffects(
   const userFields = Object.fromEntries(
     mapping.fields
       .filter((field) => field.ownership === FIELD_OWNERSHIPS.USER)
-      .map((field) => [field.fieldName, requireEncodedField(encodedEntity, field)]),
-  ) as Record<string, NormalizedCell>;
+      .map((field): readonly [string, NormalizedCell] => [
+        field.fieldName,
+        requireEncodedField(encodedEntity, field),
+      ]),
+  );
   const userTarget = {
     targetKind: MAPPED_EFFECT_TARGET_KINDS.PROJECTION_ROW,
     targetId: projectionRowTargetId(userProjection.physicalSheetId, rowBindingId),

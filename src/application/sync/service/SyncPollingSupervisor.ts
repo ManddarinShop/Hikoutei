@@ -4,16 +4,16 @@ const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_ERROR_BACKOFF_INITIAL_MS = 1_000;
 const DEFAULT_ERROR_BACKOFF_MAX_MS = 30_000;
 
-type PollPass = () => Promise<unknown>;
+type PollPass<Report> = () => Promise<Report>;
 export type SyncPollingWait = (durationMs: number) => Promise<void>;
 
-export interface SyncPollingSupervisorOptions {
-  readonly runPass: PollPass;
+export interface SyncPollingSupervisorOptions<Report = unknown> {
+  readonly runPass: PollPass<Report>;
   readonly intervalMs?: number;
   readonly errorBackoffInitialMs?: number;
   readonly errorBackoffMaxMs?: number;
   readonly wait?: SyncPollingWait;
-  readonly onReport?: (report: unknown) => void;
+  readonly onReport?: (report: Report) => void;
   readonly onError?: (error: unknown) => void;
 }
 
@@ -21,22 +21,22 @@ export interface SyncPollingSupervisorOptions {
  * Coalesces polling passes and stops only after an active gateway call returns.
  * The service can therefore close the shared SQLite adapter safely.
  */
-export class SyncPollingSupervisor {
-  private readonly runPass: PollPass;
+export class SyncPollingSupervisor<Report = unknown> {
+  private readonly runPass: PollPass<Report>;
   private readonly intervalMs: number;
   private readonly errorBackoffInitialMs: number;
   private readonly errorBackoffMaxMs: number;
   private readonly wait: SyncPollingWait;
-  private readonly onReport: ((report: unknown) => void) | undefined;
+  private readonly onReport: ((report: Report) => void) | undefined;
   private readonly onError: ((error: unknown) => void) | undefined;
   private running = false;
   private acceptingPasses = true;
   private loopPromise: Promise<void> | undefined;
-  private inFlight: Promise<unknown> | undefined;
+  private inFlight: Promise<Report> | undefined;
   private stopPromise: Promise<void> | undefined;
   private wakeWaiter: (() => void) | undefined;
 
-  public constructor(options: SyncPollingSupervisorOptions) {
+  public constructor(options: SyncPollingSupervisorOptions<Report>) {
     this.runPass = options.runPass;
     this.intervalMs = requirePositive(options.intervalMs ?? DEFAULT_POLL_INTERVAL_MS, "poll interval");
     this.errorBackoffInitialMs = requirePositive(
@@ -63,7 +63,7 @@ export class SyncPollingSupervisor {
   }
 
   /** Runs one pass or joins the pass already in flight. */
-  public runOnce(): Promise<unknown> {
+  public runOnce(): Promise<Report> {
     if (!this.acceptingPasses) {
       return Promise.reject(new Error("sync polling supervisor is stopped"));
     }
@@ -130,11 +130,11 @@ export class SyncPollingSupervisor {
     });
   }
 
-  private clearInFlight(pass: Promise<unknown>): void {
+  private clearInFlight(pass: Promise<Report>): void {
     if (this.inFlight === pass) this.inFlight = undefined;
   }
 
-  private notifyReport(report: unknown): void {
+  private notifyReport(report: Report): void {
     try {
       this.onReport?.(report);
     } catch (error: unknown) {

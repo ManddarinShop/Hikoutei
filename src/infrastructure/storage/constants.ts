@@ -5,4 +5,4 @@ export {
 } from "../../shared/constants.js";
 
 /** Number of rows expected when one guarded storage mutation succeeds. */
-export const EXPECTED_SINGLE_ROW_CHANGE_COUNT = 1 as const;
+export const EXPECTED_SINGLE_ROW_CHANGE_COUNT = 1;

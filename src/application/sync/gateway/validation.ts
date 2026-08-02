@@ -131,16 +131,14 @@ export function requireSyncGatewaySnapshotReadMode(
 ): SyncGatewaySnapshotReadMode {
   if (
     !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
-    !Object.values(SYNC_GATEWAY_SNAPSHOT_READ_MODES).includes(
-      value as SyncGatewaySnapshotReadMode,
-    )
+    !isSyncGatewaySnapshotReadMode(value)
   ) {
     throw new SyncGatewayContractError(
       errorCode,
       `${label} is not supported`,
     );
   }
-  return value as SyncGatewaySnapshotReadMode;
+  return value;
 }
 
 /** Requires a non-empty list at a gateway contract boundary. */
@@ -155,7 +153,12 @@ export function requireSyncGatewayNonEmptyList<T>(
 }
 
 function isSyncGatewayProjection(value: string): value is SyncGatewayProjection {
-  return Object.values(SYNC_GATEWAY_PROJECTIONS).includes(
-    value as SyncGatewayProjection,
-  );
+  return value === SYNC_GATEWAY_PROJECTIONS.USER_INPUT ||
+    value === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE ||
+    value === SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS;
+}
+
+function isSyncGatewaySnapshotReadMode(value: string): value is SyncGatewaySnapshotReadMode {
+  return value === SYNC_GATEWAY_SNAPSHOT_READ_MODES.FULL ||
+    value === SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT;
 }

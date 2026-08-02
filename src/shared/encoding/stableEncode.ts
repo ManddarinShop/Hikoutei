@@ -30,7 +30,7 @@ import {
   NORMALIZED_CELL_KINDS,
   STABLE_ENCODING_ERROR_CODES,
 } from "./constants.js";
-import { isJavaScriptType } from "./typeGuards.js";
+import { isJavaScriptType, isRecord } from "./typeGuards.js";
 import type { HikouteiStableHash } from "../identity/types.js";
 import { isCanonicalUtcIsoDate } from "../validation.js";
 import type { DateValue, StableValue } from "./types.js";
@@ -80,8 +80,8 @@ function encodeValue(value: StableValue, chunks: Uint8Array[]): void {
     encodeArray(value, chunks);
     return;
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT)) {
-    encodeObject(value as Record<string, StableValue>, chunks);
+  if (isRecord(value)) {
+    encodeObject(value, chunks);
     return;
   }
   throw new StableEncodingError(
@@ -182,15 +182,10 @@ function shortestRoundTripDecimal(value: number): string {
 
 function isDateValue(value: unknown): value is DateValue {
   return (
-    isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT) &&
-    value !== null &&
-    !Array.isArray(value) &&
+    isRecord(value) &&
     Object.keys(value).length === 2 &&
-    (value as Record<string, unknown>).kind === NORMALIZED_CELL_KINDS.DATE &&
-    isJavaScriptType(
-      (value as Record<string, unknown>).value,
-      JAVASCRIPT_TYPE_NAMES.STRING,
-    )
+    value.kind === NORMALIZED_CELL_KINDS.DATE &&
+    typeof value.value === "string"
   );
 }
 

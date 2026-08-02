@@ -9,7 +9,7 @@
 import type { NormalizedCell, StableValue } from "../../shared/encoding/types.js";
 import { stableHash } from "../../shared/encoding/stableEncode.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../shared/encoding/constants.js";
-import { isJavaScriptType } from "../../shared/encoding/typeGuards.js";
+import { isJavaScriptType, isRecord } from "../../shared/encoding/typeGuards.js";
 import {
   CANONICAL_RESOLUTION_STATUSES,
   FIELD_OWNERSHIPS,
@@ -248,7 +248,13 @@ function quarantineFingerprintValue(value: unknown, seen: Set<object> = new Set(
       );
     }
 
-    const record = value as Record<string, unknown>;
+    if (!isRecord(value)) {
+      return makeInvalidFingerprint(
+        QUARANTINE_FINGERPRINT_KEYS.INVALID_OBJECT,
+        Object.prototype.toString.call(value),
+      );
+    }
+    const record = value;
     const normalized: Record<string, StableValue> = {};
     for (const key of Object.keys(record)) {
       normalized[key] = quarantineFingerprintValue(record[key], seen);

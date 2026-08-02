@@ -149,8 +149,7 @@ export class AppsScriptOperationSyncGateway
       },
       decode: decodeProvisionResult,
     };
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   /**
@@ -168,8 +167,7 @@ export class AppsScriptOperationSyncGateway
       headers: definition.headers,
       rows: request.rows,
     });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   /** Reads one registered table with values only; no metadata, lock, or CAS work is performed. */
@@ -198,10 +196,7 @@ export class AppsScriptOperationSyncGateway
       });
     });
     if (operations.length === 0) return [];
-    const results = await this.operationGateway.applyOperations(
-      operations as readonly AppsScriptOperationDefinition<unknown, unknown>[],
-    );
-    return results as readonly SyncTableRowsResult[];
+    return this.operationGateway.applyOperations(operations);
   }
 
   /** Applies regular update/delete effects through the full operation path. */
@@ -212,8 +207,7 @@ export class AppsScriptOperationSyncGateway
       ...request,
       ...effectRouteOptions(definition),
     });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   /** Reads one regular-effect postcondition after an uncertain response. */
@@ -234,8 +228,7 @@ export class AppsScriptOperationSyncGateway
       ...request,
       ...effectRouteOptions(definition),
     });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   /** Reads several regular-effect postconditions with one Sheet scan. */
@@ -248,8 +241,7 @@ export class AppsScriptOperationSyncGateway
       ...request,
       ...effectRouteOptions(definition),
     });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   /** Assigns missing row anchors through the observation operation. */
@@ -262,8 +254,7 @@ export class AppsScriptOperationSyncGateway
       ...request,
       ...observationRouteOptions(definition),
     });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   /** Reads a normalized, anchor-aware snapshot for polling and reconciliation. */
@@ -274,8 +265,7 @@ export class AppsScriptOperationSyncGateway
       ...request,
       ...observationRouteOptions(definition),
     });
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   /** Assigns anchors and reads one snapshot under one remote lock/request. */
@@ -303,10 +293,7 @@ export class AppsScriptOperationSyncGateway
       });
     });
     if (operations.length === 0) return [];
-    const results = await this.operationGateway.applyOperations(
-      operations as readonly AppsScriptOperationDefinition<unknown, unknown>[],
-    );
-    return results as readonly SyncObservedSnapshot[];
+    return this.operationGateway.applyOperations(operations);
   }
 
   /**
@@ -326,8 +313,7 @@ export class AppsScriptOperationSyncGateway
       args: { sheetName },
       decode: decodeProjectionStatus,
     };
-    const [result] = await this.operationGateway.applyOperations([operation] as const);
-    return result;
+    return applyOneOperation(this.operationGateway, operation);
   }
 
   private definitionForPhysicalSheet(
@@ -344,6 +330,21 @@ export class AppsScriptOperationSyncGateway
     }
     return definition;
   }
+}
+
+async function applyOneOperation<Args, Result>(
+  gateway: AppsScriptOperationGateway,
+  operation: AppsScriptOperationDefinition<Args, Result>,
+): Promise<Result> {
+  const results = await gateway.applyOperations([operation]);
+  const result = results[0];
+  if (result === undefined) {
+    throw new SyncGatewayContractError(
+      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+      "Apps Script operation returned no result",
+    );
+  }
+  return result;
 }
 
 function toProvisionRegistrationWire(

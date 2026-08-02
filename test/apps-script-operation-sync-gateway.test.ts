@@ -346,6 +346,48 @@ describe("AppsScriptOperationSyncGateway", () => {
     })).rejects.toMatchObject({ code: "invalid_sync_gateway_response" });
   });
 
+  it("rejects snapshot rows with incomplete registered cells", async () => {
+    const operationGateway = new StubOperationGateway([{
+      protocolVersion: "typed-sheets-sync-v1",
+      sheetName: "Orders",
+      registeredRange: "A:B",
+      projection: "system_state",
+      schemaVersion: 1,
+      headers: ["id", "status"],
+      rows: [{
+        rowNumber: 2,
+        physicalAnchor: null,
+        visibleRevision: null,
+        visibleHash: null,
+        cells: {
+          id: {
+            cellKind: "literal",
+            normalizedCell: { kind: "string", value: "order-1" },
+            formulaHash: null,
+            mergeRange: null,
+            errorCode: null,
+            stableHash: "cell-hash",
+          },
+        },
+      }],
+      snapshotHash: "snapshot-hash",
+      unanchoredRows: [2],
+      duplicateAnchors: [],
+    }]);
+    const adapter = new AppsScriptOperationSyncGateway({
+      operationGateway,
+      definitions: [createDefinition()],
+    });
+
+    await expect(adapter.readSnapshot({
+      physicalSheetId: "orders-state",
+      sheetName: "Orders",
+      registeredRange: "A:B",
+      projection: "system_state",
+      schemaVersion: 1,
+    })).rejects.toMatchObject({ code: "invalid_sync_gateway_response" });
+  });
+
   it("combines several projection observations into one Apps Script request", async () => {
     const operationGateway = new StubOperationGateway([
       createObservedSnapshot("Orders", "system_state"),

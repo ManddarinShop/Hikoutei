@@ -7,6 +7,14 @@ import type { NormalizedCell } from "./types.js";
 export function isNormalizedCell(value: unknown): value is NormalizedCell {
   if (value === null) return true;
   if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (
+    keys.length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(value, "kind") ||
+    !Object.prototype.hasOwnProperty.call(value, "value")
+  ) {
+    return false;
+  }
   switch (value.kind) {
     case NORMALIZED_CELL_KINDS.STRING:
       return typeof value.value === "string";

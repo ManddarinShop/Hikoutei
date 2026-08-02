@@ -46,6 +46,16 @@ describe("thin Code.gs fast-append operation", () => {
         fields: { createdAt: { kind: "date", value: "2026-01-02T03:04:05Z" } },
       }],
     })).toThrow("unsupported normalized cell");
+
+    expect(() => createFastAppendRowsOperation({
+      sheetName: "LoadTest_Customers",
+      registeredRange: "A:A",
+      headers: ["id"],
+      rows: [
+        { effectId: "effect-1", fields: { id: { kind: "string", value: "one" } } },
+        { effectId: "effect-1", fields: { id: { kind: "string", value: "two" } } },
+      ],
+    })).toThrow("row effectIds must be unique");
   });
 
   it("decodes one applied result and rejects an incomplete response", () => {
@@ -82,5 +92,9 @@ describe("thin Code.gs fast-append operation", () => {
     expect(() => operation.decode?.({ results: [], hasMore: false })).toThrow(
       "fast append operation response is invalid",
     );
+    expect(() => operation.decode?.({
+      results: [{ effectId: "other-effect", status: "applied" }],
+      hasMore: false,
+    })).toThrow("result effectIds do not match the submitted rows");
   });
 });

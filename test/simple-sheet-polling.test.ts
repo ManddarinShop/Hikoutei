@@ -98,6 +98,43 @@ describe("simple Sheet polling", () => {
       changedFields: ["name"],
     }]);
   });
+
+  it("rejects malformed canonical cells at the JSON boundary", async () => {
+    const adapter = await initializeMikroOrmSqliteAdapter({
+      dbName: ":memory:",
+      entities: [TestEntity],
+    });
+    adapters.push(adapter);
+    await migrateMikroOrmSqliteStorageSchema(adapter);
+    await seedCanonicalRows(adapter);
+    await adapter.transaction(({ sql }) => sql.run(
+      "UPDATE entity_field_state SET normalized_value = ? WHERE entity_id = ? AND field_name = ?",
+      [JSON.stringify({ kind: "date", value: "not-a-date" }), "order-1", "name"],
+    ));
+
+    const gateway: SyncSheetTableReaderGateway = {
+      readRows: async () => ({
+        sheetName: "Orders",
+        registeredRange: "A:C",
+        headers: ["id", "name", "status"],
+        rows: [],
+      }),
+      readRowsBatch: async () => [{
+        sheetName: "Orders",
+        registeredRange: "A:C",
+        headers: ["id", "name", "status"],
+        rows: [],
+      }],
+    };
+
+    await expect(
+      pollSimpleSheetRowsWithAdapter({
+        storage: adapter,
+        gateway,
+        definitions: [createDefinition()],
+      }),
+    ).rejects.toThrow("canonical value is not a normalized cell");
+  });
 });
 
 function createDefinition(): RegisteredSyncProjectionDefinition {

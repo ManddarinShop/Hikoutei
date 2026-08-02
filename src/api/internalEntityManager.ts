@@ -58,28 +58,27 @@ class EntityManagerImpl implements EntityManager {
     data: Readonly<Partial<Entity>>,
   ): Entity {
     const descriptor = this.requireDescriptor(entity);
-    const instance = buildEntityInstance(
-      descriptor,
-      data as Readonly<Record<string, unknown>>,
-    ) as Entity;
-    this.entityDescriptors.set(instance as object, descriptor);
-    this.unitOfWork.manageNew(descriptor, instance as unknown as Record<string, unknown>);
-    this.rememberIdentity(descriptor, instance as unknown as Record<string, unknown>);
+    const instance = promoteManagedEntity<Entity>(buildEntityInstance(descriptor, data));
+    this.entityDescriptors.set(instance, descriptor);
+    this.unitOfWork.manageNew(descriptor, instance);
+    this.rememberIdentity(descriptor, instance);
     return instance;
   }
 
   /** Reads every entity matching an equality filter from the local authority. */
   async find<Entity extends object>(
     entity: HikouteiEntity<Entity>,
-    where: Readonly<Partial<Entity>> = {} as Readonly<Partial<Entity>>,
+    where?: Readonly<Partial<Entity>>,
     options?: HikouteiFindOptions,
   ): Promise<readonly Entity[]> {
     const descriptor = this.requireDescriptor(entity);
-    const query = toQuery(descriptor, where, options);
+    const query = toQuery(descriptor, where ?? {}, options);
     const rows = this.activeTransaction === undefined
       ? await this.provider.read(query)
       : await this.activeTransaction.read(query);
-    return rows.map((row) => this.materialize(descriptor, row)) as Entity[];
+    return rows.map((row) =>
+      promoteManagedEntity<Entity>(this.materialize(descriptor, row)),
+    );
   }
 
   /** Reads one entity matching an equality filter, or null when none match. */
@@ -95,9 +94,9 @@ class EntityManagerImpl implements EntityManager {
   persist<Entity extends object>(input: Entity | Iterable<Entity>): this {
     for (const entity of toEntities(input)) {
       const descriptor = this.resolveDescriptorFor(entity);
-      this.entityDescriptors.set(entity as object, descriptor);
-      this.unitOfWork.persist(descriptor, entity as unknown as Record<string, unknown>);
-      this.rememberIdentity(descriptor, entity as unknown as Record<string, unknown>);
+      this.entityDescriptors.set(entity, descriptor);
+      this.unitOfWork.persist(descriptor, entity);
+      this.rememberIdentity(descriptor, entity);
     }
     return this;
   }
@@ -105,7 +104,7 @@ class EntityManagerImpl implements EntityManager {
   /** Marks one entity or iterable of entities for removal at the next flush. */
   remove<Entity extends object>(input: Entity | Iterable<Entity>): this {
     for (const entity of toEntities(input)) {
-      this.unitOfWork.remove(entity as object);
+      this.unitOfWork.remove(entity);
     }
     return this;
   }
@@ -237,9 +236,9 @@ class EntityManagerImpl implements EntityManager {
 
   private rememberIdentity(
     descriptor: ResolvedHikouteiEntityDescriptor,
-    entity: Readonly<Record<string, unknown>>,
+    entity: object,
   ): void {
-    const primaryKey = entity[descriptor.primaryKey];
+    const primaryKey = Reflect.get(entity, descriptor.primaryKey);
     if (typeof primaryKey === "string" && primaryKey.length > 0) {
       this.identityMap.set(identityKey(descriptor, entity), entity);
     }
@@ -256,7 +255,7 @@ export function createEntityManager(
 
 function buildEntityInstance(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  data: Readonly<Record<string, unknown>>,
+  data: object,
 ): Record<string, unknown> {
   const declared = new Set(descriptor.properties.map((property) => property.name));
   for (const propertyName of Object.keys(data)) {
@@ -270,7 +269,7 @@ function buildEntityInstance(
   const instance: Record<string, unknown> = {};
   for (const property of descriptor.properties) {
     if (Object.prototype.hasOwnProperty.call(data, property.name)) {
-      instance[property.name] = data[property.name];
+      instance[property.name] = Reflect.get(data, property.name);
     } else if (property.nullable) {
       instance[property.name] = null;
     }
@@ -280,7 +279,7 @@ function buildEntityInstance(
 
 function toQuery(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  where: Readonly<Record<string, unknown>>,
+  where: object,
   options?: HikouteiFindOptions,
 ): ScalarEntityQuery {
   const filter: Record<string, ScalarEntityValue> = {};
@@ -324,26 +323,34 @@ function requireFilterValue(
       `filter "${key}" cannot be null in non-nullable entity "${descriptor.name}".`,
     );
   }
-  if (property.type === "date") {
-    if (value instanceof Date && Number.isFinite(value.getTime())) return value;
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `filter "${key}" expected a valid Date in entity "${descriptor.name}".`,
-    );
+
+  switch (property.type) {
+    case "date":
+      if (value instanceof Date && Number.isFinite(value.getTime())) return value;
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+        `filter "${key}" expected a valid Date in entity "${descriptor.name}".`,
+      );
+    case "string":
+      if (typeof value === "string") return value;
+      break;
+    case "number":
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "number") {
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+          `filter "${key}" must be a finite number.`,
+        );
+      }
+      break;
+    case "boolean":
+      if (typeof value === "boolean") return value;
+      break;
   }
-  if (typeof value !== property.type) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `filter "${key}" expected ${property.type} but received ${typeof value}.`,
-    );
-  }
-  if (property.type === "number" && !Number.isFinite(value)) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `filter "${key}" must be a finite number.`,
-    );
-  }
-  return value as ScalarEntityValue;
+  throw new HikouteiError(
+    HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+    `filter "${key}" expected ${property.type} but received ${typeof value}.`,
+  );
 }
 
 function requirePageValue(value: number | undefined, label: string): void {
@@ -380,16 +387,21 @@ function toEntities<Entity extends object>(input: Entity | Iterable<Entity>): re
   return [input];
 }
 
-function isIterable<Entity>(value: Entity | Iterable<Entity>): value is Iterable<Entity> {
-  return typeof (value as { readonly [Symbol.iterator]?: unknown })[Symbol.iterator] === "function";
+function isIterable<Entity extends object>(value: Entity | Iterable<Entity>): value is Iterable<Entity> {
+  return typeof Reflect.get(value, Symbol.iterator) === "function";
 }
 
 function identityKey(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  entity: Readonly<Record<string, unknown>>,
+  entity: object,
 ): string {
   return JSON.stringify([
     descriptor.name,
-    String(entity[descriptor.primaryKey]),
+    String(Reflect.get(entity, descriptor.primaryKey)),
   ]);
+}
+
+/** Bridges the runtime object to the descriptor's phantom public entity type. */
+function promoteManagedEntity<Entity extends object>(value: object): Entity {
+  return value as Entity;
 }

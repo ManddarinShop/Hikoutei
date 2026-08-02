@@ -47,15 +47,29 @@ export interface InitializeMikroOrmSqliteAdapterOptions {
   readonly configuration?: MikroOrmSqliteConfiguration;
 }
 
+/** Explicit native mutation capability used only by the inbound observation bridge. */
+export interface MikroOrmNativeEntityWriter {
+  findOne(entityName: unknown, where: Record<string, unknown>): Promise<object | null>;
+  insert(entityName: unknown, data: Record<string, unknown>): Promise<unknown>;
+  nativeUpdate(
+    entityName: unknown,
+    where: Record<string, unknown>,
+    data: Record<string, unknown>,
+  ): Promise<number>;
+  nativeDelete(entityName: unknown, where: Record<string, unknown>): Promise<number>;
+}
+
 /**
  * Adapter-specific transaction context for code that intentionally needs
  * MikroORM entity lifecycle operations alongside typed-sheets storage SQL.
  *
- * Core storage must use `sql`; `entityManager` is an explicit escape hatch for
- * integration code and never appears in the adapter-neutral contract.
+ * Core storage must use `sql`; `entityManager` and `nativeWriter` are explicit
+ * escape hatches for integration code and never appear in the adapter-neutral contract.
  */
 export interface MikroOrmSqliteTransaction extends SqlStorageContext {
   readonly entityManager: MikroOrmSqliteEntityManager;
+  /** Explicit native mutation capability used by inbound observation writes. */
+  readonly nativeWriter: MikroOrmNativeEntityWriter;
 }
 
 /**
@@ -157,7 +171,53 @@ function createMikroOrmTransaction(
 ): MikroOrmSqliteTransaction {
   return {
     entityManager,
+    nativeWriter: createMikroOrmNativeEntityWriter(entityManager),
     sql: new MikroOrmSqlExecutor(entityManager),
+  };
+}
+
+/** Adapts native MikroORM writes without pretending the public manager has them. */
+function createMikroOrmNativeEntityWriter(
+  entityManager: MikroOrmSqliteEntityManager,
+): MikroOrmNativeEntityWriter {
+  return {
+    async findOne(entityName, where) {
+      const result: unknown = await Reflect.apply(
+        entityManager.findOne,
+        entityManager,
+        [entityName, where],
+      );
+      if (result === null) return null;
+      if (typeof result !== "object") {
+        throw new TypeError("MikroORM findOne result must be an entity object or null");
+      }
+      return result;
+    },
+    insert(entityName, data) {
+      return Reflect.apply(entityManager.insert, entityManager, [entityName, data]);
+    },
+    async nativeUpdate(entityName, where, data) {
+      const result: unknown = await Reflect.apply(
+        entityManager.nativeUpdate,
+        entityManager,
+        [entityName, where, data],
+      );
+      if (typeof result !== "number" || !Number.isSafeInteger(result)) {
+        throw new TypeError("MikroORM nativeUpdate result must be a safe integer");
+      }
+      return result;
+    },
+    async nativeDelete(entityName, where) {
+      const result: unknown = await Reflect.apply(
+        entityManager.nativeDelete,
+        entityManager,
+        [entityName, where],
+      );
+      if (typeof result !== "number" || !Number.isSafeInteger(result)) {
+        throw new TypeError("MikroORM nativeDelete result must be a safe integer");
+      }
+      return result;
+    },
   };
 }
 

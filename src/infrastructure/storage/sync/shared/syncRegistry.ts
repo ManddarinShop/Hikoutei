@@ -270,7 +270,7 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
     );
   }
   try {
-    JSON.parse(input.ownershipManifestJson) as unknown;
+    JSON.parse(input.ownershipManifestJson);
   } catch {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,

@@ -17,7 +17,7 @@ import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.
 export function parseNormalizedCell(serialized: string, fieldName: string): NormalizedCell {
   let value: unknown;
   try {
-    value = JSON.parse(serialized) as unknown;
+    value = JSON.parse(serialized);
   } catch {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_STORED_CONFLICT,

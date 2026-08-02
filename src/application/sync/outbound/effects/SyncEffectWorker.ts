@@ -283,7 +283,9 @@ async function runEffectWorker(
     operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
   });
 
-  const fullGateway = isFullEffectGateway(options.gateway);
+  const fullGateway = isFullEffectGateway(options.gateway)
+    ? options.gateway
+    : undefined;
   if (fullGateway === undefined) {
     await rejectUnsupportedGatewayEffects(
       storage,
@@ -503,16 +505,13 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
 /** Returns the full gateway only when every regular recovery capability exists. */
 function isFullEffectGateway(
   gateway: SyncEffectWorkerGateway,
-): SyncEffectWorkerFullGateway | undefined {
-  const candidate = gateway as Partial<SyncEffectWorkerFullGateway>;
-  if (
-    typeof candidate.applyEffects !== "function" ||
-    typeof candidate.readEffectPostcondition !== "function" ||
-    typeof candidate.readEffectPostconditions !== "function"
-  ) {
-    return undefined;
-  }
-  return gateway as SyncEffectWorkerFullGateway;
+): gateway is SyncEffectWorkerFullGateway {
+  return "applyEffects" in gateway &&
+    typeof gateway.applyEffects === "function" &&
+    "readEffectPostcondition" in gateway &&
+    typeof gateway.readEffectPostcondition === "function" &&
+    "readEffectPostconditions" in gateway &&
+    typeof gateway.readEffectPostconditions === "function";
 }
 
 

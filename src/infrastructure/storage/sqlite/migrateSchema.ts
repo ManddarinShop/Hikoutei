@@ -123,15 +123,17 @@ async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
 }
 
 async function verifyRequiredColumns(sql: SqlExecutor): Promise<void> {
-  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_V2_COLUMNS) as Array<
-    ["sync_conflict" | "resolution_command", readonly string[]]
-  >) {
-    await verifyTableColumns(sql, tableName, requiredColumns);
+  const versionTwoTables: readonly ("sync_conflict" | "resolution_command")[] = [
+    "sync_conflict",
+    "resolution_command",
+  ];
+  for (const tableName of versionTwoTables) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V2_COLUMNS[tableName]);
   }
-  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_V3_COLUMNS) as Array<
-    ["sheet_effect_outbox", readonly string[]]
-  >) {
-    await verifyTableColumns(sql, tableName, requiredColumns);
+
+  const versionThreeTables: readonly "sheet_effect_outbox"[] = ["sheet_effect_outbox"];
+  for (const tableName of versionThreeTables) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V3_COLUMNS[tableName]);
   }
 }
 

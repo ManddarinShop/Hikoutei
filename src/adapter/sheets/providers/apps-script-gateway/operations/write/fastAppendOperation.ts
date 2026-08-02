@@ -49,7 +49,7 @@ export function createFastAppendRowsOperation(
   return {
     fn: FAST_APPEND_OPERATION_SOURCE,
     args: request,
-    decode: (value) => decodeFastAppendResult(value, request.rows.length),
+    decode: (value) => decodeFastAppendResult(value, request.rows),
   };
 }
 
@@ -202,10 +202,15 @@ function validateFastAppendRequest(request: AppsScriptFastAppendOperationRequest
   if (columnNumber(end) < columnNumber(start) || columnNumber(end) - columnNumber(start) + 1 !== request.headers.length) {
     invalidOperationRequest("fast append operation", "headers must match registeredRange");
   }
+  const effectIds = new Set<string>();
   for (const row of request.rows) {
     if (row.effectId.trim().length === 0) {
       invalidOperationRequest("fast append operation", "every row needs an effectId");
     }
+    if (effectIds.has(row.effectId)) {
+      invalidOperationRequest("fast append operation", "row effectIds must be unique");
+    }
+    effectIds.add(row.effectId);
     const fieldNames = Object.keys(row.fields).sort();
     const expectedFieldNames = [...request.headers].sort();
     if (fieldNames.length !== expectedFieldNames.length || fieldNames.some((field, index) => field !== expectedFieldNames[index])) {
@@ -229,11 +234,14 @@ function columnNumber(value: string | undefined): number {
   return result;
 }
 
-function decodeFastAppendResult(value: unknown, expectedCount: number): FastAppendRowsResult {
+function decodeFastAppendResult(
+  value: unknown,
+  expectedRows: readonly FastAppendRow[],
+): FastAppendRowsResult {
   if (
     !isRecord(value) ||
     !Array.isArray(value.results) ||
-    value.results.length !== expectedCount ||
+    value.results.length !== expectedRows.length ||
     value.hasMore !== false
   ) {
     invalidOperationResponse(
@@ -242,10 +250,20 @@ function decodeFastAppendResult(value: unknown, expectedCount: number): FastAppe
     );
   }
   const timing = decodeOptionalSyncGatewayTiming(value.timing, "fast append timing");
-  const result: FastAppendRowsResult = {
-    results: value.results.map(decodeFastAppendRowResult),
-    hasMore: false,
-  };
+  const results = value.results.map(decodeFastAppendRowResult);
+  const expectedEffectIds = new Set(expectedRows.map((row) => row.effectId));
+  const actualEffectIds = new Set(results.map((row) => row.effectId));
+  if (
+    actualEffectIds.size !== results.length ||
+    actualEffectIds.size !== expectedEffectIds.size ||
+    results.some((row) => !expectedEffectIds.has(row.effectId))
+  ) {
+    return invalidOperationResponse(
+      "fast append operation",
+      "result effectIds do not match the submitted rows",
+    );
+  }
+  const result: FastAppendRowsResult = { results, hasMore: false };
   return timing === undefined ? result : { ...result, timing };
 }
 

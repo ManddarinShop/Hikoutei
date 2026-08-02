@@ -11,6 +11,7 @@
  */
 
 import { EMPTY_STRING_LENGTH_ZERO } from "../shared/constants.js";
+import { isRecord } from "../shared/encoding/typeGuards.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 
 /** Runtime tags for the scalar property types supported in v1. */
@@ -225,42 +226,41 @@ function resolveProperty(
   propertyName: string,
   options: unknown,
 ): ResolvedHikouteiProperty {
-  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+  if (!isRecord(options)) {
     throwInvalid(`property "${propertyName}" must declare a scalar descriptor object.`);
   }
-  const optionKeys = Object.keys(options as Record<string, unknown>);
-  for (const optionKey of optionKeys) {
+  for (const optionKey of Object.keys(options)) {
     if (!ALLOWED_PROPERTY_OPTION_KEYS.has(optionKey)) {
       throwInvalid(
         `property "${propertyName}" has an unsupported option "${optionKey}"; v1 supports only scalar types (relations and provider options are not supported).`,
       );
     }
   }
-  const descriptor = options as HikouteiPropertyOptions;
-  if (!isHikouteiScalarType(descriptor.type)) {
+  const type = options.type;
+  if (!isHikouteiScalarType(type)) {
     throwInvalid(
       `property "${propertyName}" has an unsupported type; v1 supports only "string", "number", "boolean", and "date" scalars.`,
     );
   }
-  const primary = descriptor.primary === true;
-  const nullable = descriptor.nullable === true || descriptor.required === false;
-  const unique = descriptor.unique === true || primary;
+  const primary = options.primary === true;
+  const nullable = options.nullable === true || options.required === false;
+  const unique = options.unique === true || primary;
   if (primary && nullable) {
     throwInvalid(`property "${propertyName}" cannot be both primary and nullable.`);
   }
-  if (descriptor.required !== undefined && typeof descriptor.required !== "boolean") {
+  if (options.required !== undefined && typeof options.required !== "boolean") {
     throwInvalid(`property "${propertyName}" required must be a boolean.`);
   }
-  if (descriptor.nullable !== undefined && typeof descriptor.nullable !== "boolean") {
+  if (options.nullable !== undefined && typeof options.nullable !== "boolean") {
     throwInvalid(`property "${propertyName}" nullable must be a boolean.`);
   }
-  if (descriptor.primary !== undefined && typeof descriptor.primary !== "boolean") {
+  if (options.primary !== undefined && typeof options.primary !== "boolean") {
     throwInvalid(`property "${propertyName}" primary must be a boolean.`);
   }
-  if (descriptor.unique !== undefined && typeof descriptor.unique !== "boolean") {
+  if (options.unique !== undefined && typeof options.unique !== "boolean") {
     throwInvalid(`property "${propertyName}" unique must be a boolean.`);
   }
-  if (descriptor.required === true && descriptor.nullable === true) {
+  if (options.required === true && options.nullable === true) {
     throwInvalid(`property "${propertyName}" cannot be both required and nullable.`);
   }
   if (unique && !primary) {
@@ -270,8 +270,8 @@ function resolveProperty(
   }
   return {
     name: propertyName,
-    type: descriptor.type,
-    storageType: toStorageType(descriptor.type),
+    type,
+    storageType: toStorageType(type),
     primary,
     nullable,
     unique,
@@ -342,15 +342,15 @@ const RESERVED_TABLE_NAMES = new Set([
   "sqlite_temp_schema",
 ]);
 
-function requireIdentifier(value: unknown, label: string): void {
+function requireIdentifier(value: unknown, label: string): string {
   if (typeof value !== "string" || !SQL_IDENTIFIER_PATTERN.test(value)) {
     throwInvalid(`${label} must be a SQL identifier matching ${SQL_IDENTIFIER_PATTERN}.`);
   }
+  return value;
 }
 
 function requireTableName(value: unknown): string {
-  requireIdentifier(value, "table name");
-  const tableName = value as string;
+  const tableName = requireIdentifier(value, "table name");
   if (
     RESERVED_TABLE_NAMES.has(tableName.toLowerCase()) ||
     tableName.toLowerCase().startsWith("sqlite_")

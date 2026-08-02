@@ -133,9 +133,10 @@ export interface SyncSheetObservationBatchGateway extends SyncSheetObservationGa
 export function isSyncSheetObservationBatchGateway(
   gateway: SyncSheetObservationGateway,
 ): gateway is SyncSheetObservationBatchGateway {
-  const candidate = gateway as Partial<SyncSheetObservationBatchGateway>;
-  return typeof candidate.observeSnapshot === "function" &&
-    typeof candidate.observeSnapshots === "function";
+  return "observeSnapshot" in gateway &&
+    typeof gateway.observeSnapshot === "function" &&
+    "observeSnapshots" in gateway &&
+    typeof gateway.observeSnapshots === "function";
 }
 
 /** Reads one snapshot with one combined request when the gateway supports it. */
@@ -457,7 +458,7 @@ export function computeSyncVisibleHash(fields: Readonly<Record<string, Normalize
 export function parseSyncProjectionEffectPayload(value: string): SyncProjectionEffectPayload {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(value) as unknown;
+    parsed = JSON.parse(value);
   } catch {
     throw new SyncGatewayContractError(
       SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,

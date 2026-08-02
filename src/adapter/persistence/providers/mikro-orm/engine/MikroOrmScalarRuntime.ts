@@ -37,6 +37,7 @@ import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
 } from "../../../../../shared/encoding/constants.js";
+import { SYNC_GATEWAY_PROJECTIONS } from "../../../../../application/sync/gateway/constants.js";
 
 /** Generated provider inputs for one mapped internal sync runtime. */
 export interface MikroOrmScalarRuntimeDefinition extends MikroOrmScalarEntityRuntimeDefinition {
@@ -75,7 +76,7 @@ export function createMikroOrmScalarRuntime(
 
 function createMapping(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  reference: TypedSheetsEntityReference<object>,
+  reference: TypedSheetsEntityReference<Record<string, unknown>>,
   entityConfig: InternalSyncEntityConfig,
   spreadsheetId: string,
 ): TypedSheetsEntityMapping {
@@ -100,14 +101,14 @@ function createMapping(
       spreadsheetId,
       tabName: entityConfig.systemState.tabName,
       registeredRange: entityConfig.systemState.registeredRange,
-      projection: "system_state" as const,
+      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
     },
     ...(entityConfig.userInput === undefined ? [] : [{
       physicalSheetId: `${logicalSheetId}:user_input`,
       spreadsheetId,
       tabName: entityConfig.userInput.tabName,
       registeredRange: entityConfig.userInput.registeredRange,
-      projection: "user_input" as const,
+      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
     }]),
   ];
 
@@ -145,7 +146,7 @@ function createMapping(
       unique: property.primary,
     })),
     projections,
-  } as never);
+  });
 }
 
 function toCellKind(property: ResolvedHikouteiProperty): NormalizedCellKind {
