@@ -18,10 +18,11 @@ import { EMPTY_STRING_LENGTH_ZERO } from "../../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import type { NewEffect } from "../../sync/outbound/effectOutbox.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
-import type {
-  CanonicalRowMutation,
-  ObservationAttemptInput,
-  PersistObservedRowInput,
+import {
+  OBSERVED_PROJECTION_EVIDENCE_SOURCES,
+  type CanonicalRowMutation,
+  type ObservationAttemptInput,
+  type PersistObservedRowInput,
 } from "./observationTypes.js";
 
 const READ_REGISTERED_PROJECTION_SQL = `
@@ -63,6 +64,38 @@ export function validatePersistObservedRowInput(input: PersistObservedRowInput):
       STORAGE_ERROR_CODES.INVALID_OBSERVATION_INPUT,
       "logical sheet ID and batch ID are required",
     );
+  }
+  if (input.observedProjection !== undefined) {
+    const evidence = input.observedProjection;
+    const validSource = evidence.source === undefined ||
+      evidence.source === OBSERVED_PROJECTION_EVIDENCE_SOURCES.REMOTE ||
+      evidence.source === OBSERVED_PROJECTION_EVIDENCE_SOURCES.SYNTHETIC;
+    const validEvidence = Number.isSafeInteger(evidence.visibleRevision) &&
+      evidence.visibleRevision >= 0 &&
+      evidence.visibleHash.length > EMPTY_STRING_LENGTH_ZERO &&
+      validSource;
+    const validBaseline = evidence.baseline !== undefined &&
+      Number.isSafeInteger(evidence.baseline.visibleRevision) &&
+      evidence.baseline.visibleRevision >= 0 &&
+      evidence.baseline.visibleHash.length > EMPTY_STRING_LENGTH_ZERO;
+    const baselineMatchesRow = evidence.source !== OBSERVED_PROJECTION_EVIDENCE_SOURCES.SYNTHETIC || (
+      evidence.baseline !== undefined &&
+      row.baseVisibleHash !== undefined &&
+      evidence.baseline.visibleRevision === row.baseVisibleRevision &&
+      evidence.baseline.visibleHash === row.baseVisibleHash
+    );
+    if (
+      !validEvidence ||
+      (evidence.source === OBSERVED_PROJECTION_EVIDENCE_SOURCES.SYNTHETIC
+        ? !validBaseline
+        : evidence.baseline !== undefined && !validBaseline) ||
+      !baselineMatchesRow
+    ) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.INVALID_OBSERVATION_INPUT,
+        "observed projection evidence must contain valid revision, hash, and baseline data",
+      );
+    }
   }
   if (input.evaluation.rowBindingId !== row.rowBindingId) {
     throw new StorageError(

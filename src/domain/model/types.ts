@@ -138,6 +138,8 @@ export type RawObservedFieldChange =
 interface ObservedRowChangeBase {
   readonly rowBindingId: string;
   readonly baseVisibleRevision: number;
+  /** Exact confirmed row hash used when revision evidence is synthetic. */
+  readonly baseVisibleHash?: string;
 }
 
 /** A validated insertion with only the state an insertion can carry. */
@@ -176,6 +178,8 @@ export type ObservedRowChange =
 interface RawObservedRowChangeBase {
   readonly rowBindingId: string;
   readonly baseVisibleRevision: number;
+  /** Exact confirmed row hash used when revision evidence is synthetic. */
+  readonly baseVisibleHash?: string;
 }
 
 /** Raw insertion input with no existing-row state fields. */

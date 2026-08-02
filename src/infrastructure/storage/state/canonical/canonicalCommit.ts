@@ -8,6 +8,7 @@
 
 // Domain contract: canonical rows are the SQLite source of truth.
 import { ROW_OPERATIONS } from "../../../../domain/model/constants.js";
+import { stableHash } from "../../../../domain/index.js";
 import type {
   Applicability,
   FieldOwnership,
@@ -35,6 +36,7 @@ import {
 } from "../../sync/outbound/effectOutbox.js";
 import { FENCE_EXISTS_SQL } from "../../sync/outbound/effectOutboxSql.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import { parseNormalizedCell } from "../resolution/resolutionWriterHelpers.js";
 
 const INSERT_CANONICAL_ENTITY_SQL = `
   INSERT INTO entity_state (entity_id, entity_revision, accepted_snapshot_hash, status)
@@ -53,6 +55,12 @@ const INSERT_CANONICAL_FIELD_SQL = `
 const READ_CANONICAL_ENTITY_SQL = `
   SELECT entity_revision FROM entity_state
   WHERE entity_id = ? AND status = 'active'
+`;
+
+const READ_CANONICAL_FIELDS_SQL = `
+  SELECT field_name, normalized_value
+  FROM entity_field_state
+  WHERE entity_id = ?
 `;
 
 const UPDATE_CANONICAL_FIELD_SQL = `
@@ -95,6 +103,11 @@ export type CanonicalCommitStaleTarget =
   (typeof CANONICAL_COMMIT_STALE_TARGETS)[keyof typeof CANONICAL_COMMIT_STALE_TARGETS];
 
 /** A field value the writer should insert or compare-and-set. */
+export type CanonicalEffectsFactory = (
+  sql: SqlExecutor,
+  result: Extract<CanonicalCommitResult, { readonly kind: typeof CANONICAL_COMMIT_RESULT_KINDS.APPLIED }>,
+) => Promise<readonly NewEffect[]>;
+
 export interface CanonicalFieldWrite {
   readonly fieldName: string;
   readonly value: NormalizedCell;
@@ -110,6 +123,12 @@ interface CanonicalCommitBase {
   readonly acceptedSnapshotHash: Presence<string>;
   /** Effects are inserted in this same savepoint as the canonical mutation. */
   readonly effects: readonly NewEffect[];
+  /**
+   * Optional transaction-local effect planner. It is evaluated after the
+   * canonical CAS so payloads can include fields committed by another writer
+   * that touched a different field before this transaction began.
+   */
+  readonly effectsFactory?: CanonicalEffectsFactory;
 }
 
 /** An insert prepared from one core evaluation result. */
@@ -187,7 +206,10 @@ export async function commitCanonicalChangesWithSql(
       return result;
     }
 
-    if (!(await appendPendingEffectsWithSql(sql, fence, input.effects))) {
+    const effects = input.effectsFactory === undefined
+      ? input.effects
+      : await input.effectsFactory(sql, result);
+    if (!(await appendPendingEffectsWithSql(sql, fence, effects))) {
       throw new AsyncFenceLostError();
     }
 
@@ -294,9 +316,10 @@ async function applyUpdateWithSql(
   }
 
   const nextEntityRevision = entity.entity_revision + 1;
+  const acceptedSnapshotHash = await canonicalSnapshotHashWithSql(sql, input.entityId);
   const entityResult = await sql.run(UPDATE_CANONICAL_ENTITY_SQL, [
     nextEntityRevision,
-    toSqlNullable(input.acceptedSnapshotHash),
+    toSqlNullable(acceptedSnapshotHash),
     input.entityId,
     entity.entity_revision,
     ...fenceParameters(fence),
@@ -329,6 +352,28 @@ async function applyDeleteWithSql(
     kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
     entityRevision: nextEntityRevision,
     fieldRevisions: new Map(),
+  };
+}
+
+async function canonicalSnapshotHashWithSql(
+  sql: SqlExecutor,
+  entityId: string,
+): Promise<Presence<string>> {
+  const fields = await sql.all<{
+    readonly field_name: string;
+    readonly normalized_value: string;
+  }>(READ_CANONICAL_FIELDS_SQL, [entityId]);
+  return {
+    kind: PRESENCE_KINDS.PRESENT,
+    value: stableHash({
+      entityId,
+      fields: fields
+        .map((field) => ({
+          fieldName: field.field_name,
+          value: parseNormalizedCell(field.normalized_value, `${entityId}.${field.field_name}`),
+        }))
+        .sort((left, right) => left.fieldName.localeCompare(right.fieldName)),
+    }),
   };
 }
 

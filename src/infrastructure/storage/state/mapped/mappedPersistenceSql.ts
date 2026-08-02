@@ -7,12 +7,13 @@
  * changing the public entity lifecycle API.
  */
 
-import type { EffectStatus } from "../../../../domain/index.js";
+import type { EffectStatus, NormalizedCell } from "../../../../domain/index.js";
 import { ROW_BINDING_STATES } from "../../../../domain/model/constants.js";
 import type {
   SqlExecutor,
   SqlMutationResult,
 } from "../../../../adapter/persistence/contracts/sql.js";
+import { parseNormalizedCell } from "../resolution/resolutionWriterHelpers.js";
 
 /** Raw row-binding state returned by SQLite. */
 export interface MappedRowBindingSqlRow {
@@ -31,6 +32,12 @@ export interface MappedCanonicalEntitySqlRow {
 export interface MappedCanonicalFieldRevisionSqlRow {
   readonly field_name: string;
   readonly field_revision: number;
+}
+
+/** Raw canonical field value used to rebuild a transaction-local projection. */
+export interface MappedCanonicalFieldValueSqlRow {
+  readonly field_name: string;
+  readonly normalized_value: string;
 }
 
 /** Raw active business-key row returned by SQLite. */
@@ -88,6 +95,12 @@ const READ_ACTIVE_CANONICAL_ENTITY_SQL = `
 
 const READ_CANONICAL_FIELD_REVISIONS_SQL = `
   SELECT field_name, field_revision
+  FROM entity_field_state
+  WHERE entity_id = ?
+`;
+
+const READ_CANONICAL_FIELD_VALUES_SQL = `
+  SELECT field_name, normalized_value
   FROM entity_field_state
   WHERE entity_id = ?
 `;
@@ -182,6 +195,21 @@ export function readMappedActiveCanonicalEntityWithSql(
   entityId: string,
 ): Promise<MappedCanonicalEntitySqlRow | undefined> {
   return sql.get<MappedCanonicalEntitySqlRow>(READ_ACTIVE_CANONICAL_ENTITY_SQL, [entityId]);
+}
+
+/** Reads the current canonical values used for transaction-local projection payloads. */
+export async function readMappedCanonicalFieldsWithSql(
+  sql: SqlExecutor,
+  entityId: string,
+): Promise<Readonly<Record<string, NormalizedCell>>> {
+  const rows = await sql.all<MappedCanonicalFieldValueSqlRow>(
+    READ_CANONICAL_FIELD_VALUES_SQL,
+    [entityId],
+  );
+  return Object.fromEntries(rows.map((row) => [
+    row.field_name,
+    parseNormalizedCell(row.normalized_value, `${entityId}.${row.field_name}`),
+  ]));
 }
 
 /** Reads canonical field revisions used to build update compare-and-set input. */

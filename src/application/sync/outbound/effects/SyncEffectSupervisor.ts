@@ -95,9 +95,11 @@ export class SyncEffectWorkerSupervisor {
   private readonly onReport: ((report: SyncEffectWorkerReport) => void) | undefined;
   private readonly onError: ((error: unknown) => void) | undefined;
   private running = false;
+  private acceptingPasses = true;
   private loopPromise: Promise<void> | undefined;
   private inFlightPass: Promise<SyncEffectWorkerReport> | undefined;
   private inFlightReconciliation: Promise<ReconciliationScanReport> | undefined;
+  private stopPromise: Promise<void> | undefined;
   private nextReconciliationAt = 0;
   private wakeWaiter: (() => void) | undefined;
 
@@ -134,7 +136,7 @@ export class SyncEffectWorkerSupervisor {
 
   /** Starts the background drain loop; repeated calls are harmless. */
   public start(): void {
-    if (this.running) return;
+    if (this.running || !this.acceptingPasses) return;
     this.running = true;
     this.nextReconciliationAt = this.now();
     this.loopPromise = this.runLoop();
@@ -150,6 +152,9 @@ export class SyncEffectWorkerSupervisor {
    * Manual HTTP triggers therefore cannot create a second concurrent worker.
    */
   public runOnce(): Promise<SyncEffectWorkerReport> {
+    if (!this.acceptingPasses) {
+      return Promise.reject(new Error("sync effect supervisor is stopped"));
+    }
     if (this.inFlightPass !== undefined) return this.inFlightPass;
     const pass = Promise.resolve().then(() => this.runPass());
     this.inFlightPass = pass;
@@ -161,12 +166,23 @@ export class SyncEffectWorkerSupervisor {
   }
 
   /** Stops scheduling new passes and waits for the active pass to finish. */
-  public async stop(): Promise<void> {
+  public stop(): Promise<void> {
+    if (this.stopPromise !== undefined) return this.stopPromise;
+    this.acceptingPasses = false;
     this.running = false;
     this.wakeWaiter?.();
-    const loop = this.loopPromise;
-    if (loop !== undefined) await loop;
-    this.loopPromise = undefined;
+    this.stopPromise = (async () => {
+      const loop = this.loopPromise;
+      if (loop !== undefined) await loop.catch(() => undefined);
+      const inFlightPass = this.inFlightPass;
+      if (inFlightPass !== undefined) await inFlightPass.catch(() => undefined);
+      const inFlightReconciliation = this.inFlightReconciliation;
+      if (inFlightReconciliation !== undefined) {
+        await inFlightReconciliation.catch(() => undefined);
+      }
+      this.loopPromise = undefined;
+    })();
+    return this.stopPromise;
   }
 
   private async runLoop(): Promise<void> {
