@@ -57,7 +57,7 @@ const PROJECTION_TARGET_KINDS = {
   CONFLICT: "conflict",
 } as const satisfies Record<string, EffectTargetKind>;
 
-const EMPTY_VISIBLE_HASH = "" as const;
+const EMPTY_VISIBLE_HASH = "";
 
 /** Common immutable coordinates of a writer-approved projection effect. */
 export interface ProjectionEffectInput {

@@ -27,6 +27,8 @@ import {
   PRESENCE_KINDS,
 } from "../../../../shared/state/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
+import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
+import { isRecord } from "../../../../shared/encoding/typeGuards.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -107,7 +109,7 @@ interface DesiredRow {
   readonly rowBindingId: string;
   readonly anchorReference: string;
   readonly entityRevision: number;
-  readonly fields: Readonly<Record<string, NormalizedCell>>;
+  readonly fields: Record<string, NormalizedCell>;
   readonly fieldRevisionHash: string;
 }
 
@@ -435,7 +437,7 @@ async function readDesiredSystemStateWithSql(
       });
       continue;
     }
-    (existing.fields as Record<string, NormalizedCell>)[row.field_name] = cell;
+    existing.fields[row.field_name] = cell;
   }
 
   const desired: DesiredRow[] = [];
@@ -449,7 +451,7 @@ async function readDesiredSystemStateWithSql(
 
 function ensureTombstoneField(row: DesiredRow, tombstoneField: string | undefined): void {
   if (tombstoneField === undefined) return;
-  const fields = row.fields as Record<string, NormalizedCell>;
+  const fields = row.fields;
   if (fields[tombstoneField] === undefined) {
     fields[tombstoneField] = { kind: NORMALIZED_CELL_KINDS.BOOLEAN, value: false };
   }
@@ -464,8 +466,8 @@ function computeFieldRevisionHash(fields: Readonly<Record<string, NormalizedCell
 
 function decodeNormalizedCell(value: string): NormalizedCell {
   try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!isNormalizedCellLike(parsed)) {
+    const parsed: unknown = JSON.parse(value);
+    if (!isNormalizedCell(parsed)) {
       throw new StorageError(
         STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
         "entity_field_state.normalized_value is not a normalized cell",
@@ -479,13 +481,6 @@ function decodeNormalizedCell(value: string): NormalizedCell {
       "entity_field_state.normalized_value is not valid JSON",
     );
   }
-}
-
-function isNormalizedCellLike(value: unknown): value is NormalizedCell {
-  if (value === null) return true;
-  if (typeof value !== "object" || value === null) return false;
-  const cell = value as { kind?: unknown; value?: unknown };
-  return typeof cell.kind === "string";
 }
 
 async function buildCorrectionEffects(
@@ -629,7 +624,8 @@ function baselineFromVisible(
 
 function extractTargetVisibleHash(payloadJson: string): string {
   try {
-    const parsed = JSON.parse(payloadJson) as { targetVisibleHash?: unknown };
+    const parsed: unknown = JSON.parse(payloadJson);
+    if (!isRecord(parsed)) return "";
     return typeof parsed.targetVisibleHash === "string" ? parsed.targetVisibleHash : "";
   } catch {
     return "";
