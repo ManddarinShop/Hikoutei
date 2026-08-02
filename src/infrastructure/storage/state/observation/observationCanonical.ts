@@ -48,7 +48,7 @@ import {
 import { CanonicalStaleError, FenceLostError } from "./observationTypes.js";
 
 const INITIAL_CANDIDATE_EPOCH = 0;
-const CONFLICT_ID_PREFIX = "conflict:" as const;
+const CONFLICT_ID_PREFIX = "conflict:";
 
 const INSERT_SYNC_CONFLICT_SQL = `
   INSERT INTO sync_conflict (

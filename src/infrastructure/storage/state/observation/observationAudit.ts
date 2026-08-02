@@ -8,6 +8,7 @@
 import { computeRowHash, stableHash, type NormalizedRow } from "../../../../domain/index.js";
 import {
   isJavaScriptType,
+  isRecord,
   JAVASCRIPT_TYPE_NAMES,
 } from "../../../../shared/encoding/index.js";
 import { QUARANTINE_FINGERPRINT_MARKERS } from "../../../../domain/evaluate/constants.js";
@@ -86,7 +87,10 @@ function toAuditValue(value: unknown, seen: Set<object>): AuditValue {
       return { $invalidObject: Object.prototype.toString.call(value) };
     }
 
-    const objectValue = value as Record<string, unknown>;
+    if (!isRecord(value)) {
+      return { $invalidObject: Object.prototype.toString.call(value) };
+    }
+    const objectValue = value;
     const result: Record<string, AuditValue> = {};
     for (const key of Object.keys(objectValue).sort()) {
       result[key] = toAuditValue(objectValue[key], seen);
