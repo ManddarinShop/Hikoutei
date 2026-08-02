@@ -79,6 +79,7 @@ export async function projectionEffects(
   changedFields: readonly TypedSheetsEntityFieldMapping[],
   commitId: string,
   targetEntityRevision: number,
+  options: { readonly includeUserProjection?: boolean } = {},
 ): Promise<readonly NewEffect[]> {
   const systemProjection = requireTypedSheetsEntityProjection(
     mapping,
@@ -132,7 +133,8 @@ export async function projectionEffects(
     (projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
   );
   if (userProjection === undefined) return effects;
-  const shouldReconcileUserInput = userProjection !== undefined &&
+  const shouldReconcileUserInput = options.includeUserProjection !== false &&
+    userProjection !== undefined &&
     changeKind !== TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE &&
     (changeKind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE ||
       changedFields.some((field) => field.ownership === FIELD_OWNERSHIPS.USER));

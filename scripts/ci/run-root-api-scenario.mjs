@@ -13,8 +13,8 @@
  *   remove()/flush() -> verify deletion
  *   hikoutei.close()
  *
- * It uses an in-memory SQLite authority (dbName `:memory:`) and a local Sheet
- * route only. It never contacts Google Sheets, never needs credentials, and
+ * It uses an in-memory SQLite authority (dbName `:memory:`) with no Sheet
+ * configuration. It never contacts Google Sheets, never needs credentials, and
  * never provisions remote tabs. A pass proves the packed, installed package's
  * public root surface is usable by an external consumer end to end.
  */
@@ -106,19 +106,11 @@ async function main() {
     });
 
     runtime = await measure("open_runtime", async () => {
-      // `:memory:` keeps the scenario self-contained; the route is a valid
-      // local Sheet route and never triggers a remote provisioning call.
+      // `:memory:` keeps the scenario self-contained. Sheet configuration is
+      // intentionally absent because it belongs to the internal sync service.
       return createTypedSheets({
         dbName: ":memory:",
         entities: [User],
-        sheets: {
-          spreadsheetId: "hikoutei-root-api-smoke",
-          routes: {
-            User: {
-              systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-            },
-          },
-        },
       });
     });
     assertions += 1;

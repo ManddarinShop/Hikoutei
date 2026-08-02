@@ -15,8 +15,9 @@ fake, and neither is allowed to import those.
    package subpaths and no source imports) and exercises the public
    entity-lifecycle contract an application is meant to use.
 
-The public contract is the high-level `hikoutei` root API: Sheet
-configuration/registration and a MikroORM-style entity lifecycle. The
+The public contract is the high-level `hikoutei` root API: a SQLite-backed
+entity lifecycle. Sheet configuration, registration, and synchronization remain
+internal service concerns. The
 `hikoutei/orm` and `hikoutei/mikro-orm` package subpaths are intentionally not
 published; the root smoke performs those dynamic imports only as negative
 boundary assertions (they must be rejected with `ERR_PACKAGE_PATH_NOT_EXPORTED`)
@@ -46,7 +47,7 @@ the stable public lifecycle end to end against an in-memory SQLite authority
 (`dbName: ":memory:"`):
 
 1. define a scalar entity with `defineTypedSheetsEntity()`;
-2. open the runtime with `createTypedSheets()` and a valid local Sheet route;
+2. open the runtime with `createTypedSheets()` and only `dbName` plus entity tokens;
 3. obtain a request-local manager with `em.fork()`;
 4. `create()` / `persist()` / `flush()` one entity and `findOne()`-verify it;
 5. mutate the loaded entity, `flush()`, and re-read it through a fresh fork to

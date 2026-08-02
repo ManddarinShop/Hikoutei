@@ -26,12 +26,6 @@ export const HIKOUTEI_ERROR_CODES = {
   INVALID_SCALAR_VALUE: "invalid_scalar_value",
   /** A provider transaction could not find the row targeted by a managed change. */
   ENTITY_NOT_FOUND: "entity_not_found",
-  /** Sheet route configuration is missing or inconsistent with the entities. */
-  INVALID_SHEET_ROUTE: "invalid_sheet_route",
-  /** A remote setup call was requested without a configured provisioner. */
-  SHEET_SETUP_UNAVAILABLE: "sheet_setup_unavailable",
-  /** An internal entity-to-sync mapping is inconsistent with the runtime. */
-  INVALID_ENTITY_MAPPING: "invalid_entity_mapping",
 } as const;
 
 /** Closed set of Hikoutei API error codes. */

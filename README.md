@@ -27,7 +27,8 @@ replacement, a Prisma/JPA clone, or a general Google Sheets API wrapper.
 ## Why Hikoutei?
 
 - Entity-oriented lifecycle: create, find, mutate, persist, remove, and flush.
-- Typed field mappings with runtime validation for Sheet data.
+- Typed scalar entity fields with runtime validation at the local boundary.
+- Internal projection mappings with runtime validation for Sheet data.
 - Local SQLite reads for application workflows that should not wait on a remote
   spreadsheet request.
 - Asynchronous Google Sheets views for human review and lightweight
@@ -49,9 +50,10 @@ without changing the entity lifecycle API.
 
 ## Quick start
 
-Define a scalar entity and configure its environment-specific Sheet route
-separately. The application reads and writes the local SQLite authority through
-a request-local manager.
+Define a scalar entity and use the local SQLite authority through a
+request-local manager. Sheet routes, gateway credentials, provisioning, and
+polling belong to the internal service bootstrap rather than the application
+API.
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -68,14 +70,6 @@ const User = defineTypedSheetsEntity({
 const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  sheets: {
-    spreadsheetId: process.env.SHEET_ID!,
-    routes: {
-      User: {
-        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-      },
-    },
-  },
 });
 
 const em = hikoutei.em.fork();
@@ -87,11 +81,11 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`createTypedSheets()` only opens SQLite and registers local sync state. Call
-`hikoutei.setupSheets(provisioner)` explicitly when a deployment is ready to
-provision or validate remote tabs and headers. `flush()` commits the entity,
-canonical sync state, and durable Sheet outbox locally; remote delivery remains
-asynchronous.
+`createTypedSheets()` opens the local entity tables only. The internal sync
+service separately registers mappings, provisions remote tabs, starts the
+outbound worker, and polls User_Input. In service mode, `flush()` commits the
+entity, canonical sync state, and durable Sheet outbox locally; remote delivery
+remains asynchronous.
 
 ## When to use Hikoutei
 
@@ -116,29 +110,31 @@ Use a conventional database and direct Google APIs when you need:
 
 ## Google Sheets setup
 
-1. Define scalar entities and environment-specific routes in
-   `createTypedSheets()`.
-2. Follow the [Quick start](docs/quick-start.md#sheet-setup-and-delivery) to
-   copy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) into a
+Google Sheets synchronization is a service-side concern. Applications do not
+import a gateway client, pass Sheet routes to `createTypedSheets()`, call
+`setupSheets()`, or choose an operation for each write.
+
+1. Copy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) into a
    spreadsheet-bound Apps Script project, deploy it as a Web App, set the
    `/exec` URL, and run `setupSyncGateway()`.
-3. Keep the generated `TYPED_SHEETS_GATEWAY_URL`,
+2. Keep `TYPED_SHEETS_GATEWAY_URL`,
    `TYPED_SHEETS_GATEWAY_SHARED_SECRET`, and
-   `TYPED_SHEETS_GATEWAY_SHEET_ID` values in an untracked server environment or
-   secret store. Never put the shared secret in browser code or Git.
-4. Call `hikoutei.setupSheets(provisioner)` explicitly to provision and verify
-   the registered tabs and headers, then run the worker that delivers pending
-   outbox effects.
+   `TYPED_SHEETS_GATEWAY_SHEET_ID` in an untracked server environment or secret
+   store. Never put the shared secret in browser code or Git.
+3. Start the internal sync bootstrap. It validates the private route/ownership
+   configuration, provisions and verifies headers, then starts outbox delivery
+   and User_Input polling.
 
 The gateway must be deployed with an access audience that can reach the
 service; an external server normally requires **Anyone**. Use the deployed
 `/exec` URL, not the editor-only `/dev` URL. When `Code.gs` changes, update the
-existing Web App deployment with a new version before relying on the change.
+existing Web App deployment with a new version. Live Google calls are opt-in;
+fake gateways and SQLite fixtures are the normal verification path.
 The detailed setup and troubleshooting steps are in the [Quick start](docs/quick-start.md).
 
 ## Documentation
 
-- [Quick start](docs/quick-start.md) — installation, mapping, and gateway setup.
+- [Quick start](docs/quick-start.md) — installation, ORM lifecycle, and service-side sync setup.
 - [Architecture](docs/architecture.md) — how the local store and Sheet views
   fit together.
 - [Write and synchronization flow](docs/write-and-synchronization-flow.md) —

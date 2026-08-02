@@ -1,148 +1,153 @@
 # Hikoutei Architecture
 
 Hikoutei owns a local SQLite entity store and exposes Google Sheets as an
-asynchronous human-facing projection. The public API belongs to Hikoutei;
-MikroORM is the current replaceable execution engine behind that API.
+asynchronous human-facing projection. SQLite is the authority; Sheets is an
+internal service-side projection and human input surface.
 
-> Current status: the scalar entity lifecycle, SQLite transaction boundary,
-> outbox, outbound worker, gateway path, and the first provider-side User_Input
-> polling path are implemented. The global Conflict decision loop is still a
-> target design foundation, not a complete end-to-end public runtime yet. The
-> root public API is provider-neutral; MikroORM is only the current adapter and
-> Prisma is a future provider target.
+> The root package API is ORM-only. Sheet synchronization is implemented inside
+> `src`, but its bootstrap, gateway, worker, and storage contracts are not root
+> exports.
 
 ## System shape
 
 ```text
-Application server
-  └─ Hikoutei scalar entity API
-       ├─ entity descriptors and Sheet routes
-       └─ Hikoutei Unit of Work / EntityManager
-            └─ provider-neutral persistence contract
-                 └─ MikroORM + SQLite (current provider)
-                      ├─ business entity tables
-                      ├─ SQLite sync state and conflict ledger
-                      └─ durable Sheet effect outbox
-                           └─ separate sync worker
-                                └─ signed Apps Script gateway
-                                     └─ Google Sheets projections
+Application code
+  └─ hikoutei root API
+       └─ EntityManager
+            └─ SQLite entity tables
+                 └─ [internal sync service in the same process]
+                      ├─ canonical sync state
+                      ├─ durable Sheet effect outbox
+                      ├─ outbound effect worker
+                      ├─ User_Input polling
+                      └─ Apps Script gateway
+                           └─ Google Sheets projections
 ```
 
-## Ownership boundaries
+The internal service reuses the same MikroORM SQLite adapter and transaction
+boundary as the entity manager. A future deployment can extract the worker
+process without changing the root entity lifecycle contract.
 
-### TypedSheets public API
-
-Applications define entities with `defineTypedSheetsEntity()` and use the
-typed-sheets EntityManager for `fork()`, `create()`, `find()`, `persist()`,
-`remove()`, `flush()`, and `transactional()`.
-
-Applications import only `defineTypedSheetsEntity()` and
-`createTypedSheets()` from the root package. They do not import `defineEntity`,
-`p`, `MikroORM`, Prisma, or provider-specific SQL types. The public Unit of Work
-owns identity maps, snapshots, dirty diffs, and flush semantics; the current
-MikroORM adapter materializes those plans and a future Prisma adapter must use
-the same provider contract.
-
-### Business entity tables
-
-The ORM entity tables are the authoritative application data. A successful
-SQLite transaction commits the entity mutation together with the sync work
-needed to project it to Sheets.
-
-Primary keys are explicit, string-valued, and immutable in the scalar release.
-The primary `id` is also the visible business key by default. Relations,
-provider-specific query operators, lazy loading, and cascade persistence are
-out of scope for this release.
-
-### SQLite sync state
-
-SQLite sync tables record bindings, revisions, visible Sheet state, event
-evidence, conflicts, resolution commands, leases, and outbox effects. They are not
-additional business tables such as `Users_System` or `Users_Input`.
-
-The sync layer must not become a second source of application field values.
-Where it needs a value for hashing or conflict evidence, it stores the minimum
-required normalized snapshot or audit evidence and the entity table remains the
-application authority.
-
-### Google Sheets projections
-
-Each mapped entity can have a protected `System_State` projection and an
-editable `User_Input` projection. The application never reads normal entity
-data from Sheets. It reads SQLite; the worker observes User_Input only to
-evaluate intentional human changes.
-
-The target design has one global `sync_conflicts` projection, conventionally
-represented by a `Sync_Conflicts` tab. A conflict row contains one field-level
-decision and two mutually exclusive controls:
+## Source boundaries
 
 ```text
-conflict_id | entity_name | entity_id | field_name |
-system_value | user_value | use_system | use_user
+src/domain/                         pure normalization/evaluation/conflict rules
+src/application/orm/                public ORM facade and mapped flush planning
+src/application/sync/               internal sync engine and service bootstrap
+src/adapter/persistence/            SQLite/MikroORM implementation
+src/adapter/sheets/                 Apps Script transport and operation adapter
+src/infrastructure/storage/         canonical, observation, resolution, outbox state
+src/api/                            root-facing entity and EntityManager facade
+src/index.ts                        root public barrel only
+apps-script/gateway/                deployable Apps Script code
 ```
 
-No checked control is a pending decision. Exactly one control creates a
-compare-and-set resolution command. Both checked controls are invalid and are
-reset. A stale command is reset and leaves the conflict visible for rebase.
-After a successful resolution, SQLite records the result first and a durable
-outbox effect removes the resolved row from the Conflict projection. The
-projection contract is designed now; global registration and end-to-end
-checkbox consumption are still pending implementation.
+`src` does not mean public. The only application-facing package entrypoint is
+`src/index.ts`; package subpaths for providers, gateway operations, polling,
+and sync state are not part of the contract.
 
-## Transaction boundary
+## Root public API
 
-The transaction boundary ends at SQLite commit:
+Applications define scalar entities and open a local SQLite runtime:
+
+```ts
+import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
+
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
+  dbName: "./hikoutei.sqlite",
+  entities: [User],
+});
+
+const em = hikoutei.em.fork();
+const user = em.create(User, { id: "u1", name: "Ada" });
+em.persist(user);
+await em.flush();
+```
+
+The public surface contains entity definition, runtime creation, and the
+request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
+`findOne()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
+MikroORM, raw SQL, gateway clients, Sheet routes, provisioning, polling, and
+outbox controls are internal.
+
+## SQLite authority
+
+Business entity tables are the authoritative application data. Normal reads
+always come from SQLite and never from a Sheet. The public local runtime opens
+entity tables only and does not contact Google Sheets or create sync tables.
+
+When the internal sync service is active, its mapped flush coordinator extends
+the same SQLite transaction with:
+
+```text
+entity mutation
+canonical sync state
+projection registry/state
+Sheet effect outbox
+```
+
+The service-side configuration supplies projection routes, spreadsheet identity,
+and user-owned fields. Those values are not entity metadata or public ORM
+options.
+
+## Google Sheets projection
+
+The internal service provisions and validates registered projection tabs before
+starting delivery. It owns the signed Apps Script client, effect worker,
+response-loss recovery, reconciliation, and User_Input polling.
+
+The application does not call Sheet operations. A successful public `flush()`
+means that the local SQLite transaction committed. It does not mean that a
+remote Sheet write has completed.
+
+`System_State` is materialized from canonical SQLite state. `User_Input` is
+observed by the internal polling loop, evaluated with ownership and field-level
+compare-and-set rules, and then committed back to SQLite. Stale, conflicting,
+and malformed input is recorded in SQLite rather than silently overwriting the
+entity table.
+
+## Transaction and lifecycle boundary
 
 ```text
 em.persist(entity) / em.remove(entity)
           │
           ▼
-SQLite transaction
-  ├─ business entity table
-  ├─ SQLite sync state and conflict state
+SQLite transaction (internal sync service mode)
+  ├─ entity table
+  ├─ canonical state and conflict evidence
   └─ durable Sheet effect outbox
           │
           ▼
-separate worker process
-  ├─ drain outbound effects
-  ├─ poll User_Input
-  ├─ evaluate accepted fields and persist them through SQLite
-  └─ [planned] poll and apply Conflict decisions
+internal outbound effect supervisor
+  ├─ claim leases and send signed operations
+  ├─ retry recoverable failures
+  └─ reconcile remote drift
           │
           ▼
-Google Sheets projection
+Apps Script gateway ──▶ Google Sheets
+
+internal User_Input polling
+  ├─ read registered projections
+  ├─ evaluate ownership/revisions/CAS
+  └─ persist accepted observations and entity mutations in SQLite
 ```
 
-`flush()` returning successfully means that SQLite accepted the local entity
-change, canonical sync mutation, and durable outbox effect in one transaction.
-It does not mean that a Sheet write has completed. Remote provisioning is also
-separate: `createTypedSheets()` is local-only and `setupSheets()` is the
-explicit external setup call.
-
-## Worker responsibilities
-
-The initial inbound source is polling. The current MikroORM provider exposes a
-worker-side one-pass polling entrypoint that observes `User_Input`, validates
-row identity and cells, evaluates field revisions, and persists accepted rows
-through the observation writer and mapped entity mutation transaction.
-Every remote projection is addressed through its registered visible business-key
-column (normally `id`), which must be required and unique in SQLite. Snapshot
-reads never assign or scan Developer Metadata. An unknown or duplicated business
-key is quarantined as invalid rather than being matched to a different entity.
-The Sheet owner should treat this identity column as immutable/protected: a
-polling-only runtime cannot prove which old row a manually changed key came from
-when the key is changed to another existing entity.
-`onEdit` can be added later as an optional lower-latency observation source, but
-it must enter the same evaluator and SQLite writer boundary. Long-running loop
-ownership and Conflict checkbox consumption remain worker follow-up work.
-
-The worker claims leases, sends signed gateway operations, retries recoverable
-failures, and reconciles remote drift. The Apps Script gateway performs only
-the signed, range-constrained Sheet operation; it does not choose conflict
-winners or own canonical state.
+The service bootstrap starts provisioning, outbound delivery, and inbound polling
+as one internal runtime. Shutdown stops polling first, waits for remote calls,
+stops the outbound supervisor, and only then closes SQLite.
 
 ## Design limits
 
 Hikoutei targets one local SQLite writer process and low-traffic MVP or internal
 workflows. It is not a distributed transaction coordinator, a general-purpose
-database, or a Google Sheets API replacement.
+database, or a Google Sheets API replacement. Live Google integration remains
+opt-in; normal tests use fake gateways and SQLite fixtures.

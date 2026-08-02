@@ -38,11 +38,12 @@ import {
   candidateHash,
   readActiveCandidateWithSql,
 } from "./observationLedger.js";
-import type {
-  AppliedCanonicalCommit,
-  CanonicalRowMutation,
-  PersistObservedRowInput,
-  RowBindingRow,
+import {
+  OBSERVED_PROJECTION_EVIDENCE_SOURCES,
+  type AppliedCanonicalCommit,
+  type CanonicalRowMutation,
+  type PersistObservedRowInput,
+  type RowBindingRow,
 } from "./observationTypes.js";
 import { CanonicalStaleError, FenceLostError } from "./observationTypes.js";
 
@@ -71,6 +72,48 @@ const UPSERT_VISIBLE_FIELD_STATE_SQL = `
     active_candidate_hash = excluded.active_candidate_hash,
     candidate_epoch = excluded.candidate_epoch,
     last_observed_field_hash = excluded.last_observed_field_hash
+`;
+
+const READ_CONFIRMED_VISIBLE_STATE_SQL = `
+  SELECT confirmed_snapshot_hash, confirmed_visible_revision
+  FROM sheet_visible_state
+  WHERE physical_sheet_id = ? AND projection = ? AND row_binding_id = ?
+`;
+
+const CONFIRM_SYNTHETIC_VISIBLE_STATE_SQL = `
+  UPDATE sheet_visible_state
+  SET confirmed_snapshot_hash = ?, confirmed_visible_revision = ?,
+      confirmed_entity_revision = ?, last_observed_hash = ?
+  WHERE physical_sheet_id = ? AND projection = ? AND row_binding_id = ?
+    AND confirmed_visible_revision = ? AND confirmed_snapshot_hash = ?
+`;
+
+const CONFIRM_OBSERVED_VISIBLE_STATE_SQL = `
+  INSERT INTO sheet_visible_state (
+    physical_sheet_id, projection, row_binding_id, confirmed_snapshot_hash,
+    confirmed_visible_revision, confirmed_entity_revision, last_observed_hash
+  ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(physical_sheet_id, projection, row_binding_id)
+  DO UPDATE SET
+    confirmed_snapshot_hash = excluded.confirmed_snapshot_hash,
+    confirmed_visible_revision = excluded.confirmed_visible_revision,
+    confirmed_entity_revision = excluded.confirmed_entity_revision,
+    last_observed_hash = excluded.last_observed_hash
+  WHERE sheet_visible_state.confirmed_visible_revision <= excluded.confirmed_visible_revision
+`;
+
+const CONFIRM_OBSERVED_VISIBLE_FIELD_STATE_SQL = `
+  INSERT INTO sheet_visible_field_state (
+    physical_sheet_id, projection, row_binding_id, field_name,
+    confirmed_field_hash, confirmed_visible_revision, candidate_epoch,
+    last_observed_field_hash
+  ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  ON CONFLICT(physical_sheet_id, projection, row_binding_id, field_name)
+  DO UPDATE SET
+    confirmed_field_hash = excluded.confirmed_field_hash,
+    confirmed_visible_revision = excluded.confirmed_visible_revision,
+    last_observed_field_hash = excluded.last_observed_field_hash
+  WHERE sheet_visible_field_state.confirmed_visible_revision <= excluded.confirmed_visible_revision
 `;
 
 const ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL = `
@@ -203,6 +246,90 @@ export async function applyCanonicalMutationWithSql(
   await applyBusinessKeyChangesWithSql(sql, input.batch.sheetId, mutation);
   await rebaseActiveConflictsWithSql(sql, input, row, mutation, result);
   return { kind: PRESENCE_KINDS.PRESENT, value: result };
+}
+
+/** Rejects synthetic evidence when the exact baseline read by polling changed. */
+export async function assertObservedProjectionBaselineWithSql(
+  sql: SqlExecutor,
+  input: PersistObservedRowInput,
+  row: ObservedRowChange,
+): Promise<void> {
+  const evidence = input.observedProjection;
+  if (
+    evidence?.source !== OBSERVED_PROJECTION_EVIDENCE_SOURCES.SYNTHETIC ||
+    evidence.baseline === undefined
+  ) return;
+  const current = await sql.get<{
+    readonly confirmed_snapshot_hash: string;
+    readonly confirmed_visible_revision: number;
+  }>(READ_CONFIRMED_VISIBLE_STATE_SQL, [
+    input.physicalSheetId,
+    input.batch.projection,
+    row.rowBindingId,
+  ]);
+  if (
+    current === undefined ||
+    current.confirmed_visible_revision !== evidence.baseline.visibleRevision ||
+    current.confirmed_snapshot_hash !== evidence.baseline.visibleHash
+  ) {
+    throw new CanonicalStaleError();
+  }
+}
+
+/**
+ * Advances the confirmed visible baseline after an accepted observation.
+ *
+ * Without this confirmation, the next User_Input edit appears older than the
+ * canonical entity revision and is forced into a false conflict. Candidate
+ * columns are deliberately preserved; only accepted observed fields advance.
+ */
+export async function confirmObservedProjectionWithSql(
+  sql: SqlExecutor,
+  input: PersistObservedRowInput,
+  row: ObservedRowChange,
+  entityRevision: number,
+): Promise<void> {
+  const evidence = input.observedProjection;
+  if (evidence === undefined) return;
+
+  const rowResult = evidence.source === OBSERVED_PROJECTION_EVIDENCE_SOURCES.SYNTHETIC &&
+      evidence.baseline !== undefined
+    ? await sql.run(CONFIRM_SYNTHETIC_VISIBLE_STATE_SQL, [
+      evidence.visibleHash,
+      evidence.visibleRevision,
+      entityRevision,
+      evidence.visibleHash,
+      input.physicalSheetId,
+      input.batch.projection,
+      row.rowBindingId,
+      evidence.baseline.visibleRevision,
+      evidence.baseline.visibleHash,
+    ])
+    : await sql.run(CONFIRM_OBSERVED_VISIBLE_STATE_SQL, [
+      input.physicalSheetId,
+      input.batch.projection,
+      row.rowBindingId,
+      evidence.visibleHash,
+      evidence.visibleRevision,
+      entityRevision,
+      evidence.visibleHash,
+    ]);
+  if (rowResult.changes !== 1) return;
+
+  const acceptedFields = new Set(input.evaluation.acceptedFields.map((field) => field.fieldName));
+  for (const field of row.fields) {
+    if (!acceptedFields.has(field.fieldName)) continue;
+    const fieldResult = await sql.run(CONFIRM_OBSERVED_VISIBLE_FIELD_STATE_SQL, [
+      input.physicalSheetId,
+      input.batch.projection,
+      row.rowBindingId,
+      field.fieldName,
+      stableHash(field.nextValue),
+      evidence.visibleRevision,
+      stableHash(field.nextValue),
+    ]);
+    if (fieldResult.changes !== 1) return;
+  }
 }
 
 /** Writes new field candidates through the active async SQL transaction. */

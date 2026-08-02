@@ -46,7 +46,8 @@ SQLite provider가 내부적으로 사용하지만 루트 public API에는 Mikro
 
 ## 빠른 시작
 
-엔티티 정의와 환경별 Sheet route를 분리하고 루트 API만 사용합니다.
+엔티티 정의와 SQLite lifecycle은 루트 API만 사용합니다. Sheet route,
+gateway credential, provisioning, polling은 내부 service bootstrap의 책임입니다.
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -63,14 +64,6 @@ const User = defineTypedSheetsEntity({
 const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  sheets: {
-    spreadsheetId: process.env.SHEET_ID!,
-    routes: {
-      User: {
-        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-      },
-    },
-  },
 });
 
 const em = hikoutei.em.fork();
@@ -82,10 +75,11 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`createTypedSheets()`는 SQLite와 로컬 canonical/outbox만 준비합니다. 원격
-탭과 헤더 provisioning은 `hikoutei.setupSheets(provisioner)`를 명시적으로
-호출해야 합니다. `flush()`가 성공하면 SQLite 변경과 durable outbox가
-커밋되며 원격 Sheet 전달은 별도 worker가 비동기로 수행합니다.
+`createTypedSheets()`는 로컬 entity table만 준비하며 Google Sheets에 연결하지
+않습니다. 내부 sync service가 mapping을 등록하고 탭을 provisioning한 뒤
+outbound worker와 User_Input polling을 시작합니다. service mode에서
+`flush()`는 entity, canonical state, durable outbox를 SQLite transaction으로
+커밋하고 원격 Sheet 전달은 비동기로 수행합니다.
 
 ## Hikoutei를 사용하기 좋은 경우
 
@@ -110,19 +104,17 @@ await em.flush();
 
 ## Google Sheets 설정
 
-1. `createTypedSheets()`에서 scalar entity와 환경별 Sheet route를 정의합니다.
-2. [빠른 시작](docs/quick-start.md#sheet-setup-and-delivery)을 따라
-   [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs)를 대상
+1. [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs)를 대상
    Spreadsheet에 bound된 Apps Script 프로젝트에 복사하고 Web App으로
    배포한 뒤 `/exec` URL을 입력하고 `setupSyncGateway()`를 실행합니다.
-3. 생성된 `TYPED_SHEETS_GATEWAY_URL`,
-   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`,
+2. `TYPED_SHEETS_GATEWAY_URL`, `TYPED_SHEETS_GATEWAY_SHARED_SECRET`,
    `TYPED_SHEETS_GATEWAY_SHEET_ID`를 추적하지 않는 서버 환경 파일이나
    secret store에 보관합니다. shared secret은 브라우저 코드나 Git에 넣지
    마세요.
-4. `hikoutei.setupSheets(provisioner)`를 명시적으로 호출해 등록된 탭과
-   헤더를 provisioning한 뒤, 대기 중인 outbox effect를 전달하는 sync worker를
-   실행합니다.
+3. 내부 sync bootstrap을 시작하면 private route/ownership configuration을
+   검증하고 탭과 헤더를 provisioning한 뒤 outbox delivery와 User_Input
+   polling을 실행합니다. 애플리케이션 코드는 gateway API를 호출하지
+   않습니다.
 
 외부 서버에서 접근하려면 Web App의 액세스 범위가 서버를 허용해야 하며,
 일반적으로 **Anyone** 설정이 필요합니다. 편집기 전용 `/dev`가 아니라 배포용
@@ -132,7 +124,7 @@ await em.flush();
 
 ## 문서
 
-- [빠른 시작](docs/quick-start.md) — 설치, 매핑, Gateway 설정.
+- [빠른 시작](docs/quick-start.md) — 설치, ORM lifecycle, service-side sync 설정.
 - [아키텍처](docs/architecture.md) — 로컬 저장소와 Sheet 화면의 관계.
 - [쓰기 및 동기화 흐름](docs/write-and-synchronization-flow.md) — 비동기 전달과
   복구 동작.

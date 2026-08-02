@@ -43,10 +43,10 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(descriptor.tableName).toBe("users");
     expect(descriptor.primaryKey).toBe("id");
     expect(descriptor.properties).toEqual([
-      { name: "id", type: HIKOUTEI_SCALAR_TYPES.STRING, storageType: "TEXT", primary: true, nullable: false, editable: false, unique: true },
-      { name: "name", type: HIKOUTEI_SCALAR_TYPES.STRING, storageType: "TEXT", primary: false, nullable: false, editable: false, unique: false },
-      { name: "age", type: HIKOUTEI_SCALAR_TYPES.NUMBER, storageType: "REAL", primary: false, nullable: false, editable: false, unique: false },
-      { name: "active", type: HIKOUTEI_SCALAR_TYPES.BOOLEAN, storageType: "INTEGER", primary: false, nullable: false, editable: false, unique: false },
+      { name: "id", type: HIKOUTEI_SCALAR_TYPES.STRING, storageType: "TEXT", primary: true, nullable: false, unique: true },
+      { name: "name", type: HIKOUTEI_SCALAR_TYPES.STRING, storageType: "TEXT", primary: false, nullable: false, unique: false },
+      { name: "age", type: HIKOUTEI_SCALAR_TYPES.NUMBER, storageType: "REAL", primary: false, nullable: false, unique: false },
+      { name: "active", type: HIKOUTEI_SCALAR_TYPES.BOOLEAN, storageType: "INTEGER", primary: false, nullable: false, unique: false },
     ]);
   });
 
@@ -65,7 +65,6 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
       storageType: "TEXT",
       primary: false,
       nullable: true,
-      editable: false,
       unique: false,
     });
   });
@@ -165,8 +164,8 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("supports only");
   });
 
-  it("rejects unsupported relation/provider options on a property", () => {
-    const error = expectDescriptorError({
+  it("rejects unsupported relation/provider and Sheet ownership options", () => {
+    const relationError = expectDescriptorError({
       name: "User",
       tableName: "users",
       properties: {
@@ -174,9 +173,19 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
         profile: { type: "string", relation: "manyToOne" } as unknown as { type: "string" },
       },
     });
-    expect(error.message).toContain("unsupported option");
-    expect(error.message).toContain("relation");
-    expect(error.message).toContain("v1 supports only scalar types");
+    expect(relationError.message).toContain("unsupported option");
+    expect(relationError.message).toContain("relation");
+    expect(relationError.message).toContain("v1 supports only scalar types");
+
+    const ownershipError = expectDescriptorError({
+      name: "User",
+      tableName: "users",
+      properties: {
+        id: { type: "string", primary: true, editable: true } as unknown as { type: "string" },
+      },
+    });
+    expect(ownershipError.message).toContain("unsupported option");
+    expect(ownershipError.message).toContain("editable");
   });
 
   it("rejects a primary key that is also nullable", () => {
