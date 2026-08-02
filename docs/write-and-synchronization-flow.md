@@ -1,72 +1,103 @@
 # Write and Synchronization Flow
 
 Hikoutei commits local state first and materializes Google Sheets changes
-asynchronously. `createTypedSheets()` is local-only; remote tab/header
-provisioning happens only through the explicit `setupSheets()` boundary.
+asynchronously. The root ORM API is SQLite-only; the internal sync service owns
+all Sheet communication.
 
-## Outbound flow: SQLite to Google Sheets
+## Public ORM flow
 
 ```text
 em.persist(entity) / em.remove(entity)
           │
           ▼
 SQLite transaction
-  ├─ canonical entity state
-  └─ durable outbox effect
+  └─ entity table
           │
           ▼
-background effect worker
+return to application
+```
+
+`createTypedSheets()` never contacts Google Sheets and does not require a Sheet
+route, gateway client, or provisioner. Reads always come from SQLite.
+
+## Internal sync service flow
+
+The service-side bootstrap uses the same SQLite adapter and adds the canonical
+sync state and durable outbox to the flush transaction:
+
+```text
+EntityManager.flush()
+          │
+          ▼
+SQLite transaction
+  ├─ entity table
+  ├─ canonical sync state
+  ├─ projection registry/state
+  └─ durable Sheet effect outbox
+          │
+          ▼
+internal effect supervisor
   ├─ claim with a lease
   ├─ send a signed operation batch
   ├─ retry or recover an uncertain response
   └─ mark the effect applied/failed
           │
           ▼
-Apps Script gateway ── fast range write ──▶ Google Sheets
+Apps Script gateway ──▶ Google Sheets
 ```
 
-The application request does not wait for the remote Sheet write. A successful
-`flush()` means that SQLite accepted the entity change and the corresponding
-effect was durably queued.
+A successful `flush()` means that SQLite accepted the local change and queued
+its projection effect. It does not mean that the remote Sheet write has
+completed.
 
-## Fast append
+## Fast append, update, and delete
 
-The common system-state append path favors one contiguous range write. It avoids
-doing expensive metadata, snapshot, postcondition, and repair work before every
-append. Those checks belong to a separate safety path so the common write can
-remain small and predictable.
+New System_State rows use the bounded fast append operation where possible.
+Updates and deletes use guarded effects with expected visible revision/hash
+evidence. The same internal worker handles retries, response-loss recovery, and
+reconciliation. These operation types are implementation details and are not
+methods on the public EntityManager.
 
-## Update and delete
+## Inbound User_Input flow
 
-Update and delete effects are still represented as durable outbox work and are
-sent by the same worker. Their safety policy can be stricter than append because
-overwriting or removing an existing row has a larger failure impact.
+The internal service polls registered `User_Input` projections on a bounded
+interval. It reads the visible row, compares it with canonical SQLite state,
+and sends changed fields through the evaluator:
 
-## Gateway boundary
+```text
+User_Input polling
+  ├─ normalize literal/blank cells
+  ├─ resolve business-key row binding
+  ├─ validate ownership and field revisions
+  ├─ classify accepted, conflict, stale, or quarantine
+  └─ persist accepted observation and entity mutation in SQLite
+```
 
-The Apps Script gateway is intentionally thin:
+Accepted observation writes update canonical state and the application entity in
+the same SQLite transaction. They do not enqueue a duplicate User_Input effect;
+only the required system projection repair/materialization is considered.
+Conflicts, stale writes, duplicate keys, and malformed cells remain visible in
+SQLite evidence tables for later handling.
+
+## Provisioning and gateway boundary
+
+Projection provisioning is an internal service-start operation. The bootstrap
+generates route registrations and headers from the internal mapping, verifies
+remote schema drift, and starts workers only after provisioning succeeds. The
+Apps Script gateway remains intentionally thin:
 
 1. verify the signed operation envelope
 2. validate the operation contract
 3. execute the allowlisted Sheet operation
-4. return a structured result to the server worker
+4. return a structured result to the internal worker
 
-Entity evaluation, canonical state, retry policy, reconciliation, and effect
-classification remain in the Node/SQLite side of Hikoutei.
+Applications do not import or call the gateway client, protocol, operation
+builders, polling functions, or provisioning interfaces.
 
-## Uncertain remote results
+## Failure model
 
-An HTTP timeout or lost response does not prove that the Sheet write failed. The
-worker treats that result as recoverable work, retries according to its policy,
-and relies on idempotent effects and reconciliation to repair drift later.
-
-The design therefore favors at-least-once delivery with a repair safety net over
-trying to prove exactly-once behavior from a response that may never arrive.
-
-## Inbound path: user edits
-
-User-owned Sheet changes are a separate inbound concern. A future or configured
-`onEdit`/lightweight polling path reads the user-editable values, compares them
-with SQLite state, and sends the resulting observation into the evaluation and
-conflict pipeline. This path is intentionally separate from the fast outbound
-append path.
+An HTTP timeout or lost response does not prove that a Sheet write failed. The
+worker preserves durable work, classifies recoverable failures, and uses
+idempotent effects plus reconciliation to repair drift later. The SQLite commit
+is the application success boundary; remote delivery is at-least-once and
+asynchronous.

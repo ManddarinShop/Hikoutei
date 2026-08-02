@@ -46,7 +46,8 @@ SQLite provider が内部で利用しますが、ルート public API に MikroO
 
 ## クイックスタート
 
-エンティティ定義と環境ごとの Sheet route を分離し、ルート API だけを使います。
+エンティティ定義と SQLite の lifecycle はルート API だけを使います。Sheet route、
+gateway credential、provisioning、polling は内部 service bootstrap の責務です。
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -63,14 +64,6 @@ const User = defineTypedSheetsEntity({
 const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  sheets: {
-    spreadsheetId: process.env.SHEET_ID!,
-    routes: {
-      User: {
-        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-      },
-    },
-  },
 });
 
 const em = hikoutei.em.fork();
@@ -82,10 +75,11 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`createTypedSheets()` は SQLite とローカル canonical/outbox だけを準備します。
-リモートのタブとヘッダーは `hikoutei.setupSheets(provisioner)` を明示的に呼び出して
-プロビジョニングします。`flush()` の成功は SQLite と durable outbox のコミットを
-意味し、リモート Sheet への配信は別の worker が非同期に行います。
+`createTypedSheets()` はローカルの entity table だけを準備し、Google Sheets へ接続
+しません。内部 sync service が mapping を登録してタブを provision し、outbound
+worker と User_Input polling を開始します。service mode では `flush()` が entity、
+canonical state、durable outbox を SQLite transaction としてコミットし、リモート
+Sheet への配信は非同期に行います。
 
 ## Hikoutei が適しているケース
 
@@ -108,17 +102,15 @@ await em.flush();
 
 ## Google Sheets の設定
 
-1. `createTypedSheets()` で scalar entity と環境ごとの Sheet route を定義します。
-2. [クイックスタート](docs/quick-start.md#sheet-setup-and-delivery) に従い、
-   [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) を対象の
+1. [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) を対象の
    Spreadsheet にバインドした Apps Script プロジェクトへコピーし、Web App として
    デプロイします。その後 `/exec` URL を入力して `setupSyncGateway()` を実行します。
-3. 生成された `TYPED_SHEETS_GATEWAY_URL`、
-   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`、
+2. `TYPED_SHEETS_GATEWAY_URL`、`TYPED_SHEETS_GATEWAY_SHARED_SECRET`、
    `TYPED_SHEETS_GATEWAY_SHEET_ID` を、追跡対象外のサーバー環境ファイルまたは
    secret store に保管します。shared secret をブラウザコードや Git に入れないでください。
-4. `hikoutei.setupSheets(provisioner)` を明示的に呼び出して登録済みのタブとヘッダーを
-   プロビジョニングし、保留中の outbox effect を配信する sync worker を実行します。
+3. 内部 sync bootstrap を開始すると private route/ownership configuration を検証し、
+   タブとヘッダーを provision した後、outbox 配信と User_Input polling を実行します。
+   アプリケーションは gateway API を直接呼び出しません。
 
 外部サーバーからアクセスするには、Web App のアクセス範囲でサーバーを許可する必要が
 あり、通常は **Anyone** が必要です。エディタ専用の `/dev` ではなく、デプロイ用の
@@ -128,7 +120,7 @@ await em.flush();
 
 ## ドキュメント
 
-- [クイックスタート](docs/quick-start.md) — インストール、マッピング、Gateway 設定。
+- [クイックスタート](docs/quick-start.md) — インストール、ORM lifecycle、service-side sync 設定。
 - [アーキテクチャ](docs/architecture.md) — ローカルストアと Sheet ビューの関係。
 - [書き込みと同期の流れ](docs/write-and-synchronization-flow.md) — 非同期配信と復旧動作。
 - [開発ガイド](docs/development.md) — ローカル開発とテストコマンド。
