@@ -30,10 +30,13 @@
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
     "build:codec": "npm run build --workspace @hikoutei/canonical-codec",
+    "typecheck:test:codec": "npm run typecheck:test --workspace @hikoutei/canonical-codec",
+    "test:codec": "npm test --workspace @hikoutei/canonical-codec",
     "build": "npm run clean && npm run build:codec && tsc -p tsconfig.json",
     "typecheck": "npm run build:codec && tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "npm run build:codec && tsc -p tsconfig.test.json",
-    "test": "npm run build:codec && vitest run test/*.test.ts"
+    "typecheck:test": "npm run build:codec && npm run typecheck:test:codec && tsc -p tsconfig.test.json",
+    "test": "npm run build:codec && npm run test:codec && vitest run test/*.test.ts",
+    "smoke:packed-consumer": "node scripts/packed-consumer-smoke.mjs"
   },
   "keywords": [
     "google-sheets",

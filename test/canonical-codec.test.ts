@@ -38,8 +38,14 @@ type CanonicalCodecVector = {
   readonly canonicalJsonSha256: string;
 };
 
+// Golden vectors are owned by the `@hikoutei/canonical-codec` package so the
+// package tests and this root characterization test share a single source of
+// truth and cannot drift apart.
 const vectors: readonly CanonicalCodecVector[] = JSON.parse(
-  readFileSync(new URL("./fixtures/canonical-codec-vectors.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../packages/canonical-codec/test/fixtures/canonical-codec-vectors.json", import.meta.url),
+    "utf8",
+  ),
 );
 
 describe("canonical codec characterization vectors", () => {
