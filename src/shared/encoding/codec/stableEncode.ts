@@ -4,7 +4,7 @@ import { isCanonicalUtcIsoDate } from "../../validation.js";
 import { isRecord } from "../typeGuards.js";
 import {
   CANONICAL_CODEC_ERROR_CODES,
-  CanonicalCodecError,
+  StableCodecError,
 } from "./errors.js";
 import type { StableCodecDateValue } from "./types.js";
 
@@ -52,7 +52,7 @@ function encodeValue(
     encodeObject(value, chunks, ancestors);
     return;
   }
-  throw new CanonicalCodecError(
+  throw new StableCodecError(
     CANONICAL_CODEC_ERROR_CODES.UNSUPPORTED_VALUE_TYPE,
     `stable_encode: unsupported value type: ${typeof value}`,
   );
@@ -60,7 +60,7 @@ function encodeValue(
 
 function encodeNumber(value: number, chunks: Uint8Array[]): void {
   if (!Number.isFinite(value)) {
-    throw new CanonicalCodecError(
+    throw new StableCodecError(
       CANONICAL_CODEC_ERROR_CODES.NON_FINITE_NUMBER,
       `stable_encode: non-finite number: ${value}`,
     );
@@ -79,14 +79,14 @@ function encodeString(value: string, chunks: Uint8Array[]): void {
 
 function encodeDate(iso: string, chunks: Uint8Array[]): void {
   if (!isCanonicalUtcIsoDate(iso)) {
-    throw new CanonicalCodecError(
+    throw new StableCodecError(
       CANONICAL_CODEC_ERROR_CODES.INVALID_DATE_FORMAT,
       `stable_encode: invalid date format: ${iso}`,
     );
   }
   const bytes = textEncode(iso);
   if (bytes.length !== 24) {
-    throw new CanonicalCodecError(
+    throw new StableCodecError(
       CANONICAL_CODEC_ERROR_CODES.INVALID_DATE_BYTE_LENGTH,
       `stable_encode: date must be exactly 24 bytes, got ${bytes.length}`,
     );
@@ -121,7 +121,7 @@ function encodeObject(
     for (const key of Object.keys(obj)) {
       const nfcKey = normalizeScalarString(key);
       if (normalizedKeys.has(nfcKey)) {
-        throw new CanonicalCodecError(
+        throw new StableCodecError(
           CANONICAL_CODEC_ERROR_CODES.DUPLICATE_OBJECT_KEY,
           `stable_encode: duplicate object key after NFC normalization: ${nfcKey}`,
         );
@@ -170,7 +170,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function enterContainer(value: object, ancestors: Set<object>): void {
   if (ancestors.has(value)) {
-    throw new CanonicalCodecError(
+    throw new StableCodecError(
       CANONICAL_CODEC_ERROR_CODES.CYCLIC_VALUE,
       "stable_encode: cyclic value is not supported",
     );
@@ -184,7 +184,7 @@ function normalizeScalarString(value: string): string {
     if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
       if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff) {
-        throw new CanonicalCodecError(
+        throw new StableCodecError(
           CANONICAL_CODEC_ERROR_CODES.UNPAIRED_HIGH_SURROGATE,
           "stable_encode: string contains an unpaired high surrogate",
         );
@@ -193,7 +193,7 @@ function normalizeScalarString(value: string): string {
       continue;
     }
     if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      throw new CanonicalCodecError(
+      throw new StableCodecError(
         CANONICAL_CODEC_ERROR_CODES.UNPAIRED_LOW_SURROGATE,
         "stable_encode: string contains an unpaired low surrogate",
       );

@@ -20,6 +20,7 @@ import {
 import { stableEncode as genericStableEncode } from "../src/shared/encoding/codec/stableEncode.js";
 import type { StableValue } from "../src/shared/encoding/types.js";
 import { StableEncodingError } from "../src/domain/errors/index.js";
+import { SYNC_GATEWAY_PROTOCOL_ERROR_CODES } from "../src/adapter/sheets/providers/apps-script-gateway/errors.js";
 import {
   canonicalSyncJson,
   syncSha256Hex,
@@ -61,6 +62,21 @@ describe("canonical codec characterization vectors", () => {
       expect(canonicalJson, vector.name).toBe(vector.canonicalJson);
       expect(syncSha256Hex(canonicalJson), vector.name).toBe(vector.canonicalJsonSha256);
     }
+  });
+
+  it("maps generic canonical JSON failures to the existing protocol errors", () => {
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    expect(() => canonicalSyncJson(sparse)).toThrowError(
+      expect.objectContaining({
+        code: SYNC_GATEWAY_PROTOCOL_ERROR_CODES.INVALID_JSON_VALUE,
+      }),
+    );
+    expect(() => canonicalSyncJson(Number.NaN)).toThrowError(
+      expect.objectContaining({
+        code: SYNC_GATEWAY_PROTOCOL_ERROR_CODES.NON_FINITE_NUMBER,
+      }),
+    );
   });
 
   it("keeps negative zero equivalent to zero for both formats", () => {

@@ -41,3 +41,13 @@ export class CanonicalCodecError extends Error {
     this.code = code;
   }
 }
+
+/** Stable-encoding-specific generic error with a narrowed compatibility code set. */
+export class StableCodecError extends CanonicalCodecError {
+  declare readonly code: StableEncodingErrorCode;
+
+  constructor(code: StableEncodingErrorCode, message: string) {
+    super(code, message);
+    this.name = "StableCodecError";
+  }
+}

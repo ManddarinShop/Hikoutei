@@ -3,6 +3,7 @@ export {
   CANONICAL_CODEC_ERROR_CODES,
   CanonicalCodecError,
   type CanonicalCodecErrorCode,
+  StableCodecError,
   STABLE_ENCODING_ERROR_CODES,
   type StableEncodingErrorCode,
 } from "./errors.js";
