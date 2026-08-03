@@ -3,14 +3,24 @@
 Runtime-neutral **canonical codec** primitives shared across Hikoutei runtimes:
 the `stable_encode_v1` byte grammar and the canonical-JSON text grammar used for
 signed payloads. The package has no runtime dependencies and no Google SDK,
-SQLite, or Node-specific types in its public surface, so the same codecs can run
-in the Node service, the Apps Script gateway, and golden-vector characterization
-tests. The deployed Apps Script gateway keeps a self-contained source mirror;
-Apps Script does not import this npm package at runtime.
+SQLite, or Node-specific types in its public surface. It uses standard runtime
+facilities such as `Uint8Array`, `TextEncoder`, and `String.prototype.normalize`.
+The deployed Apps Script gateway keeps a self-contained source mirror; Apps
+Script does not import this npm package at runtime.
 
 The public API contract, type definitions, structured error classes, error-code
 constants, and the real `stableEncode` / `canonicalJson` implementations are
 wired into the Hikoutei workspace and are checked against the Apps Script mirror.
+
+## Installation
+
+```sh
+npm install @hikoutei/canonical-codec
+```
+
+The package is ESM-only. Import it from a modern Node.js or other runtime that
+provides the standard `Uint8Array`/`TextEncoder` APIs. CommonJS compatibility is
+not part of this package's contract.
 
 ## When to use
 
@@ -34,7 +44,7 @@ arrays, and cyclic structures. Both throw a typed `CanonicalCodecError` /
 ```ts
 import {
   // Encoders
-  stableEncode, // (value: StableCodecValue) => Uint8Array
+  stableEncode, // (value: unknown) => Uint8Array; validates StableCodecValue at runtime
   canonicalJson, // (value: unknown) => string
   isCanonicalJsonValue, // (value: unknown) => value is CanonicalJsonValue
   // Value types
@@ -51,7 +61,9 @@ import {
 
 `StableCodecValue` accepts scalars, arrays, objects with string keys, and tagged
 dates (`{ kind: "date", value: "<canonical UTC ISO-8601>" }`). Tagged dates are
-encoded on the date path, not as plain objects.
+encoded on the date path, not as plain objects. The package intentionally does
+not provide a SHA-256 helper: Hikoutei keeps its Node `node:crypto` wrapper and
+`HikouteiStableHash` brand at the application boundary.
 
 ## Implementation note
 

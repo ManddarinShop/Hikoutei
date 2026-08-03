@@ -1,9 +1,9 @@
 # CI scenarios
 
-Hikoutei's CI runs two installed-consumer scenarios against the packed
-package. Each is built as an installed consumer: after `npm pack` it imports
-from the packed tarball rather than from `src/**` or the source-only test
-fake, and neither is allowed to import those.
+Hikoutei's CI runs two installed-consumer scenarios against packed `hikoutei`
+and `@hikoutei/canonical-codec` tarballs. Each is built as an installed
+consumer: after `npm pack` it imports from the packed tarballs rather than from
+`src/**` or the source-only test fake, and neither is allowed to import those.
 
 1. **Internal sync/gateway E2E** (`scripts/ci/run-api-scenario.mjs`) drives the
    internal typed-sheets sync pipeline — projection registration, gateway
@@ -69,9 +69,13 @@ not part of the lifecycle.
 
 The normal CI, beta, and stable verification jobs run **both** installed-consumer
 scenarios — the internal sync/gateway E2E and the installed root API smoke. The
-internal E2E uses the **fake** backend (no Google Sheets contact, no
-credentials); the root API smoke is local-only, an in-memory SQLite authority
-(`:memory:`) with no backend concept. The workflows are:
+pull-request CI packs the codec tarball beside the root tarball and installs
+both locally, so it does not depend on a previously published codec version.
+Beta and stable release verification instead resolves the exact codec version
+from npm after checking that it exists. The internal E2E uses the **fake**
+backend (no Google Sheets contact, no credentials); the root API smoke is
+local-only, an in-memory SQLite authority (`:memory:`) with no backend concept.
+The workflows are:
 
 - `.github/workflows/ci.yml` runs on pull requests and pushes to `main` and
   `develop`.
@@ -107,6 +111,33 @@ and the workflow repeats cleanup with `if: always()` so a failed assertion does
 not leave the fixture behind. The Apps Script receipt tab is also removed by
 the cleanup operation. Do not point the live secrets at a production
 spreadsheet; cleanup is intentionally scoped to the dedicated CI spreadsheet.
+
+## Canonical codec publication
+
+`@hikoutei/canonical-codec` is a separate public ESM package, while its source
+and parity tests remain in this repository under `packages/canonical-codec/`.
+The package has no runtime dependency on Hikoutei, MikroORM, Google SDKs, or
+Node crypto. Apps Script continues to use the self-contained source fragment;
+it never imports the npm package.
+
+The codec workflow is `.github/workflows/canonical-codec-publish.yml` and is
+triggered by a tag such as `canonical-codec-v0.1.0`. It validates the tag and
+package version, runs package tests plus the Node/Apps Script parity test,
+checks the public tarball contents, and publishes with `--access public
+--provenance`. The `@hikoutei` npm scope and the repository `NPM_TOKEN` must be
+configured before the first publish.
+
+Publish the exact codec dependency before publishing Hikoutei. The beta and
+stable root workflows query npm for the exact version declared in
+`hikoutei`'s `dependencies`; they intentionally fail if that codec version is
+not available. The initial sequence is therefore:
+
+1. publish `@hikoutei/canonical-codec@0.1.0` with
+   `canonical-codec-v0.1.0`;
+2. release the next Hikoutei patch version (`0.3.1` by default).
+
+The two npm download counters remain package-specific; installing Hikoutei may
+fetch both tarballs, but it does not double the `hikoutei` counter.
 
 ## Beta publication
 
