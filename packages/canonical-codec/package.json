@@ -1,0 +1,40 @@
+{
+  "name": "@hikoutei/canonical-codec",
+  "version": "0.1.0",
+  "description": "Runtime-neutral canonical codec primitives (stable_encode_v1 and canonical JSON) shared across Hikoutei runtimes.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/canonical-codec"
+  },
+  "bugs": {
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "license": "MIT",
+  "author": "ManddarinShop",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.3"
+  }
+}
