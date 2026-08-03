@@ -35,6 +35,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify codec source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -n -E 'node:|@mikro-orm|googleapis' packages/canonical-codec/src --include='*.ts'; then
+            echo "canonical codec source must not depend on platform or provider packages" >&2
+            exit 1
+          fi
+          if grep -R -n 'from "..' packages/canonical-codec/src --include='*.ts'; then
+            echo "canonical codec source must not import parent repository modules" >&2
+            exit 1
+          fi
+
       - name: Typecheck production code
         run: npm run typecheck
 
@@ -53,16 +66,43 @@ jobs:
           set -euo pipefail
           consumer_dir="$RUNNER_TEMP/hikoutei-consumer"
           mkdir -p "$consumer_dir"
+          codec_pack_file="$(npm pack --workspace @hikoutei/canonical-codec --silent --pack-destination "$RUNNER_TEMP")"
+          codec_pack_path="$RUNNER_TEMP/$codec_pack_file"
           pack_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
           pack_path="$RUNNER_TEMP/$pack_file"
+
+          tar -tzf "$codec_pack_path" | grep -q '^package/dist/index.js$'
+          tar -tzf "$codec_pack_path" | grep -q '^package/dist/index.d.ts$'
+          tar -tzf "$codec_pack_path" | grep -q '^package/README.md$'
+          tar -tzf "$codec_pack_path" | grep -q '^package/LICENSE$'
+          if tar -tzf "$codec_pack_path" | grep -qE '^package/(src|test)/'; then
+            echo "codec tarball contains unpublished source or tests" >&2
+            exit 1
+          fi
+          if tar -tzf "$pack_path" | grep -q '^package/packages/'; then
+            echo "hikoutei tarball contains workspace source" >&2
+            exit 1
+          fi
 
           (
             cd "$consumer_dir"
             npm init -y >/dev/null
             npm install --no-audit --no-fund --ignore-scripts \
+              "$codec_pack_path" \
               "$pack_path" \
               "@mikro-orm/core@7.1.7" \
               "@mikro-orm/sql@7.1.7"
+          )
+
+          (
+            cd "$consumer_dir"
+            node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          const codec = await import("@hikoutei/canonical-codec");
+          assert.equal(codec.canonicalJson({ b: 2, a: 1 }), '{"a":1,"b":2}');
+          assert.equal(typeof codec.stableEncode, "function");
+          console.log("installed codec public API smoke OK");
+          NODE
           )
 
           # Internal sync/gateway E2E: loads dist modules directly and exercises

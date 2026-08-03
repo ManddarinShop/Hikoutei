@@ -49,6 +49,15 @@ jobs:
           test "$(node -p "require('./package.json').name")" = "hikoutei"
           npm pack --dry-run
 
+      - name: Verify public codec dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          codec_version="$(node -p "require('./package.json').dependencies['@hikoutei/canonical-codec'] || ''")"
+          test -n "$codec_version"
+          published_codec_version="$(npm view "@hikoutei/canonical-codec@$codec_version" version --registry=https://registry.npmjs.org)"
+          test "$published_codec_version" = "$codec_version"
+
       - name: Assign unique beta version
         shell: bash
         env:

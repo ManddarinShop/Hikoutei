@@ -62,6 +62,11 @@ jobs:
           fi
           test "$(node -p "require('./package.json').name")" = "hikoutei"
 
+          codec_version="$(node -p "require('./package.json').dependencies['@hikoutei/canonical-codec'] || ''")"
+          test -n "$codec_version"
+          published_codec_version="$(npm view "@hikoutei/canonical-codec@$codec_version" version --registry=https://registry.npmjs.org)"
+          test "$published_codec_version" = "$codec_version"
+
       - name: Install dependencies
         run: npm ci
 
