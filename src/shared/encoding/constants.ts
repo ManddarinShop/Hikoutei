@@ -14,20 +14,10 @@ export const JAVASCRIPT_TYPE_NAMES = {
 export type JavaScriptTypeName =
   (typeof JAVASCRIPT_TYPE_NAMES)[keyof typeof JAVASCRIPT_TYPE_NAMES];
 
-/** Stable machine-readable error codes emitted by the encoder. */
-export const STABLE_ENCODING_ERROR_CODES = {
-  UNSUPPORTED_VALUE_TYPE: "unsupported_value_type",
-  NON_FINITE_NUMBER: "non_finite_number",
-  INVALID_DATE_FORMAT: "invalid_date_format",
-  INVALID_DATE_BYTE_LENGTH: "invalid_date_byte_length",
-  DUPLICATE_OBJECT_KEY: "duplicate_object_key",
-  UNPAIRED_HIGH_SURROGATE: "unpaired_high_surrogate",
-  UNPAIRED_LOW_SURROGATE: "unpaired_low_surrogate",
-} as const;
-
-/** Closed set of stable encoder error codes. */
-export type StableEncodingErrorCode =
-  (typeof STABLE_ENCODING_ERROR_CODES)[keyof typeof STABLE_ENCODING_ERROR_CODES];
+export {
+  STABLE_ENCODING_ERROR_CODES,
+  type StableEncodingErrorCode,
+} from "./codec/errors.js";
 
 /** Runtime values for normalized cell value kinds. */
 export const NORMALIZED_CELL_KINDS = {
