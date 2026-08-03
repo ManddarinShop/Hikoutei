@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -190,6 +189,23 @@ describe("canonical codec characterization vectors", () => {
     }
   });
 
+  it("rejects malformed values in the deployed Code.gs canonical JSON mirror", () => {
+    const codeGsCanonicalJson = loadCodeGsCanonicalJson();
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    expect(() => codeGsCanonicalJson(sparse)).toThrow(/dense/);
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(() => codeGsCanonicalJson(cyclic)).toThrow(/cycles/);
+
+    expect(() => codeGsCanonicalJson({ value: undefined })).toThrow(/unsupported value type/);
+    expect(() => codeGsCanonicalJson(Object.create({ inherited: true }))).toThrow(/unsupported value type/);
+
+    const taggedRecord = { [Symbol.toStringTag]: "NotAnArrayOrObject" };
+    expect(codeGsCanonicalJson(taggedRecord)).toBe("{}");
+  });
+
   it("embeds one shared codec fragment in both operation source paths", () => {
     const observationOperation = createReadSnapshotOperation({
       physicalSheetId: "physical-orders",
@@ -225,12 +241,9 @@ interface AppsScriptCodecForTest {
 }
 
 function loadCodeGsCanonicalJson(): (value: unknown) => string {
-  const sandbox: Record<string, unknown> = {};
-  runInNewContext(
-    readFileSync(new URL("../apps-script/gateway/Code.gs", import.meta.url), "utf8"),
-    sandbox,
-  );
-  const candidate = sandbox.canonicalJson_;
+  const source = readFileSync(new URL("../apps-script/gateway/Code.gs", import.meta.url), "utf8");
+  const factory = new Function(`${source}\nreturn canonicalJson_;`);
+  const candidate: unknown = factory();
   if (typeof candidate !== "function") {
     throw new Error("Code.gs canonicalJson_ function is not available");
   }
