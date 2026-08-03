@@ -38,6 +38,9 @@
     "optimistic-locking"
   ],
   "license": "MIT",
+  "dependencies": {
+    "@hikoutei/kohkai": "0.1.0"
+  },
   "devDependencies": {
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",

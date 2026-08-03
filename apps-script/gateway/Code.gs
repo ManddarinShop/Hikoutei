@@ -338,7 +338,8 @@ function readGatewayConfiguration_() {
 // Shared encoding / hashing helpers (preserved from v1)
 // ---------------------------------------------------------------------------
 
-function canonicalJson_(value) {
+function canonicalJson_(value, ancestors) {
+  ancestors = ancestors || [];
   if (value === null) return "null";
   if (value === true) return "true";
   if (value === false) return "false";
@@ -348,14 +349,46 @@ function canonicalJson_(value) {
     return (value === 0 ? "0" : String(value)).replace(/e\+/, "e").replace(/e(-?)0+(\d+)/, "e$1$2");
   }
   if (Array.isArray(value)) {
-    return "[" + value.map(canonicalJson_).join(",") + "]";
+    if (!isDenseArray_(value)) throw new Error("Sync payload arrays must be dense");
+    enterCanonicalContainer_(value, ancestors);
+    try {
+      return "[" + value.map(function (item) {
+        return canonicalJson_(item, ancestors);
+      }).join(",") + "]";
+    } finally {
+      leaveCanonicalContainer_(value, ancestors);
+    }
   }
   if (isPlainObject_(value)) {
-    return "{" + Object.keys(value).sort().map(function (key) {
-      return JSON.stringify(key) + ":" + canonicalJson_(value[key]);
-    }).join(",") + "}";
+    enterCanonicalContainer_(value, ancestors);
+    try {
+      return "{" + Object.keys(value).sort().map(function (key) {
+        return JSON.stringify(key) + ":" + canonicalJson_(value[key], ancestors);
+      }).join(",") + "}";
+    } finally {
+      leaveCanonicalContainer_(value, ancestors);
+    }
   }
   throw new Error("Sync payload has unsupported value type");
+}
+
+function isDenseArray_(value) {
+  for (var index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
+}
+
+function enterCanonicalContainer_(value, ancestors) {
+  if (ancestors.indexOf(value) !== -1) {
+    throw new Error("Sync payload cannot contain cycles");
+  }
+  ancestors.push(value);
+}
+
+function leaveCanonicalContainer_(value, ancestors) {
+  var index = ancestors.lastIndexOf(value);
+  if (index !== -1) ancestors.splice(index, 1);
 }
 
 function sha256Hex_(value) {
@@ -382,7 +415,9 @@ function constantTimeEquals_(left, right) {
 }
 
 function isPlainObject_(value) {
-  return value !== null && !Array.isArray(value) && Object.prototype.toString.call(value) === "[object Object]";
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  var prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function isNonEmptyString_(value) {
