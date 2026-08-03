@@ -1,0 +1,229 @@
+name: Publish develop package
+
+# Triggered by a develop release tag such as develop-v0.3.1. The tag must
+# exactly match the numeric version in package.json and package-lock.json; the
+# separate develop-version workflow creates the version commit and tag.
+on:
+  push:
+    tags:
+      - 'develop-v[0-9]*'
+
+concurrency:
+  # Never cancel an in-flight develop publish for the same tag.
+  group: develop-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify develop package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate release tag matches package versions
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG_NAME" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          else
+            echo "Develop release tag must be develop-vX.Y.Z: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          pkg_version="$(node -p "require('./package.json').version")"
+          lock_version="$(node -p "require('./package-lock.json').version")"
+          lock_root_version="$(node -p "require('./package-lock.json').packages[''].version")"
+          echo "tag=$TAG_NAME expected_version=$expected_version package.json=$pkg_version package-lock.json=$lock_version"
+
+          if [[ "$pkg_version" != "$expected_version" ]]; then
+            echo "package.json version ($pkg_version) does not match tag ($TAG_NAME)" >&2
+            exit 1
+          fi
+          if [[ "$lock_version" != "$expected_version" ]]; then
+            echo "package-lock.json top-level version ($lock_version) does not match tag ($TAG_NAME)" >&2
+            exit 1
+          fi
+          if [[ "$lock_root_version" != "$expected_version" ]]; then
+            echo "package-lock.json root packages version ($lock_root_version) does not match tag ($TAG_NAME)" >&2
+            exit 1
+          fi
+          test "$(node -p "require('./package.json').name")" = "hikoutei"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck production code
+        run: npm run typecheck
+
+      - name: Typecheck tests
+        run: npm run typecheck:test
+
+      - name: Run unit and contract tests
+        run: npm test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Verify package name and contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p "require('./package.json').name")" = "hikoutei"
+          npm pack --dry-run
+
+      - name: Pack develop package
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the tarball and its checksum together in a dedicated directory so
+          # the artifact and publish job reason about a single, self-contained path.
+          package_dir="$RUNNER_TEMP/hikoutei-develop-package"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir"
+          package_file="$(npm pack --silent --pack-destination "$package_dir")"
+          package_path="$package_dir/$package_file"
+          test -f "$package_path"
+          tar -xOf "$package_path" package/package.json > "$RUNNER_TEMP/hikoutei-develop-package.json"
+          node -e '
+            const pkg = require(process.argv[1]);
+            const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
+            if (pkg.name !== "hikoutei" || !isStable) process.exit(1);
+          ' "$RUNNER_TEMP/hikoutei-develop-package.json"
+          (cd "$package_dir" && sha256sum "$package_file" > hikoutei-develop-package.sha256)
+          echo "Packed $package_path"
+
+      - name: Run installed-package internal sync/gateway E2E and root API smoke (fake)
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_dir="$RUNNER_TEMP/hikoutei-develop-consumer"
+          mkdir -p "$consumer_dir"
+          package_file="$(find "$RUNNER_TEMP/hikoutei-develop-package" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
+          test -n "$package_file"
+
+          (
+            cd "$consumer_dir"
+            npm init -y >/dev/null
+            npm install --no-audit --no-fund --ignore-scripts \
+              "$package_file" \
+              "@mikro-orm/core@7.1.7" \
+              "@mikro-orm/sql@7.1.7"
+          )
+
+          # Internal sync/gateway E2E: loads dist modules directly and exercises
+          # projection registration, provisioning, the worker, and polling.
+          cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
+          node "$consumer_dir/run-api-scenario.mjs" \
+            --backend=fake \
+            --output="$RUNNER_TEMP/hikoutei-develop-fake-result.json" \
+            --manifest="$RUNNER_TEMP/hikoutei-develop-manifest.json"
+
+          # Installed root API smoke: imports ONLY the installed `hikoutei` root
+          # entrypoint and drives the public entity-lifecycle contract.
+          cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
+          cp scripts/ci/root-api-options.mjs "$consumer_dir/root-api-options.mjs"
+          node "$consumer_dir/run-root-api-scenario.mjs" \
+            --output="$RUNNER_TEMP/hikoutei-develop-root-api-smoke-result.json"
+
+      - name: Upload develop installed-consumer reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: hikoutei-develop-fake-installed-consumer
+          path: |
+            ${{ runner.temp }}/hikoutei-develop-fake-result.json
+            ${{ runner.temp }}/hikoutei-develop-root-api-smoke-result.json
+          if-no-files-found: ignore
+
+      - name: Upload develop package
+        if: success()
+        uses: actions/upload-artifact@v5
+        with:
+          name: hikoutei-develop-package
+          path: ${{ runner.temp }}/hikoutei-develop-package
+          if-no-files-found: error
+
+  publish:
+    name: Publish develop package
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download develop package
+        uses: actions/download-artifact@v5
+        with:
+          name: hikoutei-develop-package
+          path: ${{ runner.temp }}/hikoutei-develop-package
+
+      - name: Publish develop package
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NPM_TOKEN secret is required to publish the develop package." >&2
+            exit 1
+          fi
+          if [[ "$TAG_NAME" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          else
+            echo "Develop release tag must be develop-vX.Y.Z: $TAG_NAME" >&2
+            exit 1
+          fi
+          package_dir="$RUNNER_TEMP/hikoutei-develop-package"
+          mapfile -t packages < <(find "$package_dir" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print)
+          if [[ "${#packages[@]}" -ne 1 ]]; then
+            echo "expected exactly one develop package, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          package_file="${packages[0]}"
+          checksum_file="$package_dir/hikoutei-develop-package.sha256"
+          if [[ ! -f "$checksum_file" ]]; then
+            echo "missing develop checksum file $checksum_file" >&2
+            exit 1
+          fi
+          # Assert the checksum line names the tarball we actually publish, not
+          # merely any file that sha256sum --check happens to find in the dir.
+          expected_name="$(basename "$package_file")"
+          recorded_name="$(awk 'NR==1{n=$2; sub(/^\*/,"",n); print n}' "$checksum_file")"
+          if [[ "$recorded_name" != "$expected_name" ]]; then
+            echo "develop checksum names '$recorded_name' but tarball is '$expected_name'" >&2
+            exit 1
+          fi
+          (cd "$package_dir" && sha256sum --check hikoutei-develop-package.sha256)
+          tar -xOf "$package_file" package/package.json > "$RUNNER_TEMP/hikoutei-develop-package.json"
+          node -e '
+            const pkg = require(process.argv[1]);
+            const expected = process.argv[2];
+            const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
+            if (pkg.name !== "hikoutei" || !isStable || pkg.version !== expected) process.exit(1);
+          ' "$RUNNER_TEMP/hikoutei-develop-package.json" "$expected_version"
+          npm publish "$package_file" --tag develop --access public --provenance
