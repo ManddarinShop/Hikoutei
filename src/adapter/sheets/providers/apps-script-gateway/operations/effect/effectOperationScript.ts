@@ -1,3 +1,5 @@
+import { APPS_SCRIPT_STABLE_CODEC_SOURCE } from "../shared/appsScriptStableCodecSource.js";
+
 /** Self-contained V8 source executed by Code.gs for effect application and read-back. */
 export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var MAX_EFFECTS = 20;
@@ -685,29 +687,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function nonNegativeInteger_(value, label) { if (typeof value !== "number" || !isFinite(value) || Math.floor(value) !== value || value < 0) throw new Error(label + " must be a non-negative integer"); return value; }
 
   function visibleHash_(fields) {
-    return stableHash_({ fields: Object.keys(fields).sort().map(function (fieldName) { return { fieldName: fieldName, value: fields[fieldName] }; }) });
+    return codecStableHash_({ fields: Object.keys(fields).sort().map(function (fieldName) { return { fieldName: fieldName, value: fields[fieldName] }; }) });
   }
-  function stableHash_(value) { return sha256Hex_(stableEncode_(value)); }
-  function stableEncode_(value) {
-    if (value === null) return "n";
-    if (value === true) return "b1";
-    if (value === false) return "b0";
-    if (typeof value === "number") return stableEncodeNumber_(value);
-    if (typeof value === "string") return stableEncodeString_(value);
-    if (isObject_(value) && value.kind === "date" && isCanonicalDate_(value.value)) return "d24:" + value.value;
-    if (Array.isArray(value)) return "a" + value.length + "[" + value.map(stableEncode_).join("") + "]";
-    if (isObject_(value)) {
-      var entries = Object.keys(value).map(function (key) { var normalized = normalizeScalarString_(key); return { key: normalized, bytes: utf8Bytes_(normalized), value: value[key] }; });
-      entries.sort(function (left, right) { return compareBytes_(left.bytes, right.bytes); });
-      return "o" + entries.length + "{" + entries.map(function (entry) { return "s" + entry.bytes.length + ":" + entry.key + stableEncode_(entry.value); }).join("") + "}";
-    }
-    throw new Error("stable value is unsupported");
-  }
-  function stableEncodeNumber_(value) { if (!isFinite(value)) throw new Error("stable number is not finite"); var decimal = value === 0 ? "0" : String(value).replace(/e\+/, "e").replace(/e(-?)0+(\d+)/, "e$1$2"); return "f" + utf8ByteLength_(decimal) + ":" + decimal; }
-  function stableEncodeString_(value) { var normalized = normalizeScalarString_(value); return "s" + utf8ByteLength_(normalized) + ":" + normalized; }
-  function normalizeScalarString_(value) { return value.normalize("NFC"); }
-  function sha256Hex_(value) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8).map(function (byte) { var unsigned = byte < 0 ? byte + 256 : byte; return ("0" + unsigned.toString(16)).slice(-2); }).join(""); }
-  function utf8Bytes_(value) { return Utilities.newBlob(value).getBytes(); }
-  function utf8ByteLength_(value) { return utf8Bytes_(value).length; }
-  function compareBytes_(left, right) { var count = Math.min(left.length, right.length); for (var index = 0; index < count; index += 1) { var a = left[index] < 0 ? left[index] + 256 : left[index]; var b = right[index] < 0 ? right[index] + 256 : right[index]; if (a !== b) return a - b; } return left.length - right.length; }
+${APPS_SCRIPT_STABLE_CODEC_SOURCE}
 }`;

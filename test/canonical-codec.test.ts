@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -18,6 +19,9 @@ import {
   CANONICAL_CODEC_ERROR_CODES,
 } from "../src/shared/encoding/codec/errors.js";
 import { stableEncode as genericStableEncode } from "../src/shared/encoding/codec/stableEncode.js";
+import { APPS_SCRIPT_STABLE_CODEC_SOURCE } from "../src/adapter/sheets/providers/apps-script-gateway/operations/shared/appsScriptStableCodecSource.js";
+import { EFFECT_OPERATION_SOURCE } from "../src/adapter/sheets/providers/apps-script-gateway/operations/effect/effectOperationScript.js";
+import { createReadSnapshotOperation } from "../src/adapter/sheets/providers/apps-script-gateway/operations/observation/observationOperation.js";
 import type { StableValue } from "../src/shared/encoding/types.js";
 import { StableEncodingError } from "../src/domain/errors/index.js";
 import { SYNC_GATEWAY_PROTOCOL_ERROR_CODES } from "../src/adapter/sheets/providers/apps-script-gateway/errors.js";
@@ -165,6 +169,33 @@ describe("canonical codec characterization vectors", () => {
     });
   });
 
+  it("matches the Apps Script codec source against every vector", () => {
+    const codec = createAppsScriptCodecForTest();
+    for (const vector of vectors) {
+      expect(Buffer.from(codec.stableEncode(vector.value), "utf8").toString("hex"), vector.name)
+        .toBe(vector.stableEncodeHex);
+      expect(codec.stableHash(vector.value), vector.name).toBe(vector.stableHash);
+    }
+  });
+
+  it("embeds one shared codec fragment in both operation source paths", () => {
+    const observationOperation = createReadSnapshotOperation({
+      physicalSheetId: "physical-orders",
+      sheetName: "Orders",
+      registeredRange: "A:B",
+      projection: "system_state",
+      schemaVersion: 1,
+      expectedHeaders: ["id", "status"],
+    });
+
+    expect(EFFECT_OPERATION_SOURCE).toContain(APPS_SCRIPT_STABLE_CODEC_SOURCE.trim());
+    expect(observationOperation.fn).toContain(APPS_SCRIPT_STABLE_CODEC_SOURCE.trim());
+    expect(EFFECT_OPERATION_SOURCE.match(/function codecStableHash_\(/g)).toHaveLength(1);
+    expect(observationOperation.fn.match(/function codecStableHash_\(/g)).toHaveLength(1);
+    expect(EFFECT_OPERATION_SOURCE).not.toContain("function stableEncode_(");
+    expect(observationOperation.fn).not.toContain("function stableEncode_(");
+  });
+
   it("keeps tagged dates on the stable date path", () => {
     const dateValue = {
       kind: NORMALIZED_CELL_KINDS.DATE,
@@ -175,3 +206,28 @@ describe("canonical codec characterization vectors", () => {
       .toBe(vectors.find((vector) => vector.name === "date-shaped-value")?.stableEncodeHex);
   });
 });
+
+interface AppsScriptCodecForTest {
+  stableEncode(value: unknown): string;
+  stableHash(value: unknown): string;
+}
+
+function createAppsScriptCodecForTest(): AppsScriptCodecForTest {
+  const utilities = {
+    DigestAlgorithm: { SHA_256: "SHA_256" },
+    Charset: { UTF_8: "UTF_8" },
+    newBlob(value: string) {
+      return {
+        getBytes: () => Array.from(new TextEncoder().encode(value), (byte) => byte > 127 ? byte - 256 : byte),
+      };
+    },
+    computeDigest(_algorithm: string, value: string, _charset: string) {
+      return Array.from(createHash("sha256").update(value, "utf8").digest(), (byte) => byte > 127 ? byte - 256 : byte);
+    },
+  };
+  const factory = new Function(
+    "Utilities",
+    `${APPS_SCRIPT_STABLE_CODEC_SOURCE}\nreturn { stableEncode: codecStableEncode_, stableHash: codecStableHash_ };`,
+  ) as (runtimeUtilities: typeof utilities) => AppsScriptCodecForTest;
+  return factory(utilities);
+}
