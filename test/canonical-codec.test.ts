@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -169,6 +170,13 @@ describe("canonical codec characterization vectors", () => {
     });
   });
 
+  it("matches the deployed Code.gs canonical JSON mirror", () => {
+    const codeGsCanonicalJson = loadCodeGsCanonicalJson();
+    for (const vector of vectors) {
+      expect(codeGsCanonicalJson(vector.value), vector.name).toBe(vector.canonicalJson);
+    }
+  });
+
   it("matches the Apps Script codec source against every vector", () => {
     const codec = createAppsScriptCodecForTest();
     for (const vector of vectors) {
@@ -210,6 +218,23 @@ describe("canonical codec characterization vectors", () => {
 interface AppsScriptCodecForTest {
   stableEncode(value: unknown): string;
   stableHash(value: unknown): string;
+}
+
+function loadCodeGsCanonicalJson(): (value: unknown) => string {
+  const sandbox: Record<string, unknown> = {};
+  runInNewContext(
+    readFileSync(new URL("../apps-script/gateway/Code.gs", import.meta.url), "utf8"),
+    sandbox,
+  );
+  const candidate = sandbox.canonicalJson_;
+  if (typeof candidate !== "function") {
+    throw new Error("Code.gs canonicalJson_ function is not available");
+  }
+  return (value: unknown): string => {
+    const result: unknown = Reflect.apply(candidate, undefined, [value]);
+    if (typeof result !== "string") throw new Error("Code.gs canonicalJson_ result is not a string");
+    return result;
+  };
 }
 
 function createAppsScriptCodecForTest(): AppsScriptCodecForTest {
