@@ -9,8 +9,9 @@ on:
       - 'v[0-9]*'
 
 concurrency:
-  # Never cancel an in-flight stable publish for the same tag.
-  group: stable-publish-${{ github.ref }}
+  # Serialize every stable publish so latest cannot move backward due to two
+  # tag workflows finishing out of order.
+  group: stable-publish
   cancel-in-progress: false
 
 permissions:
@@ -180,6 +181,26 @@ jobs:
         with:
           name: hikoutei-stable-package
           path: ${{ runner.temp }}/hikoutei-stable-package
+
+      - name: Verify latest dist-tag monotonicity
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected_version="${TAG_NAME#v}"
+          current_version="$(node scripts/ci/read-npm-dist-tag.mjs --package=hikoutei --tag=latest)"
+          CURRENT_CHANNEL_VERSION="$current_version" TARGET_VERSION="$expected_version" node --input-type=module <<'NODE'
+          import { compareStableVersions } from "./scripts/ci/release-version.mjs";
+          const current = process.env.CURRENT_CHANNEL_VERSION?.trim() ?? "";
+          const target = process.env.TARGET_VERSION ?? "";
+          if (current === "" || current === "null" || current === "undefined") process.exit(0);
+          const result = compareStableVersions(current, target);
+          if (result.status === "invalid" || result.comparison > 0) {
+            throw new Error(`latest dist-tag would move backward: current=${current} target=${target}`);
+          }
+          console.log(`latest dist-tag current=${current} target=${target}`);
+          NODE
 
       - name: Publish stable package
         shell: bash

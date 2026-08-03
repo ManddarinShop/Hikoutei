@@ -16,6 +16,17 @@ const RELEASE_VERSION_ERROR_CODES = {
 const STABLE_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const RELEASE_BUMPS = new Set(["patch", "minor"]);
 
+function parseStableVersion(value) {
+  if (typeof value !== "string") return null;
+  const match = STABLE_VERSION_PATTERN.exec(value);
+  if (match === null) return null;
+  return {
+    major: BigInt(match[1]),
+    minor: BigInt(match[2]),
+    patch: BigInt(match[3]),
+  };
+}
+
 /**
  * Computes the next release version without reading or mutating package files.
  *
@@ -23,7 +34,8 @@ const RELEASE_BUMPS = new Set(["patch", "minor"]);
  * @returns {{ status: "valid", version: string } | { status: "invalid", code: string, reason: string }}
  */
 export function computeReleaseVersion({ baseVersion, bump }) {
-  if (typeof baseVersion !== "string" || STABLE_VERSION_PATTERN.test(baseVersion) === false) {
+  const parsed = parseStableVersion(baseVersion);
+  if (parsed === null) {
     return {
       status: "invalid",
       code: RELEASE_VERSION_ERROR_CODES.INVALID_BASE_VERSION,
@@ -38,20 +50,33 @@ export function computeReleaseVersion({ baseVersion, bump }) {
     };
   }
 
-  const match = STABLE_VERSION_PATTERN.exec(baseVersion);
-  if (match === null) {
+  if (bump === "patch") return { status: "valid", version: `${parsed.major}.${parsed.minor}.${parsed.patch + 1n}` };
+  return { status: "valid", version: `${parsed.major}.${parsed.minor + 1n}.0` };
+}
+
+/**
+ * Compares two numeric stable versions for monotonic npm dist-tag updates.
+ *
+ * @param {unknown} left
+ * @param {unknown} right
+ * @returns {{ status: "valid", comparison: -1 | 0 | 1 } | { status: "invalid", code: string, reason: string }}
+ */
+export function compareStableVersions(left, right) {
+  const leftVersion = parseStableVersion(left);
+  const rightVersion = parseStableVersion(right);
+  if (leftVersion === null || rightVersion === null) {
     return {
       status: "invalid",
       code: RELEASE_VERSION_ERROR_CODES.INVALID_BASE_VERSION,
-      reason: `base version must be numeric MAJOR.MINOR.PATCH: ${baseVersion}`,
+      reason: `versions must be numeric MAJOR.MINOR.PATCH: ${String(left)} / ${String(right)}`,
     };
   }
 
-  const major = BigInt(match[1]);
-  const minor = BigInt(match[2]);
-  const patch = BigInt(match[3]);
-  if (bump === "patch") return { status: "valid", version: `${major}.${minor}.${patch + 1n}` };
-  return { status: "valid", version: `${major}.${minor + 1n}.0` };
+  for (const component of ["major", "minor", "patch"]) {
+    if (leftVersion[component] < rightVersion[component]) return { status: "valid", comparison: -1 };
+    if (leftVersion[component] > rightVersion[component]) return { status: "valid", comparison: 1 };
+  }
+  return { status: "valid", comparison: 0 };
 }
 
 /** Parses the CLI's explicit key=value arguments. */

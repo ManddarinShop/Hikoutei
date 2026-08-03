@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { computeReleaseVersion } from "../scripts/ci/release-version.mjs";
+import {
+  compareStableVersions,
+  computeReleaseVersion,
+} from "../scripts/ci/release-version.mjs";
+import { parseNpmViewDistTagResult } from "../scripts/ci/read-npm-dist-tag.mjs";
 
 const scriptPath = fileURLToPath(
   new URL("../scripts/ci/release-version.mjs", import.meta.url),
@@ -74,6 +78,61 @@ describe("computeReleaseVersion", () => {
     expect(computeReleaseVersion({ baseVersion: "0.3.0", bump: "major" })).toMatchObject({
       status: "invalid",
       code: "invalid_bump",
+    });
+  });
+});
+
+describe("compareStableVersions", () => {
+  it("orders numeric versions for a release channel", () => {
+    expect(compareStableVersions("0.3.1", "0.3.2")).toStrictEqual({
+      status: "valid",
+      comparison: -1,
+    });
+    expect(compareStableVersions("0.4.0", "0.3.9")).toStrictEqual({
+      status: "valid",
+      comparison: 1,
+    });
+    expect(compareStableVersions("0.3.1", "0.3.1")).toStrictEqual({
+      status: "valid",
+      comparison: 0,
+    });
+  });
+
+  it("rejects prerelease values in the channel guard", () => {
+    expect(compareStableVersions("0.3.1-beta.1", "0.3.2")).toMatchObject({
+      status: "invalid",
+      code: "invalid_base_version",
+    });
+  });
+});
+
+describe("parseNpmViewDistTagResult", () => {
+  it("accepts an existing tag", () => {
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: '"0.3.1"\n', stderr: "" })).toStrictEqual({
+      status: "found",
+      version: "0.3.1",
+    });
+  });
+
+  it("accepts an absent tag or package as an empty channel", () => {
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: "\n", stderr: "" })).toStrictEqual({
+      status: "missing",
+    });
+    expect(parseNpmViewDistTagResult({
+      status: 1,
+      stdout: '{"error":{"code":"E404"}}',
+      stderr: "npm error code E404",
+    })).toStrictEqual({ status: "missing" });
+  });
+
+  it("fails closed for registry and malformed-output errors", () => {
+    expect(parseNpmViewDistTagResult({ status: 1, stdout: "", stderr: "network down" })).toMatchObject({
+      status: "failed",
+      code: "npm_view_failed",
+    });
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: "not-a-version", stderr: "" })).toMatchObject({
+      status: "failed",
+      code: "invalid_npm_view_output",
     });
   });
 });
