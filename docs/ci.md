@@ -57,7 +57,7 @@ the stable public lifecycle end to end against an in-memory SQLite authority
 
 It uses assertions and writes a JSON report plus a clear pass summary. It never
 contacts Google Sheets, never needs credentials, and never provisions remote
-tabs, so it runs as a packed consumer only in the normal CI, beta, and stable
+tabs, so it runs as a packed consumer only in the normal CI, develop, and stable
 verify jobs and has no live counterpart. It is local-only — an in-memory SQLite
 authority with no backend concept — not a fake-backend scenario like the
 internal sync/gateway E2E. Its entity lifecycle imports only the
@@ -67,7 +67,7 @@ not part of the lifecycle.
 
 ## Backends and triggers
 
-The normal CI, beta, and stable verification jobs run **both** installed-consumer
+The normal CI, develop, and stable verification jobs run **both** installed-consumer
 scenarios — the internal sync/gateway E2E and the installed root API smoke. The
 internal E2E uses the **fake** backend (no Google Sheets contact, no
 credentials); the root API smoke is local-only, an in-memory SQLite authority
@@ -75,10 +75,14 @@ credentials); the root API smoke is local-only, an in-memory SQLite authority
 
 - `.github/workflows/ci.yml` runs on pull requests and pushes to `main` and
   `develop`.
-- `.github/workflows/beta-publish.yml` runs the same verification on a
-  `develop` push before publishing the beta package.
-- `.github/workflows/stable-publish.yml` runs the same verification on a
-  `vX.Y.Z` tag before publishing the stable package.
+- `.github/workflows/develop-version.yml` creates the next patch version and
+  `develop-vX.Y.Z` tag after a `develop` push.
+- `.github/workflows/develop-publish.yml` verifies and publishes that tag with
+  the `develop` dist-tag.
+- `.github/workflows/main-version.yml` creates the next minor version and
+  `vX.Y.Z` tag after a `main` push.
+- `.github/workflows/stable-publish.yml` verifies and publishes that tag with
+  the `latest` dist-tag.
 
 Only the internal sync/gateway E2E has a live variant, in the separate
 `.github/workflows/live-integration.yml` workflow. It is opt-in via
@@ -108,92 +112,104 @@ not leave the fixture behind. The Apps Script receipt tab is also removed by
 the cleanup operation. Do not point the live secrets at a production
 spreadsheet; cleanup is intentionally scoped to the dedicated CI spreadsheet.
 
-## Beta publication
+## Develop publication
 
-A push to `develop` runs `.github/workflows/beta-publish.yml`. It repeats the
+A push to `develop` runs `.github/workflows/develop-version.yml`. It verifies
+the merged package, increments only the patch component, updates
+`package.json` and `package-lock.json`, commits the release version, and creates
+an annotated tag such as `develop-v0.3.1`. The generated commit is guarded from
+being processed as another release.
+
+The tag triggers `.github/workflows/develop-publish.yml`. It repeats the
 unit/type/build/package checks, the installed-package internal sync/gateway
-E2E, and the installed root API smoke before publishing to npm with the
-`beta` dist-tag. Pull requests do not publish
-beta packages; the workflow runs after the commit reaches `develop`.
-
-The workflow requires the GitHub repository `NPM_TOKEN` secret and uses npm
-provenance. The token must never be committed to the repository. Immediately
-before publishing, the publish job checks that `develop` still points at the
-workflow commit, so it rejects a run that was stale as observed at that
-check. The check and the npm publish that follows are not atomic: `develop`
-can advance between the check and the publish, so the check reduces but does
-not eliminate the chance of publishing a superseded commit.
-
-The workflow does not commit a generated version back to `develop`. It
-publishes an ephemeral prerelease on the current numeric `package.json` version
-line with the GitHub run ID and attempt. The calculation lives in
-`scripts/ci/beta-version.mjs` (tested by `test/beta-version.test.ts`); the
-workflow reads `package.json`, calls that helper, and then runs
-`npm version --no-git-tag-version` in CI. For example, `0.3.0` produces
-`0.3.0-beta.b30560831639.1`, and starting the next development cycle at
-`0.3.1` produces `0.3.1-beta...`. The stable `package.json` version is
-therefore unchanged by CI. A full workflow rerun receives a new version;
-rerunning only the publish job intentionally reuses its verified artifact.
-An already published beta version is not deleted; after a corrected run, the
-`beta` dist-tag points to the new package on the current version line.
-
-Install the newest beta package explicitly:
+E2E, and the installed root API smoke before publishing the numeric package
+version with the npm `develop` dist-tag. The version has no `-beta` suffix, but
+normal `npm install hikoutei` still resolves `latest` rather than this channel.
+Install the develop channel explicitly:
 
 ```sh
-npm install hikoutei@beta
+npm install hikoutei@develop
 ```
+
+The version calculation is isolated in `scripts/ci/release-version.mjs` and is
+covered by `test/release-version.test.ts`. For example:
+
+```text
+0.3.0 + patch → 0.3.1
+0.3.1 + patch → 0.3.2
+```
+
+The workflow requires a repository `RELEASE_TOKEN` secret with contents write
+permission. A token other than the default `GITHUB_TOKEN` is used because a
+push made by `GITHUB_TOKEN` does not trigger another workflow; the release tag
+must trigger `develop-publish.yml`. The publish job separately requires
+`NPM_TOKEN` plus npm provenance. The branch SHA is checked immediately before
+pushing, and the commit plus tag use one atomic Git push, so a concurrent
+develop merge fails without leaving a stale release tag. The version commit and
+npm publication are not atomic; a failed publish can be retried from the
+existing `develop-vX.Y.Z` tag after verifying that the version has not already
+been published.
 
 ## Stable publication
 
-Stable releases use `.github/workflows/stable-publish.yml` and a numeric Git
-tag such as `v0.2.1`. The tag version must exactly match the versions in
-`package.json` and both version fields in `package-lock.json`; the workflow does
-not bump versions automatically.
+A push to `main` runs `.github/workflows/main-version.yml`. It verifies the
+merged package, increments the minor component, updates the package manifests,
+commits the release version, and creates an annotated tag such as `v0.4.0`:
 
-Release procedure:
+```text
+0.3.1 + minor → 0.4.0
+```
 
-1. Choose the next SemVer version and update `package.json` and
-   `package-lock.json` in a reviewed release commit.
-2. Use a compatibility-preserving patch version for bug fixes (for example
-   `0.2.1`) or a new minor version for a new public API/feature (for example
-   `0.3.0`). Document intentional pre-1.0 compatibility breaks.
-3. Create and push the matching `vX.Y.Z` tag.
-4. The tag workflow reruns the checks, the installed-package internal
-   sync/gateway E2E, and the installed root API smoke, then publishes the
-   verified package with the `latest` dist-tag. A `develop` push
-   does not change `latest`; for example, the `0.3.0` stable package is
-   published only after the `v0.3.0` tag is pushed.
+The tag triggers `.github/workflows/stable-publish.yml`. That workflow only
+validates the numeric tag and matching package manifest versions, reruns the
+full checks and installed-consumer scenarios, and publishes to npm with the
+`latest` dist-tag. A `develop-v0.3.1` tag cannot trigger this numeric `vX.Y.Z`
+workflow.
 
-A stable package is immutable on npm, so reusing a published version fails
-instead of replacing the existing package. Normal users can install the
-`latest` release with `npm install hikoutei`.
+The main version workflow uses the same `RELEASE_TOKEN` requirement so its
+`vX.Y.Z` tag triggers `stable-publish.yml`. The stable publish job also
+requires the repository `NPM_TOKEN` secret and npm provenance before publishing
+`latest`. After a stable main release, merge
+`main` back into `develop` so the next patch release starts from the new stable
+baseline. Stable package versions are
+immutable on npm, so reusing a published version fails instead of replacing
+it. Normal users install the stable channel with:
+
+```sh
+npm install hikoutei
+```
 
 ## Artifacts
 
-The CI, beta, and stable jobs each emit a JSON report for **both**
+The CI, develop, and stable jobs each emit a JSON report for **both**
 scenarios (internal sync/gateway E2E and installed root API smoke). The live
 job emits a JSON report only for the internal sync/gateway E2E, the single
 scenario it runs. Both runner scripts (`run-api-scenario.mjs` and
 `run-root-api-scenario.mjs`) default their `--summary` option to
-`GITHUB_STEP_SUMMARY`, so in GitHub Actions every CI/beta/stable invocation
+`GITHUB_STEP_SUMMARY`, so in GitHub Actions every CI/develop/stable invocation
 writes a step summary even though none passes `--summary` explicitly. The live
 internal E2E run is the only invocation that passes `--summary` explicitly
 (`--summary="$GITHUB_STEP_SUMMARY"`), which resolves to the same default but
-documents the intent. The beta and stable verify jobs upload their two
+documents the intent. The develop and stable verify jobs upload their two
 installed-consumer scenario reports as a dedicated reports artifact
 (`if: always()`), separate from the package artifact (`if: success()`) that the
 publish job consumes. Setup time and steady-state time are reported separately
 for the internal E2E so spreadsheet creation and header provisioning do not
 distort the internal sync/gateway measurements.
 
-The beta and stable package artifacts are each a single directory that holds
-the npm tarball and its `sha256` checksum together under
-`$RUNNER_TEMP/hikoutei-{beta,stable}-package`. The publish job downloads that
-directory, asserts it contains exactly one `hikoutei-*.tgz` and the checksum
-file, verifies the checksum line names that exact tarball (not merely any file
-present in the directory), and only then runs `sha256sum --check` before
-publishing. Name/version validation, npm provenance, the `beta`/`latest`
-dist-tags, and the beta stale-`develop` check are unchanged.
+The develop and stable package artifacts are each a single directory that
+holds the npm tarball and its `sha256` checksum together under
+`$RUNNER_TEMP/hikoutei-{develop,stable}-package`. Their GitHub artifact names
+are `hikoutei-develop-package` and `hikoutei-stable-package`; the installed
+consumer report artifacts are `hikoutei-develop-fake-installed-consumer` and
+`hikoutei-stable-fake-installed-consumer`. The normal CI report artifact is
+`hikoutei-fake-installed-consumer`. The publish job downloads the corresponding
+package directory, asserts it contains exactly one `hikoutei-*.tgz` and the
+checksum file, verifies the checksum line names that exact tarball (not merely
+any file present in the directory), and only then runs `sha256sum --check`
+before publishing. Name/version validation, npm provenance, the
+`develop`/`latest` dist-tags, and the stale branch SHA checks are enforced by
+the corresponding workflows.
 
 ## Action versions
 
