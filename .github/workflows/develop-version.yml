@@ -1,0 +1,124 @@
+name: Create develop patch release
+
+# A develop merge advances the patch version and creates a non-production
+# release tag. The tag publish workflow owns npm publication.
+on:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: release-develop
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Version develop patch release
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      !startsWith(github.event.head_commit.message, 'chore(release): bump develop version')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Require a workflow-triggering release token
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_TOKEN:-}" ]]; then
+            echo "RELEASE_TOKEN secret is required so the generated tag can trigger develop-publish.yml." >&2
+            exit 1
+          fi
+
+      - name: Check out develop
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify the merge commit before release work
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin develop
+          remote_sha="$(git rev-parse origin/develop)"
+          if [[ "$remote_sha" != "$GITHUB_SHA" ]]; then
+            echo "develop advanced before release preparation: remote=$remote_sha event=$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+      - name: Verify the current package
+        run: |
+          npm run typecheck
+          npm run typecheck:test
+          npm test
+          npm run build
+
+      - name: Calculate and apply the patch version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$(node -p "require('./package.json').version")"
+          next_version="$(node scripts/ci/release-version.mjs \
+            --base-version="$base_version" \
+            --bump=patch)"
+          npm version "$next_version" --no-git-tag-version
+          node -e '
+            const expected = process.argv[1];
+            const pkg = require("./package.json");
+            const lock = require("./package-lock.json");
+            if (pkg.name !== "hikoutei" || pkg.version !== expected || lock.version !== expected || lock.packages[""].version !== expected) process.exit(1);
+          ' "$next_version"
+          echo "version=$next_version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version bump scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only | sort)"
+          expected=$'package-lock.json\npackage.json'
+          if [[ "$changed" != "$expected" ]]; then
+            printf 'unexpected version bump files:\n%s\n' "$changed" >&2
+            exit 1
+          fi
+
+      - name: Commit and tag the develop release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): bump develop version to $RELEASE_VERSION"
+          git tag -a "develop-v$RELEASE_VERSION" \
+            -m "chore(release): develop $RELEASE_VERSION"
+
+      - name: Push the develop release commit and tag
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch origin develop
+          remote_sha="$(git rev-parse origin/develop)"
+          if [[ "$remote_sha" != "$GITHUB_SHA" ]]; then
+            echo "develop advanced during release preparation: remote=$remote_sha event=$GITHUB_SHA" >&2
+            exit 1
+          fi
+          git push --atomic origin HEAD:develop "refs/tags/develop-v$RELEASE_VERSION"

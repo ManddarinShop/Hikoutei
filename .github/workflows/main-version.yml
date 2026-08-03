@@ -1,0 +1,124 @@
+name: Create main minor release
+
+# A main merge advances the minor version and creates the stable release tag.
+# The existing stable-publish workflow owns npm publication for that tag.
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Version main minor release
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      !startsWith(github.event.head_commit.message, 'chore(release): bump stable version')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Require a workflow-triggering release token
+        shell: bash
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_TOKEN:-}" ]]; then
+            echo "RELEASE_TOKEN secret is required so the generated tag can trigger stable-publish.yml." >&2
+            exit 1
+          fi
+
+      - name: Check out main
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify the merge commit before release work
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          remote_sha="$(git rev-parse origin/main)"
+          if [[ "$remote_sha" != "$GITHUB_SHA" ]]; then
+            echo "main advanced before release preparation: remote=$remote_sha event=$GITHUB_SHA" >&2
+            exit 1
+          fi
+
+      - name: Verify the current package
+        run: |
+          npm run typecheck
+          npm run typecheck:test
+          npm test
+          npm run build
+
+      - name: Calculate and apply the minor version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$(node -p "require('./package.json').version")"
+          next_version="$(node scripts/ci/release-version.mjs \
+            --base-version="$base_version" \
+            --bump=minor)"
+          npm version "$next_version" --no-git-tag-version
+          node -e '
+            const expected = process.argv[1];
+            const pkg = require("./package.json");
+            const lock = require("./package-lock.json");
+            if (pkg.name !== "hikoutei" || pkg.version !== expected || lock.version !== expected || lock.packages[""].version !== expected) process.exit(1);
+          ' "$next_version"
+          echo "version=$next_version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version bump scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only | sort)"
+          expected=$'package-lock.json\npackage.json'
+          if [[ "$changed" != "$expected" ]]; then
+            printf 'unexpected version bump files:\n%s\n' "$changed" >&2
+            exit 1
+          fi
+
+      - name: Commit and tag the stable release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): bump stable version to $RELEASE_VERSION"
+          git tag -a "v$RELEASE_VERSION" \
+            -m "chore(release): stable $RELEASE_VERSION"
+
+      - name: Push the main release commit and tag
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          remote_sha="$(git rev-parse origin/main)"
+          if [[ "$remote_sha" != "$GITHUB_SHA" ]]; then
+            echo "main advanced during release preparation: remote=$remote_sha event=$GITHUB_SHA" >&2
+            exit 1
+          fi
+          git push --atomic origin HEAD:main "refs/tags/v$RELEASE_VERSION"
