@@ -112,6 +112,33 @@ not leave the fixture behind. The Apps Script receipt tab is also removed by
 the cleanup operation. Do not point the live secrets at a production
 spreadsheet; cleanup is intentionally scoped to the dedicated CI spreadsheet.
 
+## Kohkai dependency
+
+Hikoutei consumes the standalone `@hikoutei/kohkai` package from the
+`ManddarinShop/Kohkai` repository. The codec is not a Hikoutei workspace and
+its source is not included in the Hikoutei tarball:
+
+```json
+{
+  "dependencies": {
+    "@hikoutei/kohkai": "0.1.0"
+  }
+}
+```
+
+The root CI, develop publish, and stable publish workflows verify that the
+exact declared Kohkai version already exists on npm before installing or
+publishing Hikoutei. The first integration release therefore requires:
+
+1. publish `@hikoutei/kohkai@0.1.0` from the Kohkai repository using tag `v0.1.0`;
+2. merge the Hikoutei dependency integration;
+3. let the next develop release produce `0.3.2` from the current `0.3.1` baseline.
+
+Existing Hikoutei releases remain unchanged. Apps Script cannot import npm
+packages, so `apps-script/gateway/Code.gs` keeps the Hikoutei-specific gateway
+and its self-contained codec mirror; the root tests compare it with the pinned
+Kohkai compatibility vectors.
+
 ## Develop publication
 
 A push to `develop` runs `.github/workflows/develop-version.yml`. It verifies

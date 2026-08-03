@@ -32,6 +32,15 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Verify public Kohkai dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          kohkai_version="$(node -p "require('./package.json').dependencies['@hikoutei/kohkai'] || ''")"
+          test -n "$kohkai_version"
+          published_kohkai_version="$(npm view "@hikoutei/kohkai@$kohkai_version" version --registry=https://registry.npmjs.org)"
+          test "$published_kohkai_version" = "$kohkai_version"
+
       - name: Install dependencies
         run: npm ci
 
