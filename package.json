@@ -10,6 +10,9 @@
     "url": "https://github.com/ManddarinShop/Hikoutei/issues"
   },
   "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "workspaces": [
+    "packages/*"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -26,10 +29,11 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run clean && tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "tsc -p tsconfig.test.json",
-    "test": "vitest run test/*.test.ts"
+    "build:codec": "npm run build --workspace @hikoutei/canonical-codec",
+    "build": "npm run clean && npm run build:codec && tsc -p tsconfig.json",
+    "typecheck": "npm run build:codec && tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "npm run build:codec && tsc -p tsconfig.test.json",
+    "test": "npm run build:codec && vitest run test/*.test.ts"
   },
   "keywords": [
     "google-sheets",
@@ -38,6 +42,9 @@
     "optimistic-locking"
   ],
   "license": "MIT",
+  "dependencies": {
+    "@hikoutei/canonical-codec": "0.1.0"
+  },
   "devDependencies": {
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",

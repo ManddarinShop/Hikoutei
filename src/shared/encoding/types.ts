@@ -12,7 +12,7 @@ import {
 import type {
   StableCodecDateValue,
   StableCodecValue,
-} from "./codec/types.js";
+} from "@hikoutei/canonical-codec";
 import type { Presence } from "../state/types.js";
 
 export type { CellObservationKind, NormalizedCellKind } from "./constants.js";

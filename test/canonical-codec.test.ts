@@ -14,12 +14,10 @@ import {
 import {
   canonicalJson as genericCanonicalJson,
   isCanonicalJsonValue,
-} from "../src/shared/encoding/codec/canonicalJson.js";
-import {
   CanonicalCodecError,
   CANONICAL_CODEC_ERROR_CODES,
-} from "../src/shared/encoding/codec/errors.js";
-import { stableEncode as genericStableEncode } from "../src/shared/encoding/codec/stableEncode.js";
+} from "@hikoutei/canonical-codec";
+import { stableEncode as genericStableEncode } from "@hikoutei/canonical-codec";
 import { APPS_SCRIPT_STABLE_CODEC_SOURCE } from "../src/adapter/sheets/providers/apps-script-gateway/operations/shared/appsScriptStableCodecSource.js";
 import { EFFECT_OPERATION_SOURCE } from "../src/adapter/sheets/providers/apps-script-gateway/operations/effect/effectOperationScript.js";
 import { createReadSnapshotOperation } from "../src/adapter/sheets/providers/apps-script-gateway/operations/observation/observationOperation.js";

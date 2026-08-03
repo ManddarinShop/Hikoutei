@@ -3,11 +3,8 @@
  *
  * Exposes only the runtime-neutral canonical codec contract: the
  * stable-encoding and canonical-JSON grammars, their value types, and the
- * structured error vocabulary.
- *
- * Stage 1 scaffold (0.1.0): types, error classes, and error-code constants are
- * in place, but the encoder implementations are stubs that will be migrated
- * from the in-repo codec during Stage 2.
+ * structured error vocabulary. The encoders are runtime-neutral and share no
+ * types with any host repository.
  */
 
 export { canonicalJson, isCanonicalJsonValue } from "./canonicalJson.js";

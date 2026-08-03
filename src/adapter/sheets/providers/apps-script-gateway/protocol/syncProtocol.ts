@@ -4,11 +4,9 @@ import { createHash } from "node:crypto";
 import {
   canonicalJson,
   isCanonicalJsonValue,
-} from "../../../../../shared/encoding/codec/canonicalJson.js";
-import {
   CANONICAL_CODEC_ERROR_CODES,
   CanonicalCodecError,
-} from "../../../../../shared/encoding/codec/errors.js";
+} from "@hikoutei/canonical-codec";
 import {
   SYNC_GATEWAY_ENCODINGS,
   SYNC_GATEWAY_HASH_ALGORITHMS,

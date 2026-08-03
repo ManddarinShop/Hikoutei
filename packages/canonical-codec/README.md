@@ -5,14 +5,12 @@ the `stable_encode_v1` byte grammar and the canonical-JSON text grammar used for
 signed payloads. The package has no runtime dependencies and no Google SDK,
 SQLite, or Node-specific types in its public surface, so the same codecs can run
 in the Node service, the Apps Script gateway, and golden-vector characterization
-tests.
+tests. The deployed Apps Script gateway keeps a self-contained source mirror;
+Apps Script does not import this npm package at runtime.
 
-> **Status (0.1.0): Stage 1 scaffold.**
-> This version publishes the public API *contract* only. Type definitions, the
-> structured error classes, and the error-code constants are in place. The
-> encoder and guard *implementations* are stubs that throw and will be migrated
-> from the in-repo codec in Stage 2 of the package-extraction plan. Until then,
-> do not depend on this package from application code.
+The public API contract, type definitions, structured error classes, error-code
+constants, and the real `stableEncode` / `canonicalJson` implementations are
+wired into the Hikoutei workspace and are checked against the Apps Script mirror.
 
 ## When to use
 
@@ -24,10 +22,12 @@ across runtimes:
 - `canonicalJson(value)` — encodes a JSON-compatible value into sorted-key,
   finite-number, dense-array text suitable for signing.
 
-Both grammars reject values that cannot be encoded deterministically
+`stableEncode` rejects values that cannot be encoded deterministically
 (non-finite numbers, unsupported types, cyclic structures, duplicate keys after
-NFC normalization, unpaired UTF-16 surrogates) with a typed
-`CanonicalCodecError` / `StableCodecError` carrying a machine-readable `code`.
+NFC normalization, invalid tagged dates, and unpaired UTF-16 surrogates).
+`canonicalJson` separately rejects non-finite numbers, unsupported values, sparse
+arrays, and cyclic structures. Both throw a typed `CanonicalCodecError` /
+`StableCodecError` carrying a machine-readable `code`.
 
 ## Public API
 
@@ -55,9 +55,12 @@ encoded on the date path, not as plain objects.
 
 ## Implementation note
 
-The codec's grammars are versioned (`stable_encode_v1`) and exist in two
-mirrors: this package and the deployed Apps Script gateway. Stage 2 wires the
-real implementations in so the two mirrors continue to produce identical bytes.
+The stable grammar is versioned as `stable_encode_v1`, and canonical JSON is a
+separate signed-payload text format. The package implementation and the
+self-contained Apps Script mirror are kept in parity by shared golden vectors.
+A change that would alter existing `stable_encode_v1` bytes or canonical JSON
+text must not be silently released as a compatible change; introduce a new
+encoding/protocol version instead.
 
 ## License
 

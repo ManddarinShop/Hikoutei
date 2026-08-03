@@ -17,7 +17,7 @@ export type JavaScriptTypeName =
 export {
   STABLE_ENCODING_ERROR_CODES,
   type StableEncodingErrorCode,
-} from "./codec/errors.js";
+} from "@hikoutei/canonical-codec";
 
 /** Runtime values for normalized cell value kinds. */
 export const NORMALIZED_CELL_KINDS = {

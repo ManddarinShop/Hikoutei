@@ -3,8 +3,10 @@
 import { createHash } from "node:crypto";
 import type { HikouteiStableHash } from "../identity/types.js";
 import { StableEncodingError } from "../../domain/errors/stableEncoding.js";
-import { StableCodecError } from "./codec/errors.js";
-import { stableEncode as encodeStableValue } from "./codec/stableEncode.js";
+import {
+  StableCodecError,
+  stableEncode as encodeStableValue,
+} from "@hikoutei/canonical-codec";
 import type { StableValue } from "./types.js";
 
 /** Encodes a stable value while preserving Hikoutei's existing error contract. */
