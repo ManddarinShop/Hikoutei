@@ -1,7 +1,8 @@
 name: Publish stable package
 
-# Triggered by a numeric release tag such as v0.2.0. The tag must exactly match
-# the version in package.json and package-lock.json; CI never bumps versions.
+# Triggered by a numeric release tag such as v0.4.0. The main-version
+# workflow creates the version commit and tag; this workflow only verifies and
+# publishes the tagged package.
 on:
   push:
     tags:
