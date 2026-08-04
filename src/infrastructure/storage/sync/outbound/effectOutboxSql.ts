@@ -17,9 +17,17 @@ export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
 export const CLAIM_EFFECT_SQL = `
   UPDATE sheet_effect_outbox AS candidate
   SET status = 'processing', claim_token = ?, writer_epoch = ?, lease_until = ?,
+      dispatch_id = ?, next_attempt_at = NULL, next_probe_at = NULL,
       attempts = attempts + 1
   WHERE candidate.effect_id = ?
-    AND candidate.status IN ('pending', 'failed')
+    AND candidate.status IN ('pending', 'failed', 'delivery_uncertain')
+    AND (
+      candidate.status = 'pending'
+      OR (candidate.status = 'failed' AND
+        (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?))
+      OR (candidate.status = 'delivery_uncertain' AND
+        (candidate.next_probe_at IS NULL OR candidate.next_probe_at <= ?))
+    )
     AND EXISTS (${FENCE_EXISTS_SQL})
     AND NOT EXISTS (
       SELECT 1
@@ -30,6 +38,14 @@ export const CLAIM_EFFECT_SQL = `
         AND predecessor.stream_sequence < candidate.stream_sequence
         AND predecessor.status NOT IN ('applied', 'superseded')
     )
+`;
+
+export const RENEW_EFFECT_LEASE_SQL = `
+  UPDATE sheet_effect_outbox
+  SET lease_until = ?
+  WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
+    AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 
 export const INSERT_PENDING_EFFECT_SQL = `
@@ -48,7 +64,8 @@ export const INSERT_PENDING_EFFECT_SQL = `
 export const APPLY_EFFECT_RESULT_SQL = `
   UPDATE sheet_effect_outbox
   SET status = ?, last_error_code = ?, last_error_message = ?,
-      claim_token = NULL, lease_until = NULL
+      claim_token = NULL, lease_until = NULL, next_attempt_at = NULL,
+      next_probe_at = NULL, uncertain_since = NULL
   WHERE effect_id = ?
     AND status = 'processing'
     AND claim_token = ?
@@ -62,7 +79,7 @@ export const SUPERSEDE_EFFECT_SQL = `
   UPDATE sheet_effect_outbox
   SET status = 'superseded', supersedes_effect_id = ?
   WHERE effect_id = ?
-    AND status IN ('pending', 'processing', 'blocked_candidate', 'conflict', 'failed')
+    AND status IN ('pending', 'processing', 'delivery_uncertain', 'blocked_candidate', 'conflict', 'failed')
     AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 
@@ -81,7 +98,8 @@ export const INSERT_REPLANNED_EFFECT_SQL = `
 
 export const RECOVER_EXPIRED_LEASES_SQL = `
   UPDATE sheet_effect_outbox
-  SET status = 'failed', claim_token = NULL, lease_until = NULL,
+  SET status = 'delivery_uncertain', claim_token = NULL, lease_until = NULL,
+      uncertain_since = COALESCE(uncertain_since, ?), next_probe_at = ?,
       last_error_code = '${SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION}',
       last_error_message = 'Read the remote postcondition before retrying this effect.'
   WHERE status = 'processing' AND lease_until IS NOT NULL AND lease_until <= ?
@@ -91,6 +109,7 @@ export const RECOVER_EXPIRED_LEASES_SQL = `
 export const REQUEUE_CLAIMED_EFFECT_SQL = `
   UPDATE sheet_effect_outbox
   SET status = 'pending', claim_token = NULL, lease_until = NULL,
+      next_attempt_at = ?, uncertain_since = NULL, next_probe_at = NULL,
       last_error_code = ?, last_error_message = ?
   WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
     AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
@@ -100,8 +119,19 @@ export const REQUEUE_CLAIMED_EFFECT_SQL = `
 export const RELEASE_UNPROCESSED_EFFECT_SQL = `
   UPDATE sheet_effect_outbox
   SET status = 'pending', claim_token = NULL, lease_until = NULL,
+      next_attempt_at = ?, uncertain_since = NULL, next_probe_at = NULL,
       last_error_code = 'gateway_batch_deferred',
       last_error_message = 'Gateway acknowledged a bounded batch before this effect.'
+  WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
+    AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+export const MARK_DELIVERY_UNCERTAIN_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'delivery_uncertain', claim_token = NULL, lease_until = NULL,
+      uncertain_since = COALESCE(uncertain_since, ?), next_probe_at = ?,
+      last_error_code = ?, last_error_message = ?
   WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
     AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
     AND EXISTS (${FENCE_EXISTS_SQL})
@@ -113,7 +143,8 @@ export const SELECT_PENDING_EFFECTS_BY_TARGET_SQL = `
          target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
          expected_visible_revision, expected_visible_hash, repair_guard_hash,
          source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
-         stream_sequence, created_at, status
+         stream_sequence, created_at, next_attempt_at, uncertain_since,
+         next_probe_at, dispatch_id, status
   FROM sheet_effect_outbox
   WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
     AND status = 'pending'
@@ -135,13 +166,20 @@ export const SELECT_READY_EFFECTS_SQL = `
          target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
          expected_visible_revision, expected_visible_hash, repair_guard_hash,
          source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
-         stream_sequence, created_at, status
+         stream_sequence, created_at, next_attempt_at, uncertain_since,
+         next_probe_at, dispatch_id, status
   FROM sheet_effect_outbox AS candidate
   WHERE (
-    candidate.status = 'pending'
+    (candidate.status = 'pending' AND
+      (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?))
     OR (
       candidate.status = 'failed'
       AND candidate.last_error_code IN (${RECOVERABLE_EFFECT_ERROR_CODE_SQL})
+      AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?)
+    )
+    OR (
+      candidate.status = 'delivery_uncertain'
+      AND (candidate.next_probe_at IS NULL OR candidate.next_probe_at <= ?)
     )
   )
     AND NOT EXISTS (
@@ -161,7 +199,7 @@ export const SELECT_READY_EFFECTS_SQL = `
 export const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
   SELECT COUNT(*) AS count
   FROM sheet_effect_outbox
-  WHERE status IN ('pending', 'processing')
+  WHERE status IN ('pending', 'processing', 'delivery_uncertain')
 `;
 
 export const UPSERT_VISIBLE_STATE_SQL = `

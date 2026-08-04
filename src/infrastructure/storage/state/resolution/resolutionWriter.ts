@@ -22,8 +22,10 @@ import type {
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   appendPendingEffectsWithSql,
+  supersedeAndReplanWithSql,
   type NewEffect,
 } from "../../sync/outbound/effectOutbox.js";
+import { readMappedLatestProjectionEffectWithSql } from "../mapped/mappedPersistenceSql.js";
 import { fromSqlNullable } from "../../sqlite/sqlState.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import {
@@ -50,6 +52,8 @@ import {
   CLEAR_ACTIVE_CANDIDATE_POINTER_SQL,
   FIND_EXISTING_COMMAND_SQL,
   INSERT_PROCESSING_COMMAND_SQL,
+  INSERT_PENDING_COMMAND_SQL,
+  MARK_PENDING_COMMAND_PROCESSING_SQL,
   MARK_COMMAND_APPLIED_SQL,
   MARK_COMMAND_REJECTED_SQL,
   MARK_COMMAND_STALE_SQL,
@@ -59,6 +63,7 @@ import {
   READ_CONFLICT_SQL,
   READ_EFFECT_DEDUPE_SQL,
   READ_REGISTERED_PROJECTION_SQL,
+  READ_PROCESSING_PREDECESSOR_SQL,
 } from "./resolutionWriterSql.js";
 import {
   assertCurrentFenceWithSql,
@@ -95,7 +100,9 @@ export async function persistResolutionCommandWithSql(
     return await withSqlSavepoint(sql, "persist_resolution_command", async () => {
       await assertCurrentFenceWithSql(sql, fence);
       const duplicate = await findExistingCommandWithSql(sql, input.command);
-      if (duplicate.kind === LOOKUP_RESULT_KINDS.FOUND) {
+      const pendingCommand = duplicate.kind === LOOKUP_RESULT_KINDS.FOUND &&
+        duplicate.value.status === RESOLUTION_COMMAND_STATUSES.PENDING;
+      if (duplicate.kind === LOOKUP_RESULT_KINDS.FOUND && !pendingCommand) {
         const duplicateResult = duplicate.value;
         // A durable processing receipt already owns the request. Only a terminal
         // replay may consume a still-checked control with a reset projection.
@@ -118,8 +125,30 @@ export async function persistResolutionCommandWithSql(
         };
       }
       const conflict = conflictResult.value;
+      const processingPredecessor = await findProcessingPredecessorWithSql(
+        sql,
+        input.effects,
+      );
+      if (processingPredecessor !== undefined) {
+        // Do not resolve the conflict while an older remote write is still in
+        // flight. The late response could materialize after the system-wins
+        // effect and overwrite the value that the resolution just selected.
+        // Keep a pending command receipt so the next polling pass can retry the
+        // exact CAS request after the predecessor has settled.
+        await insertPendingCommandWithSql(sql, fence, input);
+        return {
+          kind: PERSIST_RESOLUTION_RESULT_KINDS.DEFERRED,
+          commandId: input.command.commandId,
+          conflictId: conflict.conflictId,
+          reason: "processing_predecessor",
+        };
+      }
 
-      await insertProcessingCommandWithSql(sql, fence, input);
+      if (pendingCommand) {
+        await markPendingCommandProcessingWithSql(sql, fence, input.command.commandId, input.command.requestKey);
+      } else {
+        await insertProcessingCommandWithSql(sql, fence, input);
+      }
       const pointerResult = await readActiveCandidatePointerWithSql(sql, conflict);
       const transition = pointerResult.kind === LOOKUP_RESULT_KINDS.FOUND &&
         pointerResult.value.candidate_epoch === input.command.expectedCandidateEpoch &&
@@ -269,8 +298,30 @@ function sameCommandIdentity(existing: CommandRow, command: ResolutionCommand): 
     existing.payload_hash === command.payloadHash;
 }
 
+/** Reads all conflict IDs for one logical entity sheet. */
+export function readConflictIdsWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+): Promise<readonly string[]> {
+  return sql.all<{ readonly conflict_id: string }>(
+    "SELECT conflict_id FROM sync_conflict WHERE logical_sheet_id = ? ORDER BY created_at, conflict_id",
+    [logicalSheetId],
+  ).then((rows) => rows.map((row) => row.conflict_id));
+}
+
+/** Reads unresolved conflict IDs for one logical entity sheet. */
+export function readOpenConflictIdsWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+): Promise<readonly string[]> {
+  return sql.all<{ readonly conflict_id: string }>(
+    "SELECT conflict_id FROM sync_conflict WHERE logical_sheet_id = ? AND status IN ('OPEN', 'NEEDS_REBASE') ORDER BY created_at, conflict_id",
+    [logicalSheetId],
+  ).then((rows) => rows.map((row) => row.conflict_id));
+}
+
 /** Reads and validates one conflict record through the active async SQL transaction. */
-async function readConflictWithSql(
+export async function readConflictWithSql(
   sql: SqlExecutor,
   logicalSheetId: string,
   conflictId: string,
@@ -348,6 +399,49 @@ async function insertProcessingCommandWithSql(
     command.expectedCandidateEpoch,
     command.payloadHash,
     fence.now,
+    ...fenceParameters(fence),
+  ]);
+  if (result.changes !== 1) throw new FenceLostError();
+}
+
+/** Stores a deferred command as durable pending work without changing conflict state. */
+async function insertPendingCommandWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: PersistResolutionCommandInput,
+): Promise<void> {
+  const command = input.command;
+  const result = await sql.run(INSERT_PENDING_COMMAND_SQL, [
+    command.commandId,
+    command.requestKey,
+    command.action,
+    command.actorId,
+    command.role,
+    command.targetConflictId,
+    command.expectedRevision,
+    command.activeCandidateHash,
+    command.expectedCandidateEpoch,
+    command.payloadHash,
+    fence.now,
+    command.commandId,
+    command.requestKey,
+    ...fenceParameters(fence),
+  ]);
+  if (result.changes === 1) return;
+  if (result.changes === 0 && await isFencingValidWithSql(sql, fence)) return;
+  throw new FenceLostError();
+}
+
+/** Claims a pending deferred command after its processing predecessor settles. */
+async function markPendingCommandProcessingWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  commandId: string,
+  requestKey: string,
+): Promise<void> {
+  const result = await sql.run(MARK_PENDING_COMMAND_PROCESSING_SQL, [
+    commandId,
+    requestKey,
     ...fenceParameters(fence),
   ]);
   if (result.changes !== 1) throw new FenceLostError();
@@ -437,41 +531,79 @@ async function markRejectedCommandWithSql(
 }
 
 /** Registers unseen resolution effects through the active async SQL transaction. */
-async function appendResolutionEffectsWithSql(
+export async function appendResolutionEffectsWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
   effects: readonly NewEffect[],
 ): Promise<void> {
   if (effects.length === 0) return;
   await ensureResolutionEffectsRegisteredWithSql(sql, effects);
-  const unseen: NewEffect[] = [];
   for (const effect of effects) {
     const existing = await sql.get<EffectDedupeRow>(READ_EFFECT_DEDUPE_SQL, [
       effect.effectDedupeKey,
     ]);
-    if (existing === undefined) {
-      unseen.push(effect);
+    if (existing !== undefined) {
+      if (
+        existing.effect_kind !== effect.effectKind ||
+        existing.commit_id !== effect.commitId ||
+        existing.logical_sheet_id !== effect.logicalSheetId ||
+        existing.physical_sheet_id !== effect.physicalSheetId ||
+        existing.projection !== effect.projection ||
+        existing.target_kind !== effect.targetKind ||
+        existing.target_id !== effect.targetId ||
+        existing.payload_hash !== effect.payloadHash
+      ) {
+        throw new StorageError(
+          STORAGE_ERROR_CODES.RESOLUTION_EFFECT_CONFLICT,
+          "resolution effect dedupe key was reused with a different payload",
+        );
+      }
       continue;
     }
-    if (
-      existing.effect_kind !== effect.effectKind ||
-      existing.commit_id !== effect.commitId ||
-      existing.logical_sheet_id !== effect.logicalSheetId ||
-      existing.physical_sheet_id !== effect.physicalSheetId ||
-      existing.projection !== effect.projection ||
-      existing.target_kind !== effect.targetKind ||
-      existing.target_id !== effect.targetId ||
-      existing.payload_hash !== effect.payloadHash
-    ) {
+
+    const processingPredecessor = await findProcessingPredecessorWithSql(sql, [effect]);
+    if (processingPredecessor !== undefined) {
       throw new StorageError(
-        STORAGE_ERROR_CODES.RESOLUTION_EFFECT_CONFLICT,
-        "resolution effect dedupe key was reused with a different payload",
+        STORAGE_ERROR_CODES.EFFECT_REPLAN_CONFLICT,
+        `effect ${effect.effectId} cannot replace processing predecessor ${processingPredecessor}`,
       );
     }
+
+    const predecessor = await readMappedLatestProjectionEffectWithSql(
+      sql,
+      effect.logicalSheetId,
+      effect.targetKind,
+      effect.targetId,
+    );
+    if (
+      predecessor !== undefined &&
+      (predecessor.status === "pending" ||
+        predecessor.status === "blocked_candidate" ||
+        predecessor.status === "conflict" ||
+        predecessor.status === "failed")
+    ) {
+      await supersedeAndReplanWithSql(sql, fence, predecessor.effect_id, effect);
+      continue;
+    }
+    if (!(await appendPendingEffectsWithSql(sql, fence, [effect]))) {
+      throw new FenceLostError();
+    }
   }
-  if (unseen.length > 0 && !(await appendPendingEffectsWithSql(sql, fence, unseen))) {
-    throw new FenceLostError();
+}
+
+/** Finds processing predecessors that must finish before a replacement is planned. */
+async function findProcessingPredecessorWithSql(
+  sql: SqlExecutor,
+  effects: readonly NewEffect[],
+): Promise<string | undefined> {
+  for (const effect of effects) {
+    const row = await sql.get<{ readonly effect_id: string }>(
+      READ_PROCESSING_PREDECESSOR_SQL,
+      [effect.logicalSheetId, effect.targetKind, effect.targetId, effect.streamSequence],
+    );
+    if (row !== undefined) return row.effect_id;
   }
+  return undefined;
 }
 
 /** Validates every resolution effect target through the active async SQL transaction. */

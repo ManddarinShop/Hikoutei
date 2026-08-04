@@ -274,7 +274,9 @@ function makeLease(
     role,
     writerId,
     writerEpoch,
-    fencingToken: `fence-${writerEpoch}`,
+    // Include the owner identity as well as the monotonically increasing epoch;
+    // equal epochs from different roles must never share a remote authority token.
+    fencingToken: `fence-${writerEpoch}:${writerId}`,
     leaseUntil,
   };
 }

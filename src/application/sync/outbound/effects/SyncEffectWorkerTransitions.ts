@@ -53,6 +53,17 @@ export async function completeGatewayResult(
     result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
     result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED
   ) {
+    if (!isPresent(result.visibleRevision) || !isPresent(result.visibleHash)) {
+      await deferDeliveryUncertain(
+        storage,
+        fence,
+        item,
+        WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
+        "Gateway applied result did not include receipt-backed visible evidence.",
+        report,
+      );
+      return;
+    }
     await completeApplied(storage, fence, item, result.visibleRevision, result.visibleHash, report);
     return;
   }
@@ -118,6 +129,8 @@ export async function completeGatewayResult(
   );
 }
 
+const DURABLE_PROBE_RETRY_DELAY_MS = 1_000;
+
 export async function recoverUnknownResults(
   options: SyncEffectWorkerFullOptions,
   storage: EffectWorkerStorage,
@@ -125,6 +138,10 @@ export async function recoverUnknownResults(
   items: readonly ClaimedEffect[],
   report: MutableReport,
 ): Promise<void> {
+  const liveFence = (): FencingContext => ({
+    ...fence,
+    now: options.clock?.() ?? fence.now,
+  });
   const usable: ClaimedEffect[] = [];
   for (const item of items) {
     if (isPresent(item.gatewayEffect)) {
@@ -133,14 +150,18 @@ export async function recoverUnknownResults(
     }
     await completeFailure(
       storage,
-      fence,
+      liveFence(),
       item,
       WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       item.invalidPayloadError,
       report,
     );
   }
-  for (const group of groupByGatewayPostconditionRequest(usable)) {
+  const probeAuthority = liveFence();
+  for (const group of groupByGatewayPostconditionRequest(usable, {
+    epoch: probeAuthority.writerEpoch,
+    token: probeAuthority.fencingToken,
+  })) {
     let results: readonly {
       readonly effectId: string;
       readonly payloadHash: string;
@@ -150,12 +171,12 @@ export async function recoverUnknownResults(
       results = await options.gateway.readEffectPostconditions(group.request);
     } catch (error: unknown) {
       for (const item of group.items) {
-        await completeFailure(
+        await deferDeliveryUncertain(
           storage,
-          fence,
+          liveFence(),
           item,
           WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
-          presentValue(safeErrorMessage(error)),
+          safeErrorMessage(error),
           report,
         );
       }
@@ -168,12 +189,12 @@ export async function recoverUnknownResults(
         result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
         result.value.payloadHash !== item.pending.payload_hash
       ) {
-        await completeFailure(
+        await deferDeliveryUncertain(
           storage,
-          fence,
+          liveFence(),
           item,
           WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
-          presentValue("Gateway postcondition batch did not return the expected effect evidence."),
+          "Gateway postcondition batch did not return the expected effect evidence.",
           report,
         );
         continue;
@@ -181,7 +202,7 @@ export async function recoverUnknownResults(
       await settleUnknownPostcondition(
         options,
         storage,
-        fence,
+        liveFence(),
         item,
         result.value.postcondition,
         report,
@@ -227,12 +248,12 @@ export async function settleUnknownPostcondition(
     return;
   }
   if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.APPLIED) {
-    await completeFailure(
+    await deferDeliveryUncertain(
       storage,
       fence,
       item,
       WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
-      presentValue("Gateway claimed an applied postcondition without a verified visible revision and hash."),
+      "Gateway claimed an applied postcondition without a verified visible revision and hash.",
       report,
     );
     return;
@@ -262,6 +283,7 @@ export async function settleUnknownPostcondition(
       claimToken: item.claimToken,
       lastErrorCode: WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
       lastErrorMessage: "Gateway did not expose the effect as applied; it was returned to pending.",
+      nextAttemptAt: fence.now + DURABLE_PROBE_RETRY_DELAY_MS,
     });
     if (requeued) {
       report.deferred += 1;
@@ -269,19 +291,53 @@ export async function settleUnknownPostcondition(
     }
     return;
   }
-  const code = postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE
-    ? WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE
-    : postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED
-      ? WORKER_ERROR_CODES.POSTCONDITION_CHANGED
-      : WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE;
+  if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE) {
+    await deferDeliveryUncertain(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
+      "Gateway response was not observed; postcondition=unavailable" +
+        (postcondition.reason === undefined ? "" : ", reason=" + postcondition.reason),
+      report,
+    );
+    return;
+  }
+  const code = postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED
+    ? WORKER_ERROR_CODES.POSTCONDITION_CHANGED
+    : WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE;
   await completeFailure(
     storage,
     fence,
     item,
     code,
-    presentValue("Gateway response was not observed; postcondition=" + postcondition.disposition),
+    presentValue(
+      "Gateway response was not observed; postcondition=" +
+      postcondition.disposition +
+      (postcondition.reason === undefined ? "" : ", reason=" + postcondition.reason),
+    ),
     report,
   );
+}
+
+async function deferDeliveryUncertain(
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  item: ClaimedEffect,
+  code: SyncEffectWorkerErrorCode,
+  message: string,
+  report: MutableReport,
+): Promise<void> {
+  const marked = await storage.markDeliveryUncertain({
+    ...fence,
+    effectId: item.pending.effect_id,
+    claimToken: item.claimToken,
+    uncertainSince: item.pending.uncertain_since ?? fence.now,
+    nextProbeAt: fence.now + DURABLE_PROBE_RETRY_DELAY_MS,
+    lastErrorCode: code,
+    lastErrorMessage: message,
+  });
+  if (marked) report.deferred += 1;
 }
 
 export async function completeApplied(
@@ -304,8 +360,18 @@ export async function completeApplied(
     );
     return false;
   }
+  if (!isPresent(visibleRevision) || !isPresent(visibleHash)) {
+    await deferDeliveryUncertain(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
+      "Applied effect lacks receipt-backed visible revision and hash evidence.",
+      report,
+    );
+    return false;
+  }
   if (
-    isPresent(visibleHash) &&
     visibleHash.value !== gatewayEffect.value.payload.targetVisibleHash
   ) {
     await completeFailure(

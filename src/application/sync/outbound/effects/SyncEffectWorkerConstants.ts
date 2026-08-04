@@ -9,14 +9,36 @@ import {
 import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../../infrastructure/storage/sync/outbound/effectOutbox.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
-export const DEFAULT_WRITER_LEASE_DURATION_MS = 60_000;
-export const DEFAULT_EFFECT_LEASE_DURATION_MS = 30_000;
+/** Outbound writer lease must outlive the longest remote effect request. */
+export const DEFAULT_WRITER_LEASE_DURATION_MS = 180_000;
+/** Minimum headroom between the remote timeout and the effect lease. */
+export const EFFECT_LEASE_GATEWAY_HEADROOM_MS = 30_000;
+/** Must exceed the 60-second Apps Script transport timeout plus recovery margin. */
+export const DEFAULT_EFFECT_LEASE_DURATION_MS = 120_000;
+
+/**
+ * Maximum effects one Apps Script `applyEffects` call will acknowledge.
+ *
+ * The deployed gateway caps a single bounded effect batch (see `MAX_EFFECTS`
+ * in effectOperationScript.ts). Chunking each physical route's dispatch to
+ * this limit keeps every request inside that batch, so an oversized configured
+ * worker limit (`maxEffects`) does not turn one route into repeated partial
+ * (`hasMore`) responses and the deferred/requeue churn they cause.
+ */
+export const GATEWAY_EFFECT_BATCH_LIMIT = 20;
+/**
+ * Maximum number of effects leased before dispatch starts. Selection may use a
+ * larger SQLite upper bound, but a worker pass must not lease an unbounded
+ * backlog while a remote batch is in flight.
+ */
+export const MAX_IN_FLIGHT_EFFECTS = GATEWAY_EFFECT_BATCH_LIMIT;
 
 export const SYNC_EFFECT_KINDS = CANONICAL_EFFECT_KINDS satisfies Record<string, EffectKind>;
 
 export const EFFECT_TARGET_KINDS = CANONICAL_EFFECT_TARGET_KINDS satisfies Record<string, EffectTargetKind>;
 
 export const OUTBOX_EFFECT_STATUSES = {
+  DELIVERY_UNCERTAIN: CANONICAL_EFFECT_STATUSES.DELIVERY_UNCERTAIN,
   FAILED: CANONICAL_EFFECT_STATUSES.FAILED,
   APPLIED: CANONICAL_EFFECT_STATUSES.APPLIED,
   BLOCKED_CANDIDATE: CANONICAL_EFFECT_STATUSES.BLOCKED_CANDIDATE,
@@ -31,7 +53,10 @@ export const WORKER_ERROR_CODES = {
   CANDIDATE_GUARD_MISMATCH: "candidate_guard_mismatch",
   VISIBLE_GUARD_MISMATCH: "visible_guard_mismatch",
   GATEWAY_SCHEMA_ERROR: "gateway_schema_error",
+  GATEWAY_REMOTE_ERROR: "gateway_remote_error",
   GATEWAY_RETRYABLE_ERROR: SYNC_EFFECT_RECOVERY_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+  DELIVERY_UNCERTAIN_REQUIRES_PROBE:
+    SYNC_EFFECT_RECOVERY_ERROR_CODES.DELIVERY_UNCERTAIN_REQUIRES_PROBE,
   POSTCONDITION_READ_FAILED: SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED,
   POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE: "postcondition_applied_without_visible_state",
   POSTCONDITION_UNAVAILABLE: SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
