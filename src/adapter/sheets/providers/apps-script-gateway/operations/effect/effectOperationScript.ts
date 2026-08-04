@@ -1,3 +1,5 @@
+import { APPS_SCRIPT_STABLE_CODEC_SOURCE } from "../shared/appsScriptStableCodecSource.js";
+
 /** Self-contained V8 source executed by Code.gs for effect application and read-back. */
 export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var MAX_EFFECTS = 20;
@@ -15,20 +17,32 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var DEFERRED = "deferred";
 
   var phases = [];
+  var effectLock = null;
   var effectLockStartedAt = Date.now();
-  var effectLock = LockService.getScriptLock();
-  if (!effectLock.tryLock(20000)) throw new Error("Could not acquire the sync effect gateway lock");
+  // Postcondition probes read the same Sheet rows and receipt state that an
+  // in-flight apply mutates, so they must hold the same script lock; otherwise
+  // a delayed or timed-out apply could overlap a probe and be misclassified.
+  var LOCKED_MODES = {
+    applyEffects: true,
+    readEffectPostcondition: true,
+    readEffectPostconditions: true
+  };
+  if (args && LOCKED_MODES[args.mode] === true) {
+    effectLock = LockService.getScriptLock();
+    if (!effectLock.tryLock(20000)) throw new Error("Could not acquire the sync effect gateway lock");
+  }
   try {
     var operationResult = run_();
-    appendTimingPhase_(operationResult, "script_lock", Date.now() - effectLockStartedAt);
+    if (effectLock !== null) appendTimingPhase_(operationResult, "script_lock", Date.now() - effectLockStartedAt);
     return operationResult;
   } finally {
-    effectLock.releaseLock();
+    if (effectLock !== null) effectLock.releaseLock();
   }
 
   function run_() {
   var startedAt = Date.now();
   requireObject_(args, "effect operation args");
+  assertAuthority_(spreadsheet, args.mode === "applyEffects");
   var validationStartedAt = Date.now();
   if (!Array.isArray(args.effects) && args.mode === "applyEffects") {
     throw new Error("applyEffects effects must be an array");
@@ -76,6 +90,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var pendingReceiptsById = Object.create(null);
   var appendRows = [];
   var deleteRows = [];
+  var deletionReceiptIds = Object.create(null);
   var deferred = [];
   var results = [];
   var count = Math.min(args.effects.length, MAX_EFFECTS);
@@ -154,6 +169,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       row.deleted = true;
       deleteRows.push(row);
       queueReceipt_(receipts, pendingReceipts, pendingReceiptsById, deletionReceipt);
+      deletionReceiptIds[deletionReceipt.effectId] = true;
       deferred.push({ index: index, checked: checked, row: row, receipt: deletionReceipt, deletion: true });
       continue;
     }
@@ -229,16 +245,18 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   });
   phase_("postcondition", postconditionStartedAt);
 
-  var deleteStartedAt = Date.now();
-  deleteRows.slice().sort(function (left, right) { return right.rowNumber - left.rowNumber; }).forEach(function (row) {
-    sheet.deleteRow(row.rowNumber);
-  });
-  phase_("delete_rows", deleteStartedAt);
-  var deleteFlushStartedAt = Date.now();
-  if (deleteRows.length > 0) SpreadsheetApp.flush();
-  phase_("delete_flush", deleteFlushStartedAt);
+  // Deletion results are receipt-backed only after the delete/receipt batch
+  // completes without throwing; a crash inside it leaves deleted rows
+  // without receipts, which recovery probes classify as delivery-uncertain.
+  var deleteBatchStartedAt = Date.now();
+  writeDeletionAndReceiptsBatch_(sheet, receiptSheet, deleteRows, pendingReceipts.filter(function (receipt) {
+    return deletionReceiptIds[receipt.effectId] === true;
+  }));
+  phase_("delete_and_receipt_batch", Date.now() - deleteBatchStartedAt);
   var receiptWriteStartedAt = Date.now();
-  writeReceipts_(receiptSheet, pendingReceipts);
+  writeReceipts_(receiptSheet, pendingReceipts.filter(function (receipt) {
+    return deletionReceiptIds[receipt.effectId] !== true;
+  }));
   phase_("receipt_write", receiptWriteStartedAt);
   results.forEach(function (entry) {
     if (entry === null || entry === undefined) throw new Error("effect result was not produced");
@@ -259,6 +277,26 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       phases: phases,
     },
   };
+  }
+
+  function assertAuthority_(targetSpreadsheet, allowAdvance) {
+    if (args.authority === undefined) return;
+    if (!args.authority || typeof args.authority.epoch !== "number" ||
+        Math.floor(args.authority.epoch) !== args.authority.epoch || args.authority.epoch < 1 ||
+        typeof args.authority.token !== "string" || args.authority.token.length === 0) {
+      throw new Error("effect authority is invalid");
+    }
+    var key = "typed_sheets_authority:" + targetSpreadsheet.getId();
+    var properties = PropertiesService.getScriptProperties();
+    var raw = properties.getProperty(key);
+    var current = raw === null ? null : JSON.parse(raw);
+    if (current !== null && (current.epoch > args.authority.epoch ||
+        current.epoch === args.authority.epoch && current.token !== args.authority.token)) {
+      throw new Error("effect authority fence is stale");
+    }
+    if (allowAdvance && (current === null || args.authority.epoch > current.epoch)) {
+      properties.setProperty(key, JSON.stringify({ epoch: args.authority.epoch, token: args.authority.token }));
+    }
   }
 
   function readLayout_(targetSheet, registeredRange) {
@@ -302,11 +340,15 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
         deleted: false,
       };
       if (anchor !== null) {
-        if (byAnchor[anchor] !== undefined) throw new Error("sync anchor is duplicated: " + anchor);
+        if (byAnchor[anchor] !== undefined) {
+          throw new Error("sync anchor is duplicated: " + anchor + " at rows " + byAnchor[anchor].rowNumber + " and " + rowNumber);
+        }
         byAnchor[anchor] = row;
       }
       if (identity !== null) {
-        if (byIdentity[identity] !== undefined) throw new Error("sync identity is duplicated: " + identity);
+        if (byIdentity[identity] !== undefined) {
+          throw new Error("sync identity is duplicated: " + identity + " at rows " + byIdentity[identity].rowNumber + " and " + rowNumber);
+        }
         byIdentity[identity] = row;
       }
       rows.push(row);
@@ -382,6 +424,9 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function classifyPostcondition_(targetContext, rawEffect, receiptsForRead) {
     var checked = requireEffect_(rawEffect, args);
     var receipt = receiptsForRead[checked.effectId] || null;
+    if (receipt !== null && receipt.payloadHash !== checked.payloadHash) {
+      return postcondition_("changed", null, null);
+    }
     var row = findRow_(targetContext, checked.payload.targetAnchor, checked.targetId);
     if (isDeletion_(checked.effectKind)) {
       if (receipt !== null && row === null) return postcondition_("applied", receipt.visibleRevision, receipt.visibleHash);
@@ -392,10 +437,34 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
         ? postcondition_("unapplied", checked.expectedVisibleRevision, deleteHash)
         : postcondition_("changed", null, deleteHash);
     }
-    if (row === null) return postcondition_(checked.payload.createIfMissing ? "unapplied" : "changed", null, null);
+    // A receipt alone cannot prove that a non-delete row still exists; a
+    // manual deletion must remain observable instead of closing the outbox.
+    if (row === null) {
+      // A receipt proves that this effect reached the Gateway, not that a
+      // non-delete projection row still exists. Treat a manually removed row
+      // as a terminal changed/manual-repair condition even when the original
+      // effect allowed creation; otherwise recovery would hot-loop forever on
+      // the same stale receipt.
+      return postcondition_(
+        receipt !== null || !checked.payload.createIfMissing ? "changed" : "unapplied",
+        null,
+        null,
+        receipt === null ? null : "receipt_target_missing",
+      );
+    }
     var current = currentHash_(row, checked.payload.fields);
     if (current === checked.payload.targetVisibleHash) {
-      return postcondition_("applied", receipt === null ? checked.expectedVisibleRevision + 1 : receipt.visibleRevision, current);
+      if (receipt === null) {
+        // The row already carries the target content, but without a receipt
+        // there is no durable proof that this effect was applied by the
+        // Gateway: the two-flush append can crash between the target-row
+        // write and the receipt write and leave exactly this orphan. Closing
+        // the outbox on row-hash evidence alone would turn that crash into a
+        // false success, so stay fail-closed: the worker defers delivery and
+        // probes again instead of calling completeApplied or redriving.
+        return postcondition_("unavailable", null, current, "receipt_missing");
+      }
+      return postcondition_("applied", receipt.visibleRevision, current);
     }
     var repairGuard = optionalWireText_(checked.repairGuardHash);
     if (current === checked.expectedVisibleHash || (repairGuard !== null && current === repairGuard)) {
@@ -404,8 +473,10 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     return postcondition_("changed", null, current);
   }
 
-  function postcondition_(disposition, revision, hash) {
-    return { disposition: disposition, visibleRevision: revision, visibleHash: hash, snapshotHash: null };
+  function postcondition_(disposition, revision, hash, reason) {
+    var result = { disposition: disposition, visibleRevision: revision, visibleHash: hash, snapshotHash: null };
+    if (reason !== null && reason !== undefined) result.reason = reason;
+    return result;
   }
 
   function requireEffect_(rawEffect, request) {
@@ -517,6 +588,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
         visibleRevision: nonNegativeInteger_(row[4], "receipt visibleRevision"),
         rowNumber: index + 2,
       };
+      if (parsed[effectId].status !== "applied") throw new Error("receipt status must be applied");
     });
     return parsed;
   }
@@ -534,15 +606,58 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function writeReceipts_(target, values) {
     if (values.length === 0) return;
     var startRow = Math.max(target.getLastRow() + 1, 2);
+    // Reserve hidden receipt rows as well; setValues must not depend on the
+    // receipt sheet's finite preallocated grid.
+    target.insertRowsAfter(startRow - 1, values.length);
     var updatedAt = new Date().toISOString();
     target.getRange(startRow, 1, values.length, RECEIPT_HEADERS.length).setValues(values.map(function (receipt) {
       return [receipt.effectId, receipt.payloadHash, receipt.status, receipt.visibleHash, receipt.visibleRevision, updatedAt];
     }));
+    // The receipt is the durable evidence a later locked probe reads. Flush it
+    // while the effect lock is still held: the ScriptLock is released when this
+    // operation returns, before the outer dispatcher's final flush, so a second
+    // apply/probe that acquires the lock next must already see the receipt.
+    // Without this flush it would read the target row without the receipt and
+    // replay or corrupt receipt state.
+    SpreadsheetApp.flush();
+  }
+
+  function writeDeletionAndReceiptsBatch_(targetSheet, receiptSheetTarget, rows, receiptsToWrite) {
+    if (rows.length === 0) return;
+    // The row deletes and the receipt write are separate built-in
+    // SpreadsheetApp mutations, not one Advanced Sheets batch: a crash
+    // between them is ambiguous and must never be reported as applied
+    // without proof. Delete the target rows first in descending physical row
+    // order so no earlier delete shifts a later delete target, flush, then
+    // append the receipts and flush again. A crash between the two phases
+    // leaves rows deleted without receipts, which the postcondition probe
+    // classifies as unavailable (delivery-uncertain), never as applied;
+    // receipt-backed applied evidence is returned only after the receipt
+    // write below lands.
+    rows.slice().sort(function (left, right) { return right.rowNumber - left.rowNumber; }).forEach(function (row) {
+      targetSheet.deleteRows(row.rowNumber, 1);
+    });
+    SpreadsheetApp.flush();
+    if (receiptsToWrite.length > 0) {
+      var receiptStartRow = Math.max(receiptSheetTarget.getLastRow() + 1, 2);
+      var updatedAt = new Date().toISOString();
+      // Reserve the receipt rows through the spreadsheet mutation API before
+      // writing values so a concurrent human append is shifted rather than
+      // overwritten.
+      receiptSheetTarget.insertRowsAfter(receiptStartRow - 1, receiptsToWrite.length);
+      receiptSheetTarget.getRange(receiptStartRow, 1, receiptsToWrite.length, RECEIPT_HEADERS.length).setValues(receiptsToWrite.map(function (receipt) {
+        return [receipt.effectId, receipt.payloadHash, receipt.status, receipt.visibleHash, receipt.visibleRevision, updatedAt];
+      }));
+    }
+    SpreadsheetApp.flush();
   }
 
   function writeAppendRows_(target, targetLayout, rows, checkboxHeaders) {
     if (rows.length === 0) return;
     rows.sort(function (left, right) { return left.rowNumber - right.rowNumber; });
+    // Reserve rows through the spreadsheet mutation API before writing values
+    // so a concurrent human append is shifted rather than overwritten.
+    target.insertRowsAfter(rows[0].rowNumber - 1, rows.length);
     target.getRange(rows[0].rowNumber, targetLayout.startColumn, rows.length, targetLayout.columnCount).setValues(rows.map(function (row) {
       return targetLayout.headers.map(function (header) { return toSheetValue_(row.cells[header]); });
     }));
@@ -673,8 +788,11 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function appendTimingPhase_(result, phaseName, durationMs) {
     if (!isObject_(result) || !isObject_(result.timing)) return;
     if (!Array.isArray(result.timing.phases)) result.timing.phases = [];
+    // Keep the script-lock wait/hold duration as a diagnostic phase, but do
+    // not fold it into the total: durationMs already measures the whole
+    // operation including the lock wait, so adding the nested phase would
+    // double-count the elapsed time.
     result.timing.phases.push({ phase: phaseName, durationMs: durationMs });
-    result.timing.durationMs = Number(result.timing.durationMs) + durationMs;
   }
   function isBlankRow_(row) { return row.every(function (cell) { return cell === "" || cell === null; }); }
   function isDate_(value) { return Object.prototype.toString.call(value) === "[object Date]" && !isNaN(value.getTime()); }
@@ -685,29 +803,8 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function nonNegativeInteger_(value, label) { if (typeof value !== "number" || !isFinite(value) || Math.floor(value) !== value || value < 0) throw new Error(label + " must be a non-negative integer"); return value; }
 
   function visibleHash_(fields) {
-    return stableHash_({ fields: Object.keys(fields).sort().map(function (fieldName) { return { fieldName: fieldName, value: fields[fieldName] }; }) });
+    return codecStableHash_({ fields: Object.keys(fields).sort().map(function (fieldName) { return { fieldName: fieldName, value: fields[fieldName] }; }) });
   }
-  function stableHash_(value) { return sha256Hex_(stableEncode_(value)); }
-  function stableEncode_(value) {
-    if (value === null) return "n";
-    if (value === true) return "b1";
-    if (value === false) return "b0";
-    if (typeof value === "number") return stableEncodeNumber_(value);
-    if (typeof value === "string") return stableEncodeString_(value);
-    if (isObject_(value) && value.kind === "date" && isCanonicalDate_(value.value)) return "d24:" + value.value;
-    if (Array.isArray(value)) return "a" + value.length + "[" + value.map(stableEncode_).join("") + "]";
-    if (isObject_(value)) {
-      var entries = Object.keys(value).map(function (key) { var normalized = normalizeScalarString_(key); return { key: normalized, bytes: utf8Bytes_(normalized), value: value[key] }; });
-      entries.sort(function (left, right) { return compareBytes_(left.bytes, right.bytes); });
-      return "o" + entries.length + "{" + entries.map(function (entry) { return "s" + entry.bytes.length + ":" + entry.key + stableEncode_(entry.value); }).join("") + "}";
-    }
-    throw new Error("stable value is unsupported");
-  }
-  function stableEncodeNumber_(value) { if (!isFinite(value)) throw new Error("stable number is not finite"); var decimal = value === 0 ? "0" : String(value).replace(/e\+/, "e").replace(/e(-?)0+(\d+)/, "e$1$2"); return "f" + utf8ByteLength_(decimal) + ":" + decimal; }
-  function stableEncodeString_(value) { var normalized = normalizeScalarString_(value); return "s" + utf8ByteLength_(normalized) + ":" + normalized; }
   function normalizeScalarString_(value) { return value.normalize("NFC"); }
-  function sha256Hex_(value) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8).map(function (byte) { var unsigned = byte < 0 ? byte + 256 : byte; return ("0" + unsigned.toString(16)).slice(-2); }).join(""); }
-  function utf8Bytes_(value) { return Utilities.newBlob(value).getBytes(); }
-  function utf8ByteLength_(value) { return utf8Bytes_(value).length; }
-  function compareBytes_(left, right) { var count = Math.min(left.length, right.length); for (var index = 0; index < count; index += 1) { var a = left[index] < 0 ? left[index] + 256 : left[index]; var b = right[index] < 0 ? right[index] + 256 : right[index]; if (a !== b) return a - b; } return left.length - right.length; }
+${APPS_SCRIPT_STABLE_CODEC_SOURCE}
 }`;

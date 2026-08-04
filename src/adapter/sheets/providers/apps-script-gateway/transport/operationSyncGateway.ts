@@ -47,7 +47,7 @@ import type {
   AppsScriptOperationDefinition,
   AppsScriptOperationGateway,
 } from "./operationClient.js";
-import { createFastAppendRowsOperation } from "../operations/write/fastAppendOperation.js";
+import { createBatchAppendRowsOperation } from "../operations/write/batchAppendOperation.js";
 import { createReadTableRowsOperation } from "../operations/read/tableReadOperation.js";
 import {
   createApplyEffectsOperation,
@@ -152,19 +152,26 @@ export class AppsScriptOperationSyncGateway
     return applyOneOperation(this.operationGateway, operation);
   }
 
-  /**
-   * Appends new System_State rows with one remote setValues operation.
-   *
-   * No row metadata, receipt, snapshot, CAS, or postcondition work is
-   * performed here. Reconciliation owns drift detection after this write.
-   */
+  /** Appends route rows through an idempotent built-in-services operation. */
   public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
     validateRoute(request, definition);
-    const operation = createFastAppendRowsOperation({
+    const routeOptions = effectRouteOptions(definition);
+    if (routeOptions.identityField === undefined) {
+      // The built-in append path never materializes anchor metadata, so a
+      // route without a registered identity cannot locate or guard its rows
+      // on replay. Fail closed instead of inventing an unsafe locator.
+      throw new SyncGatewayContractError(
+        SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+        "fast append requires a registered identityField for route " + request.physicalSheetId,
+      );
+    }
+    const operation = createBatchAppendRowsOperation({
+      ...(request.authority === undefined ? {} : { authority: request.authority }),
       sheetName: request.sheetName,
       registeredRange: request.registeredRange,
       headers: definition.headers,
+      identityField: routeOptions.identityField,
       rows: request.rows,
     });
     return applyOneOperation(this.operationGateway, operation);
@@ -495,7 +502,9 @@ function effectRouteOptions(
   return {
     ...(definition.sheet.projection === "system_state"
       ? { identityField: definition.sheet.businessKeyField }
-      : {}),
+      : definition.sheet.projection === "sync_conflicts"
+        ? { identityField: "Conflict_ID" }
+        : {}),
     ...(definition.checkboxHeaders === undefined
       ? {}
       : { checkboxHeaders: definition.checkboxHeaders }),
