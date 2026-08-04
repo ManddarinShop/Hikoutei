@@ -155,16 +155,20 @@ class FakeSyncGateway {
   async fastAppendRows(request) {
     this.calls.push({ method: "fastAppendRows", count: request.rows.length });
     const sheet = this.requireSheet(request.sheetName);
-    for (const row of request.rows) {
-      sheet.rows.push({
-        fields: this.completeFields(sheet.headers, row.fields),
-        revision: 1,
-      });
-    }
-    return {
-      results: request.rows.map((row) => ({ effectId: row.effectId, status: "applied" })),
-      hasMore: false,
-    };
+    // Mirror the built-in append operation contract: each result carries
+    // receipt-backed visible evidence (revision 1 and the hash of the written
+    // full-header row) so the effect worker can close the outbox entry.
+    const results = request.rows.map((row) => {
+      const fields = this.completeFields(sheet.headers, row.fields);
+      sheet.rows.push({ fields, revision: 1 });
+      return {
+        effectId: row.effectId,
+        status: "applied",
+        visibleRevision: 1,
+        visibleHash: visibleHash(fields, fields),
+      };
+    });
+    return { results, hasMore: false };
   }
 
   async applyEffects(request) {
