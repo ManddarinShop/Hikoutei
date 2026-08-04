@@ -177,6 +177,7 @@ export function registeredTypedSheetsProjectionDefinitions(
   return registrations.map(({ mapping, sheet, headers }) => ({
     sheet,
     headers,
+    identityField: sheet.businessKeyField,
     entityIdForBusinessKey: mapping.canonicalEntityIdFor,
   }));
 }

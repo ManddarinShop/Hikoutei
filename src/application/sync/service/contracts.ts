@@ -10,6 +10,8 @@ export interface InternalSyncRoute {
 export interface InternalSyncEntityConfig {
   readonly systemState: InternalSyncRoute;
   readonly userInput?: InternalSyncRoute;
+  /** Required system-owned audit projection for field-level conflicts. */
+  readonly syncConflicts: InternalSyncRoute;
   /** Entity property names that may be changed from the User_Input projection. */
   readonly userOwnedFields?: readonly string[];
 }

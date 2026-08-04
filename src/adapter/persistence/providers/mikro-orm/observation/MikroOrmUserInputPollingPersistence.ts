@@ -128,7 +128,8 @@ export async function persistPreparedRows(
   state: MappedPollingState,
   rows: readonly PreparedRow[],
   accumulators: readonly SheetAccumulator[],
-): Promise<void> {
+): Promise<readonly PersistObservedRowInput[]> {
+  const observedInputs: PersistObservedRowInput[] = [];
   for (const [index, prepared] of rows.entries()) {
     const accumulator = accumulators.find((candidate) => candidate.mapping === prepared.mapping);
     if (accumulator === undefined) continue;
@@ -136,14 +137,24 @@ export async function persistPreparedRows(
     const result = await persistMappedObservedRowWithMikroOrm(storage, {
       mappings: [prepared.mapping],
       fence,
+      writer,
       input,
     });
+    // A newly persisted observation is authoritative for canonical mutation.
+    // A duplicate observation is not a new mutation, but its just-read remote
+    // visible revision/hash is still valid evidence for a deferred system-wins
+    // retry. Stale, quarantined, and fenced-out inputs cannot influence that
+    // retry because their evidence was not accepted by the writer boundary.
+    if (isObservationEvidenceUsableForDeferredResolution(result)) {
+      observedInputs.push(input);
+    }
     classifyResult(accumulator, result);
     if (result.kind === OBSERVATION_WRITE_RESULT_KINDS.FENCED_OUT) {
       accumulator.fencedRows += rows.length - index - 1;
-      return;
+      return observedInputs;
     }
   }
+  return observedInputs;
 }
 
 async function createPersistInput(
@@ -383,7 +394,7 @@ async function canonicalMutationFor(
           value: stableHash({
             entityId: prepared.canonical.entityId,
             fields: Object.entries(encodedEntity)
-              .sort(([left], [right]) => left.localeCompare(right))
+              .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
               .map(([fieldName, value]) => ({ fieldName, value })),
           }),
         },
@@ -435,9 +446,34 @@ function observedVisibleHash(prepared: PreparedRow): string {
   }
   return stableHash({
     fields: Object.entries(prepared.snapshotRow.cells)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([fieldName, cell]) => ({ fieldName, value: cell.normalizedCell })),
   });
+}
+
+export function isAuthoritativeObservationResult(
+  result: PersistObservedRowResult,
+): result is Extract<
+  PersistObservedRowResult,
+  { readonly kind: typeof OBSERVATION_WRITE_RESULT_KINDS.PERSISTED }
+> {
+  return result.kind === OBSERVATION_WRITE_RESULT_KINDS.PERSISTED;
+}
+
+/**
+ * Identifies results whose current polling read may safely drive deferred
+ * system-wins evidence. A duplicate means the observation is already durable,
+ * not that the just-read visible baseline is obsolete; the gateway CAS still
+ * rejects a remote edit that occurs after this read.
+ */
+export function isObservationEvidenceUsableForDeferredResolution(
+  result: PersistObservedRowResult,
+): result is Extract<
+  PersistObservedRowResult,
+  { readonly kind: typeof OBSERVATION_WRITE_RESULT_KINDS.PERSISTED | typeof OBSERVATION_WRITE_RESULT_KINDS.DUPLICATE }
+> {
+  return result.kind === OBSERVATION_WRITE_RESULT_KINDS.PERSISTED ||
+    result.kind === OBSERVATION_WRITE_RESULT_KINDS.DUPLICATE;
 }
 
 function classifyResult(accumulator: SheetAccumulator, result: PersistObservedRowResult): void {
