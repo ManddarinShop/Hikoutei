@@ -59,6 +59,7 @@ export interface MappedVisibleProjectionSqlRow {
 
 /** Raw latest projection effect returned by SQLite. */
 export interface MappedLatestProjectionEffectSqlRow {
+  readonly effect_id: string;
   readonly physical_sheet_id: string;
   readonly projection: string;
   readonly status: EffectStatus;
@@ -143,7 +144,7 @@ const READ_VISIBLE_PROJECTION_STATE_SQL = `
 `;
 
 const READ_LATEST_PROJECTION_EFFECT_SQL = `
-  SELECT physical_sheet_id, projection, status, payload_json,
+  SELECT effect_id, physical_sheet_id, projection, status, payload_json,
          expected_visible_revision, expected_visible_hash, stream_sequence
   FROM sheet_effect_outbox
   WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?

@@ -23,17 +23,22 @@ import {
   applyEffectResultWithAdapter,
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
+  markDeliveryUncertainWithAdapter,
+  renewEffectLeaseWithAdapter,
   recoverExpiredLeasesWithAdapter,
   listReadyEffectsWithAdapter,
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
   hasActiveUserInputCandidateWithSql,
+  ensureSpreadsheetAuthorityWithAdapter,
   type ApplyResultOptions,
   type ClaimEffectOptions,
   type ClaimLeaseOptions,
   type ClaimResult,
+  type MarkDeliveryUncertainOptions,
   type FencingContext,
+  type RenewEffectLeaseOptions,
   type NewEffect,
   type PendingEffect,
   type RetryClaimedEffectOptions,
@@ -52,6 +57,10 @@ import {
   SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
   SYNC_GATEWAY_PROJECTIONS,
 } from "../../gateway/constants.js";
+import {
+  classifyTransportOutcome,
+  TRANSPORT_OUTCOME_KINDS,
+} from "../../gateway/transportClassification.js";
 import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
   SYNC_TIMING_SCOPES,
@@ -60,7 +69,10 @@ import {
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WORKER_ROLE,
+  EFFECT_LEASE_GATEWAY_HEADROOM_MS,
   DEFAULT_WRITER_LEASE_DURATION_MS,
+  GATEWAY_EFFECT_BATCH_LIMIT,
+  MAX_IN_FLIGHT_EFFECTS,
   OUTBOX_EFFECT_STATUSES,
   WORKER_ERROR_CODES,
 } from "./SyncEffectWorkerConstants.js";
@@ -88,17 +100,22 @@ import {
 } from "./SyncEffectWorkerTransitions.js";
 import {
   dispatchFastAppendGroup,
+  handleGatewayDispatchError,
   rejectUnsupportedGatewayEffects,
 } from "./SyncEffectWorkerDispatch.js";
 import {
   fenceFromLease,
   groupByFastAppendRequest,
   groupByGatewayRequest,
+  chunkFastAppendGroups,
+  chunkGatewayEffectGroups,
+  gatewayRouteKey,
   isCandidateProtectingUserInputEffect,
   isFastAppendCandidate,
   isSuccessfulGatewayPostcondition,
   toGatewayEffect,
 } from "./SyncEffectWorkerRouting.js";
+import type { AdaptiveEffectBatchController } from "./AdaptiveEffectBatchController.js";
 
 /** An effect plus evidence supplied to a writer-owned system-repair replanner. */
 export interface RepairReplanRequest {
@@ -119,6 +136,11 @@ export interface SyncEffectWorkerBaseOptions {
   readonly writerRole?: string;
   readonly writerLeaseDurationMs?: number;
   readonly effectLeaseDurationMs?: number;
+  /** Internal transport timeout used to validate lease headroom. */
+  readonly gatewayTimeoutMs?: number;
+  readonly batchController?: AdaptiveEffectBatchController;
+  /** Shared supervisor clock used to refresh fencing timestamps after remote I/O. */
+  readonly clock?: () => number;
   readonly makeRepairReplan?: RepairReplanFactory;
   /** Optional diagnostics sink for worker and gateway phases. */
   readonly onTiming?: SyncTimingSink;
@@ -161,8 +183,14 @@ export interface ClaimedEffect {
 export interface EffectWorkerStorage {
   claimWriterLease(options: ClaimLeaseOptions): Promise<WriterLeaseClaimResult>;
   recoverExpiredLeases(fence: FencingContext): Promise<number>;
-  listReadyEffects(limit: number): Promise<readonly PendingEffect[]>;
+  listReadyEffects(limit: number, now?: number): Promise<readonly PendingEffect[]>;
   claimEffect(options: ClaimEffectOptions): Promise<ClaimResult>;
+  ensureSpreadsheetAuthority(options: FencingContext & {
+    readonly physicalSheetId: string;
+    readonly ownerId: string;
+  }): Promise<boolean>;
+  markDeliveryUncertain(options: MarkDeliveryUncertainOptions): Promise<boolean>;
+  renewEffectLease(options: RenewEffectLeaseOptions): Promise<boolean>;
   applyEffectResult(options: ApplyResultOptions): Promise<boolean>;
   releaseUnprocessedEffect(
     options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
@@ -196,6 +224,13 @@ async function runEffectWorker(
   storage: EffectWorkerStorage,
 ): Promise<SyncEffectWorkerReport> {
   const passStartedAt = Date.now();
+  if (options.clock === undefined) {
+    const baselineNow = options.now;
+    options = {
+      ...options,
+      clock: () => baselineNow + Math.max(0, Date.now() - passStartedAt),
+    };
+  }
   validateOptions(options);
   const role = options.writerRole ?? DEFAULT_WORKER_ROLE;
   const leaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
@@ -233,28 +268,116 @@ async function runEffectWorker(
     operationKinds: [],
     operationCounts: emptyOperationCounts(),
   });
-  const fence = fenceFromLease(claimResult.lease, options.now);
+  let fence = fenceFromLease(claimResult.lease, options.now);
+  const leaseNow = (): number => options.clock?.() ?? options.now + Math.max(0, Date.now() - passStartedAt);
+  const currentFence = (): FencingContext => ({
+    ...fence,
+    // Direct worker callers may provide a deterministic `now` but no clock;
+    // advance that baseline by elapsed wall time so a slow remote call cannot
+    // reuse a pass-start timestamp after the writer lease has expired.
+    now: leaseNow(),
+  });
+  const refreshDispatchLeases = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
+    const now = leaseNow();
+    const writerRefresh = await storage.claimWriterLease({
+      role,
+      writerId: options.workerId,
+      leaseDurationMs: leaseDuration,
+      now,
+    });
+    if (writerRefresh.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) return false;
+    if (
+      writerRefresh.lease.writerEpoch !== fence.writerEpoch ||
+      writerRefresh.lease.fencingToken !== fence.fencingToken
+    ) {
+      // The old fence expired and was taken over. Do not dispatch effects
+      // claimed under that token; the next pass will recover them safely.
+      fence = fenceFromLease(writerRefresh.lease, now);
+      await storage.recoverExpiredLeases(currentFence());
+      return false;
+    }
+    const authoritySheetIds = new Set(items.map((item) => item.pending.physical_sheet_id));
+    for (const physicalSheetId of authoritySheetIds) {
+      if (!(await storage.ensureSpreadsheetAuthority({
+        ...currentFence(),
+        physicalSheetId,
+        ownerId: options.workerId,
+      }))) {
+        await storage.recoverExpiredLeases(currentFence());
+        return false;
+      }
+    }
+    const renewed: ClaimedEffect[] = [];
+    const notRenewed: ClaimedEffect[] = [];
+    for (const item of items) {
+      if (await storage.renewEffectLease({
+        ...currentFence(),
+        effectId: item.pending.effect_id,
+        claimToken: item.claimToken,
+        leaseDurationMs: effectLeaseDuration,
+      })) renewed.push(item);
+      else notRenewed.push(item);
+    }
+    if (renewed.length === items.length) return true;
+    await storage.recoverExpiredLeases(currentFence());
+    for (const item of renewed) {
+      if (await storage.releaseUnprocessedEffect({
+        ...currentFence(),
+        effectId: item.pending.effect_id,
+        claimToken: item.claimToken,
+      })) report.deferred += 1;
+    }
+    for (const item of notRenewed) {
+      if (await storage.retryClaimedEffect({
+        ...currentFence(),
+        effectId: item.pending.effect_id,
+        claimToken: item.claimToken,
+        lastErrorCode: WORKER_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+        lastErrorMessage: "Effect lease could not be renewed before remote dispatch.",
+      })) {
+        report.requeued += 1;
+        report.deferred += 1;
+      }
+    }
+    return false;
+  };
+  const coalesceStartedAt = Date.now();
+  const coalescedMs = await options.batchController?.waitForCoalescing(Date.now()) ?? 0;
+  if (coalescedMs > 0) {
+    emitWorkerTiming(options, {
+      scope: SYNC_TIMING_SCOPES.WORKER,
+      phase: "batch_coalesce_wait",
+      durationMs: Date.now() - coalesceStartedAt,
+      operationKinds: [],
+      operationCounts: emptyOperationCounts(),
+    });
+  }
   const selectStartedAt = Date.now();
-  report.expiredLeasesRecovered = await storage.recoverExpiredLeases(fence);
-  const selected = await storage.listReadyEffects(options.maxEffects);
-  report.selected = selected.length;
+  report.expiredLeasesRecovered = await storage.recoverExpiredLeases(currentFence());
+  const selected = await storage.listReadyEffects(options.maxEffects, currentFence().now);
+  // Keep maxEffects as the SQLite selection upper bound, but only lease a
+  // bounded in-flight window before the first remote dispatch. Remaining rows
+  // stay durable and are picked up on the next pass.
+  const claimable = selected.slice(0, MAX_IN_FLIGHT_EFFECTS);
+  report.selected = claimable.length;
   emitWorkerTiming(options, {
     scope: SYNC_TIMING_SCOPES.WORKER,
     phase: "recover_and_select",
     durationMs: Date.now() - selectStartedAt,
-    operationKinds: operationKindsForPendingEffects(selected),
-    operationCounts: countsForPendingEffects(selected),
+    operationKinds: operationKindsForPendingEffects(claimable),
+    operationCounts: countsForPendingEffects(claimable),
   });
 
   const claimed: ClaimedEffect[] = [];
   const recoveryCandidates: ClaimedEffect[] = [];
   const claimEffectsStartedAt = Date.now();
-  for (const pending of selected) {
+  for (const pending of claimable) {
     const claimToken = "claim:" + randomUUID();
     const claim = await storage.claimEffect({
-      ...fence,
+      ...currentFence(),
       effectId: pending.effect_id,
       claimToken,
+      dispatchId: "dispatch:" + randomUUID(),
       leaseDurationMs: effectLeaseDuration,
     });
     if (claim.status !== "claimed") continue;
@@ -269,7 +392,10 @@ async function runEffectWorker(
       invalidPayloadError = presentValue(safeErrorMessage(error));
     }
     const item = { pending, claimToken, gatewayEffect, invalidPayloadError };
-    if (pending.status === OUTBOX_EFFECT_STATUSES.FAILED) {
+    if (
+      pending.status === OUTBOX_EFFECT_STATUSES.FAILED ||
+      pending.status === OUTBOX_EFFECT_STATUSES.DELIVERY_UNCERTAIN
+    ) {
       recoveryCandidates.push(item);
       continue;
     }
@@ -289,15 +415,15 @@ async function runEffectWorker(
   if (fullGateway === undefined) {
     await rejectUnsupportedGatewayEffects(
       storage,
-      fence,
+      currentFence(),
       recoveryCandidates,
       report,
     );
-  } else {
+  } else if (await refreshDispatchLeases(recoveryCandidates)) {
     await recoverUnknownResults(
       { ...options, gateway: fullGateway },
       storage,
-      fence,
+      currentFence(),
       recoveryCandidates,
       report,
     );
@@ -307,7 +433,7 @@ async function runEffectWorker(
   for (const invalid of claimed.filter((item) => isAbsent(item.gatewayEffect))) {
     await completeFailure(
       storage,
-      fence,
+      currentFence(),
       invalid,
       WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       invalid.invalidPayloadError,
@@ -327,7 +453,7 @@ async function runEffectWorker(
       continue;
     }
     if (await storage.applyEffectResult({
-      ...fence,
+      ...currentFence(),
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
       status: OUTBOX_EFFECT_STATUSES.BLOCKED_CANDIDATE,
@@ -348,46 +474,102 @@ async function runEffectWorker(
   const fastAppendItems = dispatchable.filter(isFastAppendCandidate);
   const regularItems = dispatchable.filter((item) => !isFastAppendCandidate(item));
 
-  for (const group of groupByFastAppendRequest(fastAppendItems)) {
-    await dispatchFastAppendGroup(options, storage, fence, group, report);
+  const fastAppendGroups = chunkFastAppendGroups(
+    groupByFastAppendRequest(fastAppendItems, {
+      epoch: currentFence().writerEpoch,
+      token: currentFence().fencingToken,
+    }),
+    (group) => options.batchController?.limitFor(gatewayRouteKey(group.request)) ?? GATEWAY_EFFECT_BATCH_LIMIT,
+  );
+  for (const group of fastAppendGroups) {
+    if (!(await refreshDispatchLeases(group.items))) continue;
+    await dispatchFastAppendGroup(
+      options,
+      storage,
+      currentFence(),
+      group,
+      report,
+      fullGateway,
+      () => refreshDispatchLeases(group.items),
+    );
   }
 
   if (fullGateway === undefined) {
-    await rejectUnsupportedGatewayEffects(storage, fence, regularItems, report);
+    await rejectUnsupportedGatewayEffects(storage, currentFence(), regularItems, report);
   } else {
-    for (const group of groupByGatewayRequest(regularItems)) {
+    // Chunk each physical route to the Apps Script bounded effect batch so one
+    // applyEffects call returns a complete result set. An oversized configured
+    // worker limit (maxEffects) would otherwise send more effects than the
+    // gateway acknowledges per call, producing hasMore partial prefixes and the
+    // deferred/requeue churn they cause on every pass.
+    const regularGroups = chunkGatewayEffectGroups(
+      groupByGatewayRequest(regularItems, {
+        epoch: currentFence().writerEpoch,
+        token: currentFence().fencingToken,
+      }),
+      (group) => options.batchController?.limitFor(gatewayRouteKey(group.request)) ?? GATEWAY_EFFECT_BATCH_LIMIT,
+    );
+    for (const group of regularGroups) {
+      if (!(await refreshDispatchLeases(group.items))) continue;
       const deferredEffectIds = new Set<string>();
       let response: Awaited<ReturnType<SyncEffectWorkerFullGateway["applyEffects"]>>;
       const regularOperationCounts = countsForItems(group.items);
       const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
       const gatewayStartedAt = Date.now();
+      const routeKey = gatewayRouteKey(group.request);
+      const batchLimit = options.batchController?.beginDispatch(routeKey, gatewayStartedAt) ?? GATEWAY_EFFECT_BATCH_LIMIT;
       try {
         response = await fullGateway.applyEffects(group.request);
-      } catch {
+      } catch (error: unknown) {
+        const outcome = classifyTransportOutcome(error);
+        options.batchController?.observe(routeKey, {
+          durationMs: Date.now() - gatewayStartedAt,
+          responseSucceeded: false,
+          responseLoss: outcome.kind === TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN,
+        });
+        const failedDurationMs = Date.now() - gatewayStartedAt;
         emitWorkerTiming(options, {
           scope: SYNC_TIMING_SCOPES.WORKER,
           phase: "regular_gateway_dispatch",
-          durationMs: Date.now() - gatewayStartedAt,
+          durationMs: failedDurationMs,
           operationKinds: regularOperationKinds,
           operationCounts: regularOperationCounts,
+          routeKey,
+          batchLimit,
+          responseSucceeded: false,
         });
-        // Remote side may have written the effect before transport failed.
-        await recoverUnknownResults(
-          { ...options, gateway: fullGateway },
+        // Remote side may have written the effect before an uncertain
+        // transport failure. Explicit remote failures skip recovery because
+        // the Gateway already proved that the operation was rejected.
+        const resultFence = currentFence();
+        await handleGatewayDispatchError(
+          options,
           storage,
-          fence,
+          resultFence,
           group.items,
           report,
+          outcome,
+          fullGateway,
+          () => refreshDispatchLeases(group.items),
         );
         continue;
       }
+      const regularGatewayDurationMs = Date.now() - gatewayStartedAt;
+      options.batchController?.observe(routeKey, {
+        durationMs: regularGatewayDurationMs,
+        responseSucceeded: response.results.length === group.items.length && !response.hasMore,
+        responseLoss: response.results.length !== group.items.length || response.hasMore,
+      });
       emitGatewayTiming(options, response.timing);
       emitWorkerTiming(options, {
         scope: SYNC_TIMING_SCOPES.WORKER,
         phase: "regular_gateway_dispatch",
-        durationMs: Date.now() - gatewayStartedAt,
+        durationMs: regularGatewayDurationMs,
         operationKinds: regularOperationKinds,
         operationCounts: regularOperationCounts,
+        routeKey,
+        batchLimit,
+        responseSucceeded: response.results.length === group.items.length && !response.hasMore,
       });
 
       const resultPersistenceStartedAt = Date.now();
@@ -396,7 +578,7 @@ async function runEffectWorker(
         const result = lookupResult(byEffectId.get(item.pending.effect_id));
         if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND && response.hasMore) {
           if (await storage.releaseUnprocessedEffect({
-            ...fence,
+            ...currentFence(),
             effectId: item.pending.effect_id,
             claimToken: item.claimToken,
           })) {
@@ -436,15 +618,17 @@ async function runEffectWorker(
           recoveryItems.push(item);
           continue;
         }
-        await completeGatewayResult(options, storage, fence, item, result.value, report);
+        await completeGatewayResult(options, storage, currentFence(), item, result.value, report);
       }
-      await recoverUnknownResults(
-        { ...options, gateway: fullGateway },
-        storage,
-        fence,
-        recoveryItems,
-        report,
-      );
+      if (await refreshDispatchLeases(recoveryItems)) {
+        await recoverUnknownResults(
+          { ...options, gateway: fullGateway },
+          storage,
+          currentFence(),
+          recoveryItems,
+          report,
+        );
+      }
       emitWorkerTiming(options, {
         scope: SYNC_TIMING_SCOPES.WORKER,
         phase: "regular_result_persistence",
@@ -469,8 +653,14 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
   return {
     claimWriterLease: (options) => claimWriterLeaseWithAdapter(storage, options),
     recoverExpiredLeases: (fence) => recoverExpiredLeasesWithAdapter(storage, fence),
-    listReadyEffects: (limit) => listReadyEffectsWithAdapter(storage, limit),
+    listReadyEffects: (limit, now) => listReadyEffectsWithAdapter(storage, limit, now),
     claimEffect: (options) => claimEffectWithAdapter(storage, options),
+    ensureSpreadsheetAuthority: async (options) => {
+      const result = await ensureSpreadsheetAuthorityWithAdapter(storage, options);
+      return result.kind === "claimed";
+    },
+    markDeliveryUncertain: (options) => markDeliveryUncertainWithAdapter(storage, options),
+    renewEffectLease: (options) => renewEffectLeaseWithAdapter(storage, options),
     applyEffectResult: (options) => applyEffectResultWithAdapter(storage, options),
     releaseUnprocessedEffect: (options) => releaseUnprocessedEffectWithAdapter(storage, options),
     retryClaimedEffect: (options) => retryClaimedEffectWithAdapter(storage, options),
@@ -574,6 +764,7 @@ function validateOptions(options: SyncEffectWorkerBaseOptions): void {
   for (const [name, value] of [
     ["writerLeaseDurationMs", options.writerLeaseDurationMs],
     ["effectLeaseDurationMs", options.effectLeaseDurationMs],
+    ["gatewayTimeoutMs", options.gatewayTimeoutMs],
   ] as const) {
     if (
       value !== undefined &&
@@ -581,5 +772,16 @@ function validateOptions(options: SyncEffectWorkerBaseOptions): void {
     ) {
       throwWorkerError(name + " must be a positive safe integer");
     }
+  }
+  const writerLeaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
+  const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
+  if (writerLeaseDuration <= effectLeaseDuration) {
+    throwWorkerError("writerLeaseDurationMs must exceed effectLeaseDurationMs");
+  }
+  if (
+    options.gatewayTimeoutMs !== undefined &&
+    effectLeaseDuration <= options.gatewayTimeoutMs + EFFECT_LEASE_GATEWAY_HEADROOM_MS
+  ) {
+    throwWorkerError("effectLeaseDurationMs must exceed gatewayTimeoutMs by 30 seconds");
   }
 }

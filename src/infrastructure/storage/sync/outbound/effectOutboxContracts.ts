@@ -19,6 +19,7 @@ import type {
 
 export const SYNC_EFFECT_RECOVERY_ERROR_CODES = {
   LEASE_EXPIRED_REQUIRES_POSTCONDITION: "lease_expired_requires_postcondition",
+  DELIVERY_UNCERTAIN_REQUIRES_PROBE: "delivery_uncertain_requires_probe",
   GATEWAY_RETRYABLE_ERROR: "gateway_retryable_error",
   POSTCONDITION_READ_FAILED: "postcondition_read_failed",
   POSTCONDITION_UNAVAILABLE: "postcondition_unavailable",
@@ -40,6 +41,15 @@ export type ClaimResult =
 
 /** Input required to claim an effect with the current worker fence. */
 export interface ClaimEffectOptions extends FencingContext {
+  readonly effectId: string;
+  readonly claimToken: string;
+  /** Durable identity for the remote dispatch represented by this claim. */
+  readonly dispatchId?: string;
+  readonly leaseDurationMs: number;
+}
+
+/** Extends an in-flight effect lease without changing its claim token. */
+export interface RenewEffectLeaseOptions extends FencingContext {
   readonly effectId: string;
   readonly claimToken: string;
   readonly leaseDurationMs: number;
@@ -112,6 +122,19 @@ export interface RetryClaimedEffectOptions
   readonly claimToken: string;
   readonly lastErrorCode: string;
   readonly lastErrorMessage: string;
+  /** Durable retry time; defaults to a short bounded delay at the SQL boundary. */
+  readonly nextAttemptAt?: number;
+}
+
+/** Moves a claimed effect into durable ambiguous-delivery recovery. */
+export interface MarkDeliveryUncertainOptions
+  extends Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> {
+  readonly effectId: string;
+  readonly claimToken: string;
+  readonly uncertainSince: number;
+  readonly nextProbeAt: number;
+  readonly lastErrorCode: string;
+  readonly lastErrorMessage: string;
 }
 
 export interface PendingEffect {
@@ -137,5 +160,9 @@ export interface PendingEffect {
   readonly effect_dedupe_key: HikouteiEffectDedupeKey;
   readonly stream_sequence: number;
   readonly created_at: number;
+  readonly next_attempt_at: number | null;
+  readonly uncertain_since: number | null;
+  readonly next_probe_at: number | null;
+  readonly dispatch_id: string | null;
   readonly status: EffectStatus;
 }

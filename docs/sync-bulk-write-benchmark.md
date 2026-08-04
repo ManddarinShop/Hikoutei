@@ -1,5 +1,386 @@
 # Sync bulk-write benchmark
 
+## Black-box server and Locust workload
+
+The test-only server harness treats Hikoutei as a server-side library rather
+than calling the sync worker directly from a benchmark script:
+
+```sh
+node --env-file=.env .local/hikoutei-load-server.mjs
+```
+
+It binds to `127.0.0.1:8787` by default and reports a run-specific persistent
+SQLite path, System_State/User_Input tab names, and JSONL log path from
+`GET /health`. It does not delete the database or Sheet data on shutdown.
+
+Run the mixed workload from another terminal:
+
+```sh
+locust -f .local/locustfile.py \
+  --host http://127.0.0.1:8787 \
+  --users 20 \
+  --spawn-rate 5 \
+  --run-time 5m \
+  --headless
+```
+
+The Locust user weights are read 40%, create 20%, application update 25%, and
+User_Input simulation 15%. The User_Input task calls the test-only
+`/__test/user-input` endpoint, which changes the real Sheet and leaves the
+normal polling service to apply the value to SQLite. The server records HTTP,
+flush, Gateway, polling, error, and over-30-second events in the JSONL log;
+the over-30-second observer never stops the server or workload. Inspect
+`GET /metrics` after Locust stops, then stop the server with `Ctrl-C`; the
+persistent run data remains for inspection.
+
+## 2026-08-03 — black-box Locust run and configuration diagnosis
+
+- Server run: `load-1785732937019-23536468`
+- Log: `.local/hikoutei-load-load-1785732937019-23536468.jsonl`
+- Workload: `.local/locustfile.py` mixed CRUD/User_Input tasks
+- Final HTTP log: **1,508** requests; 1,201 successful responses and 307
+  failures, including 264 creates, 582 reads, 375 updates, and 209 User_Input
+  requests
+- Gateway log: **444** requests; 246 successes, 190 operation failures, and 8
+  timeouts; 4 requests exceeded 30 seconds
+- Final local state snapshot: **264** SQLite entity rows, 332 applied effects,
+  7 blocked candidates, 601 pending effects, and 234 processing effects
+
+The test did create visible tabs, but the server read a different
+`TYPED_SHEETS_GATEWAY_SHEET_ID` from the local `.env` than the spreadsheet ID
+provided for the intended target. On the spreadsheet actually used by the
+server, the following tabs were visible: `TS_Load_load-1785732937019-23536468_System`
+(265 rows including the header) and `TS_Load_load-1785732937019-23536468_Input`
+(26 rows including the header). The apparent missing table was therefore a
+configuration-target mismatch, not a provisioning omission. The intended sheet
+ID must be placed in `.env` before the next run; the shared secret must also be
+valid for that deployed gateway/sheet configuration.
+
+The run was not a clean functional pass. Concurrent User_Input simulation and
+polling contended on the Apps Script observation lock, producing repeated
+`Could not acquire the sync observation gateway lock` errors; the resulting
+failed effects then blocked later ORM writes with `user_input projection is
+blocked: latest effect is failed`. The persistent SQLite file and actual test
+Sheet data were retained for diagnosis.
+
+## 2026-08-03 — lock-refactor Locust run
+
+- Branch: `perf/adaptive-sync-performance`
+- Server run: `load-1785737483461-793bddd2`
+- Exact server command: `node --env-file=.env .local/hikoutei-load-server.mjs`
+- Exact Locust command: `/usr/local/bin/locust -f .local/locustfile.py --host http://127.0.0.1:8787`
+  (user count and duration were controlled from the Locust UI)
+- Log: `.local/hikoutei-load-load-1785737483461-793bddd2.jsonl`
+- Database: `.local/hikoutei-load-load-1785737483461-793bddd2.sqlite`
+- Backend: local Node `v24.3.0`, persistent SQLite/MikroORM, deployed Apps Script
+  gateway, and the real target Sheet
+- Scenario: mixed read/create/update/User_Input workload; HTTP activity ran from
+  `2026-08-03T06:12:25Z` through `2026-08-03T06:17:44Z` (about 5m 19s)
+- Setup: one provisioning Gateway call, 4,013 ms, excluded from steady-state
+  counts below
+
+| Metric | No-setup / steady-state result | Full recorded run |
+| --- | ---: | ---: |
+| HTTP requests | 4,883 workload requests | 4,907 through workload stop, including 21 health, 2 metrics, and 1 unknown request |
+| HTTP success/failure | 3,119 / 1,764 workload responses | 3,142 / 1,765 responses |
+| Gateway requests | 763 sync calls; 718 success / 45 failure | 764 including setup |
+| HTTP latency | p50 5.16 ms; p95 2,820.89 ms | max 60,004.28 ms |
+| Gateway latency | p50 2,312 ms; p95 30,314 ms | max 60,004 ms; 35 over 30 s |
+
+Workload response breakdown: create 505 successful and 522 failed; read 1,957
+successful; update 582 successful and 603 failed; User_Input 75 returned 202,
+598 returned 404 before the row was projected, and 41 returned 500. Gateway
+failures during the workload were 22 invalid responses, 15 `method_not_allowed`
+responses, 6 timeouts, and 2 remote operation failures. No
+`Could not acquire the sync observation gateway lock` message occurred during
+the workload window. One such lock error appeared later while background
+polling continued after Locust stopped.
+
+The dominant workload failure was projection poisoning: 1,124 HTTP operation
+errors reported `user_input projection is blocked: latest effect is
+blocked_candidate`. The workload also recorded 7 polling errors for invalid
+observed projection evidence. A post-load metrics snapshot showed 505 entity
+rows, 656 applied outbox effects, 25 blocked candidates, 61 failed effects,
+1,264 pending effects, and 177 processing effects; this snapshot includes
+background synchronization after the Locust workload stopped. The Locust UI
+process remained open without new workload requests, and the server remained
+alive for diagnosis. All Sheet, SQLite, and JSONL data were retained.
+
+## 2026-08-03 — pending User_Input retry Locust run
+
+- Branch: `perf/adaptive-sync-performance`
+- Server run: `load-1785738645774-79e64130`
+- Exact server command: `node --env-file=.env .local/hikoutei-load-server.mjs`
+- Exact Locust command: `/usr/local/bin/locust -f .local/locustfile.py --host http://127.0.0.1:8787`
+  (user count and duration were controlled from the Locust UI)
+- Log: `.local/hikoutei-load-load-1785738645774-79e64130.jsonl`
+- Database: `.local/hikoutei-load-load-1785738645774-79e64130.sqlite`
+- Backend: local Node `v24.3.0`, persistent SQLite/MikroORM, deployed Apps Script
+  gateway, and the real target Sheet
+- Scenario: mixed read/create/update/User_Input workload with bounded User_Input
+  retry/backoff; workload ran from `2026-08-03T06:31:37Z` through
+  `2026-08-03T06:36:58Z` (about 5m 21s)
+- Setup: one provisioning call and pre-load worker warm-up excluded from the
+  steady-state Gateway counts
+
+| Metric | No-setup / steady-state result | Locust result |
+| --- | ---: | ---: |
+| Requests | 7,754 CRUD/User_Input requests | 7,774 total requests |
+| Success/failure | 4,519 / 3,235 workload responses | fail ratio **41.61%** |
+| Gateway | 1,173 calls; 1,165 success / 8 failure | p50 2,132 ms; p95 6,624 ms |
+| HTTP latency | aggregate median 10 ms; p95 2,300 ms | max 52,409 ms |
+| Slow Gateway calls | 12 over 30 seconds | max 52,407 ms |
+
+Locust's stopped report had 3,116 successful reads, 1,590 creates with 1,386
+failures, 1,924 updates with 1,698 failures, and 1,124 User_Input attempts
+with 151 failures. Of the User_Input failures, 148 reached the bounded retry
+deadline and 3 were HTTP 500 responses. The harness therefore stopped counting
+most projection-lag 404 responses as immediate Locust failures, but those rows
+still did not become successful Sheet edits: the server log recorded 943 404s
+and 188 successful 202 edits.
+
+The main failure remained projection poisoning. The server recorded 3,084
+`user_input projection is blocked: latest effect is blocked_candidate` errors,
+matching the create/update failures. During the workload, the Gateway had 3
+remote operation failures, 4 invalid responses, and 1 `method_not_allowed`
+response; polling also recorded 2 observation-lock acquisition failures and 7
+invalid observed-evidence errors. The retry queue improved classification of
+asynchronous row lag, but it cannot repair a projection whose effect is already
+blocked. A post-load metrics snapshot showed 204 entity rows, 360 applied
+outbox effects, 25 blocked candidates, 2 failed effects, 397 pending effects,
+and 93 processing effects. The Locust state was stopped with zero users; the
+server and all generated data remain available for diagnosis.
+
+Compared with the previous lock-refactor run, the retry queue reduced User_Input
+failures reported by Locust from immediate row-not-found failures to 148
+retry-deadline failures, but the underlying blocked-candidate cascade remains
+the next bottleneck. The two observation-lock failures also confirm that the
+remaining contention is in the retained full-observation path, not the
+lock-free values-only read.
+
+## 2026-08-03 — Sync_Conflicts and automatic system-wins Locust run
+
+- Branch: `perf/adaptive-sync-performance`
+- Server command: `node --env-file=.env .local/hikoutei-load-server.mjs`
+- Locust command: `/usr/local/bin/locust -f .local/locustfile.py --host http://127.0.0.1:8787` (user count and duration were controlled from the Locust UI)
+- Server run: `load-1785748381328-41f5654c`
+- Log: `.local/hikoutei-load-load-1785748381328-41f5654c.jsonl`
+- Database: `.local/hikoutei-load-load-1785748381328-41f5654c.sqlite`
+- Backend: local Node `v24.3.0`, persistent SQLite/MikroORM, deployed Apps Script gateway, and the real target Sheet
+- Scenario: mixed read/create/update/User_Input workload with mandatory
+  `System_State`, `User_Input`, and `Sync_Conflicts` projections
+- Workload window: `2026-08-03T09:13:59.580Z`–`2026-08-03T09:19:17.434Z`
+  (about 5m 18s); setup provisioning took 5,436 ms and is excluded below
+- Dataset/result: 456 SQLite entity rows and 127 captured conflicts
+
+| Metric | No-setup / steady-state result | Full server record |
+| --- | ---: | ---: |
+| Application HTTP requests | 2,648 workload requests | 2,669 including 21 health requests before the workload endpoint closed |
+| HTTP outcome | 2,068 2xx / 246 projection-lag 404 / 334 500 | 2,089 2xx / 246 404 / 334 500 |
+| Locust-effective failure ratio | **334 / 2,648 = 12.61%** | 404 responses were marked success by the bounded retry queue |
+| Gateway requests | 428 sync calls; 308 success / 120 failure | 429 including setup |
+| Gateway latency | p50 4,344 ms; p95 34,246 ms | max 60,011 ms; 92 over 30 s; 4 over 60 s |
+
+Application breakdown was 456 successful creates and 93 failed creates, 1,044
+successful reads, 526 successful updates and 130 failed updates, and 42
+successful User_Input changes, 246 projection-lag 404s, and 111 failed
+User_Input requests. The main errors were 223 requests blocked by a previously
+failed `user_input` effect, 90 invalid Gateway JSON responses, 17
+`Use a signed POST request` responses, and 4 Gateway timeouts. During the
+workload window there were 2 polling evidence errors and 1 effect-worker
+postcondition/claim mismatch. The 404s are not counted as Locust failures by
+`locustfile.py`; they remain bounded pending projection retries.
+
+The new conflict path itself behaved correctly in SQLite: all **127/127**
+`sync_conflict` rows ended `RESOLVED`, all **127/127**
+`acknowledge_system` commands ended `applied` with role `sync_operator`, and
+there were **0** active candidate pointers. No `latest effect is
+blocked_candidate` cascade appeared in the server errors; the remaining
+application failures were caused by failed Gateway/materialization effects.
+The durable outbox retained the remote work for recovery. At the post-load
+metrics snapshot (after background synchronization continued), the outbox was
+`applied=390`, `pending=1,267`, `processing=60`, `failed=375`,
+`blocked_candidate=4`, and `superseded=127` at the
+`2026-08-03T09:26:09Z` metrics snapshot. The 127 conflict-audit effects
+were `30 applied`, `77 pending`, and `20 failed`, so SQLite resolution was
+committed even though the remote `Sync_Conflicts` projection had not fully
+converged.
+
+This is a functional improvement over the preceding retry-queue run: the
+unresolved conflict/candidate cascade was eliminated and the observed failure
+ratio was lower, but it is **not a clean remote-delivery benchmark**. The
+remaining bottleneck is Apps Script instability/latency (`invalid JSON`,
+`method_not_allowed`, operation failures, and timeouts), which poisoned
+System_State/User_Input effects and left a large durable backlog. The server
+and all Sheet, SQLite, and JSONL artifacts were retained; the server continued
+running after Locust stopped, so later background metrics are explicitly not
+part of the steady-state workload numbers.
+
+A later background-only inspection at `2026-08-03T09:50:42Z` found that the
+server was still alive but the remote projection had not converged: SQLite now
+contained **333** resolved conflicts (up from 127 at the workload snapshot),
+with zero active candidate pointers. This increase represents the same
+User_Input edits being observed again while their canonical reconcile effects
+remain failed/pending; it is not evidence that SQLite left conflicts open, but
+it does show that a continuously running worker cannot drain a permanently
+unavailable remote projection. The outbox then stood at `applied=794`,
+`pending=887`, `processing=64`, `failed=553`, `blocked_candidate=4`, and
+`superseded=333`; the server was still handling a long Gateway append when the
+20-second before/after check was taken. This follow-up is diagnostic and is not
+part of the steady-state workload result above.
+
+## 2026-08-02 — performance branch baseline
+
+- Branch: `perf/adaptive-sync-performance`
+- Base: `origin/develop` at `63ebddc`, including the merged contract PRs #155 and #156
+- Environment: macOS arm64, Node `v24.3.0`, npm `11.4.2`
+
+### Local implementation verification (synthetic, no live Sheets)
+
+These commands exercise the in-process SQLite authority plus fake/in-memory
+Apps Script gateways. They are correctness and contract checks, not latency
+measurements: no real spreadsheet, credentials, or Apps Script quota is
+involved, so timings are not comparable to the live baselines below.
+
+- `npm test` — 30 files, 197 tests passed
+- `npm run typecheck` — passed
+- `npm run typecheck:test` — passed
+- `npm run build` — passed
+- `npm pack --dry-run` — passed
+- `git diff --check` — passed
+
+The regression suite now covers the adaptive/outbound work directly with
+synthetic fixtures: the values-only preflight escalation rules, formula/merged/
+error deferral to the periodic safety full scan, safety-scan scheduling and
+coalescing, backlog convergence across worker passes, no full read on unchanged
+adaptive passes, response-loss backoff, and the new internal polling timing
+phases emitted through the diagnostics sink (canonical state read, values-only
+read, fast comparison, full metadata observation, persistence, overall, and safety-scan lag).
+
+### 2026-08-02 — local synthetic latency sample
+
+- Branch: `perf/adaptive-sync-performance`
+- Exact command: `./node_modules/.bin/vite-node scripts/bench-local-sync-performance.ts`
+- Backend: in-process SQLite/MikroORM plus `FakeSyncSheetGateway`; no network or Apps Script quota
+- Dataset: 66 unchanged User_Input rows; 7 steady-state samples per mode
+- Setup: entity seeding, effect delivery, and first warm-up pass excluded
+
+| Scenario | No-setup / steady-state result | Gateway calls during run |
+| --- | ---: | --- |
+| Adaptive values-only polling | mean **1.604 ms** (min 1.271 / max 2.582) | 7 values-only reads, 0 full snapshots |
+| Full metadata polling | mean **5.642 ms** (min 5.228 / max 6.656) | 0 values-only reads, 7 full snapshots |
+| 66-row outbound update | SQLite flush **68.988 ms**; delivery **216.973 ms**; 66 applied | 8 `applyEffects` calls |
+
+The local adaptive sample is about **3.5× faster** than the local full path in
+this no-network fixture, but it is not comparable to the historical live
+27.7-second versus 2.2-second measurements below. The useful correctness signal
+is that unchanged adaptive samples used no full metadata reads. The live
+measurement below confirms the same behavior through the deployed gateway.
+
+### 2026-08-02 — live Apps Script polling smoke benchmark
+
+- Branch: `perf/adaptive-sync-performance`
+- Exact command: `LIVE_POLL_ONLY=1 node --env-file=.env .local/user-input-polling-live.mjs`
+- Slow-request guard: synchronization Gateway requests with `durationMs > 30,000` fail the benchmark; provisioning and cleanup requests are recorded but excluded from this failure gate
+- Backend: deployed Apps Script gateway and real Google Sheet
+- Dataset: 1 entity row, System_State + User_Input projections
+- Setup: temporary-tab provisioning and first safety scan are reported separately;
+  steady-state polling excludes provisioning
+
+| Scenario | No-setup / steady-state result | Evidence |
+| --- | ---: | --- |
+| Initial unchanged adaptive poll | **2,504 ms** | `mode=adaptive`, `fullMetadataTables=0`, 1 values-only read, 0 full snapshots |
+| Remote edit request | **1,663.4 ms** | Apps Script `setValue()` + `flush()` |
+| Changed adaptive poll | **3,859 ms** | 1,580 ms values-only read + 2,262 ms full metadata read; SQLite status became `approved` |
+| First ORM insert flush | **12.39 ms** | SQLite/outbox commit |
+| Insert remote delivery | **5,185.8 ms** | 2 effects applied |
+
+The service's automatic initial safety scan took **2,567 ms** and used one full
+metadata request. The latency guard inspected **8 synchronization Gateway
+requests** and found **0** over the 30-second threshold. Temporary Sheet tabs
+were cleaned up after the run. This live run proves the current harness reaches
+the deployed gateway and that unchanged polling avoids the full metadata request
+while changed polling escalates and persists correctly. The JSON result includes
+`gatewayLatencyGuard` with the threshold and guarded-request summary. A
+functional failure (for example, the SQLite value is not `approved`) is reported
+separately from a `slow_sync_gateway_operation` latency failure.
+
+#### Post-guard verification rerun
+
+- Commands:
+  - `LIVE_POLL_ONLY=1 node --env-file=.env .local/user-input-polling-live.mjs`
+  - `LIVE_CRUD_ONLY=1 node --env-file=.env .local/user-input-polling-live.mjs`
+  - `node --env-file=.env .local/user-input-polling-live.mjs`
+- Dataset: 1 row per isolated run; provisioning excluded from steady-state values
+- Functional result: all runs completed; User_Input status became `approved`; all
+  CRUD deliveries applied 2 effects per operation; no conflicts
+
+| Run | No-setup / steady-state result | Guard result |
+| --- | --- | --- |
+| `LIVE_POLL_ONLY=1` | Initial poll **2,304 ms**; changed poll **5,345 ms**; insert delivery **6,194.66 ms** | 8 guarded requests, 0 slow |
+| `LIVE_CRUD_ONLY=1` | Initial poll **2,153 ms**; update delivery **8,515.16 ms**; delete delivery **6,372.73 ms** | 9 guarded requests, 0 slow |
+| Full harness | Initial poll **2,728 ms**; steady polls **3,141.38 / 2,489.48 / 2,227.51 ms**; update delivery **7,593.92 ms**; delete delivery **7,249.12 ms** | 15 guarded requests, 0 slow |
+
+#### Quota observation for this verification batch
+
+The three live runs above made **38 external Apps Script Web App POSTs** in total:
+32 synchronization requests, 3 provisioning requests, and 3 cleanup requests. Every observed gateway request returned HTTP 200; no 403/429,
+`RESOURCE_EXHAUSTED`, or quota-related gateway error occurred. The 30-second
+gateway guard also found 0 slow synchronization requests.
+
+This is an observed sample, not a remaining-quota counter. The current gateway
+uses Apps Script `SpreadsheetApp`, not the Google Sheets REST API, so the Sheets
+REST request quota cannot be inferred from these POST counts. Apps Script
+service/runtime quotas are account- and project-dependent, and Google does not
+return their remaining amount through this harness. The exact remaining quota
+must be checked in the linked Google Cloud/API or Apps Script execution/usage
+console.
+
+### 2026-08-02 — progressive live bidirectional verification
+
+- Branch: `perf/adaptive-sync-performance`
+- Exact command: `node --env-file=.env .local/progressive-bidirectional-live.mjs`
+- Backend: deployed Apps Script gateway and real Google Sheet
+- Matrix: cumulative **1 → 10 → 25 → 66 → 100 rows** in one isolated service
+- Each stage performed both directions: app flush/effect delivery, bulk User_Input
+  edit, changed polling, SQLite verification, and one unchanged polling pass
+- Policy: 30-second Gateway requests were recorded but never stopped the matrix;
+  all stages completed before the final result was reported
+
+| Rows | Added | App flush | Outbound delivery | Changed poll | Unchanged poll | Max Gateway request | Result |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | 1 | 12.25 ms | 6,304.94 ms | 4,003.09 ms | 1,768.76 ms | 3,510 ms | passed |
+| 10 | 9 | 13.18 ms | 13,100.62 ms | 10,130.85 ms | 2,356.88 ms | 8,121 ms | passed |
+| 25 | 15 | 16.71 ms | 16,375.68 ms | 7,866.09 ms | 2,037.32 ms | 8,462 ms | passed |
+| 66 | 41 | 34.96 ms | 78,406.70 ms | 16,210.92 ms | 1,845.36 ms | 19,087 ms | passed |
+| 100 | 34 | 23.89 ms | 120,235.71 ms | 27,529.99 ms | 1,881.89 ms | 26,694 ms | passed |
+
+All stages persisted the expected row count, changed polling applied every
+expected row with one full-metadata escalation and zero conflicts, and unchanged
+polling stayed on the values-only path. The matrix made **47 synchronization
+Gateway requests** (49 including one provisioning and one cleanup request),
+found **0** over 30 seconds, and had no functional or cleanup failure. The 66- and 100-row worker/stage totals exceeded 30 seconds because they
+contained multiple Gateway requests; no individual synchronization Gateway
+request exceeded the threshold.
+
+This is a one-row smoke benchmark, not a 66-row throughput result. Network
+latency, Apps Script execution variance, Sheet lock contention, and quota remain
+caveats. The progressive result above is still a single 100-row cumulative run,
+not a repeated production-load benchmark. Historical live comparison baselines
+from earlier branches remain:
+
+| Scenario | Setup | No-setup / steady-state result | Source |
+| --- | ---: | ---: | --- |
+| Full snapshot polling, 66 rows | excluded | 27,652 ms steady state | 2026-07-27 phase trace below |
+| Values-only polling, 66 rows | excluded | 2,240 ms steady state | 2026-07-27 lightweight polling below |
+| Outbound 20-order stage | excluded | 28,182 ms / 5.0 rows/s | 2026-07-27 timing run below |
+| Outbound 370-order stage | excluded | 36,865 ms / 30.1 rows/s | 2026-07-27 progressive run below |
+
+SQLite remains the application authority and Sheets the asynchronous projection:
+full metadata fidelity, response-loss recovery, and the periodic safety full scan
+stay required while the values-only fast path avoids remote full reads on
+unchanged passes.
+
 ## 2026-07-24 — raw Apps Script write
 
 - Branch: `benchmark/apps-script-bulk-write`
@@ -1034,3 +1415,142 @@ events or canonical writes.
 - The result strongly indicates that the current Gateway validation and
   metadata path, rather than raw `setValues()` throughput, is the dominant
   bottleneck.
+
+## 2026-08-03 — clean Locust smoke after adaptive-sync implementation
+
+- Branch: `perf/adaptive-sync-performance`
+- Command:
+  `locust -f .local/locustfile.py --host http://127.0.0.1:8787 --headless
+  --users 10 --spawn-rate 2 --run-time 60s --csv
+  .local/locust-20260803-231300-clean2 --html
+  .local/locust-20260803-231300-clean2.html --only-summary`
+- Server: `.local/hikoutei-load-server.mjs`, Node.js 24.3, local SQLite,
+  deployed Apps Script Gateway, fresh run ID `load-20260803-231003-clean2`
+- Dataset/scenario: fresh SQLite and fresh `System_State`, `User_Input`, and
+  `Sync_Conflicts` projection tabs; 10 mixed Locust users; 2 users/second
+  ramp; 60-second workload window.
+- No-setup/steady-state scope: server provisioning and startup were excluded;
+  the table below starts after `/health` became ready and includes only the
+  Locust workload window. The separate drain snapshot includes background
+  worker/polling traffic after Locust stopped.
+
+| Workload | Requests | Failures | p50 | p95 | Maximum | Throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `GET /users/:id` | 134 | 0 (0%) | 2 ms | 4 ms | 6 ms | 2.29/s |
+| `POST /users` | 81 | 0 (0%) | 5 ms | 6 ms | 19 ms | 1.38/s |
+| `PATCH /users/:id` | 76 | 0 (0%) | 5 ms | 8 ms | 22 ms | 1.30/s |
+| `POST /__test/user-input` | 38 | 8 (21.05%) | 2.2 s | 31.0 s | 31.9 s | 0.65/s |
+| **Aggregated** | **339** | **8 (2.36%)** | **4 ms** | **2.3 s** | **31.9 s** | **5.78/s** |
+
+The server-side Gateway snapshot after the workload and approximately two
+minutes of background drain contained 100 Gateway requests, 34 failures, p50
+3.71 s, p95 33.47 s, and maximum 60.00 s. The failures were dominated by
+intermittent non-JSON/timeout Gateway responses. The SQLite outbox had 306
+`pending`, 8 `processing`, 2 `applied`, and 2 `superseded` effects at the
+snapshot; it had not converged, so this is not a successful drain benchmark.
+
+Compared with the earlier 2,648-request run (12.61% HTTP failures, Gateway
+p50 4.34 s, p95 34.25 s, maximum 60.01 s), the clean smoke had a lower HTTP
+failure rate for entity create/read/update traffic, but its User_Input path
+still failed and the outbox did not drain. The runs are not a production
+performance comparison until the Gateway deployment is stable and the
+background outbox converges under the same workload.
+
+Artifacts:
+
+- `.local/locust-20260803-231300-clean2_stats.csv`
+- `.local/locust-20260803-231300-clean2_failures.csv`
+- `.local/locust-20260803-231300-clean2.html`
+- `.local/hikoutei-load-load-20260803-231003-clean2.jsonl`
+
+Caveats: the Gateway returned intermittent HTTP 404/non-JSON responses and
+60-second client timeouts during the run; Python 3.9 emitted Locust's
+end-of-life warning; and the remote deployment was not independently
+re-deployed during this measurement.
+
+## 2026-08-03 — Gateway baseline transport gate (stopped)
+
+- Branch: `perf/adaptive-sync-performance`
+- Command:
+  `node --env-file=.env --input-type=module <gateway-baseline-probe>`
+- Exact probe: 100 sequential (`concurrency=1`) signed `applyOperations` calls
+  using a read-only function that returned the bound spreadsheet ID and an
+  integer nonce; no Sheet rows or tabs were created or changed.
+- Environment: current built `dist/`, configured Apps Script Gateway URL,
+  configured shared secret, configured spreadsheet ID; secrets and IDs are not
+  recorded here.
+- No-setup/steady-state scope: every request was measured after the client was
+  constructed; there was no application or Sheet setup work in the request
+  loop.
+
+| Requests | Success | Failure | Failure rate | p50/p95/maximum | Duration |
+| ---: | ---: | ---: | ---: | --- | ---: |
+| 100 | 0 | 100 | **100%** | not applicable (all HTTP 405) | 425,373 ms |
+
+Every failure decoded as `invalid_sync_gateway_response` with HTTP 405 and the
+message `Code.gs response was not valid JSON`. This exceeds the 1% stop
+criterion, so no further live sync/load refactor or User_Input migration should
+be accepted until the deployed Gateway URL, redirect/method preservation,
+permissions, deployment version, and quota/runtime path are isolated. This
+probe is diagnostic only and does not establish Sheet convergence.
+
+Artifact: `.local/gateway-baseline-100-20260804.json`.
+
+## 2026-08-04 — Gateway baseline transport gate (redeployed, passed)
+
+- Branch: `perf/adaptive-sync-performance`
+- Command: ephemeral signed no-op probe using the built
+  `AppsScriptOperationClient`; Gateway credentials were supplied only through
+  process environment and are not recorded.
+- Exact probe: 100 sequential (`concurrency=1`) signed `applyOperations` calls
+  using the same read-only function as the stopped baseline. No Sheet rows or
+  tabs were created or changed.
+- Environment: redeployed Apps Script Web App `/exec`, current built `dist/`,
+  60-second client timeout. Setup was excluded from the measured loop.
+
+| Requests | Success | Failure | Failure rate | p50 | p95 | Maximum | Duration |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 100 | 0 | **0%** | 1,956 ms | 4,511 ms | 20,994 ms | 254,786 ms |
+
+All responses were valid HTTP 200 JSON envelopes. Every request followed the
+expected `POST /exec` 302 redirect to the Apps Script `macros/echo` endpoint,
+which returned HTTP 200. Compared with the previous 100% failure baseline, the
+redeployment fixed the transport gate. This probe proves transport and signed
+no-op execution only; it does not establish Sheet write convergence or remove
+the need for the subsequent single-append, replay, and concurrency checks.
+
+Artifact: `.local/gateway-baseline-100-20260804-fixed.json`.
+
+## 2026-08-04 — Code.gs-only write correctness gate (passed)
+
+- Branch: `perf/adaptive-sync-performance`
+- Command: `node .local/gateway-write-verification-live.mjs` with Gateway
+  credentials supplied only through ephemeral process environment; credentials
+  are not recorded.
+- Backend: redeployed Apps Script Web App `/exec`, built `dist/`, no Advanced
+  Sheets Service or manifest activation.
+- Scenario: create a uniquely named temporary tab, append one row, replay the
+  same effect, submit a same-effect payload mismatch, submit a duplicate
+  identity, simulate response loss after the remote append response, replay the
+  uncertain effect, inspect row/receipt counts, and delete the temporary tab and
+  newly created receipt tab. Setup and cleanup were outside the correctness
+  assertions; no existing user tab was retained or modified.
+
+| Check | Result |
+| --- | --- |
+| Single append | `applied`, receipt-backed visible hash/revision |
+| Exact replay | `applied`, target rows 2 including header, one receipt per effect |
+| Payload mismatch | rejected with `operation_failed` |
+| Duplicate identity | rejected with `operation_failed` |
+| Simulated response loss | classified as network uncertainty |
+| Response-loss replay | `applied`, no duplicate target/receipt row |
+| Cleanup | temporary target and receipt tabs deleted |
+
+This is the first live write-path verification of the built-in
+`SpreadsheetApp` implementation. It proves the default single-`Code.gs` path can
+append, replay, reject unsafe reuse, and recover a lost response without the
+Advanced Sheets Service. It does not yet establish multi-user throughput or
+eliminate the documented two-flush crash window between target and receipt
+writes.
+
+Artifact: `.local/gateway-write-verification-20260804.json`.

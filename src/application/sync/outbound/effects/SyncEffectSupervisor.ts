@@ -18,6 +18,10 @@ import {
   type SyncEffectWorkerReport,
   type SyncEffectWorkerWithAdapterOptions,
 } from "./SyncEffectWorker.js";
+import {
+  AdaptiveEffectBatchController,
+  type AdaptiveEffectBatchController as AdaptiveEffectBatchControllerType,
+} from "./AdaptiveEffectBatchController.js";
 
 const DEFAULT_MAX_EFFECTS = 20;
 const DEFAULT_IDLE_INTERVAL_MS = 1_000;
@@ -60,12 +64,14 @@ export interface SyncEffectWorkerSupervisorLoopOptions {
 /** Worker options with a clock supplied by the supervisor on every pass. */
 export type CreateSyncEffectWorkerSupervisorOptions = Omit<
   SyncEffectWorkerWithAdapterOptions,
-  "now" | "workerId" | "maxEffects" | "writerLeaseDurationMs" | "effectLeaseDurationMs"
+  "now" | "workerId" | "maxEffects" | "writerLeaseDurationMs" | "effectLeaseDurationMs" | "gatewayTimeoutMs"
 > & {
   readonly workerId?: string;
   readonly maxEffects?: number;
   readonly writerLeaseDurationMs?: number;
   readonly effectLeaseDurationMs?: number;
+  readonly gatewayTimeoutMs?: number;
+  readonly batchController?: AdaptiveEffectBatchControllerType;
   readonly now?: () => number;
   readonly idleIntervalMs?: number;
   readonly errorBackoffInitialMs?: number;
@@ -206,7 +212,13 @@ export class SyncEffectWorkerSupervisor {
           hasImmediateProgress(report) ||
           (reconciliation !== undefined && reconciliation.effectsEnqueued > 0)
         ) {
-          if (report.failed > 0) {
+          if (report.failed > 0 || isResponseLossRetryLoop(report)) {
+            // Back off when the pass only requeued work (a response-loss or
+            // postcondition-unapplied loop) or failed outright, so a struggling
+            // remote is not retried in a tight immediate loop. The backoff is
+            // bounded by errorBackoffMaxMs and resets as soon as forward
+            // progress resumes; lease expiry and recovery still keep effects
+            // live.
             const delay = withJitter(errorBackoff, this.random);
             await this.waitFor(Math.min(this.errorBackoffMaxMs, delay));
             errorBackoff = nextBackoff(errorBackoff, this.errorBackoffMaxMs);
@@ -347,9 +359,12 @@ export function createSyncEffectWorkerSupervisor(
   const now = options.now ?? Date.now;
 
   validateWorkerOptions(workerId, maxEffects);
+  const batchController = options.batchController ?? new AdaptiveEffectBatchController();
   const workerOptions = {
     storage: options.storage,
     gateway: options.gateway,
+    batchController,
+    clock: now,
     workerId,
     maxEffects,
     now: now(),
@@ -360,6 +375,9 @@ export function createSyncEffectWorkerSupervisor(
     ...(options.effectLeaseDurationMs === undefined
       ? {}
       : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
+    ...(options.gatewayTimeoutMs === undefined
+      ? {}
+      : { gatewayTimeoutMs: options.gatewayTimeoutMs }),
     ...(options.makeRepairReplan === undefined
       ? {}
       : { makeRepairReplan: options.makeRepairReplan }),
@@ -375,6 +393,29 @@ export function createSyncEffectWorkerSupervisor(
 
 function hasImmediateProgress(report: SyncEffectWorkerReport): boolean {
   return report.claimed > 0;
+}
+
+/**
+ * A pass claimed work but reached no terminal state and only requeued it is a
+ * response-loss / postcondition-unapplied retry loop against the remote.
+ * `requeued` always implies `deferred` in the worker, so it covers both the
+ * fast-append and regular recovery paths. Forward progress elsewhere (an
+ * applied/superseded/conflicted/blocked/replanned/failed effect) keeps the
+ * drain loop running immediately.
+ */
+function isResponseLossRetryLoop(report: SyncEffectWorkerReport): boolean {
+  return report.claimed > 0 &&
+    report.requeued > 0 &&
+    !hasForwardProgress(report);
+}
+
+function hasForwardProgress(report: SyncEffectWorkerReport): boolean {
+  return report.applied > 0 ||
+    report.superseded > 0 ||
+    report.conflicted > 0 ||
+    report.blockedCandidate > 0 ||
+    report.replanned > 0 ||
+    report.failed > 0;
 }
 
 function isWorkerPassIdle(report: SyncEffectWorkerReport): boolean {

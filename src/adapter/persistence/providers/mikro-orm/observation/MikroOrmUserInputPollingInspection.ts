@@ -404,7 +404,7 @@ export function snapshotHash(snapshot: SyncGatewaySnapshot): string {
     rows: snapshot.rows.map((row) => ({
       rowNumber: row.rowNumber,
       cells: Object.entries(row.cells)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(([fieldName, cell]) => ({
           fieldName,
           cellKind: cell.cellKind,

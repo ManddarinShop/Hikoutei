@@ -80,7 +80,11 @@ function toAuditValue(value: unknown, seen: Set<object>): AuditValue {
     if (value instanceof Map) {
       const entries = [...value.entries()]
         .map(([key, entry]) => [toAuditValue(key, seen), toAuditValue(entry, seen)] as const)
-        .sort((left, right) => auditSortKey(left[0]).localeCompare(auditSortKey(right[0])));
+        .sort((left, right) => {
+          const leftKey = auditSortKey(left[0]);
+          const rightKey = auditSortKey(right[0]);
+          return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+        });
       return { $map: entries };
     }
     if (Object.prototype.toString.call(value) !== QUARANTINE_FINGERPRINT_MARKERS.PLAIN_OBJECT_TAG) {

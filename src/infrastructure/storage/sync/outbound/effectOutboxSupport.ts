@@ -30,7 +30,9 @@ import type {
   ApplyResultOptions,
   ClaimEffectOptions,
   EffectProjectionConfirmation,
+  MarkDeliveryUncertainOptions,
   NewEffect,
+  RetryClaimedEffectOptions,
 } from "./effectOutboxContracts.js";
 import type {
   SqlExecutor,
@@ -111,6 +113,10 @@ export function decodePendingEffectRow(row: SqlRow, index?: number): PendingEffe
     ),
     stream_sequence: requireSqlRevision(row.stream_sequence, `${label}.stream_sequence`),
     created_at: requireSqlRevision(row.created_at, `${label}.created_at`),
+    next_attempt_at: requireNullableSqlRevision(row.next_attempt_at, `${label}.next_attempt_at`),
+    uncertain_since: requireNullableSqlRevision(row.uncertain_since, `${label}.uncertain_since`),
+    next_probe_at: requireNullableSqlRevision(row.next_probe_at, `${label}.next_probe_at`),
+    dispatch_id: requireNullableSqlText(row.dispatch_id, `${label}.dispatch_id`),
     status: requireEffectStatus(row.status, `${label}.status`),
   };
 }
@@ -145,7 +151,7 @@ function requireSqlTextAllowEmpty(value: unknown, label: string): string {
 }
 
 function requireNullableSqlText(value: unknown, label: string): string | null {
-  if (value === null) return null;
+  if (value === null || value === undefined) return null;
   return requireSqlText(value, label);
 }
 
@@ -157,7 +163,7 @@ function requireSqlRevision(value: unknown, label: string): HikouteiRevision {
 }
 
 function requireNullableSqlRevision(value: unknown, label: string): number | null {
-  if (value === null) return null;
+  if (value === null || value === undefined) return null;
   return requireSqlRevision(value, label);
 }
 
@@ -182,6 +188,7 @@ function requireEffectTargetKind(value: unknown, label: string): EffectTargetKin
 function requireEffectStatus(value: unknown, label: string): EffectStatus {
   if (value === EFFECT_STATUSES.PENDING ||
       value === EFFECT_STATUSES.PROCESSING ||
+      value === EFFECT_STATUSES.DELIVERY_UNCERTAIN ||
       value === EFFECT_STATUSES.APPLIED ||
       value === EFFECT_STATUSES.BLOCKED_CANDIDATE ||
       value === EFFECT_STATUSES.SUPERSEDED ||
@@ -353,7 +360,10 @@ export function claimEffectParameters(options: ClaimEffectOptions): readonly Sql
     options.claimToken,
     options.writerEpoch,
     options.now + options.leaseDurationMs,
+    options.dispatchId ?? "dispatch:" + options.claimToken,
     options.effectId,
+    options.now,
+    options.now,
     ...fenceParameters(options),
   ];
 }
@@ -405,6 +415,37 @@ export function pendingEffectParameters(
     ...effectInsertParameters(effect),
     fence.now,
     ...fenceParameters(fence),
+  ];
+}
+
+export function markDeliveryUncertainParameters(
+  options: MarkDeliveryUncertainOptions,
+): readonly SqlParameter[] {
+  return [
+    options.uncertainSince,
+    options.nextProbeAt,
+    options.lastErrorCode,
+    options.lastErrorMessage,
+    options.effectId,
+    options.claimToken,
+    options.writerEpoch,
+    options.now,
+    ...fenceParameters(options),
+  ];
+}
+
+export function retryClaimedEffectParameters(
+  options: RetryClaimedEffectOptions,
+): readonly SqlParameter[] {
+  return [
+    options.nextAttemptAt ?? options.now + 1_000,
+    options.lastErrorCode,
+    options.lastErrorMessage,
+    options.effectId,
+    options.claimToken,
+    options.writerEpoch,
+    options.now,
+    ...fenceParameters(options),
   ];
 }
 

@@ -115,8 +115,11 @@ import a gateway client, pass Sheet routes to `createTypedSheets()`, call
 `setupSheets()`, or choose an operation for each write.
 
 1. Copy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) into a
-   spreadsheet-bound Apps Script project, deploy it as a Web App, set the
-   `/exec` URL, and run `setupSyncGateway()`.
+   spreadsheet-bound Apps Script project and deploy it as a Web App. Paste the
+   deployed `/exec` URL into the `TYPED_SHEETS_GATEWAY_URL` constant in
+   `Code.gs` and run `setupSyncGateway()` from the editor; it stores the bound
+   spreadsheet ID and a generated shared secret in Script Properties and logs
+   a copyable local `.env` block.
 2. Keep `TYPED_SHEETS_GATEWAY_URL`,
    `TYPED_SHEETS_GATEWAY_SHARED_SECRET`, and
    `TYPED_SHEETS_GATEWAY_SHEET_ID` in an untracked server environment or secret
@@ -124,6 +127,13 @@ import a gateway client, pass Sheet routes to `createTypedSheets()`, call
 3. Start the internal sync bootstrap. It validates the private route/ownership
    configuration, provisions and verifies headers, then starts outbox delivery
    and User_Input polling.
+
+The MVP path is a single `Code.gs` file: it requires no `appsscript.json`
+manifest, no Apps Script Advanced Sheets Service, no Google Cloud Sheets API
+activation, and no service account. Sheet consistency does not come from
+cross-request Sheet transactions; it comes from the Apps Script script lock,
+the hidden effect-receipt tab, effect-id/payload-hash dedupe, the SQLite
+durable outbox, fencing, and postcondition recovery.
 
 The gateway must be deployed with an access audience that can reach the
 service; an external server normally requires **Anyone**. Use the deployed

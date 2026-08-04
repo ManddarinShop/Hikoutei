@@ -33,6 +33,12 @@ export {
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "./sync/shared/writerLease.js";
+export {
+  ensureSpreadsheetAuthorityWithAdapter,
+  ensureSpreadsheetAuthorityWithSql,
+  readSpreadsheetAuthorityWithAdapter,
+  readSpreadsheetAuthorityWithSql,
+} from "./sync/shared/spreadsheetAuthority.js";
 export type {
   WriterLease,
   ClaimLeaseOptions,
@@ -41,16 +47,24 @@ export type {
   WriterLeaseClaimResult,
   WriterLeaseClaimResultKind,
 } from "./sync/shared/writerLease.js";
+export type {
+  EnsureSpreadsheetAuthorityResult,
+  SpreadsheetAuthority,
+} from "./sync/shared/spreadsheetAuthority.js";
 
 export {
   claimEffectWithAdapter,
   claimEffectWithSql,
+  renewEffectLeaseWithAdapter,
+  renewEffectLeaseWithSql,
   applyEffectResultWithAdapter,
   applyEffectResultWithSql,
   supersedeAndReplanWithAdapter,
   supersedeAndReplanWithSql,
   recoverExpiredLeasesWithAdapter,
   recoverExpiredLeasesWithSql,
+  markDeliveryUncertainWithAdapter,
+  markDeliveryUncertainWithSql,
   releaseUnprocessedEffectWithAdapter,
   releaseUnprocessedEffectWithSql,
   retryClaimedEffectWithAdapter,
@@ -69,6 +83,8 @@ export type {
   AppliedEffectResultOptions,
   ClaimResult,
   ClaimEffectOptions,
+  MarkDeliveryUncertainOptions,
+  RenewEffectLeaseOptions,
   ApplyResultOptions,
   NonAppliedEffectResultOptions,
   EffectProjectionConfirmation,

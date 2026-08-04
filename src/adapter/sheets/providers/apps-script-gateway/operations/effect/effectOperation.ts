@@ -4,6 +4,7 @@ import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
   SyncEffectPostcondition,
+  SyncGatewayAuthority,
   SyncGatewayEffect,
   SyncGatewayEffectPostconditionResult,
   SyncGatewayEffectResult,
@@ -57,6 +58,7 @@ export type AppsScriptReadEffectPostconditionOperationArgs = {
   readonly registeredRange: string;
   readonly projection: ApplySyncEffectsRequest["projection"];
   readonly schemaVersion: number;
+  readonly authority?: SyncGatewayAuthority;
   readonly effect: SyncGatewayEffect;
 } & EffectOperationRouteOptions;
 
@@ -67,6 +69,7 @@ export type AppsScriptReadEffectPostconditionsOperationArgs = {
   readonly registeredRange: string;
   readonly projection: ApplySyncEffectsRequest["projection"];
   readonly schemaVersion: number;
+  readonly authority?: SyncGatewayAuthority;
   readonly effects: readonly SyncGatewayEffect[];
 } & EffectOperationRouteOptions;
 
@@ -118,6 +121,11 @@ function validateEffectRequest(
     | Omit<AppsScriptReadEffectPostconditionOperationArgs, "mode">
     | Omit<AppsScriptReadEffectPostconditionsOperationArgs, "mode">,
 ): void {
+  if (request.authority !== undefined &&
+      (!Number.isSafeInteger(request.authority.epoch) || request.authority.epoch < 1 ||
+        request.authority.token.trim().length === 0)) {
+    invalidOperationRequest("Apps Script effect operation", "authority is invalid");
+  }
   requireSyncGatewayText(
     request.physicalSheetId,
     "Apps Script effect physicalSheetId",
@@ -328,6 +336,13 @@ function decodePostcondition(value: unknown): SyncEffectPostcondition {
       "postcondition disposition is unsupported",
     );
   }
+  const reason = record.reason === undefined || record.reason === null
+    ? undefined
+    : requireSyncGatewayText(
+      record.reason,
+      "postcondition reason",
+      SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+    );
   return {
     disposition,
     visibleRevision: decodePresenceNonNegativeInteger(
@@ -336,6 +351,7 @@ function decodePostcondition(value: unknown): SyncEffectPostcondition {
     ),
     visibleHash: decodePresenceString(record.visibleHash, "postcondition visibleHash"),
     snapshotHash: decodePresenceString(record.snapshotHash, "postcondition snapshotHash"),
+    ...(reason === undefined ? {} : { reason }),
   };
 }
 

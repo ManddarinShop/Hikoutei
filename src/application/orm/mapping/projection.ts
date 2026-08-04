@@ -65,7 +65,7 @@ export function serializeTypedSheetsEntityOwnershipManifest(
   mapping: TypedSheetsEntityMapping,
 ): string {
   const fields = [...createTypedSheetsEntityOwnershipManifest(mapping).values()]
-    .sort((left, right) => left.fieldName.localeCompare(right.fieldName));
+    .sort((left, right) => left.fieldName < right.fieldName ? -1 : left.fieldName > right.fieldName ? 1 : 0);
   return JSON.stringify({ fields });
 }
 

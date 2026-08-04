@@ -203,6 +203,7 @@ function toLatestEffect(row: ReconciliationLatestEffectSqlRow): ReconciliationLa
 function requireEffectStatus(value: string): EffectStatus {
   if (value === EFFECT_STATUSES.PENDING ||
       value === EFFECT_STATUSES.PROCESSING ||
+      value === EFFECT_STATUSES.DELIVERY_UNCERTAIN ||
       value === EFFECT_STATUSES.APPLIED ||
       value === EFFECT_STATUSES.BLOCKED_CANDIDATE ||
       value === EFFECT_STATUSES.SUPERSEDED ||
