@@ -94,9 +94,20 @@ package root.
 ## Apps Script gateway
 
 The deployable gateway is [`apps-script/gateway/Code.gs`](../apps-script/gateway/Code.gs).
+The default installation is that single file: copy it into a spreadsheet-bound
+Apps Script project, deploy it as a Web App, paste the deployed `/exec` URL
+into the `TYPED_SHEETS_GATEWAY_URL` constant, and run `setupSyncGateway()` from
+the editor. The setup writes the bound spreadsheet ID and a generated shared
+secret to Script Properties and logs a copyable local `.env` block. This path
+requires no `appsscript.json` manifest, no Apps Script Advanced Sheets Service,
+no Google Cloud Sheets API activation, and no service account.
+
 A service deployment supplies its URL and shared secret through a secret store
 or environment configuration. Never place the shared secret in browser code or
-commit it to Git.
+commit it to Git. Sheet consistency does not rely on cross-request Sheet
+transactions; it comes from the Apps Script script lock, the hidden
+effect-receipt tab, effect-id/payload-hash dedupe, the SQLite durable outbox,
+fencing, and postcondition recovery.
 
 Live Google integration is opt-in and requires a deployed gateway, credentials,
 a spreadsheet, and external quota. The normal test suite uses fake gateways and
@@ -110,4 +121,7 @@ SQLite fixtures without credentials.
 - Stale or conflicting User_Input edits are recorded in SQLite rather than
   silently overwriting canonical data.
 - Gateway response loss is recoverable work, not proof of a failed remote write.
+- Sheet consistency comes from the Apps Script script lock, the hidden
+  effect-receipt tab, effect-id/payload-hash dedupe, the SQLite durable outbox,
+  fencing, and postcondition recovery, not cross-request Sheet transactions.
 - Projection route/header drift fails explicitly.
