@@ -38,6 +38,22 @@ function payload(
 }
 
 describe("sync gateway contract", () => {
+  it("uses deterministic UTF-16 field ordering for mixed and Unicode headers", () => {
+    const first = {
+      Z: { kind: "string" as const, value: "z" },
+      a: { kind: "string" as const, value: "a" },
+      "é": { kind: "string" as const, value: "e" },
+      "Ä": { kind: "string" as const, value: "A" },
+    };
+    const second = {
+      "Ä": first["Ä"],
+      "é": first["é"],
+      a: first.a,
+      Z: first.Z,
+    };
+    expect(computeSyncVisibleHash(first)).toBe(computeSyncVisibleHash(second));
+  });
+
   it("keeps absence typed internally while preserving null at the JSON boundary", () => {
     const serialized = serializeSyncProjectionEffectPayload(
       payload({ kind: APPLICABILITY_KINDS.NOT_APPLICABLE }),

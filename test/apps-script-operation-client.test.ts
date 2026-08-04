@@ -133,6 +133,132 @@ describe("thin Code.gs operation client", () => {
     });
   });
 
+  it("follows Apps Script response redirects by converting a 302 to GET", async () => {
+    const response = (status: number, body: string, location?: string) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      headers: new Headers(location === undefined ? {} : { location }),
+      text: async () => body,
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(
+        302,
+        "",
+        "https://script.googleusercontent.com/macros/echo?user_content_key=test",
+      ))
+      .mockResolvedValueOnce(response(200, JSON.stringify({
+        ok: true,
+        result: { results: [{ accepted: true }] },
+      })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new AppsScriptOperationClient({
+      url: "https://script.google.com/macros/s/deployment/exec",
+      secret: "secret",
+      sheetId: "sheet-1",
+    }).applyOperations([{
+      fn: "(spreadsheet, args) => ({ accepted: args.accepted })",
+      args: { accepted: true },
+    }]);
+
+    expect(result).toEqual([{ accepted: true }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const first = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const second = fetchMock.mock.calls[1]?.[1] as RequestInit | undefined;
+    expect(first?.method).toBe("POST");
+    expect(second?.method).toBe("GET");
+    expect(first?.redirect).toBe("manual");
+    expect(second?.redirect).toBe("manual");
+    expect(second?.body).toBeUndefined();
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "https://script.googleusercontent.com/macros/echo?user_content_key=test",
+    );
+  });
+
+  it("preserves POST for a 307 redirect", async () => {
+    const response = (status: number, body: string, location?: string) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      headers: new Headers(location === undefined ? {} : { location }),
+      text: async () => body,
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(
+        307,
+        "",
+        "https://script.googleusercontent.com/macros/echo?user_content_key=test",
+      ))
+      .mockResolvedValueOnce(response(200, JSON.stringify({
+        ok: true,
+        result: { results: [{ accepted: true }] },
+      })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new AppsScriptOperationClient({
+      url: "https://script.google.com/macros/s/deployment/exec",
+      secret: "secret",
+      sheetId: "sheet-1",
+    }).applyOperations([{
+      fn: "(spreadsheet, args) => ({ accepted: args.accepted })",
+      args: { accepted: true },
+    }]);
+
+    expect(result).toEqual([{ accepted: true }]);
+    const first = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const second = fetchMock.mock.calls[1]?.[1] as RequestInit | undefined;
+    expect(first?.method).toBe("POST");
+    expect(second?.method).toBe("POST");
+    expect(second?.body).toBe(first?.body);
+  });
+
+  it("classifies an unsafe redirect without following it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 302,
+      headers: new Headers({ location: "http://attacker.test/collect" }),
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new AppsScriptOperationClient({
+      url: "https://script.google.com/macros/s/deployment/exec",
+      secret: "secret",
+      sheetId: "sheet-1",
+    }).applyOperations([{
+      fn: "(spreadsheet, args) => args",
+      args: null,
+    }])).rejects.toMatchObject({
+      name: "AppsScriptSyncGatewayError",
+      code: SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_REDIRECT,
+      status: { value: 302 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a redirect chain that exceeds the bounded policy", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => ({
+      ok: false,
+      status: 302,
+      headers: new Headers({ location: `${url}?redirected=1` }),
+      text: async () => "",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new AppsScriptOperationClient({
+      url: "https://example.test/apps-script-gateway",
+      secret: "secret",
+      sheetId: "sheet-1",
+    }).applyOperations([{
+      fn: "(spreadsheet, args) => args",
+      args: null,
+    }])).rejects.toMatchObject({
+      name: "AppsScriptSyncGatewayError",
+      code: SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_REDIRECT,
+      status: { value: 302 },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   it("rejects a malformed operation source before making a request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
