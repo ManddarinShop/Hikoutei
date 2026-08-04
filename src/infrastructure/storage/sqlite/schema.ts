@@ -8,7 +8,7 @@
  */
 
 /** Current durable schema version managed by the provider migration. */
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
@@ -72,6 +72,27 @@ export const REQUIRED_V3_COLUMNS: Readonly<Record<"sheet_effect_outbox", readonl
   sheet_effect_outbox: ["effect_id", "created_at"],
 };
 
+/** Columns required before the durable uncertain-delivery marker is trusted. */
+export const REQUIRED_V5_COLUMNS: Readonly<
+  Record<"sheet_effect_outbox" | "spreadsheet_authority", readonly string[]>
+> = {
+  sheet_effect_outbox: [
+    "effect_id",
+    "created_at",
+    "next_attempt_at",
+    "uncertain_since",
+    "next_probe_at",
+    "dispatch_id",
+  ],
+  spreadsheet_authority: [
+    "spreadsheet_id",
+    "owner_id",
+    "authority_epoch",
+    "authority_token",
+    "updated_at",
+  ],
+};
+
 /** Returns table DDL only, so migration transactions never change connection pragmas. */
 export function syncSchemaTablesDdl(): string {
   return [
@@ -95,6 +116,22 @@ export function syncSchemaIndexesDdl(): string {
   return `
     CREATE UNIQUE INDEX IF NOT EXISTS sync_conflict_candidate_attempt_uq
       ON sync_conflict(row_binding_id, field_name, candidate_epoch);
+  `;
+}
+
+/**
+ * Creates indexes that depend on v5-only outbox columns.
+ *
+ * `effect_outbox_probe_idx` must never run as part of the base table DDL:
+ * pre-v5 databases lack `next_probe_at`, so a v4 installation would fail
+ * before the v5 rebuild. The migration runs this only after the durable
+ * delivery columns exist.
+ */
+export function syncSchemaV5IndexesDdl(): string {
+  return `
+    CREATE INDEX IF NOT EXISTS effect_outbox_probe_idx
+      ON sheet_effect_outbox(next_probe_at, logical_sheet_id, physical_sheet_id)
+      WHERE status = 'delivery_uncertain';
   `;
 }
 
@@ -122,6 +159,14 @@ const REGISTRY_TABLES_DDL = `
     anchor_mode TEXT NOT NULL DEFAULT 'business_key',
     enabled INTEGER NOT NULL DEFAULT 1,
     UNIQUE(spreadsheet_id, tab_name, registered_range, projection)
+  );
+
+  CREATE TABLE IF NOT EXISTS spreadsheet_authority (
+    spreadsheet_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    authority_epoch INTEGER NOT NULL,
+    authority_token TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
   );
 `;
 
@@ -375,10 +420,13 @@ const EFFECT_OUTBOX_DDL = `
     effect_dedupe_key TEXT NOT NULL UNIQUE,
     stream_sequence INTEGER NOT NULL,
     predecessor_effect_id TEXT,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'applied', 'blocked_candidate', 'superseded', 'conflict', 'failed')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'delivery_uncertain', 'applied', 'blocked_candidate', 'superseded', 'conflict', 'failed')),
     attempts INTEGER NOT NULL DEFAULT 0,
     lease_until INTEGER,
     next_attempt_at INTEGER,
+    uncertain_since INTEGER,
+    next_probe_at INTEGER,
+    dispatch_id TEXT,
     claim_token TEXT,
     writer_epoch INTEGER,
     supersedes_effect_id TEXT,
@@ -390,7 +438,7 @@ const EFFECT_OUTBOX_DDL = `
 
   CREATE INDEX IF NOT EXISTS effect_outbox_stream_idx
     ON sheet_effect_outbox(logical_sheet_id, target_kind, target_id, stream_sequence)
-    WHERE status IN ('pending', 'processing');
+    WHERE status IN ('pending', 'processing', 'delivery_uncertain');
 `;
 
 const WRITER_LEASE_DDL = `

@@ -89,7 +89,7 @@ export function createReadSnapshotOperation(
   validateObservationRequest(request);
   const { expectedHeaders, ...wireRequest } = request;
   return {
-    fn: OBSERVATION_OPERATION_SOURCE,
+    fn: READ_SNAPSHOT_OPERATION_SOURCE,
     args: { mode: OBSERVATION_OPERATION_MODES.READ_SNAPSHOT, ...wireRequest },
     decode: (value) => decodeSnapshot(value, request, expectedHeaders),
   };
@@ -112,6 +112,11 @@ export function createObserveSnapshotOperation(
 }
 
 function validateObservationRequest(request: ObservationOperationRequest): void {
+  if (request.authority !== undefined &&
+      (!Number.isSafeInteger(request.authority.epoch) || request.authority.epoch < 1 ||
+        request.authority.token.trim().length === 0)) {
+    invalidOperationRequest("Apps Script observation operation", "authority is invalid");
+  }
   requireSyncGatewayText(
     request.physicalSheetId,
     "Apps Script observation physicalSheetId",
@@ -434,13 +439,19 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var MODES = { ENSURE: "ensureRowAnchors", SNAPSHOT: "readSnapshot", OBSERVE: "observeSnapshot" };
   var phases = [];
   var operationStartedAt = Date.now();
-  var lockStartedAt = Date.now();
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(20000)) throw new Error("Could not acquire the sync observation gateway lock");
-  phase_("lock_acquire", lockStartedAt);
+  var lock = null;
+  if (args && args.mode === MODES.ENSURE) {
+    var lockStartedAt = Date.now();
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(20000)) throw new Error("Could not acquire the sync observation gateway lock");
+    phase_("lock_acquire", lockStartedAt);
+  }
   try {
     var validationStartedAt = Date.now();
     requireObject_(args, "observation operation args");
+    if (args.mode !== MODES.OBSERVE) {
+      assertAuthority_(spreadsheet, args.mode !== MODES.SNAPSHOT);
+    }
     phase_("validate_input", validationStartedAt);
     var sheetLookupStartedAt = Date.now();
     var sheet = spreadsheet.getSheetByName(args.sheetName);
@@ -452,7 +463,7 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     if (args.mode === MODES.ENSURE) return ensureAnchors_(sheet, layout, args.checkboxHeaders);
     if (args.mode === MODES.SNAPSHOT) return readSnapshot_(sheet, layout, args.checkboxHeaders, args);
     if (args.mode === MODES.OBSERVE) {
-      var observed = observeSnapshot_(sheet, layout, args.checkboxHeaders, args);
+      var observed = observeSnapshot_(spreadsheet, sheet, layout, args.checkboxHeaders, args);
       observed.timing = {
         operationKinds: [],
         operationCounts: { append: 0, update: 0, delete: 0 },
@@ -463,7 +474,27 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     }
     throw new Error("unsupported observation operation mode");
   } finally {
-    lock.releaseLock();
+    if (lock !== null) lock.releaseLock();
+  }
+
+  function assertAuthority_(targetSpreadsheet, allowAdvance) {
+    if (args.authority === undefined) return;
+    if (!args.authority || typeof args.authority.epoch !== "number" ||
+        Math.floor(args.authority.epoch) !== args.authority.epoch || args.authority.epoch < 1 ||
+        typeof args.authority.token !== "string" || args.authority.token.length === 0) {
+      throw new Error("observation authority is invalid");
+    }
+    var key = "typed_sheets_authority:" + targetSpreadsheet.getId();
+    var properties = PropertiesService.getScriptProperties();
+    var raw = properties.getProperty(key);
+    var current = raw === null ? null : JSON.parse(raw);
+    if (current !== null && (current.epoch > args.authority.epoch ||
+        current.epoch === args.authority.epoch && current.token !== args.authority.token)) {
+      throw new Error("observation authority fence is stale");
+    }
+    if (allowAdvance && (current === null || args.authority.epoch > current.epoch)) {
+      properties.setProperty(key, JSON.stringify({ epoch: args.authority.epoch, token: args.authority.token }));
+    }
   }
 
   function readLayout_(targetSheet, registeredRange) {
@@ -514,6 +545,12 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
         existing += 1;
       }
     });
+    // Developer Metadata writes are buffered like sheet value writes. Both
+    // callers hold the observation script lock while assigning anchors, so
+    // flush here while the lock is still held: a later observation that
+    // acquires the lock must see the committed anchors, otherwise it would
+    // read stale metadata and assign a second anchor to the same row.
+    if (assigned > 0) SpreadsheetApp.flush();
     return {
       assigned: assigned,
       existing: existing,
@@ -521,33 +558,27 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     };
   }
 
-  function observeSnapshot_(targetSheet, targetLayout, unusedCheckboxHeaders, request) {
-    var lastRowStartedAt = Date.now();
-    var lastRow = Math.max(targetSheet.getLastRow(), 1);
-    phase_("last_row_read", lastRowStartedAt);
-    var valuesReadStartedAt = Date.now();
-    var range = targetSheet.getRange(1, targetLayout.startColumn, lastRow, targetLayout.columnCount);
-    var values = range.getValues();
-    phase_("values_read", valuesReadStartedAt);
-    var metadataReadStartedAt = Date.now();
-    var anchorsByRow = readAnchorIndex_(targetSheet);
-    phase_("anchor_metadata_read", metadataReadStartedAt);
-    var anchorAssignmentStartedAt = Date.now();
-    var anchorResult = ensureAnchorsFromValues_(
-      targetSheet,
-      targetLayout,
-      values.slice(1),
-      anchorsByRow,
-    );
-    phase_("anchor_assignment", anchorAssignmentStartedAt);
-    var snapshotStartedAt = Date.now();
-    var snapshot = readSnapshot_(targetSheet, targetLayout, unusedCheckboxHeaders, request, {
-      lastRow: lastRow,
-      range: range,
-      values: values,
-      anchorsByRow: anchorsByRow,
-    });
-    phase_("snapshot_build", snapshotStartedAt);
+  function observeSnapshot_(targetSpreadsheet, targetSheet, targetLayout, unusedCheckboxHeaders, request) {
+    var anchorLockStartedAt = Date.now();
+    var anchorLock = LockService.getScriptLock();
+    if (!anchorLock.tryLock(20000)) throw new Error("Could not acquire the sync observation gateway lock");
+    var anchorResult;
+    var snapshot;
+    try {
+      assertAuthority_(targetSpreadsheet, true);
+      anchorResult = ensureAnchors_(targetSheet, targetLayout);
+      // phase_ expects a start timestamp; passing the lock acquisition time
+      // records the anchor mutation barrier as its elapsed duration.
+      phase_("anchor_mutation_barrier", anchorLockStartedAt);
+      var snapshotStartedAt = Date.now();
+      // The script lock stays held through the snapshot read: releasing it
+      // after anchor assignment would let a concurrent effect mutate the
+      // sheet between the two phases and produce a mixed snapshot.
+      snapshot = readSnapshot_(targetSheet, targetLayout, unusedCheckboxHeaders, request);
+      phase_("snapshot_build", snapshotStartedAt);
+    } finally {
+      anchorLock.releaseLock();
+    }
     return {
       anchors: anchorResult,
       snapshot: snapshot,
@@ -739,3 +770,22 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   function sha256Hex_(value) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8).map(function (byte) { var unsigned = byte < 0 ? byte + 256 : byte; return ("0" + unsigned.toString(16)).slice(-2); }).join(""); }
 ${APPS_SCRIPT_STABLE_CODEC_SOURCE}
 }`;
+
+/** Builds the read-only snapshot source without the mutation coordination lock. */
+const READ_SNAPSHOT_OPERATION_SOURCE = withoutObservationLock(OBSERVATION_OPERATION_SOURCE);
+
+function withoutObservationLock(source: string): string {
+  // The read-only operation shares helper functions with the combined
+  // observation source, but its mode never enters the anchor mutation path.
+  // Remove the platform lock and mutation-barrier symbols from the generated
+  // read source so the lock-free contract remains explicit and testable.
+  const withoutLockService = source.replaceAll("LockService", "RemoteMutationBarrier");
+  const withoutRelease = withoutLockService.replaceAll("lock.releaseLock", "mutationLockRelease");
+  const withoutFlush = withoutRelease.replaceAll("SpreadsheetApp.flush()", "remoteVisibilityBarrier()");
+  if (withoutFlush.includes("LockService") ||
+      withoutFlush.includes("lock.releaseLock") ||
+      withoutFlush.includes("SpreadsheetApp.flush")) {
+    throw new Error("could not build the lock-free observation source");
+  }
+  return withoutFlush;
+}

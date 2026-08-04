@@ -40,6 +40,7 @@ export const SYNC_GATEWAY_CLIENT_ERROR_CODES = {
   HTTP_ERROR: "sync_gateway_http_error",
   INVALID_RESPONSE: "invalid_sync_gateway_response",
   NETWORK_ERROR: "sync_gateway_network_error",
+  INVALID_REDIRECT: "sync_gateway_invalid_redirect",
   REMOTE_ERROR: "sync_gateway_remote_error",
   TIMEOUT: "sync_gateway_timeout",
 } as const;

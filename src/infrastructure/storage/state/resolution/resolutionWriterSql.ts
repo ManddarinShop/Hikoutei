@@ -39,6 +39,29 @@ export const INSERT_PROCESSING_COMMAND_SQL = `
   WHERE EXISTS (${FENCE_EXISTS_SQL})
 `;
 
+/** Records a deferred automatic resolution without claiming it for execution. */
+export const INSERT_PENDING_COMMAND_SQL = `
+  INSERT INTO resolution_command (
+    command_id, request_key, action, actor_id, role, target_conflict_id,
+    expected_revision, active_candidate_hash, expected_candidate_epoch,
+    payload_hash, status, issued_at
+  )
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?
+  WHERE NOT EXISTS (
+    SELECT 1 FROM resolution_command
+    WHERE command_id = ? OR request_key = ?
+  )
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+/** Promotes a durable deferred command only after its predecessor is gone. */
+export const MARK_PENDING_COMMAND_PROCESSING_SQL = `
+  UPDATE resolution_command
+  SET status = 'processing'
+  WHERE command_id = ? AND request_key = ? AND status = 'pending'
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
 export const MARK_CONFLICT_RESOLVED_SQL = `
   UPDATE sync_conflict
   SET status = 'RESOLVED', resolution_command_id = ?, updated_at = ?
@@ -106,4 +129,19 @@ export const READ_REGISTERED_PROJECTION_SQL = `
   SELECT logical_sheet_id, projection, enabled
   FROM physical_sheet_registry
   WHERE physical_sheet_id = ?
+`;
+
+/**
+ * Finds an in-flight predecessor that could still materialize after a
+ * replacement. `delivery_uncertain` counts as in-flight because the remote
+ * write may still commit after a lost response; resolution successors must
+ * wait until that predecessor is probe-settled.
+ */
+export const READ_PROCESSING_PREDECESSOR_SQL = `
+  SELECT effect_id
+  FROM sheet_effect_outbox
+  WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
+    AND stream_sequence < ? AND status IN ('processing', 'delivery_uncertain')
+  ORDER BY stream_sequence
+  LIMIT 1
 `;

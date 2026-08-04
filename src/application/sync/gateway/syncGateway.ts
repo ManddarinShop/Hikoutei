@@ -53,6 +53,12 @@ import type { SyncGatewayTiming } from "../telemetry/syncTiming.js";
 /** Projections supported by the v1 sync gateway. */
 export type SyncProjection = RegisteredProjection;
 
+/** Remote epoch/token evidence carried by internal mutating gateway calls. */
+export interface SyncGatewayAuthority {
+  readonly epoch: number;
+  readonly token: string;
+}
+
 /** Effect classes whose compare-and-set behavior differs at the gateway. */
 export type SyncEffectKind = EffectKind;
 
@@ -91,6 +97,7 @@ export interface SyncGatewaySnapshot {
 /** Request used to assign missing Developer Metadata anchors before a snapshot. */
 export interface EnsureSyncRowAnchorsRequest {
   readonly physicalSheetId: string;
+  readonly authority?: SyncGatewayAuthority;
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly projection: SyncProjection;
@@ -218,6 +225,7 @@ export interface SyncGatewayEffectResult {
 /** Gateway batch request. All effects must target the same physical sheet. */
 export interface ApplySyncEffectsRequest {
   readonly physicalSheetId: string;
+  readonly authority?: SyncGatewayAuthority;
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly projection: SyncProjection;
@@ -246,6 +254,8 @@ export interface SyncEffectPostcondition {
   readonly visibleRevision: Presence<number>;
   readonly visibleHash: Presence<string>;
   readonly snapshotHash: Presence<string>;
+  /** Stable diagnostic reason for terminal or manual-repair classifications. */
+  readonly reason?: string;
 }
 
 /** One effect identity paired with its read-back result in a recovery batch. */
@@ -255,15 +265,18 @@ export interface SyncGatewayEffectPostconditionResult {
   readonly postcondition: SyncEffectPostcondition;
 }
 
-/** One row written through the fast-append path.
+/** One row written through the append-only bulk path.
  *
- * This path is deliberately append-only. It does not carry a row anchor,
- * compare-and-set state, visible hash, receipt, or metadata instruction. A
- * response loss may therefore cause a later retry to append the row again;
- * reconciliation is the component that detects and repairs that drift.
+ * The payload hash lets the Gateway receipt sheet recognize a response-loss
+ * replay without appending the same durable effect twice. The optional shape
+ * keeps older direct adapter fixtures source-compatible; worker-produced rows
+ * always carry the SQLite outbox payload hash.
  */
 export interface FastAppendRow {
   readonly effectId: string;
+  readonly payloadHash?: string;
+  /** Developer-metadata row anchor written in the same Sheets batch. */
+  readonly anchor?: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
 }
 
@@ -272,11 +285,15 @@ export interface FastAppendRowResult {
   readonly effectId: string;
   /** The row was included in the gateway's bulk write. */
   readonly status: SyncGatewayFastAppendStatus;
+  /** Receipt-backed evidence returned by the gateway append operation. */
+  readonly visibleHash?: string;
+  readonly visibleRevision?: number;
 }
 
-/** Bounded fast-append request for one System_State projection sheet. */
+/** Bounded idempotent append request for one registered projection sheet. */
 export interface FastAppendRowsRequest {
   readonly physicalSheetId: string;
+  readonly authority?: SyncGatewayAuthority;
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly projection: SyncProjection;
@@ -296,6 +313,7 @@ export interface FastAppendRowsResult {
 /** Request used to classify several response-loss effects with one Sheet read. */
 export interface ReadSyncEffectPostconditionsRequest {
   readonly physicalSheetId: string;
+  readonly authority?: SyncGatewayAuthority;
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly projection: SyncProjection;
@@ -331,6 +349,7 @@ export interface SyncSheetObservationGateway {
 /** Request for a lightweight table read used by simple polling. */
 export interface ReadSyncTableRowsRequest {
   readonly physicalSheetId: string;
+  readonly authority?: SyncGatewayAuthority;
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly projection: SyncProjection;
@@ -359,6 +378,16 @@ export interface SyncSheetTableReaderGateway {
   readRowsBatch(
     requests: readonly ReadSyncTableRowsRequest[],
   ): Promise<readonly SyncTableRowsResult[]>;
+}
+
+/** Returns whether a full observation gateway also exposes the values-only reader. */
+export function isSyncSheetTableReaderGateway(
+  gateway: SyncSheetObservationGateway,
+): gateway is SyncSheetObservationGateway & SyncSheetTableReaderGateway {
+  return "readRows" in gateway &&
+    typeof gateway.readRows === "function" &&
+    "readRowsBatch" in gateway &&
+    typeof gateway.readRowsBatch === "function";
 }
 
 /**
@@ -449,7 +478,8 @@ export class SplitSyncGateway implements SyncSheetGateway {
 /** Computes the stable visible-state hash shared by fake and real gateways. */
 export function computeSyncVisibleHash(fields: Readonly<Record<string, NormalizedCell>>): string {
   const entries = Object.entries(fields)
-    .sort(([left], [right]) => left.localeCompare(right))
+    // Apps Script's operation sources use the same UTF-16 code-unit order.
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([fieldName, value]) => ({ fieldName, value }));
   return stableHash({ fields: entries });
 }
@@ -560,7 +590,7 @@ export function serializeSyncProjectionEffectPayload(payload: SyncProjectionEffe
     registeredRange: checked.registeredRange,
     schemaVersion: checked.schemaVersion,
     targetAnchor: checked.targetAnchor,
-    fields: Object.fromEntries(Object.entries(checked.fields).sort(([a], [b]) => a.localeCompare(b))),
+    fields: Object.fromEntries(Object.entries(checked.fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))),
     targetVisibleHash: checked.targetVisibleHash,
     createIfMissing: checked.createIfMissing,
     expectedCandidateHash: toNullableCandidateHash(checked.expectedCandidateHash),

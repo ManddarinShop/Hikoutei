@@ -578,8 +578,13 @@ describe("mapped typed-sheets ORM", () => {
     });
     if (claim.kind !== "claimed") throw new Error("Expected the observation writer lease.");
 
+    const observationWriter = {
+      ...deterministicWriter("observation-writer"),
+      onTiming: undefined,
+    };
     const result = await persistMappedObservedRowWithMikroOrm(storage, {
       mappings: [orderMapping],
+      writer: observationWriter,
       fence: {
         role: claim.lease.role,
         writerEpoch: claim.lease.writerEpoch,

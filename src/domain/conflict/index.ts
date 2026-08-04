@@ -2,6 +2,7 @@ export {
   CONFLICT_TRANSITION_KINDS,
   shouldRebaseConflict,
   applyResolution,
+  candidateHash,
 } from "./transitions.js";
 export type {
   ConflictTransitionKind,

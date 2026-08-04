@@ -364,7 +364,7 @@ async function canonicalSnapshotHashWithSql(
       entityId,
       fields: Object.entries(fields)
         .map(([fieldName, value]) => ({ fieldName, value }))
-        .sort((left, right) => left.fieldName.localeCompare(right.fieldName)),
+        .sort((left, right) => (left.fieldName < right.fieldName ? -1 : left.fieldName > right.fieldName ? 1 : 0)),
     }),
   };
 }

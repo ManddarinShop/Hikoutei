@@ -27,6 +27,7 @@ import {
 import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import {
   registeredTypedSheetsProjectionDefinitions,
+  resolveTypedSheetsEntityWriterOptions,
 } from "../../orm/persistence/flush/flushCoordinator.js";
 import type {
   SyncGatewayProvisioner,
@@ -35,7 +36,20 @@ import type {
 import {
   provisionRegisteredSyncSheets,
 } from "../gateway/SyncGatewayBootstrap.js";
-import type { SyncSheetGateway } from "../gateway/syncGateway.js";
+import {
+  registerSyncConflictProjectionRoutes,
+} from "../gateway/conflictProjectionRegistration.js";
+import {
+  autoResolveExistingMappedConflictsWithAdapter,
+  retryOpenMappedConflictsWithAdapter,
+} from "../inbound/autoSystemConflictResolution.js";
+import type { SyncSheetGateway, SyncSheetTableReaderGateway } from "../gateway/syncGateway.js";
+import { isSyncSheetTableReaderGateway } from "../gateway/syncGateway.js";
+import {
+  CoordinatedSyncGateway,
+  type CoordinatedGatewayInner,
+} from "../gateway/coordinator/CoordinatedSyncGateway.js";
+import type { CoordinatorLaneEvent } from "../gateway/coordinator/coordinatorTelemetry.js";
 import {
   AppsScriptOperationClient,
   type AppsScriptOperationClientOptions,
@@ -49,6 +63,7 @@ import {
 } from "../outbound/effects/SyncEffectSupervisor.js";
 import type { SyncEffectWorkerReport } from "../outbound/effects/SyncEffectWorker.js";
 import {
+  MAPPED_USER_INPUT_POLL_MODES,
   pollMappedUserInputWithMikroOrm,
   type MappedUserInputPollingReport,
 } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
@@ -58,10 +73,18 @@ import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
 } from "./errors.js";
+import {
+  DEFAULT_EFFECT_LEASE_DURATION_MS,
+  DEFAULT_WRITER_LEASE_DURATION_MS,
+  EFFECT_LEASE_GATEWAY_HEADROOM_MS,
+} from "../outbound/effects/SyncEffectWorkerConstants.js";
+import { SYNC_GATEWAY_CLIENT_DEFAULTS } from "../../../adapter/sheets/providers/apps-script-gateway/protocol/constants.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,
 } from "./contracts.js";
+
+const DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS = 60_000;
 
 /** Gateway capability required by internal service startup. */
 export type InternalSyncGateway = SyncSheetGateway;
@@ -80,14 +103,31 @@ export interface InternalSyncServiceOptions {
   readonly writerId?: string;
   readonly workerId?: string;
   readonly maxEffects?: number;
+  /** Internal lease for one remote effect batch; must exceed Gateway timeout. */
+  readonly effectLeaseDurationMs?: number;
   readonly effectIdleIntervalMs?: number;
   readonly onTiming?: SyncTimingSink;
   readonly onEffectReport?: (report: SyncEffectWorkerReport) => void;
   readonly onEffectError?: (error: unknown) => void;
   readonly pollingIntervalMs?: number;
+  /** Maximum interval between metadata-preserving safety scans. */
+  readonly pollingFullScanIntervalMs?: number;
+  /** Injectable clock for the polling coordinator cadence; defaults to Date.now. */
+  readonly now?: () => number;
+  /** Optional per-spreadsheet mutation-lane key for the Gateway coordinator. */
+  readonly coordinatorLaneKeyForPhysicalSheet?: (physicalSheetId: string) => string;
+  /** Optional diagnostic observer for coordinator mutation-lane events. */
+  readonly onCoordinatorLaneEvent?: (event: CoordinatorLaneEvent) => void;
   readonly onPollingReport?: (report: MappedUserInputPollingReport) => void;
   readonly onPollingError?: (error: unknown) => void;
 }
+
+/** Internal control operation serialized by the service's Gateway coordinator. */
+export type InternalSyncGatewayControl = <T>(
+  physicalSheetId: string,
+  operation: string,
+  task: () => Promise<T>,
+) => Promise<T>;
 
 /** Runtime returned to an internal service entrypoint, not to root consumers. */
 export interface InternalSyncService {
@@ -95,6 +135,10 @@ export interface InternalSyncService {
   /** Internal inspection handle; never part of the root application API. */
   readonly storage: MikroOrmSqliteAdapter;
   readonly projectionDefinitions: readonly RegisteredSyncProjectionDefinition[];
+  /** Test/admin controls must use this lane instead of the raw operation client. */
+  readonly runGatewayControl: InternalSyncGatewayControl | undefined;
+  /** Retries durable OPEN system-wins commands after predecessors settle. */
+  readonly retryDeferredConflicts: () => Promise<number>;
   readonly effectSupervisor: SyncEffectWorkerSupervisor;
   readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
   stop(): Promise<void>;
@@ -122,26 +166,68 @@ export async function createInternalSyncService(
   });
 
   try {
-    const projectionDefinitions = registeredTypedSheetsProjectionDefinitions(runtime.registrations);
+    const projectionDefinitions = [
+      ...registeredTypedSheetsProjectionDefinitions(runtime.registrations),
+      ...await registerSyncConflictProjectionRoutes(
+        runtime.storage,
+        runtime.registrations,
+        options.projections,
+        writer,
+      ),
+    ];
     const remote = createRemoteGateway(options, projectionDefinitions);
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
+    await autoResolveExistingMappedConflictsWithAdapter(
+      runtime.storage,
+      runtime.mappings.mappings,
+      resolveTypedSheetsEntityWriterOptions(writer),
+    );
 
     const effectSupervisor = createSyncEffectWorkerSupervisor({
       storage: runtime.storage,
       gateway: remote.gateway,
       ...optionalWorkerOptions(options),
     });
-    const pollingSupervisor = new SyncPollingSupervisor({
-      runPass: () => pollMappedUserInputWithMikroOrm({
+    const pollingFullScanIntervalMs = options.pollingFullScanIntervalMs
+      ?? DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS;
+    const clock = options.now ?? Date.now;
+    let lastSuccessfulFullScanAt: number | undefined;
+    const runPollingPass = async (): Promise<MappedUserInputPollingReport> => {
+      const now = clock();
+      const safetyFullScan = lastSuccessfulFullScanAt === undefined ||
+        now - lastSuccessfulFullScanAt >= pollingFullScanIntervalMs;
+      // Safety-scan lag is how far past the configured deadline this pass starts.
+      // It is zero before the first completed scan and on adaptive passes, so the
+      // report exposes a stable numeric field with a safe default elsewhere.
+      const safetyScanLagMs = safetyFullScan && lastSuccessfulFullScanAt !== undefined
+        ? Math.max(0, now - lastSuccessfulFullScanAt - pollingFullScanIntervalMs)
+        : 0;
+      const report = await pollMappedUserInputWithMikroOrm({
         storage: runtime.storage,
         gateway: remote.gateway,
         mappings: runtime.mappings,
         writer,
-      }),
+        mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
+        forceFull: safetyFullScan,
+        safetyScanLagMs,
+        ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
+      });
+      // Only a completed safety scan advances the deadline. A failing safety scan
+      // propagates its original error and leaves lastSuccessfulFullScanAt unchanged.
+      if (report.safetyFullScan) lastSuccessfulFullScanAt = clock();
+      return report;
+    };
+    const pollingSupervisor = new SyncPollingSupervisor({
+      runPass: runPollingPass,
       ...(options.pollingIntervalMs === undefined ? {} : { intervalMs: options.pollingIntervalMs }),
       onReport: (report) => options.onPollingReport?.(report),
       ...(options.onPollingError === undefined ? {} : { onError: options.onPollingError }),
     });
+    const retryDeferredConflicts = (): Promise<number> => retryOpenMappedConflictsWithAdapter(
+      runtime.storage,
+      runtime.mappings.mappings,
+      resolveTypedSheetsEntityWriterOptions(writer),
+    );
 
     let stopped = false;
     let stopPromise: Promise<void> | undefined;
@@ -171,6 +257,8 @@ export async function createInternalSyncService(
       hikoutei,
       storage: runtime.storage,
       projectionDefinitions,
+      runGatewayControl: remote.runGatewayControl,
+      retryDeferredConflicts,
       effectSupervisor,
       pollingSupervisor,
       stop,
@@ -221,6 +309,16 @@ function validateServiceOptions(
   if (options.dbName.trim() === "") {
     throw new SyncServiceError(SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS, "sync service dbName is required.");
   }
+  validateEffectLeaseHeadroom(options);
+  if (
+    options.pollingFullScanIntervalMs !== undefined &&
+    (!Number.isSafeInteger(options.pollingFullScanIntervalMs) || options.pollingFullScanIntervalMs < 1)
+  ) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service pollingFullScanIntervalMs must be a positive safe integer.",
+    );
+  }
   requireText(options.projections.spreadsheetId, "sync service spreadsheetId");
   if (descriptors.size === 0) {
     throw new SyncServiceError(
@@ -250,6 +348,45 @@ function validateServiceOptions(
   }
 }
 
+function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void {
+  const effectLeaseDurationMs = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
+  if (
+    !Number.isSafeInteger(effectLeaseDurationMs) ||
+    effectLeaseDurationMs < 1
+  ) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs must be a positive safe integer.",
+    );
+  }
+  if (effectLeaseDurationMs >= DEFAULT_WRITER_LEASE_DURATION_MS) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs must be shorter than the 180-second writer lease.",
+    );
+  }
+  if (options.appsScript === undefined) return;
+
+  const requestTimeoutMs = options.appsScript.requestTimeoutMs
+    ?? SYNC_GATEWAY_CLIENT_DEFAULTS.REQUEST_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(requestTimeoutMs) ||
+    requestTimeoutMs < SYNC_GATEWAY_CLIENT_DEFAULTS.MIN_REQUEST_TIMEOUT_MS ||
+    requestTimeoutMs > SYNC_GATEWAY_CLIENT_DEFAULTS.MAX_REQUEST_TIMEOUT_MS
+  ) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service Apps Script requestTimeoutMs must be between 1 second and 120 seconds.",
+    );
+  }
+  if (effectLeaseDurationMs <= requestTimeoutMs + EFFECT_LEASE_GATEWAY_HEADROOM_MS) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs must exceed Apps Script requestTimeoutMs by 30 seconds before supervisors start.",
+    );
+  }
+}
+
 function validateEntityConfig(
   entityName: string,
   descriptor: ResolvedHikouteiEntityDescriptor,
@@ -259,6 +396,8 @@ function validateEntityConfig(
 ): void {
   validateRoute(entityName, "systemState", config.systemState);
   addRoute(routes, spreadsheetId, config.systemState.tabName, entityName, "systemState");
+  validateRoute(entityName, "syncConflicts", config.syncConflicts);
+  addRoute(routes, spreadsheetId, config.syncConflicts.tabName, entityName, "syncConflicts");
   if (config.userInput !== undefined) {
     validateRoute(entityName, "userInput", config.userInput);
     addRoute(routes, spreadsheetId, config.userInput.tabName, entityName, "userInput");
@@ -307,6 +446,8 @@ function createWriterOptions(options: InternalSyncServiceOptions): TypedSheetsEn
 function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   readonly workerId?: string;
   readonly maxEffects?: number;
+  readonly effectLeaseDurationMs?: number;
+  readonly gatewayTimeoutMs?: number;
   readonly idleIntervalMs?: number;
   readonly onTiming?: SyncTimingSink;
   readonly onReport?: (report: SyncEffectWorkerReport) => void;
@@ -315,6 +456,8 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   return {
     ...(options.workerId === undefined ? {} : { workerId: options.workerId }),
     ...(options.maxEffects === undefined ? {} : { maxEffects: options.maxEffects }),
+    ...(options.effectLeaseDurationMs === undefined ? {} : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
+    ...(options.appsScript?.requestTimeoutMs === undefined ? {} : { gatewayTimeoutMs: options.appsScript.requestTimeoutMs }),
     ...(options.effectIdleIntervalMs === undefined ? {} : { idleIntervalMs: options.effectIdleIntervalMs }),
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
     ...(options.onEffectReport === undefined ? {} : { onReport: options.onEffectReport }),
@@ -325,16 +468,27 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
 function createRemoteGateway(
   options: InternalSyncServiceOptions,
   definitions: readonly RegisteredSyncProjectionDefinition[],
-): { readonly gateway: InternalSyncGateway; readonly provisioner: SyncGatewayProvisioner } {
+): {
+  readonly gateway: InternalSyncGateway;
+  readonly provisioner: SyncGatewayProvisioner;
+  readonly runGatewayControl?: InternalSyncGatewayControl;
+} {
   if (options.gateway !== undefined) {
-    const provisioner = options.provisioner ?? asProvisioner(options.gateway);
+    const injected = options.gateway;
+    const provisioner = options.provisioner ?? asProvisioner(injected);
     if (provisioner === undefined) {
       throw new SyncServiceError(
         SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
         "the injected sync gateway does not provide projection provisioning.",
       );
     }
-    return { gateway: options.gateway, provisioner };
+    // Wrap in the per-spreadsheet mutation coordinator when the injected
+    // gateway exposes lock-free table reads. This keeps worker, polling, and
+    // test controls from issuing competing mutations through one global Apps
+    // Script script lock, while leaving value reads untouched. Provisioning
+    // stays on the original provisioner; it runs at startup before the worker.
+    const coordinated = wrapInCoordinator(injected, options);
+    return { gateway: coordinated ?? injected, provisioner };
   }
 
   const appsScript = options.appsScript;
@@ -345,11 +499,53 @@ function createRemoteGateway(
     );
   }
   const client = new AppsScriptOperationClient(appsScript);
-  const gateway = new AppsScriptOperationSyncGateway({
+  const inner = new AppsScriptOperationSyncGateway({
     operationGateway: client,
     definitions,
   });
-  return { gateway, provisioner: gateway };
+  const gateway = new CoordinatedSyncGateway({
+    inner,
+    ...(options.coordinatorLaneKeyForPhysicalSheet === undefined
+      ? {}
+      : { mutationKeyForPhysicalSheet: options.coordinatorLaneKeyForPhysicalSheet }),
+    ...(options.onCoordinatorLaneEvent === undefined
+      ? {}
+      : { onLaneEvent: options.onCoordinatorLaneEvent }),
+  });
+  // The inner gateway owns projection provisioning; provisioning runs at
+  // startup before the worker, so it does not need the mutation lane.
+  return {
+    gateway,
+    provisioner: inner,
+    runGatewayControl: (physicalSheetId, operation, task) =>
+      gateway.runSerializedControl(physicalSheetId, operation, task),
+  };
+}
+
+/**
+ * Wraps an injected gateway in the mutation coordinator when it exposes the
+ * lock-free table-read capability the coordinator forwards. A gateway that
+ * lacks table reads is returned unwrapped so existing fast-only fixtures keep
+ * working without forcing a capability they do not implement.
+ */
+function wrapInCoordinator(
+  gateway: InternalSyncGateway,
+  options: InternalSyncServiceOptions,
+): CoordinatedSyncGateway<CoordinatedGatewayInner> | undefined {
+  if (!isSyncSheetTableReaderGateway(gateway)) return undefined;
+  // The injected gateway already implements the full SyncSheetGateway boundary;
+  // isSyncSheetTableReaderGateway confirms the table-reader capability, so the
+  // combined object satisfies CoordinatedGatewayInner.
+  const inner = gateway as unknown as CoordinatedGatewayInner;
+  return new CoordinatedSyncGateway({
+    inner,
+    ...(options.coordinatorLaneKeyForPhysicalSheet === undefined
+      ? {}
+      : { mutationKeyForPhysicalSheet: options.coordinatorLaneKeyForPhysicalSheet }),
+    ...(options.onCoordinatorLaneEvent === undefined
+      ? {}
+      : { onLaneEvent: options.onCoordinatorLaneEvent }),
+  });
 }
 
 function asProvisioner(value: object): SyncGatewayProvisioner | undefined {

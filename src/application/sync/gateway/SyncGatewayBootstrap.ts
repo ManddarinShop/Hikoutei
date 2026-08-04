@@ -26,6 +26,8 @@ import {
 export interface RegisteredSyncProjectionDefinition {
   readonly sheet: RegisteredSyncSheet;
   readonly headers: readonly string[];
+  /** Header used to detect duplicate append identities before a remote write. */
+  readonly identityField?: string;
   /** Converts a visible business key into the canonical entity identity. */
   readonly entityIdForBusinessKey?: (businessKey: string) => string;
   /** Optional user-editable boolean control fields for a Sync_Conflicts tab. */
@@ -39,7 +41,7 @@ export interface SyncGatewayProvisionRoute {
   readonly projection: RegisteredProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
-  /** Business-key header used to find append-only rows without metadata. */
+  /** Business-key header retained for append identity validation and fallback lookup. */
   readonly identityField?: string;
   readonly checkboxHeaders?: readonly string[];
 }
@@ -140,7 +142,9 @@ export async function provisionRegisteredSyncSheets(
         "sync gateway provisioning identityField",
         SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
       )
-      : undefined;
+      : definition.sheet.projection === "sync_conflicts"
+        ? "Conflict_ID"
+        : undefined;
     if (identityField !== undefined && !definition.headers.includes(identityField)) {
       throw new SyncGatewayContractError(
         SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,

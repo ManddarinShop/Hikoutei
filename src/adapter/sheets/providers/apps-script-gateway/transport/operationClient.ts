@@ -169,16 +169,53 @@ export class AppsScriptOperationClient implements AppsScriptOperationGateway {
     const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     let httpStatus: number | null = null;
     let responseBytes = 0;
+    let requestUrl = this.url;
+    let requestMethod: "GET" | "POST" = "POST";
+    let redirectCount = 0;
 
     try {
-      const response = await fetch(this.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: requestBody,
-        signal: controller.signal,
-        redirect: "follow",
-      });
-      httpStatus = response.status;
+      let response: Response;
+      while (true) {
+        const requestInit: RequestInit = {
+          method: requestMethod,
+          signal: controller.signal,
+          // Validate the target ourselves. Apps Script commonly returns a
+          // 302 after executing the POST and exposes the result through a
+          // googleusercontent GET; 307/308 are the redirects that preserve
+          // the original method and body.
+          redirect: "manual",
+          ...(requestMethod === "POST"
+            ? {
+              headers: { "content-type": "application/json" },
+              body: requestBody,
+            }
+            : {}),
+        };
+        response = await fetch(requestUrl, requestInit);
+        httpStatus = response.status;
+        if (!isRedirectStatus(response.status)) break;
+        const location = response.headers.get("location");
+        // Release the manual redirect response before opening the next request;
+        // a redirect body is never part of the signed gateway protocol.
+        try {
+          await response.body?.cancel();
+        } catch {
+          // The redirect target is still validated below; a failed body cancel
+          // must not turn a malformed Location into an unrelated network error.
+        }
+        if (redirectCount >= MAX_REDIRECTS) {
+          throw invalidRedirectError(
+            `Code.gs redirect limit of ${MAX_REDIRECTS} was exceeded`,
+            httpStatus,
+          );
+        }
+        requestUrl = resolveRedirectUrl(requestUrl, location, httpStatus);
+        if (REDIRECT_REWRITE_TO_GET_STATUS_CODES.has(response.status)) {
+          requestMethod = "GET";
+        }
+        redirectCount += 1;
+      }
+
       const responseText = await response.text();
       responseBytes = Buffer.byteLength(responseText, "utf8");
       const decoded = parseCodeGsResponse(responseText, presentValue(httpStatus));
@@ -362,6 +399,65 @@ function requireRequestTimeout(value: unknown): number {
     );
   }
   return value;
+}
+
+const MAX_REDIRECTS = 3;
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
+const REDIRECT_REWRITE_TO_GET_STATUS_CODES = new Set([301, 302, 303]);
+const TRUSTED_REDIRECT_HOSTS = new Set([
+  "script.google.com",
+  "script.googleusercontent.com",
+]);
+
+function isRedirectStatus(status: number): boolean {
+  return REDIRECT_STATUS_CODES.has(status);
+}
+
+function resolveRedirectUrl(
+  currentUrl: string,
+  location: string | null,
+  status: number,
+): string {
+  if (location === null || location.trim().length === 0) {
+    throw invalidRedirectError("Code.gs redirect did not contain a Location header", status);
+  }
+
+  let redirected: URL;
+  try {
+    redirected = new URL(location, currentUrl);
+  } catch {
+    throw invalidRedirectError("Code.gs redirect Location was not a valid URL", status);
+  }
+  if (
+    redirected.protocol !== "https:" ||
+    redirected.username.length > 0 ||
+    redirected.password.length > 0 ||
+    redirected.hash.length > 0
+  ) {
+    throw invalidRedirectError(
+      "Code.gs redirect must target an HTTPS URL without credentials or a fragment",
+      status,
+    );
+  }
+
+  const current = new URL(currentUrl);
+  const sameHost = redirected.hostname === current.hostname;
+  const trustedGoogleHost = TRUSTED_REDIRECT_HOSTS.has(redirected.hostname);
+  if (!sameHost && !trustedGoogleHost) {
+    throw invalidRedirectError(
+      "Code.gs redirect target is not the configured gateway or a trusted Apps Script host",
+      status,
+    );
+  }
+  return redirected.toString();
+}
+
+function invalidRedirectError(statusMessage: string, status: number): AppsScriptSyncGatewayError {
+  return new AppsScriptSyncGatewayError(
+    SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_REDIRECT,
+    statusMessage,
+    presentValue(status),
+  );
 }
 
 function presentOrAbsent(value: number | null): Presence<number> {

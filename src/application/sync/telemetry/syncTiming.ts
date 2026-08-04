@@ -10,6 +10,8 @@ export const SYNC_TIMING_SCOPES = {
   ORM_FLUSH: "orm_flush",
   WORKER: "worker",
   GATEWAY: "gateway",
+  /** Inbound User_Input polling phases; diagnostic only and never root-facing. */
+  POLLING: "polling",
 } as const;
 
 export type SyncTimingScope =
@@ -52,6 +54,10 @@ export interface SyncTimingEvent {
   readonly durationMs: number;
   readonly operationKinds: readonly SyncTimingOperationKind[];
   readonly operationCounts: SyncTimingOperationCounts;
+  /** Optional route/batch diagnostics used by adaptive outbound dispatch. */
+  readonly routeKey?: string;
+  readonly batchLimit?: number;
+  readonly responseSucceeded?: boolean;
 }
 
 /** Optional observer used by servers and benchmarks to collect timings. */

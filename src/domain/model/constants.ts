@@ -141,6 +141,7 @@ export type EffectTargetKind =
 export const EFFECT_STATUSES = {
   PENDING: "pending",
   PROCESSING: "processing",
+  DELIVERY_UNCERTAIN: "delivery_uncertain",
   APPLIED: "applied",
   BLOCKED_CANDIDATE: "blocked_candidate",
   SUPERSEDED: "superseded",
