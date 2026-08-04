@@ -1,0 +1,116 @@
+[
+  {
+    "name": "null",
+    "value": null,
+    "stableEncodeHex": "6e",
+    "stableHash": "1b16b1df538ba12dc3f97edbb85caa7050d46c148134290feba80f8236c83db9",
+    "canonicalJson": "null",
+    "canonicalJsonSha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "name": "boolean-true",
+    "value": true,
+    "stableEncodeHex": "6231",
+    "stableHash": "7dc96f776c8423e57a2785489a3f9c43fb6e756876d6ad9a9cac4aa4e72ec193",
+    "canonicalJson": "true",
+    "canonicalJsonSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+  },
+  {
+    "name": "boolean-false",
+    "value": false,
+    "stableEncodeHex": "6230",
+    "stableHash": "c02c0b965e023abee808f2b548d8d5193a8b5229be6f3121a6f16e2d41a449b3",
+    "canonicalJson": "false",
+    "canonicalJsonSha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+  },
+  {
+    "name": "empty-string",
+    "value": "",
+    "stableEncodeHex": "73303a",
+    "stableHash": "fb912574cecad54c6a0bc75b46172350b6374929d602d5fbcb4ca0ec831fd532",
+    "canonicalJson": "\"\"",
+    "canonicalJsonSha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"
+  },
+  {
+    "name": "plain-string",
+    "value": "Hikoutei",
+    "stableEncodeHex": "73383a48696b6f75746569",
+    "stableHash": "ec2f8628a2c073dc81e149259578b10b45520ef83b77b9e6861f9584e6afc7d9",
+    "canonicalJson": "\"Hikoutei\"",
+    "canonicalJsonSha256": "27a6ceb7471630dd372104dd62f8861c384901baf3ce81fc52b451e95a346fd2"
+  },
+  {
+    "name": "decomposed-unicode",
+    "value": "é",
+    "stableEncodeHex": "73323ac3a9",
+    "stableHash": "0566c2f70ee0c7b722fdbd0dae5e0e79e0e84ab169d7956b688da7823e471650",
+    "canonicalJson": "\"é\"",
+    "canonicalJsonSha256": "3d68ce21f2899a475713cdbe7562ba9bdb6b1dfde8af1f221bdff4a0935b53b2"
+  },
+  {
+    "name": "emoji",
+    "value": "😀",
+    "stableEncodeHex": "73343af09f9880",
+    "stableHash": "81509bcc027debace3d85bf16263e065852bf1b58825c19c0a06e04a88d63a24",
+    "canonicalJson": "\"😀\"",
+    "canonicalJsonSha256": "7a0c50b92434b015545fe93ab723db2d4b2cdd14a441405624a9ce8be29f1d5a"
+  },
+  {
+    "name": "number-zero",
+    "value": 0,
+    "stableEncodeHex": "66313a30",
+    "stableHash": "57a94aabf06f605586377a62a3deb150fab0722902f0375f0574f20319a6ba9c",
+    "canonicalJson": "0",
+    "canonicalJsonSha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+  },
+  {
+    "name": "number-exponent",
+    "value": 1.25e-7,
+    "stableEncodeHex": "66373a312e3235652d37",
+    "stableHash": "a78cb19ce9d5ab81f19cd9842eff8a36f3e4b1c1b475903af36a54138ea7fc39",
+    "canonicalJson": "1.25e-7",
+    "canonicalJsonSha256": "681a3919fe6ae2267b5a391694f5e4611d60d2f54e8e02078fab16bd5e83dd74"
+  },
+  {
+    "name": "date-shaped-value",
+    "value": {
+      "kind": "date",
+      "value": "2026-01-02T03:04:05.000Z"
+    },
+    "stableEncodeHex": "6432343a323032362d30312d30325430333a30343a30352e3030305a",
+    "stableHash": "4d9b552c23e8524d4756177f0322152b476662609b3a117e96af6c88086701c5",
+    "canonicalJson": "{\"kind\":\"date\",\"value\":\"2026-01-02T03:04:05.000Z\"}",
+    "canonicalJsonSha256": "19bb85e1494bee231dfa458a22801a7578a5128b10937a3317ea29988f5995bf"
+  },
+  {
+    "name": "array-nested",
+    "value": [
+      null,
+      true,
+      "é",
+      {
+        "z": 1,
+        "a": 2
+      }
+    ],
+    "stableEncodeHex": "61345b6e623173323ac3a96f327b73313a6166313a3273313a7a66313a317d5d",
+    "stableHash": "e550fa6bbbce1eee3d2cb1f1166a8739ac1f82e6b4d555b865026f32532d9fe3",
+    "canonicalJson": "[null,true,\"é\",{\"a\":2,\"z\":1}]",
+    "canonicalJsonSha256": "d0a2dfca99611189c9a1e4abce6506725c8765740272f02f60584fe5d92587cd"
+  },
+  {
+    "name": "object-insertion-order",
+    "value": {
+      "z": 1,
+      "a": 2,
+      "nested": {
+        "b": false,
+        "a": "x"
+      }
+    },
+    "stableEncodeHex": "6f337b73313a6166313a3273363a6e65737465646f327b73313a6173313a7873313a6262307d73313a7a66313a317d",
+    "stableHash": "065a956866f9fa4de8860a6527fad1029cdb9b0aaa93acfc871dc1cdb70200d8",
+    "canonicalJson": "{\"a\":2,\"nested\":{\"a\":\"x\",\"b\":false},\"z\":1}",
+    "canonicalJsonSha256": "480d66bc87583a0963b5d42859d62c3cf8d14df727d3f87bc6b9ecda6f726c18"
+  }
+]
