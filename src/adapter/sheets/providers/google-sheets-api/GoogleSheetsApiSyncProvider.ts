@@ -1,7 +1,7 @@
 /**
  * Full sync provider over the Google Sheets REST API.
  *
- * Implements every gateway capability the sync runtime needs with ONE
+ * Implements every provider capability the sync runtime needs with ONE
  * provider instance (one transport, one read limiter, one write limiter, one
  * telemetry sink): the outbound effect worker (fast append, applyEffects,
  * postcondition recovery), projection provisioning, values-only table reads,
@@ -38,40 +38,39 @@ import {
   type ReadSyncSnapshotRequest,
   type ReadSyncTableRowsRequest,
   type SyncEffectPostcondition,
-  type SyncEffectWorkerFullGateway,
-  type SyncGatewayAuthority,
-  type SyncGatewayEffect,
-  type SyncGatewayEffectPostconditionResult,
-  type SyncGatewayEffectResult,
-  type SyncGatewaySnapshot,
+  type SyncEffectWorkerProvider,
+  type SyncProjectionEffect,
+  type SyncEffectPostconditionResult,
+  type SyncEffectResult,
+  type SyncSheetsSnapshot,
   type SyncObservedSnapshot,
-  type SyncSheetObservationBatchGateway,
-  type SyncSheetObservationGateway,
-  type SyncSheetTableReaderGateway,
+  type SyncSheetsObservationBatchProvider,
+  type SyncSheetsObservationProvider,
+  type SyncSheetsTableReader,
   type SyncTableRowsResult,
-} from "../../../../application/sync/gateway/syncGateway.js";
+} from "../../../../application/sync/sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_ERROR_CODES,
-  SyncGatewayContractError,
-} from "../../../../application/sync/gateway/errors.js";
+  SYNC_SHEETS_ERROR_CODES,
+  SyncSheetsContractError,
+} from "../../../../application/sync/sheets/errors.js";
 import {
-  requireSyncGatewaySnapshotReadMode,
-} from "../../../../application/sync/gateway/validation.js";
+  requireSyncSnapshotReadMode,
+} from "../../../../application/sync/sheets/validation.js";
 import {
-  SYNC_GATEWAY_FAST_APPEND_STATUSES,
-  SYNC_GATEWAY_POSTCONDITION_MODES,
-  SYNC_GATEWAY_PROJECTIONS,
-  SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-  type SyncGatewaySnapshotReadMode,
-} from "../../../../application/sync/gateway/constants.js";
+  SYNC_FAST_APPEND_STATUSES,
+  SYNC_POSTCONDITION_MODES,
+  SYNC_PROJECTIONS,
+  SYNC_SNAPSHOT_READ_MODES,
+  type SyncSnapshotReadMode,
+} from "../../../../application/sync/sheets/constants.js";
 import {
   classifyTransportOutcome,
-} from "../../../../application/sync/gateway/transportClassification.js";
+} from "../../../../application/sync/sheets/transportOutcome.js";
 import type {
   RegisteredSyncProjectionDefinition,
-  SyncGatewayProvisioner,
-  SyncGatewayProvisionRoute,
-} from "../../../../application/sync/gateway/SyncGatewayBootstrap.js";
+  SyncSheetsProvisioner,
+  SyncSheetsProvisionRoute,
+} from "../../../../application/sync/sheets/sheetsProvisioning.js";
 import type { Presence } from "../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../shared/state/index.js";
 import { isNormalizedCell } from "../../../../shared/encoding/index.js";
@@ -179,7 +178,7 @@ export interface GoogleSheetsApiSyncProviderOptions extends GoogleSheetsApiProvi
 
 /**
  * Full sync provider over the Sheets REST API: outbound effects, provisioning,
- * table reads, anchors, and snapshots behind the shared gateway contracts.
+ * table reads, anchors, and snapshots behind the shared provider contracts.
  *
  * All reads share one read limiter; all writes share one write limiter; the
  * worker-level append throttle stays enabled on top in service mode via the
@@ -189,11 +188,11 @@ export interface GoogleSheetsApiSyncProviderOptions extends GoogleSheetsApiProvi
  */
 export class GoogleSheetsApiSyncProvider
   implements
-    SyncEffectWorkerFullGateway,
-    SyncSheetObservationGateway,
-    SyncSheetObservationBatchGateway,
-    SyncSheetTableReaderGateway,
-    SyncGatewayProvisioner {
+    SyncEffectWorkerProvider,
+    SyncSheetsObservationProvider,
+    SyncSheetsObservationBatchProvider,
+    SyncSheetsTableReader,
+    SyncSheetsProvisioner {
   private readonly spreadsheetId: string;
   private readonly definitions: readonly RegisteredSyncProjectionDefinition[];
   private readonly transport: GoogleSheetsApiTransport;
@@ -207,8 +206,8 @@ export class GoogleSheetsApiSyncProvider
 
   public constructor(options: GoogleSheetsApiSyncProviderOptions) {
     if (options.definitions.length === 0) {
-      throw new SyncGatewayContractError(
-        SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
+      throw new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
         "Google Sheets API sync provider requires a projection definition",
       );
     }
@@ -236,8 +235,8 @@ export class GoogleSheetsApiSyncProvider
     }
     for (const definition of options.definitions) {
       if (definition.sheet.spreadsheetId !== options.spreadsheetId) {
-        throw new SyncGatewayContractError(
-          SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
+        throw new SyncSheetsContractError(
+          SYNC_SHEETS_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
           "Google Sheets API sync provider definitions must target one spreadsheet",
         );
       }
@@ -278,15 +277,14 @@ export class GoogleSheetsApiSyncProvider
 
   /** Appends rows through one idempotent, atomic target+receipt batch. */
   public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
-    validateAuthority(request.authority);
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
     validateRoute(request, definition);
     const routeOptions = effectRouteOptions(definition);
     if (routeOptions.identityField.kind !== "present") {
       // The fast path never materializes anchor metadata, so a route without
       // a registered identity cannot locate or guard its rows on replay.
-      throw new SyncGatewayContractError(
-        SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      throw new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
         "fast append requires a registered identityField for route " + request.physicalSheetId,
       );
     }
@@ -338,7 +336,7 @@ export class GoogleSheetsApiSyncProvider
         }
         resultsById.set(row.effectId, {
           effectId: row.effectId,
-          status: SYNC_GATEWAY_FAST_APPEND_STATUSES.APPLIED,
+          status: SYNC_FAST_APPEND_STATUSES.APPLIED,
           visibleHash: existing.visibleHash,
           visibleRevision: existing.visibleRevision,
         });
@@ -350,7 +348,7 @@ export class GoogleSheetsApiSyncProvider
 
     // Mirror the built-in append identity preflight: the registered identity
     // must exist and be unique across the sheet and the pending batch; replay
-    // entries are exempt exactly like the real gateway.
+    // entries are exempt exactly like the real provider.
     let deferredSuffix = false;
     if (pending.length > 0) {
       assertAppendIdentityAvailability(context, identityField, pending);
@@ -384,7 +382,7 @@ export class GoogleSheetsApiSyncProvider
         pendingReceipts.slice(0, resolution.includeCount).forEach((receipt) => {
           resultsById.set(receipt.effectId, {
             effectId: receipt.effectId,
-            status: SYNC_GATEWAY_FAST_APPEND_STATUSES.APPLIED,
+            status: SYNC_FAST_APPEND_STATUSES.APPLIED,
             visibleHash: receipt.visibleHash,
             visibleRevision: receipt.visibleRevision,
           });
@@ -411,24 +409,23 @@ export class GoogleSheetsApiSyncProvider
 
   /** Applies regular update/delete/create effects through one atomic batch. */
   public async applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
-    validateAuthority(request.authority);
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
     validateRoute(request, definition);
     if (request.effects.length === 0) {
       invalidProviderRequest("apply effects", "effects must not be empty");
     }
     const bounded = request.effects.slice(0, GOOGLE_SHEETS_API_DEFAULTS.MAX_EFFECTS_PER_REQUEST);
-    const postconditionMode = request.postconditionMode ?? SYNC_GATEWAY_POSTCONDITION_MODES.INLINE;
+    const postconditionMode = request.postconditionMode ?? SYNC_POSTCONDITION_MODES.INLINE;
     if (
-      postconditionMode !== SYNC_GATEWAY_POSTCONDITION_MODES.INLINE &&
-      postconditionMode !== SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED
+      postconditionMode !== SYNC_POSTCONDITION_MODES.INLINE &&
+      postconditionMode !== SYNC_POSTCONDITION_MODES.DEFERRED
     ) {
       invalidProviderRequest("apply effects", "postconditionMode must be inline or deferred");
     }
     const routeOptions = effectRouteOptions(definition);
     const context = await this.readPreflight(request, definition, routeOptions);
     const plans = planEffectBatch({ ...request, effects: bounded }, context);
-    const includeReceipts = postconditionMode === SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED;
+    const includeReceipts = postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
     const updatedAt = new Date(this.now()).toISOString();
     const resolution = resolveApplyBatchBudget(context, plans, {
       maxBatchBytes: this.maxBatchBytes,
@@ -464,7 +461,7 @@ export class GoogleSheetsApiSyncProvider
     // worker always uses deferred mode, where the atomic batch already carries
     // target mutations and receipts together.
     const verified = new Set<number>();
-    if (postconditionMode === SYNC_GATEWAY_POSTCONDITION_MODES.INLINE && included.length > 0) {
+    if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE && included.length > 0) {
       const verifyContext = await this.readPreflight(request, definition, routeOptions);
       included.forEach((plan, index) => {
         if (!plan.verify || plan.mutation === undefined || plan.mutation.kind === "delete") return;
@@ -493,7 +490,7 @@ export class GoogleSheetsApiSyncProvider
       }
     }
 
-    const results: SyncGatewayEffectResult[] = [];
+    const results: SyncEffectResult[] = [];
     let includedCursor = 0;
     bounded.forEach((effect, index) => {
       if (schemaErrorIndices.has(index)) {
@@ -509,7 +506,7 @@ export class GoogleSheetsApiSyncProvider
       if (plan === undefined) return;
       let result = encodeOutcomeResult(plan.outcome);
       if (
-        postconditionMode === SYNC_GATEWAY_POSTCONDITION_MODES.INLINE &&
+        postconditionMode === SYNC_POSTCONDITION_MODES.INLINE &&
         plan.outcome.kind === "applied" &&
         !plan.outcome.deletion &&
         !verified.has(planIndex)
@@ -522,7 +519,7 @@ export class GoogleSheetsApiSyncProvider
           reason: presentValue(GOOGLE_SHEETS_API_EFFECT_REASONS.POSTCONDITION_HASH_MISMATCH),
           postcondition: "unavailable",
         };
-      } else if (postconditionMode === SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED) {
+      } else if (postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED) {
         result = withDeferredPostcondition(result);
       }
       results.push(result);
@@ -535,7 +532,7 @@ export class GoogleSheetsApiSyncProvider
   }
 
   /** Classifies one response-loss effect through a fresh target+receipt read. */
-  public async readEffectPostcondition(effect: SyncGatewayEffect): Promise<SyncEffectPostcondition> {
+  public async readEffectPostcondition(effect: SyncProjectionEffect): Promise<SyncEffectPostcondition> {
     const [result] = await this.readEffectPostconditions({
       physicalSheetId: effect.physicalSheetId,
       sheetName: effect.payload.sheetName,
@@ -553,7 +550,7 @@ export class GoogleSheetsApiSyncProvider
   /** Classifies a recovery batch with one shared target+receipt read. */
   public async readEffectPostconditions(
     request: ReadSyncEffectPostconditionsRequest,
-  ): Promise<readonly SyncGatewayEffectPostconditionResult[]> {
+  ): Promise<readonly SyncEffectPostconditionResult[]> {
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
     validateRoute(request, definition);
     if (request.effects.length === 0) {
@@ -569,7 +566,7 @@ export class GoogleSheetsApiSyncProvider
   }
 
   // -------------------------------------------------------------------------
-  // Projection provisioning (SyncGatewayProvisioner)
+  // Projection provisioning (SyncSheetsProvisioner)
   // -------------------------------------------------------------------------
 
   /**
@@ -582,9 +579,9 @@ export class GoogleSheetsApiSyncProvider
    * exact headers, and succeeds without rewriting anything.
    */
   public async provisionRegistry(
-    registrations: readonly SyncGatewayProvisionRoute[],
+    registrations: readonly SyncSheetsProvisionRoute[],
   ): Promise<{
-    readonly registrations: readonly Omit<SyncGatewayProvisionRoute, "headers">[];
+    readonly registrations: readonly Omit<SyncSheetsProvisionRoute, "headers">[];
     readonly createdSheets: readonly string[];
     readonly initializedHeaders: readonly string[];
   }> {
@@ -732,9 +729,9 @@ export class GoogleSheetsApiSyncProvider
         request.headers.length !== definition.headers.length ||
         request.headers.some((header, index) => header !== definition.headers[index])
       ) {
-        throw new SyncGatewayContractError(
-          SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-          "sync gateway table read headers do not match the registered projection " +
+        throw new SyncSheetsContractError(
+          SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+          "sync provider table read headers do not match the registered projection " +
           definition.sheet.physicalSheetId,
         );
       }
@@ -787,7 +784,6 @@ export class GoogleSheetsApiSyncProvider
   public async ensureRowAnchors(
     request: EnsureSyncRowAnchorsRequest,
   ): Promise<EnsureSyncRowAnchorsResult> {
-    validateAuthority(request.authority);
     const definition = this.definitionForPhysicalSheet(request.physicalSheetId);
     validateRoute(request, definition);
     const tabs = await this.readObservedTabs([request]);
@@ -811,7 +807,7 @@ export class GoogleSheetsApiSyncProvider
   }
 
   /** Reads one full snapshot without any mutation (lock-free). */
-  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
+  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncSheetsSnapshot> {
     const target = this.observationTargetFor(request);
     const tabs = await this.readObservedTabs([request]);
     const tab = tabs.get(request.sheetName);
@@ -921,7 +917,7 @@ export class GoogleSheetsApiSyncProvider
     requests: readonly {
       readonly sheetName: string;
       readonly registeredRange: string;
-      readonly readMode?: SyncGatewaySnapshotReadMode;
+      readonly readMode?: SyncSnapshotReadMode;
     }[],
   ): Promise<ReadonlyMap<string, ObservedTab>> {
     // One getSpreadsheet call serves the whole batch with ONE mask: the
@@ -929,7 +925,7 @@ export class GoogleSheetsApiSyncProvider
     // lightweight branch never consults merges or dataValidation; the full
     // mask is still correct for a mixed batch).
     const lightweight = requests.length > 0 && requests.every((request) =>
-      request.readMode === SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT);
+      request.readMode === SYNC_SNAPSHOT_READ_MODES.USER_INPUT);
     const fields = lightweight
       ? GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS
       : GOOGLE_SHEETS_API_OBSERVATION_FIELDS;
@@ -970,15 +966,15 @@ export class GoogleSheetsApiSyncProvider
     // Fail closed on unknown readMode strings (same shared guard as the Apps
     // Script observation operation) instead of silently reading in full mode.
     const readMode = request.readMode === undefined
-      ? SYNC_GATEWAY_SNAPSHOT_READ_MODES.FULL
-      : requireSyncGatewaySnapshotReadMode(
+      ? SYNC_SNAPSHOT_READ_MODES.FULL
+      : requireSyncSnapshotReadMode(
         request.readMode,
         "Google Sheets API observation readMode",
-        SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+        SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       );
     if (
-      readMode === SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT &&
-      request.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT
+      readMode === SYNC_SNAPSHOT_READ_MODES.USER_INPUT &&
+      request.projection !== SYNC_PROJECTIONS.USER_INPUT
     ) {
       invalidProviderRequest(
         "observation",
@@ -1083,8 +1079,8 @@ export class GoogleSheetsApiSyncProvider
       (candidate) => candidate.sheet.physicalSheetId === physicalSheetId,
     );
     if (definition === undefined) {
-      throw new SyncGatewayContractError(
-        SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
+      throw new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS,
         "no projection definition exists for " + physicalSheetId,
       );
     }
@@ -1095,31 +1091,6 @@ export class GoogleSheetsApiSyncProvider
 // ---------------------------------------------------------------------------
 // Outbound helpers (ported from the Apps Script effect operations)
 // ---------------------------------------------------------------------------
-
-/**
- * Validates the optional authority fence evidence on mutating requests,
- * mirroring the Apps Script `assertAuthority_` shape checks: when present,
- * the epoch must be a safe integer >= 1 and the token a non-empty string.
- *
- * The remote Script Properties fence is intentionally NOT written in direct
- * mode: the SQLite spreadsheet_authority row plus the writer/effect leases
- * are the fence under the single-authoritative-SQLite premise, while Apps
- * Script keeps its own Script Properties fence in gateway mode.
- */
-function validateAuthority(authority: SyncGatewayAuthority | undefined): void {
-  if (authority === undefined) return;
-  if (
-    authority === null ||
-    typeof authority !== "object" ||
-    Array.isArray(authority) ||
-    !Number.isSafeInteger(authority.epoch) ||
-    authority.epoch < 1 ||
-    typeof authority.token !== "string" ||
-    authority.token.length === 0
-  ) {
-    invalidProviderRequest("sync gateway", "authority is invalid");
-  }
-}
 
 /** Builds the fixed-shape receipt record used by the fast-append path. */
 function makeAppendReceipt(effectId: string, payloadHash: string, visibleHash: string): PlannedReceipt {
@@ -1273,7 +1244,7 @@ function findProbeRowInContext(context: PreflightContext, plan: EffectPlan): Pre
 
 /**
  * Route validation against the registered definition (mirrors
- * `validateRoute` in the Apps Script operation gateway).
+ * `validateRoute` in the Apps Script operation provider).
  */
 function validateRoute(
   request: {
@@ -1290,15 +1261,15 @@ function validateRoute(
     request.projection !== definition.sheet.projection ||
     request.schemaVersion !== definition.sheet.schemaVersion
   ) {
-    throw new SyncGatewayContractError(
-      SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "sync gateway request does not match the registered projection " +
+    throw new SyncSheetsContractError(
+      SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      "sync provider request does not match the registered projection " +
       definition.sheet.physicalSheetId,
     );
   }
 }
 
-/** Derives the per-route effect options exactly like the Apps Script gateway. */
+/** Derives the per-route effect options exactly like the Apps Script provider. */
 function effectRouteOptions(
   definition: RegisteredSyncProjectionDefinition,
 ): {
@@ -1359,7 +1330,7 @@ function requireValidBatchUpdateReply(value: unknown, requestCount: number): voi
 
 /** Validates provisioning registrations before any transport call. */
 function validateProvisionRegistrations(
-  registrations: readonly SyncGatewayProvisionRoute[],
+  registrations: readonly SyncSheetsProvisionRoute[],
 ): void {
   if (registrations.length === 0) {
     invalidProviderRequest("provisioning", "registrations must not be empty");
@@ -1406,7 +1377,7 @@ function validateProvisionRegistrations(
  * emptiness is judged only from the returned grid.
  */
 function provisionGridEndColumn(
-  registration: SyncGatewayProvisionRoute,
+  registration: SyncSheetsProvisionRoute,
   existing: { readonly gridProperties?: { readonly rowCount: number; readonly columnCount: number } },
 ): number {
   const parsed = parseRegisteredRange(registration.registeredRange);
@@ -1463,7 +1434,7 @@ function cellHasEnteredValue(value: unknown): boolean {
  */
 function assertProvisioningHeaders(
   grid: ParsedGridData,
-  registration: SyncGatewayProvisionRoute,
+  registration: SyncSheetsProvisionRoute,
 ): void {
   const range = parseRegisteredRange(registration.registeredRange);
   const headerValues = gridHeaderCells(grid, range);

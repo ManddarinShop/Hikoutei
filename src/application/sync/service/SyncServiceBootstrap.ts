@@ -5,6 +5,11 @@
  * mapped SQLite runtime, provisions the registered projections, starts the
  * outbound effect supervisor, and owns graceful shutdown around one SQLite
  * connection shared by ORM and sync storage.
+ *
+ * The full service-account Google Sheets API provider owns provisioning,
+ * outbound effects, table reads, anchors, and snapshots; no Apps Script or
+ * mixed-mode provider is supported anymore. In-process tests may inject a
+ * provider double through the internal `provider`/`provisioner` options.
  */
 
 import { randomUUID } from "node:crypto";
@@ -30,43 +35,29 @@ import {
   resolveTypedSheetsEntityWriterOptions,
 } from "../../orm/persistence/flush/flushCoordinator.js";
 import type {
-  SyncGatewayProvisioner,
+  SyncSheetsProvisioner,
   RegisteredSyncProjectionDefinition,
-} from "../gateway/SyncGatewayBootstrap.js";
+} from "../sheets/sheetsProvisioning.js";
 import {
   provisionRegisteredSyncSheets,
-} from "../gateway/SyncGatewayBootstrap.js";
+} from "../sheets/sheetsProvisioning.js";
 import {
   registerSyncConflictProjectionRoutes,
-} from "../gateway/conflictProjectionRegistration.js";
+} from "../sheets/conflictProjectionRegistration.js";
 import {
   autoResolveExistingMappedConflictsWithAdapter,
   retryOpenMappedConflictsWithAdapter,
 } from "../inbound/autoSystemConflictResolution.js";
-import type { SyncSheetGateway, SyncSheetTableReaderGateway } from "../gateway/syncGateway.js";
-import { isSyncSheetTableReaderGateway } from "../gateway/syncGateway.js";
+import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheets/syncSheets.js";
 import {
-  CoordinatedSyncGateway,
-  type CoordinatedGatewayInner,
-} from "../gateway/coordinator/CoordinatedSyncGateway.js";
-import type { CoordinatorLaneEvent } from "../gateway/coordinator/coordinatorTelemetry.js";
-import {
-  AppsScriptOperationClient,
-  type AppsScriptOperationClientOptions,
-} from "../../../adapter/sheets/providers/apps-script-gateway/transport/operationClient.js";
-import {
-  AppsScriptOperationSyncGateway,
-} from "../../../adapter/sheets/providers/apps-script-gateway/transport/operationSyncGateway.js";
+  CoordinatedSheetsProvider,
+} from "../sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
+import type { CoordinatorLaneEvent } from "../sheets/mutationCoordinator/laneTelemetry.js";
 import {
   GoogleSheetsApiSyncProvider,
   type GoogleSheetsApiProviderOptions,
 } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
-import {
-  GoogleSheetsApiEffectGateway,
-  type GoogleSheetsApiEffectGatewayOptions,
-} from "../../../adapter/sheets/providers/google-sheets-api/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
-import { RoutedSyncGateway } from "../gateway/RoutedSyncGateway.js";
 import {
   createSyncEffectWorkerSupervisor,
   type SyncEffectWorkerSupervisor,
@@ -87,10 +78,9 @@ import {
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WRITER_LEASE_DURATION_MS,
-  EFFECT_LEASE_GATEWAY_HEADROOM_MS,
+  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
   FAST_APPEND_BATCH_CANDIDATE_LIMIT,
 } from "../outbound/effects/SyncEffectWorkerConstants.js";
-import { SYNC_GATEWAY_CLIENT_DEFAULTS } from "../../../adapter/sheets/providers/apps-script-gateway/protocol/constants.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,
@@ -98,44 +88,33 @@ import type {
 
 const DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS = 60_000;
 
-/** Gateway capability required by internal service startup. */
-export type InternalSyncGateway = SyncSheetGateway;
+/** Provider capability required by internal service startup (incl. table reads). */
+export type InternalSyncProvider = SyncSheetsProvider & SyncSheetsTableReader;
 
 /** Internal service options; none are part of the root application contract. */
 export interface InternalSyncServiceOptions {
   readonly dbName: string;
   readonly entities: readonly HikouteiEntity[];
   readonly projections: InternalSyncProjectionConfig;
-  /** Injected gateway used by fake/in-process tests. */
-  readonly gateway?: InternalSyncGateway;
-  /** Optional provisioner for injected gateways that do not own setup. */
-  readonly provisioner?: SyncGatewayProvisioner;
   /**
-   * Preferred production mode: the full service-account Google Sheets API
-   * provider owns provisioning, outbound effects, table reads, anchors, and
-   * snapshots with no Apps Script at all. Requires Application Default
-   * Credentials (a service account shared on the spreadsheet). Never part of
-   * the root API.
+   * Injected provider used by fake/in-process tests; mutually exclusive with
+   * `googleSheetsApi`. The coordinator wraps it exactly like the real
+   * provider so mutations share one mutation lane.
+   */
+  readonly provider?: InternalSyncProvider;
+  /** Optional provisioner for injected providers that do not own setup. */
+  readonly provisioner?: SyncSheetsProvisioner;
+  /**
+   * The full service-account Google Sheets API provider owns provisioning,
+   * outbound effects, table reads, anchors, and snapshots with no Apps
+   * Script at all. Requires Application Default Credentials (a service
+   * account shared on the spreadsheet). Never part of the root API.
    */
   readonly googleSheetsApi?: GoogleSheetsApiProviderOptions;
-  /**
-   * @deprecated Legacy Apps Script client settings. Prefer
-   * `googleSheetsApi`: Apps Script requires a deployed gateway plus shared
-   * secrets, while the service-account provider needs no Apps Script.
-   */
-  readonly appsScript?: AppsScriptOperationClientOptions;
-  /**
-   * @deprecated Legacy direct-outbound mode: routes fast append, effects,
-   * and recovery through the Google Sheets REST API (service account via
-   * ADC) while Apps Script (or the injected gateway) still owns provisioning
-   * and User_Input observation. Prefer `googleSheetsApi`, the full provider.
-   * Never part of the root API.
-   */
-  readonly googleApiWorker?: GoogleSheetsApiEffectGatewayOptions;
   readonly writerId?: string;
   readonly workerId?: string;
   readonly maxEffects?: number;
-  /** Internal lease for one remote effect batch; must exceed Gateway timeout. */
+  /** Internal lease for one remote effect batch; must exceed provider timeout. */
   readonly effectLeaseDurationMs?: number;
   readonly effectIdleIntervalMs?: number;
   readonly onTiming?: SyncTimingSink;
@@ -146,7 +125,7 @@ export interface InternalSyncServiceOptions {
   readonly pollingFullScanIntervalMs?: number;
   /** Injectable clock for the polling coordinator cadence; defaults to Date.now. */
   readonly now?: () => number;
-  /** Optional per-spreadsheet mutation-lane key for the Gateway coordinator. */
+  /** Optional per-spreadsheet mutation-lane key for the provider coordinator. */
   readonly coordinatorLaneKeyForPhysicalSheet?: (physicalSheetId: string) => string;
   /** Optional diagnostic observer for coordinator mutation-lane events. */
   readonly onCoordinatorLaneEvent?: (event: CoordinatorLaneEvent) => void;
@@ -154,21 +133,12 @@ export interface InternalSyncServiceOptions {
   readonly onPollingError?: (error: unknown) => void;
 }
 
-/** Internal control operation serialized by the service's Gateway coordinator. */
-export type InternalSyncGatewayControl = <T>(
-  physicalSheetId: string,
-  operation: string,
-  task: () => Promise<T>,
-) => Promise<T>;
-
 /** Runtime returned to an internal service entrypoint, not to root consumers. */
 export interface InternalSyncService {
   readonly hikoutei: Hikoutei;
   /** Internal inspection handle; never part of the root application API. */
   readonly storage: MikroOrmSqliteAdapter;
   readonly projectionDefinitions: readonly RegisteredSyncProjectionDefinition[];
-  /** Test/admin controls must use this lane instead of the raw operation client. */
-  readonly runGatewayControl: InternalSyncGatewayControl | undefined;
   /** Retries durable OPEN system-wins commands after predecessors settle. */
   readonly retryDeferredConflicts: () => Promise<number>;
   readonly effectSupervisor: SyncEffectWorkerSupervisor;
@@ -180,7 +150,7 @@ export interface InternalSyncService {
 /**
  * Opens, provisions, and starts one internal sync service.
  *
- * Startup is fail-closed: a malformed route, missing gateway, or remote
+ * Startup is fail-closed: a malformed route, missing provider, or remote
  * provisioning failure closes the SQLite runtime before the error escapes.
  */
 export async function createInternalSyncService(
@@ -207,7 +177,7 @@ export async function createInternalSyncService(
         writer,
       ),
     ];
-    const remote = createRemoteGateway(options, projectionDefinitions);
+    const remote = createRemoteProvider(options, projectionDefinitions);
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
     await autoResolveExistingMappedConflictsWithAdapter(
       runtime.storage,
@@ -217,7 +187,7 @@ export async function createInternalSyncService(
 
     const effectSupervisor = createSyncEffectWorkerSupervisor({
       storage: runtime.storage,
-      gateway: remote.gateway,
+      provider: remote.provider,
       ...optionalWorkerOptions(options),
     });
     const pollingFullScanIntervalMs = options.pollingFullScanIntervalMs
@@ -236,7 +206,7 @@ export async function createInternalSyncService(
         : 0;
       const report = await pollMappedUserInputWithMikroOrm({
         storage: runtime.storage,
-        gateway: remote.gateway,
+        provider: remote.provider,
         mappings: runtime.mappings,
         writer,
         mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
@@ -289,7 +259,6 @@ export async function createInternalSyncService(
       hikoutei,
       storage: runtime.storage,
       projectionDefinitions,
-      runGatewayControl: remote.runGatewayControl,
       retryDeferredConflicts,
       effectSupervisor,
       pollingSupervisor,
@@ -372,37 +341,22 @@ function validateServiceOptions(
       throwInvalidProjection(`sync configuration contains unknown entity "${entityName}".`);
     }
   }
-  if (options.googleSheetsApi !== undefined &&
-      (options.gateway !== undefined ||
-        options.provisioner !== undefined ||
-        options.appsScript !== undefined ||
-        options.googleApiWorker !== undefined)) {
+  if (options.googleSheetsApi !== undefined && options.provider !== undefined) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      "sync service googleSheetsApi is the full direct provider and cannot be combined with an injected gateway, provisioner, Apps Script client settings, or googleApiWorker.",
+      "sync service cannot supply both an injected provider and googleSheetsApi client settings.",
     );
   }
-  if (options.gateway !== undefined && options.appsScript !== undefined) {
+  if (options.provisioner !== undefined && options.provider === undefined) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      "sync service cannot supply both an injected gateway and Apps Script client settings.",
+      "sync service provisioner requires an injected provider.",
     );
   }
-  if (
-    options.googleApiWorker !== undefined &&
-    options.gateway === undefined &&
-    options.appsScript === undefined
-  ) {
+  if (options.provider === undefined && options.googleSheetsApi === undefined) {
     throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
-      "sync service googleApiWorker requires an injected gateway or Apps Script client settings for observation and provisioning.",
-    );
-  }
-  if (options.gateway === undefined && options.appsScript === undefined &&
-      options.googleSheetsApi === undefined) {
-    throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
-      "sync service requires an injected gateway, Apps Script client settings, or googleSheetsApi.",
+      SYNC_SERVICE_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      "sync service requires an injected provider or googleSheetsApi client settings.",
     );
   }
 }
@@ -424,66 +378,48 @@ function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void 
       "sync service effectLeaseDurationMs must be shorter than the 180-second writer lease.",
     );
   }
-  if (options.appsScript === undefined && options.googleApiWorker === undefined &&
-      options.googleSheetsApi === undefined) return;
+  // Injected test providers carry no transport timeouts, so the lease
+  // headroom check applies only to the real Google Sheets API provider.
+  if (options.googleSheetsApi === undefined) return;
 
-  // The lease-headroom check uses the ACTIVE outbound provider's timeouts:
-  // the full direct Google provider when configured (its own defaults when
-  // the options are omitted), then the deprecated direct worker, then the
-  // Apps Script client. Writes share the 1s..120s bounds; direct-mode reads
-  // are bounded 1s..60s separately.
-  const activeGoogle = options.googleSheetsApi !== undefined || options.googleApiWorker !== undefined;
-  const googleOptions = options.googleSheetsApi ?? options.googleApiWorker;
-  const requestTimeoutMs = activeGoogle
-    ? googleOptions?.requestTimeoutMs
-      ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS
-    : options.appsScript?.requestTimeoutMs ?? SYNC_GATEWAY_CLIENT_DEFAULTS.REQUEST_TIMEOUT_MS;
+  // The lease-headroom check uses the ACTIVE provider's timeouts: the full
+  // direct Google provider's own defaults when the options omit them.
+  const requestTimeoutMs = options.googleSheetsApi.requestTimeoutMs
+    ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS;
   if (
     !Number.isSafeInteger(requestTimeoutMs) ||
-    requestTimeoutMs < SYNC_GATEWAY_CLIENT_DEFAULTS.MIN_REQUEST_TIMEOUT_MS ||
-    requestTimeoutMs > SYNC_GATEWAY_CLIENT_DEFAULTS.MAX_REQUEST_TIMEOUT_MS
+    requestTimeoutMs < GOOGLE_SHEETS_API_DEFAULTS.MIN_REQUEST_TIMEOUT_MS ||
+    requestTimeoutMs > GOOGLE_SHEETS_API_DEFAULTS.MAX_REQUEST_TIMEOUT_MS
   ) {
-    const label = activeGoogle
-      ? "sync service googleSheetsApi requestTimeoutMs"
-      : "sync service Apps Script requestTimeoutMs";
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      `${label} must be between 1 second and 120 seconds.`,
+      "sync service googleSheetsApi requestTimeoutMs must be between 1 second and 120 seconds.",
     );
   }
-  if (activeGoogle) {
-    // A direct-mode dispatch performs up to THREE sequential paced transport
-    // calls (two preflight reads plus one write), each with its own timeout;
-    // the lease must cover the whole sequence, so the headroom check sums
-    // the write timeout and two read timeouts. Defaults: 60 + 2x10 + 30 =
-    // 110 s, inside the 120 s default effect lease.
-    const readTimeoutMs = googleOptions?.readTimeoutMs
-      ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS;
-    if (
-      !Number.isSafeInteger(readTimeoutMs) ||
-      readTimeoutMs < GOOGLE_SHEETS_API_DEFAULTS.MIN_REQUEST_TIMEOUT_MS ||
-      readTimeoutMs > GOOGLE_SHEETS_API_DEFAULTS.MAX_READ_TIMEOUT_MS
-    ) {
-      throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-        "sync service googleSheetsApi readTimeoutMs must be between 1 second and 60 seconds.",
-      );
-    }
-    if (
-      effectLeaseDurationMs <= requestTimeoutMs + 2 * readTimeoutMs +
-        EFFECT_LEASE_GATEWAY_HEADROOM_MS
-    ) {
-      throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-        "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
-      );
-    }
-    return;
-  }
-  if (effectLeaseDurationMs <= requestTimeoutMs + EFFECT_LEASE_GATEWAY_HEADROOM_MS) {
+  // A direct-mode dispatch performs up to THREE sequential paced transport
+  // calls (two preflight reads plus one write), each with its own timeout;
+  // the lease must cover the whole sequence, so the headroom check sums
+  // the write timeout and two read timeouts. Defaults: 60 + 2x10 + 30 =
+  // 110 s, inside the 120 s default effect lease.
+  const readTimeoutMs = options.googleSheetsApi.readTimeoutMs
+    ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(readTimeoutMs) ||
+    readTimeoutMs < GOOGLE_SHEETS_API_DEFAULTS.MIN_REQUEST_TIMEOUT_MS ||
+    readTimeoutMs > GOOGLE_SHEETS_API_DEFAULTS.MAX_READ_TIMEOUT_MS
+  ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      "sync service effectLeaseDurationMs must exceed Apps Script requestTimeoutMs by 30 seconds before supervisors start.",
+      "sync service googleSheetsApi readTimeoutMs must be between 1 second and 60 seconds.",
+    );
+  }
+  if (
+    effectLeaseDurationMs <= requestTimeoutMs + 2 * readTimeoutMs +
+      EFFECT_LEASE_PROVIDER_HEADROOM_MS
+  ) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
     );
   }
 }
@@ -548,7 +484,7 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   readonly workerId?: string;
   readonly maxEffects?: number;
   readonly effectLeaseDurationMs?: number;
-  readonly gatewayTimeoutMs?: number;
+  readonly requestTimeoutMs?: number;
   readonly idleIntervalMs?: number;
   readonly maxFastAppendCandidates?: number;
   readonly appendDispatchIntervalMs?: number;
@@ -556,31 +492,25 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   readonly onReport?: (report: SyncEffectWorkerReport) => void;
   readonly onError?: (error: unknown) => void;
 } {
-  // The knobs are tied to the ACTIVE outbound provider: the full direct
-  // Google provider's timeouts (its defaults when omitted), then the
-  // deprecated direct worker's, then the Apps Script client's. For the
-  // direct modes the worker gateway timeout bounds the WHOLE sequential
-  // dispatch (two preflight reads plus one write), so it sums the write
-  // timeout and two read timeouts instead of the single write timeout.
-  const googleOptions = options.googleSheetsApi ?? options.googleApiWorker;
-  const outboundTimeoutMs = googleOptions !== undefined
-    ? (googleOptions.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS) +
-      2 * (googleOptions.readTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS)
-    : options.appsScript?.requestTimeoutMs;
+  // The knobs are tied to the ACTIVE provider: the full direct Google
+  // provider's timeouts (its defaults when omitted). The worker provider
+  // timeout bounds the WHOLE sequential dispatch (two preflight reads plus
+  // one write), so it sums the write timeout and two read timeouts instead
+  // of the single write timeout. Injected test providers carry no transport
+  // timeouts and keep the bounded 20-item window with no bulk throttle.
+  const outboundTimeoutMs = options.googleSheetsApi === undefined
+    ? undefined
+    : (options.googleSheetsApi.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS) +
+      2 * (options.googleSheetsApi.readTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS);
   return {
     ...(options.workerId === undefined ? {} : { workerId: options.workerId }),
     ...(options.maxEffects === undefined ? {} : { maxEffects: options.maxEffects }),
     ...(options.effectLeaseDurationMs === undefined ? {} : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
-    ...(outboundTimeoutMs === undefined ? {} : { gatewayTimeoutMs: outboundTimeoutMs }),
+    ...(outboundTimeoutMs === undefined ? {} : { requestTimeoutMs: outboundTimeoutMs }),
     ...(options.effectIdleIntervalMs === undefined ? {} : { idleIntervalMs: options.effectIdleIntervalMs }),
     // The bulk append claim window and the append dispatch throttle belong to
-    // the REAL outbound providers (the full direct Google provider, the
-    // deprecated direct worker, or the Apps Script gateway). Injected fake
-    // gateways keep the bounded 20-item window and no throttle. The
-    // gateway+appsScript combo is rejected at startup, so an injected gateway
-    // can never receive bulk settings through a stray appsScript option.
-    ...(options.googleSheetsApi === undefined && options.googleApiWorker === undefined &&
-      options.appsScript === undefined
+    // the real Google Sheets API provider.
+    ...(options.googleSheetsApi === undefined
       ? {}
       : {
         maxFastAppendCandidates: FAST_APPEND_BATCH_CANDIDATE_LIMIT,
@@ -592,27 +522,29 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   };
 }
 
-function createRemoteGateway(
+function createRemoteProvider(
   options: InternalSyncServiceOptions,
   definitions: readonly RegisteredSyncProjectionDefinition[],
 ): {
-  readonly gateway: InternalSyncGateway;
-  readonly provisioner: SyncGatewayProvisioner;
-  readonly runGatewayControl?: InternalSyncGatewayControl;
+  readonly provider: InternalSyncProvider;
+  readonly provisioner: SyncSheetsProvisioner;
 } {
-  if (options.googleSheetsApi !== undefined) {
-    // Preferred full-direct mode: ONE provider owns outbound effects,
-    // provisioning, table reads, anchors, and snapshots. No Apps Script
-    // object is constructed and no router is needed. The coordinator wraps
-    // the provider so writes and anchor observation share one mutation lane;
-    // provisioning runs at startup on the provider itself.
-    const provider = new GoogleSheetsApiSyncProvider({
-      ...options.googleSheetsApi,
-      spreadsheetId: options.projections.spreadsheetId,
-      definitions,
-    });
-    const gateway = new CoordinatedSyncGateway({
-      inner: provider,
+  if (options.provider !== undefined) {
+    // Injected fake/in-process provider: the coordinator wraps it exactly
+    // like the real provider so writes and anchor observation share one
+    // mutation lane; provisioning runs on the injected provisioner (or the
+    // provider itself when it implements the provisioner boundary).
+    const injected = options.provider;
+    const provisioner = options.provisioner ??
+      (isSyncSheetsProvisioner(injected) ? injected : undefined);
+    if (provisioner === undefined) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.PROVIDER_UNAVAILABLE,
+        "the injected sync provider does not provide projection provisioning.",
+      );
+    }
+    const coordinated = new CoordinatedSheetsProvider({
+      inner: injected,
       ...(options.coordinatorLaneKeyForPhysicalSheet === undefined
         ? {}
         : { mutationKeyForPhysicalSheet: options.coordinatorLaneKeyForPhysicalSheet }),
@@ -620,92 +552,20 @@ function createRemoteGateway(
         ? {}
         : { onLaneEvent: options.onCoordinatorLaneEvent }),
     });
-    return {
-      gateway,
-      provisioner: provider,
-      runGatewayControl: (physicalSheetId, operation, task) =>
-        gateway.runSerializedControl(physicalSheetId, operation, task),
-    };
+    return { provider: coordinated, provisioner };
   }
-  if (options.googleApiWorker !== undefined) {
-    // Deprecated direct-outbound mode: the Google provider owns fast append,
-    // regular effects, and recovery; Apps Script (or the injected gateway)
-    // owns provisioning, anchors, snapshots, and table reads. The router
-    // composes both behind the existing gateway boundary, and the coordinator
-    // wraps it so direct writes and anchor observation share one mutation
-    // lane. Prefer the googleSheetsApi full-provider mode instead.
-    const observation = options.gateway ?? createAppsScriptObservationGateway(options, definitions);
-    const provisioner: SyncGatewayProvisioner | undefined = options.gateway !== undefined
-      ? (options.provisioner ?? asProvisioner(options.gateway))
-      : isSyncGatewayProvisioner(observation)
-        ? observation
-        : undefined;
-    if (provisioner === undefined) {
-      throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
-        "the injected sync gateway does not provide projection provisioning.",
-      );
-    }
-    if (!isSyncSheetTableReaderGateway(observation)) {
-      throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-        "sync service googleApiWorker requires an observation gateway with table reads.",
-      );
-    }
-    const outbound = new GoogleSheetsApiEffectGateway({
-      ...options.googleApiWorker,
-      spreadsheetId: options.projections.spreadsheetId,
-      definitions,
-    });
-    const router = new RoutedSyncGateway({ outbound, observation, provisioner });
-    const gateway = new CoordinatedSyncGateway({
-      inner: router,
-      ...(options.coordinatorLaneKeyForPhysicalSheet === undefined
-        ? {}
-        : { mutationKeyForPhysicalSheet: options.coordinatorLaneKeyForPhysicalSheet }),
-      ...(options.onCoordinatorLaneEvent === undefined
-        ? {}
-        : { onLaneEvent: options.onCoordinatorLaneEvent }),
-    });
-    return {
-      gateway,
-      provisioner,
-      runGatewayControl: (physicalSheetId, operation, task) =>
-        gateway.runSerializedControl(physicalSheetId, operation, task),
-    };
-  }
-  if (options.gateway !== undefined) {
-    const injected = options.gateway;
-    const provisioner = options.provisioner ?? asProvisioner(injected);
-    if (provisioner === undefined) {
-      throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
-        "the injected sync gateway does not provide projection provisioning.",
-      );
-    }
-    // Wrap in the per-spreadsheet mutation coordinator when the injected
-    // gateway exposes lock-free table reads. This keeps worker, polling, and
-    // test controls from issuing competing mutations through one global Apps
-    // Script script lock, while leaving value reads untouched. Provisioning
-    // stays on the original provisioner; it runs at startup before the worker.
-    const coordinated = wrapInCoordinator(injected, options);
-    return { gateway: coordinated ?? injected, provisioner };
-  }
-
-  const appsScript = options.appsScript;
-  if (appsScript === undefined) {
-    throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
-      "Apps Script client settings are required when no gateway is injected.",
-    );
-  }
-  const client = new AppsScriptOperationClient(appsScript);
-  const inner = new AppsScriptOperationSyncGateway({
-    operationGateway: client,
+  // Preferred full-direct mode: ONE provider owns outbound effects,
+  // provisioning, table reads, anchors, and snapshots. No Apps Script
+  // object is constructed and no router is needed. The coordinator wraps
+  // the provider so writes and anchor observation share one mutation lane;
+  // provisioning runs at startup on the provider itself.
+  const provider = new GoogleSheetsApiSyncProvider({
+    ...options.googleSheetsApi,
+    spreadsheetId: options.projections.spreadsheetId,
     definitions,
   });
-  const gateway = new CoordinatedSyncGateway({
-    inner,
+  const coordinated = new CoordinatedSheetsProvider({
+    inner: provider,
     ...(options.coordinatorLaneKeyForPhysicalSheet === undefined
       ? {}
       : { mutationKeyForPhysicalSheet: options.coordinatorLaneKeyForPhysicalSheet }),
@@ -713,67 +573,18 @@ function createRemoteGateway(
       ? {}
       : { onLaneEvent: options.onCoordinatorLaneEvent }),
   });
-  // The inner gateway owns projection provisioning; provisioning runs at
-  // startup before the worker, so it does not need the mutation lane.
   return {
-    gateway,
-    provisioner: inner,
-    runGatewayControl: (physicalSheetId, operation, task) =>
-      gateway.runSerializedControl(physicalSheetId, operation, task),
+    provider: coordinated,
+    provisioner: provider,
   };
 }
 
-/** Builds the Apps Script observation/provisioning gateway for direct mode. */
-function createAppsScriptObservationGateway(
-  options: InternalSyncServiceOptions,
-  definitions: readonly RegisteredSyncProjectionDefinition[],
-): AppsScriptOperationSyncGateway {
-  const appsScript = options.appsScript;
-  if (appsScript === undefined) {
-    throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
-      "Apps Script client settings are required when no gateway is injected.",
-    );
-  }
-  const client = new AppsScriptOperationClient(appsScript);
-  return new AppsScriptOperationSyncGateway({
-    operationGateway: client,
-    definitions,
-  });
-}
-
-/**
- * Wraps an injected gateway in the mutation coordinator when it exposes the
- * lock-free table-read capability the coordinator forwards. A gateway that
- * lacks table reads is returned unwrapped so existing fast-only fixtures keep
- * working without forcing a capability they do not implement.
- */
-function wrapInCoordinator(
-  gateway: InternalSyncGateway,
-  options: InternalSyncServiceOptions,
-): CoordinatedSyncGateway<CoordinatedGatewayInner> | undefined {
-  if (!isSyncSheetTableReaderGateway(gateway)) return undefined;
-  // The injected gateway already implements the full SyncSheetGateway boundary;
-  // isSyncSheetTableReaderGateway confirms the table-reader capability, so the
-  // combined object satisfies CoordinatedGatewayInner.
-  const inner = gateway as unknown as CoordinatedGatewayInner;
-  return new CoordinatedSyncGateway({
-    inner,
-    ...(options.coordinatorLaneKeyForPhysicalSheet === undefined
-      ? {}
-      : { mutationKeyForPhysicalSheet: options.coordinatorLaneKeyForPhysicalSheet }),
-    ...(options.onCoordinatorLaneEvent === undefined
-      ? {}
-      : { onLaneEvent: options.onCoordinatorLaneEvent }),
-  });
-}
-
-function asProvisioner(value: object): SyncGatewayProvisioner | undefined {
-  return isSyncGatewayProvisioner(value) ? value : undefined;
-}
-
-function isSyncGatewayProvisioner(value: object): value is SyncGatewayProvisioner {
-  return "provisionRegistry" in value && typeof value.provisionRegistry === "function";
+/** Returns whether a provider also implements the provisioner boundary. */
+function isSyncSheetsProvisioner(
+  provider: InternalSyncProvider,
+): provider is InternalSyncProvider & SyncSheetsProvisioner {
+  return "provisionRegistry" in provider &&
+    typeof (provider as InternalSyncProvider & Record<"provisionRegistry", unknown>).provisionRegistry === "function";
 }
 
 function requireText(value: string, label: string): void {

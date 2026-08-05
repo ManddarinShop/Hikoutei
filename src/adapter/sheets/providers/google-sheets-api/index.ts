@@ -12,11 +12,6 @@ export type {
   GoogleSheetsApiProviderOptions,
   GoogleSheetsApiRequestEvent,
 } from "./GoogleSheetsApiSyncProvider.js";
-export { GoogleSheetsApiEffectGateway } from "./GoogleSheetsApiEffectGateway.js";
-export type {
-  GoogleSheetsApiEffectGatewayOptions,
-  GoogleSheetsApiEffectGatewayConstructionOptions,
-} from "./GoogleSheetsApiEffectGateway.js";
 export {
   GoogleSheetsApiHttpTransport,
   classifyGoogleSheetsApiError,
