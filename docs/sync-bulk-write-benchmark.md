@@ -1554,3 +1554,564 @@ eliminate the documented two-flush crash window between target and receipt
 writes.
 
 Artifact: `.local/gateway-write-verification-20260804.json`.
+
+## 2026-08-04 — Direct Sheets API service-account gate (blocked at auth)
+
+- Branch: `feature/service-account-sheets`
+- Command: `node --env-file=.env scripts/bench/direct-sheets-api-service-account.mjs`
+- Backend: Node direct Google Sheets API client using `GoogleAuth` and a local
+  service-account JSON path; Apps Script, `Code.gs`, Advanced Sheets Service, and
+  Drive API were not used. Credential values and spreadsheet identifiers are not
+  recorded.
+- Setup: Stage 0 attempted one spreadsheet metadata read. No benchmark tab was
+  created because authentication/authorization failed before setup.
+
+| Stage | Result |
+| --- | --- |
+| Environment/credential shape | local file readable and service-account JSON shape valid |
+| Stage 0 metadata/auth smoke | blocked: classified `permission` / HTTP `403` |
+| Stage 1 raw append | not run |
+| Stage 2 key reads | not run |
+| Stage 3 postcondition | not run |
+| Stage 4 response-loss replay | not run |
+| Cleanup | `ok`, 0 tabs created, 0 deleted, 0 remaining |
+
+This run confirms that the benchmark reaches the Google Sheets API but does not
+prove Direct API performance or correctness. The external setup still requires
+the Sheets API to be enabled in the Service Account's Cloud project and the
+target test Spreadsheet to be shared with that Service Account as an Editor.
+The 403 result is preserved as an environment/permission gate, not converted to
+a benchmark success or a production conclusion.
+
+Artifact: `.local/direct-sheets-api-2026-08-04T12-48-35-851Z-098c074b.json`.
+
+A retry after the external access check produced the same classified result:
+Stage 0 returned `permission` / HTTP `403` after about 1.1 seconds, no temporary
+tab was created, and cleanup remained `ok` with 0 created, 0 deleted, and 0
+remaining tabs. The retry artifact is
+`.local/direct-sheets-api-2026-08-04T13-40-14-546Z-0dfd69b2.json`.
+
+A redacted one-request diagnostic confirmed the API detail as
+`PERMISSION_DENIED`, reason `forbidden`, message `The caller does not have
+permission`; this is an access mismatch rather than a timeout, quota, or
+benchmark failure.
+
+## 2026-08-04 — Direct Sheets API service-account benchmark (access restored)
+
+- Branch: `feature/service-account-sheets`
+- Command: `node --env-file=.env scripts/bench/direct-sheets-api-service-account.mjs`
+- Backend: Node `@googleapis/sheets` client with `GoogleAuth` and a local
+  service-account JSON. The credential path was changed to the ignored local
+  file under `.local/credentials/`; no credential value or spreadsheet ID is
+  recorded here. Apps Script, `Code.gs`, Advanced Sheets Service, and Drive API
+  were not used.
+- Dataset: 4,000 requests total across 20 cells: 1/10/100/500 rows per
+  request × concurrency 1/2/4/10/20, 20 requests per cell. Setup and cleanup
+  are reported separately from the steady-state append measurements.
+
+| Setup/check | Result |
+| --- | --- |
+| Stage 0 metadata smoke | passed in 1,033 ms; one existing tab observed |
+| Temporary tabs/header setup | 21/21 tabs, 21 header appends, 12,450 ms |
+| Cleanup | passed; 21/21 deleted, 0 generated tabs remaining |
+| Total run | 123,057 ms; artifact exit code 0 |
+
+### Stage 1 — raw append
+
+The table reports `successful requests / requests`, accepted rows, and the
+cell-local rows/s value. A failed request was classified as `rate_limited`
+(HTTP `429`); no append response anomaly was recorded.
+
+| Rows/request | Concurrency | Append success | Rows appended | Rows/s | Error |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | 1 | 20/20 | 20 | 1.9 | — |
+| 1 | 2 | 20/20 | 20 | 3.7 | — |
+| 1 | 4 | 10/20 | 10 | 3.3 | 10 × 429 |
+| 1 | 10 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 1 | 20 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 10 | 1 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 10 | 2 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 10 | 4 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 10 | 10 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 10 | 20 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 100 | 1 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 100 | 2 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 100 | 4 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 100 | 10 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 100 | 20 | 16/20 | 1,600 | 689.4 | 4 × 429 |
+| 500 | 1 | 20/20 | 10,000 | 856.6 | — |
+| 500 | 2 | 20/20 | 10,000 | 1,702.9 | — |
+| 500 | 4 | 8/20 | 4,000 | 1,284.6 | 12 × 429 |
+| 500 | 10 | 0/20 | 0 | 0.0 | 20 × 429 |
+| 500 | 20 | 0/20 | 0 | 0.0 | 20 × 429 |
+
+Aggregate Stage 1: `114/400` requests succeeded, `25,650` rows were
+accepted, and `286` requests were classified as `429`. Across all requests,
+p50/p95/p99/max latency was `495/986/1,841/2,320 ms`; the measured aggregate
+steady-state rate was `341.6 rows/s`. This is direct Sheets API quota evidence,
+not evidence that concurrency 20 is production-capable.
+
+### Stage 2 — key read and batch comparison
+
+Stage 2 issued one leading-window `values.get` and one four-range
+`values.batchGet` per cell. All 20 single-range reads returned HTTP success;
+seven batch reads returned classified `bad_request` / HTTP `400`. The remaining
+batch reads compared keys order-independently. Key-read latency was
+p50/p95/max `521/532/545 ms`; batch-read latency was `524/673/835 ms`.
+
+| Cell | Key window observed/missing | Batch result |
+| --- | ---: | --- |
+| r1_c1 | 20/0 | 20 matched, 0 missing |
+| r1_c2 | 20/0 | 20 matched, 0 missing |
+| r1_c4 | 10/10 | 10 matched, 10 missing |
+| r1_c10 | 0/20 | 0 matched, 20 missing |
+| r1_c20 | 0/20 | 0 matched, 20 missing |
+| r10_c1 | 0/100 | 0 matched, 200 missing |
+| r10_c2 | 0/100 | 0 matched, 200 missing |
+| r10_c4 | 0/100 | 0 matched, 200 missing |
+| r10_c10 | 0/100 | 0 matched, 200 missing |
+| r10_c20 | 0/100 | 0 matched, 200 missing |
+| r100_c1 | 0/100 | HTTP 400 |
+| r100_c2 | 0/100 | HTTP 400 |
+| r100_c4 | 0/100 | HTTP 400 |
+| r100_c10 | 0/100 | HTTP 400 |
+| r100_c20 | 100/100 | 1,600 matched, 400 missing |
+| r500_c1 | 100/0 | 10,000 matched, 0 missing |
+| r500_c2 | 100/0 | 10,000 matched, 0 missing |
+| r500_c4 | 100/100 | HTTP 400 |
+| r500_c10 | 0/100 | HTTP 400 |
+| r500_c20 | 0/100 | HTTP 400 |
+
+The missing rows reflect the preceding Stage 1 quota failures and concurrent
+partial writes; they are not treated as successful row delivery.
+
+### Stage 3 — batch postcondition
+
+One `values.get` postcondition read was issued per cell. `4/20` cells passed
+both row-count and deterministic-key checks. Postcondition latency was
+p50/p95/max `524/681/697 ms`. The other cells had missing rows consistent with
+Stage 1's `429` results.
+
+### Stage 4 — response-loss boundary
+
+The full sweep's two replay appends were both unsuccessful after quota
+pressure, so that sweep recorded `unexpected_count` rather than claiming
+duplicate evidence. A separate five-row minimal probe was then run with the
+same Direct API client and fresh temporary tab:
+
+| Check | Result |
+| --- | --- |
+| First append; response discarded | succeeded, 403 ms |
+| Deterministic replay | succeeded, 390 ms |
+| Readback | 10 rows, 5 unique keys, 5 duplicates |
+| Verdict | `duplicate_replay` |
+| Cleanup | passed; 1/1 tab deleted, 0 remaining |
+
+This confirms that raw `values.append` has no idempotency/receipt protection;
+replaying after response loss duplicated all five rows. It is evidence for
+keeping SQLite outbox, receipt, and recovery semantics outside this raw
+transport, not a production-safe provider result.
+
+Artifacts:
+
+- `.local/direct-sheets-api-2026-08-04T13-53-31-116Z-33b98b28.json`
+- `.local/direct-sheets-api-response-loss-2026-08-04T13-58-53-371Z-2a65266b.json`
+
+## 2026-08-04 — Direct Sheets API batch-write comparison: UpdateCells vs values.batchUpdate
+
+- Branch: `feature/service-account-sheets`
+- Command: `node --env-file=.env scripts/bench/direct-sheets-api-batch-update.mjs`
+- Backend: Node `v24.3.0`, `@googleapis/sheets` client with `GoogleAuth` and a
+  local service-account JSON. Apps Script, `Code.gs`, Advanced Sheets Service,
+  and Drive API were not used. Credential values and the spreadsheet ID are
+  not recorded.
+- Dataset: total **10,000 records × 3 string cells** (`bench_key`, `seq`,
+  `payload`) per scenario, split across 1/2/4/10/20 temporary tabs
+  (10,000/5,000/2,500/1,000/500 rows per tab). Each scenario is exactly one
+  write request, always sequential (request concurrency 1; no `Promise.all` or
+  parallel workers). Warm-up 1 (unmeasured) and measured repetitions 3 per
+  scenario.
+- Two raw write paths on the same spreadsheet:
+  1. `spreadsheets.batchUpdate` + one `UpdateCellsRequest` per tab
+     (`userEnteredValue.stringValue`, `fields: "userEnteredValue"`), grid
+     pre-sized to rows+1 × 3 columns.
+  2. `spreadsheets.values.batchUpdate` + one `ValueRange` per tab
+     (`valueInputOption: "RAW"`), same grid.
+- Setup (addSheet with pre-sized grid, one batched header write per scenario),
+  write round-trip latency, verification, and cleanup are recorded
+  separately; verification time is never part of write latency. Measured
+  writes are never auto-retried; `429`/timeouts/4xx/5xx would be recorded as
+  failures.
+- **Every attempt writes its own unique deterministic key set**: the attempt
+  marker (`w0` warm-up, `r0`/`r1`/`r2` measured repetitions) is folded into
+  every key, so each attempt writes DIFFERENT keys into the same fixed
+  ranges. Stale data from an earlier attempt can never pass a later
+  attempt's verification (leftover keys surface as `missing` + `extra`); a
+  no-op or partial write cannot be silently masked by prior data.
+- **Every measured repetition is verified individually, always**: after each
+  of the 30 measured writes — including after timeout/4xx/5xx/response-format
+  failures, because a lost-response write may still have applied — a separate
+  `values.batchGet` re-reads every tab and compares exact per-tab row counts
+  plus the deterministic key set (missing/duplicate/unexpected keys) against
+  THAT attempt's expected rows. Write-response outcome and verification
+  outcome are stored independently per repetition (`responseOk`, `verified`,
+  `outcome`); a repetition is a successful benchmark write only when BOTH
+  pass. A failed response whose data was nevertheless verified is preserved
+  as `write_response_failed_but_data_verified` evidence and never counted as
+  a success. Verification latency is recorded per repetition and never
+  enters write latency.
+- **Scenarios are isolated and the matrix stops on contamination**: each
+  scenario's temporary tabs are deleted right after that scenario (before
+  the next one starts). If a per-scenario cleanup fails, the matrix is
+  aborted with an explicit `matrixAborted` reason — no later scenario ever
+  runs on possibly contaminated state — and the `finally` recovery cleanup
+  retries the leftovers. The recovery cleanup is idempotent: it resolves
+  remaining tabs from a metadata read (single source of truth); a generated
+  title the metadata does NOT list is already gone (e.g. a delete whose
+  response was lost after applying) and is forgotten instead of being
+  re-deleted, so a clean zero-remaining state never becomes a false cleanup
+  failure. Map ids are used as a fallback only when metadata is unavailable.
+- **Scenario order is a deterministic seeded shuffle** (seed
+  `DIRECT_BATCH_SEED`, default `20260804`; mulberry32 + Fisher–Yates) of all
+  (tabCount, api) pairs — no fixed-order bias (updateCells always first, tab
+  counts always ascending), no uncontrolled randomness. The seed and the
+  exact order are recorded in the artifact. Request concurrency stays 1.
+- **Signals**: SIGINT/SIGTERM request an orderly stop — the current request
+  settles, cleanup runs, the artifact is written, and the process exits
+  nonzero; cleanup is never skipped to exit faster.
+- **Configuration safety**: numeric env values (`DIRECT_BATCH_TOTAL_ROWS`,
+  `DIRECT_BATCH_WARMUP`, `DIRECT_BATCH_REPETITIONS`, each
+  `DIRECT_BATCH_TAB_COUNTS` entry, `DIRECT_BATCH_SEED`) must be safe
+  integers; values above `Number.MAX_SAFE_INTEGER` are rejected with an
+  `unsafe_integer` classification before any tab is created. An unexpected
+  fatal error preserves the whole recorded artifact (stages, completed
+  scenarios, cleanup) and appends a redacted fatal classification plus a
+  nonzero overall verdict instead of replacing it.
+- Exit code 0 only for a complete matrix: every measured write response-ok
+  AND post-write verified, clean setup, per-scenario cleanups and the final
+  recovery cleanup all complete, no interrupt. Any partial outcome (failed or
+  unverified write, setup/verification/cleanup problem, matrix abort, signal
+  interrupt) exits nonzero with a classified reason.
+
+### Result
+
+Rerun with the corrected semantics (per-attempt unique key sets, always-run
+verification, seeded order). All 30 measured writes (10 scenarios × 3
+repetitions) returned HTTP 200 with matching response signals, and **every
+repetition's own post-write verification passed**: per-tab row counts matched
+exactly and each attempt's key set was complete with zero
+missing/duplicate/unexpected keys (all repetitions `outcome: success`;
+`write_response_failed_but_data_verified` never occurred). Per-repetition
+verification reads took ~0.5–1.1 s each. Each scenario's tabs were deleted
+before the next scenario (per-scenario cleanup 0.8–1.8 s each); the final
+recovery cleanup found 0 remaining generated tabs. The run exited 0
+(complete matrix: 30/30 measured writes verified). Stage 0 metadata/auth
+smoke took 1,154 ms; the whole run took 125,731 ms.
+
+Actual scenario order (seed 20260804): `valuesBatchUpdate@20` →
+`updateCells@20` → `updateCells@4` → `valuesBatchUpdate@4` →
+`valuesBatchUpdate@1` → `valuesBatchUpdate@10` → `updateCells@10` →
+`updateCells@1` → `updateCells@2` → `valuesBatchUpdate@2`.
+
+| API | Tabs | Rows/tab | Payload bytes | Rep latencies (ms) | p50 / p95 / max (ms) | Rows/s | Cells/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `values.batchUpdate` | 20 | 500 | 846,765 | 2,090 / 2,220 / 2,272 | 2,220 / 2,272 / 2,272 | 4,558 | 13,673 |
+| `updateCells` | 20 | 500 | 2,067,308 | 2,816 / 3,419 / 3,361 | 3,361 / 3,419 / 3,419 | 3,126 | 9,379 |
+| `updateCells` | 4 | 2,500 | 2,060,473 | 1,968 / 2,491 / 3,241 | 2,491 / 3,241 / 3,241 | 3,896 | 11,689 |
+| `values.batchUpdate` | 4 | 2,500 | 840,379 | 1,640 / 2,301 / 1,785 | 1,785 / 2,301 / 2,301 | 5,238 | 15,715 |
+| `values.batchUpdate` | 1 | 10,000 | 840,122 | 2,783 / 1,507 / 2,527 | 2,527 / 2,783 / 2,783 | 4,401 | 13,204 |
+| `values.batchUpdate` | 10 | 1,000 | 840,905 | 1,312 / 1,538 / 1,317 | 1,317 / 1,538 / 1,538 | 7,200 | 21,601 |
+| `updateCells` | 10 | 1,000 | 2,061,157 | 2,071 / 2,248 / 1,902 | 2,071 / 2,248 / 2,248 | 4,822 | 14,467 |
+| `updateCells` | 1 | 10,000 | 2,060,128 | 1,899 / 2,141 / 1,850 | 1,899 / 2,141 / 2,141 | 5,093 | 15,280 |
+| `updateCells` | 2 | 5,000 | 2,060,243 | 1,665 / 1,602 / 1,699 | 1,665 / 1,699 / 1,699 | 6,041 | 18,124 |
+| `values.batchUpdate` | 2 | 5,000 | 840,207 | 1,454 / 1,545 / 1,761 | 1,545 / 1,761 / 1,761 | 6,303 | 18,908 |
+
+Per-scenario setup (tabs + headers) took 824–1,610 ms; per-repetition
+verification reads took ~0.5–1.1 s each and all 30 passed (per-scenario
+verification totals: 1.7–2.4 s for its 3 repetitions). Per-scenario cleanup
+(delete + remaining-tab check) took 0.8–1.8 s each. Warm-up latencies
+followed the same pattern as the measured repetitions. Rows/s is
+`(successful repetitions × 10,000) / sum of successful repetition durations`
+— total proven rows over the summed round-trip time of those repetitions;
+cells/s is rows/s × 3.
+
+### Reading the result
+
+- **`values.batchUpdate` is the faster and smaller path again**: its payload
+  is about 840 KB versus 2.06 MB for `updateCells` (per-cell JSON envelope
+  cost), and it was faster in 7 of 10 scenario cells (1.31–2.78 s vs
+  1.60–3.42 s round-trip; 4,401–7,200 rows/s vs 3,126–6,041 rows/s).
+- **Tab-count effects remain modest and noisy**: this run's fastest cell was
+  `values.batchUpdate` with 10 tabs (7,200 rows/s) and its slowest was
+  `updateCells` with 20 tabs (3,126 rows/s), while the single-tab cells sat
+  mid-pack — a different relative pattern from the previous fixed-order run
+  (where single-tab was slowest for both APIs). The comparison is dominated
+  by network/backend variance between scenario cells, not by a hard tab
+  count rule; three repetitions per cell cannot prove one.
+- This is a raw-transport comparison on one spreadsheet, one run, three
+  repetitions per cell, each repetition individually verified against its
+  own unique key set. It measures the Google Sheets REST path only and says
+  nothing about the Hikoutei worker/coordinator drain rate, outbox, receipts,
+  CAS, or Apps Script gateway behavior. The 10,000-row request is the
+  largest tested here; larger sizes were not attempted.
+
+### Quota observation
+
+A first run of this benchmark (before the setup batching below) hit HTTP `429`
+on 4 of 8 cleanup `deleteSheet` chunks after roughly 120 requests, stranding
+34 tabs; the stranded tabs were deleted by a paced follow-up. The fixed rerun
+reduced setup writes from ~2 per tab to O(1) per scenario (grid pre-sized in
+`addSheet`, headers written with one `values.batchUpdate`). The corrected run
+above added per-repetition verification reads (30 `batchGet` calls) and
+per-scenario cleanup (10 delete rounds plus remaining-tab checks) and still
+completed with zero `429`s, zero verification failures, and zero stranded
+tabs. Per-scenario cleanup also bounds the damage of an interrupt: at most the
+in-progress scenario's tabs can remain, and the signal handler runs the
+recovery cleanup before exiting nonzero. One intermediate rerun (16:54, see
+artifacts) hit the always-run verification gate with a verification
+normalization bug (raw `ValueRange` objects compared instead of their
+`values` arrays) and correctly exited 1 with `0 of 30 measured writes
+verified` rather than reporting a false success. This is observed quota
+pressure evidence, not a remaining-quota counter; Sheets REST write quota is
+per-minute per project and must be checked in the Cloud console.
+
+### How to run
+
+```sh
+node --env-file=.env scripts/bench/direct-sheets-api-batch-update.mjs
+```
+
+Required environment: `GOOGLE_APPLICATION_CREDENTIALS` (service-account JSON
+readable locally) and `GOOGLE_SHEETS_TEST_SPREADSHEET_ID` (the service account
+must be shared on that spreadsheet as an Editor). Optional knobs:
+
+- `DIRECT_BATCH_TAB_COUNTS=1,2,4,10,20` — tab-count matrix (each count must
+  divide the total rows evenly)
+- `DIRECT_BATCH_TOTAL_ROWS=10000` — records per scenario
+- `DIRECT_BATCH_WARMUP=1` — unmeasured warm-up requests per scenario
+- `DIRECT_BATCH_REPETITIONS=3` — measured repetitions per scenario
+- `DIRECT_BATCH_SEED=20260804` — deterministic scenario-order shuffle seed
+  (unsigned 32-bit integer; the seed and actual order are recorded in the
+  artifact)
+
+Invalid env values (non-integers, values above `Number.MAX_SAFE_INTEGER`,
+non-positive counts, uneven tab splits, out-of-range seeds) are classified
+and abort before any tab is created. If authentication or sharing is blocked,
+Stage 0 fails with a classified `auth`/`permission` result and cleanup stays
+trivially clean; the run is never reported as a benchmark success in that
+case. The exit code is 0 only when the complete matrix ran: every measured
+write response-ok AND post-write verified, setup clean, per-scenario cleanups
+and final recovery cleanup complete, no signal interrupt; anything less exits
+1 with a classified reason in the artifact.
+
+Artifacts (raw JSON, in the ignored `.local/` directory):
+
+- `.local/direct-sheets-api-batch-update-2026-08-04T16-57-19-098Z-65c1e7a5.json` (clean run above: per-attempt unique keys, always-run verification, seeded order)
+- `.local/direct-sheets-api-batch-update-2026-08-04T16-54-50-919Z-0c3ffca3.json` (superseded: verification normalization bug — every write correctly failed the always-run verification gate, exit 1, no false success)
+- `.local/direct-sheets-api-batch-update-2026-08-04T16-21-51-910Z-7013fc02.json` (superseded: pre-fix semantics — fixed order, shared key set across repetitions, verification only after response-ok writes)
+- `.local/direct-sheets-api-batch-update-2026-08-04T15-59-24-945Z-b7134a7a.json` (superseded: pre-fix semantics — single aggregate verification, rows/s under-reported 3×)
+- `.local/direct-sheets-api-batch-update-2026-08-04T15-49-31-777Z-ba3d0297.json` (first run: pre-fix `values.batchUpdate` range bug + cleanup 429 evidence)
+
+## 2026-08-05 — Integrated Apps Script `appendTestBatch` load
+
+- Branch: `feature/service-account-sheets`
+- Command: `node --env-file=.env --env-file=.local/gateway-test-override.env .local/run-append-load.mjs`
+- Backend: deployed Apps Script Gateway with the Advanced Sheets v4 service;
+  credentials and spreadsheet identifiers are intentionally not recorded.
+- Dataset: **10,000 entity inserts** into one temporary `System_State` tab,
+  one SQLite outbox/runtime, sequential worker dispatch, 1,000 append rows per
+  request, and a 1,100 ms minimum interval between append request starts.
+  Updates/deletes were not included.
+- Setup, SQLite seed/flush, worker upload, verification, and cleanup were
+  measured separately. The worker made 10 successful append requests plus
+  provisioning, verification, and cleanup requests; no gateway request failed.
+
+| Phase | Duration |
+| --- | ---: |
+| Runtime setup/provisioning | 4.68 s |
+| SQLite seed + outbox flush | 4.52 s |
+| Worker append drain | 798.10 s (13m 18.10s) |
+| Remote verification | 3.56 s |
+| Remote cleanup | 2.66 s |
+
+Append request durations were 51.43–119.89 s (p50 75.90 s, p95/max
+119.89 s). All 10,000 rows were applied and remotely verified; cleanup left no
+load tabs. The measured integrated drain rate was approximately **12.53
+rows/s**, despite the 1,000-row API batches. This is materially slower than the
+raw service-account `values.batchUpdate` result above because the integrated
+path also pays Apps Script execution, receipt handling, identity/postcondition
+scans, gateway transport, and worker lease overhead. This run confirms
+correctness and batching, but does **not** show that the end-to-end upload
+bottleneck has been eliminated.
+
+Artifact:
+
+- `.local/append-test-load-msfndo05-ecd2cf98.json`
+
+Caveat: this is one sequential run on one spreadsheet; Apps Script cold starts,
+quota pressure, network latency, and the current receipt/postcondition work can
+vary substantially. The authority fence was reset on the dedicated test
+spreadsheet before the run; no production spreadsheet should be reset this
+way.
+
+## 2026-08-05 — Direct Google Sheets API outbound worker load
+
+- Branch: `feature/service-account-sheets`
+- Command: `node --env-file=.env .local/run-append-load-direct.mjs`
+- Backend: direct Google Sheets REST API outbound worker (service account via
+  Application Default Credentials, `GOOGLE_APPLICATION_CREDENTIALS`) against
+  the shared test spreadsheet; SQLite outbox/worker state machine unchanged;
+  Apps Script gateway not involved in the write path (provisioning of the
+  temporary tab was done by the service account itself). Credentials and
+  spreadsheet identifiers are intentionally not recorded.
+- Dataset: **10,000 entity inserts** into one temporary `System_State` tab
+  (`id`, `status`, `__typed_sheets_deleted`), one SQLite outbox/runtime,
+  sequential worker dispatch, 1,000 append rows per `batchUpdate`, the worker
+  append throttle (1,100 ms between append request starts) and the provider's
+  read/write request-start limiters (1,100 ms per class) all active.
+  Updates/deletes were not included.
+- Setup, SQLite seed/flush, worker upload, verification, and cleanup were
+  measured separately. The worker made 10 successful append batches plus
+  per-batch preflight reads, verification, and cleanup; no provider request
+  failed (20/20 requests ok).
+
+| Phase | Duration |
+| --- | ---: |
+| Runtime setup/provisioning | 3.08 s |
+| SQLite seed + outbox flush | 4.44 s |
+| Worker append drain | 39.47 s |
+| Remote verification | 0.50 s |
+| Remote cleanup | 1.06 s |
+
+Append `batchUpdate` durations were 0.99–1.59 s (p50 1.45 s, max 1.59 s);
+per-batch preflight reads (sheet enumeration + grid data, two calls per batch
+spaced by the 1,100 ms read limiter) were 1.21–2.03 s. All 10,000 rows were
+applied (10 batches × 1,000), zero failures/deferred/requeues, and the read-back
+verification confirmed 10,000 rows with the expected first/last keys; cleanup
+left no load tabs and removed the receipt tab.
+
+### Comparison with the previous integrated run (2026-08-05, same spreadsheet
+class, same 10,000 rows, same 1,000-row batch and 1,100 ms interval):
+
+| Metric | Apps Script gateway | Direct Sheets API | Delta |
+| --- | ---: | ---: | ---: |
+| Worker append drain | 798.10 s | 39.47 s | **20.2× faster** |
+| Integrated throughput | 12.53 rows/s | 253.4 rows/s | +20.2× |
+| Per-batch latency p50 | 75.90 s | 1.45 s | 52× lower |
+| Per-batch latency max | 119.89 s | 1.59 s | 75× lower |
+| Failed/uncertain effects | 0 | 0 | same |
+
+Steady-state (drain-only) result: **10,000 rows in 39.47 s ≈ 253 rows/s**;
+excluding the 1,100 ms request-start pacing of the worker throttle and the
+provider read/write limiters, the raw `batchUpdate` time alone was ~13 s for
+all 10 batches (1.3 s/batch). The drain time is dominated by the deliberate
+quota pacing, not by Sheets latency.
+
+Artifact:
+
+- `.local/append-test-load-direct-msfuq2yb-3a862d7a.json`
+
+Caveats: one sequential run on one spreadsheet; a provider bug found during
+this live test (receipt-tab discovery: `spreadsheets.get` with `ranges`
+returns only intersecting sheets, so the second batch could not see the
+receipt tab created by the first and attempted to recreate it, failing the
+batch with 400 INVALID_ARGUMENT) was fixed in the provider before this run
+(2-call preflight: sheet enumeration without ranges, then target+receipt data
+ranges) and is covered by regression tests. Results are not a claim about
+quota headroom at higher concurrency, update/delete throughput, or
+multi-writer behavior; the direct provider additionally paces reads at
+1,100 ms, so observation-heavy workloads were not measured here.
+
+## 2026-08-05 — Direct outbound update/delete correctness gate (passed)
+
+- Branch: `feature/service-account-sheets`
+- Command: `node --env-file=.env .local/run-update-delete-direct.mjs`
+- Backend: direct Google Sheets API outbound worker (service account via ADC)
+  on the shared test spreadsheet; two projections per entity (`system_state`
+  tab A:C and `user_input` tab A:B), one SQLite outbox/runtime, no Apps
+  Script involvement. Credentials and spreadsheet identifiers are not
+  recorded.
+- Dataset: 100 entities (id/status), seeded through the mapped ORM, then 50
+  bulk updates, two simulated human-edit CAS scenarios, and 25 entity
+  deletions, each step drained by the real effect worker through the direct
+  provider and verified by service-account read-back.
+
+| Step | Result |
+| --- | --- |
+| Seed + append (100 system + 100 input rows) | 200 effects applied; both tabs 100 rows |
+| Bulk update 50 → "paid" | 100 effects applied; both tabs exactly 50 "paid" |
+| Human edit on user_input tab + local update | input mirror effect parked as `blocked_candidate`/`candidate_guard_mismatch`; sheet keeps human value; system tab applied "paid-v2" |
+| Human edit on system tab + local update | system effect recorded as durable `conflict`/`visible_guard_mismatch`; sheet keeps "human-sys-edit"; input mirror applied |
+| Delete 25 entities | 25 system rows flagged `__typed_sheets_deleted=true`, 25 user_input rows physically removed; 75 rows remain; human-edited rows preserved |
+| Cleanup | passed; load tabs + receipt tab removed |
+
+This gate confirms the direct provider's guarded update (visible-hash CAS
+with the same conflict semantics as the gateway path: `blocked_candidate` for
+candidate-protected user_input effects, `conflict` for system projection
+effects), physical delete with full-row guard, receipt-backed evidence, and
+per-step worker/outbox bookkeeping against the real Sheets API. It is a
+correctness gate, not a throughput measurement; delete/update volume here is
+small (≤100 effects per step) and paced by the same 1,100 ms request-start
+limiters.
+
+Artifact:
+
+- `.local/update-delete-direct-msfv3rd0-72dc5b6e.json`
+
+Caveats: single run on one spreadsheet; the guard scenarios mutate rows
+outside the worker and rely on the worker's existing conflict semantics, so
+their expected statuses are `blocked_candidate`/`conflict`, not failures.
+
+## 2026-08-05 — Direct full-provider live correctness gate (passed)
+
+- Branch: `feature/service-account-sheets`
+- Command: `node --env-file=.env scripts/ci/run-api-scenario.mjs --backend=live --outbound=direct`
+- Backend: the full `GoogleSheetsApiSyncProvider` (service account via ADC)
+on the shared test spreadsheet, provisioning from an EMPTY spreadsheet state
+(no tabs) through the tracked scenario. No Apps Script gateway, no
+`TYPED_SHEETS_GATEWAY_*` secrets. Credentials and spreadsheet identifiers
+are never recorded; the report keeps only `sheetMatched: true`.
+
+| Step | Result |
+| --- | --- |
+| Provisioning from empty spreadsheet | 3 tabs created + headers initialized (one atomic batch), `createdSheets`/`initializedHeaders` asserted |
+| ORM create → worker append | system fast append + user_input create; receipt tab evidence (2 receipt rows, no duplicates) |
+| Guarded update + read-back | ORM update → drain → sheet value verified |
+| Mapped polling of SA-simulated human edit | full observation → SQLite entity reflects `edited-by-user` (appliedRows 1) |
+| Stale input edit | input mirror effect parked `blocked_candidate`/`candidate_guard_mismatch`; sheet keeps `human-2` |
+| Stale system edit | system effect recorded as durable `conflict`/`visible_guard_mismatch`; sheet keeps `human-sys` |
+| Delete | system row tombstoned (`__typed_sheets_deleted=true`), user_input row physically removed; 3 system rows / 2 input rows remain |
+| Anchor evidence | user_input rows anchored (polling observation pass), system rows identity-located, no duplicate materialization (unique ids) |
+| Cleanup | passed; fixture tabs + receipt tab removed |
+
+Totals: 19 steps, 35 assertions, all passed. Setup 1.61 s; steady-state
+drain/observation/verification 39.41 s; total 42.06 s (paced by the same
+1,100 ms per-request-class limiters). Artifact:
+
+- `.local/live-direct-parity-2026-08-05T20-33-29.json`
+
+This gate verifies the full-provider parity checklist (R9 of the promotion
+plan) against the real Sheets API: provisioning from empty state, append /
+update / delete with receipts, mapped User_Input polling into SQLite, both
+CAS guard paths, anchor evidence, and cleanup — with zero Apps Script
+involvement. It is a correctness gate, not a throughput measurement.
+
+Caveats: single sequential run on one spreadsheet; the tracked workflow
+(`.github/workflows/live-integration.yml`) runs the same scenario
+service-account-only via `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON` + `GOOGLE_SHEETS_TEST_SPREADSHEET_ID`.
+
+## Direct full-provider parity (tracked live scenario)
+
+No new throughput measurement was run for the full-provider promotion; this
+document records only evidence that was actually measured. The full direct
+provider (`googleSheetsApi`) is exercised live by the tracked scenario
+(`scripts/ci/run-api-scenario.mjs --backend live --outbound direct`), which is
+the correctness gate for provisioning from an empty spreadsheet, append /
+update / delete delivery, receipt evidence, mapped User_Input polling,
+stale-edit CAS guards (`blocked_candidate` / `visible_guard_mismatch`), anchor
+evidence, and cleanup — all through the service account with no Apps Script.
+The unguarded raw-transport throughput numbers above do not include receipts
+or compare-and-set, so they are not provider throughput claims. Live artifacts
+from the update/delete correctness gate live under `.local/`
+(`.local/update-delete-direct-*.json`), and the workflow report is uploaded as
+the `hikoutei-live-google-sheets-direct` artifact.
