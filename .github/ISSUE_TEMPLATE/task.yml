@@ -20,7 +20,7 @@ body:
       placeholder: |
         - README quick start
         - setup prompts
-        - gateway template
+        - provider setup
     validations:
       required: true
   - type: textarea

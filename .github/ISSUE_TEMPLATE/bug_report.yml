@@ -24,7 +24,7 @@ body:
       options:
         - core repository
         - adapter
-        - Apps Script gateway
+        - sync provider
         - setup/config
         - documentation
         - performance
@@ -64,7 +64,7 @@ body:
       placeholder: |
         typed-sheets:
         Node:
-        Adapter: Apps Script gateway / service account
+        Adapter: service account (Google Sheets API)
         Auth/config:
     validations:
       required: false

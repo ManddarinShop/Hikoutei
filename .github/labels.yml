@@ -25,9 +25,6 @@
 - name: "area: adapter"
   color: 5319e7
   description: Sheet adapter interfaces and implementations.
-- name: "area: apps-script"
-  color: 5319e7
-  description: Apps Script gateway templates, deployment, or runtime behavior.
 - name: "area: setup"
   color: 5319e7
   description: CLI setup, config loading, or config writing.
