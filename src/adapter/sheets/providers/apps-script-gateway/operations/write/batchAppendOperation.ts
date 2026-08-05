@@ -27,16 +27,24 @@ export type AppsScriptBatchAppendOperation = AppsScriptOperationDefinition<
 >;
 
 /**
- * Builds an idempotent append operation backed by built-in Apps Script
- * services only (SpreadsheetApp, LockService, PropertiesService, Utilities);
- * no Advanced Sheets dependency is required. The data rows and their Gateway
- * receipts are written under one script lock, but the target write and the
- * receipt write are separate flush() calls, so a crash between them can leave
- * a target row without a receipt; this is not a cross-request atomic batch.
- * A lost HTTP response is recovered by replaying the same effect ID: the
- * replay verifies the target row postcondition and returns applied without
- * adding another row, while a reused effect ID with a different payload hash
- * fails closed.
+ * Builds an idempotent append operation. The target-row write uses the
+ * temporary test-batch API: the reserved target range is written through the
+ * Apps Script Advanced Sheets service
+ * (Sheets.Spreadsheets.Values.batchUpdate with one RAW ValueRange) so a bulk
+ * pass can write up to the configured append batch in one request. Everything
+ * else stays on built-in Apps Script services (SpreadsheetApp, LockService,
+ * PropertiesService, Utilities): receipts, identity guards, visible hashing,
+ * date number formats, postcondition checks, authority fencing, replay, and
+ * recovery. The pre-test-batch built-in target write is preserved in a
+ * commented rollback block inside the operation source.
+ *
+ * The data rows and their Gateway receipts are written under one script lock,
+ * but the target write and the receipt write are separate flush() calls, so a
+ * crash between them can leave a target row without a receipt; this is not a
+ * cross-request atomic batch. A lost HTTP response is recovered by replaying
+ * the same effect ID: the replay verifies the target row postcondition and
+ * returns applied without adding another row, while a reused effect ID with a
+ * different payload hash fails closed.
  *
  * The registered identityField is required because this path never
  * materializes anchor metadata: replay and postcondition verification locate
@@ -48,14 +56,25 @@ export function createBatchAppendRowsOperation(
 ): AppsScriptBatchAppendOperation {
   validateBatchAppendRequest(request);
   return {
-    fn: BATCH_APPEND_OPERATION_SOURCE,
+    fn: APPEND_TEST_BATCH_OPERATION_SOURCE,
     args: request,
     decode: (value) => decodeBatchAppendResult(value, request.rows),
   };
 }
 
-/** Self-contained V8 source restored by Code.gs with eval. */
-const BATCH_APPEND_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
+/**
+ * Self-contained V8 source restored by Code.gs with eval.
+ *
+ * TEMPORARY TEST-BATCH API: the target-row write in writeAppendRows_() uses
+ * the Advanced Sheets service so a bulk Apps Script pass can write a large
+ * append batch in one RAW ValueRange. This requires the appsscript.json
+ * manifest with the Sheets v4 advanced service enabled and Google Cloud
+ * Sheets API activation for the script's Cloud project. The commented
+ * rollback block at the end of this source restores the previous
+ * built-in-services write; no other part of the operation changes between
+ * the two.
+ */
+const APPEND_TEST_BATCH_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   var RECEIPT_SHEET_NAME = "__typed_sheets_internal_effect_receipts";
   var RECEIPT_HEADERS = ["effectId", "payloadHash", "status", "visibleHash", "visibleRevision", "updatedAt"];
   var phases = [];
@@ -421,14 +440,76 @@ const BATCH_APPEND_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     });
   }
 
+  // TEMPORARY TEST-BATCH API: the append target write goes through the
+  // Advanced Sheets service so a bulk pass can write up to the configured
+  // append batch in one RAW ValueRange. The call follows the Apps Script
+  // Advanced Sheets signature Sheets.Spreadsheets.Values.batchUpdate(resource,
+  // spreadsheetId): the resource body carries the valueInputOption and the
+  // data array, and the spreadsheetId is the second positional path parameter.
+  // The rows are still reserved with the built-in insertRowsAfter first so a
+  // concurrent human append is shifted rather than overwritten, and the date
+  // columns still receive the canonical UTC number format afterwards. This
+  // write requires the Apps Script Advanced Sheets Service: the project needs
+  // the appsscript.json manifest with the Sheets v4 advanced service enabled
+  // and Google Cloud Sheets API activation for its Cloud project.
+  // Rollback: restore the commented writeAppendRows_()/toSheetValue_() block
+  // at the end of this source.
   function writeAppendRows_(targetSheet, range, startRow, pending) {
-    // Reserve the rows through the spreadsheet mutation API before writing
-    // values so a concurrent human append is shifted rather than overwritten.
     targetSheet.insertRowsAfter(startRow - 1, pending.length);
-    targetSheet.getRange(startRow, range.startColumn, pending.length, range.columnCount).setValues(pending.map(function (entry) {
-      return args.headers.map(function (header) { return toSheetValue_(entry.row.fields[header]); });
-    }));
+    // The reserved rows are created through the built-in SpreadsheetApp
+    // service, but the RAW ValueRange write below goes through the Advanced
+    // Sheets service. Flush explicitly so the reserved target range is
+    // visible across that service boundary before the Values API call.
+    SpreadsheetApp.flush();
+    Sheets.Spreadsheets.Values.batchUpdate({
+      valueInputOption: "RAW",
+      data: [{
+        range: a1Range_(args.sheetName, range.startColumn, startRow, range.startColumn + range.columnCount - 1, startRow + pending.length - 1),
+        majorDimension: "ROWS",
+        values: pending.map(function (entry) {
+          return args.headers.map(function (header) { return toSheetValue_(entry.row.fields[header]); });
+        }),
+      }],
+    }, spreadsheet.getId());
     setDateNumberFormats_(targetSheet, range, startRow, pending);
+  }
+
+  /** Builds a fully escaped A1 range for one sheet tab. */
+  function a1Range_(sheetName, startColumn, startRow, endColumn, endRow) {
+    return quoteA1SheetName_(sheetName) + "!" + columnLetters_(startColumn) + startRow + ":" + columnLetters_(endColumn) + endRow;
+  }
+
+  /** Quotes a sheet name for A1 notation, doubling any embedded single quote. */
+  function quoteA1SheetName_(sheetName) {
+    return "'" + String(sheetName).replace(/'/g, "''") + "'";
+  }
+
+  /** Converts a 1-based column number to A1 letters (1 -> A, 27 -> AA). */
+  function columnLetters_(columnNumber) {
+    var letters = "";
+    var value = columnNumber;
+    while (value > 0) {
+      var remainder = (value - 1) % 26;
+      letters = String.fromCharCode(65 + remainder) + letters;
+      value = Math.floor((value - 1) / 26);
+    }
+    return letters;
+  }
+
+  /**
+   * Excel/Sheets 1900-system serial: whole days since 1899-12-30 UTC. Canonical
+   * dates are always after the 1900-02-29 phantom day, so the serial is exactly
+   * the UTC day offset and RAW input preserves the value for the number format
+   * applied by setDateNumberFormats_().
+   */
+  function dateSerial_(date) {
+    return (date.getTime() - Date.UTC(1899, 11, 30)) / 86400000;
+  }
+
+  function toSheetValue_(value) {
+    if (value === null || value === undefined) return "";
+    if (value.kind === "date") return dateSerial_(new Date(value.value));
+    return value.value;
   }
 
   function writeReceipts_(target, startRow, pending) {
@@ -453,12 +534,42 @@ const BATCH_APPEND_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
   }
 
   function assertAppendPostcondition_(targetSheet, range, pending) {
+    // Batch verification: read the registered target range once and locate
+    // every pending row through the identity column locally, instead of
+    // scanning the identity column and re-reading one row per effect. A
+    // 1,000-row bulk append therefore costs one remote read instead of
+    // 2,000. The fail-closed contract is unchanged: an empty, missing, or
+    // duplicated identity throws, and the visible hash must still match the
+    // written payload exactly.
+    var identityColumn = args.headers.indexOf(args.identityField);
+    var lastRow = targetSheet.getLastRow();
+    var rows = lastRow >= 2
+      ? targetSheet.getRange(2, range.startColumn, lastRow - 1, range.columnCount).getValues()
+      : [];
+    var byIdentity = Object.create(null);
+    rows.forEach(function (row, index) {
+      var identityValue = row[identityColumn];
+      if (identityValue === "" || identityValue === null) return;
+      var identity = String(identityValue);
+      if (byIdentity[identity] === undefined) byIdentity[identity] = [];
+      byIdentity[identity].push(index + 2);
+    });
     pending.forEach(function (entry) {
-      var rowNumber = findReceiptRowNumber_(targetSheet, range, entry.row);
-      if (rowNumber === null) {
+      var cell = entry.row.fields[args.identityField];
+      var identity = cell === null || cell === undefined || cell.value === undefined
+        ? ""
+        : String(cell.value);
+      if (identity.length === 0) {
         throw new Error("append postcondition row is unavailable for effectId: " + entry.row.effectId);
       }
-      var values = targetSheet.getRange(rowNumber, range.startColumn, 1, range.columnCount).getValues()[0];
+      var matches = byIdentity[identity];
+      if (matches !== undefined && matches.length > 1) {
+        throw new Error("sync identity is duplicated: " + identity + " at rows " + matches.join(", "));
+      }
+      if (matches === undefined || matches.length === 0) {
+        throw new Error("append postcondition row is unavailable for effectId: " + entry.row.effectId);
+      }
+      var values = rows[matches[0] - 2];
       var fields = Object.create(null);
       args.headers.forEach(function (header, headerIndex) {
         fields[header] = normalizedCellFromSheetValue_(values[headerIndex]);
@@ -467,12 +578,6 @@ const BATCH_APPEND_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
         throw new Error("append postcondition changed for effectId: " + entry.row.effectId);
       }
     });
-  }
-
-  function toSheetValue_(value) {
-    if (value === null || value === undefined) return "";
-    if (value.kind === "date") return new Date(value.value);
-    return value.value;
   }
 
   function parseRange_(value) {
@@ -496,6 +601,31 @@ const BATCH_APPEND_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
     // double-count the elapsed time.
     result.timing.phases.push({ phase: name, durationMs: durationMs });
   }
+
+  // ---------------------------------------------------------------------------
+  // ROLLBACK BLOCK: previous built-in-services append target write. Restore
+  // these two functions (and delete the Advanced Sheets writeAppendRows_() /
+  // date-serial toSheetValue_() above, including the explicit
+  // service-boundary flush inside writeAppendRows_()) to revert the temporary
+  // test-batch API without touching any other part of the operation.
+  //
+  //   function writeAppendRows_(targetSheet, range, startRow, pending) {
+  //     // Reserve the rows through the spreadsheet mutation API before
+  //     // writing values so a concurrent human append is shifted rather
+  //     // than overwritten.
+  //     targetSheet.insertRowsAfter(startRow - 1, pending.length);
+  //     targetSheet.getRange(startRow, range.startColumn, pending.length, range.columnCount).setValues(pending.map(function (entry) {
+  //       return args.headers.map(function (header) { return toSheetValue_(entry.row.fields[header]); });
+  //     }));
+  //     setDateNumberFormats_(targetSheet, range, startRow, pending);
+  //   }
+  //
+  //   function toSheetValue_(value) {
+  //     if (value === null || value === undefined) return "";
+  //     if (value.kind === "date") return new Date(value.value);
+  //     return value.value;
+  //   }
+  // ---------------------------------------------------------------------------
 }`;
 
 function validateBatchAppendRequest(request: AppsScriptBatchAppendOperationArgs): void {
