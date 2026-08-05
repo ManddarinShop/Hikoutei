@@ -55,8 +55,25 @@ function createFakeSheet(name: string, initialRows: unknown[][]): FakeSheet {
             });
           });
         },
-        setNumberFormat: () => {
+        setNumberFormat: (pattern) => {
           writes.push({ kind: "setNumberFormat", row, column });
+          // A date pattern makes the real sheet return Date objects for the
+          // stored RAW serials in this range; the fake applies the same
+          // conversion only for date-formatted cells, so numeric/boolean
+          // cells in other columns stay numeric/boolean.
+          if (pattern.includes("yyyy")) {
+            for (let rowOffset = 0; rowOffset < numRows; rowOffset += 1) {
+              const targetRow = rows[startRowIndex + rowOffset];
+              if (targetRow === undefined) continue;
+              for (let columnOffset = 0; columnOffset < numColumns; columnOffset += 1) {
+                const cell = targetRow[startColumnIndex + columnOffset];
+                if (typeof cell === "number") {
+                  targetRow[startColumnIndex + columnOffset] =
+                    new Date(Math.round(cell * 86_400_000 + Date.UTC(1899, 11, 30)));
+                }
+              }
+            }
+          }
         },
       };
     },
@@ -68,6 +85,55 @@ function createFakeSheet(name: string, initialRows: unknown[][]): FakeSheet {
     hideSheet: () => undefined,
     snapshot: () => rows.map((row) => [...row]),
     writes,
+  };
+}
+
+/** Parses one A1 cell such as "A2" into 1-based column/row numbers. */
+function parseA1Cell(cell: string): { column: number; row: number } {
+  const match = /^([A-Z]+)(\d+)$/.exec(cell);
+  if (match === null) throw new Error("invalid A1 cell: " + cell);
+  let column = 0;
+  for (const letter of match[1]!) column = column * 26 + letter.charCodeAt(0) - 64;
+  return { column, row: Number(match[2]) };
+}
+
+/**
+ * Fake Advanced Sheets service for the temporary test-batch append write.
+ * The real runtime stores RAW date serials and returns Date objects for
+ * date-formatted cells; the fake stores the RAW ValueRange as-is and converts
+ * a cell's numeric serial back to Date only when a date number format is
+ * applied to that cell's column, so the postcondition hash round-trips
+ * exactly like the real sheet while numeric/boolean cells remain
+ * numeric/boolean. The call must follow the Apps Script Advanced Sheets
+ * signature batchUpdate(resource, spreadsheetId), so the positional
+ * spreadsheetId is asserted here.
+ */
+function createFakeSheets(dataSheet: FakeSheet, spreadsheetId: string) {
+  return {
+    Spreadsheets: {
+      Values: {
+        batchUpdate: (
+          resource: { valueInputOption?: string; data?: Array<{ range: string; values: unknown[][] }> },
+          targetSpreadsheetId: string,
+        ) => {
+          expect(targetSpreadsheetId).toBe(spreadsheetId);
+          expect(resource.valueInputOption).toBe("RAW");
+          for (const entry of resource.data ?? []) {
+            const [sheetName, cells] = entry.range.split("!");
+            expect(sheetName).toBe(`'${dataSheet.name}'`);
+            const [startCell, endCell] = cells!.split(":");
+            const start = parseA1Cell(startCell!);
+            const end = parseA1Cell(endCell!);
+            // RAW values are stored as-is; the date-formatted conversion
+            // happens when the number format is applied to the column.
+            const values = entry.values.map((row) => [...row]);
+            dataSheet
+              .getRange(start.row, start.column, end.row - start.row + 1, end.column - start.column + 1)
+              .setValues(values);
+          }
+        },
+      },
+    },
   };
 }
 
@@ -132,6 +198,7 @@ function createSandbox(
     "SpreadsheetApp",
     "Utilities",
     "PropertiesService",
+    "Sheets",
     `return (${operation.fn});`,
   );
   const source = evaluateSource(
@@ -139,6 +206,7 @@ function createSandbox(
     SpreadsheetApp,
     Utilities,
     { getScriptProperties: () => undefined },
+    createFakeSheets(dataSheet, spreadsheet.getId()),
   ) as (spreadsheet: unknown, args: unknown) => unknown;
   return {
     spreadsheet,
@@ -167,12 +235,15 @@ function baseOperation() {
   });
 }
 
-describe("Built-in Apps Script batch append operation", () => {
-  it("builds an eval source that uses only built-in Apps Script services", () => {
+describe("Apps Script batch append operation", () => {
+  it("builds an eval source that writes the append batch through the Advanced Sheets service", () => {
     const operation = baseOperation();
 
+    // The temporary test-batch write intentionally uses the Advanced Sheets
+    // service; everything else (receipts, identity guards, hashing, authority
+    // fencing, replay, recovery) stays on built-in Apps Script services.
+    expect(operation.fn).toContain("Sheets.Spreadsheets.Values.batchUpdate");
     for (const banned of [
-      "Sheets.Spreadsheets",
       "createDeveloperMetadata",
       "createDeveloperMetadataFinder",
       "addDeveloperMetadata",
@@ -190,6 +261,9 @@ describe("Built-in Apps Script batch append operation", () => {
     expect(operation.fn).toContain('phase_("append_write"');
     expect(operation.fn).toContain('phase_("postcondition"');
     expect(operation.fn).toContain("script_lock");
+    // The previous built-in-services write must stay recoverable in the
+    // commented rollback block at the end of the source.
+    expect(operation.fn).toContain("ROLLBACK BLOCK");
     // The phase accumulator must live in the outer operation-function scope so
     // both run_() phase calls and the outer appendPhase_("script_lock", ...)
     // share one array.
@@ -326,7 +400,10 @@ describe("Built-in Apps Script batch append operation", () => {
     ]);
     expect(result.timing.phases.every((phase) => phase.durationMs >= 0)).toBe(true);
     expect(result.timing.phases[result.timing.phases.length - 1]?.phase).toBe("script_lock");
-    expect(sandbox.flushCount()).toBe(2);
+    // Three flushes: the explicit service-boundary flush between the built-in
+    // insertRowsAfter reservation and the Advanced Sheets RAW write, the
+    // target-row flush, and the receipt flush.
+    expect(sandbox.flushCount()).toBe(3);
 
     // durationMs already measures the whole operation including the lock
     // wait; the script_lock phase must never inflate the total further.
@@ -543,6 +620,49 @@ describe("Built-in Apps Script batch append operation", () => {
     expect(() => sandbox.run()).toThrow(
       "append postcondition changed for effectId: effect-1",
     );
+  });
+
+  it("converts RAW serials to Date only for date-formatted columns", () => {
+    // Numeric and boolean cells must stay numeric/boolean in the fake
+    // Advanced Sheets sandbox; only the date-formatted column returns Date
+    // objects for its RAW serials, matching the real sheet.
+    const operation = createBatchAppendRowsOperation({
+      sheetName: "Sync_Conflicts",
+      registeredRange: "A:D",
+      headers: ["Conflict_ID", "Severity", "Resolved_At", "Acknowledged"],
+      identityField: "Conflict_ID",
+      rows: [{
+        effectId: "effect-1",
+        payloadHash: "payload-1",
+        fields: {
+          Conflict_ID: { kind: "string", value: "conflict-1" },
+          Severity: { kind: "number", value: 42 },
+          Resolved_At: { kind: "date", value: "2024-01-02T03:04:05.000Z" },
+          Acknowledged: { kind: "boolean", value: true },
+        },
+      }],
+    });
+    const sandbox = createSandbox(
+      operation,
+      [["Conflict_ID", "Severity", "Resolved_At", "Acknowledged"]],
+      [RECEIPT_HEADERS],
+    );
+
+    const result = sandbox.run() as { results: Array<{ status: string }> };
+    expect(result.results[0]?.status).toBe("applied");
+    const appended = sandbox.dataSheet.snapshot()[1];
+    expect(appended).toEqual([
+      "conflict-1",
+      42,
+      expect.any(Date) as unknown as Date,
+      true,
+    ]);
+    expect((appended?.[2] as Date).toISOString()).toBe("2024-01-02T03:04:05.000Z");
+
+    // Only the date column received the canonical UTC number format; the
+    // numeric and boolean columns were never formatted.
+    const numberFormats = sandbox.dataSheet.writes.filter((write) => write.kind === "setNumberFormat");
+    expect(numberFormats).toEqual([{ kind: "setNumberFormat", row: 2, column: 3 }]);
   });
 
   it("rejects incomplete or mismatched result evidence", () => {

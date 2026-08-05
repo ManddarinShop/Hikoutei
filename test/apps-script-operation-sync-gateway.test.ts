@@ -89,7 +89,7 @@ describe("AppsScriptOperationSyncGateway", () => {
     expect(operationGateway.calls).toHaveLength(3);
     expect(operationGateway.calls[0]?.fn).toContain("operational provisioning");
     expect(operationGateway.calls[1]?.fn).toContain("SpreadsheetApp.flush");
-    expect(operationGateway.calls[1]?.fn).not.toContain("Sheets.Spreadsheets");
+    expect(operationGateway.calls[1]?.fn).toContain("Sheets.Spreadsheets.Values.batchUpdate");
     expect(operationGateway.calls[1]?.fn).toContain("__typed_sheets_internal_effect_receipts");
     expect(operationGateway.calls[1]?.fn).not.toContain("getDeveloperMetadata");
     expect(operationGateway.calls[2]?.fn).toContain("getLastRow");
@@ -240,7 +240,7 @@ describe("AppsScriptOperationSyncGateway", () => {
     });
 
     // Delete/receipt/materialization must never regress to the Advanced
-    // Sheets service; the default append path already avoids it.
+    // Sheets service; only the temporary test-batch append path uses it.
     for (const banned of [
       "Sheets.Spreadsheets",
       "insertDimension",
@@ -1653,7 +1653,7 @@ function createObservationSandbox(
     }),
   };
   const SpreadsheetApp = {
-    DeveloperMetadataVisibility: { PROJECT: "PROJECT" },
+    DeveloperMetadataVisibility: { PROJECT: "PROJECT", DOCUMENT: "DOCUMENT" },
     DeveloperMetadataLocationType: { ROW: "ROW" },
     flush: () => {
       events.push("flush");
