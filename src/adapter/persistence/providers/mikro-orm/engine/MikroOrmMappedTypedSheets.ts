@@ -21,7 +21,7 @@ import type {
   TypedSheetsEntityWriterOptions,
 } from "../../../../../application/orm/persistence/support/contracts.js";
 import type { TypedSheetsOrm } from "../../../../../application/orm/api/TypedSheetsOrm.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheets/sheetsProvisioning.js";
 import {
   createTypedSheetsOrm,
 } from "./MikroOrmTypedSheetsEngine.js";
@@ -45,7 +45,7 @@ export interface InitializeMappedTypedSheetsOrmOptions
    * Optional internal hook invoked after local registry writes succeed.
    *
    * The hook receives the exact generated projection definitions so the sync
-   * service can provision a remote gateway without duplicating route metadata.
+   * service can provision a remote provider without duplicating route metadata.
    */
   readonly onRegisteredProjections?: (
     definitions: readonly RegisteredSyncProjectionDefinition[],
@@ -81,7 +81,7 @@ export function createMappedTypedSheetsOrm(
  * Opens a dedicated MikroORM SQLite runtime ready for mapped entity lifecycle work.
  *
  * Startup performs non-destructive entity/schema migration and idempotent local
- * projection registration. Remote Apps Script provisioning remains explicit so
+ * projection registration. Remote provider-side provisioning remains explicit so
  * a process cannot mutate a spreadsheet merely by opening its local database.
  */
 export async function initializeMappedTypedSheetsRuntime(

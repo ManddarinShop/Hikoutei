@@ -18,11 +18,11 @@ import {
 } from "../../../shared/state/index.js";
 import { stableHash } from "../../../shared/encoding/stableEncode.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../gateway/constants.js";
+  SYNC_PROJECTIONS,
+} from "../sheets/constants.js";
 import {
   syncConflictProjectionFields,
-} from "../gateway/conflictProjection.js";
+} from "../sheets/conflictProjection.js";
 import {
   createCandidateReconcileEffect,
   createResolutionProjectionEffect,
@@ -43,7 +43,7 @@ import type {
 } from "../../orm/persistence/support/contracts.js";
 import {
   parseSyncProjectionEffectPayload,
-} from "../gateway/syncGateway.js";
+} from "../sheets/syncSheets.js";
 import type {
   PersistObservedRowInput,
 } from "../../../infrastructure/storage/state/observation/observationTypes.js";
@@ -230,7 +230,7 @@ export async function autoResolveMappedConflictsWithSql(
   const deferredConflictIds: string[] = [];
   const userProjection = requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   );
   const userSheet = await requireRegisteredSyncSheetWithSql(sql, userProjection.physicalSheetId);
   const conflictSheet = await requireRegisteredSyncSheetWithSql(
@@ -308,7 +308,7 @@ export async function retryOpenMappedConflictsWithAdapter(
       readonly conflictIds: readonly string[];
     }> = [];
     for (const mapping of mappings) {
-      if (!mapping.projections.some((projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT)) {
+      if (!mapping.projections.some((projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT)) {
         continue;
       }
       const conflictIds = await readOpenConflictIdsWithSql(sql, mapping.logicalSheetId);
@@ -360,7 +360,7 @@ export async function retryOpenMappedConflictsWithAdapter(
           if (conflictResult.kind !== LOOKUP_RESULT_KINDS.FOUND) continue;
           const userProjection = requireTypedSheetsEntityProjection(
             candidate.mapping,
-            SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+            SYNC_PROJECTIONS.USER_INPUT,
           );
           const observedInput = observedByBinding.get(
             `${userProjection.physicalSheetId}:${conflictResult.value.rowBindingId}`,
@@ -404,7 +404,7 @@ async function resolutionEffectsForConflict(
   const visible = await readMappedVisibleProjectionStateWithSql(
     sql,
     userSheet.physicalSheetId,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
     conflict.rowBindingId,
   );
   const observed = input?.observedProjection;

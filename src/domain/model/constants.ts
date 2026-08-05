@@ -108,7 +108,7 @@ export const REGISTERED_PROJECTION_KINDS = {
   SYNC_CONFLICTS: "sync_conflicts",
 } as const;
 
-/** Projection values accepted by registry and gateway routing. */
+/** Projection values accepted by registry and provider routing. */
 export type RegisteredProjectionKind =
   (typeof REGISTERED_PROJECTION_KINDS)[keyof typeof REGISTERED_PROJECTION_KINDS];
 

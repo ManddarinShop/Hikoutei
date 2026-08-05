@@ -34,7 +34,7 @@ export type NormalizedCell =
   | DateValue;
 
 /**
- * Physical Sheet metadata retained by the internal observation/gateway path.
+ * Physical Sheet metadata retained by the internal observation/provider path.
  * This compatibility type is intentionally not part of the public root API.
  */
 export interface CellObservation {

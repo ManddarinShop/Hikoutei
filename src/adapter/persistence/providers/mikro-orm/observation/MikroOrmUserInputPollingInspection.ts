@@ -11,15 +11,15 @@ import {
   type ObservedExistingRowChange,
 } from "../../../../../domain/index.js";
 import type {
-  SyncGatewaySnapshot,
+  SyncSheetsSnapshot,
   SyncObservedSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
-} from "../../../../../application/sync/gateway/syncGateway.js";
+} from "../../../../../application/sync/sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-  SYNC_GATEWAY_PROTOCOL_VERSIONS,
-} from "../../../../../application/sync/gateway/constants.js";
+  SYNC_PROJECTIONS,
+  SYNC_PROTOCOL_VERSIONS,
+} from "../../../../../application/sync/sheets/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,
@@ -58,7 +58,7 @@ export type MappedUserInputInvalidReason =
 
 export interface PreparedRow {
   readonly mapping: TypedSheetsEntityMapping;
-  readonly snapshot: SyncGatewaySnapshot;
+  readonly snapshot: SyncSheetsSnapshot;
   readonly snapshotHash: string;
   readonly snapshotRow: SyncSnapshotRow;
   readonly binding: RowBindingStateRecord;
@@ -68,7 +68,7 @@ export interface PreparedRow {
 
 export interface InvalidRow {
   readonly mapping: TypedSheetsEntityMapping;
-  readonly snapshot: SyncGatewaySnapshot;
+  readonly snapshot: SyncSheetsSnapshot;
   readonly snapshotRow: SyncSnapshotRow;
   readonly rowNumber: number;
   readonly reason: MappedUserInputInvalidReason;
@@ -91,7 +91,7 @@ export interface SheetAccumulator {
 
 interface SnapshotRowInspectionContext {
   readonly mapping: TypedSheetsEntityMapping;
-  readonly snapshot: SyncGatewaySnapshot;
+  readonly snapshot: SyncSheetsSnapshot;
   readonly snapshotHash: string;
   readonly businessKeyField: TypedSheetsEntityFieldMapping;
   readonly duplicateBusinessKeys: ReadonlySet<string>;
@@ -112,11 +112,11 @@ export function inspectSnapshot(
   const snapshot = observed.snapshot;
   const projection = requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   );
   const expectedHeaders = typedSheetsEntityProjectionHeaders(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   );
   validateSnapshotRoute(mapping, snapshot, expectedHeaders, projection);
   const observedSnapshotHash = snapshotHash(snapshot);
@@ -351,15 +351,15 @@ function validateSnapshotCell(
 
 function validateSnapshotRoute(
   mapping: TypedSheetsEntityMapping,
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   expectedHeaders: readonly string[],
   projection: ReturnType<typeof requireTypedSheetsEntityProjection>,
 ): void {
   if (
-    snapshot.protocolVersion !== SYNC_GATEWAY_PROTOCOL_VERSIONS.V1 ||
+    snapshot.protocolVersion !== SYNC_PROTOCOL_VERSIONS.V1 ||
     snapshot.sheetName !== projection.tabName ||
     snapshot.registeredRange !== projection.registeredRange ||
-    snapshot.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT ||
+    snapshot.projection !== SYNC_PROJECTIONS.USER_INPUT ||
     snapshot.schemaVersion !== mapping.schemaVersion ||
     snapshot.headers.length !== expectedHeaders.length ||
     snapshot.headers.some((header, index) => header !== expectedHeaders[index])
@@ -373,7 +373,7 @@ function validateSnapshotRoute(
 
 /** Derives duplicate business-key values from one normalized snapshot. */
 export function duplicateBusinessKeysForSnapshot(
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   businessKey: TypedSheetsEntityFieldMapping,
 ): ReadonlySet<string> {
   const rowsByBusinessKey = new Map<string, number[]>();
@@ -393,7 +393,7 @@ export function duplicateBusinessKeysForSnapshot(
 }
 
 /** Computes the stable snapshot identity used by observation deduplication. */
-export function snapshotHash(snapshot: SyncGatewaySnapshot): string {
+export function snapshotHash(snapshot: SyncSheetsSnapshot): string {
   return stableHash({
     protocolVersion: snapshot.protocolVersion,
     sheetName: snapshot.sheetName,

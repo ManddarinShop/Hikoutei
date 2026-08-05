@@ -14,7 +14,7 @@ import {
   type NormalizedCellKind,
 } from "../../../shared/encoding/constants.js";
 import { isRecord } from "../../../shared/encoding/typeGuards.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../sync/gateway/constants.js";
+import { SYNC_PROJECTIONS } from "../../sync/sheets/constants.js";
 import type {
   TypedSheetsEntityFieldCodec,
   TypedSheetsEntityFieldMapping,
@@ -78,7 +78,7 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
   }
   assertDistinct(projections.map((projection) => projection.physicalSheetId), "physical sheet ID");
   assertDistinct(projections.map((projection) => projection.projection), "projection kind");
-  if (!projections.some((projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE)) {
+  if (!projections.some((projection) => projection.projection === SYNC_PROJECTIONS.SYSTEM_STATE)) {
     throwInvalidMapping("an entity mapping must declare exactly one system_state projection");
   }
 
@@ -89,7 +89,7 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
   }
 
   const userInput = projections.find(
-    (projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
   );
   if (userInput !== undefined && fields.every((field) => field.ownership !== FIELD_OWNERSHIPS.USER)) {
     throwInvalidMapping("a user_input projection requires at least one user-owned field");
@@ -181,8 +181,8 @@ function normalizeProjectionMapping(
   requireText(projection.tabName, "tab name");
   requireText(projection.registeredRange, "registered range");
   if (
-    projection.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT &&
-    projection.projection !== SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE
+    projection.projection !== SYNC_PROJECTIONS.USER_INPUT &&
+    projection.projection !== SYNC_PROJECTIONS.SYSTEM_STATE
   ) {
     throwInvalidMapping("an entity mapping supports only user_input and system_state projections");
   }

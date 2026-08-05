@@ -20,10 +20,16 @@ import type {
 export const SYNC_EFFECT_RECOVERY_ERROR_CODES = {
   LEASE_EXPIRED_REQUIRES_POSTCONDITION: "lease_expired_requires_postcondition",
   DELIVERY_UNCERTAIN_REQUIRES_PROBE: "delivery_uncertain_requires_probe",
-  GATEWAY_RETRYABLE_ERROR: "gateway_retryable_error",
+  PROVIDER_RETRYABLE_ERROR: "provider_retryable_error",
   POSTCONDITION_READ_FAILED: "postcondition_read_failed",
   POSTCONDITION_UNAVAILABLE: "postcondition_unavailable",
   POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE: "postcondition_unapplied_requires_redrive",
+  /**
+   * Code persisted by pre-rename workers as `gateway_retryable_error`.
+   * Accepted alongside PROVIDER_RETRYABLE_ERROR so failed rows written before
+   * the provider rename stay recoverable instead of stranding permanently.
+   */
+  LEGACY_GATEWAY_RETRYABLE_ERROR: "gateway_retryable_error",
 } as const;
 
 export type ClaimResult =
@@ -65,7 +71,7 @@ interface ApplyResultOptionsBase extends FencingContext {
 /** A result that may advance confirmed projection state. */
 export interface AppliedEffectResultOptions extends ApplyResultOptionsBase {
   readonly status: "applied";
-  /** Gateway read-back evidence committed with the applied outbox result. */
+  /** Provider read-back evidence committed with the applied outbox result. */
   readonly projectionConfirmation?: EffectProjectionConfirmation;
 }
 
@@ -80,7 +86,7 @@ export type ApplyResultOptions =
   | AppliedEffectResultOptions
   | NonAppliedEffectResultOptions;
 
-/** Confirmed projection state returned only after a gateway postcondition read. */
+/** Confirmed projection state returned only after a provider postcondition read. */
 export interface EffectProjectionConfirmation {
   readonly physicalSheetId: string;
   readonly projection: string;

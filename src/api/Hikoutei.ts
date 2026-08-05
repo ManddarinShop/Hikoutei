@@ -1,7 +1,7 @@
 /**
  * Public SQLite-authoritative Hikoutei runtime and the `createTypedSheets()` factory.
  *
- * This module intentionally knows nothing about Sheet routes or gateway
+ * This module intentionally knows nothing about Sheet routes or provider
  * provisioning. The internal sync service builds a mapped runtime separately
  * and can reuse the internal construction hook below without expanding the
  * application-facing contract.

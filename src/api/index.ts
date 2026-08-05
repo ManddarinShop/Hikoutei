@@ -4,8 +4,8 @@
  * This barrel is the only application-facing entrypoint. It exposes the stable
  * entity-lifecycle API — `defineTypedSheetsEntity`, `createTypedSheets`, the
  * `Hikoutei` runtime, the `EntityManager`, and the typed errors — and nothing
- * else. Sheet synchronization, storage, provider, ORM, gateway, and protocol
- * types are internal service implementation details.
+ * else. Sheet synchronization, storage, provider, ORM, and protocol types are
+ * internal service implementation details.
  */
 
 export {

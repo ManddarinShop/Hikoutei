@@ -12,9 +12,9 @@ import { CoreErrorException } from "../../../../domain/errors/index.js";
 import { PRESENCE_KINDS } from "../../../../shared/state/index.js";
 import type { Presence } from "../../../../shared/state/index.js";
 import {
-  SYNC_GATEWAY_ERROR_CODES,
-  SyncGatewayContractError,
-} from "../../../../application/sync/gateway/errors.js";
+  SYNC_SHEETS_ERROR_CODES,
+  SyncSheetsContractError,
+} from "../../../../application/sync/sheets/errors.js";
 
 /** Stable transport error categories emitted by the direct provider. */
 export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {
@@ -64,8 +64,8 @@ export class GoogleSheetsApiTransportError extends CoreErrorException<
  * shapes, and provider options fail closed before any remote mutation.
  */
 export function invalidProviderRequest(label: string, message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+  throw new SyncSheetsContractError(
+    SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
     `${label} request is invalid: ${message}`,
   );
 }
@@ -80,8 +80,8 @@ export function invalidProviderRequest(label: string, message: string): never {
  * unverified evidence.
  */
 export function invalidProviderState(message: string): never {
-  throw new SyncGatewayContractError(
-    SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE,
+  throw new SyncSheetsContractError(
+    SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
     `Google Sheets API provider: ${message}`,
   );
 }

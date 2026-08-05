@@ -24,15 +24,15 @@ import {
 } from "../../../../../shared/encoding/constants.js";
 import type { StableValue } from "../../../../../shared/encoding/types.js";
 import {
-  SYNC_GATEWAY_PROTOCOL_VERSIONS,
-  SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-  type SyncGatewaySnapshotReadMode,
-} from "../../../../../application/sync/gateway/constants.js";
+  SYNC_PROTOCOL_VERSIONS,
+  SYNC_SNAPSHOT_READ_MODES,
+  type SyncSnapshotReadMode,
+} from "../../../../../application/sync/sheets/constants.js";
 import type {
-  SyncGatewaySnapshot,
+  SyncSheetsSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
-} from "../../../../../application/sync/gateway/syncGateway.js";
+} from "../../../../../application/sync/sheets/syncSheets.js";
 import { invalidProviderState } from "../errors.js";
 import type {
   GoogleSheetsApiTransport,
@@ -105,7 +105,7 @@ export interface SnapshotBuildTarget extends AnchorPlanningTarget {
   readonly sheetName: string;
   readonly projection: string;
   readonly schemaVersion: number;
-  readonly readMode: SyncGatewaySnapshotReadMode;
+  readonly readMode: SyncSnapshotReadMode;
 }
 
 /**
@@ -220,10 +220,10 @@ export function planRowAnchors(
 export function buildSnapshotFromTab(
   tab: ObservedTab,
   target: SnapshotBuildTarget,
-): SyncGatewaySnapshot {
+): SyncSheetsSnapshot {
   const range = parseRegisteredRange(target.registeredRange);
   const headers = readRegisteredHeaders(tab.grid, range, target.headers);
-  const lightweight = target.readMode === SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT;
+  const lightweight = target.readMode === SYNC_SNAPSHOT_READ_MODES.USER_INPUT;
   const anchorsByRow = readAnchorIndex(tab.grid);
   const checkboxIndexes = checkboxColumnIndexes(headers, target.checkboxHeaders);
   const merged = lightweight ? new Map<string, string>() : mergedRangesFor(tab);
@@ -271,10 +271,10 @@ export function buildSnapshotFromTab(
 
   const snapshotHash = stableHash(toWireSnapshot(target, headers, rows) as StableValue);
   return {
-    protocolVersion: SYNC_GATEWAY_PROTOCOL_VERSIONS.V1,
+    protocolVersion: SYNC_PROTOCOL_VERSIONS.V1,
     sheetName: target.sheetName,
     registeredRange: target.registeredRange,
-    projection: target.projection as SyncGatewaySnapshot["projection"],
+    projection: target.projection as SyncSheetsSnapshot["projection"],
     schemaVersion: target.schemaVersion,
     headers,
     rows,
@@ -450,10 +450,10 @@ function errorDisplayString(record: Record<string, unknown>): string {
 function toWireSnapshot(
   target: SnapshotBuildTarget,
   headers: readonly string[],
-  rows: SyncGatewaySnapshot["rows"],
+  rows: SyncSheetsSnapshot["rows"],
 ): unknown {
   return {
-    protocolVersion: SYNC_GATEWAY_PROTOCOL_VERSIONS.V1,
+    protocolVersion: SYNC_PROTOCOL_VERSIONS.V1,
     sheetName: target.sheetName,
     registeredRange: target.registeredRange,
     projection: target.projection,

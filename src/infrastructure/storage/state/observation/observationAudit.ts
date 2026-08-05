@@ -1,7 +1,7 @@
 /**
  * Stable audit serialization for observation evidence.
  *
- * Gateway payloads are external input, so rejected values must still be
+ * Provider payloads are external input, so rejected values must still be
  * preserved without JSON coercion silently hiding malformed data.
  */
 

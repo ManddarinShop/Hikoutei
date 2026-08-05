@@ -18,7 +18,7 @@ import {
   registerSyncSheetWithSql,
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheets/sheetsProvisioning.js";
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
@@ -117,7 +117,7 @@ export function createMappedTypedSheetsFlushCoordinator(
 /**
  * Registers every mapping route under one writer fence.
  *
- * The return value can be passed directly to the existing gateway provisioning
+ * The return value can be passed directly to the existing provider provisioning
  * helper, so users never need to duplicate route names or header lists in Apps
  * Script configuration.
  */
@@ -170,7 +170,7 @@ export async function registerTypedSheetsEntityMappings(
   });
 }
 
-/** Converts registered mapping routes into gateway provisioning definitions. */
+/** Converts registered mapping routes into provider provisioning definitions. */
 export function registeredTypedSheetsProjectionDefinitions(
   registrations: readonly RegisteredTypedSheetsMappedProjection[],
 ): readonly RegisteredSyncProjectionDefinition[] {

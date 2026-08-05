@@ -22,8 +22,8 @@ import {
 } from "../../../../../domain/index.js";
 import { QUARANTINE_REASONS } from "../../../../../domain/model/constants.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../../../../application/sync/gateway/constants.js";
+  SYNC_PROJECTIONS,
+} from "../../../../../application/sync/sheets/constants.js";
 import {
   createTypedSheetsEntityOwnershipManifest,
   requireTypedSheetsEntityProjection,
@@ -71,7 +71,7 @@ export async function persistInvalidPollingRows(
   for (const invalid of rows) {
     const projection = requireTypedSheetsEntityProjection(
       invalid.mapping,
-      SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      SYNC_PROJECTIONS.USER_INPUT,
     );
     const payloadJson = auditJson({
       snapshotHash: invalid.snapshot.snapshotHash,
@@ -167,7 +167,7 @@ async function createPersistInput(
     batchId: `batch:user_input:${prepared.mapping.logicalSheetId}:${prepared.snapshotHash}`,
     source: "polling",
     sheetId: prepared.mapping.logicalSheetId,
-    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: prepared.mapping.schemaVersion,
     atomicity: "row_independent",
     baseSnapshotHash: prepared.snapshotHash,
@@ -182,7 +182,7 @@ async function createPersistInput(
     batchId: batch.batchId,
     physicalSheetId: requireTypedSheetsEntityProjection(
       prepared.mapping,
-      SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      SYNC_PROJECTIONS.USER_INPUT,
     ).physicalSheetId,
     rowNumber: prepared.snapshotRow.rowNumber,
     row: prepared.row,
@@ -463,7 +463,7 @@ export function isAuthoritativeObservationResult(
 /**
  * Identifies results whose current polling read may safely drive deferred
  * system-wins evidence. A duplicate means the observation is already durable,
- * not that the just-read visible baseline is obsolete; the gateway CAS still
+ * not that the just-read visible baseline is obsolete; the provider CAS still
  * rejects a remote edit that occurs after this read.
  */
 export function isObservationEvidenceUsableForDeferredResolution(

@@ -2,7 +2,7 @@
  * Materializes scalar entity schemas and provider bindings without sync code.
  *
  * The root ORM factory imports this module only. Projection mapping, canonical
- * state, and gateway code remain behind the internal sync-service path.
+ * state, and provider code remain behind the internal sync-service path.
  */
 
 import { defineEntity, p } from "@mikro-orm/sql";

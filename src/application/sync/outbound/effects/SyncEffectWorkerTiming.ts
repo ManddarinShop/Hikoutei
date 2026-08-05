@@ -2,11 +2,11 @@
 
 import { NON_NEGATIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
 import type { PendingEffect } from "../../../../infrastructure/storage/index.js";
-import type { SyncGatewayEffect } from "../../gateway/syncGateway.js";
+import type { SyncProjectionEffect } from "../../sheets/syncSheets.js";
 import {
   SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
-  type SyncGatewayTiming,
+  type SyncSheetsTiming,
   type SyncTimingEvent,
   type SyncTimingOperationCounts,
   type SyncTimingOperationKind,
@@ -22,7 +22,7 @@ export function emptyOperationCounts(): SyncTimingOperationCounts {
   return { append: 0, update: 0, delete: 0 };
 }
 
-export function timingOperationKindForEffect(effect: SyncGatewayEffect): SyncTimingOperationKind {
+export function timingOperationKindForEffect(effect: SyncProjectionEffect): SyncTimingOperationKind {
   if (
     effect.effectKind === SYNC_EFFECT_KINDS.RESOLUTION_DELETE ||
     effect.effectKind === SYNC_EFFECT_KINDS.USER_INPUT_DELETE
@@ -67,7 +67,7 @@ export function countsForOperationKinds(
 
 export function countsForItems(items: readonly ClaimedEffect[]): SyncTimingOperationCounts {
   const kinds = items.flatMap((item) =>
-    isPresent(item.gatewayEffect) ? [timingOperationKindForEffect(item.gatewayEffect.value)] : []);
+    isPresent(item.providerEffect) ? [timingOperationKindForEffect(item.providerEffect.value)] : []);
   return countsForOperationKinds(kinds);
 }
 
@@ -95,14 +95,14 @@ export function operationKindsForCounts(
   ];
 }
 
-export function emitGatewayTiming(
+export function emitProviderTiming(
   options: SyncEffectWorkerBaseOptions,
-  timing: SyncGatewayTiming | undefined,
+  timing: SyncSheetsTiming | undefined,
 ): void {
   if (timing === undefined) return;
   for (const phase of timing.phases) {
     emitWorkerTiming(options, {
-      scope: SYNC_TIMING_SCOPES.GATEWAY,
+      scope: SYNC_TIMING_SCOPES.PROVIDER,
       phase: phase.phase,
       durationMs: phase.durationMs,
       operationKinds: timing.operationKinds,

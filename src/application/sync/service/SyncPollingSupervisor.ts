@@ -18,7 +18,7 @@ export interface SyncPollingSupervisorOptions<Report = unknown> {
 }
 
 /**
- * Coalesces polling passes and stops only after an active gateway call returns.
+ * Coalesces polling passes and stops only after an active provider call returns.
  * The service can therefore close the shared SQLite adapter safely.
  */
 export class SyncPollingSupervisor<Report = unknown> {

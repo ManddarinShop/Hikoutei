@@ -64,13 +64,13 @@ export interface SyncEffectWorkerSupervisorLoopOptions {
 /** Worker options with a clock supplied by the supervisor on every pass. */
 export type CreateSyncEffectWorkerSupervisorOptions = Omit<
   SyncEffectWorkerWithAdapterOptions,
-  "now" | "workerId" | "maxEffects" | "writerLeaseDurationMs" | "effectLeaseDurationMs" | "gatewayTimeoutMs"
+  "now" | "workerId" | "maxEffects" | "writerLeaseDurationMs" | "effectLeaseDurationMs" | "requestTimeoutMs"
 > & {
   readonly workerId?: string;
   readonly maxEffects?: number;
   readonly writerLeaseDurationMs?: number;
   readonly effectLeaseDurationMs?: number;
-  readonly gatewayTimeoutMs?: number;
+  readonly requestTimeoutMs?: number;
   readonly batchController?: AdaptiveEffectBatchControllerType;
   readonly now?: () => number;
   readonly idleIntervalMs?: number;
@@ -366,7 +366,7 @@ export function createSyncEffectWorkerSupervisor(
   });
   const workerOptions = {
     storage: options.storage,
-    gateway: options.gateway,
+    provider: options.provider,
     batchController,
     clock: now,
     workerId,
@@ -379,9 +379,9 @@ export function createSyncEffectWorkerSupervisor(
     ...(options.effectLeaseDurationMs === undefined
       ? {}
       : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
-    ...(options.gatewayTimeoutMs === undefined
+    ...(options.requestTimeoutMs === undefined
       ? {}
-      : { gatewayTimeoutMs: options.gatewayTimeoutMs }),
+      : { requestTimeoutMs: options.requestTimeoutMs }),
     ...(options.maxFastAppendCandidates === undefined
       ? {}
       : { maxFastAppendCandidates: options.maxFastAppendCandidates }),

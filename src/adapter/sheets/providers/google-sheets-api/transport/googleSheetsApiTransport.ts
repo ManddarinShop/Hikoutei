@@ -404,7 +404,7 @@ function toSdkRequest(request: GoogleSheetsApiWriteRequest): unknown {
             },
             // DOCUMENT-scoped metadata is visible across Cloud projects, so
             // anchors written by the service-account project stay findable by
-            // the Apps Script project (and vice versa) in mixed mode.
+            // any other project (and vice versa) that shares the spreadsheet.
             visibility: "DOCUMENT",
           },
         },

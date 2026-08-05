@@ -2,7 +2,7 @@
  * Polls User_Input projections and applies accepted edits to the local entity
  * table through the observation writer.
  *
- * The gateway is treated as an untrusted observation source: only rows with a
+ * The provider is treated as an untrusted observation source: only rows with a
  * known SQLite business key and literal/blank cells are promoted. Canonical
  * state, field revisions, conflict candidates, and the System_State outbox
  * remain the durable source of truth.
@@ -11,22 +11,22 @@
 import type {
   ReadSyncTableRowsRequest,
   SyncObservedSnapshot,
-  SyncSheetObservationGateway,
+  SyncSheetsObservationProvider,
   SyncTableRowsResult,
-} from "../../../../../application/sync/gateway/syncGateway.js";
+} from "../../../../../application/sync/sheets/syncSheets.js";
 import {
   emptySyncTimingOperationCounts,
   SYNC_TIMING_SCOPES,
   type SyncTimingSink,
 } from "../../../../../application/sync/telemetry/syncTiming.js";
 import {
-  isSyncSheetTableReaderGateway,
+  isSyncSheetsTableReader,
   observeSyncSnapshots,
-} from "../../../../../application/sync/gateway/syncGateway.js";
+} from "../../../../../application/sync/sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-  SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-} from "../../../../../application/sync/gateway/constants.js";
+  SYNC_PROJECTIONS,
+  SYNC_SNAPSHOT_READ_MODES,
+} from "../../../../../application/sync/sheets/constants.js";
 import type {
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingRegistry,
@@ -134,7 +134,7 @@ export interface MappedUserInputPollingReport {
 /** Options for the provider-specific first inbound worker slice. */
 export interface PollMappedUserInputWithMikroOrmOptions {
   readonly storage: MikroOrmSqliteAdapter;
-  readonly gateway: SyncSheetObservationGateway;
+  readonly provider: SyncSheetsObservationProvider;
   readonly mappings: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[];
   readonly writer: TypedSheetsEntityWriterOptions;
   readonly physicalSheetIds?: readonly string[];
@@ -226,11 +226,11 @@ export async function pollMappedUserInputWithMikroOrm(
   const accumulators = mappings.map((mapping) => createAccumulator(mapping));
   const canUseAdaptivePath = requestedMode === MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE &&
     options.forceFull !== true &&
-    isSyncSheetTableReaderGateway(options.gateway);
+    isSyncSheetsTableReader(options.provider);
 
   if (canUseAdaptivePath) {
     const valuesReadStartedAt = Date.now();
-    const fastResults = await options.gateway.readRowsBatch(mappings.map(toTableRowsRequest));
+    const fastResults = await options.provider.readRowsBatch(mappings.map(toTableRowsRequest));
     emitPollingTiming(
       timingSink,
       POLLING_TIMING_PHASES.VALUES_ONLY_READ,
@@ -280,7 +280,7 @@ export async function pollMappedUserInputWithMikroOrm(
 
     const observationStartedAt = Date.now();
     const observed = await observeSyncSnapshots(
-      options.gateway,
+      options.provider,
       fullMappings.map(toSnapshotRequest),
     );
     emitPollingTiming(
@@ -323,7 +323,7 @@ export async function pollMappedUserInputWithMikroOrm(
 
   const observationStartedAt = Date.now();
   const observed = await observeSyncSnapshots(
-    options.gateway,
+    options.provider,
     mappings.map(toSnapshotRequest),
   );
   emitPollingTiming(
@@ -529,17 +529,17 @@ function createPollingReport(
 function toTableRowsRequest(mapping: TypedSheetsEntityMapping): ReadSyncTableRowsRequest {
   const projection = requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   );
   return {
     physicalSheetId: projection.physicalSheetId,
     sheetName: projection.tabName,
     registeredRange: projection.registeredRange,
-    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: mapping.schemaVersion,
     headers: typedSheetsEntityProjectionHeaders(
       mapping,
-      SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      SYNC_PROJECTIONS.USER_INPUT,
     ),
   };
 }
@@ -556,7 +556,7 @@ function selectMappings(
     : new Set(physicalSheetIds);
   return registry.mappings.filter((mapping) => {
     const projection = mapping.projections.find(
-      (candidate) => candidate.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      (candidate) => candidate.projection === SYNC_PROJECTIONS.USER_INPUT,
     );
     return projection !== undefined && (selected === undefined || selected.has(projection.physicalSheetId));
   });
@@ -565,17 +565,17 @@ function selectMappings(
 function toSnapshotRequest(mapping: TypedSheetsEntityMapping) {
   const projection = requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   );
   return {
     physicalSheetId: projection.physicalSheetId,
     sheetName: projection.tabName,
     registeredRange: projection.registeredRange,
-    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: mapping.schemaVersion,
     // Polling must retain formula/merge/error metadata so invalid cells are
     // quarantined instead of being mistaken for literal user edits.
-    readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.FULL,
+    readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
   } as const;
 }
 
@@ -617,7 +617,7 @@ function toSheetReport(accumulator: SheetAccumulator): MappedUserInputPollingShe
   return {
     physicalSheetId: requireTypedSheetsEntityProjection(
       accumulator.mapping,
-      SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      SYNC_PROJECTIONS.USER_INPUT,
     ).physicalSheetId,
     logicalSheetId: accumulator.mapping.logicalSheetId,
     rowsScanned: accumulator.rowsScanned,

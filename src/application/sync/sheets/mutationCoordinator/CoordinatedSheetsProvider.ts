@@ -1,15 +1,16 @@
 /**
- * Per-spreadsheet Gateway coordinator that serializes remote mutations.
+ * Per-spreadsheet provider coordinator that serializes remote mutations.
  *
- * The deployed Apps Script Gateway guards every data-plane operation with one
- * global `LockService.getScriptLock()`. Before this coordinator, the outbound
- * effect worker, the User_Input polling supervisor, provisioning, and test
- * controls each called the Gateway directly, so several in-flight requests
- * competed for the same script lock and the same Sheet context at once. Under
- * load that produced lock-acquisition failures, duplicate-row races, and tail
- * latency dominated by lock waits.
+ * The Google Sheets API is not transactional across requests, and concurrent
+ * in-flight requests to one spreadsheet can race (duplicate-row appends,
+ * interleaved update/delete batches) and burn quota with lock-style retries.
+ * Before this coordinator, the outbound effect worker, the User_Input polling
+ * supervisor, provisioning, and test controls each called the provider
+ * directly, so several in-flight requests competed for the same Sheet context
+ * at once. Under load that produced write races and tail latency dominated by
+ * retries.
  *
- * The coordinator is a transparent decorator: it implements the same gateway
+ * The coordinator is a transparent decorator: it implements the same provider
  * boundary the worker and polling already use, so no caller changes are
  * required. It routes every mutation and recovery barrier through one
  * per-spreadsheet FIFO lane (default total concurrency 1) while leaving
@@ -18,8 +19,8 @@
  * side from issuing competing mutations.
  *
  * Invariants preserved:
- * - Total mutation concurrency is 1 per lane by default, matching the global
- *   Apps Script script lock for single-spreadsheet deployments.
+ * - Total mutation concurrency is 1 per lane by default, giving one in-flight
+ *   write per spreadsheet at a time.
  * - Lock-free reads (`readSnapshot`, `readRows`, `readRowsBatch`) never wait on
  *   the mutation lane.
  * - Recovery barriers (`readEffectPostcondition(s)`) use the mutation lane so a
@@ -31,8 +32,8 @@
  */
 
 import {
-  isSyncSheetObservationBatchGateway,
-} from "../syncGateway.js";
+  isSyncSheetsObservationBatchProvider,
+} from "../syncSheets.js";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
@@ -44,33 +45,33 @@ import type {
   ReadSyncSnapshotRequest,
   ReadSyncTableRowsRequest,
   SyncEffectPostcondition,
-  SyncGatewayEffect,
-  SyncGatewayEffectPostconditionResult,
-  SyncGatewaySnapshot,
+  SyncProjectionEffect,
+  SyncEffectPostconditionResult,
+  SyncSheetsSnapshot,
   SyncObservedSnapshot,
-  SyncSheetGateway,
-  SyncSheetObservationBatchGateway,
-  SyncSheetTableReaderGateway,
+  SyncSheetsProvider,
+  SyncSheetsObservationBatchProvider,
+  SyncSheetsTableReader,
   SyncTableRowsResult,
-} from "../syncGateway.js";
+} from "../syncSheets.js";
 import { AsyncMutex, type AsyncMutexRelease } from "./asyncMutex.js";
 import {
   TRANSPORT_OUTCOME_KINDS,
   type CoordinatorLaneEvent,
-} from "./coordinatorTelemetry.js";
-import { classifyTransportOutcome } from "../transportClassification.js";
+} from "./laneTelemetry.js";
+import { classifyTransportOutcome } from "../transportOutcome.js";
 
-/** Gateway boundary the coordinator wraps (effect + observation + table read). */
-export type CoordinatedGatewayInner =
-  SyncSheetGateway &
-  SyncSheetTableReaderGateway;
+/** Provider boundary the coordinator wraps (effect + observation + table read). */
+export type CoordinatedSheetsInner =
+  SyncSheetsProvider &
+  SyncSheetsTableReader;
 
-// SyncGatewayProvisioner is intentionally not wrapped: provisioning runs once
+// SyncSheetsProvisioner is intentionally not wrapped: provisioning runs once
 // at startup before the worker, so it stays on the original provisioner and
 // never needs the mutation lane.
 
 /** Options for constructing a per-spreadsheet coordinator. */
-export interface CoordinatedSyncGatewayOptions<TInner extends CoordinatedGatewayInner> {
+export interface CoordinatedSheetsProviderOptions<TInner extends CoordinatedSheetsInner> {
   readonly inner: TInner;
   /**
    * Derives the mutation-lane key for one physical sheet. Defaults to a
@@ -86,22 +87,22 @@ export interface CoordinatedSyncGatewayOptions<TInner extends CoordinatedGateway
 }
 
 /**
- * Serializes Gateway mutations per lane while keeping value reads lock-free.
+ * Serializes provider mutations per lane while keeping value reads lock-free.
  *
- * Implements the full gateway, table-reader, observation-batch, and provisioner
- * boundary, so it can wrap both the real Apps Script gateway and fakes. When
- * the inner gateway lacks the one-request observation path, observation is
+ * Implements the full provider, table-reader, observation-batch, and provisioner
+ * boundary, so it can wrap both the real Google Sheets API provider and fakes.
+ * When the inner provider lacks the one-request observation path, observation is
  * routed through `ensureRowAnchors` + `readSnapshot` inside the same held lane.
  */
-export class CoordinatedSyncGateway<TInner extends CoordinatedGatewayInner>
-  implements SyncSheetGateway, SyncSheetTableReaderGateway, SyncSheetObservationBatchGateway {
+export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
+  implements SyncSheetsProvider, SyncSheetsTableReader, SyncSheetsObservationBatchProvider {
   private readonly inner: TInner;
   private readonly resolveKey: (physicalSheetId: string) => string;
   private readonly onLaneEvent: ((event: CoordinatorLaneEvent) => void) | undefined;
   private readonly now: () => number;
   private readonly lanes = new Map<string, AsyncMutex>();
 
-  public constructor(options: CoordinatedSyncGatewayOptions<TInner>) {
+  public constructor(options: CoordinatedSheetsProviderOptions<TInner>) {
     this.inner = options.inner;
     this.resolveKey = options.mutationKeyForPhysicalSheet ?? (() => DEFAULT_LANE_KEY);
     this.onLaneEvent = options.onLaneEvent;
@@ -118,7 +119,7 @@ export class CoordinatedSyncGateway<TInner extends CoordinatedGatewayInner>
   /**
    * Runs an internal control-plane operation on the same mutation lane as
    * effects and anchor writes. Test/admin controls use this to avoid issuing a
-   * competing Apps Script request outside the coordinator.
+   * competing provider request outside the coordinator.
    */
   public runSerializedControl<T>(
     physicalSheetId: string,
@@ -140,7 +141,7 @@ export class CoordinatedSyncGateway<TInner extends CoordinatedGatewayInner>
     );
   }
 
-  public async readEffectPostcondition(effect: SyncGatewayEffect): Promise<SyncEffectPostcondition> {
+  public async readEffectPostcondition(effect: SyncProjectionEffect): Promise<SyncEffectPostcondition> {
     return this.runMutation(effect.physicalSheetId, "readEffectPostcondition", () =>
       this.inner.readEffectPostcondition(effect),
     );
@@ -148,7 +149,7 @@ export class CoordinatedSyncGateway<TInner extends CoordinatedGatewayInner>
 
   public async readEffectPostconditions(
     request: ReadSyncEffectPostconditionsRequest,
-  ): Promise<readonly SyncGatewayEffectPostconditionResult[]> {
+  ): Promise<readonly SyncEffectPostconditionResult[]> {
     return this.runMutation(request.physicalSheetId, "readEffectPostconditions", () =>
       this.inner.readEffectPostconditions(request),
     );
@@ -174,15 +175,15 @@ export class CoordinatedSyncGateway<TInner extends CoordinatedGatewayInner>
     if (requests.length === 0) return [];
     const keys = distinctLaneKeys(requests.map((request) => this.resolveKey(request.physicalSheetId)));
     return this.runInLanes(keys, "observeSnapshots", async () => {
-      if (isSyncSheetObservationBatchGateway(this.inner)) {
-        // Delegate the whole batch to the inner gateway so one remote request
+      if (isSyncSheetsObservationBatchProvider(this.inner)) {
+        // Delegate the whole batch to the inner provider so one remote request
         // covers every requested projection; serializing one request at a time
         // here would defeat that shared round trip.
         return this.inner.observeSnapshots(requests);
       }
       const results: SyncObservedSnapshot[] = [];
       for (const request of requests) {
-        // Sequential fallback for inner gateways without the batch capability;
+        // Sequential fallback for inner providers without the batch capability;
         // each request still runs under the already-held lanes.
         // eslint-disable-next-line no-await-in-loop
         results.push(await this.observeOneInner(request));
@@ -192,7 +193,7 @@ export class CoordinatedSyncGateway<TInner extends CoordinatedGatewayInner>
   }
 
   /** Lock-free snapshot read; never waits on the mutation lane. */
-  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
+  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncSheetsSnapshot> {
     return this.inner.readSnapshot(request);
   }
 
@@ -209,13 +210,13 @@ export class CoordinatedSyncGateway<TInner extends CoordinatedGatewayInner>
   }
 
   /**
-   * Observes one snapshot through the inner gateway, using its single-request
+   * Observes one snapshot through the inner provider, using its single-request
    * capability when present and falling back to ensure+read otherwise. Both
    * calls run inside the caller's already-held lane, so observation stays
    * serialized against competing mutations.
    */
   private async observeOneInner(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot> {
-    if (isSyncSheetObservationBatchGateway(this.inner)) {
+    if (isSyncSheetsObservationBatchProvider(this.inner)) {
       return this.inner.observeSnapshot(request);
     }
     const anchors = await this.inner.ensureRowAnchors(request);

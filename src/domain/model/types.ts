@@ -232,7 +232,7 @@ export interface ObservedEditBatch {
   readonly baseSnapshotHash: string;
   /** Authenticated service principal; audit metadata, never a merge input. */
   readonly ingressActorId: string;
-  /** Verified editor identity when the gateway can provide one. */
+  /** Verified editor identity when the provider can provide one. */
   readonly editorActorId: Presence<string>;
   readonly editorActorSource: EditorActorSource;
   readonly rows: readonly ObservedRowChange[];

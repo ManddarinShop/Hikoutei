@@ -24,14 +24,14 @@ import {
 } from "../../orm/persistence/flush/flushCoordinator.js";
 import type { InternalSyncProjectionConfig } from "../service/contracts.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
+  SYNC_PROJECTIONS,
 } from "./constants.js";
 import {
   SYNC_CONFLICT_PROJECTION_HEADERS,
 } from "./conflictProjection.js";
 import type {
   RegisteredSyncProjectionDefinition,
-} from "./SyncGatewayBootstrap.js";
+} from "./sheetsProvisioning.js";
 
 /** Registers all conflict routes under one writer fence for a mapped runtime. */
 export async function registerSyncConflictProjectionRoutes(
@@ -80,7 +80,7 @@ export async function registerSyncConflictProjectionRoutes(
         spreadsheetId: projections.spreadsheetId,
         tabName: config.syncConflicts.tabName,
         registeredRange: config.syncConflicts.registeredRange,
-        projection: SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS,
+        projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
         schemaVersion: registration.mapping.schemaVersion,
         ownershipManifestJson: serializeTypedSheetsEntityOwnershipManifest(registration.mapping),
         businessKeyField: registration.mapping.businessKey.fieldName,
@@ -109,7 +109,7 @@ export function conflictProjectionSheet(
 ): RegisteredSyncSheet {
   const definition = definitions.find(
     (candidate) => candidate.sheet.logicalSheetId === logicalSheetId &&
-      candidate.sheet.projection === SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS,
+      candidate.sheet.projection === SYNC_PROJECTIONS.SYNC_CONFLICTS,
   );
   if (definition === undefined) {
     throw new TypedSheetsOrmError(

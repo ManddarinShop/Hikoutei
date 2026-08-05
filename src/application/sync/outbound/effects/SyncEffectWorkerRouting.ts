@@ -16,20 +16,19 @@ import type {
   ApplySyncEffectsRequest,
   FastAppendRowsRequest,
   ReadSyncEffectPostconditionsRequest,
-  SyncGatewayAuthority,
-  SyncGatewayEffect,
-  SyncGatewayEffectResult,
+  SyncProjectionEffect,
+  SyncEffectResult,
   SyncProjection,
-} from "../../gateway/syncGateway.js";
-import { parseSyncProjectionEffectPayload } from "../../gateway/syncGateway.js";
+} from "../../sheets/syncSheets.js";
+import { parseSyncProjectionEffectPayload } from "../../sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_POSTCONDITION_MODES,
-  SYNC_GATEWAY_POSTCONDITION_STATUSES,
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../gateway/constants.js";
+  SYNC_POSTCONDITION_MODES,
+  SYNC_POSTCONDITION_STATUSES,
+  SYNC_PROJECTIONS,
+} from "../../sheets/constants.js";
 import {
   EFFECT_TARGET_KINDS,
-  GATEWAY_EFFECT_BATCH_LIMIT,
+  EFFECT_BATCH_LIMIT,
   OUTBOX_EFFECT_STATUSES,
   SYNC_EFFECT_KINDS,
 } from "./SyncEffectWorkerConstants.js";
@@ -41,14 +40,14 @@ import {
 import type { ClaimedEffect } from "./SyncEffectWorker.js";
 
 /** Accepts either inline read-back or a flushed-write acknowledgement. */
-export function isSuccessfulGatewayPostcondition(
-  status: SyncGatewayEffectResult["postcondition"],
+export function isSuccessfulPostcondition(
+  status: SyncEffectResult["postcondition"],
 ): boolean {
-  return status === SYNC_GATEWAY_POSTCONDITION_STATUSES.VERIFIED ||
-    status === SYNC_GATEWAY_POSTCONDITION_STATUSES.ACKNOWLEDGED;
+  return status === SYNC_POSTCONDITION_STATUSES.VERIFIED ||
+    status === SYNC_POSTCONDITION_STATUSES.ACKNOWLEDGED;
 }
 
-export function toGatewayEffect(effect: PendingEffect): SyncGatewayEffect {
+export function toProviderEffect(effect: PendingEffect): SyncProjectionEffect {
   if (!isSyncEffectKind(effect.effect_kind)) {
     throwWorkerError("unsupported sync effect kind: " + effect.effect_kind);
   }
@@ -75,26 +74,24 @@ export function toGatewayEffect(effect: PendingEffect): SyncGatewayEffect {
   };
 }
 
-export function groupByGatewayRequest(
+export function groupByProviderRequest(
   items: readonly ClaimedEffect[],
-  authority?: SyncGatewayAuthority,
-): readonly GatewayEffectGroup[] {
+): readonly ProviderEffectGroup[] {
   const groups = new Map<string, { request: ApplySyncEffectsRequest; items: ClaimedEffect[] }>();
   for (const item of items) {
-    const effect = item.gatewayEffect;
+    const effect = item.providerEffect;
     if (!isPresent(effect)) continue;
-    const key = gatewayRouteKey(effect.value);
+    const key = routeKey(effect.value);
     const existing = lookupResult(groups.get(key));
     if (existing.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       groups.set(key, {
         request: {
           physicalSheetId: effect.value.physicalSheetId,
-          ...(authority === undefined ? {} : { authority }),
           sheetName: effect.value.payload.sheetName,
           registeredRange: effect.value.payload.registeredRange,
           projection: effect.value.projection,
           schemaVersion: effect.value.payload.schemaVersion,
-          postconditionMode: SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED,
+          postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
           effects: [effect.value],
         },
         items: [item],
@@ -102,7 +99,7 @@ export function groupByGatewayRequest(
     } else {
       existing.value.request = {
         ...existing.value.request,
-        postconditionMode: SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED,
+        postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
         effects: [...existing.value.request.effects, effect.value],
       };
       existing.value.items.push(item);
@@ -112,21 +109,20 @@ export function groupByGatewayRequest(
 }
 
 /** One append-only route paired with the claimed effects it represents. */
-export interface FastAppendGatewayGroup {
+export interface FastAppendProviderGroup {
   readonly request: FastAppendRowsRequest;
   readonly items: readonly ClaimedEffect[];
 }
 
-/** Groups append-only effects into one fast gateway request per route. */
+/** Groups append-only effects into one fast provider request per route. */
 export function groupByFastAppendRequest(
   items: readonly ClaimedEffect[],
-  authority?: SyncGatewayAuthority,
-): readonly FastAppendGatewayGroup[] {
+): readonly FastAppendProviderGroup[] {
   const groups = new Map<string, { request: FastAppendRowsRequest; items: ClaimedEffect[] }>();
   for (const item of items) {
-    const effect = item.gatewayEffect;
+    const effect = item.providerEffect;
     if (!isPresent(effect)) continue;
-    const key = gatewayRouteKey(effect.value);
+    const key = routeKey(effect.value);
     const row = {
       effectId: effect.value.effectId,
       payloadHash: effect.value.payloadHash,
@@ -138,7 +134,6 @@ export function groupByFastAppendRequest(
       groups.set(key, {
         request: {
           physicalSheetId: effect.value.physicalSheetId,
-          ...(authority === undefined ? {} : { authority }),
           sheetName: effect.value.payload.sheetName,
           registeredRange: effect.value.payload.registeredRange,
           projection: effect.value.projection,
@@ -160,10 +155,10 @@ export function groupByFastAppendRequest(
 
 /** Splits append groups using the same adaptive route limit as regular effects. */
 export function chunkFastAppendGroups(
-  groups: readonly FastAppendGatewayGroup[],
-  limit: number | ((group: FastAppendGatewayGroup) => number),
-): readonly FastAppendGatewayGroup[] {
-  const chunked: FastAppendGatewayGroup[] = [];
+  groups: readonly FastAppendProviderGroup[],
+  limit: number | ((group: FastAppendProviderGroup) => number),
+): readonly FastAppendProviderGroup[] {
+  const chunked: FastAppendProviderGroup[] = [];
   for (const group of groups) {
     const groupLimit = typeof limit === "function" ? limit(group) : limit;
     requireBatchLimit(groupLimit);
@@ -186,9 +181,8 @@ export function chunkFastAppendGroups(
 }
 
 /** Groups postcondition reads so each group performs one remote Sheet scan. */
-export function groupByGatewayPostconditionRequest(
+export function groupByPostconditionRequest(
   items: readonly ClaimedEffect[],
-  authority?: SyncGatewayAuthority,
 ): readonly {
   readonly request: ReadSyncEffectPostconditionsRequest;
   readonly items: readonly ClaimedEffect[];
@@ -198,15 +192,14 @@ export function groupByGatewayPostconditionRequest(
     items: ClaimedEffect[];
   }>();
   for (const item of items) {
-    const effect = item.gatewayEffect;
+    const effect = item.providerEffect;
     if (!isPresent(effect)) continue;
-    const key = gatewayRouteKey(effect.value);
+    const key = routeKey(effect.value);
     const existing = lookupResult(groups.get(key));
     if (existing.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
       groups.set(key, {
         request: {
           physicalSheetId: effect.value.physicalSheetId,
-          ...(authority === undefined ? {} : { authority }),
           sheetName: effect.value.payload.sheetName,
           registeredRange: effect.value.payload.registeredRange,
           projection: effect.value.projection,
@@ -226,9 +219,9 @@ export function groupByGatewayPostconditionRequest(
   return [...groups.values()];
 }
 
-/** Builds the stable grouping key shared by all gateway operations on one route. */
-export function gatewayRouteKey(
-  route: SyncGatewayEffect | ApplySyncEffectsRequest | FastAppendRowsRequest,
+/** Builds the stable grouping key shared by all provider operations on one route. */
+export function routeKey(
+  route: SyncProjectionEffect | ApplySyncEffectsRequest | FastAppendRowsRequest,
 ): string {
   const sheetName = "payload" in route ? route.payload.sheetName : route.sheetName;
   const registeredRange = "payload" in route ? route.payload.registeredRange : route.registeredRange;
@@ -238,14 +231,16 @@ export function gatewayRouteKey(
 
 function requireBatchLimit(value: number): void {
   if (!Number.isSafeInteger(value) || value < POSITIVE_SAFE_INTEGER_MINIMUM) {
-    throwWorkerError("gateway effect batch limit must be a positive safe integer");
+    throwWorkerError("provider effect batch limit must be a positive safe integer");
   }
 }
 
 /**
- * Splits each physical-route group into sub-batches no larger than the Apps
- * Script bounded effect batch so one `applyEffects` call returns a complete
- * result set instead of a `hasMore` partial prefix.
+ * Splits each physical-route group into sub-batches no larger than the
+ * provider's bounded effect batch (`EFFECT_BATCH_LIMIT` in the worker
+ * constants, matching `MAX_EFFECTS_PER_REQUEST` in the Google Sheets API
+ * provider constants) so one `applyEffects` call returns a complete result
+ * set instead of a `hasMore` partial prefix.
  *
  * The physical-route grouping and the per-target predecessor ordering of the
  * supplied items are preserved: every effect stays on its original route, and
@@ -254,12 +249,12 @@ function requireBatchLimit(value: number): void {
  * earliest non-applied effect per target ready), so sub-batching never
  * reorders effects that depend on one another.
  */
-export function chunkGatewayEffectGroups(
-  groups: readonly GatewayEffectGroup[],
-  limit: number | ((group: GatewayEffectGroup) => number) = GATEWAY_EFFECT_BATCH_LIMIT,
-): readonly GatewayEffectGroup[] {
+export function chunkProviderEffectGroups(
+  groups: readonly ProviderEffectGroup[],
+  limit: number | ((group: ProviderEffectGroup) => number) = EFFECT_BATCH_LIMIT,
+): readonly ProviderEffectGroup[] {
   if (groups.length === 0) return groups;
-  const chunked: GatewayEffectGroup[] = [];
+  const chunked: ProviderEffectGroup[] = [];
   for (const group of groups) {
     const groupLimit = typeof limit === "function" ? limit(group) : limit;
     requireBatchLimit(groupLimit);
@@ -280,32 +275,31 @@ function sliceApplyEffectsRequest(
   request: ApplySyncEffectsRequest,
   items: readonly ClaimedEffect[],
 ): ApplySyncEffectsRequest {
-  const effects: SyncGatewayEffect[] = [];
+  const effects: SyncProjectionEffect[] = [];
   for (const item of items) {
-    if (!isPresent(item.gatewayEffect)) {
-      throwWorkerError("gateway effect batch item is missing its gateway effect");
+    if (!isPresent(item.providerEffect)) {
+      throwWorkerError("provider effect batch item is missing its provider effect");
     }
-    effects.push(item.gatewayEffect.value);
+    effects.push(item.providerEffect.value);
   }
   return {
     physicalSheetId: request.physicalSheetId,
-    ...(request.authority === undefined ? {} : { authority: request.authority }),
     sheetName: request.sheetName,
     registeredRange: request.registeredRange,
     projection: request.projection,
     schemaVersion: request.schemaVersion,
-    postconditionMode: request.postconditionMode ?? SYNC_GATEWAY_POSTCONDITION_MODES.DEFERRED,
+    postconditionMode: request.postconditionMode ?? SYNC_POSTCONDITION_MODES.DEFERRED,
     effects,
   };
 }
 
-/** One physical route's effects paired with their gateway request. */
-export interface GatewayEffectGroup {
+/** One physical route's effects paired with their provider request. */
+export interface ProviderEffectGroup {
   readonly request: ApplySyncEffectsRequest;
   readonly items: readonly ClaimedEffect[];
 }
 
-export function isSyncEffectKind(value: string): value is SyncGatewayEffect["effectKind"] {
+export function isSyncEffectKind(value: string): value is SyncProjectionEffect["effectKind"] {
   return value === SYNC_EFFECT_KINDS.SYSTEM_PROJECTION ||
     value === SYNC_EFFECT_KINDS.CANDIDATE_RECONCILE ||
     value === SYNC_EFFECT_KINDS.SYSTEM_REPAIR ||
@@ -314,30 +308,30 @@ export function isSyncEffectKind(value: string): value is SyncGatewayEffect["eff
     value === SYNC_EFFECT_KINDS.USER_INPUT_DELETE;
 }
 
-export function isCandidateProtectingUserInputEffect(effect: SyncGatewayEffect): boolean {
+export function isCandidateProtectingUserInputEffect(effect: SyncProjectionEffect): boolean {
   return effect.effectKind === SYNC_EFFECT_KINDS.CANDIDATE_RECONCILE ||
     effect.effectKind === SYNC_EFFECT_KINDS.USER_INPUT_DELETE;
 }
 
 /** Selects only new System_State entity rows for the append-only fast path. */
 export function isFastAppendCandidate(item: ClaimedEffect): boolean {
-  if (!isPresent(item.gatewayEffect)) return false;
-  return isFastAppendEffect(item.gatewayEffect.value);
+  if (!isPresent(item.providerEffect)) return false;
+  return isFastAppendEffect(item.providerEffect.value);
 }
 
-/** Classifies one converted gateway effect as an append-only fast candidate. */
-export function isFastAppendEffect(effect: SyncGatewayEffect): boolean {
+/** Classifies one converted provider effect as an append-only fast candidate. */
+export function isFastAppendEffect(effect: SyncProjectionEffect): boolean {
   const emptyVisibleBaseline = effect.payload.createIfMissing &&
     effect.expectedVisibleRevision === NON_NEGATIVE_SAFE_INTEGER_MINIMUM &&
     effect.expectedVisibleHash === "";
   if (!emptyVisibleBaseline) return false;
   return (
     effect.effectKind === SYNC_EFFECT_KINDS.SYSTEM_PROJECTION &&
-      effect.projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE &&
+      effect.projection === SYNC_PROJECTIONS.SYSTEM_STATE &&
       effect.targetKind === EFFECT_TARGET_KINDS.ENTITY
   ) || (
     effect.effectKind === SYNC_EFFECT_KINDS.RESOLUTION_PROJECTION &&
-      effect.projection === SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS &&
+      effect.projection === SYNC_PROJECTIONS.SYNC_CONFLICTS &&
       effect.targetKind === EFFECT_TARGET_KINDS.CONFLICT
   );
 }
@@ -355,16 +349,16 @@ export function isFastAppendPendingEffect(pending: PendingEffect): boolean {
     return false;
   }
   try {
-    return isFastAppendEffect(toGatewayEffect(pending));
+    return isFastAppendEffect(toProviderEffect(pending));
   } catch {
     return false;
   }
 }
 
 export function isSyncProjection(value: string): value is SyncProjection {
-  return value === SYNC_GATEWAY_PROJECTIONS.USER_INPUT ||
-    value === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE ||
-    value === SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS;
+  return value === SYNC_PROJECTIONS.USER_INPUT ||
+    value === SYNC_PROJECTIONS.SYSTEM_STATE ||
+    value === SYNC_PROJECTIONS.SYNC_CONFLICTS;
 }
 
 export function isEffectTargetKind(value: string): value is EffectTargetKind {

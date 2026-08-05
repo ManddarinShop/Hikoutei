@@ -1,13 +1,13 @@
 /**
  * Provider constants for the direct Google Sheets API outbound worker.
  *
- * The direct provider mirrors the Apps Script gateway's durable contracts:
+ * The direct provider mirrors the Apps Script provider's durable contracts:
  * the same hidden receipt tab name and headers, the same developer-metadata
  * anchor key, the same canonical date serial/number-format semantics, and the
  * same bounded effect batches. Keeping these constants next to the provider
  * (rather than importing the Apps Script operation sources) makes the direct
  * path self-contained while staying wire-compatible with a spreadsheet that
- * an Apps Script gateway already wrote to.
+ * an Apps Script provider already wrote to.
  */
 
 /** Spreadsheets scope requested through Application Default Credentials. */

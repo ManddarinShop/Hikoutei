@@ -26,7 +26,7 @@ import type {
   ObservationReceiptState,
 } from "./observationConstants.js";
 
-/** One append-only occurrence captured by a gateway or polling adapter. */
+/** One append-only occurrence captured by a provider or polling adapter. */
 export interface ObservationAttemptInput {
   readonly observationId: string;
   readonly observationKey: string;
@@ -35,7 +35,7 @@ export interface ObservationAttemptInput {
   readonly detectedAt: number;
   readonly receivedAt: number;
   readonly ingressActorId: string;
-  /** Editor identity is absent when the gateway cannot verify one. */
+  /** Editor identity is absent when the provider cannot verify one. */
   readonly editorActorId: Presence<string>;
   readonly editorActorSource: EditorActorSource;
 }
@@ -77,7 +77,7 @@ export interface ObservedProjectionBaseline {
 export interface ObservedProjectionEvidence {
   /** Remote row revision, or the next monotonic local revision when unavailable. */
   readonly visibleRevision: number;
-  /** Stable hash of the complete visible row returned by the gateway. */
+  /** Stable hash of the complete visible row returned by the provider. */
   readonly visibleHash: string;
   /** Legacy callers omit this and retain the original monotonic behavior. */
   readonly source?: ObservedProjectionEvidenceSource;

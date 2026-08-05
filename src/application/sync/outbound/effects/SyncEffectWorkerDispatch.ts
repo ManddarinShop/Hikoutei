@@ -4,9 +4,8 @@ import type { FencingContext } from "../../../../infrastructure/storage/sync/sha
 import { LOOKUP_RESULT_KINDS, presentValue } from "../../../../shared/state/index.js";
 import type {
   FastAppendRowsRequest,
-  SyncEffectWorkerFullGateway,
-  SyncEffectWorkerGateway,
-} from "../../gateway/syncGateway.js";
+  SyncEffectWorkerProvider,
+} from "../../sheets/syncSheets.js";
 import {
   SYNC_TIMING_OPERATION_KINDS,
   SYNC_TIMING_SCOPES,
@@ -22,15 +21,15 @@ import {
   recoverUnknownResults,
 } from "./SyncEffectWorkerTransitions.js";
 import {
-  emitGatewayTiming,
+  emitProviderTiming,
   emitWorkerTiming,
 } from "./SyncEffectWorkerTiming.js";
-import { gatewayRouteKey } from "./SyncEffectWorkerRouting.js";
+import { routeKey } from "./SyncEffectWorkerRouting.js";
 import {
   classifyTransportOutcome,
   TRANSPORT_OUTCOME_KINDS,
   type TransportOutcome,
-} from "../../gateway/transportClassification.js";
+} from "../../sheets/transportOutcome.js";
 import type {
   ClaimedEffect,
   EffectWorkerStorage,
@@ -38,8 +37,8 @@ import type {
   SyncEffectWorkerBaseOptions,
 } from "./SyncEffectWorker.js";
 
-/** Fails regular effects explicitly when the configured gateway is fast-only. */
-export async function rejectUnsupportedGatewayEffects(
+/** Fails regular effects explicitly when the configured provider is fast-only. */
+export async function rejectUnsupportedProviderEffects(
   storage: EffectWorkerStorage,
   fence: FencingContext,
   items: readonly ClaimedEffect[],
@@ -52,11 +51,11 @@ export async function rejectUnsupportedGatewayEffects(
         fence,
         [item],
         report,
-        "The configured gateway cannot probe an uncertain delivery yet.",
+        "The configured provider cannot probe an uncertain delivery yet.",
       );
       continue;
     }
-    if (!isPresent(item.gatewayEffect)) {
+    if (!isPresent(item.providerEffect)) {
       await completeFailure(
         storage,
         fence,
@@ -71,9 +70,9 @@ export async function rejectUnsupportedGatewayEffects(
       storage,
       fence,
       item,
-      WORKER_ERROR_CODES.GATEWAY_CAPABILITY_MISSING,
+      WORKER_ERROR_CODES.PROVIDER_CAPABILITY_MISSING,
       presentValue(
-        "The configured gateway supports fast append only; regular effect dispatch or recovery is unavailable.",
+        "The configured provider supports fast append only; regular effect dispatch or recovery is unavailable.",
       ),
       report,
     );
@@ -85,17 +84,17 @@ export async function rejectUnsupportedGatewayEffects(
  *
  * A thrown batch-level dispatch error is not per-effect rejection evidence for
  * an uncertain transport. Explicit structured remote failures are different:
- * the Gateway has returned a verified rejection, so they close the effects in
+ * the provider has returned a verified rejection, so they close the effects in
  * the terminal failure path rather than entering recovery.
  */
-export async function handleGatewayDispatchError(
+export async function handleProviderDispatchError(
   options: SyncEffectWorkerBaseOptions,
   storage: EffectWorkerStorage,
   fence: FencingContext,
   items: readonly ClaimedEffect[],
   report: MutableReport,
   outcome: TransportOutcome,
-  fullGateway?: SyncEffectWorkerFullGateway,
+  fullProvider?: SyncEffectWorkerProvider,
   beforeRecovery?: () => Promise<boolean>,
   onUncertainWithoutRecovery?: () => Promise<void>,
 ): Promise<void> {
@@ -105,14 +104,14 @@ export async function handleGatewayDispatchError(
         storage,
         fence,
         item,
-        WORKER_ERROR_CODES.GATEWAY_REMOTE_ERROR,
+        WORKER_ERROR_CODES.PROVIDER_REMOTE_ERROR,
         presentValue(outcome.message),
         report,
       );
     }
     return;
   }
-  if (fullGateway === undefined) {
+  if (fullProvider === undefined) {
     if (onUncertainWithoutRecovery !== undefined) {
       await onUncertainWithoutRecovery();
       return;
@@ -122,7 +121,7 @@ export async function handleGatewayDispatchError(
   }
   if (beforeRecovery === undefined || await beforeRecovery()) {
     await recoverUnknownResults(
-      { ...options, gateway: fullGateway },
+      { ...options, provider: fullProvider },
       storage,
       fence,
       items,
@@ -132,11 +131,11 @@ export async function handleGatewayDispatchError(
 }
 
 /**
- * Dispatches append-only rows through the idempotent Gateway batch operation.
- * A lost response is still returned to recovery; the Gateway receipt batch lets
+ * Dispatches append-only rows through the idempotent provider batch operation.
+ * A lost response is still returned to recovery; the provider receipt batch lets
  * the next attempt classify an already committed write without appending again.
  *
- * When the Apps Script runtime configured the append throttle, the request
+ * When the full provider runtime configured the append throttle, the request
  * waits only the time remaining since the previous append request started;
  * regular applyEffects dispatch never waits on this throttle.
  */
@@ -149,7 +148,7 @@ export async function dispatchFastAppendGroup(
     readonly items: readonly ClaimedEffect[];
   },
   report: MutableReport,
-  fullGateway?: SyncEffectWorkerFullGateway,
+  fullProvider?: SyncEffectWorkerProvider,
   beforeRecovery?: () => Promise<boolean>,
 ): Promise<void> {
   const throttleStartedAt = Date.now();
@@ -163,66 +162,66 @@ export async function dispatchFastAppendGroup(
       operationCounts: { append: group.items.length, update: 0, delete: 0 },
     });
   }
-  let response: Awaited<ReturnType<SyncEffectWorkerGateway["fastAppendRows"]>>;
-  const gatewayStartedAt = Date.now();
-  options.batchController?.beginAppendDispatch(gatewayStartedAt);
-  const routeKey = gatewayRouteKey(group.request);
-  const batchLimit = options.batchController?.beginDispatch(routeKey, gatewayStartedAt) ?? group.items.length;
+  let response: Awaited<ReturnType<SyncEffectWorkerProvider["fastAppendRows"]>>;
+  const providerStartedAt = Date.now();
+  options.batchController?.beginAppendDispatch(providerStartedAt);
+  const requestRouteKey = routeKey(group.request);
+  const batchLimit = options.batchController?.beginDispatch(requestRouteKey, providerStartedAt) ?? group.items.length;
   try {
-    response = await options.gateway.fastAppendRows(group.request);
+    response = await options.provider.fastAppendRows(group.request);
   } catch (error: unknown) {
     const outcome = classifyTransportOutcome(error);
-    options.batchController?.observe(routeKey, {
-      durationMs: Date.now() - gatewayStartedAt,
+    options.batchController?.observe(requestRouteKey, {
+      durationMs: Date.now() - providerStartedAt,
       responseSucceeded: false,
       responseLoss: outcome.kind === TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN,
     });
-    const failedDurationMs = Date.now() - gatewayStartedAt;
+    const failedDurationMs = Date.now() - providerStartedAt;
     emitWorkerTiming(options, {
       scope: SYNC_TIMING_SCOPES.WORKER,
-      phase: "append_gateway_dispatch",
+      phase: "append_provider_dispatch",
       durationMs: failedDurationMs,
       operationKinds: [SYNC_TIMING_OPERATION_KINDS.APPEND],
       operationCounts: { append: group.items.length, update: 0, delete: 0 },
-      routeKey,
+      routeKey: requestRouteKey,
       batchLimit,
       responseSucceeded: false,
     });
     const resultFence = {
       ...fence,
-      now: options.clock?.() ?? fence.now + Math.max(0, Date.now() - gatewayStartedAt),
+      now: options.clock?.() ?? fence.now + Math.max(0, Date.now() - providerStartedAt),
     };
-    await handleGatewayDispatchError(
+    await handleProviderDispatchError(
       options,
       storage,
       resultFence,
       group.items,
       report,
       outcome,
-      fullGateway,
+      fullProvider,
       beforeRecovery,
       () => markFastAppendUncertain(storage, resultFence, group.items, report, outcome.message),
     );
     return;
   }
-  const durationMs = Date.now() - gatewayStartedAt;
+  const durationMs = Date.now() - providerStartedAt;
   const resultFence = {
     ...fence,
-    now: options.clock?.() ?? fence.now + Math.max(0, Date.now() - gatewayStartedAt),
+    now: options.clock?.() ?? fence.now + Math.max(0, Date.now() - providerStartedAt),
   };
-  options.batchController?.observe(routeKey, {
+  options.batchController?.observe(requestRouteKey, {
     durationMs,
     responseSucceeded: response.results.length === group.items.length && !response.hasMore,
     responseLoss: response.results.length !== group.items.length || response.hasMore,
   });
-  emitGatewayTiming(options, response.timing);
+  emitProviderTiming(options, response.timing);
   emitWorkerTiming(options, {
     scope: SYNC_TIMING_SCOPES.WORKER,
-    phase: "append_gateway_dispatch",
+    phase: "append_provider_dispatch",
     durationMs,
     operationKinds: [SYNC_TIMING_OPERATION_KINDS.APPEND],
     operationCounts: { append: group.items.length, update: 0, delete: 0 },
-    routeKey,
+    routeKey: requestRouteKey,
     batchLimit,
     responseSucceeded: response.results.length === group.items.length && !response.hasMore,
   });
@@ -250,7 +249,7 @@ export async function dispatchFastAppendGroup(
       await requeueFastAppendItems(storage, resultFence, [item], report);
       continue;
     }
-    if (!isPresent(item.gatewayEffect)) {
+    if (!isPresent(item.providerEffect)) {
       await requeueFastAppendItems(storage, resultFence, [item], report);
       continue;
     }
@@ -275,9 +274,9 @@ export async function dispatchFastAppendGroup(
       ...resultFence,
       now: options.clock?.() ?? resultFence.now,
     };
-    if (fullGateway !== undefined && (beforeRecovery === undefined || await beforeRecovery())) {
+    if (fullProvider !== undefined && (beforeRecovery === undefined || await beforeRecovery())) {
       await recoverUnknownResults(
-        { ...options, gateway: fullGateway },
+        { ...options, provider: fullProvider },
         storage,
         recoveryFence,
         recoveryItems,
@@ -303,7 +302,7 @@ export async function dispatchFastAppendGroup(
 }
 
 function hasReceiptBackedVisibleEvidence(
-  result: Awaited<ReturnType<SyncEffectWorkerGateway["fastAppendRows"]>>["results"][number],
+  result: Awaited<ReturnType<SyncEffectWorkerProvider["fastAppendRows"]>>["results"][number],
 ): result is typeof result & { readonly visibleRevision: number; readonly visibleHash: string } {
   return typeof result.visibleRevision === "number" &&
     Number.isSafeInteger(result.visibleRevision) &&
@@ -354,7 +353,7 @@ export async function requeueFastAppendItems(
       ...fence,
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
-      lastErrorCode: WORKER_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+      lastErrorCode: WORKER_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
       lastErrorMessage: "Fast append response was not observed; the row will be retried and reconciled later.",
     })) {
       report.deferred += 1;

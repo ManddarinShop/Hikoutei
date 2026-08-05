@@ -2,7 +2,7 @@
  * Fenced outbox worker for projection effects.
  *
  * It owns only claim/result transitions.  Canonical state and any repair
- * replan payload are supplied by the writer boundary; the gateway is never
+ * replan payload are supplied by the writer boundary; the provider is never
  * allowed to choose a winner or silently retry a response-lost write.
  */
 
@@ -49,19 +49,18 @@ import {
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import type {
   SyncEffectPostcondition,
-  SyncGatewayEffect,
-  SyncGatewayEffectResult,
-  SyncEffectWorkerGateway,
-  SyncEffectWorkerFullGateway,
-} from "../../gateway/syncGateway.js";
+  SyncProjectionEffect,
+  SyncEffectResult,
+  SyncEffectWorkerProvider,
+} from "../../sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../gateway/constants.js";
+  SYNC_EFFECT_RESULT_STATUSES,
+  SYNC_PROJECTIONS,
+} from "../../sheets/constants.js";
 import {
   classifyTransportOutcome,
   TRANSPORT_OUTCOME_KINDS,
-} from "../../gateway/transportClassification.js";
+} from "../../sheets/transportOutcome.js";
 import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
 import {
   SYNC_TIMING_SCOPES,
@@ -70,9 +69,9 @@ import {
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WORKER_ROLE,
-  EFFECT_LEASE_GATEWAY_HEADROOM_MS,
+  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
   DEFAULT_WRITER_LEASE_DURATION_MS,
-  GATEWAY_EFFECT_BATCH_LIMIT,
+  EFFECT_BATCH_LIMIT,
   MAX_IN_FLIGHT_EFFECTS,
   OUTBOX_EFFECT_STATUSES,
   WORKER_ERROR_CODES,
@@ -88,7 +87,7 @@ import {
   countsForItems,
   countsForPendingEffects,
   emptyOperationCounts,
-  emitGatewayTiming,
+  emitProviderTiming,
   emitWorkerTiming,
   operationKindsForItems,
   operationKindsForPendingEffects,
@@ -96,33 +95,33 @@ import {
 } from "./SyncEffectWorkerTiming.js";
 import {
   completeFailure,
-  completeGatewayResult,
+  completeProviderResult,
   recoverUnknownResults,
 } from "./SyncEffectWorkerTransitions.js";
 import {
   dispatchFastAppendGroup,
-  handleGatewayDispatchError,
-  rejectUnsupportedGatewayEffects,
+  handleProviderDispatchError,
+  rejectUnsupportedProviderEffects,
 } from "./SyncEffectWorkerDispatch.js";
 import {
   fenceFromLease,
   groupByFastAppendRequest,
-  groupByGatewayRequest,
+  groupByProviderRequest,
   chunkFastAppendGroups,
-  chunkGatewayEffectGroups,
-  gatewayRouteKey,
+  chunkProviderEffectGroups,
+  routeKey,
   isCandidateProtectingUserInputEffect,
   isFastAppendCandidate,
   isFastAppendPendingEffect,
-  isSuccessfulGatewayPostcondition,
-  toGatewayEffect,
+  isSuccessfulPostcondition,
+  toProviderEffect,
 } from "./SyncEffectWorkerRouting.js";
 import type { AdaptiveEffectBatchController } from "./AdaptiveEffectBatchController.js";
 
 /** An effect plus evidence supplied to a writer-owned system-repair replanner. */
 export interface RepairReplanRequest {
   readonly effect: PendingEffect;
-  readonly gatewayResult: Presence<SyncGatewayEffectResult>;
+  readonly providerResult: Presence<SyncEffectResult>;
   readonly postcondition: Presence<SyncEffectPostcondition>;
 }
 
@@ -131,7 +130,7 @@ export type RepairReplanFactory = (request: RepairReplanRequest) => Presence<New
 
 /** Shared construction options for a bounded effect-worker pass. */
 export interface SyncEffectWorkerBaseOptions {
-  readonly gateway: SyncEffectWorkerGateway;
+  readonly provider: SyncEffectWorkerProvider;
   readonly workerId: string;
   readonly now: number;
   readonly maxEffects: number;
@@ -139,31 +138,31 @@ export interface SyncEffectWorkerBaseOptions {
   readonly writerLeaseDurationMs?: number;
   readonly effectLeaseDurationMs?: number;
   /** Internal transport timeout used to validate lease headroom. */
-  readonly gatewayTimeoutMs?: number;
+  readonly requestTimeoutMs?: number;
   readonly batchController?: AdaptiveEffectBatchController;
   /**
-   * Internal bulk-append claim window for the real Apps Script runtime. When
+   * Internal bulk-append claim window for the real provider runtime. When
    * set, a pass claims up to this many append candidates through a dedicated
    * ready fast-append selection (so a regular/recovery backlog ahead of them
    * cannot starve appends), and keeps the regular/recovery claim window at
-   * the bounded 20-effect limit. Direct workers and fake gateways omit it
+   * the bounded 20-effect limit. Direct workers and fake providers omit it
    * and keep the 20-item window.
    */
   readonly maxFastAppendCandidates?: number;
   /**
    * Internal minimum interval between fast-append request starts. Only the
-   * Apps Script runtime sets it; the batch controller owns the actual wait.
+   * full provider runtime sets it; the batch controller owns the actual wait.
    */
   readonly appendDispatchIntervalMs?: number;
   /** Shared supervisor clock used to refresh fencing timestamps after remote I/O. */
   readonly clock?: () => number;
   readonly makeRepairReplan?: RepairReplanFactory;
-  /** Optional diagnostics sink for worker and gateway phases. */
+  /** Optional diagnostics sink for worker and provider phases. */
   readonly onTiming?: SyncTimingSink;
 }
 
-export type SyncEffectWorkerFullOptions = Omit<SyncEffectWorkerBaseOptions, "gateway"> & {
-  readonly gateway: SyncEffectWorkerFullGateway;
+export type SyncEffectWorkerFullOptions = Omit<SyncEffectWorkerBaseOptions, "provider"> & {
+  readonly provider: SyncEffectWorkerProvider;
 };
 
 /** Construction options for a worker running through an async storage adapter. */
@@ -191,7 +190,7 @@ export interface SyncEffectWorkerReport {
 export interface ClaimedEffect {
   readonly pending: PendingEffect;
   readonly claimToken: string;
-  readonly gatewayEffect: Presence<SyncGatewayEffect>;
+  readonly providerEffect: Presence<SyncProjectionEffect>;
   readonly invalidPayloadError: Presence<string>;
 }
 
@@ -349,7 +348,7 @@ async function runEffectWorker(
         ...currentFence(),
         effectId: item.pending.effect_id,
         claimToken: item.claimToken,
-        lastErrorCode: WORKER_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+        lastErrorCode: WORKER_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
         lastErrorMessage: "Effect lease could not be renewed before remote dispatch.",
       })) {
         report.requeued += 1;
@@ -371,8 +370,8 @@ async function runEffectWorker(
   }
   const selectStartedAt = Date.now();
   report.expiredLeasesRecovered = await storage.recoverExpiredLeases(currentFence());
-  // The bulk Apps Script runtime selects ready append candidates through
-  // their own bounded query and keeps the regular/recovery selection on the
+  // The bulk provider runtime selects ready append candidates through their
+  // own bounded query and keeps the regular/recovery selection on the
   // head-of-line window; every other runtime keeps maxEffects as the SQLite
   // selection upper bound. Only the bounded in-flight window is ever leased
   // before the first remote dispatch; remaining rows stay durable and are
@@ -435,16 +434,16 @@ async function runEffectWorker(
     });
     if (claim.status !== "claimed") continue;
     report.claimed += 1;
-    let gatewayEffect: Presence<SyncGatewayEffect>;
+    let providerEffect: Presence<SyncProjectionEffect>;
     let invalidPayloadError: Presence<string>;
     try {
-      gatewayEffect = presentValue(toGatewayEffect(pending));
+      providerEffect = presentValue(toProviderEffect(pending));
       invalidPayloadError = absentValue();
     } catch (error: unknown) {
-      gatewayEffect = absentValue();
+      providerEffect = absentValue();
       invalidPayloadError = presentValue(safeErrorMessage(error));
     }
-    const item = { pending, claimToken, gatewayEffect, invalidPayloadError };
+    const item = { pending, claimToken, providerEffect, invalidPayloadError };
     if (
       pending.status === OUTBOX_EFFECT_STATUSES.FAILED ||
       pending.status === OUTBOX_EFFECT_STATUSES.DELIVERY_UNCERTAIN
@@ -462,11 +461,11 @@ async function runEffectWorker(
     operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
   });
 
-  const fullGateway = isFullEffectGateway(options.gateway)
-    ? options.gateway
+  const fullProvider = isFullEffectProvider(options.provider)
+    ? options.provider
     : undefined;
-  if (fullGateway === undefined) {
-    await rejectUnsupportedGatewayEffects(
+  if (fullProvider === undefined) {
+    await rejectUnsupportedProviderEffects(
       storage,
       currentFence(),
       recoveryCandidates,
@@ -474,7 +473,7 @@ async function runEffectWorker(
     );
   } else if (await refreshDispatchLeases(recoveryCandidates)) {
     await recoverUnknownResults(
-      { ...options, gateway: fullGateway },
+      { ...options, provider: fullProvider },
       storage,
       currentFence(),
       recoveryCandidates,
@@ -482,8 +481,8 @@ async function runEffectWorker(
     );
   }
 
-  const usable = claimed.filter((item) => isPresent(item.gatewayEffect));
-  for (const invalid of claimed.filter((item) => isAbsent(item.gatewayEffect))) {
+  const usable = claimed.filter((item) => isPresent(item.providerEffect));
+  for (const invalid of claimed.filter((item) => isAbsent(item.providerEffect))) {
     await completeFailure(
       storage,
       currentFence(),
@@ -528,16 +527,13 @@ async function runEffectWorker(
   const regularItems = dispatchable.filter((item) => !isFastAppendCandidate(item));
 
   const fastAppendGroups = chunkFastAppendGroups(
-    groupByFastAppendRequest(fastAppendItems, {
-      epoch: currentFence().writerEpoch,
-      token: currentFence().fencingToken,
-    }),
-    // The bulk Apps Script runtime sends one append request per route at the
+    groupByFastAppendRequest(fastAppendItems),
+    // The bulk provider runtime sends one append request per route at the
     // bulk claim window; every other runtime keeps the adaptive/bounded
     // per-request chunking.
     (group) => options.maxFastAppendCandidates
-      ?? options.batchController?.limitFor(gatewayRouteKey(group.request))
-      ?? GATEWAY_EFFECT_BATCH_LIMIT,
+      ?? options.batchController?.limitFor(routeKey(group.request))
+      ?? EFFECT_BATCH_LIMIT,
   );
   for (const group of fastAppendGroups) {
     if (!(await refreshDispatchLeases(group.items))) continue;
@@ -547,85 +543,82 @@ async function runEffectWorker(
       currentFence(),
       group,
       report,
-      fullGateway,
+      fullProvider,
       () => refreshDispatchLeases(group.items),
     );
   }
 
-  if (fullGateway === undefined) {
-    await rejectUnsupportedGatewayEffects(storage, currentFence(), regularItems, report);
+  if (fullProvider === undefined) {
+    await rejectUnsupportedProviderEffects(storage, currentFence(), regularItems, report);
   } else {
-    // Chunk each physical route to the Apps Script bounded effect batch so one
+    // Chunk each physical route to the provider's bounded effect batch so one
     // applyEffects call returns a complete result set. An oversized configured
     // worker limit (maxEffects) would otherwise send more effects than the
-    // gateway acknowledges per call, producing hasMore partial prefixes and the
+    // provider acknowledges per call, producing hasMore partial prefixes and the
     // deferred/requeue churn they cause on every pass.
-    const regularGroups = chunkGatewayEffectGroups(
-      groupByGatewayRequest(regularItems, {
-        epoch: currentFence().writerEpoch,
-        token: currentFence().fencingToken,
-      }),
-      (group) => options.batchController?.limitFor(gatewayRouteKey(group.request)) ?? GATEWAY_EFFECT_BATCH_LIMIT,
+    const regularGroups = chunkProviderEffectGroups(
+      groupByProviderRequest(regularItems),
+      (group) => options.batchController?.limitFor(routeKey(group.request)) ?? EFFECT_BATCH_LIMIT,
     );
     for (const group of regularGroups) {
       if (!(await refreshDispatchLeases(group.items))) continue;
       const deferredEffectIds = new Set<string>();
-      let response: Awaited<ReturnType<SyncEffectWorkerFullGateway["applyEffects"]>>;
+      let response: Awaited<ReturnType<SyncEffectWorkerProvider["applyEffects"]>>;
       const regularOperationCounts = countsForItems(group.items);
       const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
-      const gatewayStartedAt = Date.now();
-      const routeKey = gatewayRouteKey(group.request);
-      const batchLimit = options.batchController?.beginDispatch(routeKey, gatewayStartedAt) ?? GATEWAY_EFFECT_BATCH_LIMIT;
+      const providerStartedAt = Date.now();
+      const requestRouteKey = routeKey(group.request);
+      const batchLimit = options.batchController?.beginDispatch(requestRouteKey, providerStartedAt) ?? EFFECT_BATCH_LIMIT;
       try {
-        response = await fullGateway.applyEffects(group.request);
+        response = await fullProvider.applyEffects(group.request);
       } catch (error: unknown) {
         const outcome = classifyTransportOutcome(error);
-        options.batchController?.observe(routeKey, {
-          durationMs: Date.now() - gatewayStartedAt,
+        options.batchController?.observe(requestRouteKey, {
+          durationMs: Date.now() - providerStartedAt,
           responseSucceeded: false,
           responseLoss: outcome.kind === TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN,
         });
-        const failedDurationMs = Date.now() - gatewayStartedAt;
+        const failedDurationMs = Date.now() - providerStartedAt;
         emitWorkerTiming(options, {
           scope: SYNC_TIMING_SCOPES.WORKER,
-          phase: "regular_gateway_dispatch",
+          phase: "regular_provider_dispatch",
           durationMs: failedDurationMs,
           operationKinds: regularOperationKinds,
           operationCounts: regularOperationCounts,
-          routeKey,
+          routeKey: requestRouteKey,
           batchLimit,
           responseSucceeded: false,
         });
         // Remote side may have written the effect before an uncertain
         // transport failure. Explicit remote failures skip recovery because
-        // the Gateway already proved that the operation was rejected.
+        // the provider already proved that the operation was rejected.
         const resultFence = currentFence();
-        await handleGatewayDispatchError(
+        await handleProviderDispatchError(
           options,
           storage,
           resultFence,
           group.items,
           report,
           outcome,
-          fullGateway,
+          fullProvider,
           () => refreshDispatchLeases(group.items),
         );
         continue;
       }
-      const regularGatewayDurationMs = Date.now() - gatewayStartedAt;
-      options.batchController?.observe(routeKey, {
-        durationMs: regularGatewayDurationMs,
+      const regularProviderDurationMs = Date.now() - providerStartedAt;
+      options.batchController?.observe(requestRouteKey, {
+        durationMs: regularProviderDurationMs,
         responseSucceeded: response.results.length === group.items.length && !response.hasMore,
         responseLoss: response.results.length !== group.items.length || response.hasMore,
       });
-      emitGatewayTiming(options, response.timing);
+      emitProviderTiming(options, response.timing);
       emitWorkerTiming(options, {
         scope: SYNC_TIMING_SCOPES.WORKER,
-        phase: "regular_gateway_dispatch",
-        durationMs: regularGatewayDurationMs,
+        phase: "regular_provider_dispatch",
+        durationMs: regularProviderDurationMs,
         operationKinds: regularOperationKinds,
         operationCounts: regularOperationCounts,
-        routeKey,
+        routeKey: requestRouteKey,
         batchLimit,
         responseSucceeded: response.results.length === group.items.length && !response.hasMore,
       });
@@ -660,14 +653,14 @@ async function runEffectWorker(
           continue;
         }
         if (
-          (result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
-            result.value.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
+          (result.value.status === SYNC_EFFECT_RESULT_STATUSES.APPLIED ||
+            result.value.status === SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
           (
-            !isSuccessfulGatewayPostcondition(result.value.postcondition) ||
+            !isSuccessfulPostcondition(result.value.postcondition) ||
             !isPresent(result.value.visibleRevision) ||
             !isPresent(result.value.visibleHash) ||
-            !isPresent(item.gatewayEffect) ||
-            result.value.visibleHash.value !== item.gatewayEffect.value.payload.targetVisibleHash
+            !isPresent(item.providerEffect) ||
+            result.value.visibleHash.value !== item.providerEffect.value.payload.targetVisibleHash
           )
         ) {
           // A success label without the acknowledged target state is not enough
@@ -676,11 +669,11 @@ async function runEffectWorker(
           recoveryItems.push(item);
           continue;
         }
-        await completeGatewayResult(options, storage, currentFence(), item, result.value, report);
+        await completeProviderResult(options, storage, currentFence(), item, result.value, report);
       }
       if (await refreshDispatchLeases(recoveryItems)) {
         await recoverUnknownResults(
-          { ...options, gateway: fullGateway },
+          { ...options, provider: fullProvider },
           storage,
           currentFence(),
           recoveryItems,
@@ -727,7 +720,7 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
       return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
     },
     isUserInputCandidateBlocked: (item) => {
-      const effect = item.gatewayEffect;
+      const effect = item.providerEffect;
       if (
         !isPresent(effect) ||
         !isCandidateProtectingUserInputEffect(effect.value)
@@ -736,12 +729,12 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
       }
       const rowBinding = effect.value.rowBindingId;
       if (!isPresent(rowBinding)) return Promise.resolve(false);
-      const gatewayEffect = effect.value;
+      const providerEffect = effect.value;
       const rowBindingId = rowBinding.value;
-      const fieldNames = Object.keys(gatewayEffect.payload.fields);
+      const fieldNames = Object.keys(providerEffect.payload.fields);
       return storage.read(({ sql }) => hasActiveUserInputCandidateWithSql(sql, {
-        physicalSheetId: gatewayEffect.physicalSheetId,
-        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        physicalSheetId: providerEffect.physicalSheetId,
+        projection: SYNC_PROJECTIONS.USER_INPUT,
         rowBindingId,
         fieldNames,
         openConflictStatus: CONFLICT_STATUSES.OPEN,
@@ -751,16 +744,16 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
   };
 }
 
-/** Returns the full gateway only when every regular recovery capability exists. */
-function isFullEffectGateway(
-  gateway: SyncEffectWorkerGateway,
-): gateway is SyncEffectWorkerFullGateway {
-  return "applyEffects" in gateway &&
-    typeof gateway.applyEffects === "function" &&
-    "readEffectPostcondition" in gateway &&
-    typeof gateway.readEffectPostcondition === "function" &&
-    "readEffectPostconditions" in gateway &&
-    typeof gateway.readEffectPostconditions === "function";
+/** Returns the full provider only when every regular recovery capability exists. */
+function isFullEffectProvider(
+  provider: SyncEffectWorkerProvider,
+): provider is SyncEffectWorkerProvider {
+  return "applyEffects" in provider &&
+    typeof provider.applyEffects === "function" &&
+    "readEffectPostcondition" in provider &&
+    typeof provider.readEffectPostcondition === "function" &&
+    "readEffectPostconditions" in provider &&
+    typeof provider.readEffectPostconditions === "function";
 }
 
 
@@ -837,7 +830,7 @@ function validateOptions(options: SyncEffectWorkerBaseOptions): void {
   for (const [name, value] of [
     ["writerLeaseDurationMs", options.writerLeaseDurationMs],
     ["effectLeaseDurationMs", options.effectLeaseDurationMs],
-    ["gatewayTimeoutMs", options.gatewayTimeoutMs],
+    ["requestTimeoutMs", options.requestTimeoutMs],
   ] as const) {
     if (
       value !== undefined &&
@@ -852,9 +845,9 @@ function validateOptions(options: SyncEffectWorkerBaseOptions): void {
     throwWorkerError("writerLeaseDurationMs must exceed effectLeaseDurationMs");
   }
   if (
-    options.gatewayTimeoutMs !== undefined &&
-    effectLeaseDuration <= options.gatewayTimeoutMs + EFFECT_LEASE_GATEWAY_HEADROOM_MS
+    options.requestTimeoutMs !== undefined &&
+    effectLeaseDuration <= options.requestTimeoutMs + EFFECT_LEASE_PROVIDER_HEADROOM_MS
   ) {
-    throwWorkerError("effectLeaseDurationMs must exceed gatewayTimeoutMs by 30 seconds");
+    throwWorkerError("effectLeaseDurationMs must exceed requestTimeoutMs by 30 seconds");
   }
 }

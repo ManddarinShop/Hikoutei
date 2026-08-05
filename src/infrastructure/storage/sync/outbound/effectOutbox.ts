@@ -358,7 +358,7 @@ export async function markDeliveryUncertainWithAdapter(
  * Returns an acknowledged-but-unprocessed batch suffix to pending.
  *
  * This is intentionally narrower than a generic redrive: it may be used only
- * after a valid gateway response explicitly says the batch budget stopped
+ * after a valid provider response explicitly says the batch budget stopped
  * before this effect.  Unknown response loss remains failed until read-back.
  */
 /** Returns one acknowledged-but-unprocessed effect through an async SQL context. */
