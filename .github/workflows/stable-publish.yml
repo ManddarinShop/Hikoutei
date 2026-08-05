@@ -116,7 +116,7 @@ jobs:
           (cd "$package_dir" && sha256sum "$package_file" > hikoutei-stable-package.sha256)
           echo "Packed $package_path"
 
-      - name: Run installed-package internal sync/gateway E2E and root API smoke (fake)
+      - name: Run installed-package internal sync/provider E2E and root API smoke (fake)
         shell: bash
         run: |
           set -euo pipefail
@@ -134,7 +134,7 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
-          # Internal sync/gateway E2E: loads dist modules directly and exercises
+          # Internal sync/provider E2E: loads dist modules directly and exercises
           # projection registration, provisioning, the worker, and polling.
           cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
           node "$consumer_dir/run-api-scenario.mjs" \

@@ -4,12 +4,10 @@ import {
   createInternalSyncService,
   type InternalSyncService,
 } from "../src/application/sync/service/SyncServiceBootstrap.ts";
-import type {
-  SyncGatewayProvisioner,
-  SyncGatewayProvisionRoute,
-} from "../src/application/sync/gateway/SyncGatewayBootstrap.ts";
-import { SYNC_GATEWAY_PROJECTIONS } from "../src/application/sync/gateway/constants.ts";
-import { FakeSyncSheetGateway } from "../test/support/FakeSyncSheetGateway.ts";
+import {
+  StubSpreadsheet,
+  StubSheetsTransport,
+} from "../test/support/StubSheetsTransport.ts";
 
 const User = defineTypedSheetsEntity({
   name: "PerfUser",
@@ -20,41 +18,8 @@ const User = defineTypedSheetsEntity({
   },
 });
 
-const SYSTEM_SHEET_ID = "entity:perf_users:system_state";
-const USER_INPUT_SHEET_ID = "entity:perf_users:user_input";
 const ROWS = 66;
 const POLL_SAMPLES = 7;
-
-class Provisioner implements SyncGatewayProvisioner {
-  async provisionRegistry(registrations: readonly SyncGatewayProvisionRoute[]) {
-    return {
-      registrations: registrations.map(({ headers: _headers, ...registration }) => registration),
-      createdSheets: registrations.map((registration) => registration.sheetName),
-      initializedHeaders: registrations.map((registration) => registration.sheetName),
-    };
-  }
-}
-
-function gateway(): FakeSyncSheetGateway {
-  return new FakeSyncSheetGateway([
-    {
-      physicalSheetId: SYSTEM_SHEET_ID,
-      sheetName: "PerfUsers_System",
-      registeredRange: "A:C",
-      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
-      schemaVersion: 1,
-      headers: ["id", "status", "__typed_sheets_deleted"],
-    },
-    {
-      physicalSheetId: USER_INPUT_SHEET_ID,
-      sheetName: "PerfUsers_Input",
-      registeredRange: "A:B",
-      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
-      schemaVersion: 1,
-      headers: ["id", "status"],
-    },
-  ]);
-}
 
 function projections() {
   return {
@@ -70,7 +35,13 @@ function projections() {
   } as const;
 }
 
-async function seed(service: InternalSyncService) {
+function transport(): StubSheetsTransport {
+  // Each service provisions its own spreadsheet from the EMPTY state so the
+  // adaptive and full-scan services measure identical data shapes.
+  return new StubSheetsTransport(new StubSpreadsheet());
+}
+
+async function seed(service: InternalSyncService, transport: StubSheetsTransport) {
   const em = service.hikoutei.em.fork();
   const users = [];
   for (let index = 0; index < ROWS; index += 1) {
@@ -79,11 +50,12 @@ async function seed(service: InternalSyncService) {
     em.persist(user);
   }
   await em.flush();
+  const writesBefore = transport.batchUpdateCalls;
   for (let pass = 0; pass < 10; pass += 1) {
     const report = await service.effectSupervisor.runOnce();
     if (report.selected === 0 && report.claimed === 0) break;
   }
-  return { em, users };
+  return { em, users, writesBefore, writesAfter: transport.batchUpdateCalls };
 }
 
 function stats(values: readonly number[]) {
@@ -97,14 +69,16 @@ function stats(values: readonly number[]) {
 }
 
 async function run(): Promise<void> {
-  const adaptiveGateway = gateway();
   let adaptiveClock = 0;
+  const adaptiveTransport = transport();
   const adaptiveService = await createInternalSyncService({
     dbName: ":memory:",
     entities: [User],
     projections: projections(),
-    gateway: adaptiveGateway,
-    provisioner: new Provisioner(),
+    googleSheetsApi: {
+      transport: adaptiveTransport,
+      rateLimitIntervalMs: 0,
+    },
     maxEffects: 200,
     pollingIntervalMs: 3_600_000,
     pollingFullScanIntervalMs: 3_600_000,
@@ -112,14 +86,16 @@ async function run(): Promise<void> {
     now: () => adaptiveClock,
   });
 
-  const fullGateway = gateway();
   let fullClock = 0;
+  const fullTransport = transport();
   const fullService = await createInternalSyncService({
     dbName: ":memory:",
     entities: [User],
     projections: projections(),
-    gateway: fullGateway,
-    provisioner: new Provisioner(),
+    googleSheetsApi: {
+      transport: fullTransport,
+      rateLimitIntervalMs: 0,
+    },
     maxEffects: 200,
     pollingIntervalMs: 3_600_000,
     pollingFullScanIntervalMs: 1,
@@ -128,7 +104,7 @@ async function run(): Promise<void> {
   });
 
   try {
-    const adaptiveSeed = await seed(adaptiveService);
+    const adaptiveSeed = await seed(adaptiveService, adaptiveTransport);
     await adaptiveService.pollingSupervisor.runOnce();
     const adaptiveSamples: number[] = [];
     for (let index = 0; index < POLL_SAMPLES; index += 1) {
@@ -140,7 +116,7 @@ async function run(): Promise<void> {
       }
     }
 
-    const callsBeforeUpdate = adaptiveGateway.applyEffectsCalls;
+    const readsBeforeUpdate = adaptiveTransport.getSpreadsheetCalls;
     const flushStartedAt = performance.now();
     for (const user of adaptiveSeed.users) user.status = "approved";
     await adaptiveSeed.em.flush();
@@ -148,8 +124,10 @@ async function run(): Promise<void> {
     const deliveryStartedAt = performance.now();
     const deliveryReport = await adaptiveService.effectSupervisor.runOnce();
     const deliveryMs = performance.now() - deliveryStartedAt;
+    const applyEffectsWrites = adaptiveTransport.batchUpdateCalls - adaptiveSeed.writesAfter;
+    const deliveryReads = adaptiveTransport.getSpreadsheetCalls - readsBeforeUpdate;
 
-    const fullSeed = await seed(fullService);
+    const fullSeed = await seed(fullService, fullTransport);
     fullClock = 1_000;
     await fullService.pollingSupervisor.runOnce();
     const fullSamples: number[] = [];
@@ -170,13 +148,13 @@ async function run(): Promise<void> {
       polling: {
         adaptiveValuesOnly: stats(adaptiveSamples),
         fullMetadata: stats(fullSamples),
-        adaptiveGatewayCalls: {
-          valuesOnlyBatches: adaptiveGateway.tableReadBatchCount,
-          fullSnapshots: adaptiveGateway.snapshotReadCount,
+        adaptiveProviderCalls: {
+          getSpreadsheet: adaptiveTransport.getSpreadsheetCalls,
+          batchUpdate: adaptiveTransport.batchUpdateCalls,
         },
-        fullGatewayCalls: {
-          valuesOnlyBatches: fullGateway.tableReadBatchCount,
-          fullSnapshots: fullGateway.snapshotReadCount,
+        fullProviderCalls: {
+          getSpreadsheet: fullTransport.getSpreadsheetCalls,
+          batchUpdate: fullTransport.batchUpdateCalls,
         },
       },
       outboundUpdate: {
@@ -184,7 +162,8 @@ async function run(): Promise<void> {
         sqliteFlushMs: Number(flushMs.toFixed(3)),
         deliveryMs: Number(deliveryMs.toFixed(3)),
         applied: deliveryReport.applied,
-        applyEffectsCalls: adaptiveGateway.applyEffectsCalls - callsBeforeUpdate,
+        applyEffectsWrites,
+        deliveryReads,
       },
     }, null, 2));
   } finally {
