@@ -5,8 +5,8 @@ package. Each is built as an installed consumer: after `npm pack` it imports
 from the packed tarball rather than from `src/**` or the source-only test
 fake, and neither is allowed to import those.
 
-1. **Internal sync/gateway E2E** (`scripts/ci/run-api-scenario.mjs`) drives the
-   internal typed-sheets sync pipeline — projection registration, gateway
+1. **Internal sync E2E** (`scripts/ci/run-api-scenario.mjs`) drives the
+   internal typed-sheets sync pipeline — projection registration, sheet
    provisioning, the bounded effect worker, polling, and the MikroORM-backed
    storage/CAS/hash machinery — and loads implementation modules directly from
    the packed `dist/` tree.
@@ -25,7 +25,7 @@ while the lifecycle itself imports only the root `hikoutei` entrypoint. This
 guards the boundary directly in an installed consumer in addition to the
 source-level tests.
 
-## Internal sync/gateway E2E
+## Internal sync E2E
 
 The scenario is built as an installed consumer: after `npm pack` it imports the
 package entrypoints from the packed tarball rather than from `src/**` or the
@@ -60,7 +60,7 @@ contacts Google Sheets, never needs credentials, and never provisions remote
 tabs, so it runs as a packed consumer only in the normal CI, develop, and stable
 verify jobs and has no live counterpart. It is local-only — an in-memory SQLite
 authority with no backend concept — not a fake-backend scenario like the
-internal sync/gateway E2E. Its entity lifecycle imports only the
+internal sync E2E. Its entity lifecycle imports only the
 root `hikoutei` package; the `hikoutei/orm` and `hikoutei/mikro-orm` dynamic
 imports it performs are negative boundary assertions that must be rejected,
 not part of the lifecycle.
@@ -68,7 +68,7 @@ not part of the lifecycle.
 ## Backends and triggers
 
 The normal CI, develop, and stable verification jobs run **both** installed-consumer
-scenarios — the internal sync/gateway E2E and the installed root API smoke. The
+scenarios — the internal sync E2E and the installed root API smoke. The
 internal E2E uses the **fake** backend (no Google Sheets contact, no
 credentials); the root API smoke is local-only, an in-memory SQLite authority
 (`:memory:`) with no backend concept. The workflows are:
@@ -84,7 +84,7 @@ credentials); the root API smoke is local-only, an in-memory SQLite authority
 - `.github/workflows/stable-publish.yml` verifies and publishes that tag with
   the `latest` dist-tag too.
 
-Only the internal sync/gateway E2E has a live variant, in the separate
+Only the internal sync E2E has a live variant, in the separate
 `.github/workflows/live-integration.yml` workflow. It is opt-in via
 `workflow_dispatch` — a maintainer with write access dispatches it explicitly;
 it never runs automatically on pull requests or pushes — and exercises
@@ -106,8 +106,8 @@ secrets:
 - `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON` (the service-account key JSON)
 - `GOOGLE_SHEETS_TEST_SPREADSHEET_ID`
 
-No Apps Script gateway is deployed or invoked, so the legacy
-`TYPED_SHEETS_GATEWAY_*` secrets are not used by the live workflow.
+No gateway is deployed or invoked — the live path is service-account-only, so
+the workflow needs only those two secrets.
 
 ## Cleanup
 
@@ -141,10 +141,11 @@ publishing Hikoutei. The first integration release therefore requires:
 2. merge the Hikoutei dependency integration;
 3. let the next develop release produce `0.3.2` from the current `0.3.1` baseline.
 
-Existing Hikoutei releases remain unchanged. Apps Script cannot import npm
-packages, so `apps-script/gateway/Code.gs` keeps the Hikoutei-specific gateway
-and its self-contained codec mirror; the root tests compare it with the pinned
-Kohkai compatibility vectors.
+Existing Hikoutei releases remain unchanged. The root
+`test/kohkai-compatibility.test.ts` pins the Hikoutei shared stable encoding to
+the Kohkai compatibility vectors and proves the local codec is byte-compatible
+with the generic `@hikoutei/kohkai` codec; the Apps Script codec mirror was
+removed with the gateway.
 
 ## Develop publication
 
@@ -155,7 +156,7 @@ an annotated tag such as `develop-v0.3.1`. The generated commit is guarded from
 being processed as another release.
 
 The tag triggers `.github/workflows/develop-publish.yml`. It repeats the
-unit/type/build/package checks, the installed-package internal sync/gateway
+unit/type/build/package checks, the installed-package internal sync
 E2E, and the installed root API smoke before publishing the numeric package
 version with the npm `latest` dist-tag. The version has no `-beta` suffix, and
 a plain `npm install hikoutei` resolves this channel:
@@ -233,8 +234,8 @@ npm install hikoutei
 ## Artifacts
 
 The CI, develop, and stable jobs each emit a JSON report for **both**
-scenarios (internal sync/gateway E2E and installed root API smoke). The live
-job emits a JSON report only for the internal sync/gateway E2E, the single
+scenarios (internal sync E2E and installed root API smoke). The live
+job emits a JSON report only for the internal sync E2E, the single
 scenario it runs. Both runner scripts (`run-api-scenario.mjs` and
 `run-root-api-scenario.mjs`) default their `--summary` option to
 `GITHUB_STEP_SUMMARY`, so in GitHub Actions every CI/develop/stable invocation
@@ -246,7 +247,7 @@ installed-consumer scenario reports as a dedicated reports artifact
 (`if: always()`), separate from the package artifact (`if: success()`) that the
 publish job consumes. Setup time and steady-state time are reported separately
 for the internal E2E so spreadsheet creation and header provisioning do not
-distort the internal sync/gateway measurements.
+distort the internal sync measurements.
 
 The develop and stable package artifacts are each a single directory that
 holds the npm tarball and its `sha256` checksum together under

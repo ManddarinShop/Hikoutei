@@ -5,7 +5,7 @@ asynchronous human-facing projection. SQLite is the authority; Sheets is an
 internal service-side projection and human input surface.
 
 > The root package API is ORM-only. Sheet synchronization is implemented inside
-> `src`, but its bootstrap, gateway, worker, and storage contracts are not root
+> `src`, but its bootstrap, worker, and storage contracts are not root
 > exports.
 
 ## System shape
@@ -20,7 +20,7 @@ Application code
                       ├─ durable Sheet effect outbox
                       ├─ outbound effect worker
                       ├─ User_Input polling
-                      └─ Apps Script gateway
+                      └─ sync provider (googleSheetsApi)
                            └─ Google Sheets projections
 ```
 
@@ -35,15 +35,14 @@ src/domain/                         pure normalization/evaluation/conflict rules
 src/application/orm/                public ORM facade and mapped flush planning
 src/application/sync/               internal sync engine and service bootstrap
 src/adapter/persistence/            SQLite/MikroORM implementation
-src/adapter/sheets/                 Apps Script transport (legacy) + full direct Sheets API provider
+src/adapter/sheets/                 Google Sheets API provider (sync provider contracts + implementation)
 src/infrastructure/storage/         canonical, observation, resolution, outbox state
 src/api/                            root-facing entity and EntityManager facade
 src/index.ts                        root public barrel only
-apps-script/gateway/                deployable Apps Script code
 ```
 
 `src` does not mean public. The only application-facing package entrypoint is
-`src/index.ts`; package subpaths for providers, gateway operations, polling,
+`src/index.ts`; package subpaths for providers, sync operations, polling,
 and sync state are not part of the contract.
 
 ## Root public API
@@ -76,7 +75,7 @@ await em.flush();
 The public surface contains entity definition, runtime creation, and the
 request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
 `findOne()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
-MikroORM, raw SQL, gateway clients, Sheet routes, provisioning, polling, and
+MikroORM, raw SQL, provider clients, Sheet routes, provisioning, polling, and
 outbox controls are internal.
 
 ## SQLite authority
@@ -116,7 +115,7 @@ remote Sheet write has completed.
 
 The preferred production path uses the internal `googleSheetsApi` service
 option: ONE Google Sheets API provider under
-`src/adapter/sheets/providers/google-sheets-api/` implements every gateway
+`src/adapter/sheets/providers/google-sheets-api/` implements every provider
 capability the runtime needs — provisioning, outbound effects (fast append,
 guarded update/delete, receipts, response-loss recovery), values-only table
 reads, row-anchor assignment, and full metadata snapshots. It authenticates
@@ -131,40 +130,26 @@ order-preserving prefix with `hasMore`. Transport failures are classified by
 the shared `classifyTransportOutcome` boundary: proven pre-mutation 4xx
 rejections are explicit remote failures, while timeouts, network errors,
 408/429/5xx, and malformed 2xx replies stay delivery-uncertain and are
-recovered through the same postcondition probe path as the Apps Script
-gateway. Telemetry carries only operation names, counts, durations, and
-stable codes — never credentials, spreadsheet IDs, URLs, or payloads.
+recovered through the shared postcondition probe path. Telemetry carries only
+operation names, counts, durations, and stable codes — never credentials,
+spreadsheet IDs, URLs, or payloads.
 
 Provisioning creates missing tabs and initializes header rows in one atomic
 batch and fails closed on any header drift; snapshot wire shapes (merged,
-error, formula, literal/blank cells plus stableHash evidence) are
-byte-compatible with the Apps Script observation source, so reconciliation
-evidence is provider-independent. No Apps Script deployment is required.
+error, formula, literal/blank cells plus stableHash evidence) are stable
+across providers, so reconciliation evidence is provider-independent. No Apps
+Script deployment is required.
 
-### Apps Script gateway (legacy, no service account)
+### Removed: Apps Script gateway
 
-Deployments without a service account can keep the legacy signed Apps Script
-gateway: the internal `appsScript` service option. The gateway is a single
-file, `apps-script/gateway/Code.gs`, copied into a spreadsheet-bound Apps
-Script project and deployed as a Web App. The deployer pastes the `/exec` URL
-into `TYPED_SHEETS_GATEWAY_URL` and runs `setupSyncGateway()` from the editor,
-which stores the bound spreadsheet ID and a generated shared secret in Script
-Properties. No service account is required. The current fast-append
-implementation unconditionally calls the Apps Script Advanced Sheets Service
-for append target writes; there is no runtime enablement switch, so the
-bundled `appsscript.json` manifest (Sheets v4 advanced service) and Google
-Cloud Sheets API activation in the script's Cloud project are mandatory for
-the current temporary append path. A legacy `Code.gs`-only deployment must
-first restore the commented rollback block in `batchAppendOperation.ts` to
-revert append target writes to the built-in services path. Sheet consistency
-does not rely on cross-request Sheet transactions; it comes from the Apps
-Script script lock, the hidden effect-receipt tab, effect-id/payload-hash
-dedupe, the SQLite durable outbox, fencing, and postcondition recovery.
-
-A deprecated mixed mode (`googleApiWorker` internal option) routes outbound
-effects to the direct provider while Apps Script (or an injected gateway)
-still owns provisioning and observation; new setups should use
-`googleSheetsApi` instead.
+The signed Apps Script gateway and the `appsScript`/`googleApiWorker` options
+were removed in this cleanup. The service-account `googleSheetsApi` provider
+above is the only sync path; existing deployments should switch to it. The
+provider reads and writes the same tabs, receipt sheet, and anchor metadata,
+so existing spreadsheets keep working without re-provisioning. Sheet
+consistency does not rely on cross-request Sheet transactions; it comes from
+the hidden effect-receipt tab, effect-id/payload-hash dedupe, the SQLite
+durable outbox, fencing, and postcondition recovery.
 
 `System_State` is materialized from canonical SQLite state. `User_Input` is
 observed by the internal polling loop, evaluated with ownership and field-level
@@ -197,7 +182,7 @@ internal outbound effect supervisor
   └─ reconcile remote drift
           │
           ▼
-Apps Script gateway ──▶ Google Sheets
+sync provider (googleSheetsApi) ──▶ Google Sheets
 
 internal User_Input polling
   ├─ adaptive values-only preflight over registered projections
@@ -215,15 +200,15 @@ a missing expected entity, or a type-invalid cell), or when the periodic safety
 full scan falls due. The safety scan (default one minute, configurable) keeps
 formula, merged, and error cell fidelity because the values-only read drops that
 metadata; the scan's overdue lag is recorded for diagnostics. Outbound effects
-are split into bounded sub-batches per physical route so one gateway call returns
+are split into bounded sub-batches per physical route so one provider call returns
 a complete result set, and a pass that only requeued uncertain work backs off with
 a bounded delay instead of retrying a struggling remote in a tight loop.
 
 The service bootstrap starts provisioning, outbound delivery, and inbound polling
 as one internal runtime. Outbound dispatch keeps the SQLite outbox as its only
 durable buffer, coalesces only a short in-process burst, and adapts each route's
-Gateway batch between five and twenty effects from latency and response-loss
-signals. The effect lease is longer than the configured Gateway timeout so a
+provider batch between five and twenty effects from latency and response-loss
+signals. The effect lease is longer than the configured provider timeout so a
 slow but valid request is recovered only after its remote result is checked.
 Ambiguous delivery is stored as `delivery_uncertain` with `uncertain_since`,
 `next_probe_at`, and `dispatch_id`; only a due probe may return it to processing.
@@ -236,4 +221,4 @@ supervisor, and only then closes SQLite.
 Hikoutei targets one local SQLite writer process and low-traffic MVP or internal
 workflows. It is not a distributed transaction coordinator, a general-purpose
 database, or a Google Sheets API replacement. Live Google integration remains
-opt-in; normal tests use fake gateways and SQLite fixtures.
+opt-in; normal tests use fake providers and SQLite fixtures.
