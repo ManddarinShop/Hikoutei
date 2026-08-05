@@ -61,6 +61,12 @@ const {
   AppsScriptOperationSyncGateway,
   AppsScriptSyncGatewayError,
 } = gateway;
+const [directSheets, mappedPolling] = await Promise.all([
+  import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", packageDist).href),
+  import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", packageDist).href),
+]);
+const { GoogleSheetsApiSyncProvider, GoogleSheetsApiHttpTransport } = directSheets;
+const { pollMappedUserInputWithMikroOrm } = mappedPolling;
 
 await assertLegacyPackageSubpathsUnavailable();
 
@@ -340,11 +346,24 @@ class FakeSyncGateway {
 }
 
 class LiveSyncBackend {
-  constructor() {
+  constructor(outbound) {
+    this.outbound = outbound ?? "gateway";
+    this.sheetMatched = undefined;
+    this.events = [];
+    if (this.outbound === "direct") {
+      // Service-account-only full-provider mode: no Apps Script gateway is
+      // involved at all. ADC supplies the service account; the spreadsheet
+      // must be shared with it. No TYPED_SHEETS_GATEWAY_* variables are read.
+      requireEnvironment("GOOGLE_APPLICATION_CREDENTIALS");
+      this.sheetId = requireEnvironment("GOOGLE_SHEETS_TEST_SPREADSHEET_ID");
+      this.sheetMatched = true;
+      this.saTransport = new GoogleSheetsApiHttpTransport({ requestTimeoutMs: 120_000 });
+      return;
+    }
     const url = requireEnvironment("TYPED_SHEETS_GATEWAY_URL");
     const secret = requireEnvironment("TYPED_SHEETS_GATEWAY_SHARED_SECRET");
     const sheetId = requireEnvironment("TYPED_SHEETS_GATEWAY_SHEET_ID");
-    this.events = [];
+    this.sheetId = sheetId;
     this.client = new AppsScriptOperationClient({
       url,
       secret,
@@ -357,6 +376,17 @@ class LiveSyncBackend {
   }
 
   createGateway(definitions) {
+    if (this.outbound === "direct") {
+      // The full service-account provider owns provisioning, outbound
+      // effects, table reads, anchors, and snapshots in one instance.
+      return new GoogleSheetsApiSyncProvider({
+        spreadsheetId: this.sheetId,
+        definitions,
+        requestTimeoutMs: 120_000,
+        onRequest: (event) => this.events.push(event),
+      });
+    }
+    // Legacy Apps Script gateway mode.
     return new AppsScriptOperationSyncGateway({
       operationGateway: this.client,
       definitions,
@@ -364,6 +394,10 @@ class LiveSyncBackend {
   }
 
   async mutateRow({ sheetName, identity, field, value }) {
+    if (this.outbound === "direct") {
+      await this.mutateRowDirect({ sheetName, identity, field, value });
+      return;
+    }
     await this.client.applyOperations([{
       fn: mutateRowSource,
       args: {
@@ -376,7 +410,74 @@ class LiveSyncBackend {
     }]);
   }
 
+  /**
+   * Simulates a human edit with the service-account transport: locate the
+   * tab, find the row by its identity cell, and overwrite one field cell
+   * through an updateCells batchUpdate.
+   */
+  async mutateRowDirect({ sheetName, identity, field, value }) {
+    const raw = await this.saTransport.getSpreadsheet({
+      spreadsheetId: this.sheetId,
+      ranges: [`${quoteTabName(sheetName)}!A1:B1048576`],
+      fields: "sheets.properties(sheetId,title),sheets.data(startRow,startColumn,rowData.values(userEnteredValue,formattedValue))",
+    });
+    const sheetEntry = (raw?.sheets ?? []).find((entry) =>
+      entry?.properties?.title === sheetName);
+    if (sheetEntry === undefined) {
+      throw new Error(`test sheet was not found: ${sheetName}`);
+    }
+    const grid = (sheetEntry.data ?? [])[0];
+    const rows = grid?.rowData ?? [];
+    const headers = (rows[0]?.values ?? []).map((cell) =>
+      String(cell?.userEnteredValue?.stringValue ?? ""));
+    const identityColumn = headers.indexOf("id");
+    const fieldColumn = headers.indexOf(field);
+    if (identityColumn < 0) throw new Error("test identity field was not found: id");
+    if (fieldColumn < 0) throw new Error(`test field was not found: ${field}`);
+    for (let index = 1; index < rows.length; index += 1) {
+      const cells = rows[index]?.values ?? [];
+      const cellValue = cells[identityColumn]?.userEnteredValue?.stringValue ??
+        cells[identityColumn]?.formattedValue;
+      if (String(cellValue) !== String(identity)) continue;
+      await this.saTransport.batchUpdate({
+        spreadsheetId: this.sheetId,
+        requests: [{
+          kind: "updateCells",
+          sheetId: sheetEntry.properties.sheetId,
+          startRowIndex: index,
+          startColumnIndex: fieldColumn,
+          rows: [[{ userEnteredValue: { stringValue: String(value) } }]],
+          fields: "userEnteredValue",
+        }],
+      });
+      return { rowNumber: index + 1 };
+    }
+    throw new Error(`test identity row was not found: ${identity}`);
+  }
+
+  /** Reads one tab's raw string rows through the service-account transport. */
+  async readTabRows(tabName) {
+    if (this.outbound !== "direct") {
+      throw new Error("readTabRows is a service-account-only helper");
+    }
+    const raw = await this.saTransport.getSpreadsheet({
+      spreadsheetId: this.sheetId,
+      ranges: [`${quoteTabName(tabName)}!A1:F1048576`],
+      fields: "sheets.properties(sheetId,title),sheets.data(startRow,startColumn,rowData.values(userEnteredValue))",
+    });
+    const sheetEntry = (raw?.sheets ?? []).find((entry) =>
+      entry?.properties?.title === tabName);
+    if (sheetEntry === undefined) return [];
+    const grid = (sheetEntry.data ?? [])[0];
+    return (grid?.rowData ?? []).map((row) =>
+      (row?.values ?? []).map((cell) => cell?.userEnteredValue?.stringValue ?? ""));
+  }
+
   async cleanup(sheetNames) {
+    if (this.outbound === "direct") {
+      await this.cleanupDirect(sheetNames);
+      return;
+    }
     // A timed-out Apps Script request may still be finishing remotely. Retry
     // idempotent cleanup so the scenario does not report a false failure while
     // the workflow's always-run cleanup step remains the final safety net.
@@ -396,9 +497,38 @@ class LiveSyncBackend {
     }
   }
 
+  /**
+   * Deletes the fixture tabs and the shared receipt tab through deleteSheet
+   * batchUpdates. The provider itself never emits deleteSheet; the scenario
+   * harness uses the request kind for cleanup only.
+   */
+  async cleanupDirect(sheetNames) {
+    const raw = await this.saTransport.getSpreadsheet({
+      spreadsheetId: this.sheetId,
+      ranges: [],
+      fields: "sheets.properties(sheetId,title)",
+    });
+    const targets = (raw?.sheets ?? [])
+      .map((entry) => entry?.properties)
+      .filter((properties) =>
+        properties?.sheetId !== undefined &&
+        (sheetNames.includes(properties.title) || properties.title === INTERNAL_RECEIPT_SHEET))
+      .map((properties) => properties.sheetId);
+    if (targets.length === 0) return;
+    await this.saTransport.batchUpdate({
+      spreadsheetId: this.sheetId,
+      requests: targets.map((sheetId) => ({ kind: "deleteSheet", sheetId })),
+    });
+  }
+
   readRequest(definition) {
     return requestForDefinition(definition);
   }
+}
+
+/** Quotes a tab name for A1 notation in raw harness reads. */
+function quoteTabName(sheetName) {
+  return `'${sheetName.replace(/'/g, "''")}'`;
 }
 
 async function main() {
@@ -410,6 +540,12 @@ async function main() {
   if (options.backend !== "fake" && options.backend !== "live") {
     throw new Error("--backend must be fake or live");
   }
+  if (options.outbound !== "gateway" && options.outbound !== "direct") {
+    throw new Error("--outbound must be gateway or direct");
+  }
+  if (options.outbound === "direct" && options.backend !== "live") {
+    throw new Error("--outbound direct requires --backend live (it needs a service account and a shared spreadsheet)");
+  }
 
   const startedAt = new Date().toISOString();
   const startedClock = performance.now();
@@ -418,13 +554,14 @@ async function main() {
   const manifest = {
     version: SCENARIO_VERSION,
     backend: options.backend,
+    outbound: options.outbound,
     prefix,
     sheetNames,
     createdAt: startedAt,
   };
   await writeJson(options.manifest, manifest);
 
-  const backend = options.backend === "live" ? new LiveSyncBackend() : new FakeSyncGateway();
+  const backend = options.backend === "live" ? new LiveSyncBackend(options.outbound) : new FakeSyncGateway();
   const steps = [];
   const timings = [];
   let runtime;
@@ -462,17 +599,29 @@ async function main() {
       sheetNames,
       recordTiming: (event) => timings.push({ phase: "internal", ...event }),
     }));
-    const { orm, storage, gateway, definitions, entity, mapping } = runtime;
+    const { orm, storage, gateway, definitions, entity, mapping, writer, provision } = runtime;
     const systemDefinition = requireDefinition(definitions, "system_state");
     const userDefinition = requireDefinition(definitions, "user_input");
     const em = orm.em.fork();
     const entityId = `${prefix}-order-1`;
+    const conflictEntityId = `${prefix}-order-conflict`;
+    const systemGuardEntityId = `${prefix}-order-system-guard`;
 
     await measure("initialize_mapped_orm", "setup", () => smokeInitializeMappedOrm({
       entity,
       mapping,
       prefix,
     }));
+
+    if (options.outbound === "direct") {
+      // Service-account-only mode provisions from the EMPTY spreadsheet
+      // state: both fixture tabs are created and their headers initialized.
+      await measure("provision_created_tabs", "setup", async () => {
+        assert.deepEqual(provision.createdSheets, sheetNames);
+        assert.deepEqual(provision.initializedHeaders, sheetNames);
+        assertions += 2;
+      });
+    }
 
     await measure("create_and_flush", "steady_state", async () => {
       const order = em.create(entity, { id: entityId, status: "pending" });
@@ -485,6 +634,15 @@ async function main() {
       assert.equal(reports.at(-1)?.selected ?? 0, 0);
       assertions += 1;
     });
+    if (options.outbound === "direct") {
+      // Append receipt evidence: the create produced exactly two receipt rows
+      // (system fast append + user_input create) and no duplicate rows.
+      await measure("append_receipt_evidence", "steady_state", async () => {
+        const receiptRows = await backend.readTabRows(INTERNAL_RECEIPT_SHEET);
+        assert.equal(receiptRows.length - 1, 2);
+        assertions += 1;
+      });
+    }
     await measure("read_after_create", "steady_state", async () => {
       const loaded = await em.findOne(entity, { id: entityId });
       assert.notEqual(loaded, null);
@@ -514,46 +672,160 @@ async function main() {
       assertions += 2;
     });
 
-    await measure("polling_changed_row", "steady_state", async () => {
-      await backend.mutateRow({
-        sheetName: userDefinition.sheet.tabName,
-        identity: entityId,
-        field: "status",
-        value: "edited-by-user",
+    if (options.outbound === "direct") {
+      // Direct full-parity checklist (service-account only): seed a second
+      // entity for the stale-edit guard steps, run a mapped polling pass so a
+      // simulated human edit flows through full observation into SQLite, and
+      // verify both CAS guards (candidate on User_Input, visible on System).
+      await measure("seed_conflict_entity", "steady_state", async () => {
+        const conflictEm = orm.em.fork();
+        conflictEm.persist(conflictEm.create(entity, { id: conflictEntityId, status: "pending" }));
+        await conflictEm.flush();
+        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`);
+        assert.equal(reports.at(-1)?.selected ?? 0, 0);
+        assertions += 1;
       });
-      const result = await pollSimpleSheetRowsWithAdapter({
-        storage,
-        gateway,
-        definitions: [userDefinition],
+
+      await measure("seed_system_guard_entity", "steady_state", async () => {
+        // A separate entity for the System_State guard step: an entity whose
+        // user_input projection is blocked (blocked_candidate) can no longer
+        // enqueue further projection effects, so the system guard must target
+        // a fresh entity with an unblocked input projection.
+        const guardEm = orm.em.fork();
+        guardEm.persist(guardEm.create(entity, { id: systemGuardEntityId, status: "pending" }));
+        await guardEm.flush();
+        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`);
+        assert.equal(reports.at(-1)?.selected ?? 0, 0);
+        assertions += 1;
       });
-      assert.equal(result.rowsScanned, 1);
-      assert.equal(result.changedRows.length, 1);
-      assert.deepEqual(result.changedRows[0]?.fields.status, {
-        kind: "string",
-        value: "edited-by-user",
+
+      await measure("mapped_polling_human_edit", "steady_state", async () => {
+        await backend.mutateRow({
+          sheetName: userDefinition.sheet.tabName,
+          identity: entityId,
+          field: "status",
+          value: "edited-by-user",
+        });
+        const mapped = await pollMappedUserInputWithMikroOrm({
+          storage,
+          gateway,
+          mappings: [mapping],
+          writer,
+          mode: "adaptive",
+          forceFull: true,
+        });
+        assert.equal(mapped.appliedRows, 1);
+        assertions += 1;
+        // The long-lived em fork's identity map predates the polling write;
+        // read the persisted entity through a fresh fork so the assertion
+        // observes the SQLite row, not the stale managed instance.
+        const reloaded = await orm.em.fork().findOne(entity, { id: entityId });
+        assert.notEqual(reloaded, null);
+        assert.equal(reloaded.status, "edited-by-user");
+        assertions += 2;
       });
-      assertions += 3;
-    });
-    await measure("polling_restored_row", "steady_state", async () => {
-      await backend.mutateRow({
-        sheetName: userDefinition.sheet.tabName,
-        identity: entityId,
-        field: "status",
-        value: "paid",
+
+      await measure("stale_input_edit_blocked", "steady_state", async () => {
+        // A stale human edit on User_Input: the input mirror effect is parked
+        // as blocked_candidate (candidate_guard_mismatch) and the sheet keeps
+        // the human value.
+        await backend.mutateRow({
+          sheetName: userDefinition.sheet.tabName,
+          identity: conflictEntityId,
+          field: "status",
+          value: "human-2",
+        });
+        const em5 = orm.em.fork();
+        const target = await em5.findOne(entity, { id: conflictEntityId });
+        assert.notEqual(target, null);
+        if (target === null) throw new Error("conflict target entity missing");
+        target.status = "paid-v2";
+        await em5.flush();
+        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`, true);
+        const blocked = reports.reduce((sum, report) => sum + report.blockedCandidate, 0);
+        const conflicted = reports.reduce((sum, report) => sum + report.conflicted, 0);
+        assert.ok(blocked >= 1);
+        assert.equal(conflicted, 0);
+        const inputRows = await backend.readTabRows(userDefinition.sheet.tabName);
+        const humanRow = inputRows.find((row) => row[0] === conflictEntityId);
+        assert.equal(humanRow?.[1], "human-2");
+        assertions += 4;
       });
-      const result = await pollSimpleSheetRowsWithAdapter({
-        storage,
-        gateway,
-        definitions: [userDefinition],
+
+      await measure("stale_system_edit_conflict", "steady_state", async () => {
+        // A stale human edit on System_State: the system effect records a
+        // durable conflict (visible_guard_mismatch) and the sheet keeps the
+        // human value.
+        await backend.mutateRow({
+          sheetName: systemDefinition.sheet.tabName,
+          identity: systemGuardEntityId,
+          field: "status",
+          value: "human-sys",
+        });
+        const em5b = orm.em.fork();
+        const target = await em5b.findOne(entity, { id: systemGuardEntityId });
+        assert.notEqual(target, null);
+        if (target === null) throw new Error("system guard target entity missing");
+        target.status = "paid-v4";
+        await em5b.flush();
+        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`, true);
+        const conflicted = reports.reduce((sum, report) => sum + report.conflicted, 0);
+        assert.ok(conflicted >= 1);
+        const systemRows = await backend.readTabRows(systemDefinition.sheet.tabName);
+        const humanRow = systemRows.find((row) => row[0] === systemGuardEntityId);
+        assert.equal(humanRow?.[1], "human-sys");
+        assertions += 3;
       });
-      assert.equal(result.rowsScanned, 1);
-      assert.equal(result.changedRows.length, 0);
-      assertions += 2;
-    });
+    } else {
+      await measure("polling_changed_row", "steady_state", async () => {
+        await backend.mutateRow({
+          sheetName: userDefinition.sheet.tabName,
+          identity: entityId,
+          field: "status",
+          value: "edited-by-user",
+        });
+        const result = await pollSimpleSheetRowsWithAdapter({
+          storage,
+          gateway,
+          definitions: [userDefinition],
+        });
+        assert.equal(result.rowsScanned, 1);
+        assert.equal(result.changedRows.length, 1);
+        assert.deepEqual(result.changedRows[0]?.fields.status, {
+          kind: "string",
+          value: "edited-by-user",
+        });
+        assertions += 3;
+      });
+      await measure("polling_restored_row", "steady_state", async () => {
+        await backend.mutateRow({
+          sheetName: userDefinition.sheet.tabName,
+          identity: entityId,
+          field: "status",
+          value: "paid",
+        });
+        const result = await pollSimpleSheetRowsWithAdapter({
+          storage,
+          gateway,
+          definitions: [userDefinition],
+        });
+        assert.equal(result.rowsScanned, 1);
+        assert.equal(result.changedRows.length, 0);
+        assertions += 2;
+      });
+    }
 
     await measure("delete_and_flush", "steady_state", async () => {
-      em.remove(loaded);
-      await em.flush();
+      // Read through a fresh fork: the long-lived em identity map predates the
+      // polling-applied human edit, and the mapped delete fails closed when the
+      // managed entity fields diverge from the User_Input row.
+      const deleteEm = orm.em.fork();
+      const fresh = await deleteEm.findOne(entity, { id: entityId });
+      assert.notEqual(fresh, null);
+      if (fresh !== null) {
+        deleteEm.remove(fresh);
+        await deleteEm.flush();
+      }
       assertions += 1;
     });
     await measure("worker_after_delete", "steady_state", async () => {
@@ -562,22 +834,62 @@ async function main() {
       assertions += 1;
     });
     await measure("read_after_delete", "steady_state", async () => {
-      const readBack = await em.findOne(entity, { id: entityId });
+      // Fresh fork again: the long-lived em identity map still holds the
+      // deleted instance and would return it instead of the SQLite row.
+      const readBack = await orm.em.fork().findOne(entity, { id: entityId });
       assert.equal(readBack, null);
       const userRows = await gateway.readRows(backend.readRequest(userDefinition));
-      assert.equal(userRows.rows.length, 0);
       const systemRows = await gateway.readRows(backend.readRequest(systemDefinition));
-      assert.equal(systemRows.rows.length, 1);
-      assert.deepEqual(systemRows.rows[0]?.fields.__typed_sheets_deleted, {
-        kind: "boolean",
-        value: true,
-      });
+      if (options.outbound === "direct") {
+        // The conflict fixture row remains; the deleted entity's User_Input
+        // row is physically gone and its System_State row is tombstoned.
+        assert.equal(
+          userRows.rows.filter((row) => cellValue(row.fields.id) === entityId).length,
+          0,
+        );
+        assert.equal(systemRows.rows.length, 3);
+        const systemRow = systemRows.rows.find((row) => cellValue(row.fields.id) === entityId);
+        assert.deepEqual(systemRow?.fields.__typed_sheets_deleted, {
+          kind: "boolean",
+          value: true,
+        });
+      } else {
+        assert.equal(userRows.rows.length, 0);
+        assert.equal(systemRows.rows.length, 1);
+        assert.deepEqual(systemRows.rows[0]?.fields.__typed_sheets_deleted, {
+          kind: "boolean",
+          value: true,
+        });
+      }
       assertions += 4;
     });
+
+    if (options.outbound === "direct") {
+      // Anchor evidence: the fast append path intentionally never materializes
+      // anchor metadata (matching the Apps Script batch append), so anchors
+      // exist on User_Input rows, which the polling observation pass anchored;
+      // System_State rows are located by visible identity instead. Assert both
+      // surfaces and that no entity was materialized twice.
+      await measure("anchor_evidence", "steady_state", async () => {
+        const systemSnapshot = await gateway.readSnapshot(backend.readRequest(systemDefinition));
+        assert.equal(systemSnapshot.rows.length, 3);
+        const systemIds = systemSnapshot.rows.map((row) => cellValue(row.cells.id?.normalizedCell));
+        assert.equal(new Set(systemIds).size, 3);
+        const inputSnapshot = await gateway.readSnapshot(backend.readRequest(userDefinition));
+        assert.equal(inputSnapshot.rows.length, 2);
+        assert.ok(inputSnapshot.rows.every((row) => row.physicalAnchor.kind === PRESENT));
+        assert.equal(inputSnapshot.unanchoredRows.length, 0);
+        const inputIds = inputSnapshot.rows.map((row) => cellValue(row.cells.id?.normalizedCell));
+        assert.equal(new Set(inputIds).size, 2);
+        assertions += 5;
+      });
+    }
 
     // Keep the mapping in the result so a future scenario can report which
     // internal route was exercised without importing source-only test helpers.
     void mapping;
+    void writer;
+    void provision;
   } catch (error) {
     scenarioError = error;
   } finally {
@@ -598,6 +910,8 @@ async function main() {
 
   const report = createReport({
     backend: options.backend,
+    outbound: options.outbound,
+    sheetMatched: backend.sheetMatched,
     prefix,
     startedAt,
     durationMs: elapsedMs(startedClock),
@@ -618,7 +932,9 @@ async function main() {
 async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "hikoutei-ci-"));
   const dbName = path.join(tempRoot, "scenario.sqlite");
-  const spreadsheetId = backend instanceof LiveSyncBackend ? requireEnvironment("TYPED_SHEETS_GATEWAY_SHEET_ID") : `fake-${prefix}`;
+  const spreadsheetId = backend instanceof LiveSyncBackend
+    ? backend.sheetId
+    : `fake-${prefix}`;
   const OrderSchema = defineEntity({
     name: "CiOrder",
     tableName: "ci_orders",
@@ -686,7 +1002,7 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
     const registrations = await registerTypedSheetsEntityMappings(storage, [mapping], writer);
     const definitions = registeredTypedSheetsProjectionDefinitions(registrations);
     const gateway = backend.createGateway(definitions);
-    await provisionRegisteredSyncSheets(gateway, definitions);
+    const provision = await provisionRegisteredSyncSheets(gateway, definitions);
     const orm = createMappedTypedSheetsOrm(storage, {
       mappings: [mapping],
       writer,
@@ -699,6 +1015,8 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
       definitions,
       entity: CiOrder,
       mapping,
+      writer,
+      provision,
     };
   } catch (error) {
     if (storage !== undefined) await storage.close(true);
@@ -724,7 +1042,7 @@ async function smokeInitializeMappedOrm({ entity, mapping, prefix }) {
   }
 }
 
-async function runWorkerUntilIdle(storage, gateway, workerId) {
+async function runWorkerUntilIdle(storage, gateway, workerId, allowConflicts = false) {
   const reports = [];
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const report = await runSyncEffectWorkerWithAdapter({
@@ -736,7 +1054,7 @@ async function runWorkerUntilIdle(storage, gateway, workerId) {
     });
     reports.push(report);
     if (report.selected === 0) return reports;
-    if (report.failed > 0 || report.conflicted > 0) {
+    if (report.failed > 0 || (!allowConflicts && report.conflicted > 0)) {
       throw new Error(`sync worker did not apply all effects: ${JSON.stringify(report)}`);
     }
   }
@@ -753,13 +1071,18 @@ async function cleanupFromManifest(options) {
     return;
   }
   const manifest = JSON.parse(await readFile(options.manifest, "utf8"));
-  const backend = new LiveSyncBackend();
+  // The manifest records which outbound mode produced the fixture, so the
+  // cleanup step uses the matching backend (service-account-only for the
+  // direct workflow, the Apps Script gateway for legacy runs).
+  const backend = new LiveSyncBackend(manifest.outbound);
   await backend.cleanup(manifest.sheetNames);
   process.stdout.write(`cleaned live fixture ${manifest.prefix}\n`);
 }
 
 function createReport({
   backend,
+  outbound,
+  sheetMatched,
   prefix,
   startedAt,
   durationMs,
@@ -777,6 +1100,8 @@ function createReport({
     scenario: "internal-sync-gateway-e2e-lifecycle-and-polling",
     scenarioVersion: SCENARIO_VERSION,
     backend,
+    outbound,
+    ...(sheetMatched === undefined ? {} : { sheetMatched }),
     status,
     prefix,
     startedAt,
@@ -813,6 +1138,7 @@ async function writeSummary(summaryPath, report) {
 function parseOptions(arguments_) {
   const options = {
     backend: undefined,
+    outbound: "gateway",
     cleanupOnly: false,
     manifest: process.env.HIKOUTEI_CI_MANIFEST,
     output: process.env.HIKOUTEI_CI_OUTPUT,
@@ -828,6 +1154,7 @@ function parseOptions(arguments_) {
     const [key, inlineValue] = argument.split("=", 2);
     const value = inlineValue ?? arguments_[++index];
     if (key === "--backend") options.backend = value;
+    else if (key === "--outbound") options.outbound = value;
     else if (key === "--manifest") options.manifest = value;
     else if (key === "--output") options.output = value;
     else if (key === "--summary") options.summary = value;
