@@ -90,6 +90,19 @@ export interface FencingContext {
   readonly now: number;
 }
 
+/** SQL fragment used to fence mutations against the current writer lease. */
+export const FENCE_EXISTS_SQL = `
+  SELECT 1 FROM writer_lease
+  WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until > ?
+`;
+
+/** Returns the parameter tuple shared by every fenced SQL statement. */
+export function fenceParameters(
+  fence: FencingContext,
+): readonly [string, number, string, number] {
+  return [fence.role, fence.writerEpoch, fence.fencingToken, fence.now];
+}
+
 /**
  * Claims or renews a writer lease inside an already-active async SQL context.
  *
@@ -261,7 +274,9 @@ function makeLease(
     role,
     writerId,
     writerEpoch,
-    fencingToken: `fence-${writerEpoch}`,
+    // Include the owner identity as well as the monotonically increasing epoch;
+    // equal epochs from different roles must never share a remote authority token.
+    fencingToken: `fence-${writerEpoch}:${writerId}`,
     leaseUntil,
   };
 }

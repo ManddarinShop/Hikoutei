@@ -19,18 +19,27 @@ permissions:
 
 jobs:
   test:
-    name: Unit, type, build, and packed internal sync/gateway E2E
+    name: Unit, type, build, packed sync/provider E2E, and installed root API smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
+
+      - name: Verify public Kohkai dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          kohkai_version="$(node -p "require('./package.json').dependencies['@hikoutei/kohkai'] || ''")"
+          test -n "$kohkai_version"
+          published_kohkai_version="$(npm view "@hikoutei/kohkai@$kohkai_version" version --registry=https://registry.npmjs.org)"
+          test "$published_kohkai_version" = "$kohkai_version"
 
       - name: Install dependencies
         run: npm ci
@@ -47,7 +56,7 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run installed-package internal sync/gateway E2E (fake)
+      - name: Run installed-package internal sync/provider E2E and root API smoke (fake)
         shell: bash
         run: |
           set -euo pipefail
@@ -65,16 +74,27 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
+          # Internal sync/provider E2E: loads dist modules directly and exercises
+          # projection registration, provisioning, the worker, and polling.
           cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
           node "$consumer_dir/run-api-scenario.mjs" \
             --backend=fake \
             --output="$RUNNER_TEMP/hikoutei-fake-result.json" \
             --manifest="$RUNNER_TEMP/hikoutei-fake-manifest.json"
 
-      - name: Upload internal sync/gateway E2E report (fake)
+          # Installed root API smoke: imports ONLY the installed `hikoutei` root
+          # entrypoint and drives the public entity-lifecycle contract.
+          cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
+          cp scripts/ci/root-api-options.mjs "$consumer_dir/root-api-options.mjs"
+          node "$consumer_dir/run-root-api-scenario.mjs" \
+            --output="$RUNNER_TEMP/hikoutei-root-api-smoke-result.json"
+
+      - name: Upload installed-consumer reports (fake)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: hikoutei-fake-sync-gateway-e2e
-          path: ${{ runner.temp }}/hikoutei-fake-result.json
+          name: hikoutei-fake-installed-consumer
+          path: |
+            ${{ runner.temp }}/hikoutei-fake-result.json
+            ${{ runner.temp }}/hikoutei-root-api-smoke-result.json
           if-no-files-found: ignore

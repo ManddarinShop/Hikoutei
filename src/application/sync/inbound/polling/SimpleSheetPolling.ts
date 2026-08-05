@@ -12,18 +12,19 @@ import type { NormalizedCell } from "../../../../domain/index.js";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../../../../shared/encoding/constants.js";
+import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
 } from "../../../../infrastructure/storage/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../../gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../../sheets/sheetsProvisioning.js";
 import type {
   ReadSyncTableRowsRequest,
-  SyncSheetTableReaderGateway,
+  SyncSheetsTableReader,
   SyncTableRow,
   SyncTableRowsResult,
-} from "../../gateway/syncGateway.js";
+} from "../../sheets/syncSheets.js";
 
 const READ_CANONICAL_ROWS_SQL = `
   SELECT binding.logical_sheet_id, entity.entity_id, entity.status AS entity_status,
@@ -138,7 +139,7 @@ interface CanonicalEntity {
  */
 export async function pollSimpleSheetRowsWithAdapter(options: {
   readonly storage: SqlStorageAdapter;
-  readonly gateway: SyncSheetTableReaderGateway;
+  readonly provider: SyncSheetsTableReader;
   readonly definitions: readonly RegisteredSyncProjectionDefinition[];
   readonly physicalSheetIds?: readonly string[];
 }): Promise<SimpleSheetPollingResult> {
@@ -160,7 +161,7 @@ export async function pollSimpleSheetRowsWithAdapter(options: {
 
   const [canonicalByLogicalSheet, remoteResults] = await Promise.all([
     readCanonicalRows(options.storage, definitions),
-    options.gateway.readRowsBatch(definitions.map(toReadRequest)),
+    options.provider.readRowsBatch(definitions.map(toReadRequest)),
   ]);
   if (remoteResults.length !== definitions.length) {
     throwPollingError("table read result count does not match the requested tables");
@@ -392,28 +393,10 @@ function parseCanonicalCell(value: string, label: string): NormalizedCell {
   } catch (error) {
     throwPollingError("canonical value is not valid JSON for " + label, error);
   }
-  if (parsed === null) return null;
-  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (!isNormalizedCell(parsed)) {
     throwPollingError("canonical value is not a normalized cell for " + label);
   }
-  const record = parsed as Record<string, unknown>;
-  if (record.kind === NORMALIZED_CELL_KINDS.STRING || record.kind === NORMALIZED_CELL_KINDS.DATE) {
-    if (typeof record.value !== "string") throwPollingError("canonical text cell is invalid for " + label);
-    return record.kind === NORMALIZED_CELL_KINDS.STRING
-      ? { kind: NORMALIZED_CELL_KINDS.STRING, value: record.value }
-      : { kind: NORMALIZED_CELL_KINDS.DATE, value: record.value };
-  }
-  if (record.kind === NORMALIZED_CELL_KINDS.NUMBER) {
-    if (typeof record.value !== "number" || !Number.isFinite(record.value)) {
-      throwPollingError("canonical number cell is invalid for " + label);
-    }
-    return { kind: NORMALIZED_CELL_KINDS.NUMBER, value: record.value };
-  }
-  if (record.kind === NORMALIZED_CELL_KINDS.BOOLEAN) {
-    if (typeof record.value !== "boolean") throwPollingError("canonical boolean cell is invalid for " + label);
-    return { kind: NORMALIZED_CELL_KINDS.BOOLEAN, value: record.value };
-  }
-  throwPollingError("canonical cell kind is unsupported for " + label);
+  return parsed;
 }
 
 function parseCanonicalEntityStatus(value: string, entityId: string): CanonicalEntity["status"] {

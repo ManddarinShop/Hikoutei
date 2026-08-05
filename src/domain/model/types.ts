@@ -17,6 +17,11 @@ import type {
   RowOperation,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
+  ProjectionKind,
+  RegisteredProjectionKind,
+  EffectKind as DomainEffectKind,
+  EffectTargetKind as DomainEffectTargetKind,
+  EffectStatus as DomainEffectStatus,
 } from "./constants.js";
 
 export type {
@@ -24,6 +29,8 @@ export type {
   ConflictStatus,
   DeleteEvidence,
   FieldOwnership,
+  ProjectionKind,
+  RegisteredProjectionKind,
   QuarantineReason,
   RowBindingState,
   RowOperation,
@@ -62,7 +69,7 @@ export type CanonicalResolution =
 // ---------------------------------------------------------------------------
 
 /** Legacy value retained for compatibility; new registrations use explicit projections. */
-export type Projection = "user_input" | "system_state" | "legacy_combined";
+export type Projection = ProjectionKind;
 
 // ---------------------------------------------------------------------------
 // Normalized row
@@ -138,6 +145,8 @@ export type RawObservedFieldChange =
 interface ObservedRowChangeBase {
   readonly rowBindingId: string;
   readonly baseVisibleRevision: number;
+  /** Exact confirmed row hash used when revision evidence is synthetic. */
+  readonly baseVisibleHash?: string;
 }
 
 /** A validated insertion with only the state an insertion can carry. */
@@ -176,6 +185,8 @@ export type ObservedRowChange =
 interface RawObservedRowChangeBase {
   readonly rowBindingId: string;
   readonly baseVisibleRevision: number;
+  /** Exact confirmed row hash used when revision evidence is synthetic. */
+  readonly baseVisibleHash?: string;
 }
 
 /** Raw insertion input with no existing-row state fields. */
@@ -221,7 +232,7 @@ export interface ObservedEditBatch {
   readonly baseSnapshotHash: string;
   /** Authenticated service principal; audit metadata, never a merge input. */
   readonly ingressActorId: string;
-  /** Verified editor identity when the gateway can provide one. */
+  /** Verified editor identity when the provider can provide one. */
   readonly editorActorId: Presence<string>;
   readonly editorActorSource: EditorActorSource;
   readonly rows: readonly ObservedRowChange[];
@@ -438,26 +449,14 @@ export interface ResolutionCommand {
 // Effect model
 // ---------------------------------------------------------------------------
 
-export type EffectKind =
-  | "system_projection"
-  | "candidate_reconcile"
-  | "system_repair"
-  | "resolution_projection"
-  /** Removes a resolved system-owned Sync_Conflicts row after a visible CAS. */
-  | "resolution_delete"
-  /** Removes one candidate-free User_Input row after a full-row visible CAS. */
-  | "user_input_delete";
+/** Durable outbox effect operation, derived from the canonical constants. */
+export type EffectKind = DomainEffectKind;
 
-export type EffectTargetKind = "entity" | "row_binding" | "projection_row" | "conflict";
+/** Durable outbox target kind, derived from the canonical constants. */
+export type EffectTargetKind = DomainEffectTargetKind;
 
-export type EffectStatus =
-  | "pending"
-  | "processing"
-  | "applied"
-  | "blocked_candidate"
-  | "superseded"
-  | "conflict"
-  | "failed";
+/** Durable outbox lifecycle status, derived from the canonical constants. */
+export type EffectStatus = DomainEffectStatus;
 
 /** A sheet effect to be dispatched by the outbox worker. */
 export interface SheetEffect {

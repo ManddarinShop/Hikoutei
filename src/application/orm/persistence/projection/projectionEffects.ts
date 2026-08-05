@@ -3,7 +3,7 @@
  *
  * This module derives system-state and user-input effects from the SQLite
  * baseline. It does not execute them; the outbox worker remains responsible
- * for materializing effects in Apps Script.
+ * for materializing effects through the sync provider.
  */
 
 import {
@@ -14,17 +14,21 @@ import {
   type NormalizedCell,
 } from "../../../../domain/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../../sync/gateway/constants.js";
+import { SYNC_PROJECTIONS } from "../../../sync/sheets/constants.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../../../sync/gateway/syncGateway.js";
+} from "../../../sync/sheets/syncSheets.js";
 import {
   createCandidateReconcileEffect,
   createSystemProjectionEffect,
   createUserInputDeleteEffect,
 } from "../../../sync/outbound/projection/ProjectionEffectFactory.js";
-import { requireRegisteredSyncSheetWithSql } from "../../../../infrastructure/storage/index.js";
+import {
+  readMappedLatestProjectionEffectWithSql,
+  readMappedVisibleProjectionStateWithSql,
+  requireRegisteredSyncSheetWithSql,
+} from "../../../../infrastructure/storage/index.js";
 import type {
   NewEffect,
   RegisteredSyncSheet,
@@ -33,12 +37,8 @@ import type {
 import {
   MAPPED_EFFECT_STATUSES,
   MAPPED_EFFECT_TARGET_KINDS,
-  READ_LATEST_PROJECTION_EFFECT_SQL,
-  READ_VISIBLE_PROJECTION_STATE_SQL,
-  type LatestProjectionEffectSqlRow,
   type ProjectionBaseline,
   type ResolvedWriterOptions,
-  type VisibleProjectionSqlRow,
 } from "../support/contracts.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
@@ -55,16 +55,20 @@ import {
   TypedSheetsOrmError,
 } from "../../errors.js";
 import {
-  absentValue,
-  applicableValue,
   identifiedValue,
-  isNonNegativeSafeInteger,
-  isPositiveSafeInteger,
   projectionRowTargetId,
   requireEncodedField,
   throwProjectionBlocked,
-  presentValue,
 } from "../support/helpers.js";
+import {
+  absentValue,
+  applicableValue,
+  presentValue,
+} from "../../../../shared/state/index.js";
+import {
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+} from "../../../../shared/validation.js";
 
 /** Plans all projection effects required by one mapped entity lifecycle change. */
 export async function projectionEffects(
@@ -79,10 +83,11 @@ export async function projectionEffects(
   changedFields: readonly TypedSheetsEntityFieldMapping[],
   commitId: string,
   targetEntityRevision: number,
+  options: { readonly includeUserProjection?: boolean } = {},
 ): Promise<readonly NewEffect[]> {
   const systemProjection = requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+    SYNC_PROJECTIONS.SYSTEM_STATE,
   );
   const systemRoute = await requireMappedRoute(sql, mapping, systemProjection);
   const systemTarget = {
@@ -112,7 +117,7 @@ export async function projectionEffects(
       physicalSheetId: systemRoute.physicalSheetId,
       sheetName: systemRoute.tabName,
       registeredRange: systemRoute.registeredRange,
-      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
       schemaVersion: mapping.schemaVersion,
       targetKind: systemTarget.targetKind,
       targetId: systemTarget.targetId,
@@ -129,10 +134,11 @@ export async function projectionEffects(
   ];
 
   const userProjection = mapping.projections.find(
-    (projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
   );
   if (userProjection === undefined) return effects;
-  const shouldReconcileUserInput = userProjection !== undefined &&
+  const shouldReconcileUserInput = options.includeUserProjection !== false &&
+    userProjection !== undefined &&
     changeKind !== TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE &&
     (changeKind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE ||
       changedFields.some((field) => field.ownership === FIELD_OWNERSHIPS.USER));
@@ -145,8 +151,11 @@ export async function projectionEffects(
   const userFields = Object.fromEntries(
     mapping.fields
       .filter((field) => field.ownership === FIELD_OWNERSHIPS.USER)
-      .map((field) => [field.fieldName, requireEncodedField(encodedEntity, field)]),
-  ) as Record<string, NormalizedCell>;
+      .map((field): readonly [string, NormalizedCell] => [
+        field.fieldName,
+        requireEncodedField(encodedEntity, field),
+      ]),
+  );
   const userTarget = {
     targetKind: MAPPED_EFFECT_TARGET_KINDS.PROJECTION_ROW,
     targetId: projectionRowTargetId(userProjection.physicalSheetId, rowBindingId),
@@ -242,11 +251,12 @@ export async function projectionBaseline(
   targetKind: EffectTargetKind,
   targetId: string,
 ): Promise<ProjectionBaseline> {
-  const latest = await sql.get<LatestProjectionEffectSqlRow>(READ_LATEST_PROJECTION_EFFECT_SQL, [
+  const latest = await readMappedLatestProjectionEffectWithSql(
+    sql,
     mapping.logicalSheetId,
     targetKind,
     targetId,
-  ]);
+  );
   if (latest !== undefined) {
     if (
       latest.physical_sheet_id !== projection.physicalSheetId ||
@@ -307,11 +317,12 @@ export async function projectionBaselineFromConfirmedState(
   rowBindingId: string,
   streamSequence: number,
 ): Promise<ProjectionBaseline> {
-  const visible = await sql.get<VisibleProjectionSqlRow>(READ_VISIBLE_PROJECTION_STATE_SQL, [
+  const visible = await readMappedVisibleProjectionStateWithSql(
+    sql,
     projection.physicalSheetId,
     projection.projection,
     rowBindingId,
-  ]);
+  );
   if (visible === undefined) {
     return {
       expectedVisibleRevision: 0,

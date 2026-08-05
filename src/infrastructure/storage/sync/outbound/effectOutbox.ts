@@ -10,17 +10,24 @@
 
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
-import { isFencingValidWithSql } from "../shared/writerLease.js";
+import {
+  fenceParameters,
+  isFencingValidWithSql,
+} from "../shared/writerLease.js";
 import type { FencingContext } from "../shared/writerLease.js";
-import type {
-  SqlExecutor,
-  SqlStorageAdapter,
+import {
+  decodeSqlRows,
+  type SqlExecutor,
+  type SqlRow,
+  type SqlStorageAdapter,
 } from "../../../../adapter/persistence/contracts/sql.js";
 import type {
   ApplyResultOptions,
   ClaimEffectOptions,
   ClaimResult,
+  MarkDeliveryUncertainOptions,
   NewEffect,
+  RenewEffectLeaseOptions,
   PendingEffect,
   RetryClaimedEffectOptions,
 } from "./effectOutboxContracts.js";
@@ -30,21 +37,27 @@ import {
   COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL,
   INSERT_PENDING_EFFECT_SQL,
   INSERT_REPLANNED_EFFECT_SQL,
+  MARK_DELIVERY_UNCERTAIN_SQL,
   RECOVER_EXPIRED_LEASES_SQL,
+  RENEW_EFFECT_LEASE_SQL,
   REQUEUE_CLAIMED_EFFECT_SQL,
   RELEASE_UNPROCESSED_EFFECT_SQL,
   SELECT_PENDING_EFFECTS_BY_TARGET_SQL,
   SELECT_READY_EFFECTS_SQL,
+  SELECT_READY_FAST_APPEND_EFFECTS_SQL,
   SUPERSEDE_EFFECT_SQL,
 } from "./effectOutboxSql.js";
 import {
   applyEffectResultParameters,
+  assertProjectionConfirmationTargetWithSql,
   AsyncFenceLostError,
   claimEffectParameters,
-  fenceParameters,
+  decodePendingEffectRow,
   pendingEffectParameters,
+  markDeliveryUncertainParameters,
   replannedEffectParameters,
   requireCurrentFenceWithSql,
+  retryClaimedEffectParameters,
   validateApplyResultOptions,
   validateEffectLeaseDuration,
   validateReadyEffectLimit,
@@ -52,10 +65,14 @@ import {
 } from "./effectOutboxSupport.js";
 export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./effectOutboxContracts.js";
 export type {
+  AppliedEffectResultOptions,
   ApplyResultOptions,
   ClaimEffectOptions,
   ClaimResult,
+  NonAppliedEffectResultOptions,
+  RenewEffectLeaseOptions,
   EffectProjectionConfirmation,
+  MarkDeliveryUncertainOptions,
   NewEffect,
   PendingEffect,
   RetryClaimedEffectOptions,
@@ -75,22 +92,26 @@ export async function claimEffectWithSql(
     return {
       effectId: options.effectId,
       claimToken: options.claimToken,
-      success: false,
+      status: "not_claimed",
       reason: "stale_fencing",
     };
   }
   validateEffectLeaseDuration(options.leaseDurationMs);
 
   const result = await sql.run(CLAIM_EFFECT_SQL, claimEffectParameters(options));
-  const success = result.changes > 0;
+  if (result.changes > 0) {
+    return {
+      effectId: options.effectId,
+      claimToken: options.claimToken,
+      status: "claimed",
+    };
+  }
 
   return {
     effectId: options.effectId,
     claimToken: options.claimToken,
-    success,
-    reason: success
-      ? "claimed"
-      : await isFencingValidWithSql(sql, options) ? "not_claimable" : "stale_fencing",
+    status: "not_claimed",
+    reason: await isFencingValidWithSql(sql, options) ? "not_claimable" : "stale_fencing",
   };
 }
 
@@ -102,6 +123,31 @@ export async function claimEffectWithAdapter(
   return storage.transaction(({ sql }) => claimEffectWithSql(sql, options));
 }
 
+/** Renews a processing effect only while the current writer fence and claim still match. */
+export async function renewEffectLeaseWithSql(
+  sql: SqlExecutor,
+  options: RenewEffectLeaseOptions,
+): Promise<boolean> {
+  if (!(await isFencingValidWithSql(sql, options))) return false;
+  validateEffectLeaseDuration(options.leaseDurationMs);
+  const result = await sql.run(RENEW_EFFECT_LEASE_SQL, [
+    options.now + options.leaseDurationMs,
+    options.effectId,
+    options.claimToken,
+    options.writerEpoch,
+    options.now,
+    ...fenceParameters(options),
+  ]);
+  return result.changes === 1;
+}
+
+/** Renews one claimed effect through an adapter-owned transaction. */
+export async function renewEffectLeaseWithAdapter(
+  storage: SqlStorageAdapter,
+  options: RenewEffectLeaseOptions,
+): Promise<boolean> {
+  return storage.transaction(({ sql }) => renewEffectLeaseWithSql(sql, options));
+}
 
 /**
  * Appends pending effects under the supplied writer fence.
@@ -171,6 +217,14 @@ export async function applyEffectResultWithSql(
 ): Promise<boolean> {
   if (!(await isFencingValidWithSql(sql, options))) return false;
   validateApplyResultOptions(options);
+  if (options.projectionConfirmation !== undefined) {
+    await assertProjectionConfirmationTargetWithSql(
+      sql,
+      options.effectId,
+      options.claimToken,
+      options.projectionConfirmation,
+    );
+  }
 
   return withSqlSavepoint(sql, "apply_effect_result", async () => {
     const result = await sql.run(APPLY_EFFECT_RESULT_SQL, applyEffectResultParameters(options));
@@ -258,6 +312,8 @@ export async function recoverExpiredLeasesWithSql(
   await requireCurrentFenceWithSql(sql, fence);
   const result = await sql.run(RECOVER_EXPIRED_LEASES_SQL, [
     fence.now,
+    fence.now,
+    fence.now,
     ...fenceParameters(fence),
   ]);
   return result.changes;
@@ -271,11 +327,38 @@ export async function recoverExpiredLeasesWithAdapter(
   return storage.transaction(({ sql }) => recoverExpiredLeasesWithSql(sql, fence));
 }
 
+/** Moves a claimed effect into durable ambiguous-delivery recovery. */
+export async function markDeliveryUncertainWithSql(
+  sql: SqlExecutor,
+  options: MarkDeliveryUncertainOptions,
+): Promise<boolean> {
+  if (!(await isFencingValidWithSql(sql, options))) return false;
+  if (options.nextProbeAt < options.uncertainSince || options.uncertainSince < 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "uncertain delivery timestamps must be ordered non-negative values",
+    );
+  }
+  const result = await sql.run(
+    MARK_DELIVERY_UNCERTAIN_SQL,
+    markDeliveryUncertainParameters(options),
+  );
+  return result.changes === 1;
+}
+
+/** Moves one claimed effect into durable ambiguous-delivery recovery. */
+export async function markDeliveryUncertainWithAdapter(
+  storage: SqlStorageAdapter,
+  options: MarkDeliveryUncertainOptions,
+): Promise<boolean> {
+  return storage.transaction(({ sql }) => markDeliveryUncertainWithSql(sql, options));
+}
+
 /**
  * Returns an acknowledged-but-unprocessed batch suffix to pending.
  *
  * This is intentionally narrower than a generic redrive: it may be used only
- * after a valid gateway response explicitly says the batch budget stopped
+ * after a valid provider response explicitly says the batch budget stopped
  * before this effect.  Unknown response loss remains failed until read-back.
  */
 /** Returns one acknowledged-but-unprocessed effect through an async SQL context. */
@@ -288,6 +371,7 @@ export async function releaseUnprocessedEffectWithSql(
 ): Promise<boolean> {
   if (!(await isFencingValidWithSql(sql, options))) return false;
   const result = await sql.run(RELEASE_UNPROCESSED_EFFECT_SQL, [
+    options.now + 1_000,
     options.effectId,
     options.claimToken,
     options.writerEpoch,
@@ -315,15 +399,7 @@ export async function retryClaimedEffectWithSql(
   options: RetryClaimedEffectOptions,
 ): Promise<boolean> {
   if (!(await isFencingValidWithSql(sql, options))) return false;
-  const result = await sql.run(REQUEUE_CLAIMED_EFFECT_SQL, [
-    options.lastErrorCode,
-    options.lastErrorMessage,
-    options.effectId,
-    options.claimToken,
-    options.writerEpoch,
-    options.now,
-    ...fenceParameters(options),
-  ]);
+  const result = await sql.run(REQUEUE_CLAIMED_EFFECT_SQL, retryClaimedEffectParameters(options));
   return result.changes === 1;
 }
 
@@ -346,11 +422,12 @@ export async function findPendingEffectsByTargetWithSql(
   targetKind: string,
   targetId: string,
 ): Promise<readonly PendingEffect[]> {
-  return sql.all<PendingEffect>(SELECT_PENDING_EFFECTS_BY_TARGET_SQL, [
+  const rows = await sql.all<SqlRow>(SELECT_PENDING_EFFECTS_BY_TARGET_SQL, [
     logicalSheetId,
     targetKind,
     targetId,
   ]);
+  return decodeSqlRows(rows, decodePendingEffectRow, "pending effects");
 }
 
 /** Reads one target stream through a fresh adapter read context. */
@@ -375,17 +452,60 @@ export async function findPendingEffectsByTargetWithAdapter(
 export async function listReadyEffectsWithSql(
   sql: SqlExecutor,
   limit: number,
+  now = Date.now(),
 ): Promise<readonly PendingEffect[]> {
   validateReadyEffectLimit(limit);
-  return sql.all<PendingEffect>(SELECT_READY_EFFECTS_SQL, [limit]);
+  if (!Number.isSafeInteger(now) || now < 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "ready effect time must be a non-negative safe integer",
+    );
+  }
+  const rows = await sql.all<SqlRow>(SELECT_READY_EFFECTS_SQL, [now, now, now, limit]);
+  return decodeSqlRows(rows, decodePendingEffectRow, "ready effects");
 }
 
 /** Reads bounded head-of-line effects through a fresh adapter read context. */
 export async function listReadyEffectsWithAdapter(
   storage: SqlStorageAdapter,
   limit: number,
+  now = Date.now(),
 ): Promise<readonly PendingEffect[]> {
-  return storage.read(({ sql }) => listReadyEffectsWithSql(sql, limit));
+  return storage.read(({ sql }) => listReadyEffectsWithSql(sql, limit, now));
+}
+
+/**
+ * Reads bounded head-of-line effects that can only be fast-append rows.
+ *
+ * The query jumps past any regular/recovery backlog in the same ready order,
+ * so an arbitrary number of head-of-queue rows cannot starve the bulk append
+ * path. Only the SQL-visible append shape is filtered; the worker still
+ * validates each row's payload (createIfMissing) before claiming it.
+ */
+/** Reads bounded ready fast-append candidates through an already-active async SQL context. */
+export async function listReadyFastAppendEffectsWithSql(
+  sql: SqlExecutor,
+  limit: number,
+  now = Date.now(),
+): Promise<readonly PendingEffect[]> {
+  validateReadyEffectLimit(limit);
+  if (!Number.isSafeInteger(now) || now < 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "ready fast-append effect time must be a non-negative safe integer",
+    );
+  }
+  const rows = await sql.all<SqlRow>(SELECT_READY_FAST_APPEND_EFFECTS_SQL, [now, limit]);
+  return decodeSqlRows(rows, decodePendingEffectRow, "ready fast-append effects");
+}
+
+/** Reads bounded ready fast-append candidates through a fresh adapter read context. */
+export async function listReadyFastAppendEffectsWithAdapter(
+  storage: SqlStorageAdapter,
+  limit: number,
+  now = Date.now(),
+): Promise<readonly PendingEffect[]> {
+  return storage.read(({ sql }) => listReadyFastAppendEffectsWithSql(sql, limit, now));
 }
 
 /** Returns whether normal outbox work is still pending or actively processing. */

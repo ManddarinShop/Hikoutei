@@ -11,9 +11,11 @@ import {
 } from "@mikro-orm/sql";
 import type { Options, SqlEntityManager } from "@mikro-orm/sql";
 
+import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 import type {
   SqlExecutor,
   SqlGeneratedId,
+  SqlRow,
   SqlMutationResult,
   SqlParameter,
   SqlStorageAdapter,
@@ -45,15 +47,29 @@ export interface InitializeMikroOrmSqliteAdapterOptions {
   readonly configuration?: MikroOrmSqliteConfiguration;
 }
 
+/** Explicit native mutation capability used only by the inbound observation bridge. */
+export interface MikroOrmNativeEntityWriter {
+  findOne(entityName: unknown, where: Record<string, unknown>): Promise<object | null>;
+  insert(entityName: unknown, data: Record<string, unknown>): Promise<unknown>;
+  nativeUpdate(
+    entityName: unknown,
+    where: Record<string, unknown>,
+    data: Record<string, unknown>,
+  ): Promise<number>;
+  nativeDelete(entityName: unknown, where: Record<string, unknown>): Promise<number>;
+}
+
 /**
  * Adapter-specific transaction context for code that intentionally needs
  * MikroORM entity lifecycle operations alongside typed-sheets storage SQL.
  *
- * Core storage must use `sql`; `entityManager` is an explicit escape hatch for
- * integration code and never appears in the adapter-neutral contract.
+ * Core storage must use `sql`; `entityManager` and `nativeWriter` are explicit
+ * escape hatches for integration code and never appear in the adapter-neutral contract.
  */
 export interface MikroOrmSqliteTransaction extends SqlStorageContext {
   readonly entityManager: MikroOrmSqliteEntityManager;
+  /** Explicit native mutation capability used by inbound observation writes. */
+  readonly nativeWriter: MikroOrmNativeEntityWriter;
 }
 
 /**
@@ -155,7 +171,53 @@ function createMikroOrmTransaction(
 ): MikroOrmSqliteTransaction {
   return {
     entityManager,
+    nativeWriter: createMikroOrmNativeEntityWriter(entityManager),
     sql: new MikroOrmSqlExecutor(entityManager),
+  };
+}
+
+/** Adapts native MikroORM writes without pretending the public manager has them. */
+function createMikroOrmNativeEntityWriter(
+  entityManager: MikroOrmSqliteEntityManager,
+): MikroOrmNativeEntityWriter {
+  return {
+    async findOne(entityName, where) {
+      const result: unknown = await Reflect.apply(
+        entityManager.findOne,
+        entityManager,
+        [entityName, where],
+      );
+      if (result === null) return null;
+      if (typeof result !== "object") {
+        throw new TypeError("MikroORM findOne result must be an entity object or null");
+      }
+      return result;
+    },
+    insert(entityName, data) {
+      return Reflect.apply(entityManager.insert, entityManager, [entityName, data]);
+    },
+    async nativeUpdate(entityName, where, data) {
+      const result: unknown = await Reflect.apply(
+        entityManager.nativeUpdate,
+        entityManager,
+        [entityName, where, data],
+      );
+      if (typeof result !== "number" || !Number.isSafeInteger(result)) {
+        throw new TypeError("MikroORM nativeUpdate result must be a safe integer");
+      }
+      return result;
+    },
+    async nativeDelete(entityName, where) {
+      const result: unknown = await Reflect.apply(
+        entityManager.nativeDelete,
+        entityManager,
+        [entityName, where],
+      );
+      if (typeof result !== "number" || !Number.isSafeInteger(result)) {
+        throw new TypeError("MikroORM nativeDelete result must be a safe integer");
+      }
+      return result;
+    },
   };
 }
 
@@ -167,8 +229,11 @@ class MikroOrmSqlExecutor implements SqlExecutor {
     sql: string,
     parameters: readonly SqlParameter[] = [],
   ): Promise<readonly Row[]> {
-    const rows = await this.entityManager.execute(sql, [...parameters], "all");
-    return rows as unknown as readonly Row[];
+    const rows = await this.entityManager.execute<readonly SqlRow[]>(sql, [...parameters], "all");
+    if (!Array.isArray(rows) || !rows.every(isRecord)) {
+      throw new TypeError("SQL all result must be an array of object rows");
+    }
+    return rows as readonly Row[];
   }
 
   async get<Row extends object>(
@@ -176,7 +241,10 @@ class MikroOrmSqlExecutor implements SqlExecutor {
     parameters: readonly SqlParameter[] = [],
   ): Promise<Row | undefined> {
     const row = await this.entityManager.execute(sql, [...parameters], "get");
-    return row as unknown as Row | undefined;
+    if (row !== undefined && !isRecord(row)) {
+      throw new TypeError("SQL get result must be an object row");
+    }
+    return row as Row | undefined;
   }
 
   async run(

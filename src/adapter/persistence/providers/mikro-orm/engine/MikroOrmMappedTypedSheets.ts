@@ -16,9 +16,12 @@ import {
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
 } from "../../../../../application/orm/mapping/entityMapping.js";
-import type { TypedSheetsEntityWriterOptions } from "../../../../../application/orm/persistence/support/contracts.js";
+import type {
+  RegisteredTypedSheetsMappedProjection,
+  TypedSheetsEntityWriterOptions,
+} from "../../../../../application/orm/persistence/support/contracts.js";
 import type { TypedSheetsOrm } from "../../../../../application/orm/api/TypedSheetsOrm.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheets/sheetsProvisioning.js";
 import {
   createTypedSheetsOrm,
 } from "./MikroOrmTypedSheetsEngine.js";
@@ -39,14 +42,22 @@ export interface CreateMappedTypedSheetsOrmOptions {
 export interface InitializeMappedTypedSheetsOrmOptions
   extends InitializeMikroOrmSqliteAdapterOptions, CreateMappedTypedSheetsOrmOptions {
   /**
-   * Optional control-plane hook invoked after local registry writes succeed.
+   * Optional internal hook invoked after local registry writes succeed.
    *
-   * Applications can pass `provisionRegisteredSyncSheets()` here to provision
-   * the exact generated headers without duplicating route configuration.
+   * The hook receives the exact generated projection definitions so the sync
+   * service can provision a remote provider without duplicating route metadata.
    */
   readonly onRegisteredProjections?: (
     definitions: readonly RegisteredSyncProjectionDefinition[],
   ) => Promise<void>;
+}
+
+/** Internal mapped runtime resources shared by the ORM facade and sync worker. */
+export interface InitializedMappedTypedSheetsRuntime {
+  readonly storage: MikroOrmSqliteAdapter;
+  readonly orm: TypedSheetsOrm;
+  readonly mappings: TypedSheetsEntityMappingRegistry;
+  readonly registrations: readonly RegisteredTypedSheetsMappedProjection[];
 }
 
 /**
@@ -70,12 +81,12 @@ export function createMappedTypedSheetsOrm(
  * Opens a dedicated MikroORM SQLite runtime ready for mapped entity lifecycle work.
  *
  * Startup performs non-destructive entity/schema migration and idempotent local
- * projection registration. Remote Apps Script provisioning remains explicit so
+ * projection registration. Remote provider-side provisioning remains explicit so
  * a process cannot mutate a spreadsheet merely by opening its local database.
  */
-export async function initializeMappedTypedSheetsOrm(
+export async function initializeMappedTypedSheetsRuntime(
   options: InitializeMappedTypedSheetsOrmOptions,
-): Promise<TypedSheetsOrm> {
+): Promise<InitializedMappedTypedSheetsRuntime> {
   const {
     mappings: mappingsInput,
     writer,
@@ -90,11 +101,24 @@ export async function initializeMappedTypedSheetsOrm(
     if (onRegisteredProjections !== undefined) {
       await onRegisteredProjections(registeredTypedSheetsProjectionDefinitions(registrations));
     }
-    return createMappedTypedSheetsOrm(storage, { mappings, writer });
+    return {
+      storage,
+      orm: createMappedTypedSheetsOrm(storage, { mappings, writer }),
+      mappings,
+      registrations,
+    };
   } catch (error: unknown) {
     await storage.close(true);
     throw error;
   }
+}
+
+/** Opens a mapped runtime and returns only its ORM facade for existing callers. */
+export async function initializeMappedTypedSheetsOrm(
+  options: InitializeMappedTypedSheetsOrmOptions,
+): Promise<TypedSheetsOrm> {
+  const runtime = await initializeMappedTypedSheetsRuntime(options);
+  return runtime.orm;
 }
 
 function mappingRegistry(

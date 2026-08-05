@@ -25,6 +25,8 @@ import {
 } from "../../sync/shared/writerLease.js";
 import {
   applyCanonicalMutationWithSql,
+  assertObservedProjectionBaselineWithSql,
+  confirmObservedProjectionWithSql,
   persistConflictAttemptsWithSql,
   requirePersistedOutcome,
 } from "./observationCanonical.js";
@@ -75,6 +77,7 @@ export type {
   EventIdentityInput,
   BusinessKeyChange,
   CanonicalRowMutation,
+  ObservedProjectionEvidence,
   PersistObservedRowInput,
   PersistObservedRowResult,
 } from "./observationTypes.js";
@@ -250,6 +253,7 @@ export async function persistObservedRowWithSql(
         );
       }
 
+      await assertObservedProjectionBaselineWithSql(sql, input, row);
       const canonicalResult = await applyCanonicalMutationWithSql(sql, fence, input, row, binding);
       const conflictIds = await persistConflictAttemptsWithSql(
         sql,
@@ -258,6 +262,14 @@ export async function persistObservedRowWithSql(
         binding,
         createdEvent.eventId,
       );
+      if (canonicalResult.kind === PRESENCE_KINDS.PRESENT) {
+        await confirmObservedProjectionWithSql(
+          sql,
+          input,
+          row,
+          canonicalResult.value.entityRevision,
+        );
+      }
       await appendAdditionalEffectsOrThrowWithSql(sql, fence, input.effects);
 
       const eventStatus = input.evaluation.conflicts.length === EMPTY_ARRAY_LENGTH_ZERO

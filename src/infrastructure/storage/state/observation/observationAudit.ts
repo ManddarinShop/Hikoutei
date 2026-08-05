@@ -1,13 +1,14 @@
 /**
  * Stable audit serialization for observation evidence.
  *
- * Gateway payloads are external input, so rejected values must still be
+ * Provider payloads are external input, so rejected values must still be
  * preserved without JSON coercion silently hiding malformed data.
  */
 
 import { computeRowHash, stableHash, type NormalizedRow } from "../../../../domain/index.js";
 import {
   isJavaScriptType,
+  isRecord,
   JAVASCRIPT_TYPE_NAMES,
 } from "../../../../shared/encoding/index.js";
 import { QUARANTINE_FINGERPRINT_MARKERS } from "../../../../domain/evaluate/constants.js";
@@ -79,14 +80,21 @@ function toAuditValue(value: unknown, seen: Set<object>): AuditValue {
     if (value instanceof Map) {
       const entries = [...value.entries()]
         .map(([key, entry]) => [toAuditValue(key, seen), toAuditValue(entry, seen)] as const)
-        .sort((left, right) => auditSortKey(left[0]).localeCompare(auditSortKey(right[0])));
+        .sort((left, right) => {
+          const leftKey = auditSortKey(left[0]);
+          const rightKey = auditSortKey(right[0]);
+          return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+        });
       return { $map: entries };
     }
     if (Object.prototype.toString.call(value) !== QUARANTINE_FINGERPRINT_MARKERS.PLAIN_OBJECT_TAG) {
       return { $invalidObject: Object.prototype.toString.call(value) };
     }
 
-    const objectValue = value as Record<string, unknown>;
+    if (!isRecord(value)) {
+      return { $invalidObject: Object.prototype.toString.call(value) };
+    }
+    const objectValue = value;
     const result: Record<string, AuditValue> = {};
     for (const key of Object.keys(objectValue).sort()) {
       result[key] = toAuditValue(objectValue[key], seen);

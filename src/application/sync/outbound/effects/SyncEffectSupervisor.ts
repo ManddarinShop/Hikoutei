@@ -18,6 +18,10 @@ import {
   type SyncEffectWorkerReport,
   type SyncEffectWorkerWithAdapterOptions,
 } from "./SyncEffectWorker.js";
+import {
+  AdaptiveEffectBatchController,
+  type AdaptiveEffectBatchController as AdaptiveEffectBatchControllerType,
+} from "./AdaptiveEffectBatchController.js";
 
 const DEFAULT_MAX_EFFECTS = 20;
 const DEFAULT_IDLE_INTERVAL_MS = 1_000;
@@ -60,12 +64,14 @@ export interface SyncEffectWorkerSupervisorLoopOptions {
 /** Worker options with a clock supplied by the supervisor on every pass. */
 export type CreateSyncEffectWorkerSupervisorOptions = Omit<
   SyncEffectWorkerWithAdapterOptions,
-  "now" | "workerId" | "maxEffects" | "writerLeaseDurationMs" | "effectLeaseDurationMs"
+  "now" | "workerId" | "maxEffects" | "writerLeaseDurationMs" | "effectLeaseDurationMs" | "requestTimeoutMs"
 > & {
   readonly workerId?: string;
   readonly maxEffects?: number;
   readonly writerLeaseDurationMs?: number;
   readonly effectLeaseDurationMs?: number;
+  readonly requestTimeoutMs?: number;
+  readonly batchController?: AdaptiveEffectBatchControllerType;
   readonly now?: () => number;
   readonly idleIntervalMs?: number;
   readonly errorBackoffInitialMs?: number;
@@ -95,9 +101,11 @@ export class SyncEffectWorkerSupervisor {
   private readonly onReport: ((report: SyncEffectWorkerReport) => void) | undefined;
   private readonly onError: ((error: unknown) => void) | undefined;
   private running = false;
+  private acceptingPasses = true;
   private loopPromise: Promise<void> | undefined;
   private inFlightPass: Promise<SyncEffectWorkerReport> | undefined;
   private inFlightReconciliation: Promise<ReconciliationScanReport> | undefined;
+  private stopPromise: Promise<void> | undefined;
   private nextReconciliationAt = 0;
   private wakeWaiter: (() => void) | undefined;
 
@@ -134,7 +142,7 @@ export class SyncEffectWorkerSupervisor {
 
   /** Starts the background drain loop; repeated calls are harmless. */
   public start(): void {
-    if (this.running) return;
+    if (this.running || !this.acceptingPasses) return;
     this.running = true;
     this.nextReconciliationAt = this.now();
     this.loopPromise = this.runLoop();
@@ -150,6 +158,9 @@ export class SyncEffectWorkerSupervisor {
    * Manual HTTP triggers therefore cannot create a second concurrent worker.
    */
   public runOnce(): Promise<SyncEffectWorkerReport> {
+    if (!this.acceptingPasses) {
+      return Promise.reject(new Error("sync effect supervisor is stopped"));
+    }
     if (this.inFlightPass !== undefined) return this.inFlightPass;
     const pass = Promise.resolve().then(() => this.runPass());
     this.inFlightPass = pass;
@@ -161,12 +172,23 @@ export class SyncEffectWorkerSupervisor {
   }
 
   /** Stops scheduling new passes and waits for the active pass to finish. */
-  public async stop(): Promise<void> {
+  public stop(): Promise<void> {
+    if (this.stopPromise !== undefined) return this.stopPromise;
+    this.acceptingPasses = false;
     this.running = false;
     this.wakeWaiter?.();
-    const loop = this.loopPromise;
-    if (loop !== undefined) await loop;
-    this.loopPromise = undefined;
+    this.stopPromise = (async () => {
+      const loop = this.loopPromise;
+      if (loop !== undefined) await loop.catch(() => undefined);
+      const inFlightPass = this.inFlightPass;
+      if (inFlightPass !== undefined) await inFlightPass.catch(() => undefined);
+      const inFlightReconciliation = this.inFlightReconciliation;
+      if (inFlightReconciliation !== undefined) {
+        await inFlightReconciliation.catch(() => undefined);
+      }
+      this.loopPromise = undefined;
+    })();
+    return this.stopPromise;
   }
 
   private async runLoop(): Promise<void> {
@@ -190,7 +212,13 @@ export class SyncEffectWorkerSupervisor {
           hasImmediateProgress(report) ||
           (reconciliation !== undefined && reconciliation.effectsEnqueued > 0)
         ) {
-          if (report.failed > 0) {
+          if (report.failed > 0 || isResponseLossRetryLoop(report)) {
+            // Back off when the pass only requeued work (a response-loss or
+            // postcondition-unapplied loop) or failed outright, so a struggling
+            // remote is not retried in a tight immediate loop. The backoff is
+            // bounded by errorBackoffMaxMs and resets as soon as forward
+            // progress resumes; lease expiry and recovery still keep effects
+            // live.
             const delay = withJitter(errorBackoff, this.random);
             await this.waitFor(Math.min(this.errorBackoffMaxMs, delay));
             errorBackoff = nextBackoff(errorBackoff, this.errorBackoffMaxMs);
@@ -330,10 +358,17 @@ export function createSyncEffectWorkerSupervisor(
   const maxEffects = options.maxEffects ?? DEFAULT_MAX_EFFECTS;
   const now = options.now ?? Date.now;
 
-  validateWorkerOptions(workerId, maxEffects);
+  validateWorkerOptions(workerId, maxEffects, options.maxFastAppendCandidates, options.appendDispatchIntervalMs);
+  const batchController = options.batchController ?? new AdaptiveEffectBatchController({
+    ...(options.appendDispatchIntervalMs === undefined
+      ? {}
+      : { appendDispatchIntervalMs: options.appendDispatchIntervalMs }),
+  });
   const workerOptions = {
     storage: options.storage,
-    gateway: options.gateway,
+    provider: options.provider,
+    batchController,
+    clock: now,
     workerId,
     maxEffects,
     now: now(),
@@ -344,6 +379,15 @@ export function createSyncEffectWorkerSupervisor(
     ...(options.effectLeaseDurationMs === undefined
       ? {}
       : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
+    ...(options.requestTimeoutMs === undefined
+      ? {}
+      : { requestTimeoutMs: options.requestTimeoutMs }),
+    ...(options.maxFastAppendCandidates === undefined
+      ? {}
+      : { maxFastAppendCandidates: options.maxFastAppendCandidates }),
+    ...(options.appendDispatchIntervalMs === undefined
+      ? {}
+      : { appendDispatchIntervalMs: options.appendDispatchIntervalMs }),
     ...(options.makeRepairReplan === undefined
       ? {}
       : { makeRepairReplan: options.makeRepairReplan }),
@@ -359,6 +403,29 @@ export function createSyncEffectWorkerSupervisor(
 
 function hasImmediateProgress(report: SyncEffectWorkerReport): boolean {
   return report.claimed > 0;
+}
+
+/**
+ * A pass claimed work but reached no terminal state and only requeued it is a
+ * response-loss / postcondition-unapplied retry loop against the remote.
+ * `requeued` always implies `deferred` in the worker, so it covers both the
+ * fast-append and regular recovery paths. Forward progress elsewhere (an
+ * applied/superseded/conflicted/blocked/replanned/failed effect) keeps the
+ * drain loop running immediately.
+ */
+function isResponseLossRetryLoop(report: SyncEffectWorkerReport): boolean {
+  return report.claimed > 0 &&
+    report.requeued > 0 &&
+    !hasForwardProgress(report);
+}
+
+function hasForwardProgress(report: SyncEffectWorkerReport): boolean {
+  return report.applied > 0 ||
+    report.superseded > 0 ||
+    report.conflicted > 0 ||
+    report.blockedCandidate > 0 ||
+    report.replanned > 0 ||
+    report.failed > 0;
 }
 
 function isWorkerPassIdle(report: SyncEffectWorkerReport): boolean {
@@ -380,12 +447,35 @@ function withJitter(durationMs: number, random: () => number): number {
   return durationMs + Math.floor(normalized * DEFAULT_JITTER_MAX_MS);
 }
 
-function validateWorkerOptions(workerId: string, maxEffects: number): void {
+function validateWorkerOptions(
+  workerId: string,
+  maxEffects: number,
+  maxFastAppendCandidates?: number,
+  appendDispatchIntervalMs?: number,
+): void {
   if (workerId.length === NON_NEGATIVE_SAFE_INTEGER_MINIMUM) {
     throw new RangeError("sync effect supervisor worker ID is required");
   }
   if (!Number.isSafeInteger(maxEffects) || maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM) {
     throw new RangeError("sync effect supervisor maxEffects must be a positive safe integer");
+  }
+  if (
+    maxFastAppendCandidates !== undefined &&
+    (!Number.isSafeInteger(maxFastAppendCandidates) ||
+      maxFastAppendCandidates < POSITIVE_SAFE_INTEGER_MINIMUM)
+  ) {
+    throw new RangeError(
+      "sync effect supervisor maxFastAppendCandidates must be a positive safe integer",
+    );
+  }
+  if (
+    appendDispatchIntervalMs !== undefined &&
+    (!Number.isSafeInteger(appendDispatchIntervalMs) ||
+      appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)
+  ) {
+    throw new RangeError(
+      "sync effect supervisor appendDispatchIntervalMs must be a non-negative safe integer",
+    );
   }
 }
 

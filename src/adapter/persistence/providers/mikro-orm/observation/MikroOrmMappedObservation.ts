@@ -33,24 +33,21 @@ import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
 } from "../../../../../application/orm/errors.js";
-import type { MikroOrmSqliteAdapter } from "../storage/MikroOrmSqliteAdapter.js";
+import {
+  autoResolveMappedConflictsWithSql,
+} from "../../../../../application/sync/inbound/autoSystemConflictResolution.js";
+import type { ResolvedWriterOptions } from "../../../../../application/orm/persistence/support/contracts.js";
+import type {
+  MikroOrmNativeEntityWriter,
+  MikroOrmSqliteAdapter,
+} from "../storage/MikroOrmSqliteAdapter.js";
 
 /** Input for committing one pre-evaluated Sheet observation and its entity update together. */
 export interface PersistMappedObservedRowOptions {
   readonly mappings: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[];
   readonly fence: FencingContext;
+  readonly writer: ResolvedWriterOptions;
   readonly input: PersistObservedRowInput;
-}
-
-interface MikroOrmNativeEntityWriter {
-  findOne(entityName: unknown, where: Record<string, unknown>): Promise<object | null>;
-  insert(entityName: unknown, data: Record<string, unknown>): Promise<unknown>;
-  nativeUpdate(
-    entityName: unknown,
-    where: Record<string, unknown>,
-    data: Record<string, unknown>,
-  ): Promise<number>;
-  nativeDelete(entityName: unknown, where: Record<string, unknown>): Promise<number>;
 }
 
 /**
@@ -74,8 +71,21 @@ export async function persistMappedObservedRowWithMikroOrm(
     );
   }
 
-  return storage.transactional(async ({ entityManager, sql }) => {
+  return storage.transactional(async ({ nativeWriter, sql }) => {
     const result = await persistObservedRowWithSql(sql, options.fence, options.input);
+    if (
+      result.kind === OBSERVATION_WRITE_RESULT_KINDS.PERSISTED &&
+      result.conflictIds.length > 0
+    ) {
+      await autoResolveMappedConflictsWithSql(
+        sql,
+        options.fence,
+        options.writer,
+        mapping,
+        options.input,
+        result.conflictIds,
+      );
+    }
     const canonical = options.input.canonical;
     if (
       result.kind !== OBSERVATION_WRITE_RESULT_KINDS.PERSISTED ||
@@ -84,7 +94,6 @@ export async function persistMappedObservedRowWithMikroOrm(
       return result;
     }
 
-    const nativeWriter = entityManager as unknown as MikroOrmNativeEntityWriter;
     const entityId = await resolveObservationEntityId(
       nativeWriter,
       mapping,

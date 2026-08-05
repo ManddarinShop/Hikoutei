@@ -26,7 +26,7 @@ export type ScalarManagedEntityState = "new" | "clean" | "removed";
 /** One managed entity entry tracked by the Unit of Work. */
 interface ManagedEntity {
   readonly descriptor: ResolvedHikouteiEntityDescriptor;
-  readonly entity: Record<string, unknown>;
+  readonly entity: object;
   snapshot: Readonly<Record<string, ScalarEntityValue>>;
   state: ScalarManagedEntityState;
 }
@@ -35,7 +35,7 @@ interface ManagedEntity {
 export interface ScalarEntityUnitOfWorkCheckpoint {
   readonly entries: readonly {
     readonly descriptor: ResolvedHikouteiEntityDescriptor;
-    readonly entity: Record<string, unknown>;
+    readonly entity: object;
     readonly snapshot: Readonly<Record<string, ScalarEntityValue>>;
     readonly state: ScalarManagedEntityState;
   }[];
@@ -64,7 +64,7 @@ export class ScalarEntityUnitOfWork {
   /** Tracks a newly created entity so its first flush emits an insert. */
   manageNew(
     descriptor: ResolvedHikouteiEntityDescriptor,
-    entity: Record<string, unknown>,
+    entity: object,
   ): void {
     this.entries.set(entity, {
       descriptor,
@@ -80,7 +80,7 @@ export class ScalarEntityUnitOfWork {
   /** Tracks an entity loaded from storage so mutations diff against its snapshot. */
   manageLoaded(
     descriptor: ResolvedHikouteiEntityDescriptor,
-    entity: Record<string, unknown>,
+    entity: object,
     snapshot: Readonly<Record<string, ScalarEntityValue>>,
   ): void {
     this.entries.set(entity, { descriptor, entity, snapshot, state: "clean" });
@@ -117,7 +117,7 @@ export class ScalarEntityUnitOfWork {
   }
 
   /** Marks a tracked entity (or registers a new one) for the next flush. */
-  persist(descriptor: ResolvedHikouteiEntityDescriptor, entity: Record<string, unknown>): void {
+  persist(descriptor: ResolvedHikouteiEntityDescriptor, entity: object): void {
     const existing = this.entries.get(entity);
     if (existing === undefined) {
       this.manageNew(descriptor, entity);
@@ -280,22 +280,17 @@ function requirePrimaryKeyValue(
 /** Reads the declared scalar values from one managed entity instance. */
 export function readEntityValues(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  entity: Record<string, unknown>,
+  entity: object,
 ): Readonly<Record<string, ScalarEntityValue>> {
   const values: Record<string, ScalarEntityValue> = {};
   for (const property of descriptor.properties) {
-    values[property.name] = readScalarValue(property, entity[property.name]);
+    values[property.name] = readScalarValue(property, Reflect.get(entity, property.name));
   }
   return values;
 }
 
 function readScalarValue(
-  property: {
-    readonly name: string;
-    readonly type: string;
-    readonly nullable: boolean;
-    readonly primary: boolean;
-  },
+  property: ResolvedHikouteiEntityDescriptor["properties"][number],
   value: unknown,
 ): ScalarEntityValue {
   if (value === null || value === undefined) {
@@ -307,48 +302,51 @@ function readScalarValue(
       `${property.name} is not nullable but was ${value === null ? "null" : "missing"}.`,
     );
   }
-  if (property.type === "date") {
-    if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
-      throw new HikouteiError(
-        HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-        `${property.name} expected a valid Date but received ${typeof value}.`,
-      );
-    }
-    return new Date(value.getTime());
-  }
-  const expected = expectedValueType(property.type);
-  if (typeof value !== expected) {
-    throw new HikouteiError(
-      property.primary
-        ? HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE
-        : HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `${property.name} expected ${expected} but received ${typeof value}.`,
-    );
-  }
-  if (property.primary && typeof value === "string" && value.length === 0) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
-      `${property.name} must be a non-empty string before flush.`,
-    );
-  }
-  if (expected === "number" && !Number.isFinite(value)) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `${property.name} must be a finite number.`,
-    );
-  }
-  return value as ScalarEntityValue;
-}
 
-function expectedValueType(type: string): "string" | "number" | "boolean" {
-  switch (type) {
+  switch (property.type) {
+    case "date":
+      if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+          `${property.name} expected a valid Date but received ${typeof value}.`,
+        );
+      }
+      return new Date(value.getTime());
     case "string":
-      return "string";
+      if (typeof value !== "string") {
+        throw new HikouteiError(
+          property.primary
+            ? HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE
+            : HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+          `${property.name} expected string but received ${typeof value}.`,
+        );
+      }
+      if (property.primary && value.length === 0) {
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+          `${property.name} must be a non-empty string before flush.`,
+        );
+      }
+      return value;
     case "number":
-      return "number";
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new HikouteiError(
+          property.primary
+            ? HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE
+            : HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+          `${property.name} expected a finite number but received ${typeof value}.`,
+        );
+      }
+      return value;
     case "boolean":
-      return "boolean";
-    default:
-      return "string";
+      if (typeof value !== "boolean") {
+        throw new HikouteiError(
+          property.primary
+            ? HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE
+            : HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+          `${property.name} expected boolean but received ${typeof value}.`,
+        );
+      }
+      return value;
   }
 }

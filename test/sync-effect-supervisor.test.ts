@@ -33,6 +33,28 @@ describe("SyncEffectWorkerSupervisor", () => {
     ]);
   });
 
+  it("drains an externally triggered pass before stop resolves", async () => {
+    let resolvePass!: (report: SyncEffectWorkerReport) => void;
+    const pendingPass = new Promise<SyncEffectWorkerReport>((resolve) => {
+      resolvePass = resolve;
+    });
+    const supervisor = new SyncEffectWorkerSupervisor({ runPass: () => pendingPass });
+    const pass = supervisor.runOnce();
+    await Promise.resolve();
+
+    let stopped = false;
+    const stopping = supervisor.stop().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    resolvePass(createReport());
+    await expect(pass).resolves.toEqual(createReport());
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it("continues bounded passes until the outbox reports idle", async () => {
     let calls = 0;
     let stopPromise: Promise<void> | undefined;
@@ -65,7 +87,7 @@ describe("SyncEffectWorkerSupervisor", () => {
     supervisor = new SyncEffectWorkerSupervisor({
       runPass: async () => {
         calls += 1;
-        if (calls === 1) throw new Error("gateway unavailable");
+        if (calls === 1) throw new Error("provider unavailable");
         return createReport();
       },
       wait: async (durationMs) => {
@@ -140,7 +162,7 @@ describe("SyncEffectWorkerSupervisor", () => {
         intervalMs: 60_000,
         run: async () => {
           reconciliationCalls += 1;
-          throw new Error("reconciliation gateway unavailable");
+          throw new Error("reconciliation provider unavailable");
         },
         onError: (error) => reconciliationErrors.push(error),
       },
@@ -157,6 +179,75 @@ describe("SyncEffectWorkerSupervisor", () => {
     expect(reconciliationCalls).toBe(1);
     expect(reconciliationErrors).toHaveLength(1);
     expect(reconciliationErrors[0]).toBeInstanceOf(Error);
+  });
+
+  it("backs off when a pass only requeues work without forward progress", async () => {
+    // A response-loss / postcondition-unapplied loop: the pass claimed work
+    // but only requeued it. The supervisor must back off so a struggling
+    // remote is not retried in a tight immediate loop.
+    let calls = 0;
+    const waits: number[] = [];
+    let stopPromise: Promise<void> | undefined;
+    let supervisor!: SyncEffectWorkerSupervisor;
+    supervisor = new SyncEffectWorkerSupervisor({
+      runPass: async () => {
+        calls += 1;
+        return createReport({ selected: 1, claimed: 1, requeued: 1, deferred: 1 });
+      },
+      idleIntervalMs: 5_000,
+      errorBackoffInitialMs: 1_000,
+      errorBackoffMaxMs: 30_000,
+      random: () => 0,
+      wait: async (durationMs) => {
+        waits.push(durationMs);
+      },
+      onReport: () => {
+        if (calls >= 2) stopPromise = supervisor.stop();
+      },
+    });
+
+    supervisor.start();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await stopPromise;
+
+    expect(calls).toBe(2);
+    // The first pass backed off using the error backoff (1s), not the idle
+    // interval (5s), proving the loop did not continue immediately.
+    expect(waits[0]).toBe(1_000);
+    expect(waits.every((durationMs) => durationMs !== 5_000)).toBe(true);
+  });
+
+  it("keeps draining immediately when a requeuing pass also applies work", async () => {
+    // Forward progress (an applied effect) must not be penalized even when the
+    // same pass requeued another effect: the drain loop continues without a
+    // backoff or idle wait between passes.
+    let calls = 0;
+    const waits: number[] = [];
+    let stopPromise: Promise<void> | undefined;
+    let supervisor!: SyncEffectWorkerSupervisor;
+    supervisor = new SyncEffectWorkerSupervisor({
+      runPass: async () => {
+        calls += 1;
+        return createReport({ selected: 2, claimed: 2, applied: 1, requeued: 1, deferred: 1 });
+      },
+      idleIntervalMs: 5_000,
+      errorBackoffInitialMs: 1_000,
+      errorBackoffMaxMs: 30_000,
+      random: () => 0,
+      wait: async (durationMs) => {
+        waits.push(durationMs);
+      },
+      onReport: () => {
+        if (calls >= 2) stopPromise = supervisor.stop();
+      },
+    });
+
+    supervisor.start();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await stopPromise;
+
+    expect(calls).toBe(2);
+    expect(waits).toEqual([]);
   });
 
   it("waits for the outbox to become idle before reconciliation", async () => {

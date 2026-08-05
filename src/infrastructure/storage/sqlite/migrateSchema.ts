@@ -13,9 +13,11 @@ import {
   CURRENT_SCHEMA_VERSION,
   REQUIRED_V2_COLUMNS,
   REQUIRED_V3_COLUMNS,
+  REQUIRED_V5_COLUMNS,
   SQLITE_CONNECTION_PRAGMAS,
   syncSchemaIndexesDdl,
   syncSchemaTablesDdl,
+  syncSchemaV5IndexesDdl,
   type SchemaMigrationResult,
 } from "./schema.js";
 import type {
@@ -51,6 +53,7 @@ export async function migrateSqliteSchema(
       await executeSqlScript(sql, syncSchemaTablesDdl());
       await verifyRequiredColumns(sql);
       await executeSqlScript(sql, syncSchemaIndexesDdl());
+      await executeSqlScript(sql, syncSchemaV5IndexesDdl());
       await writeSchemaVersion(sql, CURRENT_SCHEMA_VERSION);
       await verifyCurrentSchema(sql);
       return {
@@ -86,8 +89,19 @@ export async function migrateSqliteSchema(
       await writeSchemaVersion(sql, 4);
       appliedVersions.push(4);
     }
+    if (fromVersion < 5) {
+      // SQLite cannot widen the existing status CHECK constraint with ALTER
+      // TABLE. Rebuild only this durable outbox table transactionally while
+      // preserving every existing row and effect evidence.
+      await applyVersion5DurableDeliveryMigration(sql);
+      await writeSchemaVersion(sql, 5);
+      appliedVersions.push(5);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
+    // v5-only indexes are created after every migration so an upgraded v4
+    // installation gets the probe index the same way a fresh install does.
+    await executeSqlScript(sql, syncSchemaV5IndexesDdl());
     await verifyCurrentSchema(sql);
 
     return {
@@ -112,6 +126,43 @@ async function applyVersion3EffectTimestampMigration(sql: SqlExecutor): Promise<
   await addColumnIfMissing(sql, "sheet_effect_outbox", "created_at", "INTEGER NOT NULL DEFAULT 0");
 }
 
+async function applyVersion5DurableDeliveryMigration(sql: SqlExecutor): Promise<void> {
+  await sql.run("DROP INDEX IF EXISTS effect_outbox_stream_idx");
+  await sql.run("DROP INDEX IF EXISTS effect_outbox_probe_idx");
+  await sql.run("ALTER TABLE sheet_effect_outbox RENAME TO sheet_effect_outbox_v4");
+  await executeSqlScript(sql, syncSchemaTablesDdl());
+  await sql.run(`
+    INSERT INTO sheet_effect_outbox (
+      effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+      projection, row_binding_id, conflict_id, target_kind, target_id,
+      target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+      expected_visible_revision, expected_visible_hash, repair_guard_hash,
+      source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+      stream_sequence, predecessor_effect_id, status, attempts, lease_until,
+      next_attempt_at, uncertain_since, next_probe_at, dispatch_id, claim_token,
+      writer_epoch, supersedes_effect_id, last_error_code, last_error_message,
+      created_at
+    )
+    SELECT
+      effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+      projection, row_binding_id, conflict_id, target_kind, target_id,
+      target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+      expected_visible_revision, expected_visible_hash, repair_guard_hash,
+      source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+      stream_sequence, predecessor_effect_id, status, attempts, lease_until,
+      next_attempt_at, NULL, NULL, claim_token, claim_token,
+      writer_epoch, supersedes_effect_id, last_error_code, last_error_message,
+      created_at
+    FROM sheet_effect_outbox_v4
+  `);
+  await sql.run("DROP TABLE sheet_effect_outbox_v4");
+  // The renamed table carried the old index names; recreate indexes against
+  // the new table after the old table and its indexes have been removed. The
+  // probe index is v5-only and is created by the caller after this rebuild so
+  // the base DDL stays safe for pre-v5 tables that lack next_probe_at.
+  await executeSqlScript(sql, syncSchemaTablesDdl());
+}
+
 async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
   await verifyRequiredColumns(sql);
   if (!(await indexExists(sql, "sync_conflict_candidate_attempt_uq"))) {
@@ -120,18 +171,33 @@ async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
       "SQLite schema is missing sync_conflict_candidate_attempt_uq.",
     );
   }
+  if (!(await indexExists(sql, "effect_outbox_probe_idx"))) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SCHEMA_INDEX_MISSING,
+      "SQLite schema is missing effect_outbox_probe_idx.",
+    );
+  }
 }
 
 async function verifyRequiredColumns(sql: SqlExecutor): Promise<void> {
-  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_V2_COLUMNS) as Array<
-    ["sync_conflict" | "resolution_command", readonly string[]]
-  >) {
-    await verifyTableColumns(sql, tableName, requiredColumns);
+  const versionTwoTables: readonly ("sync_conflict" | "resolution_command")[] = [
+    "sync_conflict",
+    "resolution_command",
+  ];
+  for (const tableName of versionTwoTables) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V2_COLUMNS[tableName]);
   }
-  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_V3_COLUMNS) as Array<
-    ["sheet_effect_outbox", readonly string[]]
-  >) {
-    await verifyTableColumns(sql, tableName, requiredColumns);
+
+  const versionThreeTables: readonly "sheet_effect_outbox"[] = ["sheet_effect_outbox"];
+  for (const tableName of versionThreeTables) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V3_COLUMNS[tableName]);
+  }
+  const versionFiveTables: readonly ("sheet_effect_outbox" | "spreadsheet_authority")[] = [
+    "sheet_effect_outbox",
+    "spreadsheet_authority",
+  ];
+  for (const tableName of versionFiveTables) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V5_COLUMNS[tableName]);
   }
 }
 

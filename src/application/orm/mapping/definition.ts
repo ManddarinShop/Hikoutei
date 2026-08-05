@@ -13,10 +13,12 @@ import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
 } from "../../../shared/encoding/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../sync/gateway/constants.js";
+import { isRecord } from "../../../shared/encoding/typeGuards.js";
+import { SYNC_PROJECTIONS } from "../../sync/sheets/constants.js";
 import type {
+  TypedSheetsEntityFieldCodec,
   TypedSheetsEntityFieldMapping,
-  TypedSheetsEntityFieldMappingInput,
+  TypedSheetsEntityFieldMappingInputForEntity,
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingInput,
   TypedSheetsEntityProjectionMapping,
@@ -37,6 +39,12 @@ import {
 export function defineTypedSheetsEntityMapping<Entity extends object>(
   input: TypedSheetsEntityMappingInput<Entity>,
 ): TypedSheetsEntityMapping {
+  if (!isRecord(input)) {
+    throwInvalidMapping("entity mapping must be an object");
+  }
+  if (!Array.isArray(input.fields) || !Array.isArray(input.projections)) {
+    throwInvalidMapping("entity mapping fields and projections must be arrays");
+  }
   const entityName = input.entityName ?? entityReferenceName(input.entity);
   requireText(entityName, "entity name");
   requireText(input.logicalSheetId, "logical sheet ID");
@@ -49,7 +57,7 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
     throwInvalidMapping("an entity mapping must declare at least one field");
   }
 
-  const fields = input.fields.map((field) => normalizeFieldMapping(field));
+  const fields = input.fields.map((field) => normalizeFieldMapping<Entity>(field));
   assertDistinct(fields.map((field) => field.property), "entity property");
   assertDistinct(fields.map((field) => field.fieldName), "canonical field name");
 
@@ -70,7 +78,7 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
   }
   assertDistinct(projections.map((projection) => projection.physicalSheetId), "physical sheet ID");
   assertDistinct(projections.map((projection) => projection.projection), "projection kind");
-  if (!projections.some((projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE)) {
+  if (!projections.some((projection) => projection.projection === SYNC_PROJECTIONS.SYSTEM_STATE)) {
     throwInvalidMapping("an entity mapping must declare exactly one system_state projection");
   }
 
@@ -81,7 +89,7 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
   }
 
   const userInput = projections.find(
-    (projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
   );
   if (userInput !== undefined && fields.every((field) => field.ownership !== FIELD_OWNERSHIPS.USER)) {
     throwInvalidMapping("a user_input projection requires at least one user-owned field");
@@ -91,11 +99,15 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
   }
 
   return {
-    entity: input.entity as unknown as TypedSheetsEntityMapping["entity"],
+    entity: input.entity,
     entityName,
     logicalSheetId: input.logicalSheetId,
     primaryKey: input.primaryKey,
     businessKey,
+    identity: {
+      primaryProperty: input.primaryKey,
+      businessKey,
+    },
     schemaVersion: input.schemaVersion,
     fields,
     projections,
@@ -107,8 +119,11 @@ export function defineTypedSheetsEntityMapping<Entity extends object>(
 }
 
 function normalizeFieldMapping<Entity extends object>(
-  field: TypedSheetsEntityFieldMappingInput<Entity>,
+  field: TypedSheetsEntityFieldMappingInputForEntity<Entity>,
 ): TypedSheetsEntityFieldMapping {
+  if (!isRecord(field)) {
+    throwInvalidMapping("entity field mapping must be an object");
+  }
   const property = field.property;
   const fieldName = field.fieldName ?? property;
   requireText(property, "entity property");
@@ -119,6 +134,19 @@ function normalizeFieldMapping<Entity extends object>(
   if (field.ownership !== FIELD_OWNERSHIPS.USER && field.ownership !== FIELD_OWNERSHIPS.SYSTEM) {
     throwInvalidMapping(`${fieldName} has an unsupported ownership`);
   }
+  if (field.encode !== undefined && typeof field.encode !== "function") {
+    throwInvalidMapping(`${fieldName} encode must be a function`);
+  }
+  if (field.decode !== undefined && typeof field.decode !== "function") {
+    throwInvalidMapping(`${fieldName} decode must be a function`);
+  }
+  if (field.required !== undefined && typeof field.required !== "boolean") {
+    throwInvalidMapping(`${fieldName} required must be boolean`);
+  }
+  if (field.unique !== undefined && typeof field.unique !== "boolean") {
+    throwInvalidMapping(`${fieldName} unique must be boolean`);
+  }
+  const codec = eraseFieldCodec(field);
   return {
     property,
     fieldName,
@@ -126,21 +154,35 @@ function normalizeFieldMapping<Entity extends object>(
     ownership: field.ownership,
     required: field.required ?? false,
     unique: field.unique ?? false,
-    ...(field.encode === undefined ? {} : { encode: field.encode }),
-    ...(field.decode === undefined ? {} : { decode: field.decode }),
+    ...(codec.encode === undefined ? {} : { encode: codec.encode }),
+    ...(codec.decode === undefined ? {} : { decode: codec.decode }),
+  };
+}
+
+/** Erases a property-specific codec only after the mapping boundary validates it. */
+function eraseFieldCodec<Entity extends object>(
+  field: TypedSheetsEntityFieldMappingInputForEntity<Entity>,
+): TypedSheetsEntityFieldCodec<unknown> {
+  const codec: TypedSheetsEntityFieldCodec<unknown> = field;
+  return {
+    ...(codec.encode === undefined ? {} : { encode: codec.encode }),
+    ...(codec.decode === undefined ? {} : { decode: codec.decode }),
   };
 }
 
 function normalizeProjectionMapping(
   projection: TypedSheetsEntityProjectionMappingInput,
 ): TypedSheetsEntityProjectionMapping {
+  if (!isRecord(projection)) {
+    throwInvalidMapping("entity projection mapping must be an object");
+  }
   requireText(projection.physicalSheetId, "physical sheet ID");
   requireText(projection.spreadsheetId, "spreadsheet ID");
   requireText(projection.tabName, "tab name");
   requireText(projection.registeredRange, "registered range");
   if (
-    projection.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT &&
-    projection.projection !== SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE
+    projection.projection !== SYNC_PROJECTIONS.USER_INPUT &&
+    projection.projection !== SYNC_PROJECTIONS.SYSTEM_STATE
   ) {
     throwInvalidMapping("an entity mapping supports only user_input and system_state projections");
   }
@@ -151,11 +193,9 @@ function entityReferenceName<Entity extends object>(
   entity: TypedSheetsEntityMappingInput<Entity>["entity"],
 ): string {
   if (typeof entity === "string") return entity;
-  const name = (entity as unknown as { readonly name?: unknown }).name;
-  if (typeof name !== "string") {
-    throwInvalidMapping("an entity class must expose a stable name or entityName must be provided");
-  }
-  return name;
+  if (typeof entity === "function" && typeof entity.name === "string") return entity.name;
+  if (isRecord(entity) && typeof entity.name === "string") return entity.name;
+  throwInvalidMapping("an entity class must expose a stable name or entityName must be provided");
 }
 
 function assertDistinct(values: readonly string[], label: string): void {
@@ -183,10 +223,11 @@ function isNormalizedCellKind(value: unknown): value is NormalizedCellKind {
     value === NORMALIZED_CELL_KINDS.DATE;
 }
 
-function requireText(value: string, label: string): void {
-  if (value.length === EMPTY_STRING_LENGTH_ZERO) {
+function requireText(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === EMPTY_STRING_LENGTH_ZERO) {
     throwInvalidMapping(`${label} is required`);
   }
+  return value;
 }
 
 function throwInvalidMapping(message: string): never {

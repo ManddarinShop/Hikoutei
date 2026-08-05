@@ -14,7 +14,7 @@ body:
     attributes:
       label: Problem
       description: What user problem or workflow does this solve?
-      placeholder: I want to avoid manual Apps Script deployment because...
+      placeholder: I want to avoid manual spreadsheet setup because...
     validations:
       required: true
   - type: textarea
@@ -31,7 +31,7 @@ body:
       options:
         - core repository
         - adapter
-        - Apps Script gateway
+        - sync provider
         - setup/config
         - documentation
         - performance

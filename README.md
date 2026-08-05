@@ -8,7 +8,7 @@
 
 <a href="https://www.npmjs.com/package/hikoutei">npm package</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a> ·
-<a href="apps-script/gateway/Code.gs">Apps Script gateway</a>
+<a href="docs/quick-start.md">Quick start</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
 [![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
@@ -19,7 +19,7 @@
 Hikoutei helps TypeScript and Node.js applications use Google Sheets as a
 human-friendly part of an MVP or internal workflow. Your application works
 with typed entities and local SQLite; changes can be delivered to Google
-Sheets asynchronously through the included Apps Script gateway.
+Sheets asynchronously through a service-account Google Sheets provider.
 
 Hikoutei is intentionally focused. It is not a general-purpose database
 replacement, a Prisma/JPA clone, or a general Google Sheets API wrapper.
@@ -27,7 +27,8 @@ replacement, a Prisma/JPA clone, or a general Google Sheets API wrapper.
 ## Why Hikoutei?
 
 - Entity-oriented lifecycle: create, find, mutate, persist, remove, and flush.
-- Typed field mappings with runtime validation for Sheet data.
+- Typed scalar entity fields with runtime validation at the local boundary.
+- Internal projection mappings with runtime validation for Sheet data.
 - Local SQLite reads for application workflows that should not wait on a remote
   spreadsheet request.
 - Asynchronous Google Sheets views for human review and lightweight
@@ -49,9 +50,10 @@ without changing the entity lifecycle API.
 
 ## Quick start
 
-Define a scalar entity and configure its environment-specific Sheet route
-separately. The application reads and writes the local SQLite authority through
-a request-local manager.
+Define a scalar entity and use the local SQLite authority through a
+request-local manager. Sheet routes, provider credentials, provisioning, and
+polling belong to the internal service bootstrap rather than the application
+API.
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -68,14 +70,6 @@ const User = defineTypedSheetsEntity({
 const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  sheets: {
-    spreadsheetId: process.env.SHEET_ID!,
-    routes: {
-      User: {
-        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-      },
-    },
-  },
 });
 
 const em = hikoutei.em.fork();
@@ -87,11 +81,11 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`createTypedSheets()` only opens SQLite and registers local sync state. Call
-`hikoutei.setupSheets(provisioner)` explicitly when a deployment is ready to
-provision or validate remote tabs and headers. `flush()` commits the entity,
-canonical sync state, and durable Sheet outbox locally; remote delivery remains
-asynchronous.
+`createTypedSheets()` opens the local entity tables only. The internal sync
+service separately registers mappings, provisions remote tabs, starts the
+outbound worker, and polls User_Input. In service mode, `flush()` commits the
+entity, canonical sync state, and durable Sheet outbox locally; remote delivery
+remains asynchronous.
 
 ## When to use Hikoutei
 
@@ -116,29 +110,57 @@ Use a conventional database and direct Google APIs when you need:
 
 ## Google Sheets setup
 
-1. Define scalar entities and environment-specific routes in
-   `createTypedSheets()`.
-2. Follow the [Quick start](docs/quick-start.md#sheet-setup-and-delivery) to
-   copy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) into a
-   spreadsheet-bound Apps Script project, deploy it as a Web App, set the
-   `/exec` URL, and run `setupSyncGateway()`.
-3. Keep the generated `TYPED_SHEETS_GATEWAY_URL`,
-   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`, and
-   `TYPED_SHEETS_GATEWAY_SHEET_ID` values in an untracked server environment or
-   secret store. Never put the shared secret in browser code or Git.
-4. Call `hikoutei.setupSheets(provisioner)` explicitly to provision and verify
-   the registered tabs and headers, then run the worker that delivers pending
-   outbox effects.
+Google Sheets synchronization is a service-side concern. Applications do not
+import a provider client, pass Sheet routes to `createTypedSheets()`, call
+`setupSheets()`, or choose an operation for each write.
 
-The gateway must be deployed with an access audience that can reach the
-service; an external server normally requires **Anyone**. Use the deployed
-`/exec` URL, not the editor-only `/dev` URL. When `Code.gs` changes, update the
-existing Web App deployment with a new version before relying on the change.
-The detailed setup and troubleshooting steps are in the [Quick start](docs/quick-start.md).
+### Service-account provider (googleSheetsApi)
+
+The sync runtime uses one Google Sheets API provider (the internal
+`googleSheetsApi` bootstrap option) with a service account — no Apps Script
+deployment. The provider provisions the registered tabs, writes outbound
+effects (fast append, guarded update/delete, receipts, response-loss
+recovery), reads table values, assigns row anchors, and observes human edits:
+
+1. Create a Google Cloud service account with the
+   `https://www.googleapis.com/auth/spreadsheets` scope and share the target
+   spreadsheet with its email as an Editor: the provider creates tabs, writes
+   effect rows and receipt records, and manages row anchors, so Viewer access
+   is not enough. Enable the Google Sheets API for the Cloud project.
+2. Keep the service-account key file path in
+   `GOOGLE_APPLICATION_CREDENTIALS` on the server, and the spreadsheet ID in
+   an untracked secret store. Never put the key in browser code or Git.
+3. Start the internal sync bootstrap with `googleSheetsApi` configured. It
+   creates and verifies headers on the registered tabs, then starts outbox
+   delivery and User_Input polling.
+
+Sheet consistency does not come from cross-request Sheet transactions; it
+comes from the hidden effect-receipt tab, effect-id/payload-hash dedupe, the
+SQLite durable outbox, fencing, field-level compare-and-set evidence, and
+postcondition recovery. The provider never logs credentials, spreadsheet IDs,
+URLs, or payloads; it spaces request starts at 1,100 ms per class (reads and
+writes separately) to stay inside Google's quota windows, and it keeps the
+same SQLite-authoritative model: `flush()` commits locally, delivery is
+asynchronous, and every write is receipted and recovered through the same
+effect worker.
+
+The tracked live scenario runs through this provider. The 10,000-row append
+and update/delete live evidence recorded in
+[docs/sync-bulk-write-benchmark.md](docs/sync-bulk-write-benchmark.md) uses
+the same REST path; the raw-transport experiments under `scripts/bench/`
+measure the unguarded API path (no receipts, no compare-and-set), so treat
+any throughput number as unverified until it is measured through the full
+worker. Live Google calls are opt-in; fake providers and SQLite fixtures are
+the normal verification path.
+
+The previous Apps Script gateway and the `appsScript`/`googleApiWorker`
+options were removed; the service-account provider above is the only sync
+path. The detailed setup and troubleshooting steps are in the
+[Quick start](docs/quick-start.md).
 
 ## Documentation
 
-- [Quick start](docs/quick-start.md) — installation, mapping, and gateway setup.
+- [Quick start](docs/quick-start.md) — installation, ORM lifecycle, and service-side sync setup.
 - [Architecture](docs/architecture.md) — how the local store and Sheet views
   fit together.
 - [Write and synchronization flow](docs/write-and-synchronization-flow.md) —
@@ -149,7 +171,7 @@ The detailed setup and troubleshooting steps are in the [Quick start](docs/quick
 
 ## Limitations
 
-- Google Sheets has quota, latency, and Apps Script execution limits.
+- Google Sheets has quota, latency, and API rate limits.
 - Sheet updates are asynchronous; the application should read its local state.
 - SQLite is local to the service and is not a distributed coordination layer.
 - Schema changes, manual edits, and conflicting updates still need an
@@ -159,7 +181,7 @@ The detailed setup and troubleshooting steps are in the [Quick start](docs/quick
 
 - Complete ingestion of intentional user edits from Google Sheets.
 - Improve update/delete conflict handling and presentation.
-- Add setup tooling for registry and Apps Script deployment.
+- Add setup tooling for registry and direct provider deployment.
 - Stabilize the public package release.
 
 See the [open issues](https://github.com/ManddarinShop/Hikoutei/issues)

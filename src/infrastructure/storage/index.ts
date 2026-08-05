@@ -15,6 +15,7 @@ export {
 export type {
   CanonicalCommitInput,
   CanonicalCommitResult,
+  CanonicalEffectsFactory,
   CanonicalFieldWrite,
   CanonicalFieldCommitInput,
   CanonicalInsertCommitInput,
@@ -32,6 +33,12 @@ export {
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "./sync/shared/writerLease.js";
+export {
+  ensureSpreadsheetAuthorityWithAdapter,
+  ensureSpreadsheetAuthorityWithSql,
+  readSpreadsheetAuthorityWithAdapter,
+  readSpreadsheetAuthorityWithSql,
+} from "./sync/shared/spreadsheetAuthority.js";
 export type {
   WriterLease,
   ClaimLeaseOptions,
@@ -40,16 +47,24 @@ export type {
   WriterLeaseClaimResult,
   WriterLeaseClaimResultKind,
 } from "./sync/shared/writerLease.js";
+export type {
+  EnsureSpreadsheetAuthorityResult,
+  SpreadsheetAuthority,
+} from "./sync/shared/spreadsheetAuthority.js";
 
 export {
   claimEffectWithAdapter,
   claimEffectWithSql,
+  renewEffectLeaseWithAdapter,
+  renewEffectLeaseWithSql,
   applyEffectResultWithAdapter,
   applyEffectResultWithSql,
   supersedeAndReplanWithAdapter,
   supersedeAndReplanWithSql,
   recoverExpiredLeasesWithAdapter,
   recoverExpiredLeasesWithSql,
+  markDeliveryUncertainWithAdapter,
+  markDeliveryUncertainWithSql,
   releaseUnprocessedEffectWithAdapter,
   releaseUnprocessedEffectWithSql,
   retryClaimedEffectWithAdapter,
@@ -58,6 +73,8 @@ export {
   findPendingEffectsByTargetWithSql,
   listReadyEffectsWithAdapter,
   listReadyEffectsWithSql,
+  listReadyFastAppendEffectsWithAdapter,
+  listReadyFastAppendEffectsWithSql,
   hasPendingOrProcessingEffectsWithAdapter,
   hasPendingOrProcessingEffectsWithSql,
   appendPendingEffectsWithAdapter,
@@ -65,9 +82,13 @@ export {
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
 } from "./sync/outbound/effectOutbox.js";
 export type {
+  AppliedEffectResultOptions,
   ClaimResult,
   ClaimEffectOptions,
+  MarkDeliveryUncertainOptions,
+  RenewEffectLeaseOptions,
   ApplyResultOptions,
+  NonAppliedEffectResultOptions,
   EffectProjectionConfirmation,
   NewEffect,
   PendingEffect,
@@ -78,14 +99,30 @@ export {
   persistObservedRowWithAdapter,
   persistObservedRowWithSql,
 } from "./state/observation/observationWriter.js";
+export {
+  OBSERVED_PROJECTION_EVIDENCE_SOURCES,
+} from "./state/observation/observationTypes.js";
 export type {
   ObservationAttemptInput,
   EventIdentityInput,
   BusinessKeyChange,
   CanonicalRowMutation,
+  ObservedProjectionEvidence,
   PersistObservedRowInput,
   PersistObservedRowResult,
 } from "./state/observation/observationWriter.js";
+export type {
+  ObservedProjectionBaseline,
+  ObservedProjectionEvidenceSource,
+} from "./state/observation/observationTypes.js";
+export {
+  persistPollingQuarantineWithSql,
+  POLLING_QUARANTINE_WRITE_RESULT_KINDS,
+} from "./state/observation/observationQuarantine.js";
+export type {
+  PollingQuarantineInput,
+  PollingQuarantineWriteResult,
+} from "./state/observation/observationQuarantine.js";
 
 export {
   persistResolutionCommandWithAdapter,
@@ -114,6 +151,7 @@ export {
   insertMappedActiveRowBindingWithSql,
   tombstoneMappedActiveRowBindingWithSql,
   readMappedActiveCanonicalEntityWithSql,
+  readMappedCanonicalFieldsWithSql,
   readMappedCanonicalFieldRevisionsWithSql,
   readMappedActiveBusinessKeyWithSql,
   readMappedBusinessKeyOwnerWithSql,
@@ -126,6 +164,7 @@ export {
 export type {
   MappedRowBindingSqlRow,
   MappedCanonicalEntitySqlRow,
+  MappedCanonicalFieldValueSqlRow,
   MappedCanonicalFieldRevisionSqlRow,
   MappedActiveBusinessKeySqlRow,
   MappedBusinessKeyOwnerSqlRow,

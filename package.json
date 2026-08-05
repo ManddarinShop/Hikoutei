@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.3.0",
+  "version": "0.3.6",
   "description": "Hikoutei — typed repository and safe write layer for Google Sheets-backed MVPs.",
   "repository": {
     "type": "git",
@@ -21,8 +21,7 @@
   },
   "files": [
     "dist",
-    "docs",
-    "apps-script/gateway/Code.gs"
+    "docs"
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
@@ -38,6 +37,11 @@
     "optimistic-locking"
   ],
   "license": "MIT",
+  "dependencies": {
+    "@googleapis/sheets": "^14.0.0",
+    "@hikoutei/kohkai": "0.1.0",
+    "google-auth-library": "^11.0.0"
+  },
   "devDependencies": {
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",

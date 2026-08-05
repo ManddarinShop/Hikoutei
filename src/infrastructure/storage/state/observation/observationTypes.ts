@@ -26,7 +26,7 @@ import type {
   ObservationReceiptState,
 } from "./observationConstants.js";
 
-/** One append-only occurrence captured by a gateway or polling adapter. */
+/** One append-only occurrence captured by a provider or polling adapter. */
 export interface ObservationAttemptInput {
   readonly observationId: string;
   readonly observationKey: string;
@@ -35,7 +35,7 @@ export interface ObservationAttemptInput {
   readonly detectedAt: number;
   readonly receivedAt: number;
   readonly ingressActorId: string;
-  /** Editor identity is absent when the gateway cannot verify one. */
+  /** Editor identity is absent when the provider cannot verify one. */
   readonly editorActorId: Presence<string>;
   readonly editorActorSource: EditorActorSource;
 }
@@ -60,10 +60,37 @@ export interface CanonicalRowMutation {
   readonly businessKeyChanges: readonly BusinessKeyChange[];
 }
 
+/** Remote visible-state evidence captured with one observed row. */
+export const OBSERVED_PROJECTION_EVIDENCE_SOURCES = {
+  REMOTE: "remote",
+  SYNTHETIC: "synthetic",
+} as const;
+
+export type ObservedProjectionEvidenceSource =
+  (typeof OBSERVED_PROJECTION_EVIDENCE_SOURCES)[keyof typeof OBSERVED_PROJECTION_EVIDENCE_SOURCES];
+
+export interface ObservedProjectionBaseline {
+  readonly visibleRevision: number;
+  readonly visibleHash: string;
+}
+
+export interface ObservedProjectionEvidence {
+  /** Remote row revision, or the next monotonic local revision when unavailable. */
+  readonly visibleRevision: number;
+  /** Stable hash of the complete visible row returned by the provider. */
+  readonly visibleHash: string;
+  /** Legacy callers omit this and retain the original monotonic behavior. */
+  readonly source?: ObservedProjectionEvidenceSource;
+  /** Exact prior baseline required before accepting synthetic evidence. */
+  readonly baseline?: ObservedProjectionBaseline;
+}
+
 /** Input for exactly one row of an observed batch. */
 export interface PersistObservedRowInput {
   readonly physicalSheetId: string;
   readonly batch: ObservedEditBatch;
+  /** Optional for legacy callers that do not have visible revision evidence. */
+  readonly observedProjection?: ObservedProjectionEvidence;
   readonly rowIndex: number;
   readonly observation: ObservationAttemptInput;
   readonly event: Presence<EventIdentityInput>;

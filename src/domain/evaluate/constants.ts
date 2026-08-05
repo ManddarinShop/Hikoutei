@@ -10,7 +10,7 @@ export const ROW_OUTCOMES = {
 export type RowOutcome = (typeof ROW_OUTCOMES)[keyof typeof ROW_OUTCOMES];
 
 /** Prefix used for deterministic quarantine identifiers. */
-export const QUARANTINE_ID_PREFIX = "q-" as const;
+export const QUARANTINE_ID_PREFIX = "q-";
 
 /** Identifier shape returned for a quarantined row. */
 export type QuarantineId = `${typeof QUARANTINE_ID_PREFIX}${string}`;

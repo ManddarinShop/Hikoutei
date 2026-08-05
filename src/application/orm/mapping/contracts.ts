@@ -10,33 +10,35 @@ import {
   type NormalizedCell,
 } from "../../../domain/index.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../sync/gateway/constants.js";
+  SYNC_PROJECTIONS,
+} from "../../sync/sheets/constants.js";
 import type { RegisterSyncSheetInput } from "../../../infrastructure/storage/index.js";
 import type { TypedSheetsEntityReference } from "../api/contracts.js";
 import type { NormalizedCellKind } from "../../../shared/encoding/constants.js";
 
 /** Physical projections supported by a mapped business entity. */
 export type TypedSheetsEntityProjection =
-  | typeof SYNC_GATEWAY_PROJECTIONS.USER_INPUT
-  | typeof SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE;
+  | typeof SYNC_PROJECTIONS.USER_INPUT
+  | typeof SYNC_PROJECTIONS.SYSTEM_STATE;
 
 /** A string property name declared by one mapped entity. */
 export type TypedSheetsEntityProperty<Entity extends object> = Extract<keyof Entity, string>;
 
 /** Optional codec used when a TypeScript property needs custom cell conversion. */
-export interface TypedSheetsEntityFieldCodec {
+export interface TypedSheetsEntityFieldCodec<Value = unknown> {
   /** Converts one entity property value into a normalized Sheet cell. */
-  readonly encode?: (value: unknown) => NormalizedCell;
+  encode?(value: Value): NormalizedCell;
   /** Converts one accepted canonical cell into an entity property value. */
-  readonly decode?: (value: NormalizedCell) => unknown;
+  decode?(value: NormalizedCell): Value;
 }
 
 /** Input declaration for one entity property stored as a canonical field. */
-export interface TypedSheetsEntityFieldMappingInput<Entity extends object>
-  extends TypedSheetsEntityFieldCodec {
+export interface TypedSheetsEntityFieldMappingInput<
+  Entity extends object,
+  Property extends TypedSheetsEntityProperty<Entity> = TypedSheetsEntityProperty<Entity>,
+> extends TypedSheetsEntityFieldCodec<Entity[Property]> {
   /** Property on the application entity. */
-  readonly property: TypedSheetsEntityProperty<Entity>;
+  readonly property: Property;
   /** Stable canonical/Sheet field name. Defaults to `property`. */
   readonly fieldName?: string;
   /** Runtime cell type stored in canonical state and projected to Sheets. */
@@ -58,6 +60,11 @@ export interface TypedSheetsEntityProjectionMappingInput {
   readonly projection: TypedSheetsEntityProjection;
 }
 
+/** A property-specific mapping input union that preserves codec value inference. */
+export type TypedSheetsEntityFieldMappingInputForEntity<Entity extends object> = {
+  [Property in TypedSheetsEntityProperty<Entity>]: TypedSheetsEntityFieldMappingInput<Entity, Property>
+}[TypedSheetsEntityProperty<Entity>];
+
 /** User-facing declaration used to construct one validated entity mapping. */
 export interface TypedSheetsEntityMappingInput<Entity extends object> {
   /** Entity class or stable entity name handled by the execution engine. */
@@ -73,7 +80,7 @@ export interface TypedSheetsEntityMappingInput<Entity extends object> {
   /** Schema version registered for every physical projection of this entity. */
   readonly schemaVersion: number;
   /** Canonical business fields exposed by this mapping. */
-  readonly fields: readonly TypedSheetsEntityFieldMappingInput<Entity>[];
+  readonly fields: readonly TypedSheetsEntityFieldMappingInputForEntity<Entity>[];
   /** One System_State projection and, optionally, one User_Input projection. */
   readonly projections: readonly TypedSheetsEntityProjectionMappingInput[];
   /** System-only marker projected when `em.remove()` tombstones an entity. */
@@ -105,6 +112,12 @@ export interface TypedSheetsEntityProjectionMapping {
   readonly projection: TypedSheetsEntityProjection;
 }
 
+/** Canonical identity metadata shared by persistence and observation paths. */
+export interface TypedSheetsEntityIdentityMapping {
+  readonly primaryProperty: string;
+  readonly businessKey: TypedSheetsEntityFieldMapping;
+}
+
 /** Adapter-neutral mapping consumed by the flush and observation bridges. */
 export interface TypedSheetsEntityMapping {
   readonly entity: TypedSheetsEntityReference<object>;
@@ -112,6 +125,7 @@ export interface TypedSheetsEntityMapping {
   readonly logicalSheetId: string;
   readonly primaryKey: string;
   readonly businessKey: TypedSheetsEntityFieldMapping;
+  readonly identity: TypedSheetsEntityIdentityMapping;
   readonly schemaVersion: number;
   readonly fields: readonly TypedSheetsEntityFieldMapping[];
   readonly projections: readonly TypedSheetsEntityProjectionMapping[];

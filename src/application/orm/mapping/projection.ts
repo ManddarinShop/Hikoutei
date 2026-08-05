@@ -7,10 +7,11 @@
 
 import {
   FIELD_OWNERSHIPS,
+  REGISTERED_PROJECTION_KINDS,
   type FieldManifestEntry,
   type OwnershipManifest,
 } from "../../../domain/index.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../sync/gateway/constants.js";
+import { SYNC_PROJECTIONS } from "../../sync/sheets/constants.js";
 import type { RegisterSyncSheetInput, RegisteredProjection } from "../../../infrastructure/storage/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
@@ -49,8 +50,8 @@ export function createTypedSheetsEntityOwnershipManifest(
         fieldName: field.fieldName,
         ownership: field.ownership,
         projection: field.ownership === FIELD_OWNERSHIPS.USER
-          ? SYNC_GATEWAY_PROJECTIONS.USER_INPUT
-          : SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+          ? SYNC_PROJECTIONS.USER_INPUT
+          : SYNC_PROJECTIONS.SYSTEM_STATE,
         type: field.cellKind,
         required: field.required,
         unique: field.unique,
@@ -64,7 +65,7 @@ export function serializeTypedSheetsEntityOwnershipManifest(
   mapping: TypedSheetsEntityMapping,
 ): string {
   const fields = [...createTypedSheetsEntityOwnershipManifest(mapping).values()]
-    .sort((left, right) => left.fieldName.localeCompare(right.fieldName));
+    .sort((left, right) => left.fieldName < right.fieldName ? -1 : left.fieldName > right.fieldName ? 1 : 0);
   return JSON.stringify({ fields });
 }
 
@@ -73,12 +74,12 @@ export function typedSheetsEntityProjectionHeaders(
   mapping: TypedSheetsEntityMapping,
   projection: TypedSheetsEntityProjection,
 ): readonly string[] {
-  const fieldNames = projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE
+  const fieldNames = projection === SYNC_PROJECTIONS.SYSTEM_STATE
     ? mapping.fields.map((field) => field.fieldName)
     : mapping.fields
       .filter((field) => field.ownership === FIELD_OWNERSHIPS.USER)
       .map((field) => field.fieldName);
-  return projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE
+  return projection === SYNC_PROJECTIONS.SYSTEM_STATE
     ? [...fieldNames, mapping.tombstoneFieldName]
     : fieldNames;
 }
@@ -94,11 +95,22 @@ export function createTypedSheetsEntityProjectionRegistration(
     spreadsheetId: projection.spreadsheetId,
     tabName: projection.tabName,
     registeredRange: projection.registeredRange,
-    projection: projection.projection as RegisteredProjection,
+    projection: toRegisteredProjection(projection.projection),
     schemaVersion: mapping.schemaVersion,
     ownershipManifestJson: serializeTypedSheetsEntityOwnershipManifest(mapping),
     businessKeyField: mapping.businessKey.fieldName,
   };
+}
+
+function toRegisteredProjection(
+  projection: TypedSheetsEntityProjection,
+): RegisteredProjection {
+  switch (projection) {
+    case SYNC_PROJECTIONS.USER_INPUT:
+      return REGISTERED_PROJECTION_KINDS.USER_INPUT;
+    case SYNC_PROJECTIONS.SYSTEM_STATE:
+      return REGISTERED_PROJECTION_KINDS.SYSTEM_STATE;
+  }
 }
 
 /** Returns every setup definition necessary to register and provision a mapping collection. */

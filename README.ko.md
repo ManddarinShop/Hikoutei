@@ -8,7 +8,7 @@
 
 <a href="https://www.npmjs.com/package/hikoutei">npm 패키지</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">이슈</a> ·
-<a href="apps-script/gateway/Code.gs">Apps Script Gateway</a>
+<a href="docs/quick-start.md">빠른 시작</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
 [![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
@@ -18,8 +18,9 @@
 
 Hikoutei는 TypeScript와 Node.js 애플리케이션에서 Google Sheets를 MVP 또는
 내부 업무 흐름의 사람이 읽기 쉬운 화면으로 사용할 수 있게 합니다. 애플리케이션은
-타입이 지정된 엔티티와 로컬 SQLite를 사용하고, 포함된 Apps Script Gateway를
-통해 변경 내용을 Google Sheets에 비동기적으로 전달할 수 있습니다.
+타입이 지정된 엔티티와 로컬 SQLite를 사용하고, 서비스 계정 기반 Google
+Sheets provider를 통해 변경 내용을 Google Sheets에 비동기적으로 전달할 수
+있습니다.
 
 Hikoutei의 범위는 의도적으로 작습니다. 범용 데이터베이스 대체재, Prisma/JPA
 클론, 범용 Google Sheets API 래퍼를 목표로 하지 않습니다.
@@ -46,7 +47,8 @@ SQLite provider가 내부적으로 사용하지만 루트 public API에는 Mikro
 
 ## 빠른 시작
 
-엔티티 정의와 환경별 Sheet route를 분리하고 루트 API만 사용합니다.
+엔티티 정의와 SQLite lifecycle은 루트 API만 사용합니다. Sheet route,
+provider credential, provisioning, polling은 내부 service bootstrap의 책임입니다.
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -63,14 +65,6 @@ const User = defineTypedSheetsEntity({
 const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  sheets: {
-    spreadsheetId: process.env.SHEET_ID!,
-    routes: {
-      User: {
-        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-      },
-    },
-  },
 });
 
 const em = hikoutei.em.fork();
@@ -82,10 +76,11 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`createTypedSheets()`는 SQLite와 로컬 canonical/outbox만 준비합니다. 원격
-탭과 헤더 provisioning은 `hikoutei.setupSheets(provisioner)`를 명시적으로
-호출해야 합니다. `flush()`가 성공하면 SQLite 변경과 durable outbox가
-커밋되며 원격 Sheet 전달은 별도 worker가 비동기로 수행합니다.
+`createTypedSheets()`는 로컬 entity table만 준비하며 Google Sheets에 연결하지
+않습니다. 내부 sync service가 mapping을 등록하고 탭을 provisioning한 뒤
+outbound worker와 User_Input polling을 시작합니다. service mode에서
+`flush()`는 entity, canonical state, durable outbox를 SQLite transaction으로
+커밋하고 원격 Sheet 전달은 비동기로 수행합니다.
 
 ## Hikoutei를 사용하기 좋은 경우
 
@@ -110,29 +105,46 @@ await em.flush();
 
 ## Google Sheets 설정
 
-1. `createTypedSheets()`에서 scalar entity와 환경별 Sheet route를 정의합니다.
-2. [빠른 시작](docs/quick-start.md#sheet-setup-and-delivery)을 따라
-   [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs)를 대상
-   Spreadsheet에 bound된 Apps Script 프로젝트에 복사하고 Web App으로
-   배포한 뒤 `/exec` URL을 입력하고 `setupSyncGateway()`를 실행합니다.
-3. 생성된 `TYPED_SHEETS_GATEWAY_URL`,
-   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`,
-   `TYPED_SHEETS_GATEWAY_SHEET_ID`를 추적하지 않는 서버 환경 파일이나
-   secret store에 보관합니다. shared secret은 브라우저 코드나 Git에 넣지
-   마세요.
-4. `hikoutei.setupSheets(provisioner)`를 명시적으로 호출해 등록된 탭과
-   헤더를 provisioning한 뒤, 대기 중인 outbox effect를 전달하는 sync worker를
-   실행합니다.
+Google Sheets 동기화는 service-side의 책임입니다. 권장 경로는 서비스 계정
+기반 `googleSheetsApi` provider로, 하나의 서비스 계정으로 탭 provisioning,
+outbound effect 쓰기(빠른 append, guarded update/delete, receipt, 응답 유실
+복구), 테이블 읽기, 행 anchor, 사용자 편집 관찰을 모두 수행합니다.
+애플리케이션은 provider client를 import하거나 Sheet route를
+`createTypedSheets()`에 넘기지 않습니다.
 
-외부 서버에서 접근하려면 Web App의 액세스 범위가 서버를 허용해야 하며,
-일반적으로 **Anyone** 설정이 필요합니다. 편집기 전용 `/dev`가 아니라 배포용
-`/exec` URL을 사용하세요. `Code.gs`를 변경하면 Web App deployment를 새
-버전으로 갱신해야 합니다. 상세한 설정과 문제 해결 방법은
-[빠른 시작](docs/quick-start.md)에 설명되어 있습니다.
+1. `https://www.googleapis.com/auth/spreadsheets` scope를 가진 Google Cloud
+   서비스 계정을 만들고, 대상 스프레드시트를 이메일로 **Editor** 권한으로
+   공유합니다. provider가 탭 생성, effect 행과 receipt 기록, 행 anchor 관리를
+   하므로 Viewer 권한으로는 부족합니다. Cloud 프로젝트에서 Google Sheets API를
+   활성화합니다.
+2. 서비스 계정 키 파일 경로를 서버의 `GOOGLE_APPLICATION_CREDENTIALS`에 두고,
+   스프레드시트 ID는 커밋되지 않는 시크릿 저장소에 보관합니다. 키를 브라우저
+   코드나 Git에 넣지 마세요.
+3. `googleSheetsApi`로 내부 sync bootstrap을 시작합니다. 등록된 탭의 헤더를
+   생성/검증한 뒤 outbox 전달과 User_Input polling을 시작합니다.
+
+시트 일관성은 요청 간 Sheet 트랜잭션에서 오지 않습니다. 숨겨진
+effect-receipt 탭, effect-id/payload-hash 중복 제거, SQLite durable outbox,
+fencing, 필드 단위 compare-and-set 증거, postcondition 복구에서 옵니다.
+provider는 자격 증명, 스프레드시트 ID, URL, payload를 로그에 남기지 않으며,
+요청 시작 간격을 클래스별(읽기/쓰기) 1,100ms로 조절해 Google quota window를
+지킵니다. `flush()`는 로컬 커밋만 의미하고 전달은 비동기이며, 모든 쓰기는
+receipt로 기록되고 같은 effect worker가 복구합니다.
+
+추적되는 live 시나리오는 이 provider로 실행됩니다.
+[docs/sync-bulk-write-benchmark.md](docs/sync-bulk-write-benchmark.md)의
+10,000행 append와 update/delete live 증거도 같은 REST 경로를 사용합니다.
+`scripts/bench/`의 원시 전송 실험은 receipt/CAS 없는 unguarded 경로이므로,
+worker를 통한 측정 전에는 성능 수치를 검증된 것으로 보지 마세요. live 호출은
+opt-in이며, 일반 검증은 fake provider와 SQLite fixture를 사용합니다.
+
+기존 Apps Script Gateway와 `appsScript`/`googleApiWorker` 옵션은 제거되어
+위 서비스 계정 provider가 유일한 동기화 경로입니다. 상세한 설정과 문제 해결
+방법은 [빠른 시작](docs/quick-start.md)에 설명되어 있습니다.
 
 ## 문서
 
-- [빠른 시작](docs/quick-start.md) — 설치, 매핑, Gateway 설정.
+- [빠른 시작](docs/quick-start.md) — 설치, ORM lifecycle, service-side sync 설정.
 - [아키텍처](docs/architecture.md) — 로컬 저장소와 Sheet 화면의 관계.
 - [쓰기 및 동기화 흐름](docs/write-and-synchronization-flow.md) — 비동기 전달과
   복구 동작.
@@ -142,7 +154,7 @@ await em.flush();
 
 ## 제한사항
 
-- Google Sheets에는 quota, 지연 시간, Apps Script 실행 시간 제한이 있습니다.
+- Google Sheets에는 quota, 지연 시간, API rate limit이 있습니다.
 - Sheet 업데이트는 비동기이므로 애플리케이션은 로컬 상태를 읽어야 합니다.
 - SQLite는 서비스에 로컬이며 분산 조정 계층이 아닙니다.
 - 스키마 변경, 수동 편집, 충돌하는 변경에 대한 운영 정책은 애플리케이션이
@@ -152,7 +164,7 @@ await em.flush();
 
 - Google Sheets에서 의도적인 사용자 편집을 수집하는 기능 완성.
 - update/delete 충돌 처리와 표시 개선.
-- 레지스트리 및 Apps Script 배포를 위한 설정 도구 추가.
+- 레지스트리 및 직접 provider 배포를 위한 설정 도구 추가.
 - 공개 패키지 릴리스 안정화.
 
 현재 작업은 [open issues](https://github.com/ManddarinShop/Hikoutei/issues)

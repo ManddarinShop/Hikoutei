@@ -1,20 +1,31 @@
 # CI scenarios
 
-Hikoutei's CI includes an **internal sync/gateway end-to-end scenario**. It is
-not a public API smoke test. The scenario drives the internal typed-sheets sync
-pipeline — projection registration, gateway provisioning, the bounded effect
-worker, polling, and the MikroORM-backed storage/CAS/hash machinery — and
-loads implementation modules directly from the packed `dist/` tree. The
+Hikoutei's CI runs two installed-consumer scenarios against the packed
+package. Each is built as an installed consumer: after `npm pack` it imports
+from the packed tarball rather than from `src/**` or the source-only test
+fake, and neither is allowed to import those.
+
+1. **Internal sync E2E** (`scripts/ci/run-api-scenario.mjs`) drives the
+   internal typed-sheets sync pipeline — projection registration, sheet
+   provisioning, the bounded effect worker, polling, and the MikroORM-backed
+   storage/CAS/hash machinery — and loads implementation modules directly from
+   the packed `dist/` tree.
+2. **Installed root API smoke** (`scripts/ci/run-root-api-scenario.mjs`)
+   imports ONLY the installed package root entrypoint `hikoutei` (no internal
+   package subpaths and no source imports) and exercises the public
+   entity-lifecycle contract an application is meant to use.
+
+The public contract is the high-level `hikoutei` root API: a SQLite-backed
+entity lifecycle. Sheet configuration, registration, and synchronization remain
+internal service concerns. The
 `hikoutei/orm` and `hikoutei/mikro-orm` package subpaths are intentionally not
-published.
+published; the root smoke performs those dynamic imports only as negative
+boundary assertions (they must be rejected with `ERR_PACKAGE_PATH_NOT_EXPORTED`)
+while the lifecycle itself imports only the root `hikoutei` entrypoint. This
+guards the boundary directly in an installed consumer in addition to the
+source-level tests.
 
-The public contract is the high-level `hikoutei` root API: Sheet
-configuration/registration and a MikroORM-style entity lifecycle. Root API
-coverage lives in the unit/provider tests; this installed-consumer scenario
-intentionally remains focused on the internal sync/gateway pipeline and should
-not be read as public API CRUD coverage.
-
-## Internal sync/gateway E2E
+## Internal sync E2E
 
 The scenario is built as an installed consumer: after `npm pack` it imports the
 package entrypoints from the packed tarball rather than from `src/**` or the
@@ -29,84 +40,248 @@ the same lifecycle:
 5. edit a User_Input value and verify that polling reports the changed row;
 6. restore the value, delete the entity, and verify the final projection state.
 
+## Installed root API smoke
+
+The root smoke imports only the installed `hikoutei` root entrypoint and drives
+the stable public lifecycle end to end against an in-memory SQLite authority
+(`dbName: ":memory:"`):
+
+1. define a scalar entity with `defineTypedSheetsEntity()`;
+2. open the runtime with `createTypedSheets()` and only `dbName` plus entity tokens;
+3. obtain a request-local manager with `em.fork()`;
+4. `create()` / `persist()` / `flush()` one entity and `findOne()`-verify it;
+5. mutate the loaded entity, `flush()`, and re-read it through a fresh fork to
+   confirm the mutation committed locally;
+6. `remove()` / `flush()` and verify the entity is gone through a fresh fork;
+7. close the runtime.
+
+It uses assertions and writes a JSON report plus a clear pass summary. It never
+contacts Google Sheets, never needs credentials, and never provisions remote
+tabs, so it runs as a packed consumer only in the normal CI, develop, and stable
+verify jobs and has no live counterpart. It is local-only — an in-memory SQLite
+authority with no backend concept — not a fake-backend scenario like the
+internal sync E2E. Its entity lifecycle imports only the
+root `hikoutei` package; the `hikoutei/orm` and `hikoutei/mikro-orm` dynamic
+imports it performs are negative boundary assertions that must be rejected,
+not part of the lifecycle.
+
 ## Backends and triggers
 
-The fake backend runs when a pull request targets `main` or `develop`, and when
-those branches receive a push. The live workflow runs for pull requests
-targeting `main` or `develop`. Live is skipped for forked pull requests because
-GitHub does not expose repository secrets to them; using `pull_request_target`
-would expose the secret to untrusted PR code. It uses a dedicated test
-spreadsheet and the following GitHub Actions secrets:
+The normal CI, develop, and stable verification jobs run **both** installed-consumer
+scenarios — the internal sync E2E and the installed root API smoke. The
+internal E2E uses the **fake** backend (no Google Sheets contact, no
+credentials); the root API smoke is local-only, an in-memory SQLite authority
+(`:memory:`) with no backend concept. The workflows are:
 
-- `TYPED_SHEETS_GATEWAY_URL`
-- `TYPED_SHEETS_GATEWAY_SHARED_SECRET`
-- `TYPED_SHEETS_GATEWAY_SHEET_ID`
+- `.github/workflows/ci.yml` runs on pull requests and pushes to `main` and
+  `develop`.
+- `.github/workflows/develop-version.yml` creates the next patch version and
+  `develop-vX.Y.Z` tag after a `develop` push.
+- `.github/workflows/develop-publish.yml` verifies and publishes that tag with
+  the `latest` dist-tag.
+- `.github/workflows/main-version.yml` creates the next minor version and
+  `vX.Y.Z` tag after a `main` push.
+- `.github/workflows/stable-publish.yml` verifies and publishes that tag with
+  the `latest` dist-tag too.
+
+Only the internal sync E2E has a live variant, in the separate
+`.github/workflows/live-integration.yml` workflow. It is opt-in via
+`workflow_dispatch` — a maintainer with write access dispatches it explicitly;
+it never runs automatically on pull requests or pushes — and exercises
+that single scenario against real Google Sheets with `--backend=live
+--outbound=direct`. The installed root API smoke has no live
+counterpart: it is a local-only lifecycle smoke against an in-memory SQLite
+authority, so it never runs there.
+
+Because live is opt-in via `workflow_dispatch`, it is triggered manually by a
+maintainer with write access rather than automatically on pull requests, so
+there is no forked-PR secret-exposure path. The live path is
+service-account-only: the workflow materializes the service-account key in
+`$RUNNER_TEMP` and scopes the credential/spreadsheet environment to the live
+execution and cleanup steps only, not the whole job, so
+checkout/setup/install/build never see them. The live run uses a dedicated test
+spreadsheet shared with the service account and the following GitHub Actions
+secrets:
+
+- `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON` (the service-account key JSON)
+- `GOOGLE_SHEETS_TEST_SPREADSHEET_ID`
+
+No gateway is deployed or invoked — the live path is service-account-only, so
+the workflow needs only those two secrets.
 
 ## Cleanup
 
 Each live run generates unique tab names from the workflow run ID. The runner
 writes a manifest before provisioning, cleans those tabs in a `finally` path,
 and the workflow repeats cleanup with `if: always()` so a failed assertion does
-not leave the fixture behind. The Apps Script receipt tab is also removed by
-the cleanup operation. Do not point the live secrets at a production
+not leave the fixture behind. Cleanup uses the same service account
+(`deleteSheet` requests through the direct provider's transport) and removes
+the shared receipt tab too. Do not point the live secrets at a production
 spreadsheet; cleanup is intentionally scoped to the dedicated CI spreadsheet.
 
-## Beta publication
+## Kohkai dependency
 
-A push to `develop` runs `.github/workflows/beta-publish.yml`. It repeats the
-unit/type/build/package checks and the installed-package fake sync/gateway E2E
-before publishing to npm with the `beta` dist-tag. Pull requests do not publish
-beta packages; the workflow runs after the commit reaches `develop`.
+Hikoutei consumes the standalone `@hikoutei/kohkai` package from the
+`ManddarinShop/Kohkai` repository. The codec is not a Hikoutei workspace and
+its source is not included in the Hikoutei tarball:
 
-The workflow requires the GitHub repository `NPM_TOKEN` secret and uses npm
-provenance. The token must never be committed to the repository. The publish
-job also checks that `develop` still points at the workflow commit so an older
-run cannot publish after a newer commit has landed.
+```json
+{
+  "dependencies": {
+    "@hikoutei/kohkai": "0.1.0"
+  }
+}
+```
 
-The workflow does not commit a generated version back to `develop`. It
-publishes an ephemeral prerelease on the current numeric `package.json` version
-line with the GitHub run ID and attempt. For example, `0.3.0` produces
-`0.3.0-beta.b30560831639.1`, and starting the next development cycle at
-`0.3.1` produces `0.3.1-beta...`. The stable `package.json` version is
-therefore unchanged by CI. A full workflow rerun receives a new version;
-rerunning only the publish job intentionally reuses its verified artifact.
-An already published beta version is not deleted; after a corrected run, the
-`beta` dist-tag points to the new package on the current version line.
+The root CI, develop publish, and stable publish workflows verify that the
+exact declared Kohkai version already exists on npm before installing or
+publishing Hikoutei. The first integration release therefore requires:
 
-Install the newest beta package explicitly:
+1. publish `@hikoutei/kohkai@0.1.0` from the Kohkai repository using tag `v0.1.0`;
+2. merge the Hikoutei dependency integration;
+3. let the next develop release produce `0.3.2` from the current `0.3.1` baseline.
+
+Existing Hikoutei releases remain unchanged. The root
+`test/kohkai-compatibility.test.ts` pins the Hikoutei shared stable encoding to
+the Kohkai compatibility vectors and proves the local codec is byte-compatible
+with the generic `@hikoutei/kohkai` codec; the Apps Script codec mirror was
+removed with the gateway.
+
+## Develop publication
+
+A push to `develop` runs `.github/workflows/develop-version.yml`. It verifies
+the merged package, increments only the patch component, updates
+`package.json` and `package-lock.json`, commits the release version, and creates
+an annotated tag such as `develop-v0.3.1`. The generated commit is guarded from
+being processed as another release.
+
+The tag triggers `.github/workflows/develop-publish.yml`. It repeats the
+unit/type/build/package checks, the installed-package internal sync
+E2E, and the installed root API smoke before publishing the numeric package
+version with the npm `latest` dist-tag. The version has no `-beta` suffix, and
+a plain `npm install hikoutei` resolves this channel:
 
 ```sh
-npm install hikoutei@beta
+npm install hikoutei
 ```
+
+The old `develop` dist-tag is no longer updated by this workflow; existing
+pinned `hikoutei@develop` installs keep the last develop-tagged version.
+
+The version calculation is isolated in `scripts/ci/release-version.mjs` and is
+covered by `test/release-version.test.ts`. For example:
+
+```text
+0.3.0 + patch → 0.3.1
+0.3.1 + patch → 0.3.2
+0.3.2 + patch → 0.3.3
+```The workflow requires a repository `RELEASE_TOKEN` secret with contents write
+permission. A token other than the default `GITHUB_TOKEN` is used because a
+push made by `GITHUB_TOKEN` does not trigger another workflow; the release tag
+must trigger `develop-publish.yml`. The publish job separately requires
+`NPM_TOKEN` plus npm provenance. The branch SHA is checked immediately before
+pushing, and the commit plus tag use one atomic Git push, so a concurrent
+develop merge fails without leaving a stale release tag. The version commit and
+npm publication are not atomic; a failed publish can be retried from the
+existing `develop-vX.Y.Z` tag after verifying that the version has not already
+been published.
 
 ## Stable publication
 
-Stable releases use `.github/workflows/stable-publish.yml` and a numeric Git
-tag such as `v0.2.1`. The tag version must exactly match the versions in
-`package.json` and both version fields in `package-lock.json`; the workflow does
-not bump versions automatically.
+A push to `main` runs `.github/workflows/main-version.yml`. It verifies the
+merged package, increments the minor component, updates the package manifests,
+commits the release version, and creates an annotated tag such as `v0.4.0`:
 
-Release procedure:
+```text
+0.3.1 + minor → 0.4.0
+```
 
-1. Choose the next SemVer version and update `package.json` and
-   `package-lock.json` in a reviewed release commit.
-2. Use a compatibility-preserving patch version for bug fixes (for example
-   `0.2.1`) or a new minor version for a new public API/feature (for example
-   `0.3.0`). Document intentional pre-1.0 compatibility breaks.
-3. Create and push the matching `vX.Y.Z` tag.
-4. The tag workflow reruns the checks and installed-consumer fake E2E, then
-   publishes the verified package with the `latest` dist-tag. A `develop` push
-   does not change `latest`; for example, the `0.3.0` stable package is
-   published only after the `v0.3.0` tag is pushed.
+The tag triggers `.github/workflows/stable-publish.yml`. That workflow only
+validates the numeric tag and matching package manifest versions, reruns the
+full checks and installed-consumer scenarios, and publishes to npm with the
+`latest` dist-tag. A `develop-v0.3.1` tag cannot trigger this numeric `vX.Y.Z`
+workflow.
 
-A stable package is immutable on npm, so reusing a published version fails
-instead of replacing the existing package. Normal users can install the
-`latest` release with `npm install hikoutei`.
+The main version workflow uses the same `RELEASE_TOKEN` requirement so its
+`vX.Y.Z` tag triggers `stable-publish.yml`. The stable publish job also
+requires the repository `NPM_TOKEN` secret and npm provenance before publishing
+`latest`. Stable package versions are
+immutable on npm, so reusing a published version fails instead of replacing
+it.
+
+Both channels publish `latest`, so their versions must increase globally:
+
+```text
+develop merges → patch:   0.3.3 → 0.3.4 → 0.3.5   (latest)
+main merge (after merging develop) → minor: 0.3.5 → 0.4.0   (latest)
+merge main back into develop → 0.4.0
+next develop merges → patch: 0.4.0 → 0.4.1 → 0.4.2   (latest)
+next main merge → minor: 0.4.2 → 0.5.0   (latest)
+```
+
+Keep the channels aligned: after a stable main release, merge `main` back
+into `develop` so the next develop patch release starts from the new stable
+baseline. If a develop release is prepared before that back-merge, its
+publish fails loudly on the latest-dist-tag monotonicity check (the develop
+version trails the main minor); merge main back and re-run the publish from
+the existing `develop-vX.Y.Z` tag. Normal users install the rolling line
+with:
+
+```sh
+npm install hikoutei
+```
 
 ## Artifacts
 
-The internal sync/gateway CI workflows emit a JSON artifact and, for live
-runs, a step summary. The beta and stable publication workflows upload their
-fake E2E reports and verified package artifacts when available. Setup time and
-steady-state time are reported separately so spreadsheet creation and header
-provisioning do not distort the internal sync/gateway measurements.
+The CI, develop, and stable jobs each emit a JSON report for **both**
+scenarios (internal sync E2E and installed root API smoke). The live
+job emits a JSON report only for the internal sync E2E, the single
+scenario it runs. Both runner scripts (`run-api-scenario.mjs` and
+`run-root-api-scenario.mjs`) default their `--summary` option to
+`GITHUB_STEP_SUMMARY`, so in GitHub Actions every CI/develop/stable invocation
+writes a step summary even though none passes `--summary` explicitly. The live
+internal E2E run is the only invocation that passes `--summary` explicitly
+(`--summary="$GITHUB_STEP_SUMMARY"`), which resolves to the same default but
+documents the intent. The develop and stable verify jobs upload their two
+installed-consumer scenario reports as a dedicated reports artifact
+(`if: always()`), separate from the package artifact (`if: success()`) that the
+publish job consumes. Setup time and steady-state time are reported separately
+for the internal E2E so spreadsheet creation and header provisioning do not
+distort the internal sync measurements.
+
+The develop and stable package artifacts are each a single directory that
+holds the npm tarball and its `sha256` checksum together under
+`$RUNNER_TEMP/hikoutei-{develop,stable}-package`. Their GitHub artifact names
+are `hikoutei-develop-package` and `hikoutei-stable-package`; the installed
+consumer report artifacts are `hikoutei-develop-fake-installed-consumer` and
+`hikoutei-stable-fake-installed-consumer`. The normal CI report artifact is
+`hikoutei-fake-installed-consumer`. The publish job downloads the corresponding
+package directory, asserts it contains exactly one `hikoutei-*.tgz` and the
+checksum file, verifies the checksum line names that exact tarball (not merely
+any file present in the directory), and only then runs `sha256sum --check`
+before publishing. Name/version validation, npm provenance, the
+`latest` dist-tag, and the stale branch SHA checks are enforced by
+the corresponding workflows.
+
+## Action versions
+
+Every workflow pins `actions/checkout`, `actions/setup-node`,
+`actions/upload-artifact`, and `actions/download-artifact` to the current
+Node 24-compatible major (`v5`) so the JavaScript actions run on the runner's
+Node 24 runtime:
+
+| Action | Major | Runtime |
+| --- | --- | --- |
+| `actions/checkout` | `v5` | Node 24 |
+| `actions/setup-node` | `v5` | Node 24 |
+| `actions/upload-artifact` | `v5` | Node 24 |
+| `actions/download-artifact` | `v5` | Node 24 |
+
+All four are on the same major, so there is no exception to record. The pin
+preserves behavior: artifacts are downloaded by name (not by artifact ID);
+`upload-artifact` still zips by default; `setup-node` `cache: npm` is set
+explicitly (the package has no `packageManager` field, so the auto-cache
+shortcut never applies); and the publish steps set `NODE_AUTH_TOKEN` in their
+own `env`, so npm provenance and the `id-token: write` permission are
+unchanged. This major is the action's own runtime version; the build and
+test job still uses `node-version: 22`.

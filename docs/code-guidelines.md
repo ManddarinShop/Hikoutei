@@ -13,7 +13,7 @@ The core value is safety around common Google Sheets-as-data-store failure modes
 - invalid row parsing
 - duplicate or missing key columns
 - API quota pressure
-- future write serialization through Apps Script
+- paced write serialization through the direct provider
 
 ## Positioning
 
@@ -60,8 +60,6 @@ MVP exclusions:
 - migration engine
 - lazy loading
 - multi-row atomic transactions
-- Apps Script automatic installation
-- Apps Script Web App gateway
 - caching
 - request collapse
 - retry/backoff
@@ -81,20 +79,15 @@ src/
   shared/                       # 도메인 간 공유 상수·인코딩·상태 계약
   application/
     orm/                        # 공개 ORM facade, mapping, flush 계획
-    sync/                       # worker, reconciliation, gateway orchestration
+    sync/                       # worker, reconciliation, Sheets 조정, telemetry
   adapter/
     persistence/
       contracts/                # 저장소 공통 계약
       providers/mikro-orm/      # 현재 MikroORM + SQLite 구현
     sheets/
-      providers/apps-script-gateway/
-        protocol/               # 서명·직렬화·응답 검증
-        transport/              # HTTP operation client
-        operations/
-          read/                 # 테이블 읽기
-          write/                # fast append
-          observation/           # snapshot·anchor 관측
-          effect/               # update/delete effect
+      providers/google-sheets-api/
+        transport/              # paced REST transport client
+        model/                  # preflight·planner·observation·batch 모델
   infrastructure/
     storage/                    # SQLite canonical state와 outbox
   index.ts
@@ -135,15 +128,16 @@ If a production source issue blocks the requested work, describe the blocker and
 ## Adapter Boundary
 
 Adapters are split by capability and provider. A provider is a concrete
-implementation such as MikroORM or Apps Script; a contract is the stable
-boundary that core, ORM, storage, or runtime code consumes.
+implementation such as MikroORM or the Google Sheets REST provider; a contract
+is the stable boundary that core, ORM, storage, or runtime code consumes.
 
 - `adapter/persistence/contracts/`: SQL and persistence contracts independent of
   MikroORM, Prisma, or another future implementation
 - `adapter/persistence/providers/mikro-orm/`: the current MikroORM-backed
   entity engine and SQLite storage bridge
-- `adapter/sheets/providers/apps-script-gateway/`: the current signed Apps Script
-  provider, separated into protocol, transport, and operation capabilities
+- `adapter/sheets/providers/google-sheets-api/`: the current direct Google
+  Sheets REST provider, separated into transport and model; the single sync
+  provider
 
 The adapter should expose sheet-level operations in terms the core needs, not Google-specific concepts.
 
@@ -210,8 +204,6 @@ After the MVP is stable, possible extensions are:
 - retry/backoff for 429 and transient 5xx
 - Google Sheet template generator
 - schema drift report
-- Apps Script installer CLI
-- Apps Script `LockService` write gateway
 - audit log sheet
 - `_createdAt` and `_updatedAt` system columns
 - GitHub Action for schema verification

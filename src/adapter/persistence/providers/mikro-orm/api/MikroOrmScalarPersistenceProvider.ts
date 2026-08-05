@@ -23,20 +23,20 @@ import type {
   ScalarEntityValue,
 } from "../../../contracts/scalar.js";
 import type {
-  TypedSheetsEntityData,
   TypedSheetsEntityReference,
   TypedSheetsFindOptions,
-  TypedSheetsEntityFilter,
 } from "../../../../../application/orm/api/contracts.js";
 import type {
   TypedSheetsEntityManager,
   TypedSheetsOrm,
 } from "../../../../../application/orm/api/TypedSheetsOrm.js";
+import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";
+import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
 
 /** Internal mapping from a public descriptor to its generated MikroORM entity. */
 export interface MikroOrmScalarEntityBinding {
   readonly descriptor: ResolvedHikouteiEntityDescriptor;
-  readonly entity: TypedSheetsEntityReference<object>;
+  readonly entity: TypedSheetsEntityReference<Record<string, unknown>>;
 }
 
 /**
@@ -101,7 +101,7 @@ class MikroOrmScalarTransaction implements ScalarEntityTransaction {
     const binding = this.requireBindingByTable(row.tableName);
     const entity = this.manager.create(
       binding.entity,
-      toInternalData(binding.descriptor, row.values) as TypedSheetsEntityData<object>,
+      toInternalData(binding.descriptor, row.values),
     );
     this.manager.persist(entity);
   }
@@ -148,7 +148,7 @@ class MikroOrmScalarTransaction implements ScalarEntityTransaction {
   ): Promise<object | null> {
     const result = await this.manager.findOne(
       binding.entity,
-      { [primaryKeyColumn]: toInternalValue(binding.descriptor, primaryKeyColumn, primaryKeyValue) } as TypedSheetsEntityFilter<object>,
+      { [primaryKeyColumn]: toInternalValue(binding.descriptor, primaryKeyColumn, primaryKeyValue) },
     );
     return result;
   }
@@ -171,7 +171,7 @@ async function readRows(
 ): Promise<readonly ScalarEntityRow[]> {
   const entities = await manager.find(
     binding.entity,
-    toInternalFilter(binding.descriptor, query.where) as TypedSheetsEntityFilter<object>,
+    toInternalFilter(binding.descriptor, query.where),
     toFindOptions(query),
   );
   return entities.map((entity) => fromInternalEntity(binding.descriptor, entity));
@@ -222,32 +222,62 @@ function fromInternalEntity(
   descriptor: ResolvedHikouteiEntityDescriptor,
   entity: object,
 ): ScalarEntityRow {
+  if (!isRecord(entity)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      "stored entity must be an object",
+    );
+  }
   const values: Record<string, ScalarEntityValue> = {};
-  const record = entity as Readonly<Record<string, unknown>>;
   for (const property of descriptor.properties) {
-    const value = record[property.name];
-    if (property.type === "date") {
-      if (value === null || value === undefined) {
-        values[property.name] = null;
-        continue;
-      }
-      if (typeof value !== "string") {
+    const value = entity[property.name];
+    if (value === null || value === undefined) {
+      if (!property.nullable && value === undefined) {
         throw new HikouteiError(
           HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-          `${property.name} returned a non-string stored date.`,
+          `${property.name} is missing from the stored entity.`,
         );
       }
-      const date = new Date(value);
-      if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) {
+      if (!property.nullable && value === null) {
         throw new HikouteiError(
           HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-          `${property.name} contains a non-canonical stored date.`,
+          `${property.name} is unexpectedly null in the stored entity.`,
         );
       }
-      values[property.name] = date;
+      values[property.name] = null;
       continue;
     }
-    values[property.name] = value === undefined ? null : value as ScalarEntityValue;
+
+    switch (property.type) {
+      case "string":
+        if (typeof value !== "string") throwInvalidStoredScalar(property.name, "string");
+        values[property.name] = value;
+        break;
+      case "number":
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+          throwInvalidStoredScalar(property.name, "finite number");
+        }
+        values[property.name] = value;
+        break;
+      case "boolean":
+        if (typeof value !== "boolean") throwInvalidStoredScalar(property.name, "boolean");
+        values[property.name] = value;
+        break;
+      case "date": {
+        if (typeof value !== "string" || !isCanonicalUtcIsoDate(value)) {
+          throwInvalidStoredScalar(property.name, "canonical UTC date string");
+        }
+        values[property.name] = new Date(value);
+        break;
+      }
+    }
   }
   return values;
+}
+
+function throwInvalidStoredScalar(propertyName: string, expected: string): never {
+  throw new HikouteiError(
+    HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+    `${propertyName} must be a ${expected} in the stored entity.`,
+  );
 }

@@ -8,7 +8,7 @@
 
 <a href="https://www.npmjs.com/package/hikoutei">npm パッケージ</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a> ·
-<a href="apps-script/gateway/Code.gs">Apps Script Gateway</a>
+<a href="docs/quick-start.md">クイックスタート</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
 [![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
@@ -18,8 +18,9 @@
 
 Hikoutei は、TypeScript と Node.js のアプリケーションで Google Sheets を
 MVP や社内ワークフローの人間向けの画面として利用できるようにします。
-アプリケーションは型付きエンティティとローカル SQLite を使い、付属の
-Apps Script Gateway を通して変更を Google Sheets へ非同期に届けられます。
+アプリケーションは型付きエンティティとローカル SQLite を使い、サービス
+アカウントの Google Sheets provider を通して変更を Google Sheets へ非同期に
+届けられます。
 
 Hikoutei の対象は意図的に限定されています。汎用データベースの代替、
 Prisma/JPA のクローン、汎用 Google Sheets API ラッパーを目的としていません。
@@ -46,7 +47,8 @@ SQLite provider が内部で利用しますが、ルート public API に MikroO
 
 ## クイックスタート
 
-エンティティ定義と環境ごとの Sheet route を分離し、ルート API だけを使います。
+エンティティ定義と SQLite の lifecycle はルート API だけを使います。Sheet route、
+provider credential、provisioning、polling は内部 service bootstrap の責務です。
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -63,14 +65,6 @@ const User = defineTypedSheetsEntity({
 const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  sheets: {
-    spreadsheetId: process.env.SHEET_ID!,
-    routes: {
-      User: {
-        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-      },
-    },
-  },
 });
 
 const em = hikoutei.em.fork();
@@ -82,10 +76,11 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-`createTypedSheets()` は SQLite とローカル canonical/outbox だけを準備します。
-リモートのタブとヘッダーは `hikoutei.setupSheets(provisioner)` を明示的に呼び出して
-プロビジョニングします。`flush()` の成功は SQLite と durable outbox のコミットを
-意味し、リモート Sheet への配信は別の worker が非同期に行います。
+`createTypedSheets()` はローカルの entity table だけを準備し、Google Sheets へ接続
+しません。内部 sync service が mapping を登録してタブを provision し、outbound
+worker と User_Input polling を開始します。service mode では `flush()` が entity、
+canonical state、durable outbox を SQLite transaction としてコミットし、リモート
+Sheet への配信は非同期に行います。
 
 ## Hikoutei が適しているケース
 
@@ -108,27 +103,47 @@ await em.flush();
 
 ## Google Sheets の設定
 
-1. `createTypedSheets()` で scalar entity と環境ごとの Sheet route を定義します。
-2. [クイックスタート](docs/quick-start.md#sheet-setup-and-delivery) に従い、
-   [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) を対象の
-   Spreadsheet にバインドした Apps Script プロジェクトへコピーし、Web App として
-   デプロイします。その後 `/exec` URL を入力して `setupSyncGateway()` を実行します。
-3. 生成された `TYPED_SHEETS_GATEWAY_URL`、
-   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`、
-   `TYPED_SHEETS_GATEWAY_SHEET_ID` を、追跡対象外のサーバー環境ファイルまたは
-   secret store に保管します。shared secret をブラウザコードや Git に入れないでください。
-4. `hikoutei.setupSheets(provisioner)` を明示的に呼び出して登録済みのタブとヘッダーを
-   プロビジョニングし、保留中の outbox effect を配信する sync worker を実行します。
+Google Sheets の同期は service-side の責務です。推奨経路はサービスアカウントの
+`googleSheetsApi` provider で、ひとつのサービスアカウントがタブの provisioning、
+outbound effect の書き込み（高速 append、guarded update/delete、レシート、
+応答喪失の復旧）、テーブル読み取り、行アンカー、ユーザー編集の観察をすべて
+行います。アプリケーションは provider クライアントを import したり、Sheet route
+を `createTypedSheets()` に渡したりしません。
 
-外部サーバーからアクセスするには、Web App のアクセス範囲でサーバーを許可する必要が
-あり、通常は **Anyone** が必要です。エディタ専用の `/dev` ではなく、デプロイ用の
-`/exec` URL を使用してください。`Code.gs` を変更した場合は、Web App deployment を
-新しいバージョンに更新してから利用します。詳しい設定とトラブルシューティングは
-[クイックスタート](docs/quick-start.md)を参照してください。
+1. `https://www.googleapis.com/auth/spreadsheets` スコープを持つ Google Cloud
+   サービスアカウントを作成し、対象スプレッドシートをそのメールアドレスに
+   **編集者**として共有します。provider がタブ作成、effect 行とレシート記録、
+   行アンカー管理を行うため、閲覧者権限では不十分です。Cloud プロジェクトで
+   Google Sheets API を有効化します。
+2. サービスアカウントキーのファイルパスをサーバーの
+   `GOOGLE_APPLICATION_CREDENTIALS` に置き、スプレッドシート ID はコミットされない
+   シークレットストアに保管します。キーをブラウザコードや Git に入れないでください。
+3. `googleSheetsApi` で内部 sync bootstrap を起動します。登録タブのヘッダーを
+   作成・検証した後、outbox 配信と User_Input polling を開始します。
+
+シートの整合性はリクエスト間の Sheet トランザクションから生まれるのではなく、
+隠された effect-receipt タブ、effect-id/payload-hash の重複排除、SQLite の
+durable outbox、フェンシング、フィールド単位の compare-and-set 証拠、
+postcondition 復旧から生まれます。provider は資格情報・スプレッドシート ID・
+URL・payload をログに残さず、要求開始間隔をクラスごと（読み取り/書き込み）
+1,100ms に調整して Google の quota window を守ります。`flush()` はローカル
+コミットのみを意味し、配信は非同期で、すべての書き込みはレシートで記録され、
+同じ effect worker が復旧します。
+
+追跡される live シナリオはこの provider で実行されます。
+[docs/sync-bulk-write-benchmark.md](docs/sync-bulk-write-benchmark.md) の
+10,000 行 append と update/delete の live 証拠も同じ REST 経路です。
+`scripts/bench/` の生トランスポート実験はレシート/CAS のない unguarded 経路
+なので、worker 経由の測定までは性能値を検証済みと見なさないでください。live
+呼び出しは opt-in で、通常の検証は fake provider と SQLite fixture を使います。
+
+従来の Apps Script Gateway と `appsScript`/`googleApiWorker` オプションは削除され、
+上記のサービスアカウント provider が唯一の同期経路です。詳しい設定と
+トラブルシューティングは [クイックスタート](docs/quick-start.md) を参照してください。
 
 ## ドキュメント
 
-- [クイックスタート](docs/quick-start.md) — インストール、マッピング、Gateway 設定。
+- [クイックスタート](docs/quick-start.md) — インストール、ORM lifecycle、service-side sync 設定。
 - [アーキテクチャ](docs/architecture.md) — ローカルストアと Sheet ビューの関係。
 - [書き込みと同期の流れ](docs/write-and-synchronization-flow.md) — 非同期配信と復旧動作。
 - [開発ガイド](docs/development.md) — ローカル開発とテストコマンド。
@@ -136,7 +151,7 @@ await em.flush();
 
 ## 制限事項
 
-- Google Sheets にはクォータ、レイテンシー、Apps Script の実行時間制限があります。
+- Google Sheets にはクォータ、レイテンシー、API のレート制限があります。
 - Sheet の更新は非同期なので、アプリケーションはローカル状態を読み取るべきです。
 - SQLite はサービスにローカルなもので、分散調整レイヤーではありません。
 - スキーマ変更、手動編集、競合する変更に対する運用方針は、アプリケーション側で
@@ -146,7 +161,7 @@ await em.flush();
 
 - Google Sheets から意図的なユーザー編集を取り込む機能を完成させる。
 - update/delete の競合処理と表示を改善する。
-- レジストリと Apps Script デプロイ用のセットアップツールを追加する。
+- レジストリと直接 provider デプロイ用のセットアップツールを追加する。
 - 公開パッケージのリリースを安定化する。
 
 現在の作業については [open issues](https://github.com/ManddarinShop/Hikoutei/issues)

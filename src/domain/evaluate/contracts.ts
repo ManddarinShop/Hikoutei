@@ -2,7 +2,7 @@
  * Shared contracts for pure batch evaluation.
  *
  * These types keep evaluator inputs and outcomes independent from SQLite,
- * gateway transport, and any repository implementation.
+ * provider transport, and any repository implementation.
  */
 
 import type { NormalizedCell } from "../../shared/encoding/types.js";

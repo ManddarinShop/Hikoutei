@@ -7,12 +7,13 @@
  * changing the public entity lifecycle API.
  */
 
-import type { EffectStatus } from "../../../../domain/index.js";
+import type { EffectStatus, NormalizedCell } from "../../../../domain/index.js";
 import { ROW_BINDING_STATES } from "../../../../domain/model/constants.js";
 import type {
   SqlExecutor,
   SqlMutationResult,
 } from "../../../../adapter/persistence/contracts/sql.js";
+import { parseNormalizedCell } from "../resolution/resolutionWriterHelpers.js";
 
 /** Raw row-binding state returned by SQLite. */
 export interface MappedRowBindingSqlRow {
@@ -31,6 +32,12 @@ export interface MappedCanonicalEntitySqlRow {
 export interface MappedCanonicalFieldRevisionSqlRow {
   readonly field_name: string;
   readonly field_revision: number;
+}
+
+/** Raw canonical field value used to rebuild a transaction-local projection. */
+export interface MappedCanonicalFieldValueSqlRow {
+  readonly field_name: string;
+  readonly normalized_value: string;
 }
 
 /** Raw active business-key row returned by SQLite. */
@@ -52,6 +59,7 @@ export interface MappedVisibleProjectionSqlRow {
 
 /** Raw latest projection effect returned by SQLite. */
 export interface MappedLatestProjectionEffectSqlRow {
+  readonly effect_id: string;
   readonly physical_sheet_id: string;
   readonly projection: string;
   readonly status: EffectStatus;
@@ -88,6 +96,12 @@ const READ_ACTIVE_CANONICAL_ENTITY_SQL = `
 
 const READ_CANONICAL_FIELD_REVISIONS_SQL = `
   SELECT field_name, field_revision
+  FROM entity_field_state
+  WHERE entity_id = ?
+`;
+
+const READ_CANONICAL_FIELD_VALUES_SQL = `
+  SELECT field_name, normalized_value
   FROM entity_field_state
   WHERE entity_id = ?
 `;
@@ -130,7 +144,7 @@ const READ_VISIBLE_PROJECTION_STATE_SQL = `
 `;
 
 const READ_LATEST_PROJECTION_EFFECT_SQL = `
-  SELECT physical_sheet_id, projection, status, payload_json,
+  SELECT effect_id, physical_sheet_id, projection, status, payload_json,
          expected_visible_revision, expected_visible_hash, stream_sequence
   FROM sheet_effect_outbox
   WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
@@ -182,6 +196,21 @@ export function readMappedActiveCanonicalEntityWithSql(
   entityId: string,
 ): Promise<MappedCanonicalEntitySqlRow | undefined> {
   return sql.get<MappedCanonicalEntitySqlRow>(READ_ACTIVE_CANONICAL_ENTITY_SQL, [entityId]);
+}
+
+/** Reads the current canonical values used for transaction-local projection payloads. */
+export async function readMappedCanonicalFieldsWithSql(
+  sql: SqlExecutor,
+  entityId: string,
+): Promise<Readonly<Record<string, NormalizedCell>>> {
+  const rows = await sql.all<MappedCanonicalFieldValueSqlRow>(
+    READ_CANONICAL_FIELD_VALUES_SQL,
+    [entityId],
+  );
+  return Object.fromEntries(rows.map((row) => [
+    row.field_name,
+    parseNormalizedCell(row.normalized_value, `${entityId}.${row.field_name}`),
+  ]));
 }
 
 /** Reads canonical field revisions used to build update compare-and-set input. */

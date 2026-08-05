@@ -7,17 +7,18 @@
 
 import {
   NORMALIZED_CELL_KINDS,
+  type CellObservationKind,
 } from "./constants.js";
-import type { CellObservationKind } from "./constants.js";
+import type {
+  StableCodecDateValue,
+  StableCodecValue,
+} from "@hikoutei/kohkai";
 import type { Presence } from "../state/types.js";
 
 export type { CellObservationKind, NormalizedCellKind } from "./constants.js";
 
 /** A date encoded as a fixed-width UTC ISO-8601 string. */
-export interface DateValue {
-  readonly kind: typeof NORMALIZED_CELL_KINDS.DATE;
-  readonly value: string; // YYYY-MM-DDTHH:mm:ss.SSSZ
-}
+export type DateValue = StableCodecDateValue;
 
 /**
  * A normalized scalar value that can be deterministically encoded.
@@ -33,7 +34,7 @@ export type NormalizedCell =
   | DateValue;
 
 /**
- * Physical Sheet metadata retained by the internal observation/gateway path.
+ * Physical Sheet metadata retained by the internal observation/provider path.
  * This compatibility type is intentionally not part of the public root API.
  */
 export interface CellObservation {
@@ -49,11 +50,4 @@ export interface CellObservation {
  * objects with string keys. Objects with `kind: "date"` are encoded as dates,
  * not as plain objects.
  */
-export type StableValue =
-  | null
-  | boolean
-  | number
-  | string
-  | DateValue
-  | readonly StableValue[]
-  | { readonly [key: string]: StableValue };
+export type StableValue = StableCodecValue;

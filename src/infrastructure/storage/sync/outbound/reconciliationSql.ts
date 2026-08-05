@@ -1,6 +1,10 @@
 /** Storage reads used by System_State reconciliation. */
 
-import type { EffectStatus } from "../../../../domain/index.js";
+import {
+  EFFECT_STATUSES,
+  type EffectStatus,
+} from "../../../../domain/index.js";
+import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import type {
   SqlExecutor,
   SqlStorageAdapter,
@@ -191,7 +195,22 @@ function toLatestEffect(row: ReconciliationLatestEffectSqlRow): ReconciliationLa
     streamSequence: row.stream_sequence,
     expectedVisibleRevision: row.expected_visible_revision,
     expectedVisibleHash: row.expected_visible_hash,
-    status: row.status as EffectStatus,
+    status: requireEffectStatus(row.status),
     payloadJson: row.payload_json,
   };
+}
+
+function requireEffectStatus(value: string): EffectStatus {
+  if (value === EFFECT_STATUSES.PENDING ||
+      value === EFFECT_STATUSES.PROCESSING ||
+      value === EFFECT_STATUSES.DELIVERY_UNCERTAIN ||
+      value === EFFECT_STATUSES.APPLIED ||
+      value === EFFECT_STATUSES.BLOCKED_CANDIDATE ||
+      value === EFFECT_STATUSES.SUPERSEDED ||
+      value === EFFECT_STATUSES.CONFLICT ||
+      value === EFFECT_STATUSES.FAILED) return value;
+  throw new StorageError(
+    STORAGE_ERROR_CODES.INVALID_EFFECT_RESULT,
+    `stored reconciliation effect has invalid status ${value}`,
+  );
 }

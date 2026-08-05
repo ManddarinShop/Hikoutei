@@ -1,0 +1,110 @@
+/**
+ * Provider constants for the direct Google Sheets API outbound worker.
+ *
+ * The direct provider mirrors the Apps Script provider's durable contracts:
+ * the same hidden receipt tab name and headers, the same developer-metadata
+ * anchor key, the same canonical date serial/number-format semantics, and the
+ * same bounded effect batches. Keeping these constants next to the provider
+ * (rather than importing the Apps Script operation sources) makes the direct
+ * path self-contained while staying wire-compatible with a spreadsheet that
+ * an Apps Script provider already wrote to.
+ */
+
+/** Spreadsheets scope requested through Application Default Credentials. */
+export const GOOGLE_SHEETS_API_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets",
+] as const;
+
+/** Defaults for the direct Google Sheets API transport and batching. */
+export const GOOGLE_SHEETS_API_DEFAULTS = {
+  /** Default per-request timeout; the durable worker owns retries, not gaxios. */
+  REQUEST_TIMEOUT_MS: 60_000,
+  MIN_REQUEST_TIMEOUT_MS: 1_000,
+  MAX_REQUEST_TIMEOUT_MS: 120_000,
+  /**
+   * Default per-READ-request timeout (every getSpreadsheet call). Reads are
+   * bounded much shorter than writes so a slow-but-working effect dispatch
+   * (up to three sequential paced calls: two preflight reads plus one write)
+   * cannot outlive its effect lease.
+   */
+  READ_TIMEOUT_MS: 10_000,
+  /** Upper bound for read timeouts; reads must stay well under the lease. */
+  MAX_READ_TIMEOUT_MS: 60_000,
+  /**
+   * Minimum interval between request starts of one class (reads or writes).
+   * Google Sheets quota is enforced per 100-second windows; the provider
+   * spaces request starts so a burst cannot exhaust the read or write budget
+   * before the worker's own backoff reacts.
+   */
+  REQUEST_START_INTERVAL_MS: 1_100,
+  /**
+   * The provider stops adding effects to one batchUpdate once the serialized
+   * body would exceed this budget and returns `hasMore` for the suffix. The
+   * Google API itself accepts larger bodies; this is the provider's own
+   * safety valve so a pathological payload cannot monopolize a request.
+   */
+  MAX_BATCH_REQUEST_BYTES: 2 * 1024 * 1024,
+  /** Regular effect batch cap, matching the Apps Script MAX_EFFECTS boundary. */
+  MAX_EFFECTS_PER_REQUEST: 20,
+  /** Append row cap per request, matching the worker's bulk claim window. */
+  MAX_APPEND_ROWS_PER_REQUEST: 1_000,
+} as const;
+
+/** Hidden receipt tab shared with the Apps Script effect operations. */
+export const GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME =
+  "__typed_sheets_internal_effect_receipts";
+
+/** Receipt columns written by both the Apps Script and direct providers. */
+export const GOOGLE_SHEETS_API_RECEIPT_HEADERS = [
+  "effectId",
+  "payloadHash",
+  "status",
+  "visibleHash",
+  "visibleRevision",
+  "updatedAt",
+] as const;
+
+/** Developer-metadata anchor key shared with the Apps Script observation path. */
+export const GOOGLE_SHEETS_API_ANCHOR_KEY = "typed_sheets_sync_anchor";
+
+/**
+ * Canonical UTC date number format, byte-identical to the Apps Script
+ * `setNumberFormat` pattern so date cells written by either provider read
+ * back as dates through the REST API.
+ */
+export const GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT =
+  'yyyy"-"mm"-"dd"T"hh:mm:ss.000"Z"';
+
+/**
+ * Canonical date number format as a REST `CellFormat.numberFormat` object.
+ * The Sheets API models number formats as `{ type, pattern }` objects, not
+ * bare pattern strings.
+ */
+export const GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT = {
+  type: "DATE_TIME",
+  pattern: GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT,
+} as const;
+
+/** Stable per-effect reason codes emitted by the direct provider. */
+export const GOOGLE_SHEETS_API_EFFECT_REASONS = {
+  EFFECT_ID_REUSED_WITH_DIFFERENT_PAYLOAD: "effect_id_reused_with_different_payload",
+  RECEIPT_TARGET_MISSING: "receipt_target_missing",
+  RECEIPT_POSTCONDITION_CHANGED: "receipt_postcondition_changed",
+  RECEIPT_TARGET_REAPPEARED: "receipt_target_reappeared",
+  TARGET_ANCHOR_MISSING: "target_anchor_missing",
+  INSERT_REQUIRES_EMPTY_VISIBLE_BASELINE: "insert_requires_empty_visible_baseline",
+  VISIBLE_GUARD_MISMATCH: "visible_guard_mismatch",
+  CANDIDATE_GUARD_MISMATCH: "candidate_guard_mismatch",
+  REPAIR_GUARD_MISMATCH: "repair_guard_mismatch",
+  INVALID_DELETION_GUARD: "invalid_deletion_guard",
+  POSTCONDITION_HASH_MISMATCH: "postcondition_hash_mismatch",
+  EFFECT_PAYLOAD_TOO_LARGE: "effect_payload_too_large",
+} as const;
+
+export type GoogleSheetsApiEffectReason =
+  (typeof GOOGLE_SHEETS_API_EFFECT_REASONS)[keyof typeof GOOGLE_SHEETS_API_EFFECT_REASONS];
+
+/** Deletion-kind projection restriction reasons use the effect kind prefix. */
+export function fullRowDeletionReason(effectKind: string): string {
+  return `${effectKind}_requires_full_row`;
+}

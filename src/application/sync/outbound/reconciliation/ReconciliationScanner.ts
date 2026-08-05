@@ -4,7 +4,7 @@
  * SQLite is the canonical state; the Sheet is a projection that may drift when
  * the fast-append path skips per-effect CAS, when a spreadsheet owner edits a
  * protected tab, or when a response is lost. This scanner compares the durable
- * desired state against one gateway snapshot per scan and, for every drift, it
+ * desired state against one provider snapshot per scan and, for every drift, it
  * enqueues a normal system_projection effect on the existing outbox. The effect
  * worker then applies the correction through the same slow path (with CAS) used
  * by regular writes, so reconciliation never writes to the Sheet directly.
@@ -27,6 +27,8 @@ import {
   PRESENCE_KINDS,
 } from "../../../../shared/state/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
+import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
+import { isRecord } from "../../../../shared/encoding/typeGuards.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -40,13 +42,13 @@ import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persist
 import {
   computeSyncVisibleHash,
   observeSyncSnapshot,
-  type SyncGatewaySnapshot,
-  type SyncSheetGateway,
-} from "../../gateway/syncGateway.js";
+  type SyncSheetsSnapshot,
+  type SyncSheetsProvider,
+} from "../../sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-  SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-} from "../../gateway/constants.js";
+  SYNC_PROJECTIONS,
+  SYNC_SNAPSHOT_READ_MODES,
+} from "../../sheets/constants.js";
 import { createSystemProjectionEffect } from "../projection/ProjectionEffectFactory.js";
 
 const DEFAULT_RECONCILIATION_ROLE = "typed-sheets-reconciler";
@@ -59,7 +61,7 @@ export type ReconciliationIdFactory = () => string;
 /** Construction options for a single reconciliation scan. */
 export interface RunReconciliationScanOptions {
   readonly storage: SqlStorageAdapter;
-  readonly gateway: SyncSheetGateway;
+  readonly provider: SyncSheetsProvider;
   /** Physical sheet id of the System_State projection to reconcile. */
   readonly physicalSheetId: string;
   /** Logical sheet id owning the entity row bindings. */
@@ -107,7 +109,7 @@ interface DesiredRow {
   readonly rowBindingId: string;
   readonly anchorReference: string;
   readonly entityRevision: number;
-  readonly fields: Readonly<Record<string, NormalizedCell>>;
+  readonly fields: Record<string, NormalizedCell>;
   readonly fieldRevisionHash: string;
 }
 
@@ -191,7 +193,7 @@ export async function runReconciliationScan(
 
   const report: ReconciliationScanReport = await scanAndEnqueue({
     storage: options.storage,
-    gateway: options.gateway,
+    provider: options.provider,
     physicalSheetId: options.physicalSheetId,
     logicalSheetId: options.logicalSheetId,
     systemFields: options.systemFields,
@@ -214,7 +216,7 @@ export async function runReconciliationScan(
 
 interface ScanContext {
   readonly storage: SqlStorageAdapter;
-  readonly gateway: SyncSheetGateway;
+  readonly provider: SyncSheetsProvider;
   readonly physicalSheetId: string;
   readonly logicalSheetId: string;
   readonly systemFields: readonly string[];
@@ -232,7 +234,7 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     context.storage,
     context.physicalSheetId,
   );
-  if (sheet.projection !== SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE) {
+  if (sheet.projection !== SYNC_PROJECTIONS.SYSTEM_STATE) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
       "reconciliation scanner only supports the system_state projection",
@@ -243,13 +245,13 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     physicalSheetId: context.physicalSheetId,
     sheetName: sheet.tabName,
     registeredRange: sheet.registeredRange,
-    projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+    projection: SYNC_PROJECTIONS.SYSTEM_STATE,
     schemaVersion: sheet.schemaVersion,
-    readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.FULL,
+    readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
   } as const;
   // Fast append intentionally skips metadata. Reconciliation is the lazy
   // repair point that assigns stable anchors before comparing the snapshot.
-  const observed = await observeSyncSnapshot(context.gateway, snapshotRequest);
+  const observed = await observeSyncSnapshot(context.provider, snapshotRequest);
   const snapshot = observed.snapshot;
 
   const desired = await readDesiredSystemState(context);
@@ -325,17 +327,26 @@ interface DriftTarget {
 }
 
 function computeDrifts(args: {
-  readonly snapshot: SyncGatewaySnapshot;
+  readonly snapshot: SyncSheetsSnapshot;
   readonly desired: readonly DesiredRow[];
   readonly systemFields: readonly string[];
   readonly sheet: { readonly registeredRange: string; readonly businessKeyField: string };
 }): readonly DriftTarget[] {
-  const rowsByAnchor = new Map<string, SyncGatewaySnapshot["rows"][number]>();
-  const rowsByIdentity = new Map<string, SyncGatewaySnapshot["rows"][number]>();
+  const rowsByAnchor = new Map<string, SyncSheetsSnapshot["rows"][number]>();
+  const ambiguousAnchors = new Set<string>();
+  const rowsByIdentity = new Map<string, SyncSheetsSnapshot["rows"][number]>();
   const ambiguousIdentities = new Set<string>();
   for (const row of args.snapshot.rows) {
     if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT) {
-      rowsByAnchor.set(row.physicalAnchor.value, row);
+      // A duplicated physical anchor is an anomaly, never a row choice: drop
+      // the anchor index entry instead of letting the last row win silently.
+      if (ambiguousAnchors.has(row.physicalAnchor.value)) continue;
+      if (rowsByAnchor.has(row.physicalAnchor.value)) {
+        rowsByAnchor.delete(row.physicalAnchor.value);
+        ambiguousAnchors.add(row.physicalAnchor.value);
+      } else {
+        rowsByAnchor.set(row.physicalAnchor.value, row);
+      }
     }
     const identity = snapshotIdentity(row, args.sheet.businessKeyField);
     if (identity === undefined || ambiguousIdentities.has(identity)) continue;
@@ -350,10 +361,17 @@ function computeDrifts(args: {
   const drifts: DriftTarget[] = [];
   for (const desiredRow of args.desired) {
     const identity = desiredRowIdentity(desiredRow, args.sheet.businessKeyField);
-    const observed = rowsByAnchor.get(desiredRow.anchorReference) ??
-      (identity === undefined || ambiguousIdentities.has(identity)
-        ? undefined
-        : rowsByIdentity.get(identity));
+    // The primary locator's ambiguity is fatal: when the desired anchor is
+    // duplicated, identity fallback would silently pick one of the rows that
+    // the corrupted anchor cannot distinguish, so the binding is unmatched.
+    // The same quarantine applies to a desired identity that appears in the
+    // snapshot's duplicate set: the duplicated business key cannot prove that
+    // this binding owns even its unique anchor, so neither locator may match.
+    const identityAmbiguous = identity !== undefined && ambiguousIdentities.has(identity);
+    const observed = ambiguousAnchors.has(desiredRow.anchorReference) || identityAmbiguous
+      ? undefined
+      : rowsByAnchor.get(desiredRow.anchorReference) ??
+        (identity === undefined ? undefined : rowsByIdentity.get(identity));
     if (observed === undefined) {
       drifts.push({ kind: "missing", desired: desiredRow });
       continue;
@@ -369,7 +387,7 @@ function computeDrifts(args: {
 
 /** Reads a business-key value from a snapshot row for unanchored fast appends. */
 function snapshotIdentity(
-  row: SyncGatewaySnapshot["rows"][number],
+  row: SyncSheetsSnapshot["rows"][number],
   identityField: string,
 ): string | undefined {
   return normalizedCellIdentity(row.cells[identityField]?.normalizedCell);
@@ -395,7 +413,7 @@ function normalizedCellIdentity(cell: NormalizedCell | undefined): string | unde
 }
 
 function computeObservedHash(
-  row: SyncGatewaySnapshot["rows"][number],
+  row: SyncSheetsSnapshot["rows"][number],
   systemFields: readonly string[],
 ): string {
   const values: Record<string, NormalizedCell> = {};
@@ -435,7 +453,7 @@ async function readDesiredSystemStateWithSql(
       });
       continue;
     }
-    (existing.fields as Record<string, NormalizedCell>)[row.field_name] = cell;
+    existing.fields[row.field_name] = cell;
   }
 
   const desired: DesiredRow[] = [];
@@ -449,7 +467,7 @@ async function readDesiredSystemStateWithSql(
 
 function ensureTombstoneField(row: DesiredRow, tombstoneField: string | undefined): void {
   if (tombstoneField === undefined) return;
-  const fields = row.fields as Record<string, NormalizedCell>;
+  const fields = row.fields;
   if (fields[tombstoneField] === undefined) {
     fields[tombstoneField] = { kind: NORMALIZED_CELL_KINDS.BOOLEAN, value: false };
   }
@@ -457,15 +475,15 @@ function ensureTombstoneField(row: DesiredRow, tombstoneField: string | undefine
 
 function computeFieldRevisionHash(fields: Readonly<Record<string, NormalizedCell>>): string {
   const entries = Object.entries(fields)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([fieldName, value]) => ({ fieldName, value }));
   return stableHash({ fields: entries });
 }
 
 function decodeNormalizedCell(value: string): NormalizedCell {
   try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!isNormalizedCellLike(parsed)) {
+    const parsed: unknown = JSON.parse(value);
+    if (!isNormalizedCell(parsed)) {
       throw new StorageError(
         STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
         "entity_field_state.normalized_value is not a normalized cell",
@@ -479,13 +497,6 @@ function decodeNormalizedCell(value: string): NormalizedCell {
       "entity_field_state.normalized_value is not valid JSON",
     );
   }
-}
-
-function isNormalizedCellLike(value: unknown): value is NormalizedCell {
-  if (value === null) return true;
-  if (typeof value !== "object" || value === null) return false;
-  const cell = value as { kind?: unknown; value?: unknown };
-  return typeof cell.kind === "string";
 }
 
 async function buildCorrectionEffects(
@@ -506,7 +517,7 @@ async function buildCorrectionEffects(
       physicalSheetId: context.physicalSheetId,
       sheetName: sheet.tabName,
       registeredRange: sheet.registeredRange,
-      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
       schemaVersion: context.schemaVersion,
       targetKind: "entity",
       targetId: drift.desired.entityId,
@@ -562,14 +573,21 @@ async function resolveCorrectionBaselineWithSql(
 
   if (latestEffect !== undefined && latestEffect.stream_sequence !== null) {
     const streamSequence = latestEffect.stream_sequence + 1;
-    if (latestEffect.status === "pending" || latestEffect.status === "processing") {
+    // delivery_uncertain counts as in-flight: the predecessor may still commit
+    // remotely after a lost response, and the outbox claim ordering keeps any
+    // successor pending until that effect is probe-settled. Planning a
+    // correction against the uncertain target (rather than stale visible
+    // state) is what makes the eventual guard match the committed write.
+    if (latestEffect.status === "pending" ||
+        latestEffect.status === "processing" ||
+        latestEffect.status === "delivery_uncertain") {
       const payload = latestEffect.payload_json;
       const expectedHash =
         payload === null ? "" : extractTargetVisibleHash(payload);
       if (expectedHash === computeSyncVisibleHash(desired.fields)) {
         // A canonical write already has an equivalent correction in flight.
         // Do not append another stream item on every periodic scan while the
-        // first item is waiting for the gateway or its recovery read-back.
+        // first item is waiting for the provider or its recovery read-back.
         return {
           skip: true,
           expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
@@ -629,7 +647,8 @@ function baselineFromVisible(
 
 function extractTargetVisibleHash(payloadJson: string): string {
   try {
-    const parsed = JSON.parse(payloadJson) as { targetVisibleHash?: unknown };
+    const parsed: unknown = JSON.parse(payloadJson);
+    if (!isRecord(parsed)) return "";
     return typeof parsed.targetVisibleHash === "string" ? parsed.targetVisibleHash : "";
   } catch {
     return "";
@@ -654,15 +673,24 @@ async function claimReconcilerFence(context: ScanContext): Promise<FencingContex
 }
 
 function countMatchedRows(
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   desired: readonly DesiredRow[],
   identityField: string,
 ): number {
   const anchors = new Set<string>();
+  const ambiguousAnchors = new Set<string>();
   const identities = new Set<string>();
   const duplicateIdentities = new Set<string>();
   for (const row of snapshot.rows) {
-    if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT) anchors.add(row.physicalAnchor.value);
+    if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT) {
+      if (ambiguousAnchors.has(row.physicalAnchor.value)) continue;
+      if (anchors.has(row.physicalAnchor.value)) {
+        anchors.delete(row.physicalAnchor.value);
+        ambiguousAnchors.add(row.physicalAnchor.value);
+      } else {
+        anchors.add(row.physicalAnchor.value);
+      }
+    }
     const identity = snapshotIdentity(row, identityField);
     if (identity === undefined || duplicateIdentities.has(identity)) continue;
     if (identities.has(identity)) {
@@ -675,7 +703,12 @@ function countMatchedRows(
   let matched = 0;
   for (const row of desired) {
     const identity = desiredRowIdentity(row, identityField);
-    if (anchors.has(row.anchorReference) || (identity !== undefined && identities.has(identity))) {
+    const anchorAmbiguous = ambiguousAnchors.has(row.anchorReference);
+    // A desired identity duplicated in the sheet quarantines the binding:
+    // neither its unique anchor nor its identity may count as matched.
+    const identityAmbiguous = identity !== undefined && duplicateIdentities.has(identity);
+    if ((!anchorAmbiguous && !identityAmbiguous && anchors.has(row.anchorReference)) ||
+        (!anchorAmbiguous && !identityAmbiguous && identity !== undefined && identities.has(identity))) {
       matched += 1;
     }
   }
@@ -683,23 +716,56 @@ function countMatchedRows(
 }
 
 function countExtraRows(
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   desired: readonly DesiredRow[],
   identityField: string,
 ): number {
-  const desiredAnchors = new Set(desired.map((row) => row.anchorReference));
-  const desiredIdentities = new Set(
-    desired
-      .map((row) => desiredRowIdentity(row, identityField))
-      .filter((identity): identity is string => identity !== undefined),
-  );
+  // Identities that appear more than once in the snapshot cannot prove
+  // ownership. A desired row carrying one of these identities is quarantined:
+  // its anchor never suppresses the extra count, and the duplicated identity
+  // itself never suppresses it either.
+  const duplicateIdentities = new Set<string>();
+  {
+    const seen = new Set<string>();
+    for (const row of snapshot.rows) {
+      const identity = snapshotIdentity(row, identityField);
+      if (identity === undefined) continue;
+      if (seen.has(identity)) duplicateIdentities.add(identity);
+      seen.add(identity);
+    }
+  }
+  const desiredByAnchor = new Map<string, DesiredRow>();
+  const desiredIdentities = new Set<string>();
+  for (const row of desired) {
+    if (!desiredByAnchor.has(row.anchorReference)) desiredByAnchor.set(row.anchorReference, row);
+    const identity = desiredRowIdentity(row, identityField);
+    if (identity !== undefined) desiredIdentities.add(identity);
+  }
+  const anchorCounts = new Map<string, number>();
+  for (const row of snapshot.rows) {
+    if (row.physicalAnchor.kind !== PRESENCE_KINDS.PRESENT) continue;
+    anchorCounts.set(row.physicalAnchor.value, (anchorCounts.get(row.physicalAnchor.value) ?? 0) + 1);
+  }
   let extra = 0;
   for (const row of snapshot.rows) {
-    if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT && desiredAnchors.has(row.physicalAnchor.value)) {
-      continue;
+    // A duplicated anchor cannot prove which row the desired binding owns, so
+    // it never suppresses the extra count; the business key decides instead.
+    // A quarantined desired identity (duplicated in the sheet) blocks the
+    // anchor suppression too, because the anchor cannot prove ownership of a
+    // business key that appears elsewhere.
+    if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT &&
+        (anchorCounts.get(row.physicalAnchor.value) ?? 0) === 1) {
+      const desiredRow = desiredByAnchor.get(row.physicalAnchor.value);
+      const desiredIdentity = desiredRow === undefined
+        ? undefined
+        : desiredRowIdentity(desiredRow, identityField);
+      if (desiredRow !== undefined &&
+          (desiredIdentity === undefined || !duplicateIdentities.has(desiredIdentity))) {
+        continue;
+      }
     }
     const identity = snapshotIdentity(row, identityField);
-    if (identity !== undefined && desiredIdentities.has(identity)) continue;
+    if (identity !== undefined && !duplicateIdentities.has(identity) && desiredIdentities.has(identity)) continue;
     extra += 1;
   }
   return extra;
@@ -716,7 +782,7 @@ interface ReportDelta {
 
 function freezeReport(
   physicalSheetId: string,
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   desired: readonly DesiredRow[],
   delta: ReportDelta,
 ): ReconciliationScanReport {

@@ -27,6 +27,7 @@ import {
   listReadyEffectsWithAdapter,
 } from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
 import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
 import {
   claimWriterLeaseWithAdapter,
   isFencingValidWithAdapter,
@@ -43,6 +44,7 @@ import {
   requireRegisteredSyncSheetWithAdapter,
 } from "../src/infrastructure/storage/sync/shared/syncRegistry.js";
 import { persistResolutionCommandWithAdapter } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+import { renewAutomaticConflictResolutionLeaseWithSql } from "../src/application/sync/inbound/autoSystemConflictResolution.js";
 import type {
   NewEffect,
 } from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
@@ -63,9 +65,10 @@ import {
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/gateway/syncGateway.js";
+} from "../src/application/sync/sheets/syncSheets.js";
+import type { SyncProjectionEffect } from "../src/application/sync/sheets/syncSheets.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
-import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const OrderSchema = defineEntity({
   name: "MikroOrmAdapterOrder",
@@ -161,6 +164,18 @@ interface ActiveCandidateStateRow {
 }
 
 describe("MikroOrmSqliteAdapter", () => {
+  it("requires an exact baseline for explicit synthetic observation evidence", () => {
+    const input = createQuarantinedObservationInput();
+    expect(() => validatePersistObservedRowInput({
+      ...input,
+      observedProjection: {
+        source: "synthetic",
+        visibleRevision: 1,
+        visibleHash: "observed-hash",
+      },
+    })).toThrow("observed projection evidence must contain valid revision, hash, and baseline data");
+  });
+
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
   afterEach(async () => {
@@ -216,12 +231,12 @@ describe("MikroOrmSqliteAdapter", () => {
     try {
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
         fromVersion: 0,
-        toVersion: 4,
-        appliedVersions: [4],
+        toVersion: 5,
+        appliedVersions: [5],
       });
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-        fromVersion: 4,
-        toVersion: 4,
+        fromVersion: 5,
+        toVersion: 5,
         appliedVersions: [],
       });
       await expect(adapter.read(({ sql }) => {
@@ -311,12 +326,12 @@ describe("MikroOrmSqliteAdapter", () => {
 
     expect(firstMigration).toEqual({
       fromVersion: 0,
-      toVersion: 4,
-      appliedVersions: [4],
+      toVersion: 5,
+      appliedVersions: [5],
     });
     expect(secondMigration).toEqual({
-      fromVersion: 4,
-      toVersion: 4,
+      fromVersion: 5,
+      toVersion: 5,
       appliedVersions: [],
     });
 
@@ -325,11 +340,11 @@ describe("MikroOrmSqliteAdapter", () => {
     });
     await expect(migrateMikroOrmSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 3,
-      toVersion: 4,
-      appliedVersions: [4],
+      toVersion: 5,
+      appliedVersions: [4, 5],
     });
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 4 });
+      .resolves.toEqual({ user_version: 5 });
 
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
     expect(tables.map((table) => table.name)).toContain("sheet_effect_outbox");
@@ -493,8 +508,7 @@ describe("MikroOrmSqliteAdapter", () => {
     })).resolves.toMatchObject({
       effectId: effect.effectId,
       claimToken: "claim-1",
-      success: true,
-      reason: "claimed",
+      status: "claimed",
     });
     await expect(applyEffectResultWithAdapter(adapter, {
       ...fence,
@@ -583,7 +597,7 @@ describe("MikroOrmSqliteAdapter", () => {
     };
     await expect(appendPendingEffectsWithSqlInAdapter(adapter, fence, [effect])).resolves.toBe(true);
 
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "physical-sheet",
         sheetName: "Orders",
@@ -604,7 +618,7 @@ describe("MikroOrmSqliteAdapter", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "worker-a",
       writerRole: "sync_worker",
       now: 1000,
@@ -615,7 +629,7 @@ describe("MikroOrmSqliteAdapter", () => {
       applied: 1,
       failed: 0,
     });
-    expect(gateway.readRow("physical-sheet", "order-anchor")).toMatchObject({
+    expect(provider.readRow("physical-sheet", "order-anchor")).toMatchObject({
       fields: nextFields,
       visibleRevision: 1,
     });
@@ -750,6 +764,59 @@ describe("MikroOrmSqliteAdapter", () => {
     })).resolves.toEqual({ entity_id: "order-accepted", state: "active" });
   });
 
+  it("renews the automatic conflict resolver lease and rejects a silent takeover", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(adapter);
+    let now = 1_000;
+    const writer = {
+      writerId: "automatic-resolver",
+      role: "resolution_writer",
+      leaseDurationMs: 100,
+      now: () => now,
+      createId: () => "unused",
+      onTiming: undefined,
+    };
+    const claim = await claimWriterLeaseWithAdapter(adapter, {
+      role: writer.role,
+      writerId: writer.writerId,
+      leaseDurationMs: writer.leaseDurationMs,
+      now,
+    });
+    if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    const fence = {
+      role: claim.lease.role,
+      writerEpoch: claim.lease.writerEpoch,
+      fencingToken: claim.lease.fencingToken,
+      now,
+    };
+
+    now = 1_050;
+    const renewed = await adapter.transaction(({ sql }) =>
+      renewAutomaticConflictResolutionLeaseWithSql(sql, fence, writer));
+    expect(renewed).toMatchObject({
+      writerEpoch: fence.writerEpoch,
+      fencingToken: fence.fencingToken,
+      now: 1_050,
+    });
+    await expect(adapter.read(({ sql }) => sql.get<{ lease_until: number }>(
+      "SELECT lease_until FROM writer_lease WHERE role = ?",
+      [writer.role],
+    ))).resolves.toEqual({ lease_until: 1_150 });
+
+    now = 1_151;
+    await expect(adapter.transaction(({ sql }) =>
+      renewAutomaticConflictResolutionLeaseWithSql(sql, renewed, writer),
+    )).rejects.toThrow("lease changed ownership");
+    await expect(adapter.read(({ sql }) => sql.get<{ writer_epoch: number }>(
+      "SELECT writer_epoch FROM writer_lease WHERE role = ?",
+      [writer.role],
+    ))).resolves.toEqual({ writer_epoch: fence.writerEpoch });
+  });
+
   it("persists a resolved conflict command through the MikroORM transaction", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -809,6 +876,210 @@ describe("MikroOrmSqliteAdapter", () => {
       active_candidate_hash: null,
       candidate_epoch: 4,
     });
+  });
+
+  it("defers system-wins until an in-flight predecessor has completed remotely", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await seedResolvableConflict(adapter);
+
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "sync-effect-worker",
+      writerId: "late-response-worker",
+      leaseDurationMs: 100_000,
+      now: 1_000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    const fence = {
+      role: leaseClaim.lease.role,
+      writerEpoch: leaseClaim.lease.writerEpoch,
+      fencingToken: leaseClaim.lease.fencingToken,
+      now: 1_000,
+    };
+    const predecessor = createOrderingEffect(
+      "effect-late-predecessor",
+      "stale-system",
+      computeSyncVisibleHash({ status: { kind: "string", value: "before" } }),
+      1,
+      1,
+    );
+    const resolution = createOrderingEffect(
+      "effect-system-resolution",
+      "canonical",
+      computeSyncVisibleHash({ status: { kind: "string", value: "stale-system" } }),
+      2,
+      2,
+      "resolution_projection",
+    );
+    await expect(appendPendingEffectsWithSqlInAdapter(adapter, fence, [predecessor])).resolves.toBe(true);
+    const claim = await claimEffectWithAdapter(adapter, {
+      ...fence,
+      effectId: predecessor.effectId,
+      claimToken: "late-response-claim",
+      leaseDurationMs: 10_000,
+    });
+    expect(claim.status).toBe("claimed");
+
+    const deferred = await persistResolutionCommandWithAdapter(
+      adapter,
+      fence,
+      createResolvedCommandInput([resolution]),
+    );
+    expect(deferred).toEqual({
+      kind: "deferred",
+      commandId: "command-resolved",
+      conflictId: "conflict-resolved",
+      reason: "processing_predecessor",
+    });
+    await expect(adapter.read(({ sql }) => sql.get<{ status: string }>(
+      "SELECT status FROM sync_conflict WHERE conflict_id = ?",
+      ["conflict-resolved"],
+    ))).resolves.toEqual({ status: CONFLICT_STATUSES.OPEN });
+
+    const provider = new FakeSyncSheetsProvider([{
+      physicalSheetId: "physical-sheet",
+      sheetName: "Orders",
+      registeredRange: "A1:Z",
+      projection: "system_state",
+      schemaVersion: 1,
+      headers: ["status"],
+      rows: [{
+        targetId: "order-resolution",
+        physicalAnchor: "resolution-anchor",
+        fields: { status: { kind: "string", value: "before" } },
+        visibleRevision: 1,
+      }],
+    }]);
+    const lateRemoteResult = await provider.applyEffects({
+      physicalSheetId: "physical-sheet",
+      sheetName: "Orders",
+      registeredRange: "A1:Z",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: "inline",
+      effects: [toProviderEffect(predecessor)],
+    });
+    expect(lateRemoteResult.results[0]?.status).toBe("applied");
+    await expect(applyEffectResultWithAdapter(adapter, {
+      ...fence,
+      now: 1_002,
+      effectId: predecessor.effectId,
+      claimToken: "late-response-claim",
+      status: "applied",
+      lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+      lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+    })).resolves.toBe(true);
+
+    const applied = await persistResolutionCommandWithAdapter(
+      adapter,
+      { ...fence, now: 1_003 },
+      createResolvedCommandInput([resolution]),
+    );
+    expect(applied).toMatchObject({ kind: "applied", commandId: "command-resolved" });
+
+    await expect(runSyncEffectWorkerWithAdapter({
+      storage: adapter,
+      provider,
+      workerId: "late-response-worker",
+      now: 1_004,
+      maxEffects: 1,
+    })).resolves.toMatchObject({ applied: 1, failed: 0 });
+    expect(provider.readRow("physical-sheet", "resolution-anchor").fields.status).toEqual({
+      kind: "string",
+      value: "canonical",
+    });
+    await expect(adapter.read(({ sql }) => sql.all<{ effect_id: string; status: string }>(
+      "SELECT effect_id, status FROM sheet_effect_outbox WHERE target_id = ? ORDER BY stream_sequence",
+      ["order-resolution"],
+    ))).resolves.toEqual([
+      { effect_id: "effect-late-predecessor", status: "applied" },
+      { effect_id: "effect-system-resolution", status: "applied" },
+    ]);
+  });
+
+  it("defers system-wins until a delivery-uncertain predecessor is probe-settled", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await seedResolvableConflict(adapter);
+
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "sync-effect-worker",
+      writerId: "uncertain-predecessor-worker",
+      leaseDurationMs: 100_000,
+      now: 1_000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    const fence = {
+      role: leaseClaim.lease.role,
+      writerEpoch: leaseClaim.lease.writerEpoch,
+      fencingToken: leaseClaim.lease.fencingToken,
+      now: 1_000,
+    };
+    const predecessor = createOrderingEffect(
+      "effect-uncertain-predecessor",
+      "stale-system",
+      computeSyncVisibleHash({ status: { kind: "string", value: "before" } }),
+      1,
+      1,
+    );
+    const resolution = createOrderingEffect(
+      "effect-uncertain-resolution",
+      "canonical",
+      computeSyncVisibleHash({ status: { kind: "string", value: "stale-system" } }),
+      2,
+      2,
+      "resolution_projection",
+    );
+    await expect(appendPendingEffectsWithSqlInAdapter(adapter, fence, [predecessor])).resolves.toBe(true);
+    // The predecessor lost its response and is waiting for a postcondition
+    // probe; its remote write may still commit, so resolution must wait.
+    await adapter.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = 'delivery_uncertain', claim_token = NULL, lease_until = NULL, uncertain_since = ?, next_probe_at = ? WHERE effect_id = ?",
+      [1_000, 2_000, predecessor.effectId],
+    ));
+
+    const deferred = await persistResolutionCommandWithAdapter(
+      adapter,
+      fence,
+      createResolvedCommandInput([resolution]),
+    );
+    expect(deferred).toEqual({
+      kind: "deferred",
+      commandId: "command-resolved",
+      conflictId: "conflict-resolved",
+      reason: "processing_predecessor",
+    });
+    await expect(adapter.read(({ sql }) => sql.get<{ status: string }>(
+      "SELECT status FROM sync_conflict WHERE conflict_id = ?",
+      ["conflict-resolved"],
+    ))).resolves.toEqual({ status: CONFLICT_STATUSES.OPEN });
+
+    // The probe settles the predecessor as applied; the same exact CAS request
+    // can then proceed without re-planning.
+    await adapter.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = 'applied' WHERE effect_id = ?",
+      [predecessor.effectId],
+    ));
+    const applied = await persistResolutionCommandWithAdapter(
+      adapter,
+      { ...fence, now: 1_001 },
+      createResolvedCommandInput([resolution]),
+    );
+    expect(applied).toMatchObject({ kind: "applied", commandId: "command-resolved" });
+    await expect(adapter.read(({ sql }) => sql.get<{ status: string }>(
+      "SELECT status FROM sync_conflict WHERE conflict_id = ?",
+      ["conflict-resolved"],
+    ))).resolves.toEqual({ status: CONFLICT_STATUSES.RESOLVED });
   });
 
   it("rolls an ORM entity back with its pending Sheets effect when outbox insertion fails", async () => {
@@ -1099,7 +1370,7 @@ function createQuarantinedObservationInput(): PersistObservedRowInput {
       schemaVersion: 1,
       atomicity: "row_independent",
       baseSnapshotHash: "snapshot-quarantine",
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
       rows: [row],
@@ -1112,7 +1383,7 @@ function createQuarantinedObservationInput(): PersistObservedRowInput {
       payloadHash: "payload-quarantine",
       detectedAt: 1000,
       receivedAt: 1000,
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
     },
@@ -1181,7 +1452,7 @@ function createAcceptedObservationInput(): PersistObservedRowInput {
       schemaVersion: 1,
       atomicity: "row_independent",
       baseSnapshotHash: "snapshot-accepted",
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
       rows: [row],
@@ -1194,7 +1465,7 @@ function createAcceptedObservationInput(): PersistObservedRowInput {
       payloadHash: "payload-accepted",
       detectedAt: 1000,
       receivedAt: 1000,
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
     },
@@ -1243,7 +1514,9 @@ function createAcceptedObservationInput(): PersistObservedRowInput {
   };
 }
 
-function createResolvedCommandInput(): PersistResolutionCommandInput {
+function createResolvedCommandInput(
+  effects: readonly NewEffect[] = [],
+): PersistResolutionCommandInput {
   const userValue = { kind: "string" as const, value: "edited-by-user" };
   return {
     logicalSheetId: "logical-sheet",
@@ -1260,7 +1533,69 @@ function createResolvedCommandInput(): PersistResolutionCommandInput {
       expectedCandidateEpoch: 3,
       payloadHash: "resolution-payload-hash",
     },
-    effects: [],
+    effects,
+  };
+}
+
+function createOrderingEffect(
+  effectId: string,
+  value: string,
+  expectedVisibleHash: string,
+  expectedVisibleRevision: number,
+  streamSequence: number,
+  effectKind: "system_projection" | "resolution_projection" = "system_projection",
+): NewEffect {
+  const fields = { status: { kind: "string" as const, value } };
+  return {
+    effectId,
+    effectKind,
+    commitId: `commit-${effectId}`,
+    logicalSheetId: "logical-sheet",
+    physicalSheetId: "physical-sheet",
+    projection: "system_state",
+    rowBindingId: { kind: PRESENCE_KINDS.ABSENT },
+    conflictId: { kind: PRESENCE_KINDS.ABSENT },
+    targetKind: "entity",
+    targetId: "order-resolution",
+    targetEntityRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: 1 },
+    targetFieldRevisionHash: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+    targetCanonicalCommitId: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+    expectedVisibleRevision,
+    expectedVisibleHash,
+    repairGuardHash: { kind: PRESENCE_KINDS.ABSENT },
+    sourceQuarantineId: { kind: PRESENCE_KINDS.ABSENT },
+    payloadJson: serializeSyncProjectionEffectPayload({
+      sheetName: "Orders",
+      registeredRange: "A1:Z",
+      schemaVersion: 1,
+      targetAnchor: "resolution-anchor",
+      fields,
+      targetVisibleHash: computeSyncVisibleHash(fields),
+      createIfMissing: false,
+      expectedCandidateHash: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+    }),
+    payloadHash: `payload-${effectId}`,
+    effectDedupeKey: `dedupe-${effectId}`,
+    streamSequence,
+  };
+}
+
+function toProviderEffect(effect: NewEffect): SyncProjectionEffect {
+  const payload = JSON.parse(effect.payloadJson) as SyncProjectionEffect["payload"];
+  return {
+    effectId: effect.effectId,
+    payloadHash: effect.payloadHash,
+    effectKind: effect.effectKind,
+    physicalSheetId: effect.physicalSheetId,
+    projection: effect.projection as SyncProjectionEffect["projection"],
+    targetKind: effect.targetKind,
+    targetId: effect.targetId,
+    rowBindingId: effect.rowBindingId,
+    conflictId: effect.conflictId,
+    expectedVisibleRevision: effect.expectedVisibleRevision,
+    expectedVisibleHash: effect.expectedVisibleHash,
+    repairGuardHash: effect.repairGuardHash,
+    payload,
   };
 }
 

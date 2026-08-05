@@ -1,148 +1,224 @@
 # Hikoutei Architecture
 
 Hikoutei owns a local SQLite entity store and exposes Google Sheets as an
-asynchronous human-facing projection. The public API belongs to Hikoutei;
-MikroORM is the current replaceable execution engine behind that API.
+asynchronous human-facing projection. SQLite is the authority; Sheets is an
+internal service-side projection and human input surface.
 
-> Current status: the scalar entity lifecycle, SQLite transaction boundary,
-> outbox, outbound worker, gateway path, and the first provider-side User_Input
-> polling path are implemented. The global Conflict decision loop is still a
-> target design foundation, not a complete end-to-end public runtime yet. The
-> root public API is provider-neutral; MikroORM is only the current adapter and
-> Prisma is a future provider target.
+> The root package API is ORM-only. Sheet synchronization is implemented inside
+> `src`, but its bootstrap, worker, and storage contracts are not root
+> exports.
 
 ## System shape
 
 ```text
-Application server
-  └─ Hikoutei scalar entity API
-       ├─ entity descriptors and Sheet routes
-       └─ Hikoutei Unit of Work / EntityManager
-            └─ provider-neutral persistence contract
-                 └─ MikroORM + SQLite (current provider)
-                      ├─ business entity tables
-                      ├─ SQLite sync state and conflict ledger
-                      └─ durable Sheet effect outbox
-                           └─ separate sync worker
-                                └─ signed Apps Script gateway
-                                     └─ Google Sheets projections
+Application code
+  └─ hikoutei root API
+       └─ EntityManager
+            └─ SQLite entity tables
+                 └─ [internal sync service in the same process]
+                      ├─ canonical sync state
+                      ├─ durable Sheet effect outbox
+                      ├─ outbound effect worker
+                      ├─ User_Input polling
+                      └─ sync provider (googleSheetsApi)
+                           └─ Google Sheets projections
 ```
 
-## Ownership boundaries
+The internal service reuses the same MikroORM SQLite adapter and transaction
+boundary as the entity manager. A future deployment can extract the worker
+process without changing the root entity lifecycle contract.
 
-### TypedSheets public API
-
-Applications define entities with `defineTypedSheetsEntity()` and use the
-typed-sheets EntityManager for `fork()`, `create()`, `find()`, `persist()`,
-`remove()`, `flush()`, and `transactional()`.
-
-Applications import only `defineTypedSheetsEntity()` and
-`createTypedSheets()` from the root package. They do not import `defineEntity`,
-`p`, `MikroORM`, Prisma, or provider-specific SQL types. The public Unit of Work
-owns identity maps, snapshots, dirty diffs, and flush semantics; the current
-MikroORM adapter materializes those plans and a future Prisma adapter must use
-the same provider contract.
-
-### Business entity tables
-
-The ORM entity tables are the authoritative application data. A successful
-SQLite transaction commits the entity mutation together with the sync work
-needed to project it to Sheets.
-
-Primary keys are explicit, string-valued, and immutable in the scalar release.
-The primary `id` is also the visible business key by default. Relations,
-provider-specific query operators, lazy loading, and cascade persistence are
-out of scope for this release.
-
-### SQLite sync state
-
-SQLite sync tables record bindings, revisions, visible Sheet state, event
-evidence, conflicts, resolution commands, leases, and outbox effects. They are not
-additional business tables such as `Users_System` or `Users_Input`.
-
-The sync layer must not become a second source of application field values.
-Where it needs a value for hashing or conflict evidence, it stores the minimum
-required normalized snapshot or audit evidence and the entity table remains the
-application authority.
-
-### Google Sheets projections
-
-Each mapped entity can have a protected `System_State` projection and an
-editable `User_Input` projection. The application never reads normal entity
-data from Sheets. It reads SQLite; the worker observes User_Input only to
-evaluate intentional human changes.
-
-The target design has one global `sync_conflicts` projection, conventionally
-represented by a `Sync_Conflicts` tab. A conflict row contains one field-level
-decision and two mutually exclusive controls:
+## Source boundaries
 
 ```text
-conflict_id | entity_name | entity_id | field_name |
-system_value | user_value | use_system | use_user
+src/domain/                         pure normalization/evaluation/conflict rules
+src/application/orm/                public ORM facade and mapped flush planning
+src/application/sync/               internal sync engine and service bootstrap
+src/adapter/persistence/            SQLite/MikroORM implementation
+src/adapter/sheets/                 Google Sheets API provider (sync provider contracts + implementation)
+src/infrastructure/storage/         canonical, observation, resolution, outbox state
+src/api/                            root-facing entity and EntityManager facade
+src/index.ts                        root public barrel only
 ```
 
-No checked control is a pending decision. Exactly one control creates a
-compare-and-set resolution command. Both checked controls are invalid and are
-reset. A stale command is reset and leaves the conflict visible for rebase.
-After a successful resolution, SQLite records the result first and a durable
-outbox effect removes the resolved row from the Conflict projection. The
-projection contract is designed now; global registration and end-to-end
-checkbox consumption are still pending implementation.
+`src` does not mean public. The only application-facing package entrypoint is
+`src/index.ts`; package subpaths for providers, sync operations, polling,
+and sync state are not part of the contract.
 
-## Transaction boundary
+## Root public API
 
-The transaction boundary ends at SQLite commit:
+Applications define scalar entities and open a local SQLite runtime:
+
+```ts
+import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
+
+const User = defineTypedSheetsEntity({
+  name: "User",
+  tableName: "users",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+  },
+});
+
+const hikoutei = await createTypedSheets({
+  dbName: "./hikoutei.sqlite",
+  entities: [User],
+});
+
+const em = hikoutei.em.fork();
+const user = em.create(User, { id: "u1", name: "Ada" });
+em.persist(user);
+await em.flush();
+```
+
+The public surface contains entity definition, runtime creation, and the
+request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
+`findOne()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
+MikroORM, raw SQL, provider clients, Sheet routes, provisioning, polling, and
+outbox controls are internal.
+
+## SQLite authority
+
+Business entity tables are the authoritative application data. Normal reads
+always come from SQLite and never from a Sheet. The public local runtime opens
+entity tables only and does not contact Google Sheets or create sync tables.
+
+When the internal sync service is active, its mapped flush coordinator extends
+the same SQLite transaction with:
+
+```text
+entity mutation
+canonical sync state
+projection registry/state
+Sheet effect outbox
+```
+
+The service-side configuration supplies the required `System_State`,
+`User_Input`, and `Sync_Conflicts` routes, spreadsheet identity, and user-owned
+fields. Those values are not entity metadata or public ORM options. Every
+internal sync runtime fails closed if any of the three physical routes or its
+fixed headers are missing or drifted.
+
+## Google Sheets projection
+
+The internal service provisions and validates registered projection tabs before
+starting delivery. It owns the sync provider (service-account Google Sheets API
+by default), effect worker, response-loss recovery, reconciliation, and
+User_Input polling.
+
+The application does not call Sheet operations. A successful public `flush()`
+means that the local SQLite transaction committed. It does not mean that a
+remote Sheet write has completed.
+
+### Full direct provider (service account, preferred)
+
+The preferred production path uses the internal `googleSheetsApi` service
+option: ONE Google Sheets API provider under
+`src/adapter/sheets/providers/google-sheets-api/` implements every provider
+capability the runtime needs — provisioning, outbound effects (fast append,
+guarded update/delete, receipts, response-loss recovery), values-only table
+reads, row-anchor assignment, and full metadata snapshots. It authenticates
+with Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` service
+account shared on the spreadsheet), disables SDK auto-retry (retries are the
+durable worker's job), enforces request-start intervals of 1,100 ms per
+request class (reads and writes separately), and batches every applicable
+target mutation plus its receipt writes into one atomic
+`spreadsheets.batchUpdate`. The provider paces and reports every transport
+call individually; a serialized batch over ~2 MB is trimmed to an
+order-preserving prefix with `hasMore`. Transport failures are classified by
+the shared `classifyTransportOutcome` boundary: proven pre-mutation 4xx
+rejections are explicit remote failures, while timeouts, network errors,
+408/429/5xx, and malformed 2xx replies stay delivery-uncertain and are
+recovered through the shared postcondition probe path. Telemetry carries only
+operation names, counts, durations, and stable codes — never credentials,
+spreadsheet IDs, URLs, or payloads.
+
+Provisioning creates missing tabs and initializes header rows in one atomic
+batch and fails closed on any header drift; snapshot wire shapes (merged,
+error, formula, literal/blank cells plus stableHash evidence) are stable
+across providers, so reconciliation evidence is provider-independent. No Apps
+Script deployment is required.
+
+### Removed: Apps Script gateway
+
+The signed Apps Script gateway and the `appsScript`/`googleApiWorker` options
+were removed in this cleanup. The service-account `googleSheetsApi` provider
+above is the only sync path; existing deployments should switch to it. The
+provider reads and writes the same tabs, receipt sheet, and anchor metadata,
+so existing spreadsheets keep working without re-provisioning. Sheet
+consistency does not rely on cross-request Sheet transactions; it comes from
+the hidden effect-receipt tab, effect-id/payload-hash dedupe, the SQLite
+durable outbox, fencing, and postcondition recovery.
+
+`System_State` is materialized from canonical SQLite state. `User_Input` is
+observed by the internal polling loop, evaluated with ownership and field-level
+compare-and-set rules, and then committed back to SQLite. `Sync_Conflicts` is a
+system-owned audit projection of field-level conflict evidence and resolution
+outcomes; it is created even when empty and resolved rows remain visible for
+audit. A detected conflict is resolved with the fenced `acknowledge_system`
+policy: revision, candidate-hash, and epoch CAS clear the active candidate and
+queue the canonical User_Input rewrite. A newer remote edit that fails that CAS
+starts a new conflict instead of being overwritten. Stale, conflicting, and
+malformed input is therefore never silently written over the entity table.
+
+## Transaction and lifecycle boundary
 
 ```text
 em.persist(entity) / em.remove(entity)
           │
           ▼
-SQLite transaction
-  ├─ business entity table
-  ├─ SQLite sync state and conflict state
+SQLite transaction (internal sync service mode)
+  ├─ entity table
+  ├─ canonical state and conflict evidence
+  ├─ automatic system-wins resolution receipt/state
   └─ durable Sheet effect outbox
           │
           ▼
-separate worker process
-  ├─ drain outbound effects
-  ├─ poll User_Input
-  ├─ evaluate accepted fields and persist them through SQLite
-  └─ [planned] poll and apply Conflict decisions
+internal outbound effect supervisor
+  ├─ claim leases and send bounded signed operation batches
+  ├─ persist delivery uncertainty and due postcondition probes in SQLite
+  ├─ fence remote routes with the current spreadsheet authority epoch/token
+  └─ reconcile remote drift
           │
           ▼
-Google Sheets projection
+sync provider (googleSheetsApi) ──▶ Google Sheets
+
+internal User_Input polling
+  ├─ adaptive values-only preflight over registered projections
+  ├─ escalate changed/ambiguous/schema tables to full metadata
+  ├─ periodic safety full scan for formula/merged/error fidelity
+  ├─ evaluate ownership/revisions/CAS
+  ├─ persist conflict evidence and automatic system-wins resolution in SQLite
+  └─ persist accepted observations and entity mutations in SQLite
 ```
 
-`flush()` returning successfully means that SQLite accepted the local entity
-change, canonical sync mutation, and durable outbox effect in one transaction.
-It does not mean that a Sheet write has completed. Remote provisioning is also
-separate: `createTypedSheets()` is local-only and `setupSheets()` is the
-explicit external setup call.
+Inbound polling defaults to an adaptive values-only preflight that reads the
+cheap value surface and only escalates a table to the metadata-preserving
+snapshot read when it changed, is ambiguous (unknown or duplicate business key,
+a missing expected entity, or a type-invalid cell), or when the periodic safety
+full scan falls due. The safety scan (default one minute, configurable) keeps
+formula, merged, and error cell fidelity because the values-only read drops that
+metadata; the scan's overdue lag is recorded for diagnostics. Outbound effects
+are split into bounded sub-batches per physical route so one provider call returns
+a complete result set, and a pass that only requeued uncertain work backs off with
+a bounded delay instead of retrying a struggling remote in a tight loop.
 
-## Worker responsibilities
-
-The initial inbound source is polling. The current MikroORM provider exposes a
-worker-side one-pass polling entrypoint that observes `User_Input`, validates
-row identity and cells, evaluates field revisions, and persists accepted rows
-through the observation writer and mapped entity mutation transaction.
-Every remote projection is addressed through its registered visible business-key
-column (normally `id`), which must be required and unique in SQLite. Snapshot
-reads never assign or scan Developer Metadata. An unknown or duplicated business
-key is quarantined as invalid rather than being matched to a different entity.
-The Sheet owner should treat this identity column as immutable/protected: a
-polling-only runtime cannot prove which old row a manually changed key came from
-when the key is changed to another existing entity.
-`onEdit` can be added later as an optional lower-latency observation source, but
-it must enter the same evaluator and SQLite writer boundary. Long-running loop
-ownership and Conflict checkbox consumption remain worker follow-up work.
-
-The worker claims leases, sends signed gateway operations, retries recoverable
-failures, and reconciles remote drift. The Apps Script gateway performs only
-the signed, range-constrained Sheet operation; it does not choose conflict
-winners or own canonical state.
+The service bootstrap starts provisioning, outbound delivery, and inbound polling
+as one internal runtime. Outbound dispatch keeps the SQLite outbox as its only
+durable buffer, coalesces only a short in-process burst, and adapts each route's
+provider batch between five and twenty effects from latency and response-loss
+signals. The effect lease is longer than the configured provider timeout so a
+slow but valid request is recovered only after its remote result is checked.
+Ambiguous delivery is stored as `delivery_uncertain` with `uncertain_since`,
+`next_probe_at`, and `dispatch_id`; only a due probe may return it to processing.
+A terminal structured remote failure does not enter the ambiguous probe path.
+Shutdown stops polling first, waits for remote calls, stops the outbound
+supervisor, and only then closes SQLite.
 
 ## Design limits
 
 Hikoutei targets one local SQLite writer process and low-traffic MVP or internal
 workflows. It is not a distributed transaction coordinator, a general-purpose
-database, or a Google Sheets API replacement.
+database, or a Google Sheets API replacement. Live Google integration remains
+opt-in; normal tests use fake providers and SQLite fixtures.

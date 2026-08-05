@@ -43,7 +43,7 @@ export function typedSheetsEntityId(
   mapping: TypedSheetsEntityMapping,
   entity: object,
 ): string {
-  const value = (entity as Readonly<Record<string, unknown>>)[mapping.primaryKey];
+  const value = Reflect.get(entity, mapping.primaryKey);
   if (typeof value !== "string" || value.length === EMPTY_STRING_LENGTH_ZERO) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,

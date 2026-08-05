@@ -2,15 +2,16 @@
  * Public scalar entity descriptor and the `defineTypedSheetsEntity()` builder.
  *
  * The descriptor is intentionally scalar-only and provider-neutral: it describes
- * a local SQLite-backed entity table without referencing any ORM, Sheets route,
- * or storage-execution type. Sheet route configuration is a separate concern
- * (see `setupSheets`), so descriptor validation never depends on it.
+ * a local entity table without referencing any ORM, Sheet route, or storage-
+ * execution type. Remote projection configuration is an internal service concern,
+ * so descriptor validation never depends on it.
  *
  * The returned `HikouteiEntity` token carries the runtime descriptor and a
  * phantom entity type so `em.create(User, { ... })` infers the entity shape.
  */
 
 import { EMPTY_STRING_LENGTH_ZERO } from "../shared/constants.js";
+import { isRecord } from "../shared/encoding/typeGuards.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 
 /** Runtime tags for the scalar property types supported in v1. */
@@ -38,8 +39,6 @@ export interface HikouteiPropertyOptions {
   readonly nullable?: boolean;
   /** Equivalent positive spelling for callers that prefer required fields. */
   readonly required?: boolean;
-  /** Marks this field as the human-editable part of a User_Input projection. */
-  readonly editable?: boolean;
   /** v1 permits uniqueness only on the primary/business key. */
   readonly unique?: boolean;
 }
@@ -52,7 +51,7 @@ export interface HikouteiEntityDescriptorInput<
   Name extends string = string,
   Properties extends HikouteiPropertyDescriptorMap = HikouteiPropertyDescriptorMap,
 > {
-  /** Stable entity name used by the manager and by future Sheet routes. */
+  /** Stable entity name used by the manager and internal service mappings. */
   readonly name: Name;
   /** SQLite table name that stores this entity's rows. */
   readonly tableName: string;
@@ -67,7 +66,6 @@ export interface ResolvedHikouteiProperty {
   readonly storageType: HikouteiScalarStorageType;
   readonly primary: boolean;
   readonly nullable: boolean;
-  readonly editable: boolean;
   readonly unique: boolean;
 }
 
@@ -111,9 +109,14 @@ export type HikouteiEntityInstance<
  */
 const ENTITY_DESCRIPTORS = new WeakMap<object, ResolvedHikouteiEntityDescriptor>();
 
-export class HikouteiEntity<Entity extends object = object> {
+export class HikouteiEntity<
+  Entity extends object = object,
+  Name extends string = string,
+> {
   /** @internal phantom marker that carries the inferred entity type. */
   private declare readonly __entityType: Entity;
+  /** @internal phantom marker that preserves the descriptor name. */
+  private declare readonly __entityName: Name;
 
   constructor(descriptor: ResolvedHikouteiEntityDescriptor) {
     ENTITY_DESCRIPTORS.set(this, descriptor);
@@ -121,8 +124,11 @@ export class HikouteiEntity<Entity extends object = object> {
 }
 
 /** Reads an opaque token's descriptor for internal runtime/provider wiring. */
-export function getEntityDescriptor(
-  entity: HikouteiEntity,
+export function getEntityDescriptor<
+  Entity extends object,
+  Name extends string,
+>(
+  entity: HikouteiEntity<Entity, Name>,
 ): ResolvedHikouteiEntityDescriptor {
   const descriptor = ENTITY_DESCRIPTORS.get(entity);
   if (descriptor === undefined) {
@@ -137,7 +143,6 @@ const ALLOWED_PROPERTY_OPTION_KEYS: ReadonlySet<string> = new Set([
   "primary",
   "nullable",
   "required",
-  "editable",
   "unique",
 ]);
 
@@ -154,8 +159,8 @@ export function defineTypedSheetsEntity<
   Properties extends HikouteiPropertyDescriptorMap,
 >(
   input: HikouteiEntityDescriptorInput<Name, Properties>,
-): HikouteiEntity<HikouteiEntityInstance<Properties>> {
-  return new HikouteiEntity<HikouteiEntityInstance<Properties>>(
+): HikouteiEntity<HikouteiEntityInstance<Properties>, Name> {
+  return new HikouteiEntity<HikouteiEntityInstance<Properties>, Name>(
     resolveEntityDescriptor(input),
   );
 }
@@ -221,46 +226,41 @@ function resolveProperty(
   propertyName: string,
   options: unknown,
 ): ResolvedHikouteiProperty {
-  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+  if (!isRecord(options)) {
     throwInvalid(`property "${propertyName}" must declare a scalar descriptor object.`);
   }
-  const optionKeys = Object.keys(options as Record<string, unknown>);
-  for (const optionKey of optionKeys) {
+  for (const optionKey of Object.keys(options)) {
     if (!ALLOWED_PROPERTY_OPTION_KEYS.has(optionKey)) {
       throwInvalid(
         `property "${propertyName}" has an unsupported option "${optionKey}"; v1 supports only scalar types (relations and provider options are not supported).`,
       );
     }
   }
-  const descriptor = options as HikouteiPropertyOptions;
-  if (!isHikouteiScalarType(descriptor.type)) {
+  const type = options.type;
+  if (!isHikouteiScalarType(type)) {
     throwInvalid(
       `property "${propertyName}" has an unsupported type; v1 supports only "string", "number", "boolean", and "date" scalars.`,
     );
   }
-  const primary = descriptor.primary === true;
-  const nullable = descriptor.nullable === true || descriptor.required === false;
-  const editable = descriptor.editable === true;
-  const unique = descriptor.unique === true || primary;
+  const primary = options.primary === true;
+  const nullable = options.nullable === true || options.required === false;
+  const unique = options.unique === true || primary;
   if (primary && nullable) {
     throwInvalid(`property "${propertyName}" cannot be both primary and nullable.`);
   }
-  if (descriptor.required !== undefined && typeof descriptor.required !== "boolean") {
+  if (options.required !== undefined && typeof options.required !== "boolean") {
     throwInvalid(`property "${propertyName}" required must be a boolean.`);
   }
-  if (descriptor.nullable !== undefined && typeof descriptor.nullable !== "boolean") {
+  if (options.nullable !== undefined && typeof options.nullable !== "boolean") {
     throwInvalid(`property "${propertyName}" nullable must be a boolean.`);
   }
-  if (descriptor.primary !== undefined && typeof descriptor.primary !== "boolean") {
+  if (options.primary !== undefined && typeof options.primary !== "boolean") {
     throwInvalid(`property "${propertyName}" primary must be a boolean.`);
   }
-  if (descriptor.editable !== undefined && typeof descriptor.editable !== "boolean") {
-    throwInvalid(`property "${propertyName}" editable must be a boolean.`);
-  }
-  if (descriptor.unique !== undefined && typeof descriptor.unique !== "boolean") {
+  if (options.unique !== undefined && typeof options.unique !== "boolean") {
     throwInvalid(`property "${propertyName}" unique must be a boolean.`);
   }
-  if (descriptor.required === true && descriptor.nullable === true) {
+  if (options.required === true && options.nullable === true) {
     throwInvalid(`property "${propertyName}" cannot be both required and nullable.`);
   }
   if (unique && !primary) {
@@ -270,11 +270,10 @@ function resolveProperty(
   }
   return {
     name: propertyName,
-    type: descriptor.type,
-    storageType: toStorageType(descriptor.type),
+    type,
+    storageType: toStorageType(type),
     primary,
     nullable,
-    editable,
     unique,
   };
 }
@@ -343,15 +342,15 @@ const RESERVED_TABLE_NAMES = new Set([
   "sqlite_temp_schema",
 ]);
 
-function requireIdentifier(value: unknown, label: string): void {
+function requireIdentifier(value: unknown, label: string): string {
   if (typeof value !== "string" || !SQL_IDENTIFIER_PATTERN.test(value)) {
     throwInvalid(`${label} must be a SQL identifier matching ${SQL_IDENTIFIER_PATTERN}.`);
   }
+  return value;
 }
 
 function requireTableName(value: unknown): string {
-  requireIdentifier(value, "table name");
-  const tableName = value as string;
+  const tableName = requireIdentifier(value, "table name");
   if (
     RESERVED_TABLE_NAMES.has(tableName.toLowerCase()) ||
     tableName.toLowerCase().startsWith("sqlite_")

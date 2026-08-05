@@ -1,15 +1,17 @@
 name: Publish stable package
 
-# Triggered by a numeric release tag such as v0.2.0. The tag must exactly match
-# the version in package.json and package-lock.json; CI never bumps versions.
+# Triggered by a numeric release tag such as v0.4.0. The main-version
+# workflow creates the version commit and tag; this workflow only verifies and
+# publishes the tagged package.
 on:
   push:
     tags:
       - 'v[0-9]*'
 
 concurrency:
-  # Never cancel an in-flight stable publish for the same tag.
-  group: stable-publish-${{ github.ref }}
+  # Serialize every stable publish so latest cannot move backward due to two
+  # tag workflows finishing out of order.
+  group: stable-publish
   cancel-in-progress: false
 
 permissions:
@@ -22,10 +24,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -62,6 +64,15 @@ jobs:
           fi
           test "$(node -p "require('./package.json').name")" = "hikoutei"
 
+      - name: Verify public Kohkai dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          kohkai_version="$(node -p "require('./package.json').dependencies['@hikoutei/kohkai'] || ''")"
+          test -n "$kohkai_version"
+          published_kohkai_version="$(npm view "@hikoutei/kohkai@$kohkai_version" version --registry=https://registry.npmjs.org)"
+          test "$published_kohkai_version" = "$kohkai_version"
+
       - name: Install dependencies
         run: npm ci
 
@@ -88,8 +99,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
-          package_path="$RUNNER_TEMP/$package_file"
+          # Keep the tarball and its checksum together in a dedicated directory so
+          # the artifact and publish job reason about a single, self-contained path.
+          package_dir="$RUNNER_TEMP/hikoutei-stable-package"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir"
+          package_file="$(npm pack --silent --pack-destination "$package_dir")"
+          package_path="$package_dir/$package_file"
           test -f "$package_path"
           tar -xOf "$package_path" package/package.json > "$RUNNER_TEMP/hikoutei-stable-package.json"
           node -e '
@@ -97,16 +113,16 @@ jobs:
             const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
             if (pkg.name !== "hikoutei" || !isStable) process.exit(1);
           ' "$RUNNER_TEMP/hikoutei-stable-package.json"
-          (cd "$RUNNER_TEMP" && sha256sum "$package_file" > hikoutei-stable-package.sha256)
+          (cd "$package_dir" && sha256sum "$package_file" > hikoutei-stable-package.sha256)
           echo "Packed $package_path"
 
-      - name: Run installed-package internal sync/gateway E2E (fake)
+      - name: Run installed-package internal sync/provider E2E and root API smoke (fake)
         shell: bash
         run: |
           set -euo pipefail
           consumer_dir="$RUNNER_TEMP/hikoutei-stable-consumer"
           mkdir -p "$consumer_dir"
-          package_file="$(find "$RUNNER_TEMP" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
+          package_file="$(find "$RUNNER_TEMP/hikoutei-stable-package" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
           test -n "$package_file"
 
           (
@@ -118,28 +134,37 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
+          # Internal sync/provider E2E: loads dist modules directly and exercises
+          # projection registration, provisioning, the worker, and polling.
           cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
           node "$consumer_dir/run-api-scenario.mjs" \
             --backend=fake \
             --output="$RUNNER_TEMP/hikoutei-stable-fake-result.json" \
             --manifest="$RUNNER_TEMP/hikoutei-stable-fake-manifest.json"
 
-      - name: Upload stable fake E2E report
+          # Installed root API smoke: imports ONLY the installed `hikoutei` root
+          # entrypoint and drives the public entity-lifecycle contract.
+          cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
+          cp scripts/ci/root-api-options.mjs "$consumer_dir/root-api-options.mjs"
+          node "$consumer_dir/run-root-api-scenario.mjs" \
+            --output="$RUNNER_TEMP/hikoutei-stable-root-api-smoke-result.json"
+
+      - name: Upload stable installed-consumer reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
-          name: hikoutei-stable-fake-sync-gateway-e2e
-          path: ${{ runner.temp }}/hikoutei-stable-fake-result.json
+          name: hikoutei-stable-fake-installed-consumer
+          path: |
+            ${{ runner.temp }}/hikoutei-stable-fake-result.json
+            ${{ runner.temp }}/hikoutei-stable-root-api-smoke-result.json
           if-no-files-found: ignore
 
       - name: Upload stable package
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: hikoutei-stable-package
-          path: |
-            ${{ runner.temp }}/hikoutei-*.tgz
-            ${{ runner.temp }}/hikoutei-stable-package.sha256
+          path: ${{ runner.temp }}/hikoutei-stable-package
           if-no-files-found: error
 
   publish:
@@ -152,19 +177,39 @@ jobs:
       id-token: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       - name: Download stable package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: hikoutei-stable-package
           path: ${{ runner.temp }}/hikoutei-stable-package
+
+      - name: Verify latest dist-tag monotonicity
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected_version="${TAG_NAME#v}"
+          current_version="$(node scripts/ci/read-npm-dist-tag.mjs --package=hikoutei --tag=latest)"
+          CURRENT_CHANNEL_VERSION="$current_version" TARGET_VERSION="$expected_version" node --input-type=module <<'NODE'
+          import { compareStableVersions } from "./scripts/ci/release-version.mjs";
+          const current = process.env.CURRENT_CHANNEL_VERSION?.trim() ?? "";
+          const target = process.env.TARGET_VERSION ?? "";
+          if (current === "" || current === "null" || current === "undefined") process.exit(0);
+          const result = compareStableVersions(current, target);
+          if (result.status === "invalid" || result.comparison > 0) {
+            throw new Error(`latest dist-tag would move backward: current=${current} target=${target}`);
+          }
+          console.log(`latest dist-tag current=${current} target=${target}`);
+          NODE
 
       - name: Publish stable package
         shell: bash
@@ -190,6 +235,19 @@ jobs:
             exit 1
           fi
           package_file="${packages[0]}"
+          checksum_file="$package_dir/hikoutei-stable-package.sha256"
+          if [[ ! -f "$checksum_file" ]]; then
+            echo "missing stable checksum file $checksum_file" >&2
+            exit 1
+          fi
+          # Assert the checksum line names the tarball we actually publish, not
+          # merely any file that sha256sum --check happens to find in the dir.
+          expected_name="$(basename "$package_file")"
+          recorded_name="$(awk 'NR==1{n=$2; sub(/^\*/,"",n); print n}' "$checksum_file")"
+          if [[ "$recorded_name" != "$expected_name" ]]; then
+            echo "stable checksum names '$recorded_name' but tarball is '$expected_name'" >&2
+            exit 1
+          fi
           (cd "$package_dir" && sha256sum --check hikoutei-stable-package.sha256)
           tar -xOf "$package_file" package/package.json > "$RUNNER_TEMP/hikoutei-stable-package.json"
           node -e '

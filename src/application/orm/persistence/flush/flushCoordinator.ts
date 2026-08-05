@@ -18,7 +18,7 @@ import {
   registerSyncSheetWithSql,
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheets/sheetsProvisioning.js";
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
@@ -63,7 +63,7 @@ export function createMappedTypedSheetsFlushCoordinator(
   options: CreateMappedTypedSheetsFlushCoordinatorOptions,
 ): TypedSheetsFlushCoordinator {
   const mappings = mappingRegistry(options.mappings);
-  const writer = resolveWriterOptions(options.writer);
+  const writer = resolveTypedSheetsEntityWriterOptions(options.writer);
 
   return {
     async onFlush(context: TypedSheetsFlushContext): Promise<void> {
@@ -117,7 +117,7 @@ export function createMappedTypedSheetsFlushCoordinator(
 /**
  * Registers every mapping route under one writer fence.
  *
- * The return value can be passed directly to the existing gateway provisioning
+ * The return value can be passed directly to the existing provider provisioning
  * helper, so users never need to duplicate route names or header lists in Apps
  * Script configuration.
  */
@@ -127,7 +127,7 @@ export async function registerTypedSheetsEntityMappings(
   writerInput: TypedSheetsEntityWriterOptions,
 ): Promise<readonly RegisteredTypedSheetsMappedProjection[]> {
   const mappings = mappingRegistry(mappingsInput);
-  const writer = resolveWriterOptions(writerInput);
+  const writer = resolveTypedSheetsEntityWriterOptions(writerInput);
   const definitions = createTypedSheetsMappedProjectionDefinitions(mappings.mappings);
 
   return storage.transaction(async ({ sql }) => {
@@ -170,13 +170,14 @@ export async function registerTypedSheetsEntityMappings(
   });
 }
 
-/** Converts registered mapping routes into gateway provisioning definitions. */
+/** Converts registered mapping routes into provider provisioning definitions. */
 export function registeredTypedSheetsProjectionDefinitions(
   registrations: readonly RegisteredTypedSheetsMappedProjection[],
 ): readonly RegisteredSyncProjectionDefinition[] {
   return registrations.map(({ mapping, sheet, headers }) => ({
     sheet,
     headers,
+    identityField: sheet.businessKeyField,
     entityIdForBusinessKey: mapping.canonicalEntityIdFor,
   }));
 }
@@ -224,7 +225,10 @@ function mappingRegistry(
   return createTypedSheetsEntityMappingRegistry(input);
 }
 
-function resolveWriterOptions(options: TypedSheetsEntityWriterOptions): ResolvedWriterOptions {
+/** Normalizes writer identity and lease settings for internal observation workers. */
+export function resolveTypedSheetsEntityWriterOptions(
+  options: TypedSheetsEntityWriterOptions,
+): ResolvedWriterOptions {
   if (options.writerId.length === EMPTY_STRING_LENGTH_ZERO) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.INVALID_ENTITY_MAPPING,

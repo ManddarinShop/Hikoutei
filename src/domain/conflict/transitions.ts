@@ -103,7 +103,7 @@ export function applyResolution(
     };
   }
 
-  if (command.role !== "sheet_editor") {
+  if (command.role !== "sheet_editor" && command.role !== "sync_operator") {
     return {
       kind: CONFLICT_TRANSITION_KINDS.REJECTED,
       error: createInvalidResolutionRoleError(command.role),
@@ -162,7 +162,8 @@ export function applyResolution(
 }
 
 /** Computes the active candidate hash for CAS comparison. */
-function candidateHash(conflict: SyncConflict): string {
+/** Computes the compare-and-set hash for the currently active user candidate. */
+export function candidateHash(conflict: SyncConflict): string {
   return stableHash({
     value: conflict.userValue,
     revision: conflict.userBaseRevision,

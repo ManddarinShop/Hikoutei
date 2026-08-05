@@ -8,10 +8,10 @@ import {
 import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { pollSimpleSheetRowsWithAdapter } from "../src/application/sync/inbound/polling/SimpleSheetPolling.js";
 import type {
-  SyncSheetTableReaderGateway,
+  SyncSheetsTableReader,
   SyncTableRowsResult,
-} from "../src/application/sync/gateway/syncGateway.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
+} from "../src/application/sync/sheets/syncSheets.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheets/sheetsProvisioning.js";
 
 const TestEntitySchema = defineEntity({
   name: "SimpleSheetPollingTestEntity",
@@ -72,7 +72,7 @@ describe("simple Sheet polling", () => {
         },
       ],
     };
-    const gateway: SyncSheetTableReaderGateway = {
+    const provider: SyncSheetsTableReader = {
       readRows: async () => result,
       readRowsBatch: async () => {
         batchReadCount += 1;
@@ -82,7 +82,7 @@ describe("simple Sheet polling", () => {
 
     const polling = await pollSimpleSheetRowsWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       definitions: [definition],
     });
 
@@ -97,6 +97,43 @@ describe("simple Sheet polling", () => {
       fields: result.rows[1]?.fields,
       changedFields: ["name"],
     }]);
+  });
+
+  it("rejects malformed canonical cells at the JSON boundary", async () => {
+    const adapter = await initializeMikroOrmSqliteAdapter({
+      dbName: ":memory:",
+      entities: [TestEntity],
+    });
+    adapters.push(adapter);
+    await migrateMikroOrmSqliteStorageSchema(adapter);
+    await seedCanonicalRows(adapter);
+    await adapter.transaction(({ sql }) => sql.run(
+      "UPDATE entity_field_state SET normalized_value = ? WHERE entity_id = ? AND field_name = ?",
+      [JSON.stringify({ kind: "date", value: "not-a-date" }), "order-1", "name"],
+    ));
+
+    const provider: SyncSheetsTableReader = {
+      readRows: async () => ({
+        sheetName: "Orders",
+        registeredRange: "A:C",
+        headers: ["id", "name", "status"],
+        rows: [],
+      }),
+      readRowsBatch: async () => [{
+        sheetName: "Orders",
+        registeredRange: "A:C",
+        headers: ["id", "name", "status"],
+        rows: [],
+      }],
+    };
+
+    await expect(
+      pollSimpleSheetRowsWithAdapter({
+        storage: adapter,
+        provider,
+        definitions: [createDefinition()],
+      }),
+    ).rejects.toThrow("canonical value is not a normalized cell");
   });
 });
 

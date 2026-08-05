@@ -5,6 +5,8 @@ import type { NewEffect } from "../../sync/outbound/effectOutbox.js";
 
 /** Runtime values for the durable resolution-command lifecycle. */
 export const RESOLUTION_COMMAND_STATUSES = {
+  /** A durable command waiting for an in-flight predecessor to settle. */
+  PENDING: "pending",
   PROCESSING: "processing",
   APPLIED: "applied",
   STALE: "stale",
@@ -19,6 +21,7 @@ export type ResolutionCommandStatus =
 /** Runtime values for results returned by the resolution writer. */
 export const PERSIST_RESOLUTION_RESULT_KINDS = {
   FENCED_OUT: "fenced_out",
+  DEFERRED: "deferred",
   APPLIED: "applied",
   STALE: "stale",
   REJECTED: "rejected",
@@ -49,9 +52,15 @@ export interface PersistResolutionCommandInput {
   readonly duplicateEffects?: readonly NewEffect[];
 }
 
-/** Terminal or replay-visible result of a resolution command transaction. */
+/** Result of a resolution command transaction, including safe in-flight deferral. */
 export type PersistResolutionCommandResult =
   | { readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.FENCED_OUT }
+  | {
+      readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.DEFERRED;
+      readonly commandId: string;
+      readonly conflictId: string;
+      readonly reason: "processing_predecessor";
+    }
   | {
       readonly kind: typeof PERSIST_RESOLUTION_RESULT_KINDS.APPLIED;
       readonly commandId: string;

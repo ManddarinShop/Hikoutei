@@ -1,12 +1,16 @@
 /**
- * SQLite registry/allowlist operations for the sync gateway.
+ * SQLite registry/allowlist operations for the sync provider.
  *
- * The local registry is the source of truth used to choose a gateway range.
+ * The local registry is the source of truth used to choose a provider range.
  * A caller cannot turn an arbitrary tab name into a sync target by merely
- * passing it to the gateway client.
+ * passing it to the provider client.
  */
 
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../../errors.js";
+import {
+  REGISTERED_PROJECTION_KINDS,
+  type RegisteredProjectionKind,
+} from "../../../../domain/model/constants.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
@@ -51,7 +55,7 @@ const READ_REGISTERED_SYNC_SHEET_SQL = `
 `;
 
 /** The only projection labels accepted by the v1 runtime registry. */
-export type RegisteredProjection = "user_input" | "system_state" | "sync_conflicts";
+export type RegisteredProjection = RegisteredProjectionKind;
 
 /** Immutable logical/physical registration supplied by deployment setup. */
 export interface RegisterSyncSheetInput {
@@ -69,7 +73,7 @@ export interface RegisterSyncSheetInput {
   readonly anchorMode?: "business_key" | "developer_metadata";
 }
 
-/** Registry row used for all gateway requests. */
+/** Registry row used for all provider requests. */
 export interface RegisteredSyncSheet {
   readonly logicalSheetId: string;
   readonly physicalSheetId: string;
@@ -266,7 +270,7 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
     );
   }
   try {
-    JSON.parse(input.ownershipManifestJson) as unknown;
+    JSON.parse(input.ownershipManifestJson);
   } catch {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
@@ -342,10 +346,12 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
 }
 
 function isRegisteredProjection(value: string): value is RegisteredProjection {
-  return value === "user_input" || value === "system_state" || value === "sync_conflicts";
+  return value === REGISTERED_PROJECTION_KINDS.USER_INPUT ||
+    value === REGISTERED_PROJECTION_KINDS.SYSTEM_STATE ||
+    value === REGISTERED_PROJECTION_KINDS.SYNC_CONFLICTS;
 }
 
-/** Normalizes the v1 whole-column gateway boundary to the form accepted by Apps Script. */
+/** Normalizes the v1 whole-column provider boundary to the form accepted by the Sheets provider. */
 function normalizeRegisteredRange(value: string, errorCode: StorageErrorCode): string {
   const normalized = value.trim().toUpperCase();
   const match = /^([A-Z]+):([A-Z]+)$/.exec(normalized);

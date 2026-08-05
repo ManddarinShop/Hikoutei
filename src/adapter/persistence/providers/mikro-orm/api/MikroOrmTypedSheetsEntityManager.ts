@@ -45,8 +45,10 @@ export class MikroOrmSqliteTypedSheetsEntityManager
 
   /** Creates a manager with an independent MikroORM identity map. */
   fork(options?: TypedSheetsForkOptions): TypedSheetsEntityEngineManager {
-    const fork = this.entityManager.fork.bind(this.entityManager) as TypedSheetsFork;
-    return new MikroOrmSqliteTypedSheetsEntityManager(this.storage, fork(options));
+    const forked = options?.clear === undefined
+      ? this.entityManager.fork()
+      : this.entityManager.fork({ clear: options.clear });
+    return new MikroOrmSqliteTypedSheetsEntityManager(this.storage, forked);
   }
 
   /** Delegates entity construction while keeping MikroORM types inside the adapter. */
@@ -54,8 +56,16 @@ export class MikroOrmSqliteTypedSheetsEntityManager
     entityName: TypedSheetsEntityReference<Entity>,
     data: TypedSheetsEntityData<Entity>,
   ): Entity {
-    const create = this.entityManager.create.bind(this.entityManager) as TypedSheetsCreate;
-    return create(entityName, data);
+    if (typeof entityName === "string") {
+      const metadata = this.entityManager.getMetadata().getByUniqueName(entityName);
+      return this.entityManager.create(metadata.class, this.toMikroData(data), { partial: true });
+    }
+    return this.entityManager.create(entityName, this.toMikroData(data), { partial: true });
+  }
+
+  /** Converts public partial data into the untyped provider data boundary. */
+  private toMikroData(data: object): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(data));
   }
 
   /** Reads a filtered entity collection through the local SQLite manager. */
@@ -64,8 +74,11 @@ export class MikroOrmSqliteTypedSheetsEntityManager
     where: TypedSheetsEntityFilter<Entity>,
     options?: TypedSheetsFindOptions,
   ): Promise<readonly Entity[]> {
-    const find = this.entityManager.find.bind(this.entityManager) as TypedSheetsFind;
-    return find(entityName, where, options);
+    if (typeof entityName === "string") {
+      const metadata = this.entityManager.getMetadata().getByUniqueName(entityName);
+      return this.entityManager.find(metadata.class, where, options);
+    }
+    return this.entityManager.find(entityName, where, options);
   }
 
   /** Reads one filtered entity through the local SQLite manager. */
@@ -74,18 +87,21 @@ export class MikroOrmSqliteTypedSheetsEntityManager
     where: TypedSheetsEntityFilter<Entity>,
     options?: TypedSheetsFindOptions,
   ): Promise<Entity | null> {
-    const findOne = this.entityManager.findOne.bind(this.entityManager) as TypedSheetsFindOne;
-    return findOne(entityName, where, options);
+    if (typeof entityName === "string") {
+      const metadata = this.entityManager.getMetadata().getByUniqueName(entityName);
+      return this.entityManager.findOne(metadata.class, where, options);
+    }
+    return this.entityManager.findOne(entityName, where, options);
   }
 
   /** Marks one or more entities for MikroORM insertion or update. */
   persist<Entity extends object>(entity: Entity | Iterable<Entity>): void {
-    this.entityManager.persist(entity as never);
+    this.entityManager.persist(entity);
   }
 
   /** Marks one or more entities for MikroORM removal. */
   remove<Entity extends object>(entity: Entity | Iterable<Entity>): void {
-    this.entityManager.remove(entity as never);
+    this.entityManager.remove(entity);
   }
 
   /** Flushes the current MikroORM unit of work. */
@@ -147,24 +163,3 @@ export class MikroOrmSqliteTypedSheetsEntityManager
     });
   }
 }
-
-type TypedSheetsCreate = <Entity extends object>(
-  entityName: TypedSheetsEntityReference<Entity>,
-  data: TypedSheetsEntityData<Entity>,
-) => Entity;
-
-type TypedSheetsFind = <Entity extends object>(
-  entityName: TypedSheetsEntityReference<Entity>,
-  where: TypedSheetsEntityFilter<Entity>,
-  options?: TypedSheetsFindOptions,
-) => Promise<readonly Entity[]>;
-
-type TypedSheetsFindOne = <Entity extends object>(
-  entityName: TypedSheetsEntityReference<Entity>,
-  where: TypedSheetsEntityFilter<Entity>,
-  options?: TypedSheetsFindOptions,
-) => Promise<Entity | null>;
-
-type TypedSheetsFork = (
-  options?: TypedSheetsForkOptions,
-) => MikroOrmSqliteEntityManager;

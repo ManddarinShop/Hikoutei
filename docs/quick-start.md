@@ -1,7 +1,8 @@
 # Hikoutei Quick Start
 
-The project is called Hikoutei and is currently published on npm as
-`hikoutei`.
+Hikoutei is a typed repository and safe write layer for Google Sheets-backed MVPs.
+SQLite is the application authority; Google Sheets is an asynchronous internal
+projection and human input surface.
 
 ## Installation
 
@@ -9,13 +10,11 @@ The project is called Hikoutei and is currently published on npm as
 npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
-The root API does not expose MikroORM types. The current built-in SQLite
-provider uses those optional peer dependencies internally; a future provider
-can replace it without changing the entity lifecycle API.
+The root API does not expose MikroORM, SQL, or sync-worker types.
+The current built-in SQLite provider uses the optional MikroORM peer
+dependencies internally.
 
-## Define a scalar entity
-
-Entity metadata and environment-specific Sheet routes are separate:
+## Define an entity
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -33,26 +32,16 @@ const User = defineTypedSheetsEntity({
 const hikoutei = await createTypedSheets({
   dbName: "./hikoutei.sqlite",
   entities: [User],
-  sheets: {
-    spreadsheetId: process.env.GOOGLE_SHEET_ID!,
-    routes: {
-      User: {
-        systemState: { tabName: "Users_System", registeredRange: "A:Z" },
-      },
-    },
-  },
 });
 ```
 
-`createTypedSheets()` validates the descriptors and routes, opens the local
-SQLite authority, registers canonical/outbox state, and prepares the current
-persistence provider. It does not call Google Sheets or mutate a remote tab.
+`createTypedSheets()` validates entity descriptors, opens the local SQLite
+authority, and creates the declared entity tables. It does not contact Google
+Sheets and accepts no Sheet route or provider option.
 
 ## Entity lifecycle
 
-Use a request-local manager. Reads come from SQLite, never from the remote Sheet.
-The Unit of Work owns identity maps and snapshots, so mutation followed by
-`flush()` has the same meaning regardless of the persistence provider.
+Use a request-local manager. Reads come from SQLite, never from a remote Sheet.
 
 ```ts
 const em = hikoutei.em.fork();
@@ -69,83 +58,80 @@ const loaded = await em.findOne(User, { id: "u1" });
 if (loaded !== null) {
   loaded.name = "Ada Lovelace";
   await em.flush();
-
-  await em.transactional(async (transactionalEm) => {
-    transactionalEm.remove(loaded);
-  });
 }
+
+await em.transactional(async (transactionalEm) => {
+  const target = await transactionalEm.findOne(User, { id: "u1" });
+  if (target !== null) transactionalEm.remove(target);
+});
 ```
 
-The stable lifecycle methods are `fork()`, `create()`, `find()`, `persist()`,
-`remove()`, `flush()`, and `transactional()`. Relations and provider-specific
-query operators are not part of the scalar release.
+The stable lifecycle methods are `fork()`, `create()`, `find()`, `findOne()`,
+`persist()`, `remove()`, `flush()`, and `transactional()`. Relations and
+provider-specific query operators are not part of the scalar release.
 
-## Sheet setup and delivery
+## Internal Sheet synchronization
 
-`createTypedSheets()` opens the local SQLite authority and validates the
-registered routes, but it does not contact Google Sheets. Provisioning is an
-explicit service/deployment operation, and the included
-[`apps-script/gateway/Code.gs`](../apps-script/gateway/Code.gs) must be deployed
-before the server can deliver Sheet effects.
+Applications do not call Sheet APIs or choose a write operation for each
+entity change. A service-side internal sync bootstrap owns:
 
-### Deploy the Apps Script gateway
+- projection routes and user-owned field configuration
+- provider credentials (service account) and spreadsheet ID
+- local projection registration and remote provisioning
+- the outbound effect supervisor and durable outbox delivery
+- User_Input polling, evaluation, conflict handling, and reconciliation
 
-Complete these steps once for the spreadsheet that the service will use:
+When that internal service mode is active, `flush()` commits the entity table,
+canonical sync state, and durable Sheet effect outbox in one SQLite transaction.
+The call still does not wait for the remote Sheet write.
 
-1. Create or open the target Google Spreadsheet. From **Extensions → Apps
-   Script**, create a **bound** Apps Script project for that spreadsheet.
-2. Copy the complete `apps-script/gateway/Code.gs` file from this repository or
-   from `node_modules/hikoutei/apps-script/gateway/Code.gs` into the Apps Script
-   editor, then save it.
-3. Choose **Deploy → New deployment**, select **Web app**, and deploy it with
-   **Execute as: Me**. Choose the narrowest access audience that can reach the
-   server. A server outside the Workspace normally requires **Anyone**; the
-   signed request secret still authenticates every useful POST.
-4. Copy the deployed URL ending in `/exec`. Do not use the editor-only `/dev`
-   URL. Paste the URL into the constant near the top of `Code.gs` and save:
+The internal service provisions and validates the registered tabs before it
+starts delivery. Schema drift or provider setup failure stops service startup
+rather than silently changing a remote Sheet. These service modules are under
+`src/application/sync/service/` and are intentionally not re-exported from the
+package root.
 
-   ```js
-   var TYPED_SHEETS_GATEWAY_URL =
-     "https://script.google.com/macros/s/DEPLOYMENT_ID/exec";
-   ```
+### Full direct provider (service account, recommended)
 
-5. In the **bound** Apps Script editor, select `setupSyncGateway` in the
-   function menu and click **Run**. Approve the requested Google permissions.
-   The helper reads the active spreadsheet ID, stores the ID and shared secret
-   in Script Properties, and logs a copyable local environment block. Running
-   it from a standalone Apps Script project cannot identify the spreadsheet.
-6. Open the execution log and copy the printed values into an untracked server
-   environment file or secret store:
+The bootstrap can run the entire sync path with ONE Google Sheets API
+provider by setting the internal `googleSheetsApi` option. The provider
+authenticates with Application Default Credentials — set
+`GOOGLE_APPLICATION_CREDENTIALS` to a service-account key that is shared on
+the spreadsheet — and implements provisioning (creating missing tabs and
+headers in one atomic batch), fast append, guarded update/delete, receipt,
+replay, response-loss recovery, values-only table reads, row anchors, and
+User_Input observation. No Apps Script deployment is needed.
 
-   ```dotenv
-   TYPED_SHEETS_GATEWAY_URL="https://script.google.com/macros/s/DEPLOYMENT_ID/exec"
-   TYPED_SHEETS_GATEWAY_SHARED_SECRET="generated-secret"
-   TYPED_SHEETS_GATEWAY_SHEET_ID="spreadsheet-id"
-   ```
+The provider disables SDK auto-retry, spaces every request start at 1,100 ms
+per class (reads and writes separately), and telemetries only operation
+names, counts, durations, and stable codes. One SQLite runtime stays the
+single authoritative writer per spreadsheet.
 
-   The sheet ID is derived from the bound spreadsheet; it is not a second
-   spreadsheet to configure. Never put the shared secret in browser code or
-   commit it to Git.
-7. If `Code.gs` changes, use **Deploy → Manage deployments**, edit the Web App
-   deployment, and create a new version before relying on the changed gateway.
-   The `/exec` URL stays the same when an existing deployment is updated.
+## Removed: Apps Script gateway
 
-### Provision and deliver Sheets
+The signed Apps Script gateway and the `appsScript`/`googleApiWorker` options
+were removed in this cleanup. The service-account `googleSheetsApi` provider
+above is the only sync path; existing deployments should switch to it. The
+provider reads and writes the same tabs, receipt sheet, and anchor metadata,
+so existing spreadsheets keep working without re-provisioning.
 
-Provide a server-side, provider-neutral `HikouteiSheetProvisioner` using the
-server credentials, then explicitly provision the registered tabs and headers:
+Sheet consistency does not rely on cross-request Sheet transactions; it comes
+from the hidden effect-receipt tab, effect-id/payload-hash dedupe, the SQLite
+durable outbox, fencing, and postcondition recovery.
 
-```ts
-await hikoutei.setupSheets(provisioner);
-```
+Live Google integration is opt-in and requires a service account, credentials,
+a spreadsheet, and external quota. The normal test suite uses fake providers
+and SQLite fixtures without credentials.
 
-The operation is idempotent and rejects schema drift instead of silently
-rewriting headers. After setup, run the sync worker that delivers pending
-outbox effects. A successful `flush()` commits the entity table, canonical sync
-state, and durable Sheet effect outbox in one SQLite transaction; it does not
-mean that the remote Sheet has already been updated.
+## Read/write guarantees
 
-If `setupSyncGateway()` reports that it must run from a bound project, reopen
-Apps Script from the spreadsheet's **Extensions → Apps Script** menu. If the
-server receives `gateway_not_configured`, run the setup helper again and make
-sure the three environment variables are available to the service.
+- SQLite is the source of truth for application reads.
+- `flush()` returns after the local SQLite transaction commits.
+- Sheet delivery is asynchronous and at-least-once.
+- Stale or conflicting User_Input edits are recorded in SQLite rather than
+  silently overwriting canonical data.
+- Provider response loss is recoverable work, not proof of a failed remote write.
+- Sheet consistency comes from the hidden effect-receipt tab,
+  effect-id/payload-hash dedupe, the SQLite durable outbox, fencing, and
+  postcondition recovery, not cross-request Sheet transactions.
+- Projection route/header drift fails explicitly.

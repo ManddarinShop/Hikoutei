@@ -2,14 +2,16 @@
  * Shared timing(소요 시간) contracts for the SQLite-to-Sheets write pipeline.
  *
  * Timing is diagnostic only: a sink failure must never change persistence or
- * gateway behavior. The operation kinds describe the public lifecycle while
+ * provider behavior. The operation kinds describe the public lifecycle while
  * phases describe implementation boundaries that can be compared in a trace.
  */
 
 export const SYNC_TIMING_SCOPES = {
   ORM_FLUSH: "orm_flush",
   WORKER: "worker",
-  GATEWAY: "gateway",
+  PROVIDER: "provider",
+  /** Inbound User_Input polling phases; diagnostic only and never root-facing. */
+  POLLING: "polling",
 } as const;
 
 export type SyncTimingScope =
@@ -31,18 +33,18 @@ export interface SyncTimingOperationCounts {
   readonly delete: number;
 }
 
-/** One measured implementation phase inside a remote gateway operation. */
-export interface SyncGatewayTimingPhase {
+/** One measured implementation phase inside a remote provider operation. */
+export interface SyncSheetsTimingPhase {
   readonly phase: string;
   readonly durationMs: number;
 }
 
-/** Timing returned by one dynamically evaluated Apps Script operation. */
-export interface SyncGatewayTiming {
+/** Timing returned by one remote provider operation. */
+export interface SyncSheetsTiming {
   readonly operationKinds: readonly SyncTimingOperationKind[];
   readonly operationCounts: SyncTimingOperationCounts;
   readonly durationMs: number;
-  readonly phases: readonly SyncGatewayTimingPhase[];
+  readonly phases: readonly SyncSheetsTimingPhase[];
 }
 
 /** One local or remote phase sent to the application's diagnostics sink. */
@@ -52,6 +54,10 @@ export interface SyncTimingEvent {
   readonly durationMs: number;
   readonly operationKinds: readonly SyncTimingOperationKind[];
   readonly operationCounts: SyncTimingOperationCounts;
+  /** Optional route/batch diagnostics used by adaptive outbound dispatch. */
+  readonly routeKey?: string;
+  readonly batchLimit?: number;
+  readonly responseSucceeded?: boolean;
 }
 
 /** Optional observer used by servers and benchmarks to collect timings. */

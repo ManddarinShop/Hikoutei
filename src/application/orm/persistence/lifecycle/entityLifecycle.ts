@@ -50,10 +50,10 @@ import {
 } from "../support/timing.js";
 import {
   identifiedValue,
-  presentValue,
   requireChangeEntityId,
   requireEncodedField,
 } from "../support/helpers.js";
+import { presentValue } from "../../../../shared/state/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -282,7 +282,7 @@ function acceptedSnapshotHash(
   return presentValue(stableHash({
     entityId,
     fields: Object.entries(fields)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([fieldName, value]) => ({ fieldName, value })),
   }));
 }
