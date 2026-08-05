@@ -5,11 +5,16 @@ name: Live Google Sheets integration
 # maintainer with write access dispatches it explicitly. Manual dispatch is the
 # only trigger, so there is no forked-PR secret-exposure path and no need for
 # the pull_request/pull_request_target distinction.
+#
+# The live path is service-account-only: the scenario provisions, writes,
+# observes, and cleans up through the Google Sheets REST API with Application
+# Default Credentials. No Apps Script gateway is involved, so no
+# TYPED_SHEETS_GATEWAY_* secrets are used anywhere in this workflow.
 on:
   workflow_dispatch:
 
-# All live runs share one deployed gateway and spreadsheet, so serialize manual
-# dispatches to avoid quota and SpreadsheetApp contention.
+# All live runs share one spreadsheet, so serialize manual dispatches to avoid
+# quota contention between concurrent service accounts.
 concurrency:
   group: live-google-sheets
   cancel-in-progress: false
@@ -19,7 +24,7 @@ permissions:
 
 jobs:
   live:
-    name: Installed-package Google Sheets internal sync/gateway E2E
+    name: Installed-package Google Sheets service-account sync/gateway E2E
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -38,16 +43,19 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run installed-package internal sync/gateway E2E (live)
-        # The gateway secrets are scoped to this step and the cleanup step only,
-        # not the whole job, so checkout/setup/install/build never see them.
+      - name: Run installed-package internal sync/gateway E2E (live, service account)
+        # The service-account key is materialized in the runner temp dir and
+        # the credential/spreadsheet env vars are scoped to this step and the
+        # cleanup step only, not the whole job, so checkout/setup/install/build
+        # never see them.
         env:
-          TYPED_SHEETS_GATEWAY_URL: ${{ secrets.TYPED_SHEETS_GATEWAY_URL }}
-          TYPED_SHEETS_GATEWAY_SHARED_SECRET: ${{ secrets.TYPED_SHEETS_GATEWAY_SHARED_SECRET }}
-          TYPED_SHEETS_GATEWAY_SHEET_ID: ${{ secrets.TYPED_SHEETS_GATEWAY_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON }}
+          GOOGLE_SHEETS_TEST_SPREADSHEET_ID: ${{ secrets.GOOGLE_SHEETS_TEST_SPREADSHEET_ID }}
         shell: bash
         run: |
           set -euo pipefail
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON" > "$RUNNER_TEMP/gcp-sa-key.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
           consumer_dir="$RUNNER_TEMP/hikoutei-live-consumer"
           mkdir -p "$consumer_dir"
           pack_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
@@ -65,20 +73,24 @@ jobs:
           cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
           node "$consumer_dir/run-api-scenario.mjs" \
             --backend=live \
+            --outbound=direct \
             --output="$RUNNER_TEMP/hikoutei-live-result.json" \
             --manifest="$RUNNER_TEMP/hikoutei-live-manifest.json" \
             --summary="$GITHUB_STEP_SUMMARY"
 
       - name: Clean up live fixture
-        # Cleanup also talks to the live gateway, so it needs the same secrets.
+        # Cleanup also talks to the live spreadsheet with the service account,
+        # so it needs the same credential env; the key file is still present
+        # because this step runs in the same job.
         if: always()
         env:
-          TYPED_SHEETS_GATEWAY_URL: ${{ secrets.TYPED_SHEETS_GATEWAY_URL }}
-          TYPED_SHEETS_GATEWAY_SHARED_SECRET: ${{ secrets.TYPED_SHEETS_GATEWAY_SHARED_SECRET }}
-          TYPED_SHEETS_GATEWAY_SHEET_ID: ${{ secrets.TYPED_SHEETS_GATEWAY_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON }}
+          GOOGLE_SHEETS_TEST_SPREADSHEET_ID: ${{ secrets.GOOGLE_SHEETS_TEST_SPREADSHEET_ID }}
         shell: bash
         run: |
           set -euo pipefail
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON" > "$RUNNER_TEMP/gcp-sa-key.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
           runner="$RUNNER_TEMP/hikoutei-live-consumer/run-api-scenario.mjs"
           if [ ! -f "$runner" ]; then
             echo "Live runner was not installed; there is no fixture to clean."
@@ -86,14 +98,16 @@ jobs:
           fi
           node "$runner" \
             --backend=live \
+            --outbound=direct \
             --cleanup-only \
             --manifest="$RUNNER_TEMP/hikoutei-live-manifest.json"
+          rm -f "$RUNNER_TEMP/gcp-sa-key.json"
 
-      - name: Upload internal sync/gateway E2E report (live)
+      - name: Upload internal sync/gateway E2E report (live, service account)
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: hikoutei-live-sync-gateway-e2e
+          name: hikoutei-live-google-sheets-direct
           path: |
             ${{ runner.temp }}/hikoutei-live-result.json
             ${{ runner.temp }}/hikoutei-live-manifest.json

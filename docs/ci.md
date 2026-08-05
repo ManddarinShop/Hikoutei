@@ -88,28 +88,35 @@ Only the internal sync/gateway E2E has a live variant, in the separate
 `.github/workflows/live-integration.yml` workflow. It is opt-in via
 `workflow_dispatch` — a maintainer with write access dispatches it explicitly;
 it never runs automatically on pull requests or pushes — and exercises
-that single scenario against real Google Sheets with `--backend=live`. The installed root API smoke has no live
+that single scenario against real Google Sheets with `--backend=live
+--outbound=direct`. The installed root API smoke has no live
 counterpart: it is a local-only lifecycle smoke against an in-memory SQLite
 authority, so it never runs there.
 
 Because live is opt-in via `workflow_dispatch`, it is triggered manually by a
 maintainer with write access rather than automatically on pull requests, so
-there is no forked-PR secret-exposure path. The three gateway secrets are
-scoped to the live execution and cleanup steps only, not the whole job, so
+there is no forked-PR secret-exposure path. The live path is
+service-account-only: the workflow materializes the service-account key in
+`$RUNNER_TEMP` and scopes the credential/spreadsheet environment to the live
+execution and cleanup steps only, not the whole job, so
 checkout/setup/install/build never see them. The live run uses a dedicated test
-spreadsheet and the following GitHub Actions secrets:
+spreadsheet shared with the service account and the following GitHub Actions
+secrets:
 
-- `TYPED_SHEETS_GATEWAY_URL`
-- `TYPED_SHEETS_GATEWAY_SHARED_SECRET`
-- `TYPED_SHEETS_GATEWAY_SHEET_ID`
+- `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON` (the service-account key JSON)
+- `GOOGLE_SHEETS_TEST_SPREADSHEET_ID`
+
+No Apps Script gateway is deployed or invoked, so the legacy
+`TYPED_SHEETS_GATEWAY_*` secrets are not used by the live workflow.
 
 ## Cleanup
 
 Each live run generates unique tab names from the workflow run ID. The runner
 writes a manifest before provisioning, cleans those tabs in a `finally` path,
 and the workflow repeats cleanup with `if: always()` so a failed assertion does
-not leave the fixture behind. The Apps Script receipt tab is also removed by
-the cleanup operation. Do not point the live secrets at a production
+not leave the fixture behind. Cleanup uses the same service account
+(`deleteSheet` requests through the direct provider's transport) and removes
+the shared receipt tab too. Do not point the live secrets at a production
 spreadsheet; cleanup is intentionally scoped to the dedicated CI spreadsheet.
 
 ## Kohkai dependency

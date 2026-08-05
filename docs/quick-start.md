@@ -91,16 +91,48 @@ rather than silently changing a remote Sheet. These service modules are under
 `src/application/sync/service/` and are intentionally not re-exported from the
 package root.
 
-## Apps Script gateway
+### Full direct provider (service account, recommended)
+
+The bootstrap can run the entire sync path with ONE Google Sheets API
+provider by setting the internal `googleSheetsApi` option. The provider
+authenticates with Application Default Credentials — set
+`GOOGLE_APPLICATION_CREDENTIALS` to a service-account key that is shared on
+the spreadsheet — and implements provisioning (creating missing tabs and
+headers in one atomic batch), fast append, guarded update/delete, receipt,
+replay, response-loss recovery, values-only table reads, row anchors, and
+User_Input observation. No Apps Script deployment is needed.
+
+The provider disables SDK auto-retry, spaces every request start at 1,100 ms
+per class (reads and writes separately), and telemetries only operation
+names, counts, durations, and stable codes. One SQLite runtime stays the
+single authoritative writer per spreadsheet. The deprecated `googleApiWorker`
+option routes only the outbound half directly while Apps Script (or an
+injected test gateway) still owns provisioning and observation; new setups
+should use `googleSheetsApi` instead.
+
+## Apps Script gateway (legacy)
 
 The deployable gateway is [`apps-script/gateway/Code.gs`](../apps-script/gateway/Code.gs).
-The default installation is that single file: copy it into a spreadsheet-bound
-Apps Script project, deploy it as a Web App, paste the deployed `/exec` URL
-into the `TYPED_SHEETS_GATEWAY_URL` constant, and run `setupSyncGateway()` from
-the editor. The setup writes the bound spreadsheet ID and a generated shared
-secret to Script Properties and logs a copyable local `.env` block. This path
-requires no `appsscript.json` manifest, no Apps Script Advanced Sheets Service,
-no Google Cloud Sheets API activation, and no service account.
+It is the legacy no-service-account path and remains fully supported: copy it
+into a spreadsheet-bound Apps Script project, deploy it as a Web App, paste
+the deployed `/exec` URL into the `TYPED_SHEETS_GATEWAY_URL` constant, and run
+`setupSyncGateway()` from the editor. The setup writes the bound spreadsheet
+ID and a generated shared secret to Script Properties and logs a copyable
+local `.env` block. To migrate to the service-account provider, share the
+spreadsheet with the service account and switch the internal bootstrap option
+from `appsScript` to `googleSheetsApi`.
+
+The current fast-append implementation unconditionally calls the Apps Script
+Advanced Sheets Service (`Sheets.Spreadsheets.Values.batchUpdate`) for append
+target writes; there is no runtime enablement switch. The bundled
+[`appsscript.json`](../apps-script/gateway/appsscript.json) manifest (Sheets v4
+advanced service enabled) and Google Cloud Sheets API activation in the
+script's Cloud project are therefore mandatory for the current temporary
+append path. A legacy `Code.gs`-only deployment that runs only on built-in
+`SpreadsheetApp` services must first restore the commented rollback block in
+`src/adapter/sheets/providers/apps-script-gateway/operations/write/batchAppendOperation.ts`,
+which reverts append target writes to the built-in services path. No service
+account is required.
 
 A service deployment supplies its URL and shared secret through a secret store
 or environment configuration. Never place the shared secret in browser code or
@@ -109,9 +141,9 @@ transactions; it comes from the Apps Script script lock, the hidden
 effect-receipt tab, effect-id/payload-hash dedupe, the SQLite durable outbox,
 fencing, and postcondition recovery.
 
-Live Google integration is opt-in and requires a deployed gateway, credentials,
-a spreadsheet, and external quota. The normal test suite uses fake gateways and
-SQLite fixtures without credentials.
+Live Google integration is opt-in and requires a service account (or a
+deployed legacy gateway), credentials, a spreadsheet, and external quota. The
+normal test suite uses fake gateways and SQLite fixtures without credentials.
 
 ## Read/write guarantees
 

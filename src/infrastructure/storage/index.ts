@@ -73,6 +73,8 @@ export {
   findPendingEffectsByTargetWithSql,
   listReadyEffectsWithAdapter,
   listReadyEffectsWithSql,
+  listReadyFastAppendEffectsWithAdapter,
+  listReadyFastAppendEffectsWithSql,
   hasPendingOrProcessingEffectsWithAdapter,
   hasPendingOrProcessingEffectsWithSql,
   appendPendingEffectsWithAdapter,

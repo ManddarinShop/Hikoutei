@@ -32,6 +32,21 @@ export const GATEWAY_EFFECT_BATCH_LIMIT = 20;
  * backlog while a remote batch is in flight.
  */
 export const MAX_IN_FLIGHT_EFFECTS = GATEWAY_EFFECT_BATCH_LIMIT;
+/**
+ * Maximum eligible fast-append rows one worker pass may select/claim in the
+ * real Apps Script runtime. The temporary test-batch append operation writes
+ * the whole reserved target range in one Advanced Sheets Values.batchUpdate
+ * request, so a bulk pass can claim this many append candidates while regular
+ * and recovery effects keep the bounded 20-effect window below.
+ */
+export const FAST_APPEND_BATCH_CANDIDATE_LIMIT = 1_000;
+/**
+ * Minimum interval between fast-append request starts in the real Apps Script
+ * runtime. The adaptive batch controller remembers the last append request
+ * start across supervisor passes and waits only the remaining time before the
+ * next append request; regular applyEffects calls never wait on this throttle.
+ */
+export const APPEND_DISPATCH_THROTTLE_INTERVAL_MS = 1_100;
 
 export const SYNC_EFFECT_KINDS = CANONICAL_EFFECT_KINDS satisfies Record<string, EffectKind>;
 

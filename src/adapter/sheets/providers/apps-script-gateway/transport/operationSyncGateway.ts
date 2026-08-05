@@ -97,8 +97,10 @@ interface ReadProjectionArgs {
 }
 
 /**
- * Adapts the generic Apps Script operation transport to the sync worker's
- * fast and regular effect gateway boundaries.
+ * @deprecated Legacy Apps Script gateway adapter. The preferred
+ * `googleSheetsApi` bootstrap mode uses the full service-account Google
+ * Sheets provider and needs no Apps Script at all; this class remains for
+ * the deprecated `appsScript` / `googleApiWorker` modes.
  */
 export class AppsScriptOperationSyncGateway
   implements

@@ -23,6 +23,11 @@ import {
 import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncTimingEvent } from "../src/application/sync/telemetry/syncTiming.js";
 import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+import {
+  StubSpreadsheet,
+  StubSheetsTransport,
+  stubRowFields,
+} from "./support/StubSheetsTransport.js";
 
 const User = defineTypedSheetsEntity({
   name: "SyncServiceUser",
@@ -959,5 +964,501 @@ describe("internal sync service bootstrap", () => {
     const recoveryReport = await service.pollingSupervisor.runOnce();
     expect(recoveryReport.mode).toBe("full");
     expect(recoveryReport.safetyFullScan).toBe(true);
+  });
+});
+
+describe("internal sync service direct-outbound mode", () => {
+  const services: InternalSyncService[] = [];
+
+  afterEach(async () => {
+    await Promise.all(services.splice(0).map((service) => service.close()));
+  });
+
+  const SYSTEM_SHEET_ID = "entity:sync_service_users:system_state";
+  const USER_INPUT_SHEET_ID = "entity:sync_service_users:user_input";
+  const CONFLICT_SHEET_ID = "entity:sync_service_users:sync_conflicts";
+
+  const directProjections = {
+    spreadsheetId: "sync-service-spreadsheet",
+    entities: {
+      SyncServiceUser: {
+        systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userOwnedFields: ["id", "status"],
+      },
+    },
+  };
+
+  const buildObservationGateway = () => new FakeSyncSheetGateway([
+    {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "SyncServiceUsers_System",
+      registeredRange: "A:C",
+      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+      headers: ["id", "status", "__typed_sheets_deleted"],
+    },
+    {
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "SyncServiceUsers_Input",
+      registeredRange: "A:B",
+      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+      headers: ["id", "status"],
+    },
+  ]);
+
+  /** Seeds the stub spreadsheet the way Apps Script provisioning would. */
+  const buildStubSpreadsheet = () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("SyncServiceUsers_System", {
+      headers: ["id", "status", "__typed_sheets_deleted"],
+    });
+    spreadsheet.addTab("SyncServiceUsers_Input", {
+      headers: ["id", "status"],
+    });
+    return spreadsheet;
+  };
+
+  it("rejects an injected gateway combined with Apps Script client settings", async () => {
+    const gateway = buildObservationGateway();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: directProjections,
+      gateway,
+      provisioner: new RecordingProvisioner(),
+      appsScript: {
+        url: "https://example.test/exec",
+        secret: "test-secret",
+        sheetId: "spreadsheet",
+      },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service cannot supply both an injected gateway and Apps Script client settings.",
+    });
+  });
+
+  it("rejects googleApiWorker without any observation base provider", async () => {
+    const spreadsheet = buildStubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: directProjections,
+      googleApiWorker: { transport: new StubSheetsTransport(spreadsheet) },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.GATEWAY_UNAVAILABLE,
+    });
+  });
+
+  it("routes outbound writes to the Google provider and observation/provisioning to the injected gateway", async () => {
+    const gateway = buildObservationGateway();
+    const provisioner = new RecordingProvisioner();
+    const spreadsheet = buildStubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: directProjections,
+      gateway,
+      provisioner,
+      googleApiWorker: {
+        transport,
+        // Per-request pacing paces every getSpreadsheet (preflight now takes
+        // two read slots); fast pacing keeps this wall-clock test quick.
+        rateLimitIntervalMs: 1,
+      },
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    // Provisioning ran through the injected provisioner, not the stub.
+    expect(provisioner.calls).toEqual([
+      ["SyncServiceUsers_System", "SyncServiceUsers_Input", "SyncServiceUsers_Conflicts"],
+    ]);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "direct-1", status: "pending" }));
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+
+    // The outbound writes landed in the stub spreadsheet through the Google
+    // provider: one fast-append batch (system_state) plus one regular create
+    // batch (user_input shadow row), each atomic with its receipts.
+    expect(transport.batchUpdateCalls).toBe(2);
+    const systemTab = spreadsheet.findTab("SyncServiceUsers_System");
+    expect(systemTab).toBeDefined();
+    if (systemTab === undefined) throw new Error("stub system tab missing");
+    expect(stubRowFields(systemTab, 2, ["id", "status", "__typed_sheets_deleted"]).id).toEqual({
+      kind: "string",
+      value: "direct-1",
+    });
+    // The injected gateway never saw the outbound effect write.
+    expect(gateway.fastAppendCalls).toBe(0);
+    expect(gateway.applyEffectsCalls).toBe(0);
+
+    // Observation still runs through the injected gateway (anchor/snapshot
+    // reads), not the stub transport. The fake's state is independent of the
+    // direct outbound writes, so its snapshot is empty here.
+    const snapshot = await service.runGatewayControl?.(SYSTEM_SHEET_ID, "readSnapshot", () =>
+      gateway.readSnapshot({
+        physicalSheetId: SYSTEM_SHEET_ID,
+        sheetName: "SyncServiceUsers_System",
+        registeredRange: "A:C",
+        projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+      }));
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.rows).toHaveLength(0);
+  });
+
+  it("applies the bulk append window only for the direct outbound provider", async () => {
+    // Direct mode: 25 creates travel in ONE fast append request (bulk window).
+    const gateway = buildObservationGateway();
+    const spreadsheet = buildStubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    const direct = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: directProjections,
+      gateway,
+      provisioner: new RecordingProvisioner(),
+      googleApiWorker: {
+        transport,
+        // Per-request pacing paces every getSpreadsheet (preflight now takes
+        // two read slots); fast pacing keeps this wall-clock test quick.
+        rateLimitIntervalMs: 1,
+      },
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(direct);
+    const directEm = direct.hikoutei.em.fork();
+    for (let index = 0; index < 25; index += 1) {
+      directEm.persist(directEm.create(User, {
+        id: `bulk-${index}`,
+        status: "pending",
+      }));
+    }
+    await directEm.flush();
+    await direct.effectSupervisor.runOnce();
+    // The 25 system_state creates travelled in ONE fast-append batch (the
+    // bulk claim window), not in the bounded 20-item chunks.
+    const bulkBatch = transport.appliedBatchUpdates.find((batch) =>
+      batch.some((request) => request.kind === "updateCells" && request.rows.length === 25));
+    expect(bulkBatch).toBeDefined();
+
+    // Injected-only mode keeps the bounded 20-item window: 25 candidates are
+    // chunked across multiple fast append requests.
+    const boundedGateway = buildObservationGateway();
+    const bounded = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: directProjections,
+      gateway: boundedGateway,
+      provisioner: new RecordingProvisioner(),
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(bounded);
+    const boundedEm = bounded.hikoutei.em.fork();
+    for (let index = 0; index < 25; index += 1) {
+      boundedEm.persist(boundedEm.create(User, {
+        id: `bounded-${index}`,
+        status: "pending",
+      }));
+    }
+    await boundedEm.flush();
+    await bounded.effectSupervisor.runOnce();
+    expect(boundedGateway.fastAppendCalls).toBeGreaterThan(1);
+  });
+
+  it("uses the Google provider timeout for lease-headroom validation in direct mode", async () => {
+    const gateway = buildObservationGateway();
+    const spreadsheet = buildStubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: directProjections,
+      gateway,
+      provisioner: new RecordingProvisioner(),
+      googleApiWorker: {
+        transport: new StubSheetsTransport(spreadsheet),
+        requestTimeoutMs: 100_000,
+      },
+      effectLeaseDurationMs: 120_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("uses the Google provider default timeout when direct mode omits requestTimeoutMs", async () => {
+    // The active direct provider's own defaults (60 s write, 10 s reads)
+    // must be used for the headroom check, never the Apps Script client's
+    // configured timeout.
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: directProjections,
+      appsScript: {
+        url: "https://example.test/exec",
+        secret: "test-secret",
+        sheetId: "spreadsheet",
+        requestTimeoutMs: 100_000,
+      },
+      googleApiWorker: {
+        transport: new StubSheetsTransport(buildStubSpreadsheet()),
+      },
+      effectLeaseDurationMs: 85_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+    });
+  });
+});
+
+describe("internal sync service googleSheetsApi full-provider mode", () => {
+  const services: InternalSyncService[] = [];
+
+  afterEach(async () => {
+    await Promise.all(services.splice(0).map((service) => service.close()));
+  });
+
+  const fullProjections = {
+    spreadsheetId: "sync-service-spreadsheet",
+    entities: {
+      SyncServiceUser: {
+        systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userOwnedFields: ["id", "status"],
+      },
+    },
+  };
+
+  it("provisions an EMPTY spreadsheet, delivers effects, and polls without any Apps Script object", async () => {
+    // A brand-new spreadsheet with no tabs at all: the full provider must
+    // create every projection tab and header row through the stub transport.
+    const spreadsheet = new StubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport,
+        // Per-request pacing paces every getSpreadsheet; fast pacing keeps
+        // this wall-clock test quick.
+        rateLimitIntervalMs: 1,
+      },
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    // Provisioning created all three tabs in one atomic batch (addSheet +
+    // header updateCells pairs); the conflicts tab carries its checkbox
+    // header row too.
+    const provisionBatch = transport.appliedBatchUpdates[0];
+    const addSheets = provisionBatch?.filter((request) => request.kind === "addSheet");
+    expect(addSheets?.map((request) => request.kind === "addSheet" ? request.title : "")).toEqual([
+      "SyncServiceUsers_System",
+      "SyncServiceUsers_Input",
+      "SyncServiceUsers_Conflicts",
+    ]);
+    const systemTab = spreadsheet.findTab("SyncServiceUsers_System");
+    const inputTab = spreadsheet.findTab("SyncServiceUsers_Input");
+    const conflictsTab = spreadsheet.findTab("SyncServiceUsers_Conflicts");
+    expect(systemTab).toBeDefined();
+    expect(inputTab).toBeDefined();
+    expect(conflictsTab).toBeDefined();
+    expect(systemTab?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
+    expect(systemTab?.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__typed_sheets_deleted");
+    expect(conflictsTab?.cell(0, 12)?.userEnteredValue?.stringValue).toBe("Status");
+
+    // ORM create travels through the worker to the stub tabs (system fast
+    // append plus user_input create), each atomic with its receipts.
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "full-1", status: "pending" }));
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    expect(stubRowFields(systemTab as never, 2, ["id", "status", "__typed_sheets_deleted"]).id).toEqual({
+      kind: "string",
+      value: "full-1",
+    });
+    expect(stubRowFields(inputTab as never, 2, ["id", "status"]).id).toEqual({
+      kind: "string",
+      value: "full-1",
+    });
+    const receiptTab = spreadsheet.findTab("__typed_sheets_internal_effect_receipts");
+    expect(receiptTab?.hidden).toBe(true);
+    expect(receiptTab?.cell(1, 0)?.userEnteredValue?.stringValue).toBeTypeOf("string");
+
+    // A polling pass observes the created rows through the provider's own
+    // snapshots/table reads (no Apps Script anywhere in this mode).
+    const report = await service.pollingSupervisor.runOnce();
+    expect(report.rowsScanned).toBeGreaterThanOrEqual(1);
+
+    // ORM update and delete drain through the provider as well.
+    const loaded = await em.findOne(User, { id: "full-1" });
+    expect(loaded).not.toBeNull();
+    if (loaded !== null) {
+      loaded.status = "paid";
+      await em.flush();
+    }
+    await service.effectSupervisor.runOnce();
+    expect(stubRowFields(inputTab as never, 2, ["id", "status"]).status).toEqual({
+      kind: "string",
+      value: "paid",
+    });
+
+    if (loaded !== null) em.remove(loaded);
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    expect(stubRowFields(inputTab as never, 2, ["id", "status"]).id).toBeNull();
+    const systemRow = stubRowFields(systemTab as never, 2, ["id", "status", "__typed_sheets_deleted"]);
+    expect(systemRow.__typed_sheets_deleted).toEqual({ kind: "boolean", value: true });
+  });
+
+  it("rejects googleSheetsApi combined with any other provider option before any transport call", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    const gateway = new FakeSyncSheetGateway([]);
+    const provisioner = new RecordingProvisioner();
+
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: { transport },
+      gateway,
+      provisioner,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service googleSheetsApi is the full direct provider and cannot be combined with an injected gateway, provisioner, Apps Script client settings, or googleApiWorker.",
+    });
+    expect(transport.getSpreadsheetCalls).toBe(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: { transport },
+      appsScript: {
+        url: "https://example.test/exec",
+        secret: "test-secret",
+        sheetId: "spreadsheet",
+      },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+    });
+    expect(transport.getSpreadsheetCalls).toBe(0);
+
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: { transport },
+      googleApiWorker: { transport },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+    });
+    expect(transport.getSpreadsheetCalls).toBe(0);
+  });
+
+  it("uses the googleSheetsApi timeout for lease-headroom validation", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        requestTimeoutMs: 100_000,
+      },
+      effectLeaseDurationMs: 120_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("uses the googleSheetsApi default timeout when the option omits requestTimeoutMs", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+      },
+      effectLeaseDurationMs: 85_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("passes lease-headroom validation with default timeouts and the default 120-second lease", async () => {
+    // The default worst-case dispatch is 60 s write + 2 x 10 s reads + 30 s
+    // headroom = 110 s, which fits inside the 120 s default effect lease, so
+    // startup must succeed without any lease override.
+    const spreadsheet = new StubSpreadsheet();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        rateLimitIntervalMs: 1,
+      },
+      effectLeaseDurationMs: 120_000,
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+    expect(service.effectSupervisor).toBeDefined();
+  });
+
+  it("rejects a lease that only covers the write timeout, not the two preflight reads", async () => {
+    // 120 s covers 60 s write + 30 s headroom but not 2 x 10 s of preflight
+    // reads; a too-large read timeout must fail the headroom validation.
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        readTimeoutMs: 60_000,
+      },
+      effectLeaseDurationMs: 120_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("rejects a readTimeoutMs outside the 1..60 second bounds before any transport call", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport,
+        readTimeoutMs: 500,
+      },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service googleSheetsApi readTimeoutMs must be between 1 second and 60 seconds.",
+    });
+    expect(transport.getSpreadsheetCalls).toBe(0);
+    expect(transport.batchUpdateCalls).toBe(0);
   });
 });

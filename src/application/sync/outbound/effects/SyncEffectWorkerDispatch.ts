@@ -135,6 +135,10 @@ export async function handleGatewayDispatchError(
  * Dispatches append-only rows through the idempotent Gateway batch operation.
  * A lost response is still returned to recovery; the Gateway receipt batch lets
  * the next attempt classify an already committed write without appending again.
+ *
+ * When the Apps Script runtime configured the append throttle, the request
+ * waits only the time remaining since the previous append request started;
+ * regular applyEffects dispatch never waits on this throttle.
  */
 export async function dispatchFastAppendGroup(
   options: SyncEffectWorkerBaseOptions,
@@ -148,8 +152,20 @@ export async function dispatchFastAppendGroup(
   fullGateway?: SyncEffectWorkerFullGateway,
   beforeRecovery?: () => Promise<boolean>,
 ): Promise<void> {
+  const throttleStartedAt = Date.now();
+  const throttledMs = await options.batchController?.waitForAppendThrottle(throttleStartedAt) ?? 0;
+  if (throttledMs > 0) {
+    emitWorkerTiming(options, {
+      scope: SYNC_TIMING_SCOPES.WORKER,
+      phase: "append_throttle_wait",
+      durationMs: Date.now() - throttleStartedAt,
+      operationKinds: [SYNC_TIMING_OPERATION_KINDS.APPEND],
+      operationCounts: { append: group.items.length, update: 0, delete: 0 },
+    });
+  }
   let response: Awaited<ReturnType<SyncEffectWorkerGateway["fastAppendRows"]>>;
   const gatewayStartedAt = Date.now();
+  options.batchController?.beginAppendDispatch(gatewayStartedAt);
   const routeKey = gatewayRouteKey(group.request);
   const batchLimit = options.batchController?.beginDispatch(routeKey, gatewayStartedAt) ?? group.items.length;
   try {

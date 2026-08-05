@@ -10,7 +10,6 @@ export const DEFAULT_EFFECT_BATCH_COALESCE_WINDOW_MS = 500;
 export const EFFECT_BATCH_HIGH_LATENCY_THRESHOLD_MS = 30_000;
 export const EFFECT_BATCH_STABLE_SUCCESSES_TO_GROW = 3;
 export const EFFECT_BATCH_GROWTH_STEP = 5;
-
 export interface AdaptiveEffectBatchObservation {
   readonly durationMs: number;
   readonly responseSucceeded: boolean;
@@ -35,8 +34,10 @@ export class AdaptiveEffectBatchController {
   private readonly highLatencyThresholdMs: number;
   private readonly stableSuccessesToGrow: number;
   private readonly growthStep: number;
+  private readonly appendDispatchIntervalMs: number;
   private readonly routes = new Map<string, RouteState>();
   private lastDispatchAt: number | undefined;
+  private lastAppendDispatchAt: number | undefined;
 
   public constructor(options: {
     readonly minimum?: number;
@@ -46,6 +47,8 @@ export class AdaptiveEffectBatchController {
     readonly highLatencyThresholdMs?: number;
     readonly stableSuccessesToGrow?: number;
     readonly growthStep?: number;
+    /** Minimum interval between fast-append request starts; 0 disables the throttle. */
+    readonly appendDispatchIntervalMs?: number;
   } = {}) {
     this.minimum = requireBatchLimit(options.minimum ?? ADAPTIVE_EFFECT_BATCH_LIMITS.MINIMUM, "minimum");
     this.initial = requireBatchLimit(options.initial ?? ADAPTIVE_EFFECT_BATCH_LIMITS.INITIAL, "initial");
@@ -68,6 +71,10 @@ export class AdaptiveEffectBatchController {
     this.growthStep = requirePositiveInteger(
       options.growthStep ?? EFFECT_BATCH_GROWTH_STEP,
       "growthStep",
+    );
+    this.appendDispatchIntervalMs = requireNonNegativeInteger(
+      options.appendDispatchIntervalMs ?? 0,
+      "appendDispatchIntervalMs",
     );
   }
 
@@ -105,6 +112,30 @@ export class AdaptiveEffectBatchController {
   public async waitForCoalescing(now: number = Date.now()): Promise<number> {
     if (this.lastDispatchAt === undefined || this.coalesceWindowMs === 0) return 0;
     const remaining = this.lastDispatchAt + this.coalesceWindowMs - now;
+    if (remaining <= 0) return 0;
+    await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+    return remaining;
+  }
+
+  /**
+   * Records the start of one fast-append request so the next append request
+   * waits only the remaining throttle interval. The marker is process-local
+   * and survives supervisor passes because the controller outlives one pass.
+   */
+  public beginAppendDispatch(now: number = Date.now()): void {
+    this.lastAppendDispatchAt = now;
+  }
+
+  /**
+   * Waits only the time remaining since the last fast-append request started.
+   * Regular applyEffects dispatch never waits on this throttle; when the
+   * interval is 0 (direct workers and fake gateways) this returns immediately.
+   */
+  public async waitForAppendThrottle(now: number = Date.now()): Promise<number> {
+    if (this.appendDispatchIntervalMs === 0 || this.lastAppendDispatchAt === undefined) {
+      return 0;
+    }
+    const remaining = this.lastAppendDispatchAt + this.appendDispatchIntervalMs - now;
     if (remaining <= 0) return 0;
     await new Promise<void>((resolve) => setTimeout(resolve, remaining));
     return remaining;

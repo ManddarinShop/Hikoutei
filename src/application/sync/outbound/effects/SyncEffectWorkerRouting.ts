@@ -30,6 +30,7 @@ import {
 import {
   EFFECT_TARGET_KINDS,
   GATEWAY_EFFECT_BATCH_LIMIT,
+  OUTBOX_EFFECT_STATUSES,
   SYNC_EFFECT_KINDS,
 } from "./SyncEffectWorkerConstants.js";
 import {
@@ -321,7 +322,11 @@ export function isCandidateProtectingUserInputEffect(effect: SyncGatewayEffect):
 /** Selects only new System_State entity rows for the append-only fast path. */
 export function isFastAppendCandidate(item: ClaimedEffect): boolean {
   if (!isPresent(item.gatewayEffect)) return false;
-  const effect = item.gatewayEffect.value;
+  return isFastAppendEffect(item.gatewayEffect.value);
+}
+
+/** Classifies one converted gateway effect as an append-only fast candidate. */
+export function isFastAppendEffect(effect: SyncGatewayEffect): boolean {
   const emptyVisibleBaseline = effect.payload.createIfMissing &&
     effect.expectedVisibleRevision === NON_NEGATIVE_SAFE_INTEGER_MINIMUM &&
     effect.expectedVisibleHash === "";
@@ -335,6 +340,25 @@ export function isFastAppendCandidate(item: ClaimedEffect): boolean {
       effect.projection === SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS &&
       effect.targetKind === EFFECT_TARGET_KINDS.CONFLICT
   );
+}
+
+/**
+ * Pending-level fast-append classification used to bound a bulk claim window
+ * before conversion. Recovery-status effects are excluded because the claim
+ * loop diverts them to recovery regardless of their append shape.
+ */
+export function isFastAppendPendingEffect(pending: PendingEffect): boolean {
+  if (
+    pending.status === OUTBOX_EFFECT_STATUSES.FAILED ||
+    pending.status === OUTBOX_EFFECT_STATUSES.DELIVERY_UNCERTAIN
+  ) {
+    return false;
+  }
+  try {
+    return isFastAppendEffect(toGatewayEffect(pending));
+  } catch {
+    return false;
+  }
 }
 
 export function isSyncProjection(value: string): value is SyncProjection {

@@ -44,6 +44,7 @@ import {
   RELEASE_UNPROCESSED_EFFECT_SQL,
   SELECT_PENDING_EFFECTS_BY_TARGET_SQL,
   SELECT_READY_EFFECTS_SQL,
+  SELECT_READY_FAST_APPEND_EFFECTS_SQL,
   SUPERSEDE_EFFECT_SQL,
 } from "./effectOutboxSql.js";
 import {
@@ -471,6 +472,40 @@ export async function listReadyEffectsWithAdapter(
   now = Date.now(),
 ): Promise<readonly PendingEffect[]> {
   return storage.read(({ sql }) => listReadyEffectsWithSql(sql, limit, now));
+}
+
+/**
+ * Reads bounded head-of-line effects that can only be fast-append rows.
+ *
+ * The query jumps past any regular/recovery backlog in the same ready order,
+ * so an arbitrary number of head-of-queue rows cannot starve the bulk append
+ * path. Only the SQL-visible append shape is filtered; the worker still
+ * validates each row's payload (createIfMissing) before claiming it.
+ */
+/** Reads bounded ready fast-append candidates through an already-active async SQL context. */
+export async function listReadyFastAppendEffectsWithSql(
+  sql: SqlExecutor,
+  limit: number,
+  now = Date.now(),
+): Promise<readonly PendingEffect[]> {
+  validateReadyEffectLimit(limit);
+  if (!Number.isSafeInteger(now) || now < 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "ready fast-append effect time must be a non-negative safe integer",
+    );
+  }
+  const rows = await sql.all<SqlRow>(SELECT_READY_FAST_APPEND_EFFECTS_SQL, [now, limit]);
+  return decodeSqlRows(rows, decodePendingEffectRow, "ready fast-append effects");
+}
+
+/** Reads bounded ready fast-append candidates through a fresh adapter read context. */
+export async function listReadyFastAppendEffectsWithAdapter(
+  storage: SqlStorageAdapter,
+  limit: number,
+  now = Date.now(),
+): Promise<readonly PendingEffect[]> {
+  return storage.read(({ sql }) => listReadyFastAppendEffectsWithSql(sql, limit, now));
 }
 
 /** Returns whether normal outbox work is still pending or actively processing. */

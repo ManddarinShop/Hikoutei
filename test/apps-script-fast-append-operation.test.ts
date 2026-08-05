@@ -4,8 +4,8 @@ import {
   createFastAppendRowsOperation,
 } from "../src/adapter/sheets/providers/apps-script-gateway/operations/write/fastAppendOperation.js";
 
-describe("Built-in Apps Script append operation compatibility", () => {
-  it("builds one idempotent built-in-services append operation", () => {
+describe("Apps Script append operation compatibility", () => {
+  it("builds one idempotent append operation backed by the Advanced Sheets test-batch write", () => {
     const operation = createFastAppendRowsOperation({
       sheetName: "LoadTest_Customers",
       registeredRange: "A:B",
@@ -20,7 +20,7 @@ describe("Built-in Apps Script append operation compatibility", () => {
       }],
     });
 
-    expect(operation.fn).not.toContain("Sheets.Spreadsheets");
+    expect(operation.fn).toContain("Sheets.Spreadsheets.Values.batchUpdate");
     expect(operation.fn).not.toContain("createDeveloperMetadata");
     expect(operation.fn).toContain("SpreadsheetApp.flush");
     expect(operation.fn).toContain("insertRowsAfter");

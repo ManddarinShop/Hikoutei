@@ -27,6 +27,7 @@ import {
   renewEffectLeaseWithAdapter,
   recoverExpiredLeasesWithAdapter,
   listReadyEffectsWithAdapter,
+  listReadyFastAppendEffectsWithAdapter,
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
@@ -112,6 +113,7 @@ import {
   gatewayRouteKey,
   isCandidateProtectingUserInputEffect,
   isFastAppendCandidate,
+  isFastAppendPendingEffect,
   isSuccessfulGatewayPostcondition,
   toGatewayEffect,
 } from "./SyncEffectWorkerRouting.js";
@@ -139,6 +141,20 @@ export interface SyncEffectWorkerBaseOptions {
   /** Internal transport timeout used to validate lease headroom. */
   readonly gatewayTimeoutMs?: number;
   readonly batchController?: AdaptiveEffectBatchController;
+  /**
+   * Internal bulk-append claim window for the real Apps Script runtime. When
+   * set, a pass claims up to this many append candidates through a dedicated
+   * ready fast-append selection (so a regular/recovery backlog ahead of them
+   * cannot starve appends), and keeps the regular/recovery claim window at
+   * the bounded 20-effect limit. Direct workers and fake gateways omit it
+   * and keep the 20-item window.
+   */
+  readonly maxFastAppendCandidates?: number;
+  /**
+   * Internal minimum interval between fast-append request starts. Only the
+   * Apps Script runtime sets it; the batch controller owns the actual wait.
+   */
+  readonly appendDispatchIntervalMs?: number;
   /** Shared supervisor clock used to refresh fencing timestamps after remote I/O. */
   readonly clock?: () => number;
   readonly makeRepairReplan?: RepairReplanFactory;
@@ -184,6 +200,7 @@ export interface EffectWorkerStorage {
   claimWriterLease(options: ClaimLeaseOptions): Promise<WriterLeaseClaimResult>;
   recoverExpiredLeases(fence: FencingContext): Promise<number>;
   listReadyEffects(limit: number, now?: number): Promise<readonly PendingEffect[]>;
+  listReadyFastAppendEffects(limit: number, now?: number): Promise<readonly PendingEffect[]>;
   claimEffect(options: ClaimEffectOptions): Promise<ClaimResult>;
   ensureSpreadsheetAuthority(options: FencingContext & {
     readonly physicalSheetId: string;
@@ -354,11 +371,47 @@ async function runEffectWorker(
   }
   const selectStartedAt = Date.now();
   report.expiredLeasesRecovered = await storage.recoverExpiredLeases(currentFence());
-  const selected = await storage.listReadyEffects(options.maxEffects, currentFence().now);
-  // Keep maxEffects as the SQLite selection upper bound, but only lease a
-  // bounded in-flight window before the first remote dispatch. Remaining rows
-  // stay durable and are picked up on the next pass.
-  const claimable = selected.slice(0, MAX_IN_FLIGHT_EFFECTS);
+  // The bulk Apps Script runtime selects ready append candidates through
+  // their own bounded query and keeps the regular/recovery selection on the
+  // head-of-line window; every other runtime keeps maxEffects as the SQLite
+  // selection upper bound. Only the bounded in-flight window is ever leased
+  // before the first remote dispatch; remaining rows stay durable and are
+  // picked up on the next pass.
+  const maxFastAppendCandidates = options.maxFastAppendCandidates;
+  const selectionLimit = maxFastAppendCandidates === undefined
+    ? options.maxEffects
+    : Math.max(options.maxEffects, maxFastAppendCandidates + MAX_IN_FLIGHT_EFFECTS);
+  const selected = await storage.listReadyEffects(selectionLimit, currentFence().now);
+  let claimable: PendingEffect[];
+  if (maxFastAppendCandidates === undefined) {
+    claimable = selected.slice(0, MAX_IN_FLIGHT_EFFECTS);
+  } else {
+    // Append candidates are discovered independently of the head-of-queue
+    // prefix: the dedicated query jumps past any regular/recovery backlog in
+    // the same ready order, so an arbitrary number of rows before the first
+    // append candidate cannot starve the bulk append path. Each returned row
+    // is still payload-validated here before claiming, the claim CAS still
+    // enforces per-target predecessor ordering, and the regular bucket stays
+    // at the existing bounded window without leasing the claimed append rows
+    // twice. The general selection can extend past the dedicated append
+    // query's window, so the regular bucket excludes every pending fast-append
+    // effect, not only the claimed IDs: an append candidate beyond the bulk
+    // window stays on the outbox for the next pass instead of being
+    // reclassified into a second append request. Payload-invalid potential
+    // rows and recovery-status rows are not fast-append pending and remain
+    // eligible for the regular path.
+    const appendCandidates = (await storage.listReadyFastAppendEffects(
+      maxFastAppendCandidates,
+      currentFence().now,
+    )).filter(isFastAppendPendingEffect).slice(0, maxFastAppendCandidates);
+    const regular: PendingEffect[] = [];
+    for (const pending of selected) {
+      if (regular.length >= MAX_IN_FLIGHT_EFFECTS) break;
+      if (isFastAppendPendingEffect(pending)) continue;
+      regular.push(pending);
+    }
+    claimable = [...appendCandidates, ...regular];
+  }
   report.selected = claimable.length;
   emitWorkerTiming(options, {
     scope: SYNC_TIMING_SCOPES.WORKER,
@@ -479,7 +532,12 @@ async function runEffectWorker(
       epoch: currentFence().writerEpoch,
       token: currentFence().fencingToken,
     }),
-    (group) => options.batchController?.limitFor(gatewayRouteKey(group.request)) ?? GATEWAY_EFFECT_BATCH_LIMIT,
+    // The bulk Apps Script runtime sends one append request per route at the
+    // bulk claim window; every other runtime keeps the adaptive/bounded
+    // per-request chunking.
+    (group) => options.maxFastAppendCandidates
+      ?? options.batchController?.limitFor(gatewayRouteKey(group.request))
+      ?? GATEWAY_EFFECT_BATCH_LIMIT,
   );
   for (const group of fastAppendGroups) {
     if (!(await refreshDispatchLeases(group.items))) continue;
@@ -654,6 +712,7 @@ function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWor
     claimWriterLease: (options) => claimWriterLeaseWithAdapter(storage, options),
     recoverExpiredLeases: (fence) => recoverExpiredLeasesWithAdapter(storage, fence),
     listReadyEffects: (limit, now) => listReadyEffectsWithAdapter(storage, limit, now),
+    listReadyFastAppendEffects: (limit, now) => listReadyFastAppendEffectsWithAdapter(storage, limit, now),
     claimEffect: (options) => claimEffectWithAdapter(storage, options),
     ensureSpreadsheetAuthority: async (options) => {
       const result = await ensureSpreadsheetAuthorityWithAdapter(storage, options);
@@ -760,6 +819,20 @@ function validateOptions(options: SyncEffectWorkerBaseOptions): void {
     options.maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM
   ) {
     throwWorkerError("effect worker maxEffects must be a positive safe integer");
+  }
+  if (
+    options.maxFastAppendCandidates !== undefined &&
+    (!Number.isSafeInteger(options.maxFastAppendCandidates) ||
+      options.maxFastAppendCandidates < POSITIVE_SAFE_INTEGER_MINIMUM)
+  ) {
+    throwWorkerError("effect worker maxFastAppendCandidates must be a positive safe integer");
+  }
+  if (
+    options.appendDispatchIntervalMs !== undefined &&
+    (!Number.isSafeInteger(options.appendDispatchIntervalMs) ||
+      options.appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)
+  ) {
+    throwWorkerError("effect worker appendDispatchIntervalMs must be a non-negative safe integer");
   }
   for (const [name, value] of [
     ["writerLeaseDurationMs", options.writerLeaseDurationMs],

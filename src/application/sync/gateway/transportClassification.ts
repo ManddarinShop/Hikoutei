@@ -26,6 +26,7 @@
  */
 
 import { AppsScriptSyncGatewayError, SYNC_GATEWAY_CLIENT_ERROR_CODES } from "../../../adapter/sheets/providers/apps-script-gateway/errors.js";
+import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../../../adapter/sheets/providers/google-sheets-api/errors.js";
 import { PRESENCE_KINDS } from "../../../shared/state/index.js";
 import type { Presence } from "../../../shared/state/types.js";
 
@@ -66,6 +67,17 @@ export function classifyTransportOutcome(error: unknown): TransportOutcome {
   }
   if (error instanceof AppsScriptSyncGatewayError) {
     const kind = isDeliveryUncertain(error)
+      ? TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN
+      : TRANSPORT_OUTCOME_KINDS.EXPLICIT_REMOTE_FAILURE;
+    return {
+      kind,
+      httpStatus: error.status,
+      code: error.remoteCode,
+      message: error.message,
+    };
+  }
+  if (error instanceof GoogleSheetsApiTransportError) {
+    const kind = isGoogleSheetsApiDeliveryUncertain(error)
       ? TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN
       : TRANSPORT_OUTCOME_KINDS.EXPLICIT_REMOTE_FAILURE;
     return {
@@ -148,4 +160,33 @@ export function isDeliveryUncertain(error: AppsScriptSyncGatewayError): boolean 
   if (error.status.kind !== PRESENCE_KINDS.PRESENT) return false;
   const status = error.status.value;
   return status === 404 || status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * Returns true when the direct Sheets transport error implies an ambiguous
+ * delivery.
+ *
+ * Google API non-2xx responses prove the batch did not execute only for the
+ * pre-mutation rejection statuses below; timeouts, network failures, and
+ * proxy-emitted 408/429/5xx responses can follow a committed write, and a
+ * malformed 2xx reply cannot prove what was applied. Those are recovered
+ * through the postcondition probe path, never closed as success.
+ */
+export function isGoogleSheetsApiDeliveryUncertain(
+  error: GoogleSheetsApiTransportError,
+): boolean {
+  if (
+    error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT ||
+    error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR ||
+    error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.INVALID_RESPONSE
+  ) {
+    return true;
+  }
+  if (error.status.kind !== PRESENCE_KINDS.PRESENT) return true;
+  const status = error.status.value;
+  if (status === 400 || status === 401 || status === 403 || status === 404) {
+    // The API rejected the request before executing any part of the batch.
+    return false;
+  }
+  return true;
 }

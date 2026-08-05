@@ -196,6 +196,45 @@ export const SELECT_READY_EFFECTS_SQL = `
   LIMIT ?
 `;
 
+/**
+ * Bounded head-of-line selection restricted to potential fast-append rows.
+ *
+ * Only the SQL-visible append shape is filtered here (pending status,
+ * readiness, predecessor ordering, and the revision-zero baseline on the
+ * System_State/Sync_Conflicts routes); the worker re-validates each returned
+ * row's payload (createIfMissing) before claiming. Rows that fail that
+ * payload validation drain through the regular claim path instead.
+ */
+export const SELECT_READY_FAST_APPEND_EFFECTS_SQL = `
+  SELECT effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+         projection, row_binding_id, conflict_id, target_kind, target_id,
+         target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+         expected_visible_revision, expected_visible_hash, repair_guard_hash,
+         source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+         stream_sequence, created_at, next_attempt_at, uncertain_since,
+         next_probe_at, dispatch_id, status
+  FROM sheet_effect_outbox AS candidate
+  WHERE candidate.status = 'pending'
+    AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?)
+    AND candidate.effect_kind IN ('system_projection', 'resolution_projection')
+    AND candidate.projection IN ('system_state', 'sync_conflicts')
+    AND candidate.target_kind IN ('entity', 'conflict')
+    AND candidate.expected_visible_revision = 0
+    AND candidate.expected_visible_hash = ''
+    AND NOT EXISTS (
+      SELECT 1
+      FROM sheet_effect_outbox AS predecessor
+      WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
+        AND predecessor.target_kind = candidate.target_kind
+        AND predecessor.target_id = candidate.target_id
+        AND predecessor.stream_sequence < candidate.stream_sequence
+        AND predecessor.status NOT IN ('applied', 'superseded')
+    )
+  ORDER BY candidate.logical_sheet_id, candidate.physical_sheet_id,
+           candidate.target_kind, candidate.target_id, candidate.stream_sequence
+  LIMIT ?
+`;
+
 export const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
   SELECT COUNT(*) AS count
   FROM sheet_effect_outbox
