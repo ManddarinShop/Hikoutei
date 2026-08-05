@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -17,16 +16,8 @@ import {
   CANONICAL_CODEC_ERROR_CODES,
 } from "@hikoutei/kohkai";
 import { stableEncode as genericStableEncode } from "@hikoutei/kohkai";
-import { APPS_SCRIPT_STABLE_CODEC_SOURCE } from "../src/adapter/sheets/providers/apps-script-gateway/operations/shared/appsScriptStableCodecSource.js";
-import { EFFECT_OPERATION_SOURCE } from "../src/adapter/sheets/providers/apps-script-gateway/operations/effect/effectOperationScript.js";
-import { createReadSnapshotOperation } from "../src/adapter/sheets/providers/apps-script-gateway/operations/observation/observationOperation.js";
 import type { StableValue } from "../src/shared/encoding/types.js";
 import { StableEncodingError } from "../src/domain/errors/index.js";
-import { SYNC_GATEWAY_PROTOCOL_ERROR_CODES } from "../src/adapter/sheets/providers/apps-script-gateway/errors.js";
-import {
-  canonicalSyncJson,
-  syncSha256Hex,
-} from "../src/adapter/sheets/providers/apps-script-gateway/protocol/syncProtocol.js";
 
 type CanonicalCodecVector = {
   readonly name: string;
@@ -38,7 +29,7 @@ type CanonicalCodecVector = {
 };
 
 // These vectors are pinned from the @hikoutei/kohkai compatibility contract so
-// the Hikoutei gateway characterization test cannot drift from the package.
+// the Hikoutei provider characterization test cannot drift from the package.
 const vectors: readonly CanonicalCodecVector[] = JSON.parse(
   readFileSync(
     new URL("./fixtures/kohkai-vectors.json", import.meta.url),
@@ -63,33 +54,10 @@ describe("canonical codec characterization vectors", () => {
     }
   });
 
-  it("preserves canonical JSON text and hashes separately from stable encoding", () => {
-    for (const vector of vectors) {
-      const canonicalJson = canonicalSyncJson(vector.value);
-      expect(canonicalJson, vector.name).toBe(vector.canonicalJson);
-      expect(syncSha256Hex(canonicalJson), vector.name).toBe(vector.canonicalJsonSha256);
-    }
-  });
-
-  it("maps generic canonical JSON failures to the existing protocol errors", () => {
-    const sparse: unknown[] = [];
-    sparse.length = 1;
-    expect(() => canonicalSyncJson(sparse)).toThrowError(
-      expect.objectContaining({
-        code: SYNC_GATEWAY_PROTOCOL_ERROR_CODES.INVALID_JSON_VALUE,
-      }),
-    );
-    expect(() => canonicalSyncJson(Number.NaN)).toThrowError(
-      expect.objectContaining({
-        code: SYNC_GATEWAY_PROTOCOL_ERROR_CODES.NON_FINITE_NUMBER,
-      }),
-    );
-  });
-
-  it("keeps negative zero equivalent to zero for both formats", () => {
+  it("keeps negative zero equivalent to zero for stable encoding", () => {
     expect(Buffer.from(stableEncode(-0)).toString("hex"))
       .toBe(Buffer.from(stableEncode(0)).toString("hex"));
-    expect(canonicalSyncJson(-0)).toBe(canonicalSyncJson(0));
+    expect(genericCanonicalJson(-0)).toBe(genericCanonicalJson(0));
   });
 
   it("validates canonical JSON values without applying stable encoding rules", () => {
@@ -172,57 +140,6 @@ describe("canonical codec characterization vectors", () => {
     });
   });
 
-  it("matches the deployed Code.gs canonical JSON mirror", () => {
-    const codeGsCanonicalJson = loadCodeGsCanonicalJson();
-    for (const vector of vectors) {
-      expect(codeGsCanonicalJson(vector.value), vector.name).toBe(vector.canonicalJson);
-    }
-  });
-
-  it("matches the Apps Script codec source against every vector", () => {
-    const codec = createAppsScriptCodecForTest();
-    for (const vector of vectors) {
-      expect(Buffer.from(codec.stableEncode(vector.value), "utf8").toString("hex"), vector.name)
-        .toBe(vector.stableEncodeHex);
-      expect(codec.stableHash(vector.value), vector.name).toBe(vector.stableHash);
-    }
-  });
-
-  it("rejects malformed values in the deployed Code.gs canonical JSON mirror", () => {
-    const codeGsCanonicalJson = loadCodeGsCanonicalJson();
-    const sparse: unknown[] = [];
-    sparse.length = 1;
-    expect(() => codeGsCanonicalJson(sparse)).toThrow(/dense/);
-
-    const cyclic: Record<string, unknown> = {};
-    cyclic.self = cyclic;
-    expect(() => codeGsCanonicalJson(cyclic)).toThrow(/cycles/);
-
-    expect(() => codeGsCanonicalJson({ value: undefined })).toThrow(/unsupported value type/);
-    expect(() => codeGsCanonicalJson(Object.create({ inherited: true }))).toThrow(/unsupported value type/);
-
-    const taggedRecord = { [Symbol.toStringTag]: "NotAnArrayOrObject" };
-    expect(codeGsCanonicalJson(taggedRecord)).toBe("{}");
-  });
-
-  it("embeds one shared codec fragment in both operation source paths", () => {
-    const observationOperation = createReadSnapshotOperation({
-      physicalSheetId: "physical-orders",
-      sheetName: "Orders",
-      registeredRange: "A:B",
-      projection: "system_state",
-      schemaVersion: 1,
-      expectedHeaders: ["id", "status"],
-    });
-
-    expect(EFFECT_OPERATION_SOURCE).toContain(APPS_SCRIPT_STABLE_CODEC_SOURCE.trim());
-    expect(observationOperation.fn).toContain(APPS_SCRIPT_STABLE_CODEC_SOURCE.trim());
-    expect(EFFECT_OPERATION_SOURCE.match(/function codecStableHash_\(/g)).toHaveLength(1);
-    expect(observationOperation.fn.match(/function codecStableHash_\(/g)).toHaveLength(1);
-    expect(EFFECT_OPERATION_SOURCE).not.toContain("function stableEncode_(");
-    expect(observationOperation.fn).not.toContain("function stableEncode_(");
-  });
-
   it("keeps tagged dates on the stable date path", () => {
     const dateValue = {
       kind: NORMALIZED_CELL_KINDS.DATE,
@@ -233,42 +150,3 @@ describe("canonical codec characterization vectors", () => {
       .toBe(vectors.find((vector) => vector.name === "date-shaped-value")?.stableEncodeHex);
   });
 });
-
-interface AppsScriptCodecForTest {
-  stableEncode(value: unknown): string;
-  stableHash(value: unknown): string;
-}
-
-function loadCodeGsCanonicalJson(): (value: unknown) => string {
-  const source = readFileSync(new URL("../apps-script/gateway/Code.gs", import.meta.url), "utf8");
-  const factory = new Function(`${source}\nreturn canonicalJson_;`);
-  const candidate: unknown = factory();
-  if (typeof candidate !== "function") {
-    throw new Error("Code.gs canonicalJson_ function is not available");
-  }
-  return (value: unknown): string => {
-    const result: unknown = Reflect.apply(candidate, undefined, [value]);
-    if (typeof result !== "string") throw new Error("Code.gs canonicalJson_ result is not a string");
-    return result;
-  };
-}
-
-function createAppsScriptCodecForTest(): AppsScriptCodecForTest {
-  const utilities = {
-    DigestAlgorithm: { SHA_256: "SHA_256" },
-    Charset: { UTF_8: "UTF_8" },
-    newBlob(value: string) {
-      return {
-        getBytes: () => Array.from(new TextEncoder().encode(value), (byte) => byte > 127 ? byte - 256 : byte),
-      };
-    },
-    computeDigest(_algorithm: string, value: string, _charset: string) {
-      return Array.from(createHash("sha256").update(value, "utf8").digest(), (byte) => byte > 127 ? byte - 256 : byte);
-    },
-  };
-  const factory = new Function(
-    "Utilities",
-    `${APPS_SCRIPT_STABLE_CODEC_SOURCE}\nreturn { stableEncode: codecStableEncode_, stableHash: codecStableHash_ };`,
-  ) as (runtimeUtilities: typeof utilities) => AppsScriptCodecForTest;
-  return factory(utilities);
-}

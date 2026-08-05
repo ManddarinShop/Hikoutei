@@ -18,19 +18,19 @@ import type { NormalizedCell } from "../src/domain/index.js";
 import { stableHash } from "../src/shared/encoding/index.js";
 import type { StableValue } from "../src/shared/encoding/types.js";
 import { presentValue, absentValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/gateway/syncGateway.js";
+import { computeSyncVisibleHash } from "../src/application/sync/sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-  SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-} from "../src/application/sync/gateway/constants.js";
-import { SYNC_GATEWAY_ERROR_CODES } from "../src/application/sync/gateway/errors.js";
+  SYNC_PROJECTIONS,
+  SYNC_SNAPSHOT_READ_MODES,
+} from "../src/application/sync/sheets/constants.js";
+import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheets/errors.js";
 import type {
   ApplySyncEffectsRequest,
   ReadSyncSnapshotRequest,
-  SyncGatewaySnapshot,
-  SyncGatewayEffect,
-} from "../src/application/sync/gateway/syncGateway.js";
-import type { SyncGatewayProvisionRoute } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
+  SyncSheetsSnapshot,
+  SyncProjectionEffect,
+} from "../src/application/sync/sheets/syncSheets.js";
+import type { SyncSheetsProvisionRoute } from "../src/application/sync/sheets/sheetsProvisioning.js";
 import {
   GoogleSheetsApiSyncProvider,
   type GoogleSheetsApiRequestEvent,
@@ -46,7 +46,7 @@ import {
 } from "../src/adapter/sheets/providers/google-sheets-api/model/preflight.js";
 import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheets/sheetsProvisioning.js";
 import {
   StubSheet,
   StubSpreadsheet,
@@ -152,7 +152,7 @@ function buildProvider(
   });
 }
 
-function provisionRoutes(): SyncGatewayProvisionRoute[] {
+function provisionRoutes(): SyncSheetsProvisionRoute[] {
   return DEFINITIONS.map((definition) => ({
     sheetName: definition.sheet.tabName,
     registeredRange: definition.sheet.registeredRange,
@@ -171,7 +171,7 @@ function systemSnapshotRequest(overrides: Partial<ReadSyncSnapshotRequest> = {})
     physicalSheetId: SYSTEM_SHEET_ID,
     sheetName: "Users_System",
     registeredRange: "A:C",
-    projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+    projection: SYNC_PROJECTIONS.SYSTEM_STATE,
     schemaVersion: 1,
     ...overrides,
   };
@@ -182,7 +182,7 @@ function userInputSnapshotRequest(overrides: Partial<ReadSyncSnapshotRequest> = 
     physicalSheetId: USER_INPUT_SHEET_ID,
     sheetName: "Users_Input",
     registeredRange: "A:B",
-    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: 1,
     ...overrides,
   };
@@ -473,7 +473,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "Users_Input",
         registeredRange: "A:B",
-        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: USER_INPUT_HEADERS,
       },
@@ -481,7 +481,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
         physicalSheetId: SYSTEM_SHEET_ID,
         sheetName: "Users_System",
         registeredRange: "A:C",
-        projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
         schemaVersion: 1,
         headers: SYSTEM_HEADERS,
       },
@@ -520,7 +520,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
       registeredRange: "A:B",
-      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
     });
@@ -553,7 +553,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
       registeredRange: "A:B",
-      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
     });
@@ -576,7 +576,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
       registeredRange: "A:B",
-      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
     });
@@ -592,7 +592,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
       registeredRange: "A:B",
-      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
     };
@@ -625,7 +625,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       physicalSheetId: CONFLICT_SHEET_ID,
       sheetName: "Users_Conflicts",
       registeredRange: "A:O",
-      projection: SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS,
+      projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
       schemaVersion: 1,
       headers: CONFLICT_HEADERS,
     });
@@ -730,7 +730,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
       physicalSheetId: CONFLICT_SHEET_ID,
       sheetName: "Users_Conflicts",
       registeredRange: "A:O",
-      projection: SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS,
+      projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
       schemaVersion: 1,
     });
     expect(observed.anchors.assigned).toBe(1);
@@ -929,7 +929,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(presenceValue(full.rows[0]?.cells.status?.mergeRange)).toBe("A2:B2");
 
     const lightweight = await provider.readSnapshot(
-      userInputSnapshotRequest({ readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT }),
+      userInputSnapshotRequest({ readMode: SYNC_SNAPSHOT_READ_MODES.USER_INPUT }),
     );
     expect(lightweight.rows[0]?.cells.status).toMatchObject({
       cellKind: "literal",
@@ -956,7 +956,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     const provider = buildProvider(transport);
 
     const snapshot = await provider.readSnapshot(
-      userInputSnapshotRequest({ readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT }),
+      userInputSnapshotRequest({ readMode: SYNC_SNAPSHOT_READ_MODES.USER_INPUT }),
     );
     expect(snapshot.rows[0]?.cells.status?.cellKind).toBe("error");
     expect(presenceValue(snapshot.rows[0]?.cells.status?.errorCode)).toBe("#DIV/0!");
@@ -991,7 +991,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     const provider = buildProvider(transport);
 
     await provider.readSnapshot(userInputSnapshotRequest({
-      readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT,
+      readMode: SYNC_SNAPSHOT_READ_MODES.USER_INPUT,
     }));
     const lightweightRequest = transport.getSpreadsheetRequests.at(-1);
     expect(lightweightRequest?.fields).toBe(GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS);
@@ -1014,7 +1014,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     await expect(provider.readSnapshot(systemSnapshotRequest({
       readMode: "bogus" as never,
     }))).rejects.toMatchObject({
-      code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       message: "Google Sheets API observation readMode is not supported",
     });
     expect(transport.getSpreadsheetCalls).toBe(0);
@@ -1027,7 +1027,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     const provider = buildProvider(transport);
 
     await expect(provider.readSnapshot(systemSnapshotRequest({
-      readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.USER_INPUT,
+      readMode: SYNC_SNAPSHOT_READ_MODES.USER_INPUT,
     }))).rejects.toThrow(/user_input readMode requires the user_input projection/);
   });
 });
@@ -1148,12 +1148,12 @@ function pacedApplyRequest(): ApplySyncEffectsRequest {
     __typed_sheets_deleted: cell.bool(false),
   };
   const targetVisibleHash = computeSyncVisibleHash(fields);
-  const effect: SyncGatewayEffect = {
+  const effect: SyncProjectionEffect = {
     effectId: "paced-1",
     payloadHash: "paced-payload",
     effectKind: "system_projection",
     physicalSheetId: SYSTEM_SHEET_ID,
-    projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+    projection: SYNC_PROJECTIONS.SYSTEM_STATE,
     targetKind: "entity",
     targetId: "entity:users:u1",
     rowBindingId: presentValue("row:u1"),
@@ -1176,7 +1176,7 @@ function pacedApplyRequest(): ApplySyncEffectsRequest {
     physicalSheetId: SYSTEM_SHEET_ID,
     sheetName: "Users_System",
     registeredRange: "A:C",
-    projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+    projection: SYNC_PROJECTIONS.SYSTEM_STATE,
     schemaVersion: 1,
     postconditionMode: "deferred",
     effects: [effect],
@@ -1184,7 +1184,7 @@ function pacedApplyRequest(): ApplySyncEffectsRequest {
 }
 
 /** Rebuilds the Apps Script wire-shaped snapshot object for hash parity. */
-function wireSnapshotShape(snapshot: SyncGatewaySnapshot): unknown {
+function wireSnapshotShape(snapshot: SyncSheetsSnapshot): unknown {
   return {
     protocolVersion: snapshot.protocolVersion,
     sheetName: snapshot.sheetName,

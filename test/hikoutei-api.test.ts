@@ -263,9 +263,9 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
-  it("initializes the local runtime only and does not contact a remote gateway", async () => {
+  it("initializes the local runtime only and does not contact a remote provider", async () => {
     // createTypedSheets opens SQLite and creates entity tables only. There is no
-    // gateway client in scope, so this asserts the no-remote contract by path:
+    // provider client in scope, so this asserts the no-remote contract by path:
     // opening the runtime must not throw and must not depend on any network.
     const hikoutei = await openRuntime();
     expect(hikoutei.em).toBeDefined();

@@ -38,7 +38,7 @@ import {
   GoogleSheetsApiTransportError,
 } from "../../src/adapter/sheets/providers/google-sheets-api/errors.js";
 import { presentValue, absentValue } from "../../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../../src/application/sync/gateway/syncGateway.js";
+import { computeSyncVisibleHash } from "../../src/application/sync/sheets/syncSheets.js";
 import type { NormalizedCell } from "../../src/domain/index.js";
 import { dateSerialFromIso, isCanonicalDateNumberFormat } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 

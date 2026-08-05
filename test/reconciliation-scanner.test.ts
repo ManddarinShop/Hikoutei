@@ -7,7 +7,7 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import {
@@ -44,7 +44,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("reports zero drift when the sheet matches the desired state", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -71,7 +71,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -94,7 +94,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("rejects malformed canonical cells before scheduling a correction", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -115,7 +115,7 @@ describe("runReconciliationScan", () => {
 
     await expect(runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -128,7 +128,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("matches a fast-appended row by business key without creating a duplicate", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -155,7 +155,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -175,7 +175,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("matches an unanchored row by visible business key when canonical IDs are namespaced", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "entity:orders:order-1",
@@ -190,7 +190,7 @@ describe("runReconciliationScan", () => {
       sheetRows: [],
     });
 
-    await gateway.fastAppendRows({
+    await provider.fastAppendRows({
       physicalSheetId: "physical-recon",
       sheetName: "Orders",
       registeredRange: "A:C",
@@ -208,7 +208,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -228,7 +228,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("matches a row with no physical anchor metadata by visible business key", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -257,7 +257,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -277,7 +277,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("does not silently match a duplicated identity and stays fail-closed", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -313,7 +313,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -325,7 +325,7 @@ describe("runReconciliationScan", () => {
 
     // The ambiguous binding is never counted as matched and no row is
     // deleted; the only repair is a createIfMissing correction that the
-    // gateway rejects on the duplicate identity guard (fail-closed).
+    // provider rejects on the duplicate identity guard (fail-closed).
     expect(report).toMatchObject({
       matchedRows: 0,
       driftedRows: 0,
@@ -340,7 +340,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("does not silently choose a row when the physical anchor is duplicated", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -379,7 +379,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -407,7 +407,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("does not accept a unique desired anchor when the desired identity is duplicated in the sheet", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -448,7 +448,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -461,7 +461,7 @@ describe("runReconciliationScan", () => {
     // The duplicated business identity quarantines the binding: the unique
     // anchor is not accepted, neither snapshot row counts as owned (both are
     // reported extra), and only a fail-closed createIfMissing correction is
-    // enqueued, which the gateway rejects on its own identity guard.
+    // enqueued, which the provider rejects on its own identity guard.
     expect(report).toMatchObject({
       matchedRows: 0,
       driftedRows: 0,
@@ -477,7 +477,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("enqueues a correction effect when the sheet drifted from canonical", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -504,7 +504,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -531,7 +531,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("enqueues a createIfMissing effect when the sheet is missing the row", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -548,7 +548,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -573,7 +573,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("does not enqueue a duplicate while an equivalent correction is pending", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -640,7 +640,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -663,7 +663,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("defers corrections while the latest effect is delivery-uncertain", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -748,7 +748,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -774,7 +774,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("leaves extra sheet rows untouched in the report without enqueuing effects", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -810,7 +810,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -831,7 +831,7 @@ describe("runReconciliationScan", () => {
   });
 
   it("skips enqueuing effects when the reconciler cannot claim the writer fence", async () => {
-    const { adapter, gateway } = await bootstrap({
+    const { adapter, provider } = await bootstrap({
       entities: [
         {
           entityId: "order-1",
@@ -864,7 +864,7 @@ describe("runReconciliationScan", () => {
 
     const report = await runReconciliationScan({
       storage: adapter,
-      gateway,
+      provider,
       physicalSheetId: "physical-recon",
       logicalSheetId: "logical-recon",
       systemFields: [...SYSTEM_HEADERS],
@@ -899,7 +899,7 @@ interface SheetRowInput {
 
 interface BootstrapResult {
   readonly adapter: MikroOrmSqliteAdapter;
-  readonly gateway: FakeSyncSheetGateway;
+  readonly provider: FakeSyncSheetsProvider;
 }
 
 async function bootstrap(
@@ -907,14 +907,14 @@ async function bootstrap(
     readonly entities: readonly DesiredEntityInput[];
     readonly sheetRows: readonly SheetRowInput[];
   },
-  gatewayOptions?: ConstructorParameters<typeof FakeSyncSheetGateway>[1],
+  providerOptions?: ConstructorParameters<typeof FakeSyncSheetsProvider>[1],
 ): Promise<BootstrapResult> {
   const orm = await createOrm();
   const adapter = new MikroOrmSqliteAdapter(orm);
   await migrateMikroOrmSqliteSchema(adapter);
   await seedRegistryAndEntities(adapter, args.entities);
 
-  const gateway = new FakeSyncSheetGateway([
+  const provider = new FakeSyncSheetsProvider([
     {
       physicalSheetId: "physical-recon",
       sheetName: "Orders",
@@ -928,9 +928,9 @@ async function bootstrap(
         fields: row.fields,
       })),
     },
-  ], gatewayOptions);
+  ], providerOptions);
 
-  return { adapter, gateway };
+  return { adapter, provider };
 }
 
 async function seedRegistryAndEntities(
