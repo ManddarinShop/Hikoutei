@@ -358,8 +358,12 @@ export function createSyncEffectWorkerSupervisor(
   const maxEffects = options.maxEffects ?? DEFAULT_MAX_EFFECTS;
   const now = options.now ?? Date.now;
 
-  validateWorkerOptions(workerId, maxEffects);
-  const batchController = options.batchController ?? new AdaptiveEffectBatchController();
+  validateWorkerOptions(workerId, maxEffects, options.maxFastAppendCandidates, options.appendDispatchIntervalMs);
+  const batchController = options.batchController ?? new AdaptiveEffectBatchController({
+    ...(options.appendDispatchIntervalMs === undefined
+      ? {}
+      : { appendDispatchIntervalMs: options.appendDispatchIntervalMs }),
+  });
   const workerOptions = {
     storage: options.storage,
     gateway: options.gateway,
@@ -378,6 +382,12 @@ export function createSyncEffectWorkerSupervisor(
     ...(options.gatewayTimeoutMs === undefined
       ? {}
       : { gatewayTimeoutMs: options.gatewayTimeoutMs }),
+    ...(options.maxFastAppendCandidates === undefined
+      ? {}
+      : { maxFastAppendCandidates: options.maxFastAppendCandidates }),
+    ...(options.appendDispatchIntervalMs === undefined
+      ? {}
+      : { appendDispatchIntervalMs: options.appendDispatchIntervalMs }),
     ...(options.makeRepairReplan === undefined
       ? {}
       : { makeRepairReplan: options.makeRepairReplan }),
@@ -437,12 +447,35 @@ function withJitter(durationMs: number, random: () => number): number {
   return durationMs + Math.floor(normalized * DEFAULT_JITTER_MAX_MS);
 }
 
-function validateWorkerOptions(workerId: string, maxEffects: number): void {
+function validateWorkerOptions(
+  workerId: string,
+  maxEffects: number,
+  maxFastAppendCandidates?: number,
+  appendDispatchIntervalMs?: number,
+): void {
   if (workerId.length === NON_NEGATIVE_SAFE_INTEGER_MINIMUM) {
     throw new RangeError("sync effect supervisor worker ID is required");
   }
   if (!Number.isSafeInteger(maxEffects) || maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM) {
     throw new RangeError("sync effect supervisor maxEffects must be a positive safe integer");
+  }
+  if (
+    maxFastAppendCandidates !== undefined &&
+    (!Number.isSafeInteger(maxFastAppendCandidates) ||
+      maxFastAppendCandidates < POSITIVE_SAFE_INTEGER_MINIMUM)
+  ) {
+    throw new RangeError(
+      "sync effect supervisor maxFastAppendCandidates must be a positive safe integer",
+    );
+  }
+  if (
+    appendDispatchIntervalMs !== undefined &&
+    (!Number.isSafeInteger(appendDispatchIntervalMs) ||
+      appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)
+  ) {
+    throw new RangeError(
+      "sync effect supervisor appendDispatchIntervalMs must be a non-negative safe integer",
+    );
   }
 }
 
