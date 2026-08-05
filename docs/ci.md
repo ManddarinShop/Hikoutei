@@ -78,11 +78,11 @@ credentials); the root API smoke is local-only, an in-memory SQLite authority
 - `.github/workflows/develop-version.yml` creates the next patch version and
   `develop-vX.Y.Z` tag after a `develop` push.
 - `.github/workflows/develop-publish.yml` verifies and publishes that tag with
-  the `develop` dist-tag.
+  the `latest` dist-tag.
 - `.github/workflows/main-version.yml` creates the next minor version and
   `vX.Y.Z` tag after a `main` push.
 - `.github/workflows/stable-publish.yml` verifies and publishes that tag with
-  the `latest` dist-tag.
+  the `latest` dist-tag too.
 
 Only the internal sync/gateway E2E has a live variant, in the separate
 `.github/workflows/live-integration.yml` workflow. It is opt-in via
@@ -150,13 +150,15 @@ being processed as another release.
 The tag triggers `.github/workflows/develop-publish.yml`. It repeats the
 unit/type/build/package checks, the installed-package internal sync/gateway
 E2E, and the installed root API smoke before publishing the numeric package
-version with the npm `develop` dist-tag. The version has no `-beta` suffix, but
-normal `npm install hikoutei` still resolves `latest` rather than this channel.
-Install the develop channel explicitly:
+version with the npm `latest` dist-tag. The version has no `-beta` suffix, and
+a plain `npm install hikoutei` resolves this channel:
 
 ```sh
-npm install hikoutei@develop
+npm install hikoutei
 ```
+
+The old `develop` dist-tag is no longer updated by this workflow; existing
+pinned `hikoutei@develop` installs keep the last develop-tagged version.
 
 The version calculation is isolated in `scripts/ci/release-version.mjs` and is
 covered by `test/release-version.test.ts`. For example:
@@ -164,9 +166,8 @@ covered by `test/release-version.test.ts`. For example:
 ```text
 0.3.0 + patch → 0.3.1
 0.3.1 + patch → 0.3.2
-```
-
-The workflow requires a repository `RELEASE_TOKEN` secret with contents write
+0.3.2 + patch → 0.3.3
+```The workflow requires a repository `RELEASE_TOKEN` secret with contents write
 permission. A token other than the default `GITHUB_TOKEN` is used because a
 push made by `GITHUB_TOKEN` does not trigger another workflow; the release tag
 must trigger `develop-publish.yml`. The publish job separately requires
@@ -196,11 +197,27 @@ workflow.
 The main version workflow uses the same `RELEASE_TOKEN` requirement so its
 `vX.Y.Z` tag triggers `stable-publish.yml`. The stable publish job also
 requires the repository `NPM_TOKEN` secret and npm provenance before publishing
-`latest`. After a stable main release, merge
-`main` back into `develop` so the next patch release starts from the new stable
-baseline. Stable package versions are
+`latest`. Stable package versions are
 immutable on npm, so reusing a published version fails instead of replacing
-it. Normal users install the stable channel with:
+it.
+
+Both channels publish `latest`, so their versions must increase globally:
+
+```text
+develop merges → patch:   0.3.3 → 0.3.4 → 0.3.5   (latest)
+main merge (after merging develop) → minor: 0.3.5 → 0.4.0   (latest)
+merge main back into develop → 0.4.0
+next develop merges → patch: 0.4.0 → 0.4.1 → 0.4.2   (latest)
+next main merge → minor: 0.4.2 → 0.5.0   (latest)
+```
+
+Keep the channels aligned: after a stable main release, merge `main` back
+into `develop` so the next develop patch release starts from the new stable
+baseline. If a develop release is prepared before that back-merge, its
+publish fails loudly on the latest-dist-tag monotonicity check (the develop
+version trails the main minor); merge main back and re-run the publish from
+the existing `develop-vX.Y.Z` tag. Normal users install the rolling line
+with:
 
 ```sh
 npm install hikoutei
@@ -235,7 +252,7 @@ package directory, asserts it contains exactly one `hikoutei-*.tgz` and the
 checksum file, verifies the checksum line names that exact tarball (not merely
 any file present in the directory), and only then runs `sha256sum --check`
 before publishing. Name/version validation, npm provenance, the
-`develop`/`latest` dist-tags, and the stale branch SHA checks are enforced by
+`latest` dist-tag, and the stale branch SHA checks are enforced by
 the corresponding workflows.
 
 ## Action versions

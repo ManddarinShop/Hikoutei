@@ -3,6 +3,12 @@ name: Publish develop package
 # Triggered by a develop release tag such as develop-v0.3.1. The tag must
 # exactly match the numeric version in package.json and package-lock.json; the
 # separate develop-version workflow creates the version commit and tag.
+#
+# The published package is tagged `latest`, so every develop merge becomes the
+# version a plain `npm install hikoutei` resolves. The main/stable channel also
+# publishes `latest` with globally-increasing minor versions; keep the two
+# channels aligned by merging main back into develop after each main release
+# (see docs/ci.md) so the develop patch line never trails the latest tag.
 on:
   push:
     tags:
@@ -191,14 +197,14 @@ jobs:
           name: hikoutei-develop-package
           path: ${{ runner.temp }}/hikoutei-develop-package
 
-      - name: Verify develop dist-tag monotonicity
+      - name: Verify latest dist-tag monotonicity
         shell: bash
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           expected_version="${TAG_NAME#develop-v}"
-          current_version="$(node scripts/ci/read-npm-dist-tag.mjs --package=hikoutei --tag=develop)"
+          current_version="$(node scripts/ci/read-npm-dist-tag.mjs --package=hikoutei --tag=latest)"
           CURRENT_CHANNEL_VERSION="$current_version" TARGET_VERSION="$expected_version" node --input-type=module <<'NODE'
           import { compareStableVersions } from "./scripts/ci/release-version.mjs";
           const current = process.env.CURRENT_CHANNEL_VERSION?.trim() ?? "";
@@ -206,9 +212,9 @@ jobs:
           if (current === "" || current === "null" || current === "undefined") process.exit(0);
           const result = compareStableVersions(current, target);
           if (result.status === "invalid" || result.comparison > 0) {
-            throw new Error(`develop dist-tag would move backward: current=${current} target=${target}`);
+            throw new Error(`latest dist-tag would move backward: current=${current} target=${target}`);
           }
-          console.log(`develop dist-tag current=${current} target=${target}`);
+          console.log(`latest dist-tag current=${current} target=${target}`);
           NODE
 
       - name: Publish develop package
@@ -256,4 +262,4 @@ jobs:
             const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
             if (pkg.name !== "hikoutei" || !isStable || pkg.version !== expected) process.exit(1);
           ' "$RUNNER_TEMP/hikoutei-develop-package.json" "$expected_version"
-          npm publish "$package_file" --tag develop --access public --provenance
+          npm publish "$package_file" --tag latest --access public --provenance
