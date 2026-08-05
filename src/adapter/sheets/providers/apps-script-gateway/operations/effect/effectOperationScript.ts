@@ -662,7 +662,7 @@ export const EFFECT_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       return targetLayout.headers.map(function (header) { return toSheetValue_(row.cells[header]); });
     }));
     rows.forEach(function (row) {
-      target.getRange(row.rowNumber + ":" + row.rowNumber).addDeveloperMetadata(ANCHOR_KEY, row.physicalAnchor, SpreadsheetApp.DeveloperMetadataVisibility.PROJECT);
+      target.getRange(row.rowNumber + ":" + row.rowNumber).addDeveloperMetadata(ANCHOR_KEY, row.physicalAnchor, SpreadsheetApp.DeveloperMetadataVisibility.DOCUMENT);
     });
     if (Array.isArray(checkboxHeaders)) checkboxHeaders.forEach(function (header) {
       var position = targetLayout.positions[header];

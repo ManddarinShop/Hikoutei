@@ -537,7 +537,7 @@ const OBSERVATION_OPERATION_SOURCE = String.raw`function (spreadsheet, args) {
       if (anchors.length === 0) {
         var anchor = "sync-anchor:" + Utilities.getUuid();
         targetSheet.getRange(rowNumber + ":" + rowNumber).addDeveloperMetadata(
-          ANCHOR_KEY, anchor, SpreadsheetApp.DeveloperMetadataVisibility.PROJECT,
+          ANCHOR_KEY, anchor, SpreadsheetApp.DeveloperMetadataVisibility.DOCUMENT,
         );
         anchorsByRow[rowNumber] = [anchor];
         assigned += 1;
