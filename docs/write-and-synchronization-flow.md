@@ -38,12 +38,12 @@ SQLite transaction
           ▼
 internal effect supervisor
   ├─ claim with a lease
-  ├─ send a signed operation batch
+  ├─ send a signed operation batch (gateway) or a direct REST batch
   ├─ persist uncertain delivery and schedule a durable postcondition probe
   └─ mark the effect applied, terminally failed, or recoverably pending
           │
           ▼
-Apps Script gateway ──▶ Google Sheets
+full direct provider / legacy Apps Script gateway ──▶ Google Sheets
 ```
 
 A successful `flush()` means that SQLite accepted the local change and queued
@@ -59,6 +59,40 @@ reconciliation. Each physical route's effects are split into bounded sub-batches
 so one gateway call returns a complete result set instead of a partial prefix.
 These operation types are implementation details and are not methods on the
 public EntityManager.
+
+### Outbound providers
+
+The outbound half of the worker can run through one of three interchangeable
+providers behind the same `SyncEffectWorkerFullGateway` contract:
+
+- **Full direct Google Sheets API (preferred, `googleSheetsApi`):** ONE
+  service-account provider owns provisioning, outbound effects, table reads,
+  row anchors, and User_Input observation with no Apps Script at all.
+- **Apps Script gateway (legacy):** every fast append, guarded effect, and
+  recovery probe is a signed operation executed by the deployed `Code.gs`.
+  It remains supported but is deprecated; new setups should use the full
+  direct provider.
+- **Direct outbound worker (deprecated, `googleApiWorker`):** the worker
+  talks to the Sheets REST API directly with a service account (Application
+  Default Credentials) while Apps Script (or an injected gateway) still owns
+  provisioning and User_Input observation. Superseded by `googleSheetsApi`,
+  which moves provisioning and observation into the direct provider as well.
+
+The direct provider ports the Apps Script semantics to TypeScript: bulk
+preflight with fail-closed validation (headers, anchors, identities,
+receipts), receipt replay/idempotency, visible/candidate/repair guards,
+full-row deletion guards, one atomic `spreadsheets.batchUpdate` per
+applicable target mutation + receipt write, and receipt-backed postcondition
+recovery. It disables SDK auto-retry (the durable worker owns retries),
+spaces request starts at 1,100 ms per class (reads and writes separately),
+and trims a serialized batch over ~2 MB to an order-preserving prefix with
+`hasMore`. Transport outcomes are classified by the shared
+`classifyTransportOutcome` boundary: pre-mutation 4xx rejections are explicit
+remote failures; timeouts, network errors, 408/429/5xx, and malformed 2xx
+replies stay delivery-uncertain and are probed like Apps Script response loss.
+This mode is not a performance claim; the raw-transport experiments under
+`scripts/bench/` measure the unguarded API path without receipts or
+compare-and-set.
 
 ## Inbound User_Input flow
 
@@ -110,23 +144,32 @@ Projection provisioning is an internal service-start operation. The bootstrap
 generates route registrations and headers for the required System_State,
 User_Input, and Sync_Conflicts projections, verifies remote schema drift, and
 starts workers only after provisioning and unresolved-conflict backfill succeed.
-The Apps Script gateway remains intentionally thin:
+In the preferred `googleSheetsApi` mode the full direct provider provisions
+the tabs itself — creating missing tabs, initializing truly-empty tabs, and
+failing closed on header drift — with no Apps Script involved. In the legacy
+Apps Script mode the gateway remains intentionally thin:
 
 1. verify the signed operation envelope
 2. validate the operation contract
 3. execute the signed operation source, whose contract validates the registered Sheet operation
 4. return a structured result to the internal worker
 
-The MVP gateway contract is a single deployable file:
+The gateway contract is a single deployable file:
 `apps-script/gateway/Code.gs`. A user copies it into a spreadsheet-bound Apps
 Script project, deploys it as a Web App, pastes the deployed `/exec` URL into
 the `TYPED_SHEETS_GATEWAY_URL` constant, and runs `setupSyncGateway()` from the
 editor. That setup writes the bound spreadsheet ID and a generated shared
-secret into Script Properties and logs a copyable local `.env` block. This path
-requires no `appsscript.json` manifest, no Apps Script Advanced Sheets Service,
-no Google Cloud Sheets API activation, and no service account; the gateway runs
-on the built-in `SpreadsheetApp`, `LockService`, and `PropertiesService`
-services only. The signed gateway secret is a code-execution trust boundary;
+secret into Script Properties and logs a copyable local `.env` block. The
+current fast-append implementation unconditionally writes append target rows
+through the Apps Script Advanced Sheets Service; there is no runtime
+enablement switch, so the bundled `appsscript.json` manifest (Sheets v4
+advanced service enabled) and Google Cloud Sheets API activation in the
+script's Cloud project are mandatory for the current temporary append path.
+A legacy deployment that runs only on the built-in `SpreadsheetApp`,
+`LockService`, and `PropertiesService` services must first restore the
+commented rollback block in `batchAppendOperation.ts`, which reverts the
+append target write to the built-in services path. No service account is
+required. The signed gateway secret is a code-execution trust boundary;
 keep it private and rotate the previously exposed value before production
 deployment.
 
@@ -139,13 +182,26 @@ effect is recognized as already applied and never double-materialized), the
 SQLite durable outbox (effects survive restarts and are delivered
 at-least-once), fencing (spreadsheet authority epoch/token and worker/effect
 leases reject stale writers), and postcondition recovery (uncertain deliveries
-are probed until receipt-backed visible evidence matches). A batch-append
-operation source that would use the Apps Script Advanced Sheets Service and an
-`appsscript.json` manifest exists only as an out-of-MVP performance experiment;
-it is not part of the default installation.
+are probed until receipt-backed visible evidence matches). The temporary
+test-batch append operation writes a whole bulk append batch in one RAW
+ValueRange through the Apps Script Advanced Sheets Service; that call is
+unconditional in the current implementation, so the only way back to the
+built-in services write is restoring the commented rollback block in
+`batchAppendOperation.ts`, while the rest of the gateway runs on built-in
+services.
 
 Applications do not import or call the gateway client, protocol, operation
-builders, polling functions, or provisioning interfaces.
+builders, polling functions, provisioning interfaces, or the direct Sheets
+API provider.
+
+In direct mode the same spreadsheet must be reachable by the service account
+(the full provider owns provisioning, outbound writes, and observation): one
+SQLite runtime is the single authoritative writer for the whole spreadsheet.
+The tracked live scenario
+(`scripts/ci/run-api-scenario.mjs --backend live --outbound direct`) verifies
+provisioning from an empty spreadsheet, append/update/delete delivery, mapped
+User_Input polling, stale-edit CAS guards, anchor evidence, and cleanup
+without any Apps Script deployment.
 
 ## Failure model
 

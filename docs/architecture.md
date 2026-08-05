@@ -35,7 +35,7 @@ src/domain/                         pure normalization/evaluation/conflict rules
 src/application/orm/                public ORM facade and mapped flush planning
 src/application/sync/               internal sync engine and service bootstrap
 src/adapter/persistence/            SQLite/MikroORM implementation
-src/adapter/sheets/                 Apps Script transport and operation adapter
+src/adapter/sheets/                 Apps Script transport (legacy) + full direct Sheets API provider
 src/infrastructure/storage/         canonical, observation, resolution, outbox state
 src/api/                            root-facing entity and EntityManager facade
 src/index.ts                        root public barrel only
@@ -104,23 +104,67 @@ fixed headers are missing or drifted.
 ## Google Sheets projection
 
 The internal service provisions and validates registered projection tabs before
-starting delivery. It owns the signed Apps Script client, effect worker,
-response-loss recovery, reconciliation, and User_Input polling.
+starting delivery. It owns the sync provider (service-account Google Sheets API
+by default), effect worker, response-loss recovery, reconciliation, and
+User_Input polling.
 
 The application does not call Sheet operations. A successful public `flush()`
 means that the local SQLite transaction committed. It does not mean that a
 remote Sheet write has completed.
 
-The MVP gateway is a single file, `apps-script/gateway/Code.gs`, copied into a
-spreadsheet-bound Apps Script project and deployed as a Web App. The deployer
-pastes the `/exec` URL into `TYPED_SHEETS_GATEWAY_URL` and runs
-`setupSyncGateway()` from the editor, which stores the bound spreadsheet ID and
-a generated shared secret in Script Properties. This default path requires no
-`appsscript.json` manifest, no Apps Script Advanced Sheets Service, no Google
-Cloud Sheets API activation, and no service account. Sheet consistency does
-not rely on cross-request Sheet transactions; it comes from the Apps Script
-script lock, the hidden effect-receipt tab, effect-id/payload-hash dedupe, the
-SQLite durable outbox, fencing, and postcondition recovery.
+### Full direct provider (service account, preferred)
+
+The preferred production path uses the internal `googleSheetsApi` service
+option: ONE Google Sheets API provider under
+`src/adapter/sheets/providers/google-sheets-api/` implements every gateway
+capability the runtime needs — provisioning, outbound effects (fast append,
+guarded update/delete, receipts, response-loss recovery), values-only table
+reads, row-anchor assignment, and full metadata snapshots. It authenticates
+with Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` service
+account shared on the spreadsheet), disables SDK auto-retry (retries are the
+durable worker's job), enforces request-start intervals of 1,100 ms per
+request class (reads and writes separately), and batches every applicable
+target mutation plus its receipt writes into one atomic
+`spreadsheets.batchUpdate`. The provider paces and reports every transport
+call individually; a serialized batch over ~2 MB is trimmed to an
+order-preserving prefix with `hasMore`. Transport failures are classified by
+the shared `classifyTransportOutcome` boundary: proven pre-mutation 4xx
+rejections are explicit remote failures, while timeouts, network errors,
+408/429/5xx, and malformed 2xx replies stay delivery-uncertain and are
+recovered through the same postcondition probe path as the Apps Script
+gateway. Telemetry carries only operation names, counts, durations, and
+stable codes — never credentials, spreadsheet IDs, URLs, or payloads.
+
+Provisioning creates missing tabs and initializes header rows in one atomic
+batch and fails closed on any header drift; snapshot wire shapes (merged,
+error, formula, literal/blank cells plus stableHash evidence) are
+byte-compatible with the Apps Script observation source, so reconciliation
+evidence is provider-independent. No Apps Script deployment is required.
+
+### Apps Script gateway (legacy, no service account)
+
+Deployments without a service account can keep the legacy signed Apps Script
+gateway: the internal `appsScript` service option. The gateway is a single
+file, `apps-script/gateway/Code.gs`, copied into a spreadsheet-bound Apps
+Script project and deployed as a Web App. The deployer pastes the `/exec` URL
+into `TYPED_SHEETS_GATEWAY_URL` and runs `setupSyncGateway()` from the editor,
+which stores the bound spreadsheet ID and a generated shared secret in Script
+Properties. No service account is required. The current fast-append
+implementation unconditionally calls the Apps Script Advanced Sheets Service
+for append target writes; there is no runtime enablement switch, so the
+bundled `appsscript.json` manifest (Sheets v4 advanced service) and Google
+Cloud Sheets API activation in the script's Cloud project are mandatory for
+the current temporary append path. A legacy `Code.gs`-only deployment must
+first restore the commented rollback block in `batchAppendOperation.ts` to
+revert append target writes to the built-in services path. Sheet consistency
+does not rely on cross-request Sheet transactions; it comes from the Apps
+Script script lock, the hidden effect-receipt tab, effect-id/payload-hash
+dedupe, the SQLite durable outbox, fencing, and postcondition recovery.
+
+A deprecated mixed mode (`googleApiWorker` internal option) routes outbound
+effects to the direct provider while Apps Script (or an injected gateway)
+still owns provisioning and observation; new setups should use
+`googleSheetsApi` instead.
 
 `System_State` is materialized from canonical SQLite state. `User_Input` is
 observed by the internal polling loop, evaluated with ownership and field-level
