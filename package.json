@@ -22,7 +22,8 @@
   "files": [
     "dist",
     "docs",
-    "apps-script/gateway/Code.gs"
+    "apps-script/gateway/Code.gs",
+    "apps-script/gateway/appsscript.json"
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
@@ -39,7 +40,9 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@hikoutei/kohkai": "0.1.0"
+    "@googleapis/sheets": "^14.0.0",
+    "@hikoutei/kohkai": "0.1.0",
+    "google-auth-library": "^11.0.0"
   },
   "devDependencies": {
     "@mikro-orm/core": "7.1.7",
