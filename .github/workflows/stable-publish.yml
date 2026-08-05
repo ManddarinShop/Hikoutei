@@ -175,6 +175,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -257,3 +258,36 @@ jobs:
             if (pkg.name !== "hikoutei" || !isStable || pkg.version !== expected) process.exit(1);
           ' "$RUNNER_TEMP/hikoutei-stable-package.json" "$expected_version"
           npm publish "$package_file" --tag latest --access public --provenance
+
+      - name: Publish to GitHub Packages mirror
+        shell: bash
+        env:
+          GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected_version="${TAG_NAME#v}"
+          package_dir="$RUNNER_TEMP/hikoutei-stable-package"
+          scoped_dir="$RUNNER_TEMP/hikoutei-stable-gh-packages"
+          rm -rf "$scoped_dir"
+          mkdir -p "$scoped_dir"
+          # The GitHub Packages npm registry only hosts scoped packages, so the
+          # verified tarball is re-packed under @ManddarinShop/hikoutei. The
+          # npmjs release keeps the unscoped name; contents are identical.
+          package_file="$(find "$package_dir" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
+          test -n "$package_file"
+          tar -xzf "$package_file" -C "$scoped_dir"
+          node -e '
+            const fs = require("fs");
+            const dir = process.argv[1];
+            const expected = process.argv[2];
+            const pkg = JSON.parse(fs.readFileSync(dir + "/package/package.json", "utf8"));
+            if (pkg.name !== "hikoutei" || pkg.version !== expected) process.exit(1);
+            pkg.name = "@ManddarinShop/hikoutei";
+            fs.writeFileSync(dir + "/package/package.json", JSON.stringify(pkg, null, 2) + "\n");
+          ' "$scoped_dir" "$expected_version"
+          (cd "$scoped_dir" && tar -czf "$RUNNER_TEMP/hikoutei-stable-gh-packages.tgz" package)
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$GH_PACKAGES_TOKEN" > .npmrc
+          npm publish "$RUNNER_TEMP/hikoutei-stable-gh-packages.tgz" \
+            --registry=https://npm.pkg.github.com \
+            --tag latest --access public

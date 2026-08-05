@@ -209,6 +209,12 @@ requires the repository `NPM_TOKEN` secret and npm provenance before publishing
 immutable on npm, so reusing a published version fails instead of replacing
 it.
 
+Every release is also mirrored to GitHub Packages as the scoped package
+`@ManddarinShop/hikoutei` (`npm.pkg.github.com`), repacked from the
+verified tarball because the GitHub Packages npm registry only hosts
+scoped packages; the mirror uses the workflow `GITHUB_TOKEN` with
+`packages: write`.
+
 Both channels publish `latest`, so their versions must increase globally:
 
 ```text
