@@ -1,4 +1,12 @@
-/** Signed adapter tools for the registry-bound Apps Script sync gateway. */
+/**
+ * Signed adapter tools for the registry-bound Apps Script sync gateway.
+ *
+ * @deprecated The Apps Script gateway is the legacy no-service-account
+ * path; the preferred `googleSheetsApi` bootstrap mode uses the full
+ * service-account Google Sheets provider and needs no Apps Script. The
+ * signed protocol and these tools remain fully supported for existing
+ * deployments.
+ */
 
 export {
   APPS_SCRIPT_OPERATION_NAMES,
