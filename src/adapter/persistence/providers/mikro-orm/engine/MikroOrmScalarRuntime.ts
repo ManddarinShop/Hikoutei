@@ -37,7 +37,7 @@ import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
 } from "../../../../../shared/encoding/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../../../../application/sync/gateway/constants.js";
+import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheets/constants.js";
 
 /** Generated provider inputs for one mapped internal sync runtime. */
 export interface MikroOrmScalarRuntimeDefinition extends MikroOrmScalarEntityRuntimeDefinition {
@@ -101,14 +101,14 @@ function createMapping(
       spreadsheetId,
       tabName: entityConfig.systemState.tabName,
       registeredRange: entityConfig.systemState.registeredRange,
-      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
     },
     ...(entityConfig.userInput === undefined ? [] : [{
       physicalSheetId: `${logicalSheetId}:user_input`,
       spreadsheetId,
       tabName: entityConfig.userInput.tabName,
       registeredRange: entityConfig.userInput.registeredRange,
-      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      projection: SYNC_PROJECTIONS.USER_INPUT,
     }]),
   ];
 

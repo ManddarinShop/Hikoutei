@@ -12,36 +12,38 @@ export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 /** Outbound writer lease must outlive the longest remote effect request. */
 export const DEFAULT_WRITER_LEASE_DURATION_MS = 180_000;
 /** Minimum headroom between the remote timeout and the effect lease. */
-export const EFFECT_LEASE_GATEWAY_HEADROOM_MS = 30_000;
-/** Must exceed the 60-second Apps Script transport timeout plus recovery margin. */
+export const EFFECT_LEASE_PROVIDER_HEADROOM_MS = 30_000;
+/** Must exceed the 60-second provider transport timeout plus recovery margin. */
 export const DEFAULT_EFFECT_LEASE_DURATION_MS = 120_000;
 
 /**
- * Maximum effects one Apps Script `applyEffects` call will acknowledge.
+ * Maximum effects one provider `applyEffects` call will acknowledge.
  *
- * The deployed gateway caps a single bounded effect batch (see `MAX_EFFECTS`
- * in effectOperationScript.ts). Chunking each physical route's dispatch to
- * this limit keeps every request inside that batch, so an oversized configured
- * worker limit (`maxEffects`) does not turn one route into repeated partial
- * (`hasMore`) responses and the deferred/requeue churn they cause.
+ * The remote provider caps a single bounded effect batch (see
+ * `MAX_EFFECTS_PER_REQUEST` in the Google Sheets API provider defaults).
+ * Chunking each physical route's dispatch to this limit keeps every request
+ * inside that batch, so an oversized configured worker limit (`maxEffects`)
+ * does not turn one route into repeated partial (`hasMore`) responses and the
+ * deferred/requeue churn they cause.
  */
-export const GATEWAY_EFFECT_BATCH_LIMIT = 20;
+export const EFFECT_BATCH_LIMIT = 20;
 /**
  * Maximum number of effects leased before dispatch starts. Selection may use a
  * larger SQLite upper bound, but a worker pass must not lease an unbounded
  * backlog while a remote batch is in flight.
  */
-export const MAX_IN_FLIGHT_EFFECTS = GATEWAY_EFFECT_BATCH_LIMIT;
+export const MAX_IN_FLIGHT_EFFECTS = EFFECT_BATCH_LIMIT;
 /**
  * Maximum eligible fast-append rows one worker pass may select/claim in the
- * real Apps Script runtime. The temporary test-batch append operation writes
- * the whole reserved target range in one Advanced Sheets Values.batchUpdate
- * request, so a bulk pass can claim this many append candidates while regular
- * and recovery effects keep the bounded 20-effect window below.
+ * real provider runtime. The bulk append operation writes the whole reserved
+ * target range in one `spreadsheets.batchUpdate` request (an atomic
+ * target-plus-receipt batch), so a bulk pass can claim this many append
+ * candidates while regular and recovery effects keep the bounded 20-effect
+ * window below.
  */
 export const FAST_APPEND_BATCH_CANDIDATE_LIMIT = 1_000;
 /**
- * Minimum interval between fast-append request starts in the real Apps Script
+ * Minimum interval between fast-append request starts in the real provider
  * runtime. The adaptive batch controller remembers the last append request
  * start across supervisor passes and waits only the remaining time before the
  * next append request; regular applyEffects calls never wait on this throttle.
@@ -64,12 +66,12 @@ export const OUTBOX_EFFECT_STATUSES = {
 export const WORKER_ERROR_CODES = {
   INVALID_EFFECT_PAYLOAD: "invalid_effect_payload",
   ACTIVE_CANDIDATE_PRESERVED: "active_candidate_preserved",
-  GATEWAY_SUPERSEDED: "gateway_superseded",
+  PROVIDER_SUPERSEDED: "provider_superseded",
   CANDIDATE_GUARD_MISMATCH: "candidate_guard_mismatch",
   VISIBLE_GUARD_MISMATCH: "visible_guard_mismatch",
-  GATEWAY_SCHEMA_ERROR: "gateway_schema_error",
-  GATEWAY_REMOTE_ERROR: "gateway_remote_error",
-  GATEWAY_RETRYABLE_ERROR: SYNC_EFFECT_RECOVERY_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+  PROVIDER_SCHEMA_ERROR: "provider_schema_error",
+  PROVIDER_REMOTE_ERROR: "provider_remote_error",
+  PROVIDER_RETRYABLE_ERROR: SYNC_EFFECT_RECOVERY_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
   DELIVERY_UNCERTAIN_REQUIRES_PROBE:
     SYNC_EFFECT_RECOVERY_ERROR_CODES.DELIVERY_UNCERTAIN_REQUIRES_PROBE,
   POSTCONDITION_READ_FAILED: SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED,
@@ -81,7 +83,7 @@ export const WORKER_ERROR_CODES = {
   REPAIR_REOBSERVE_REQUIRES_WRITER_REPLAN: "repair_reobserve_requires_writer_replan",
   REPAIR_REPLAN_FAILED: "repair_replan_failed",
   REPAIR_REPLAN_DEFERRED: "repair_replan_deferred",
-  GATEWAY_CAPABILITY_MISSING: "gateway_capability_missing",
+  PROVIDER_CAPABILITY_MISSING: "provider_capability_missing",
 } as const;
 
 export type SyncEffectWorkerErrorCode =

@@ -4,7 +4,7 @@
  * The public repository never exposes insert/update/delete mechanics here.
  * These helpers translate a writer-approved canonical/candidate/resolution
  * decision into one immutable effect payload; the effect worker later performs
- * the remote compare-and-set through the gateway.
+ * the remote compare-and-set through the provider.
  */
 
 import {
@@ -26,15 +26,15 @@ import {
   notApplicableValue,
 } from "../../../../shared/state/index.js";
 import {
-  SYNC_GATEWAY_EFFECT_KINDS,
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../gateway/constants.js";
+  SYNC_DELETE_EFFECT_KINDS,
+  SYNC_PROJECTIONS,
+} from "../../sheets/constants.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncEffectKind,
   type SyncProjection,
-} from "../../gateway/syncGateway.js";
+} from "../../sheets/syncSheets.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
@@ -46,8 +46,8 @@ const PROJECTION_EFFECT_KINDS = {
   CANDIDATE_RECONCILE: "candidate_reconcile",
   SYSTEM_REPAIR: "system_repair",
   RESOLUTION_PROJECTION: "resolution_projection",
-  RESOLUTION_DELETE: SYNC_GATEWAY_EFFECT_KINDS.RESOLUTION_DELETE,
-  USER_INPUT_DELETE: SYNC_GATEWAY_EFFECT_KINDS.USER_INPUT_DELETE,
+  RESOLUTION_DELETE: SYNC_DELETE_EFFECT_KINDS.RESOLUTION_DELETE,
+  USER_INPUT_DELETE: SYNC_DELETE_EFFECT_KINDS.USER_INPUT_DELETE,
 } as const satisfies Record<string, SyncEffectKind>;
 
 const PROJECTION_TARGET_KINDS = {
@@ -94,19 +94,19 @@ export type SystemProjectionEffectInput = Omit<ProjectionEffectInput, "effectKin
 /** Input for a User_Input candidate reconciliation effect. */
 export type CandidateReconcileEffectInput =
   Omit<ProjectionEffectInput, "effectKind" | "projection"> & {
-    readonly projection?: typeof SYNC_GATEWAY_PROJECTIONS.USER_INPUT;
+    readonly projection?: typeof SYNC_PROJECTIONS.USER_INPUT;
   };
 
 /** Input for a guarded physical deletion from a User_Input projection. */
 export type UserInputDeleteEffectInput =
   Omit<ProjectionEffectInput, "effectKind" | "projection"> & {
-    readonly projection?: typeof SYNC_GATEWAY_PROJECTIONS.USER_INPUT;
+    readonly projection?: typeof SYNC_PROJECTIONS.USER_INPUT;
   };
 
 /** Shared input for effects projected to the Sync_Conflicts control sheet. */
 export type ResolutionEffectInput =
   Omit<ProjectionEffectInput, "effectKind" | "projection" | "targetKind"> & {
-    readonly projection?: typeof SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS;
+    readonly projection?: typeof SYNC_PROJECTIONS.SYNC_CONFLICTS;
   };
 
 /** Builds an immutable outbox row, including stable payload/dedupe identities. */
@@ -171,7 +171,7 @@ export function createProjectionEffect(input: ProjectionEffectInput): NewEffect 
 export function createSystemProjectionEffect(
   input: SystemProjectionEffectInput,
 ): NewEffect {
-  if (input.projection !== SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE) {
+  if (input.projection !== SYNC_PROJECTIONS.SYSTEM_STATE) {
     throwEffectError("system projection must target system_state");
   }
   return createProjectionEffect({
@@ -186,7 +186,7 @@ export function createCandidateReconcileEffect(
 ): NewEffect {
   return createProjectionEffect({
     ...input,
-    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    projection: SYNC_PROJECTIONS.USER_INPUT,
     effectKind: PROJECTION_EFFECT_KINDS.CANDIDATE_RECONCILE,
   });
 }
@@ -194,7 +194,7 @@ export function createCandidateReconcileEffect(
 /**
  * Creates a full-row, candidate-preserving deletion for one User_Input row.
  *
- * The payload must represent the exact current visible row. The gateway can
+ * The payload must represent the exact current visible row. The provider can
  * therefore remove only the anchored row that the canonical delete observed,
  * while the worker blocks the effect if an unresolved user candidate exists.
  */
@@ -203,7 +203,7 @@ export function createUserInputDeleteEffect(
 ): NewEffect {
   return createProjectionEffect({
     ...input,
-    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    projection: SYNC_PROJECTIONS.USER_INPUT,
     effectKind: PROJECTION_EFFECT_KINDS.USER_INPUT_DELETE,
   });
 }
@@ -227,7 +227,7 @@ export function createResolutionProjectionEffect(
   requireConflictTarget(input.conflictId, input.targetId, "resolution projection must target exactly one conflict ID");
   return createProjectionEffect({
     ...input,
-    projection: SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS,
+    projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
     targetKind: PROJECTION_TARGET_KINDS.CONFLICT,
     effectKind: PROJECTION_EFFECT_KINDS.RESOLUTION_PROJECTION,
   });
@@ -237,7 +237,7 @@ export function createResolutionProjectionEffect(
  * Creates a guarded deletion for one resolved system-owned conflict row.
  *
  * The payload carries the full currently visible conflict row as the expected
- * state. The gateway therefore deletes only the exact anchored row that the
+ * state. The provider therefore deletes only the exact anchored row that the
  * resolver observed; it never deletes by mutable sheet row number.
  */
 export function createResolutionDeleteEffect(
@@ -246,7 +246,7 @@ export function createResolutionDeleteEffect(
   requireConflictTarget(input.conflictId, input.targetId, "resolution deletion must target exactly one conflict ID");
   return createProjectionEffect({
     ...input,
-    projection: SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS,
+    projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
     targetKind: PROJECTION_TARGET_KINDS.CONFLICT,
     effectKind: PROJECTION_EFFECT_KINDS.RESOLUTION_DELETE,
   });
@@ -290,14 +290,14 @@ function validateInput(input: ProjectionEffectInput): void {
   }
   if (
     input.effectKind === PROJECTION_EFFECT_KINDS.CANDIDATE_RECONCILE &&
-    input.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT
+    input.projection !== SYNC_PROJECTIONS.USER_INPUT
   ) {
     throwEffectError("candidate reconcile must target user_input");
   }
   if (
     (input.effectKind === PROJECTION_EFFECT_KINDS.RESOLUTION_PROJECTION ||
       input.effectKind === PROJECTION_EFFECT_KINDS.RESOLUTION_DELETE) &&
-    input.projection !== SYNC_GATEWAY_PROJECTIONS.SYNC_CONFLICTS
+    input.projection !== SYNC_PROJECTIONS.SYNC_CONFLICTS
   ) {
     throwEffectError("resolution projection must target sync_conflicts");
   }
@@ -310,7 +310,7 @@ function validateInput(input: ProjectionEffectInput): void {
   if (
     input.effectKind === PROJECTION_EFFECT_KINDS.USER_INPUT_DELETE &&
     (
-      input.projection !== SYNC_GATEWAY_PROJECTIONS.USER_INPUT ||
+      input.projection !== SYNC_PROJECTIONS.USER_INPUT ||
       input.targetKind !== PROJECTION_TARGET_KINDS.PROJECTION_ROW
     )
   ) {

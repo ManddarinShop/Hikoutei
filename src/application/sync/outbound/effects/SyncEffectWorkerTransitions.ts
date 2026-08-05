@@ -1,4 +1,4 @@
-/** Durable result transitions for gateway responses and response-loss recovery. */
+/** Durable result transitions for provider responses and response-loss recovery. */
 
 import { stableHash } from "../../../../domain/index.js";
 import type { NewEffect } from "../../../../infrastructure/storage/index.js";
@@ -8,13 +8,13 @@ import {
 } from "../../../../shared/state/constants.js";
 import type { Presence } from "../../../../shared/state/types.js";
 import {
-  SYNC_GATEWAY_EFFECT_RESULT_STATUSES,
-  SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS,
-} from "../../gateway/constants.js";
+  SYNC_EFFECT_RESULT_STATUSES,
+  SYNC_POSTCONDITION_DISPOSITIONS,
+} from "../../sheets/constants.js";
 import type {
   SyncEffectPostcondition,
-  SyncGatewayEffectResult,
-} from "../../gateway/syncGateway.js";
+  SyncEffectResult,
+} from "../../sheets/syncSheets.js";
 import {
   OUTBOX_EFFECT_STATUSES,
   SYNC_EFFECT_KINDS,
@@ -29,7 +29,7 @@ import {
   safeErrorMessage,
 } from "./SyncEffectWorkerHelpers.js";
 import {
-  groupByGatewayPostconditionRequest,
+  groupByPostconditionRequest,
   isCandidateProtectingUserInputEffect,
 } from "./SyncEffectWorkerRouting.js";
 import type {
@@ -41,17 +41,17 @@ import type {
   SyncEffectWorkerFullOptions,
 } from "./SyncEffectWorker.js";
 
-export async function completeGatewayResult(
+export async function completeProviderResult(
   options: SyncEffectWorkerBaseOptions,
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
-  result: SyncGatewayEffectResult,
+  result: SyncEffectResult,
   report: MutableReport,
 ): Promise<void> {
   if (
-    result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
-    result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED
+    result.status === SYNC_EFFECT_RESULT_STATUSES.APPLIED ||
+    result.status === SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED
   ) {
     if (!isPresent(result.visibleRevision) || !isPresent(result.visibleHash)) {
       await deferDeliveryUncertain(
@@ -59,7 +59,7 @@ export async function completeGatewayResult(
         fence,
         item,
         WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
-        "Gateway applied result did not include receipt-backed visible evidence.",
+        "Provider applied result did not include receipt-backed visible evidence.",
         report,
       );
       return;
@@ -67,20 +67,20 @@ export async function completeGatewayResult(
     await completeApplied(storage, fence, item, result.visibleRevision, result.visibleHash, report);
     return;
   }
-  if (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.SUPERSEDED) {
+  if (result.status === SYNC_EFFECT_RESULT_STATUSES.SUPERSEDED) {
     if (await storage.applyEffectResult({
       ...fence,
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
       status: OUTBOX_EFFECT_STATUSES.SUPERSEDED,
-      lastErrorCode: presentValue(WORKER_ERROR_CODES.GATEWAY_SUPERSEDED),
+      lastErrorCode: presentValue(WORKER_ERROR_CODES.PROVIDER_SUPERSEDED),
       lastErrorMessage: result.reason,
     })) report.superseded += 1;
     return;
   }
-  if (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.GUARD_MISMATCH) {
-    const blocked = isPresent(item.gatewayEffect) &&
-      isCandidateProtectingUserInputEffect(item.gatewayEffect.value);
+  if (result.status === SYNC_EFFECT_RESULT_STATUSES.GUARD_MISMATCH) {
+    const blocked = isPresent(item.providerEffect) &&
+      isCandidateProtectingUserInputEffect(item.providerEffect.value);
     const status = blocked
       ? OUTBOX_EFFECT_STATUSES.BLOCKED_CANDIDATE
       : OUTBOX_EFFECT_STATUSES.CONFLICT;
@@ -102,7 +102,7 @@ export async function completeGatewayResult(
     }
     return;
   }
-  if (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.REPAIR_REOBSERVE) {
+  if (result.status === SYNC_EFFECT_RESULT_STATUSES.REPAIR_REOBSERVE) {
     await replanOrFail(
       options,
       storage,
@@ -110,7 +110,7 @@ export async function completeGatewayResult(
       item,
       {
         effect: item.pending,
-        gatewayResult: presentValue(result),
+        providerResult: presentValue(result),
         postcondition: absentValue(),
       },
       report,
@@ -121,9 +121,9 @@ export async function completeGatewayResult(
     storage,
     fence,
     item,
-    result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.SCHEMA_ERROR
-      ? WORKER_ERROR_CODES.GATEWAY_SCHEMA_ERROR
-      : WORKER_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+    result.status === SYNC_EFFECT_RESULT_STATUSES.SCHEMA_ERROR
+      ? WORKER_ERROR_CODES.PROVIDER_SCHEMA_ERROR
+      : WORKER_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
     result.reason,
     report,
   );
@@ -144,7 +144,7 @@ export async function recoverUnknownResults(
   });
   const usable: ClaimedEffect[] = [];
   for (const item of items) {
-    if (isPresent(item.gatewayEffect)) {
+    if (isPresent(item.providerEffect)) {
       usable.push(item);
       continue;
     }
@@ -157,18 +157,14 @@ export async function recoverUnknownResults(
       report,
     );
   }
-  const probeAuthority = liveFence();
-  for (const group of groupByGatewayPostconditionRequest(usable, {
-    epoch: probeAuthority.writerEpoch,
-    token: probeAuthority.fencingToken,
-  })) {
+  for (const group of groupByPostconditionRequest(usable)) {
     let results: readonly {
       readonly effectId: string;
       readonly payloadHash: string;
       readonly postcondition: SyncEffectPostcondition;
     }[];
     try {
-      results = await options.gateway.readEffectPostconditions(group.request);
+      results = await options.provider.readEffectPostconditions(group.request);
     } catch (error: unknown) {
       for (const item of group.items) {
         await deferDeliveryUncertain(
@@ -194,7 +190,7 @@ export async function recoverUnknownResults(
           liveFence(),
           item,
           WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
-          "Gateway postcondition batch did not return the expected effect evidence.",
+          "Provider postcondition batch did not return the expected effect evidence.",
           report,
         );
         continue;
@@ -219,7 +215,7 @@ export async function settleUnknownPostcondition(
   postcondition: SyncEffectPostcondition,
   report: MutableReport,
 ): Promise<void> {
-  if (!isPresent(item.gatewayEffect)) {
+  if (!isPresent(item.providerEffect)) {
     await completeFailure(
       storage,
       fence,
@@ -231,7 +227,7 @@ export async function settleUnknownPostcondition(
     return;
   }
   if (
-    postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.APPLIED &&
+    postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.APPLIED &&
     isPresent(postcondition.visibleRevision) &&
     isPresent(postcondition.visibleHash)
   ) {
@@ -247,20 +243,20 @@ export async function settleUnknownPostcondition(
     }
     return;
   }
-  if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.APPLIED) {
+  if (postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.APPLIED) {
     await deferDeliveryUncertain(
       storage,
       fence,
       item,
       WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
-      "Gateway claimed an applied postcondition without a verified visible revision and hash.",
+      "Provider claimed an applied postcondition without a verified visible revision and hash.",
       report,
     );
     return;
   }
   if (
-    postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED &&
-    item.gatewayEffect.value.effectKind === SYNC_EFFECT_KINDS.SYSTEM_REPAIR
+    postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.CHANGED &&
+    item.providerEffect.value.effectKind === SYNC_EFFECT_KINDS.SYSTEM_REPAIR
   ) {
     await replanOrFail(
       options,
@@ -269,20 +265,20 @@ export async function settleUnknownPostcondition(
       item,
       {
         effect: item.pending,
-        gatewayResult: absentValue(),
+        providerResult: absentValue(),
         postcondition: presentValue(postcondition),
       },
       report,
     );
     return;
   }
-  if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAPPLIED) {
+  if (postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.UNAPPLIED) {
     const requeued = await storage.retryClaimedEffect({
       ...fence,
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
       lastErrorCode: WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
-      lastErrorMessage: "Gateway did not expose the effect as applied; it was returned to pending.",
+      lastErrorMessage: "Provider did not expose the effect as applied; it was returned to pending.",
       nextAttemptAt: fence.now + DURABLE_PROBE_RETRY_DELAY_MS,
     });
     if (requeued) {
@@ -291,19 +287,19 @@ export async function settleUnknownPostcondition(
     }
     return;
   }
-  if (postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE) {
+  if (postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.UNAVAILABLE) {
     await deferDeliveryUncertain(
       storage,
       fence,
       item,
       WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
-      "Gateway response was not observed; postcondition=unavailable" +
+      "Provider response was not observed; postcondition=unavailable" +
         (postcondition.reason === undefined ? "" : ", reason=" + postcondition.reason),
       report,
     );
     return;
   }
-  const code = postcondition.disposition === SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.CHANGED
+  const code = postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.CHANGED
     ? WORKER_ERROR_CODES.POSTCONDITION_CHANGED
     : WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE;
   await completeFailure(
@@ -312,7 +308,7 @@ export async function settleUnknownPostcondition(
     item,
     code,
     presentValue(
-      "Gateway response was not observed; postcondition=" +
+      "Provider response was not observed; postcondition=" +
       postcondition.disposition +
       (postcondition.reason === undefined ? "" : ", reason=" + postcondition.reason),
     ),
@@ -348,8 +344,8 @@ export async function completeApplied(
   visibleHash: Presence<string>,
   report: MutableReport,
 ): Promise<boolean> {
-  const gatewayEffect = item.gatewayEffect;
-  if (!isPresent(gatewayEffect)) {
+  const providerEffect = item.providerEffect;
+  if (!isPresent(providerEffect)) {
     await completeFailure(
       storage,
       fence,
@@ -372,32 +368,32 @@ export async function completeApplied(
     return false;
   }
   if (
-    visibleHash.value !== gatewayEffect.value.payload.targetVisibleHash
+    visibleHash.value !== providerEffect.value.payload.targetVisibleHash
   ) {
     await completeFailure(
       storage,
       fence,
       item,
       WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
-      presentValue("Gateway postcondition visible hash does not match the effect target."),
+      presentValue("Provider postcondition visible hash does not match the effect target."),
       report,
     );
     return false;
   }
   const confirmation =
-    isPresent(gatewayEffect) &&
-    isPresent(gatewayEffect.value.rowBindingId) &&
+    isPresent(providerEffect) &&
+    isPresent(providerEffect.value.rowBindingId) &&
     isPresent(visibleRevision) &&
     isPresent(visibleHash)
     ? {
       physicalSheetId: item.pending.physical_sheet_id,
       projection: item.pending.projection,
-      rowBindingId: gatewayEffect.value.rowBindingId.value,
+      rowBindingId: providerEffect.value.rowBindingId.value,
       visibleRevision: visibleRevision.value,
       visibleHash: visibleHash.value,
       entityRevision: applicabilityFromSqlNullable(item.pending.target_entity_revision),
       fieldHashes: Object.fromEntries(
-        Object.entries(gatewayEffect.value.payload.fields)
+        Object.entries(providerEffect.value.payload.fields)
           .map(([fieldName, value]) => [fieldName, stableHash(value)]),
       ),
     }

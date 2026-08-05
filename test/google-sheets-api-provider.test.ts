@@ -1,5 +1,5 @@
 /**
- * Credential-free coverage for the direct Google Sheets API outbound gateway.
+ * Credential-free coverage for the direct Google Sheets API outbound provider.
  *
  * These tests exercise the provider through the narrow stub transport with an
  * in-memory spreadsheet model: bulk preflight fail-closed validation, the
@@ -14,23 +14,22 @@ import { describe, expect, it } from "vitest";
 
 import type { NormalizedCell } from "../src/domain/index.js";
 import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/gateway/syncGateway.js";
+import { computeSyncVisibleHash } from "../src/application/sync/sheets/syncSheets.js";
 import type {
   ApplySyncEffectsRequest,
   FastAppendRow,
-  SyncGatewayAuthority,
-  SyncGatewayEffect,
-} from "../src/application/sync/gateway/syncGateway.js";
-import { SYNC_GATEWAY_POSTCONDITION_MODES } from "../src/application/sync/gateway/constants.js";
-import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/gateway/transportClassification.js";
-import { GoogleSheetsApiEffectGateway } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+  SyncProjectionEffect,
+} from "../src/application/sync/sheets/syncSheets.js";
+import { SYNC_POSTCONDITION_MODES } from "../src/application/sync/sheets/constants.js";
+import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheets/transportOutcome.js";
+import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import { serializeBatchUpdateRequests } from "../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "../src/adapter/sheets/providers/google-sheets-api/model/preflight.js";
 import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
 import { classifyGoogleSheetsApiError } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
-import { SYNC_GATEWAY_ERROR_CODES } from "../src/application/sync/gateway/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
+import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheets/errors.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheets/sheetsProvisioning.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,
@@ -123,8 +122,8 @@ function buildProvider(
     readonly sleep?: (ms: number) => Promise<void>;
     readonly onRequest?: (event: unknown) => void;
   } = {},
-): GoogleSheetsApiEffectGateway {
-  return new GoogleSheetsApiEffectGateway({
+): GoogleSheetsApiSyncProvider {
+  return new GoogleSheetsApiSyncProvider({
     spreadsheetId: SPREADSHEET_ID,
     definitions: [SYSTEM_DEFINITION, USER_INPUT_DEFINITION, CONFLICT_DEFINITION],
     transport,
@@ -193,7 +192,7 @@ function seedReceiptTab(
 interface EffectSeed {
   readonly effectId?: string;
   readonly payloadHash?: string;
-  readonly effectKind?: SyncGatewayEffect["effectKind"];
+  readonly effectKind?: SyncProjectionEffect["effectKind"];
   readonly projection?: string;
   readonly targetId?: string;
   readonly targetAnchor: string;
@@ -206,7 +205,7 @@ interface EffectSeed {
   readonly physicalSheetId?: string;
 }
 
-function effect(seed: EffectSeed): SyncGatewayEffect {
+function effect(seed: EffectSeed): SyncProjectionEffect {
   const fields = { ...seed.fields };
   const targetVisibleHash = computeSyncVisibleHash(fields);
   const projection = seed.projection ?? "system_state";
@@ -221,7 +220,7 @@ function effect(seed: EffectSeed): SyncGatewayEffect {
     payloadHash: seed.payloadHash ?? "payload-1",
     effectKind: seed.effectKind ?? "system_projection",
     physicalSheetId,
-    projection: projection as SyncGatewayEffect["projection"],
+    projection: projection as SyncProjectionEffect["projection"],
     targetKind: "entity",
     targetId: seed.targetId ?? `entity:users:${seed.targetAnchor}`,
     rowBindingId: presentValue(`row:${seed.targetAnchor}`),
@@ -247,10 +246,10 @@ function effect(seed: EffectSeed): SyncGatewayEffect {
 }
 
 function applyRequest(
-  provider: GoogleSheetsApiEffectGateway,
-  effects: readonly SyncGatewayEffect[],
+  provider: GoogleSheetsApiSyncProvider,
+  effects: readonly SyncProjectionEffect[],
   postconditionMode: "inline" | "deferred" = "deferred",
-): ReturnType<GoogleSheetsApiEffectGateway["applyEffects"]> {
+): ReturnType<GoogleSheetsApiSyncProvider["applyEffects"]> {
   return provider.applyEffects({
     physicalSheetId: effects[0]?.physicalSheetId ?? SYSTEM_SHEET_ID,
     sheetName: effects[0]?.payload.sheetName ?? "Users_System",
@@ -285,7 +284,7 @@ const cell = {
   date: (value: string): NormalizedCell => ({ kind: "date", value }),
 };
 
-describe("GoogleSheetsApiEffectGateway route and preflight validation", () => {
+describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
   it("rejects a request whose route does not match the registered definition", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -300,7 +299,7 @@ describe("GoogleSheetsApiEffectGateway route and preflight validation", () => {
       effects: [effect({ targetAnchor: "a1", fields: { id: cell.string("u1"), status: cell.string("x") } })],
     };
     await expect(provider.applyEffects(request)).rejects.toMatchObject({
-      code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
     });
     expect(transport.getSpreadsheetCalls).toBe(0);
   });
@@ -316,7 +315,7 @@ describe("GoogleSheetsApiEffectGateway route and preflight validation", () => {
       projection: "system_state",
       schemaVersion: 1,
       effects: [effect({ targetAnchor: "a1", fields: { id: cell.string("u1"), status: cell.string("x") } })],
-    })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS });
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS });
   });
 
   it("fails closed on header drift, duplicate headers, and missing headers", async () => {
@@ -326,7 +325,7 @@ describe("GoogleSheetsApiEffectGateway route and preflight validation", () => {
     const provider = buildProvider(transport);
     await expect(applyRequest(provider, [
       effect({ targetAnchor: "a1", fields: { id: cell.string("u1"), status: cell.string("x") } }),
-    ])).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE });
+    ])).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
@@ -393,7 +392,7 @@ describe("GoogleSheetsApiEffectGateway route and preflight validation", () => {
     const provider = buildProvider(transport);
     await expect(applyRequest(provider, [
       effect({ targetAnchor: "a1", fields: { id: cell.string("u1"), status: cell.string("x") } }),
-    ])).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE });
+    ])).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
@@ -407,71 +406,13 @@ describe("GoogleSheetsApiEffectGateway route and preflight validation", () => {
     const provider = buildProvider(transport);
     await expect(applyRequest(provider, [
       effect({ targetAnchor: "a1", fields: { id: cell.string("u3"), status: cell.string("z") } }),
-    ])).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE });
+    ])).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
-  it("accepts valid authority fence evidence on mutating requests", async () => {
-    const spreadsheet = new StubSpreadsheet();
-    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
-    const transport = new StubSheetsTransport(spreadsheet);
-    const provider = buildProvider(transport);
-    const result = await provider.fastAppendRows({
-      physicalSheetId: SYSTEM_SHEET_ID,
-      sheetName: "Users_System",
-      registeredRange: "A:C",
-      projection: "system_state",
-      schemaVersion: 1,
-      authority: { epoch: 4, token: "writer-token" },
-      rows: appendRows(1),
-    });
-    expect(result.hasMore).toBe(false);
-    expect(result.results[0]?.status).toBe("applied");
-    expect(transport.batchUpdateCalls).toBe(1);
-  });
-
-  it("fails closed on malformed authority before any transport call", async () => {
-    const malformed = [
-      { epoch: 0, token: "writer-token" },
-      { epoch: 1.5, token: "writer-token" },
-      { epoch: 1, token: "" },
-    ];
-    for (const authority of malformed) {
-      const spreadsheet = new StubSpreadsheet();
-      spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
-      const transport = new StubSheetsTransport(spreadsheet);
-      const provider = buildProvider(transport);
-      const rejectedAuthority = authority as unknown as SyncGatewayAuthority;
-      await expect(provider.applyEffects({
-        physicalSheetId: SYSTEM_SHEET_ID,
-        sheetName: "Users_System",
-        registeredRange: "A:C",
-        projection: "system_state",
-        schemaVersion: 1,
-        authority: rejectedAuthority,
-        effects: [effect({
-          effectId: "authority-reject",
-          targetAnchor: "anchor-auth",
-          createIfMissing: true,
-          fields: { id: cell.string("u-auth"), status: cell.string("pending") },
-        })],
-      })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
-      await expect(provider.fastAppendRows({
-        physicalSheetId: SYSTEM_SHEET_ID,
-        sheetName: "Users_System",
-        registeredRange: "A:C",
-        projection: "system_state",
-        schemaVersion: 1,
-        authority: rejectedAuthority,
-        rows: appendRows(1),
-      })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
-      expect(transport.getSpreadsheetCalls).toBe(0);
-      expect(transport.batchUpdateCalls).toBe(0);
-    }
-  });
 });
 
-describe("GoogleSheetsApiEffectGateway applyEffects planning and batches", () => {
+describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => {
   it("plans multiple creates into one target+receipt batch with anchors and receipts", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1006,7 +947,7 @@ describe("GoogleSheetsApiEffectGateway applyEffects planning and batches", () =>
     })));
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
-    const deleteAt = (row: (typeof rows)[number]): SyncGatewayEffect => effect({
+    const deleteAt = (row: (typeof rows)[number]): SyncProjectionEffect => effect({
       effectId: `delete-${row.anchor}`,
       effectKind: "user_input_delete",
       physicalSheetId: USER_INPUT_SHEET_ID,
@@ -1084,7 +1025,7 @@ describe("GoogleSheetsApiEffectGateway applyEffects planning and batches", () =>
         createIfMissing: true,
         fields: { id: cell.string("u1"), status: cell.string("x") },
       }),
-    ])).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    ])).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
@@ -1153,7 +1094,7 @@ describe("GoogleSheetsApiEffectGateway applyEffects planning and batches", () =>
   });
 });
 
-describe("GoogleSheetsApiEffectGateway fast append", () => {
+describe("GoogleSheetsApiSyncProvider fast append", () => {
   it("appends up to 1,000 rows per request and defers the suffix", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -1235,7 +1176,7 @@ describe("GoogleSheetsApiEffectGateway fast append", () => {
       projection: "system_state",
       schemaVersion: 1,
       rows: duplicated,
-    })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_GATEWAY_RESPONSE });
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
@@ -1251,7 +1192,7 @@ describe("GoogleSheetsApiEffectGateway fast append", () => {
       projection: "user_input",
       schemaVersion: 1,
       rows: appendRows(1),
-    })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
   });
 
   it("fails closed when an append row omits payloadHash", async () => {
@@ -1273,7 +1214,7 @@ describe("GoogleSheetsApiEffectGateway fast append", () => {
       projection: "system_state",
       schemaVersion: 1,
       rows: [withoutPayloadHash],
-    })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
@@ -1294,7 +1235,7 @@ describe("GoogleSheetsApiEffectGateway fast append", () => {
         ...row,
         fields: { ...row.fields, status: "raw-string" as unknown as NormalizedCell },
       }],
-    })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
@@ -1314,7 +1255,7 @@ describe("GoogleSheetsApiEffectGateway fast append", () => {
       projection: "system_state",
       schemaVersion: 1,
       rows: [{ ...row, fields: { ...row.fields, id: { kind: "boolean", value: true } } }],
-    })).rejects.toMatchObject({ code: SYNC_GATEWAY_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
@@ -1401,7 +1342,7 @@ describe("GoogleSheetsApiEffectGateway fast append", () => {
   });
 });
 
-describe("GoogleSheetsApiEffectGateway byte budget", () => {
+describe("GoogleSheetsApiSyncProvider byte budget", () => {
   it("sends only the order-preserving prefix and returns hasMore past the budget", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -1510,7 +1451,7 @@ describe("GoogleSheetsApiEffectGateway byte budget", () => {
   });
 });
 
-describe("GoogleSheetsApiEffectGateway postcondition recovery", () => {
+describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
   it("classifies an applied effect from receipt evidence", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -1766,7 +1707,7 @@ describe("GoogleSheetsApiEffectGateway postcondition recovery", () => {
   });
 });
 
-describe("GoogleSheetsApiEffectGateway transport classification and telemetry", () => {
+describe("GoogleSheetsApiSyncProvider transport classification and telemetry", () => {
   it("classifies malformed 2xx replies as delivery-uncertain", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -1943,7 +1884,7 @@ describe("GoogleSheetsApiEffectGateway transport classification and telemetry", 
   });
 });
 
-describe("GoogleSheetsApiEffectGateway inline postcondition mode", () => {
+describe("GoogleSheetsApiSyncProvider inline postcondition mode", () => {
   it("writes target mutations first, verifies, then writes receipts", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -1970,7 +1911,7 @@ describe("GoogleSheetsApiEffectGateway inline postcondition mode", () => {
         __typed_sheets_deleted: cell.bool(false),
       },
     });
-    const result = await applyRequest(provider, [update], SYNC_GATEWAY_POSTCONDITION_MODES.INLINE);
+    const result = await applyRequest(provider, [update], SYNC_POSTCONDITION_MODES.INLINE);
     expect(result.results[0]?.status).toBe("applied");
     expect(result.results[0]?.postcondition).toBe("verified");
     // Two writes: target batch first, receipt batch after verification.

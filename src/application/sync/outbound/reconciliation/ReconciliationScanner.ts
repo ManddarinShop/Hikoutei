@@ -4,7 +4,7 @@
  * SQLite is the canonical state; the Sheet is a projection that may drift when
  * the fast-append path skips per-effect CAS, when a spreadsheet owner edits a
  * protected tab, or when a response is lost. This scanner compares the durable
- * desired state against one gateway snapshot per scan and, for every drift, it
+ * desired state against one provider snapshot per scan and, for every drift, it
  * enqueues a normal system_projection effect on the existing outbox. The effect
  * worker then applies the correction through the same slow path (with CAS) used
  * by regular writes, so reconciliation never writes to the Sheet directly.
@@ -42,13 +42,13 @@ import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persist
 import {
   computeSyncVisibleHash,
   observeSyncSnapshot,
-  type SyncGatewaySnapshot,
-  type SyncSheetGateway,
-} from "../../gateway/syncGateway.js";
+  type SyncSheetsSnapshot,
+  type SyncSheetsProvider,
+} from "../../sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-  SYNC_GATEWAY_SNAPSHOT_READ_MODES,
-} from "../../gateway/constants.js";
+  SYNC_PROJECTIONS,
+  SYNC_SNAPSHOT_READ_MODES,
+} from "../../sheets/constants.js";
 import { createSystemProjectionEffect } from "../projection/ProjectionEffectFactory.js";
 
 const DEFAULT_RECONCILIATION_ROLE = "typed-sheets-reconciler";
@@ -61,7 +61,7 @@ export type ReconciliationIdFactory = () => string;
 /** Construction options for a single reconciliation scan. */
 export interface RunReconciliationScanOptions {
   readonly storage: SqlStorageAdapter;
-  readonly gateway: SyncSheetGateway;
+  readonly provider: SyncSheetsProvider;
   /** Physical sheet id of the System_State projection to reconcile. */
   readonly physicalSheetId: string;
   /** Logical sheet id owning the entity row bindings. */
@@ -193,7 +193,7 @@ export async function runReconciliationScan(
 
   const report: ReconciliationScanReport = await scanAndEnqueue({
     storage: options.storage,
-    gateway: options.gateway,
+    provider: options.provider,
     physicalSheetId: options.physicalSheetId,
     logicalSheetId: options.logicalSheetId,
     systemFields: options.systemFields,
@@ -216,7 +216,7 @@ export async function runReconciliationScan(
 
 interface ScanContext {
   readonly storage: SqlStorageAdapter;
-  readonly gateway: SyncSheetGateway;
+  readonly provider: SyncSheetsProvider;
   readonly physicalSheetId: string;
   readonly logicalSheetId: string;
   readonly systemFields: readonly string[];
@@ -234,7 +234,7 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     context.storage,
     context.physicalSheetId,
   );
-  if (sheet.projection !== SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE) {
+  if (sheet.projection !== SYNC_PROJECTIONS.SYSTEM_STATE) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
       "reconciliation scanner only supports the system_state projection",
@@ -245,13 +245,13 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     physicalSheetId: context.physicalSheetId,
     sheetName: sheet.tabName,
     registeredRange: sheet.registeredRange,
-    projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+    projection: SYNC_PROJECTIONS.SYSTEM_STATE,
     schemaVersion: sheet.schemaVersion,
-    readMode: SYNC_GATEWAY_SNAPSHOT_READ_MODES.FULL,
+    readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
   } as const;
   // Fast append intentionally skips metadata. Reconciliation is the lazy
   // repair point that assigns stable anchors before comparing the snapshot.
-  const observed = await observeSyncSnapshot(context.gateway, snapshotRequest);
+  const observed = await observeSyncSnapshot(context.provider, snapshotRequest);
   const snapshot = observed.snapshot;
 
   const desired = await readDesiredSystemState(context);
@@ -327,14 +327,14 @@ interface DriftTarget {
 }
 
 function computeDrifts(args: {
-  readonly snapshot: SyncGatewaySnapshot;
+  readonly snapshot: SyncSheetsSnapshot;
   readonly desired: readonly DesiredRow[];
   readonly systemFields: readonly string[];
   readonly sheet: { readonly registeredRange: string; readonly businessKeyField: string };
 }): readonly DriftTarget[] {
-  const rowsByAnchor = new Map<string, SyncGatewaySnapshot["rows"][number]>();
+  const rowsByAnchor = new Map<string, SyncSheetsSnapshot["rows"][number]>();
   const ambiguousAnchors = new Set<string>();
-  const rowsByIdentity = new Map<string, SyncGatewaySnapshot["rows"][number]>();
+  const rowsByIdentity = new Map<string, SyncSheetsSnapshot["rows"][number]>();
   const ambiguousIdentities = new Set<string>();
   for (const row of args.snapshot.rows) {
     if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT) {
@@ -387,7 +387,7 @@ function computeDrifts(args: {
 
 /** Reads a business-key value from a snapshot row for unanchored fast appends. */
 function snapshotIdentity(
-  row: SyncGatewaySnapshot["rows"][number],
+  row: SyncSheetsSnapshot["rows"][number],
   identityField: string,
 ): string | undefined {
   return normalizedCellIdentity(row.cells[identityField]?.normalizedCell);
@@ -413,7 +413,7 @@ function normalizedCellIdentity(cell: NormalizedCell | undefined): string | unde
 }
 
 function computeObservedHash(
-  row: SyncGatewaySnapshot["rows"][number],
+  row: SyncSheetsSnapshot["rows"][number],
   systemFields: readonly string[],
 ): string {
   const values: Record<string, NormalizedCell> = {};
@@ -517,7 +517,7 @@ async function buildCorrectionEffects(
       physicalSheetId: context.physicalSheetId,
       sheetName: sheet.tabName,
       registeredRange: sheet.registeredRange,
-      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
       schemaVersion: context.schemaVersion,
       targetKind: "entity",
       targetId: drift.desired.entityId,
@@ -587,7 +587,7 @@ async function resolveCorrectionBaselineWithSql(
       if (expectedHash === computeSyncVisibleHash(desired.fields)) {
         // A canonical write already has an equivalent correction in flight.
         // Do not append another stream item on every periodic scan while the
-        // first item is waiting for the gateway or its recovery read-back.
+        // first item is waiting for the provider or its recovery read-back.
         return {
           skip: true,
           expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
@@ -673,7 +673,7 @@ async function claimReconcilerFence(context: ScanContext): Promise<FencingContex
 }
 
 function countMatchedRows(
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   desired: readonly DesiredRow[],
   identityField: string,
 ): number {
@@ -716,7 +716,7 @@ function countMatchedRows(
 }
 
 function countExtraRows(
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   desired: readonly DesiredRow[],
   identityField: string,
 ): number {
@@ -782,7 +782,7 @@ interface ReportDelta {
 
 function freezeReport(
   physicalSheetId: string,
-  snapshot: SyncGatewaySnapshot,
+  snapshot: SyncSheetsSnapshot,
   desired: readonly DesiredRow[],
   delta: ReportDelta,
 ): ReconciliationScanReport {

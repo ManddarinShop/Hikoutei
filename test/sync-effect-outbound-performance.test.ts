@@ -17,16 +17,16 @@ import {
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-  type SyncGatewayEffect,
-} from "../src/application/sync/gateway/syncGateway.js";
+  type SyncProjectionEffect,
+} from "../src/application/sync/sheets/syncSheets.js";
 import {
-  chunkGatewayEffectGroups,
-  groupByGatewayRequest,
+  chunkProviderEffectGroups,
+  groupByProviderRequest,
 } from "../src/application/sync/outbound/effects/SyncEffectWorkerRouting.js";
-import { GATEWAY_EFFECT_BATCH_LIMIT } from "../src/application/sync/outbound/effects/SyncEffectWorkerConstants.js";
+import { EFFECT_BATCH_LIMIT } from "../src/application/sync/outbound/effects/SyncEffectWorkerConstants.js";
 import type { ClaimedEffect } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
-import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 
@@ -83,31 +83,31 @@ describe("outbound effect dispatch batching", () => {
         makeItem(ROUTE_ALPHA, "a-3"),
       ];
 
-      const groups = groupByGatewayRequest(items);
+      const groups = groupByProviderRequest(items);
 
       expect(groups).toHaveLength(2);
       const alpha = groups.find((group) => group.items[0]!.pending.effect_id === "a-1")!;
       const beta = groups.find((group) => group.items[0]!.pending.effect_id === "b-1")!;
       expect(ids(alpha)).toEqual(["a-1", "a-2", "a-3"]);
       expect(ids(beta)).toEqual(["b-1", "b-2"]);
-      // Each route keeps a single gateway request carrying all of its effects.
+      // Each route keeps a single provider request carrying all of its effects.
       expect(alpha.request.effects.map((effect) => effect.effectId)).toEqual(["a-1", "a-2", "a-3"]);
       expect(beta.request.effects.map((effect) => effect.effectId)).toEqual(["b-1", "b-2"]);
     });
 
     it("chunks an oversized route at the Apps Script bounded effect batch", () => {
-      const oversized = Array.from({ length: GATEWAY_EFFECT_BATCH_LIMIT * 2 + 5 }, (_, index) =>
+      const oversized = Array.from({ length: EFFECT_BATCH_LIMIT * 2 + 5 }, (_, index) =>
         makeItem(ROUTE_ALPHA, `a-${index}`),
       );
 
-      const chunked = chunkGatewayEffectGroups(groupByGatewayRequest(oversized));
+      const chunked = chunkProviderEffectGroups(groupByProviderRequest(oversized));
 
-      // Every chunk fits inside the gateway batch so applyEffects returns a
+      // Every chunk fits inside the provider batch so applyEffects returns a
       // complete result set (hasMore=false) instead of a partial prefix.
       expect(chunked).toHaveLength(3);
       expect(chunked.map((group) => group.items.length)).toEqual([
-        GATEWAY_EFFECT_BATCH_LIMIT,
-        GATEWAY_EFFECT_BATCH_LIMIT,
+        EFFECT_BATCH_LIMIT,
+        EFFECT_BATCH_LIMIT,
         5,
       ]);
       // Selection order is preserved across chunks; no effect is dropped.
@@ -119,29 +119,29 @@ describe("outbound effect dispatch batching", () => {
     });
 
     it("leaves a route that already fits the batch as a single group", () => {
-      const items = Array.from({ length: GATEWAY_EFFECT_BATCH_LIMIT }, (_, index) =>
+      const items = Array.from({ length: EFFECT_BATCH_LIMIT }, (_, index) =>
         makeItem(ROUTE_ALPHA, `a-${index}`),
       );
 
-      const chunked = chunkGatewayEffectGroups(groupByGatewayRequest(items));
+      const chunked = chunkProviderEffectGroups(groupByProviderRequest(items));
 
       expect(chunked).toHaveLength(1);
-      expect(chunked[0]!.items).toHaveLength(GATEWAY_EFFECT_BATCH_LIMIT);
+      expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
     });
 
     it("preserves physical-route grouping across distinct routes when chunking", () => {
       const items = [
-        ...Array.from({ length: GATEWAY_EFFECT_BATCH_LIMIT + 3 }, (_, index) =>
+        ...Array.from({ length: EFFECT_BATCH_LIMIT + 3 }, (_, index) =>
           makeItem(ROUTE_ALPHA, `a-${index}`),
         ),
         ...Array.from({ length: 2 }, (_, index) => makeItem(ROUTE_BETA, `b-${index}`)),
       ];
 
-      const chunked = chunkGatewayEffectGroups(groupByGatewayRequest(items));
+      const chunked = chunkProviderEffectGroups(groupByProviderRequest(items));
 
       expect(chunked).toHaveLength(3);
       expect(chunked[0]!.request.physicalSheetId).toBe(ROUTE_ALPHA.physicalSheetId);
-      expect(chunked[0]!.items).toHaveLength(GATEWAY_EFFECT_BATCH_LIMIT);
+      expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
       expect(chunked[1]!.request.physicalSheetId).toBe(ROUTE_ALPHA.physicalSheetId);
       expect(chunked[1]!.items).toHaveLength(3);
       expect(chunked[2]!.request.physicalSheetId).toBe(ROUTE_BETA.physicalSheetId);
@@ -157,7 +157,7 @@ describe("outbound effect dispatch batching", () => {
     });
 
     it("drains an oversized route in bounded passes without partial-response churn", async () => {
-      const count = GATEWAY_EFFECT_BATCH_LIMIT * 2 + 5; // 45 effects on one route
+      const count = EFFECT_BATCH_LIMIT * 2 + 5; // 45 effects on one route
       const orm = await createOrm();
       openOrms.push(orm);
       const adapter = new MikroOrmSqliteAdapter(orm);
@@ -166,9 +166,9 @@ describe("outbound effect dispatch batching", () => {
 
       await seedEffects(adapter, count);
 
-      // The fake gateway caps each applyEffects call at the Apps Script batch
+      // The fake provider caps each applyEffects call at the Apps Script batch
       // limit, exactly like the deployed Code.gs MAX_EFFECTS guard.
-      const gateway = new FakeSyncSheetGateway(
+      const provider = new FakeSyncSheetsProvider(
         [
           {
             physicalSheetId: "physical-perf",
@@ -180,7 +180,7 @@ describe("outbound effect dispatch batching", () => {
             rows: perfRows(count),
           },
         ],
-        { maxEffectsPerApply: GATEWAY_EFFECT_BATCH_LIMIT },
+        { maxEffectsPerApply: EFFECT_BATCH_LIMIT },
       );
 
       // An oversized configured worker limit (50) remains a SQLite selection
@@ -189,7 +189,7 @@ describe("outbound effect dispatch batching", () => {
       for (let pass = 0; pass < 3; pass += 1) {
         reports.push(await runSyncEffectWorkerWithAdapter({
           storage: adapter,
-          gateway,
+          provider,
           workerId: "perf-worker",
           now: 1_000 + pass,
           maxEffects: count + 5,
@@ -197,17 +197,17 @@ describe("outbound effect dispatch batching", () => {
       }
 
       expect(reports[0]).toMatchObject({
-        selected: GATEWAY_EFFECT_BATCH_LIMIT,
-        claimed: GATEWAY_EFFECT_BATCH_LIMIT,
-        applied: GATEWAY_EFFECT_BATCH_LIMIT,
+        selected: EFFECT_BATCH_LIMIT,
+        claimed: EFFECT_BATCH_LIMIT,
+        applied: EFFECT_BATCH_LIMIT,
         deferred: 0,
         requeued: 0,
         failed: 0,
       });
       expect(reports.reduce((sum, report) => sum + report.applied, 0)).toBe(count);
       // One bounded applyEffects call per leased window.
-      expect(gateway.applyEffectsCalls).toBe(3);
-      expect(gateway.fastAppendCalls).toBe(0);
+      expect(provider.applyEffectsCalls).toBe(3);
+      expect(provider.fastAppendCalls).toBe(0);
       await expect(allApplied(adapter, count)).resolves.toBe(true);
     });
 
@@ -220,7 +220,7 @@ describe("outbound effect dispatch batching", () => {
 
       await seedEffects(adapter, 1);
 
-      const gateway = new FakeSyncSheetGateway([
+      const provider = new FakeSyncSheetsProvider([
         {
           physicalSheetId: "physical-perf",
           sheetName: "Orders",
@@ -233,11 +233,11 @@ describe("outbound effect dispatch batching", () => {
       ]);
       // The remote write completes before the response is dropped; the worker
       // must still close the effect by reading the postcondition back.
-      gateway.dropNextResponseAfterApply();
+      provider.dropNextResponseAfterApply();
 
       const report = await runSyncEffectWorkerWithAdapter({
         storage: adapter,
-        gateway,
+        provider,
         workerId: "perf-worker",
         now: 1_000,
         maxEffects: 1,
@@ -250,13 +250,13 @@ describe("outbound effect dispatch batching", () => {
         requeued: 0,
         failed: 0,
       });
-      expect(gateway.applyEffectsCalls).toBe(1);
-      expect(gateway.postconditionBatchReads).toBe(1);
+      expect(provider.applyEffectsCalls).toBe(1);
+      expect(provider.postconditionBatchReads).toBe(1);
       await expect(allApplied(adapter, 1)).resolves.toBe(true);
     });
 
     it("converges a backlog across passes while preserving route order", async () => {
-      const count = GATEWAY_EFFECT_BATCH_LIMIT + 7; // 27 effects, two chunks + remainder
+      const count = EFFECT_BATCH_LIMIT + 7; // 27 effects, two chunks + remainder
       const orm = await createOrm();
       openOrms.push(orm);
       const adapter = new MikroOrmSqliteAdapter(orm);
@@ -265,7 +265,7 @@ describe("outbound effect dispatch batching", () => {
 
       await seedEffects(adapter, count);
 
-      const gateway = new FakeSyncSheetGateway(
+      const provider = new FakeSyncSheetsProvider(
         [
           {
             physicalSheetId: "physical-perf",
@@ -277,14 +277,14 @@ describe("outbound effect dispatch batching", () => {
             rows: perfRows(count),
           },
         ],
-        { maxEffectsPerApply: GATEWAY_EFFECT_BATCH_LIMIT },
+        { maxEffectsPerApply: EFFECT_BATCH_LIMIT },
       );
 
       // A worker limit smaller than the backlog must still converge: chunked
-      // dispatch within each pass keeps every request inside the gateway batch.
+      // dispatch within each pass keeps every request inside the provider batch.
       const first = await runSyncEffectWorkerWithAdapter({
         storage: adapter,
-        gateway,
+        provider,
         workerId: "perf-worker",
         now: 1_000,
         maxEffects: 10,
@@ -294,7 +294,7 @@ describe("outbound effect dispatch batching", () => {
 
       const second = await runSyncEffectWorkerWithAdapter({
         storage: adapter,
-        gateway,
+        provider,
         workerId: "perf-worker",
         now: 1_001,
         maxEffects: 10,
@@ -304,7 +304,7 @@ describe("outbound effect dispatch batching", () => {
 
       const third = await runSyncEffectWorkerWithAdapter({
         storage: adapter,
-        gateway,
+        provider,
         workerId: "perf-worker",
         now: 1_002,
         maxEffects: 10,
@@ -320,7 +320,7 @@ describe("outbound effect dispatch batching", () => {
 
 function makeItem(route: RouteSpec, effectId: string): ClaimedEffect {
   const fields = { status: { kind: "string" as const, value: "paid" } };
-  const gatewayEffect: SyncGatewayEffect = {
+  const providerEffect: SyncProjectionEffect = {
     effectId,
     payloadHash: `payload-${effectId}`,
     effectKind: "system_projection",
@@ -347,7 +347,7 @@ function makeItem(route: RouteSpec, effectId: string): ClaimedEffect {
   return {
     pending: { effect_id: effectId, payload_hash: `payload-${effectId}` } as PendingEffect,
     claimToken: `claim-${effectId}`,
-    gatewayEffect: { kind: PRESENCE_KINDS.PRESENT, value: gatewayEffect },
+    providerEffect: { kind: PRESENCE_KINDS.PRESENT, value: providerEffect },
     invalidPayloadError: { kind: PRESENCE_KINDS.ABSENT },
   };
 }

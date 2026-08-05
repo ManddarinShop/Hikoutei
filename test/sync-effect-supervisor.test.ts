@@ -87,7 +87,7 @@ describe("SyncEffectWorkerSupervisor", () => {
     supervisor = new SyncEffectWorkerSupervisor({
       runPass: async () => {
         calls += 1;
-        if (calls === 1) throw new Error("gateway unavailable");
+        if (calls === 1) throw new Error("provider unavailable");
         return createReport();
       },
       wait: async (durationMs) => {
@@ -162,7 +162,7 @@ describe("SyncEffectWorkerSupervisor", () => {
         intervalMs: 60_000,
         run: async () => {
           reconciliationCalls += 1;
-          throw new Error("reconciliation gateway unavailable");
+          throw new Error("reconciliation provider unavailable");
         },
         onError: (error) => reconciliationErrors.push(error),
       },

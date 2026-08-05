@@ -8,8 +8,7 @@
 
 <a href="https://www.npmjs.com/package/hikoutei">npm package</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a> ·
-<a href="docs/quick-start.md">Quick start</a> ·
-<a href="apps-script/gateway/Code.gs">Legacy Apps Script gateway</a>
+<a href="docs/quick-start.md">Quick start</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
 [![license](https://img.shields.io/npm/l/hikoutei?style=flat-square)](LICENSE)
@@ -20,8 +19,7 @@
 Hikoutei helps TypeScript and Node.js applications use Google Sheets as a
 human-friendly part of an MVP or internal workflow. Your application works
 with typed entities and local SQLite; changes can be delivered to Google
-Sheets asynchronously through a service-account Google Sheets provider (or the
-legacy Apps Script gateway when no service account is available).
+Sheets asynchronously through a service-account Google Sheets provider.
 
 Hikoutei is intentionally focused. It is not a general-purpose database
 replacement, a Prisma/JPA clone, or a general Google Sheets API wrapper.
@@ -53,7 +51,7 @@ without changing the entity lifecycle API.
 ## Quick start
 
 Define a scalar entity and use the local SQLite authority through a
-request-local manager. Sheet routes, gateway credentials, provisioning, and
+request-local manager. Sheet routes, provider credentials, provisioning, and
 polling belong to the internal service bootstrap rather than the application
 API.
 
@@ -113,16 +111,16 @@ Use a conventional database and direct Google APIs when you need:
 ## Google Sheets setup
 
 Google Sheets synchronization is a service-side concern. Applications do not
-import a gateway client, pass Sheet routes to `createTypedSheets()`, call
+import a provider client, pass Sheet routes to `createTypedSheets()`, call
 `setupSheets()`, or choose an operation for each write.
 
-### Service-account direct provider (recommended)
+### Service-account provider (googleSheetsApi)
 
-The preferred production path uses the internal `googleSheetsApi` bootstrap
-option with the Google Sheets REST API directly — no Apps Script at all. The
-provider provisions the registered tabs, writes outbound effects, reads table
-values, assigns row anchors, and observes human edits, all with one service
-account:
+The sync runtime uses one Google Sheets API provider (the internal
+`googleSheetsApi` bootstrap option) with a service account — no Apps Script
+deployment. The provider provisions the registered tabs, writes outbound
+effects (fast append, guarded update/delete, receipts, response-loss
+recovery), reads table values, assigns row anchors, and observes human edits:
 
 1. Create a Google Cloud service account with the
    `https://www.googleapis.com/auth/spreadsheets` scope and share the target
@@ -139,81 +137,26 @@ account:
 Sheet consistency does not come from cross-request Sheet transactions; it
 comes from the hidden effect-receipt tab, effect-id/payload-hash dedupe, the
 SQLite durable outbox, fencing, field-level compare-and-set evidence, and
-postcondition recovery. The service-account path never logs credentials,
-spreadsheet IDs, URLs, or payloads; it spaces request starts at 1,100 ms per
-class (reads and writes separately) to stay inside Google's quota windows, and
-it keeps the same SQLite-authoritative model: `flush()` commits locally,
-delivery is asynchronous, and every write is receipted and recovered through
-the same effect worker.
+postcondition recovery. The provider never logs credentials, spreadsheet IDs,
+URLs, or payloads; it spaces request starts at 1,100 ms per class (reads and
+writes separately) to stay inside Google's quota windows, and it keeps the
+same SQLite-authoritative model: `flush()` commits locally, delivery is
+asynchronous, and every write is receipted and recovered through the same
+effect worker.
 
-### Apps Script gateway (legacy, no service account)
+The tracked live scenario runs through this provider. The 10,000-row append
+and update/delete live evidence recorded in
+[docs/sync-bulk-write-benchmark.md](docs/sync-bulk-write-benchmark.md) uses
+the same REST path; the raw-transport experiments under `scripts/bench/`
+measure the unguarded API path (no receipts, no compare-and-set), so treat
+any throughput number as unverified until it is measured through the full
+worker. Live Google calls are opt-in; fake providers and SQLite fixtures are
+the normal verification path.
 
-Deployments that cannot use a service account can keep the legacy Apps Script
-gateway. It remains fully supported but is deprecated: new setups should
-prefer the service-account direct provider.
-
-1. Copy [`apps-script/gateway/Code.gs`](apps-script/gateway/Code.gs) into a
-   spreadsheet-bound Apps Script project and deploy it as a Web App. Paste the
-   deployed `/exec` URL into the `TYPED_SHEETS_GATEWAY_URL` constant in
-   `Code.gs` and run `setupSyncGateway()` from the editor; it stores the bound
-   spreadsheet ID and a generated shared secret in Script Properties and logs
-   a copyable local `.env` block.
-2. Keep `TYPED_SHEETS_GATEWAY_URL`,
-   `TYPED_SHEETS_GATEWAY_SHARED_SECRET`, and
-   `TYPED_SHEETS_GATEWAY_SHEET_ID` in an untracked server environment or secret
-   store. Never put the shared secret in browser code or Git.
-3. Start the internal sync bootstrap with `appsScript` configured. It
-   validates the private route/ownership configuration, provisions and
-   verifies headers, then starts outbox delivery and User_Input polling.
-
-**Migrating from the gateway to the service account:** share the spreadsheet
-with the service account, switch the internal bootstrap option from
-`appsScript` to `googleSheetsApi`, and remove the three `TYPED_SHEETS_GATEWAY_*`
-environment variables. The provider reads and writes the same tabs, receipt
-sheet, and anchor metadata, so existing spreadsheets keep working without
-re-provisioning.
-
-The current legacy Apps Script runtime writes append batches unconditionally
-through the Apps Script Advanced Sheets Service; there is no runtime
-enablement switch. The bundled [`appsscript.json`](apps-script/gateway/appsscript.json)
-manifest (Sheets v4 advanced service enabled) and Google Cloud Sheets API
-activation in the script's Cloud project are therefore mandatory for the
-current temporary append path. A legacy `Code.gs`-only deployment that runs
-only on built-in `SpreadsheetApp` services must first restore the commented
-rollback block in
-`src/adapter/sheets/providers/apps-script-gateway/operations/write/batchAppendOperation.ts`,
-which reverts append target writes to the built-in services path. No service
-account is required. Sheet consistency does not come from
-cross-request Sheet transactions; it comes from the Apps Script script lock,
-the hidden effect-receipt tab, effect-id/payload-hash dedupe, the SQLite
-durable outbox, fencing, and postcondition recovery.
-
-### Full direct provider (service account)
-
-The internal sync bootstrap also supports a full direct mode: one Google
-Sheets API provider (the `googleSheetsApi` internal option) owns provisioning,
-outbound effects (fast append, guarded update/delete, receipts, response-loss
-recovery), values-only table reads, row anchors, and User_Input observation,
-all with a service account through Application Default Credentials
-(`GOOGLE_APPLICATION_CREDENTIALS` pointing at a service-account key shared on
-the spreadsheet). No Apps Script deployment is required. The provider never
-logs credentials, spreadsheet IDs, URLs, or payloads; it spaces request starts
-at 1,100 ms per class (reads and writes separately) to stay inside Google's
-quota windows, and it keeps the same SQLite-authoritative model: `flush()`
-commits locally, delivery is asynchronous, and every write is receipted and
-recovered through the same effect worker.
-
-The direct provider is the tracked live scenario's mode. The 10,000-row
-append and update/delete live evidence collected through the same REST path
-is recorded in [docs/sync-bulk-write-benchmark.md](docs/sync-bulk-write-benchmark.md);
-those raw-transport experiments under `scripts/bench/` are separate
-measurements of the unguarded API path (no receipts, no compare-and-set), so
-treat any throughput number as unverified until it is measured through the
-full worker.
-
-Live Google calls are opt-in; fake gateways and SQLite fixtures are the
-normal verification path. The detailed setup and troubleshooting steps are in
-the [Quick start](docs/quick-start.md).
+The previous Apps Script gateway and the `appsScript`/`googleApiWorker`
+options were removed; the service-account provider above is the only sync
+path. The detailed setup and troubleshooting steps are in the
+[Quick start](docs/quick-start.md).
 
 ## Documentation
 
@@ -228,7 +171,7 @@ the [Quick start](docs/quick-start.md).
 
 ## Limitations
 
-- Google Sheets has quota, latency, and Apps Script execution limits.
+- Google Sheets has quota, latency, and API rate limits.
 - Sheet updates are asynchronous; the application should read its local state.
 - SQLite is local to the service and is not a distributed coordination layer.
 - Schema changes, manual edits, and conflicting updates still need an
@@ -238,7 +181,7 @@ the [Quick start](docs/quick-start.md).
 
 - Complete ingestion of intentional user edits from Google Sheets.
 - Improve update/delete conflict handling and presentation.
-- Add setup tooling for registry and Apps Script deployment.
+- Add setup tooling for registry and direct provider deployment.
 - Stabilize the public package release.
 
 See the [open issues](https://github.com/ManddarinShop/Hikoutei/issues)

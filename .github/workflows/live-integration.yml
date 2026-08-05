@@ -8,8 +8,8 @@ name: Live Google Sheets integration
 #
 # The live path is service-account-only: the scenario provisions, writes,
 # observes, and cleans up through the Google Sheets REST API with Application
-# Default Credentials. No Apps Script gateway is involved, so no
-# TYPED_SHEETS_GATEWAY_* secrets are used anywhere in this workflow.
+# Default Credentials. The service-account provider needs no Apps Script
+# and no TYPED_SHEETS_GATEWAY_* secrets.
 on:
   workflow_dispatch:
 
@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   live:
-    name: Installed-package Google Sheets service-account sync/gateway E2E
+    name: Installed-package Google Sheets service-account sync/provider E2E
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,7 +43,7 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run installed-package internal sync/gateway E2E (live, service account)
+      - name: Run installed-package internal sync/provider E2E (live, service account)
         # The service-account key is materialized in the runner temp dir and
         # the credential/spreadsheet env vars are scoped to this step and the
         # cleanup step only, not the whole job, so checkout/setup/install/build
@@ -103,7 +103,7 @@ jobs:
             --manifest="$RUNNER_TEMP/hikoutei-live-manifest.json"
           rm -f "$RUNNER_TEMP/gcp-sa-key.json"
 
-      - name: Upload internal sync/gateway E2E report (live, service account)
+      - name: Upload internal sync/provider E2E report (live, service account)
         if: always()
         uses: actions/upload-artifact@v5
         with:

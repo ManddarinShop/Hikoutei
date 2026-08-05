@@ -7,7 +7,10 @@ export { FENCE_EXISTS_SQL } from "../shared/writerLease.js";
 
 export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
   SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
-  SYNC_EFFECT_RECOVERY_ERROR_CODES.GATEWAY_RETRYABLE_ERROR,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
+  // Pre-rename databases may carry the legacy provider code; failed rows
+  // written with it must stay recoverable, not strand permanently.
+  SYNC_EFFECT_RECOVERY_ERROR_CODES.LEGACY_GATEWAY_RETRYABLE_ERROR,
   SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED,
   SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
   SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
@@ -120,8 +123,8 @@ export const RELEASE_UNPROCESSED_EFFECT_SQL = `
   UPDATE sheet_effect_outbox
   SET status = 'pending', claim_token = NULL, lease_until = NULL,
       next_attempt_at = ?, uncertain_since = NULL, next_probe_at = NULL,
-      last_error_code = 'gateway_batch_deferred',
-      last_error_message = 'Gateway acknowledged a bounded batch before this effect.'
+      last_error_code = 'provider_batch_deferred',
+      last_error_message = 'Provider acknowledged a bounded batch before this effect.'
   WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
     AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?
     AND EXISTS (${FENCE_EXISTS_SQL})

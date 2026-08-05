@@ -1,11 +1,10 @@
 /**
- * Minimal FIFO async mutex used to serialize Gateway mutations.
+ * Minimal FIFO async mutex used to serialize provider mutations.
  *
  * The coordinator owns one mutex per mutation lane. It is intentionally
  * in-process only: SQLite outbox, leases, and receipts remain the durable
  * authority. The mutex exists solely so the Node side never issues competing
- * mutations (and competing Apps Script `ScriptLock` acquisitions) for the same
- * spreadsheet within one process.
+ * mutations for the same spreadsheet within one process.
  *
  * Fairness is FIFO so an uncertain-recovery barrier cannot be starved by a
  * steady stream of new mutations.

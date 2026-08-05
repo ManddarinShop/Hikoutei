@@ -4,7 +4,7 @@ import { CoreErrorException } from "../../../domain/errors/index.js";
 export const SYNC_SERVICE_ERROR_CODES = {
   INVALID_OPTIONS: "invalid_sync_service_options",
   INVALID_PROJECTION_CONFIG: "invalid_sync_projection_config",
-  GATEWAY_UNAVAILABLE: "sync_gateway_unavailable",
+  PROVIDER_UNAVAILABLE: "sync_provider_unavailable",
   STARTUP_FAILED: "sync_service_startup_failed",
   CLOSED: "sync_service_closed",
 } as const;

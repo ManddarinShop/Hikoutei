@@ -10,7 +10,7 @@ projection and human input surface.
 npm install hikoutei @mikro-orm/core @mikro-orm/sql
 ```
 
-The root API does not expose MikroORM, SQL, Apps Script, or sync-worker types.
+The root API does not expose MikroORM, SQL, or sync-worker types.
 The current built-in SQLite provider uses the optional MikroORM peer
 dependencies internally.
 
@@ -37,7 +37,7 @@ const hikoutei = await createTypedSheets({
 
 `createTypedSheets()` validates entity descriptors, opens the local SQLite
 authority, and creates the declared entity tables. It does not contact Google
-Sheets and accepts no Sheet route or gateway option.
+Sheets and accepts no Sheet route or provider option.
 
 ## Entity lifecycle
 
@@ -76,7 +76,7 @@ Applications do not call Sheet APIs or choose a write operation for each
 entity change. A service-side internal sync bootstrap owns:
 
 - projection routes and user-owned field configuration
-- Apps Script URL, spreadsheet ID, and shared secret
+- provider credentials (service account) and spreadsheet ID
 - local projection registration and remote provisioning
 - the outbound effect supervisor and durable outbox delivery
 - User_Input polling, evaluation, conflict handling, and reconciliation
@@ -86,7 +86,7 @@ canonical sync state, and durable Sheet effect outbox in one SQLite transaction.
 The call still does not wait for the remote Sheet write.
 
 The internal service provisions and validates the registered tabs before it
-starts delivery. Schema drift or gateway setup failure stops service startup
+starts delivery. Schema drift or provider setup failure stops service startup
 rather than silently changing a remote Sheet. These service modules are under
 `src/application/sync/service/` and are intentionally not re-exported from the
 package root.
@@ -105,45 +105,23 @@ User_Input observation. No Apps Script deployment is needed.
 The provider disables SDK auto-retry, spaces every request start at 1,100 ms
 per class (reads and writes separately), and telemetries only operation
 names, counts, durations, and stable codes. One SQLite runtime stays the
-single authoritative writer per spreadsheet. The deprecated `googleApiWorker`
-option routes only the outbound half directly while Apps Script (or an
-injected test gateway) still owns provisioning and observation; new setups
-should use `googleSheetsApi` instead.
+single authoritative writer per spreadsheet.
 
-## Apps Script gateway (legacy)
+## Removed: Apps Script gateway
 
-The deployable gateway is [`apps-script/gateway/Code.gs`](../apps-script/gateway/Code.gs).
-It is the legacy no-service-account path and remains fully supported: copy it
-into a spreadsheet-bound Apps Script project, deploy it as a Web App, paste
-the deployed `/exec` URL into the `TYPED_SHEETS_GATEWAY_URL` constant, and run
-`setupSyncGateway()` from the editor. The setup writes the bound spreadsheet
-ID and a generated shared secret to Script Properties and logs a copyable
-local `.env` block. To migrate to the service-account provider, share the
-spreadsheet with the service account and switch the internal bootstrap option
-from `appsScript` to `googleSheetsApi`.
+The signed Apps Script gateway and the `appsScript`/`googleApiWorker` options
+were removed in this cleanup. The service-account `googleSheetsApi` provider
+above is the only sync path; existing deployments should switch to it. The
+provider reads and writes the same tabs, receipt sheet, and anchor metadata,
+so existing spreadsheets keep working without re-provisioning.
 
-The current fast-append implementation unconditionally calls the Apps Script
-Advanced Sheets Service (`Sheets.Spreadsheets.Values.batchUpdate`) for append
-target writes; there is no runtime enablement switch. The bundled
-[`appsscript.json`](../apps-script/gateway/appsscript.json) manifest (Sheets v4
-advanced service enabled) and Google Cloud Sheets API activation in the
-script's Cloud project are therefore mandatory for the current temporary
-append path. A legacy `Code.gs`-only deployment that runs only on built-in
-`SpreadsheetApp` services must first restore the commented rollback block in
-`src/adapter/sheets/providers/apps-script-gateway/operations/write/batchAppendOperation.ts`,
-which reverts append target writes to the built-in services path. No service
-account is required.
+Sheet consistency does not rely on cross-request Sheet transactions; it comes
+from the hidden effect-receipt tab, effect-id/payload-hash dedupe, the SQLite
+durable outbox, fencing, and postcondition recovery.
 
-A service deployment supplies its URL and shared secret through a secret store
-or environment configuration. Never place the shared secret in browser code or
-commit it to Git. Sheet consistency does not rely on cross-request Sheet
-transactions; it comes from the Apps Script script lock, the hidden
-effect-receipt tab, effect-id/payload-hash dedupe, the SQLite durable outbox,
-fencing, and postcondition recovery.
-
-Live Google integration is opt-in and requires a service account (or a
-deployed legacy gateway), credentials, a spreadsheet, and external quota. The
-normal test suite uses fake gateways and SQLite fixtures without credentials.
+Live Google integration is opt-in and requires a service account, credentials,
+a spreadsheet, and external quota. The normal test suite uses fake providers
+and SQLite fixtures without credentials.
 
 ## Read/write guarantees
 
@@ -152,8 +130,8 @@ normal test suite uses fake gateways and SQLite fixtures without credentials.
 - Sheet delivery is asynchronous and at-least-once.
 - Stale or conflicting User_Input edits are recorded in SQLite rather than
   silently overwriting canonical data.
-- Gateway response loss is recoverable work, not proof of a failed remote write.
-- Sheet consistency comes from the Apps Script script lock, the hidden
-  effect-receipt tab, effect-id/payload-hash dedupe, the SQLite durable outbox,
-  fencing, and postcondition recovery, not cross-request Sheet transactions.
+- Provider response loss is recoverable work, not proof of a failed remote write.
+- Sheet consistency comes from the hidden effect-receipt tab,
+  effect-id/payload-hash dedupe, the SQLite durable outbox, fencing, and
+  postcondition recovery, not cross-request Sheet transactions.
 - Projection route/header drift fails explicitly.

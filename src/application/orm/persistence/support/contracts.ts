@@ -10,7 +10,7 @@ import type {
   EffectStatus,
   EffectTargetKind,
 } from "../../../../domain/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheets/sheetsProvisioning.js";
 import type {
   SyncTimingSink,
 } from "../../../sync/telemetry/syncTiming.js";
@@ -75,7 +75,7 @@ export interface CreateMappedTypedSheetsFlushCoordinatorOptions {
   readonly writer: TypedSheetsEntityWriterOptions;
 }
 
-/** A registered route with headers ready for Apps Script control-plane provisioning. */
+/** A registered route with headers ready for provider-side provisioning. */
 export interface RegisteredTypedSheetsMappedProjection {
   readonly mapping: TypedSheetsEntityMapping;
   readonly sheet: RegisteredSyncSheet;

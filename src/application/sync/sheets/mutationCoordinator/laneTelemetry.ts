@@ -1,12 +1,12 @@
 /**
- * Telemetry contract for the per-spreadsheet Gateway coordinator.
+ * Telemetry contract for the per-spreadsheet provider coordinator.
  *
- * Lane events are diagnostic only: a sink failure must never change gateway
+ * Lane events are diagnostic only: a sink failure must never change provider
  * behavior. The fields are deliberately redacted — no signed payload, secret,
  * or operation arguments are recorded.
  */
 
-import { TRANSPORT_OUTCOME_KINDS, type TransportOutcomeKind } from "../transportClassification.js";
+import { TRANSPORT_OUTCOME_KINDS, type TransportOutcomeKind } from "../transportOutcome.js";
 
 export { TRANSPORT_OUTCOME_KINDS };
 export type { TransportOutcomeKind };
@@ -33,5 +33,5 @@ export interface CoordinatorLaneEvent {
 export type CoordinatorLaneSink = (event: CoordinatorLaneEvent) => void;
 
 /** Marker used so callers can type an absent presence without importing state. */
-// Presence is re-exported through transportClassification's redacted fields,
+// Presence is re-exported through transportOutcome's redacted fields,
 // so this file does not need to import the shared state types directly.

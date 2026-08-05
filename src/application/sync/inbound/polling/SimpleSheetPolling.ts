@@ -18,13 +18,13 @@ import {
   STORAGE_ERROR_CODES,
   StorageError,
 } from "../../../../infrastructure/storage/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../../gateway/SyncGatewayBootstrap.js";
+import type { RegisteredSyncProjectionDefinition } from "../../sheets/sheetsProvisioning.js";
 import type {
   ReadSyncTableRowsRequest,
-  SyncSheetTableReaderGateway,
+  SyncSheetsTableReader,
   SyncTableRow,
   SyncTableRowsResult,
-} from "../../gateway/syncGateway.js";
+} from "../../sheets/syncSheets.js";
 
 const READ_CANONICAL_ROWS_SQL = `
   SELECT binding.logical_sheet_id, entity.entity_id, entity.status AS entity_status,
@@ -139,7 +139,7 @@ interface CanonicalEntity {
  */
 export async function pollSimpleSheetRowsWithAdapter(options: {
   readonly storage: SqlStorageAdapter;
-  readonly gateway: SyncSheetTableReaderGateway;
+  readonly provider: SyncSheetsTableReader;
   readonly definitions: readonly RegisteredSyncProjectionDefinition[];
   readonly physicalSheetIds?: readonly string[];
 }): Promise<SimpleSheetPollingResult> {
@@ -161,7 +161,7 @@ export async function pollSimpleSheetRowsWithAdapter(options: {
 
   const [canonicalByLogicalSheet, remoteResults] = await Promise.all([
     readCanonicalRows(options.storage, definitions),
-    options.gateway.readRowsBatch(definitions.map(toReadRequest)),
+    options.provider.readRowsBatch(definitions.map(toReadRequest)),
   ]);
   if (remoteResults.length !== definitions.length) {
     throwPollingError("table read result count does not match the requested tables");

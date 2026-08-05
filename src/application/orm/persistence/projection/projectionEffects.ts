@@ -3,7 +3,7 @@
  *
  * This module derives system-state and user-input effects from the SQLite
  * baseline. It does not execute them; the outbox worker remains responsible
- * for materializing effects in Apps Script.
+ * for materializing effects through the sync provider.
  */
 
 import {
@@ -14,11 +14,11 @@ import {
   type NormalizedCell,
 } from "../../../../domain/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../../sync/gateway/constants.js";
+import { SYNC_PROJECTIONS } from "../../../sync/sheets/constants.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../../../sync/gateway/syncGateway.js";
+} from "../../../sync/sheets/syncSheets.js";
 import {
   createCandidateReconcileEffect,
   createSystemProjectionEffect,
@@ -87,7 +87,7 @@ export async function projectionEffects(
 ): Promise<readonly NewEffect[]> {
   const systemProjection = requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+    SYNC_PROJECTIONS.SYSTEM_STATE,
   );
   const systemRoute = await requireMappedRoute(sql, mapping, systemProjection);
   const systemTarget = {
@@ -117,7 +117,7 @@ export async function projectionEffects(
       physicalSheetId: systemRoute.physicalSheetId,
       sheetName: systemRoute.tabName,
       registeredRange: systemRoute.registeredRange,
-      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
       schemaVersion: mapping.schemaVersion,
       targetKind: systemTarget.targetKind,
       targetId: systemTarget.targetId,
@@ -134,7 +134,7 @@ export async function projectionEffects(
   ];
 
   const userProjection = mapping.projections.find(
-    (projection) => projection.projection === SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
   );
   if (userProjection === undefined) return effects;
   const shouldReconcileUserInput = options.includeUserProjection !== false &&

@@ -10,10 +10,10 @@
  * discriminated unions, never nullable status markers.
  */
 
-import { computeSyncVisibleHash, type SyncGatewayEffect } from "../../../../../application/sync/gateway/syncGateway.js";
+import { computeSyncVisibleHash, type SyncProjectionEffect } from "../../../../../application/sync/sheets/syncSheets.js";
 import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
-import type { ApplySyncEffectsRequest, SyncGatewayEffectResult } from "../../../../../application/sync/gateway/syncGateway.js";
-import { SYNC_GATEWAY_EFFECT_RESULT_STATUSES, SYNC_GATEWAY_POSTCONDITION_STATUSES } from "../../../../../application/sync/gateway/constants.js";
+import type { ApplySyncEffectsRequest, SyncEffectResult } from "../../../../../application/sync/sheets/syncSheets.js";
+import { SYNC_EFFECT_RESULT_STATUSES, SYNC_POSTCONDITION_STATUSES } from "../../../../../application/sync/sheets/constants.js";
 import { APPLICABILITY_KINDS, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { isNormalizedCell } from "../../../../../shared/encoding/index.js";
@@ -34,7 +34,7 @@ export interface PlannedReceipt {
 export type PlannedOutcome =
   | {
     readonly kind: "applied";
-    readonly effect: SyncGatewayEffect;
+    readonly effect: SyncProjectionEffect;
     readonly rowNumber: Presence<number>;
     readonly receipt: PlannedReceipt;
     readonly created: boolean;
@@ -42,31 +42,31 @@ export type PlannedOutcome =
   }
   | {
     readonly kind: "already_applied";
-    readonly effect: SyncGatewayEffect;
+    readonly effect: SyncProjectionEffect;
     readonly rowNumber: Presence<number>;
     readonly receipt: PlannedReceipt;
   }
   | {
     readonly kind: "guard_mismatch";
-    readonly effect: SyncGatewayEffect;
+    readonly effect: SyncProjectionEffect;
     readonly rowNumber: Presence<number>;
     readonly reason: string;
   }
   | {
     readonly kind: "repair_reobserve";
-    readonly effect: SyncGatewayEffect;
+    readonly effect: SyncProjectionEffect;
     readonly rowNumber: Presence<number>;
     readonly reason: string;
   }
   | {
     readonly kind: "schema_error";
-    readonly effect: SyncGatewayEffect;
+    readonly effect: SyncProjectionEffect;
     readonly rowNumber: Presence<number>;
     readonly reason: string;
   }
   | {
     readonly kind: "retryable_error";
-    readonly effect: SyncGatewayEffect;
+    readonly effect: SyncProjectionEffect;
     readonly rowNumber: Presence<number>;
     readonly reason: string;
   };
@@ -127,7 +127,7 @@ export function planEffectBatch(
   let nextAppendRow = context.nextAppendRow;
 
   for (const effect of request.effects) {
-    requireGatewayEffect(effect, request, context);
+    requireProviderEffect(effect, request, context);
 
     const existingReceipt = pendingReceipts.get(effect.effectId) ?? context.receipts.get(effect.effectId);
     if (existingReceipt !== undefined) {
@@ -343,8 +343,8 @@ export function planEffectBatch(
 }
 
 /** Runtime validation of one effect against its request route (fail closed). */
-export function requireGatewayEffect(
-  effect: SyncGatewayEffect,
+export function requireProviderEffect(
+  effect: SyncProjectionEffect,
   request: ApplySyncEffectsRequest,
   context: PreflightContext,
 ): void {
@@ -431,7 +431,7 @@ export function requireGatewayEffect(
 
 /** Receipt replay branch: a receipt already exists for this effect ID. */
 function planReceiptReplay(
-  effect: SyncGatewayEffect,
+  effect: SyncProjectionEffect,
   receipt: PlannedReceipt,
   context: PreflightContext,
   byAnchor: ReadonlyMap<string, WorkingRow>,
@@ -497,7 +497,7 @@ function planReceiptReplay(
 /** Validates the full-row deletion guard exactly like `validateDeletion_`. */
 export function validateDeletion(
   context: PreflightContext,
-  effect: SyncGatewayEffect,
+  effect: SyncProjectionEffect,
 ): string | null {
   if (
     effect.payload.createIfMissing ||
@@ -531,7 +531,7 @@ export function currentHash(
 
 /** Builds a receipt record exactly like `makeReceipt_`. */
 export function makeReceipt(
-  effect: SyncGatewayEffect,
+  effect: SyncProjectionEffect,
   visibleHash: string,
   visibleRevision: number,
 ): PlannedReceipt {
@@ -564,7 +564,7 @@ export function findWorkingRow(
 
 /** Builds a rejection plan (no mutation, no receipt). */
 function rejectionPlan(
-  effect: SyncGatewayEffect,
+  effect: SyncProjectionEffect,
   kind: "guard_mismatch" | "repair_reobserve" | "schema_error",
   reason: string,
   rowNumber: Presence<number> = absentValue(),
@@ -590,7 +590,7 @@ export function toWorkingRow(row: PreflightRow): WorkingRow {
   };
 }
 
-function createWorkingRow(effect: SyncGatewayEffect, rowNumber: number): WorkingRow {
+function createWorkingRow(effect: SyncProjectionEffect, rowNumber: number): WorkingRow {
   const cells: Record<string, import("../../../../../domain/index.js").NormalizedCell> = {};
   return {
     rowNumber,
@@ -623,8 +623,8 @@ function isSyncEffectKind(value: string): boolean {
     value === EFFECT_KINDS.USER_INPUT_DELETE;
 }
 
-/** Encodes a planned outcome as a gateway result (Apps Script `result_`). */
-export function encodeOutcomeResult(outcome: PlannedOutcome): SyncGatewayEffectResult {
+/** Encodes a planned outcome as a provider result (Apps Script `result_`). */
+export function encodeOutcomeResult(outcome: PlannedOutcome): SyncEffectResult {
   switch (outcome.kind) {
     case "applied":
     case "already_applied":
@@ -632,13 +632,13 @@ export function encodeOutcomeResult(outcome: PlannedOutcome): SyncGatewayEffectR
         effectId: outcome.effect.effectId,
         payloadHash: outcome.effect.payloadHash,
         status: outcome.kind === "applied"
-          ? SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED
-          : SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED,
+          ? SYNC_EFFECT_RESULT_STATUSES.APPLIED
+          : SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED,
         visibleRevision: presentValue(outcome.receipt.visibleRevision),
         visibleHash: presentValue(outcome.receipt.visibleHash),
         snapshotHash: absentValue(),
         reason: absentValue(),
-        postcondition: SYNC_GATEWAY_POSTCONDITION_STATUSES.VERIFIED,
+        postcondition: SYNC_POSTCONDITION_STATUSES.VERIFIED,
       };
     case "guard_mismatch":
     case "repair_reobserve":
@@ -652,38 +652,38 @@ export function encodeOutcomeResult(outcome: PlannedOutcome): SyncGatewayEffectR
         visibleHash: absentValue(),
         snapshotHash: absentValue(),
         reason: presentValue(outcome.reason),
-        postcondition: SYNC_GATEWAY_POSTCONDITION_STATUSES.UNAVAILABLE,
+        postcondition: SYNC_POSTCONDITION_STATUSES.UNAVAILABLE,
       };
   }
 }
 
 /** Builds a schema_error result without any receipt-backed evidence. */
 export function encodeSchemaErrorResult(
-  effect: SyncGatewayEffect,
+  effect: SyncProjectionEffect,
   reason: string,
-): SyncGatewayEffectResult {
+): SyncEffectResult {
   return {
     effectId: effect.effectId,
     payloadHash: effect.payloadHash,
-    status: SYNC_GATEWAY_EFFECT_RESULT_STATUSES.SCHEMA_ERROR,
+    status: SYNC_EFFECT_RESULT_STATUSES.SCHEMA_ERROR,
     visibleRevision: absentValue(),
     visibleHash: absentValue(),
     snapshotHash: absentValue(),
     reason: presentValue(reason),
-    postcondition: SYNC_GATEWAY_POSTCONDITION_STATUSES.UNAVAILABLE,
+    postcondition: SYNC_POSTCONDITION_STATUSES.UNAVAILABLE,
   };
 }
 
 /** Applies the deferred-mode postcondition relabeling for applied results. */
 export function withDeferredPostcondition(
-  result: SyncGatewayEffectResult,
-): SyncGatewayEffectResult {
+  result: SyncEffectResult,
+): SyncEffectResult {
   if (
-    (result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.APPLIED ||
-      result.status === SYNC_GATEWAY_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
-    result.postcondition === SYNC_GATEWAY_POSTCONDITION_STATUSES.VERIFIED
+    (result.status === SYNC_EFFECT_RESULT_STATUSES.APPLIED ||
+      result.status === SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
+    result.postcondition === SYNC_POSTCONDITION_STATUSES.VERIFIED
   ) {
-    return { ...result, postcondition: SYNC_GATEWAY_POSTCONDITION_STATUSES.ACKNOWLEDGED };
+    return { ...result, postcondition: SYNC_POSTCONDITION_STATUSES.ACKNOWLEDGED };
   }
   return result;
 }

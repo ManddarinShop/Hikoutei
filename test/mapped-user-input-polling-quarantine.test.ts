@@ -23,14 +23,14 @@ import {
 } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
 import { inspectFastPollingTable } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";
 import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import { SYNC_GATEWAY_PROTOCOL_VERSIONS } from "../src/application/sync/gateway/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../src/application/sync/gateway/constants.js";
+import { SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../src/application/sync/sheets/constants.js";
 import type {
   SyncObservedSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
   SyncTableRowsResult,
-} from "../src/application/sync/gateway/syncGateway.js";
+} from "../src/application/sync/sheets/syncSheets.js";
 
 interface Probe {
   readonly id: string;
@@ -161,10 +161,10 @@ function snapshotRow(statusCell: SyncSnapshotCell): SyncSnapshotRow {
 
 function observed(statusCell: SyncSnapshotCell): SyncObservedSnapshot {
   const snapshot = {
-    protocolVersion: SYNC_GATEWAY_PROTOCOL_VERSIONS.V1,
+    protocolVersion: SYNC_PROTOCOL_VERSIONS.V1,
     sheetName: "Probe_Input",
     registeredRange: "A:B",
-    projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: 1,
     headers: ["id", "status"],
     rows: [snapshotRow(statusCell)],

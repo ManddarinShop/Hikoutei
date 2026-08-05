@@ -1,7 +1,7 @@
 /**
  * Installed-package root API smoke scenario.
  *
- * This is the public-API counterpart to the internal sync/gateway end-to-end
+ * This is the public-API counterpart to the internal sync/provider end-to-end
  * scenario in `run-api-scenario.mjs`. It imports ONLY the installed package
  * root entrypoint `hikoutei` — no internal package subpaths and no source
  * imports — and drives the stable entity-lifecycle contract that an

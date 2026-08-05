@@ -65,10 +65,10 @@ import {
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/gateway/syncGateway.js";
-import type { SyncGatewayEffect } from "../src/application/sync/gateway/syncGateway.js";
+} from "../src/application/sync/sheets/syncSheets.js";
+import type { SyncProjectionEffect } from "../src/application/sync/sheets/syncSheets.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
-import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const OrderSchema = defineEntity({
   name: "MikroOrmAdapterOrder",
@@ -597,7 +597,7 @@ describe("MikroOrmSqliteAdapter", () => {
     };
     await expect(appendPendingEffectsWithSqlInAdapter(adapter, fence, [effect])).resolves.toBe(true);
 
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "physical-sheet",
         sheetName: "Orders",
@@ -618,7 +618,7 @@ describe("MikroOrmSqliteAdapter", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "worker-a",
       writerRole: "sync_worker",
       now: 1000,
@@ -629,7 +629,7 @@ describe("MikroOrmSqliteAdapter", () => {
       applied: 1,
       failed: 0,
     });
-    expect(gateway.readRow("physical-sheet", "order-anchor")).toMatchObject({
+    expect(provider.readRow("physical-sheet", "order-anchor")).toMatchObject({
       fields: nextFields,
       visibleRevision: 1,
     });
@@ -941,7 +941,7 @@ describe("MikroOrmSqliteAdapter", () => {
       ["conflict-resolved"],
     ))).resolves.toEqual({ status: CONFLICT_STATUSES.OPEN });
 
-    const gateway = new FakeSyncSheetGateway([{
+    const provider = new FakeSyncSheetsProvider([{
       physicalSheetId: "physical-sheet",
       sheetName: "Orders",
       registeredRange: "A1:Z",
@@ -955,14 +955,14 @@ describe("MikroOrmSqliteAdapter", () => {
         visibleRevision: 1,
       }],
     }]);
-    const lateRemoteResult = await gateway.applyEffects({
+    const lateRemoteResult = await provider.applyEffects({
       physicalSheetId: "physical-sheet",
       sheetName: "Orders",
       registeredRange: "A1:Z",
       projection: "system_state",
       schemaVersion: 1,
       postconditionMode: "inline",
-      effects: [toGatewayEffect(predecessor)],
+      effects: [toProviderEffect(predecessor)],
     });
     expect(lateRemoteResult.results[0]?.status).toBe("applied");
     await expect(applyEffectResultWithAdapter(adapter, {
@@ -984,12 +984,12 @@ describe("MikroOrmSqliteAdapter", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "late-response-worker",
       now: 1_004,
       maxEffects: 1,
     })).resolves.toMatchObject({ applied: 1, failed: 0 });
-    expect(gateway.readRow("physical-sheet", "resolution-anchor").fields.status).toEqual({
+    expect(provider.readRow("physical-sheet", "resolution-anchor").fields.status).toEqual({
       kind: "string",
       value: "canonical",
     });
@@ -1370,7 +1370,7 @@ function createQuarantinedObservationInput(): PersistObservedRowInput {
       schemaVersion: 1,
       atomicity: "row_independent",
       baseSnapshotHash: "snapshot-quarantine",
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
       rows: [row],
@@ -1383,7 +1383,7 @@ function createQuarantinedObservationInput(): PersistObservedRowInput {
       payloadHash: "payload-quarantine",
       detectedAt: 1000,
       receivedAt: 1000,
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
     },
@@ -1452,7 +1452,7 @@ function createAcceptedObservationInput(): PersistObservedRowInput {
       schemaVersion: 1,
       atomicity: "row_independent",
       baseSnapshotHash: "snapshot-accepted",
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
       rows: [row],
@@ -1465,7 +1465,7 @@ function createAcceptedObservationInput(): PersistObservedRowInput {
       payloadHash: "payload-accepted",
       detectedAt: 1000,
       receivedAt: 1000,
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
     },
@@ -1580,14 +1580,14 @@ function createOrderingEffect(
   };
 }
 
-function toGatewayEffect(effect: NewEffect): SyncGatewayEffect {
-  const payload = JSON.parse(effect.payloadJson) as SyncGatewayEffect["payload"];
+function toProviderEffect(effect: NewEffect): SyncProjectionEffect {
+  const payload = JSON.parse(effect.payloadJson) as SyncProjectionEffect["payload"];
   return {
     effectId: effect.effectId,
     payloadHash: effect.payloadHash,
     effectKind: effect.effectKind,
     physicalSheetId: effect.physicalSheetId,
-    projection: effect.projection as SyncGatewayEffect["projection"],
+    projection: effect.projection as SyncProjectionEffect["projection"],
     targetKind: effect.targetKind,
     targetId: effect.targetId,
     rowBindingId: effect.rowBindingId,

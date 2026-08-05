@@ -1,16 +1,16 @@
 /**
- * Internal sync/gateway end-to-end scenario (NOT a public API smoke test).
+ * Internal sync/provider end-to-end scenario (NOT a public API smoke test).
  *
  * This script drives Hikoutei's internal typed-sheets sync pipeline against a
  * fake backend and, when live secrets are present, a real Google Sheets
- * backend. It exercises projection registration, gateway provisioning, the
- * bounded effect worker, polling, and the MikroORM-backed storage/CAS/hash
- * machinery end to end.
+ * backend through the full service-account provider. It exercises projection
+ * registration, provider provisioning, the bounded effect worker, polling,
+ * and the MikroORM-backed storage/CAS/hash machinery end to end.
  *
  * The scenario loads implementation modules directly from the installed
  * package's `dist/` tree. The `hikoutei/orm` and `hikoutei/mikro-orm` package
  * subpaths are intentionally rejected; the public contract is the high-level
- * `hikoutei` root API. This scenario remains focused on internal sync/gateway
+ * `hikoutei` root API. This scenario remains focused on internal sync/provider
  * behavior rather than public API CRUD coverage.
  */
 import assert from "node:assert/strict";
@@ -34,7 +34,7 @@ import { defineEntity, p } from "@mikro-orm/sql";
 // root `hikoutei` entrypoint is an application-facing export.
 const packageEntry = import.meta.resolve("hikoutei");
 const packageDist = new URL("./", packageEntry);
-const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, provisioning, worker, gateway, encoding] =
+const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, provisioning, worker, encoding] =
   await Promise.all([
     import(new URL("./application/orm/mapping/entityMapping.js", packageDist).href),
     import(new URL("./application/orm/persistence/flush/flushCoordinator.js", packageDist).href),
@@ -42,9 +42,8 @@ const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, prov
     import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", packageDist).href),
     import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", packageDist).href),
     import(new URL("./application/sync/inbound/polling/SimpleSheetPolling.js", packageDist).href),
-    import(new URL("./application/sync/gateway/SyncGatewayBootstrap.js", packageDist).href),
+    import(new URL("./application/sync/sheets/sheetsProvisioning.js", packageDist).href),
     import(new URL("./application/sync/outbound/effects/SyncEffectWorker.js", packageDist).href),
-    import(new URL("./adapter/sheets/providers/apps-script-gateway/index.js", packageDist).href),
     import(new URL("./shared/encoding/index.js", packageDist).href),
   ]);
 const { defineTypedSheetsEntityMapping } = mapping;
@@ -56,11 +55,6 @@ const { pollSimpleSheetRowsWithAdapter } = polling;
 const { provisionRegisteredSyncSheets } = provisioning;
 const { runSyncEffectWorkerWithAdapter } = worker;
 const { stableHash } = encoding;
-const {
-  AppsScriptOperationClient,
-  AppsScriptOperationSyncGateway,
-  AppsScriptSyncGatewayError,
-} = gateway;
 const [directSheets, mappedPolling] = await Promise.all([
   import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", packageDist).href),
   import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", packageDist).href),
@@ -83,50 +77,7 @@ const SCENARIO_VERSION = "v1";
 const INTERNAL_RECEIPT_SHEET = "__typed_sheets_internal_effect_receipts";
 const PRESENT = "present";
 
-const cleanupSource = `function (spreadsheet, args) {
-  var names = Array.isArray(args && args.sheetNames) ? args.sheetNames : [];
-  var removed = [];
-  names.forEach(function (name) {
-    var sheet = spreadsheet.getSheetByName(name);
-    if (sheet === null) return;
-    if (spreadsheet.getSheets().length > 1) {
-      spreadsheet.deleteSheet(sheet);
-      removed.push(name);
-    } else {
-      sheet.clearContents();
-    }
-  });
-  var receipt = spreadsheet.getSheetByName(${JSON.stringify(INTERNAL_RECEIPT_SHEET)});
-  if (receipt !== null) {
-    if (spreadsheet.getSheets().length > 1) spreadsheet.deleteSheet(receipt);
-    else receipt.clearContents();
-  }
-  return { removed: removed };
-}`;
-
-const mutateRowSource = `function (spreadsheet, args) {
-  var sheet = spreadsheet.getSheetByName(args.sheetName);
-  if (sheet === null) throw new Error("test sheet was not found: " + args.sheetName);
-  var lastColumn = sheet.getLastColumn();
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2 || lastColumn < 1) throw new Error("test sheet has no data rows");
-  var headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(function (value) { return String(value); });
-  var identityColumn = headers.indexOf(args.identityField);
-  var fieldColumn = headers.indexOf(args.field);
-  if (identityColumn < 0) throw new Error("test identity field was not found: " + args.identityField);
-  if (fieldColumn < 0) throw new Error("test field was not found: " + args.field);
-  var values = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues();
-  for (var index = 0; index < values.length; index += 1) {
-    if (String(values[index][identityColumn]) !== String(args.identity)) continue;
-    values[index][fieldColumn] = args.value;
-    sheet.getRange(index + 2, 1, 1, lastColumn).setValues([values[index]]);
-    SpreadsheetApp.flush();
-    return { rowNumber: index + 2 };
-  }
-  throw new Error("test identity row was not found: " + args.identity);
-}`;
-
-class FakeSyncGateway {
+class FakeSyncSheetsProvider {
   constructor() {
     this.sheets = new Map();
     this.effects = new Map();
@@ -270,7 +221,7 @@ class FakeSyncGateway {
     return requestForDefinition(definition);
   }
 
-  createGateway() {
+  createProvider() {
     return this;
   }
 
@@ -346,68 +297,26 @@ class FakeSyncGateway {
 }
 
 class LiveSyncBackend {
-  constructor(outbound) {
-    this.outbound = outbound ?? "gateway";
-    this.sheetMatched = undefined;
+  constructor() {
+    // Service-account-only full-provider mode: no Apps Script gateway is
+    // involved at all. ADC supplies the service account; the spreadsheet
+    // must be shared with it. No TYPED_SHEETS_GATEWAY_* variables are read.
+    requireEnvironment("GOOGLE_APPLICATION_CREDENTIALS");
+    this.sheetId = requireEnvironment("GOOGLE_SHEETS_TEST_SPREADSHEET_ID");
+    this.sheetMatched = true;
     this.events = [];
-    if (this.outbound === "direct") {
-      // Service-account-only full-provider mode: no Apps Script gateway is
-      // involved at all. ADC supplies the service account; the spreadsheet
-      // must be shared with it. No TYPED_SHEETS_GATEWAY_* variables are read.
-      requireEnvironment("GOOGLE_APPLICATION_CREDENTIALS");
-      this.sheetId = requireEnvironment("GOOGLE_SHEETS_TEST_SPREADSHEET_ID");
-      this.sheetMatched = true;
-      this.saTransport = new GoogleSheetsApiHttpTransport({ requestTimeoutMs: 120_000 });
-      return;
-    }
-    const url = requireEnvironment("TYPED_SHEETS_GATEWAY_URL");
-    const secret = requireEnvironment("TYPED_SHEETS_GATEWAY_SHARED_SECRET");
-    const sheetId = requireEnvironment("TYPED_SHEETS_GATEWAY_SHEET_ID");
-    this.sheetId = sheetId;
-    this.client = new AppsScriptOperationClient({
-      url,
-      secret,
-      sheetId,
-      actorId: `hikoutei-ci-${process.env.GITHUB_RUN_ID ?? "local"}`,
-      // Live Apps Script calls can exceed the default client timeout during quota or network latency.
+    this.saTransport = new GoogleSheetsApiHttpTransport({ requestTimeoutMs: 120_000 });
+  }
+
+  createProvider(definitions) {
+    // The full service-account provider owns provisioning, outbound
+    // effects, table reads, anchors, and snapshots in one instance.
+    return new GoogleSheetsApiSyncProvider({
+      spreadsheetId: this.sheetId,
+      definitions,
       requestTimeoutMs: 120_000,
       onRequest: (event) => this.events.push(event),
     });
-  }
-
-  createGateway(definitions) {
-    if (this.outbound === "direct") {
-      // The full service-account provider owns provisioning, outbound
-      // effects, table reads, anchors, and snapshots in one instance.
-      return new GoogleSheetsApiSyncProvider({
-        spreadsheetId: this.sheetId,
-        definitions,
-        requestTimeoutMs: 120_000,
-        onRequest: (event) => this.events.push(event),
-      });
-    }
-    // Legacy Apps Script gateway mode.
-    return new AppsScriptOperationSyncGateway({
-      operationGateway: this.client,
-      definitions,
-    });
-  }
-
-  async mutateRow({ sheetName, identity, field, value }) {
-    if (this.outbound === "direct") {
-      await this.mutateRowDirect({ sheetName, identity, field, value });
-      return;
-    }
-    await this.client.applyOperations([{
-      fn: mutateRowSource,
-      args: {
-        sheetName,
-        identityField: "id",
-        identity,
-        field,
-        value,
-      },
-    }]);
   }
 
   /**
@@ -415,7 +324,7 @@ class LiveSyncBackend {
    * tab, find the row by its identity cell, and overwrite one field cell
    * through an updateCells batchUpdate.
    */
-  async mutateRowDirect({ sheetName, identity, field, value }) {
+  async mutateRow({ sheetName, identity, field, value }) {
     const raw = await this.saTransport.getSpreadsheet({
       spreadsheetId: this.sheetId,
       ranges: [`${quoteTabName(sheetName)}!A1:B1048576`],
@@ -457,9 +366,6 @@ class LiveSyncBackend {
 
   /** Reads one tab's raw string rows through the service-account transport. */
   async readTabRows(tabName) {
-    if (this.outbound !== "direct") {
-      throw new Error("readTabRows is a service-account-only helper");
-    }
     const raw = await this.saTransport.getSpreadsheet({
       spreadsheetId: this.sheetId,
       ranges: [`${quoteTabName(tabName)}!A1:F1048576`],
@@ -473,36 +379,12 @@ class LiveSyncBackend {
       (row?.values ?? []).map((cell) => cell?.userEnteredValue?.stringValue ?? ""));
   }
 
-  async cleanup(sheetNames) {
-    if (this.outbound === "direct") {
-      await this.cleanupDirect(sheetNames);
-      return;
-    }
-    // A timed-out Apps Script request may still be finishing remotely. Retry
-    // idempotent cleanup so the scenario does not report a false failure while
-    // the workflow's always-run cleanup step remains the final safety net.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        await this.client.applyOperations([{
-          fn: cleanupSource,
-          args: { sheetNames },
-        }]);
-        return;
-      } catch (error) {
-        const retryable = error instanceof AppsScriptSyncGatewayError &&
-          error.code === "sync_gateway_timeout";
-        if (!retryable || attempt === 2) throw error;
-        await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 2_000));
-      }
-    }
-  }
-
   /**
    * Deletes the fixture tabs and the shared receipt tab through deleteSheet
    * batchUpdates. The provider itself never emits deleteSheet; the scenario
    * harness uses the request kind for cleanup only.
    */
-  async cleanupDirect(sheetNames) {
+  async cleanup(sheetNames) {
     const raw = await this.saTransport.getSpreadsheet({
       spreadsheetId: this.sheetId,
       ranges: [],
@@ -540,12 +422,6 @@ async function main() {
   if (options.backend !== "fake" && options.backend !== "live") {
     throw new Error("--backend must be fake or live");
   }
-  if (options.outbound !== "gateway" && options.outbound !== "direct") {
-    throw new Error("--outbound must be gateway or direct");
-  }
-  if (options.outbound === "direct" && options.backend !== "live") {
-    throw new Error("--outbound direct requires --backend live (it needs a service account and a shared spreadsheet)");
-  }
 
   const startedAt = new Date().toISOString();
   const startedClock = performance.now();
@@ -554,14 +430,14 @@ async function main() {
   const manifest = {
     version: SCENARIO_VERSION,
     backend: options.backend,
-    outbound: options.outbound,
+    outbound: "direct",
     prefix,
     sheetNames,
     createdAt: startedAt,
   };
   await writeJson(options.manifest, manifest);
 
-  const backend = options.backend === "live" ? new LiveSyncBackend(options.outbound) : new FakeSyncGateway();
+  const backend = options.backend === "live" ? new LiveSyncBackend() : new FakeSyncSheetsProvider();
   const steps = [];
   const timings = [];
   let runtime;
@@ -599,7 +475,7 @@ async function main() {
       sheetNames,
       recordTiming: (event) => timings.push({ phase: "internal", ...event }),
     }));
-    const { orm, storage, gateway, definitions, entity, mapping, writer, provision } = runtime;
+    const { orm, storage, provider, definitions, entity, mapping, writer, provision } = runtime;
     const systemDefinition = requireDefinition(definitions, "system_state");
     const userDefinition = requireDefinition(definitions, "user_input");
     const em = orm.em.fork();
@@ -613,7 +489,7 @@ async function main() {
       prefix,
     }));
 
-    if (options.outbound === "direct") {
+    if (options.backend === "live") {
       // Service-account-only mode provisions from the EMPTY spreadsheet
       // state: both fixture tabs are created and their headers initialized.
       await measure("provision_created_tabs", "setup", async () => {
@@ -630,11 +506,11 @@ async function main() {
       assertions += 1;
     });
     await measure("worker_after_create", "steady_state", async () => {
-      const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`);
+      const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
       assert.equal(reports.at(-1)?.selected ?? 0, 0);
       assertions += 1;
     });
-    if (options.outbound === "direct") {
+    if (options.backend === "live") {
       // Append receipt evidence: the create produced exactly two receipt rows
       // (system fast append + user_input create) and no duplicate rows.
       await measure("append_receipt_evidence", "steady_state", async () => {
@@ -647,7 +523,7 @@ async function main() {
       const loaded = await em.findOne(entity, { id: entityId });
       assert.notEqual(loaded, null);
       assert.equal(loaded.status, "pending");
-      const rows = await gateway.readRows(backend.readRequest(systemDefinition));
+      const rows = await provider.readRows(backend.readRequest(systemDefinition));
       assert.equal(rows.rows.length, 1);
       assert.equal(cellValue(rows.rows[0]?.fields.id), entityId);
       assertions += 3;
@@ -661,7 +537,7 @@ async function main() {
       assertions += 1;
     });
     await measure("worker_after_update", "steady_state", async () => {
-      const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`);
+      const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
       assert.equal(reports.at(-1)?.selected ?? 0, 0);
       assertions += 1;
     });
@@ -672,7 +548,7 @@ async function main() {
       assertions += 2;
     });
 
-    if (options.outbound === "direct") {
+    if (options.backend === "live") {
       // Direct full-parity checklist (service-account only): seed a second
       // entity for the stale-edit guard steps, run a mapped polling pass so a
       // simulated human edit flows through full observation into SQLite, and
@@ -681,7 +557,7 @@ async function main() {
         const conflictEm = orm.em.fork();
         conflictEm.persist(conflictEm.create(entity, { id: conflictEntityId, status: "pending" }));
         await conflictEm.flush();
-        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`);
+        const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
         assert.equal(reports.at(-1)?.selected ?? 0, 0);
         assertions += 1;
       });
@@ -694,7 +570,7 @@ async function main() {
         const guardEm = orm.em.fork();
         guardEm.persist(guardEm.create(entity, { id: systemGuardEntityId, status: "pending" }));
         await guardEm.flush();
-        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`);
+        const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
         assert.equal(reports.at(-1)?.selected ?? 0, 0);
         assertions += 1;
       });
@@ -708,7 +584,7 @@ async function main() {
         });
         const mapped = await pollMappedUserInputWithMikroOrm({
           storage,
-          gateway,
+          provider,
           mappings: [mapping],
           writer,
           mode: "adaptive",
@@ -741,7 +617,7 @@ async function main() {
         if (target === null) throw new Error("conflict target entity missing");
         target.status = "paid-v2";
         await em5.flush();
-        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`, true);
+        const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`, true);
         const blocked = reports.reduce((sum, report) => sum + report.blockedCandidate, 0);
         const conflicted = reports.reduce((sum, report) => sum + report.conflicted, 0);
         assert.ok(blocked >= 1);
@@ -768,7 +644,7 @@ async function main() {
         if (target === null) throw new Error("system guard target entity missing");
         target.status = "paid-v4";
         await em5b.flush();
-        const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`, true);
+        const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`, true);
         const conflicted = reports.reduce((sum, report) => sum + report.conflicted, 0);
         assert.ok(conflicted >= 1);
         const systemRows = await backend.readTabRows(systemDefinition.sheet.tabName);
@@ -786,7 +662,7 @@ async function main() {
         });
         const result = await pollSimpleSheetRowsWithAdapter({
           storage,
-          gateway,
+          provider,
           definitions: [userDefinition],
         });
         assert.equal(result.rowsScanned, 1);
@@ -806,7 +682,7 @@ async function main() {
         });
         const result = await pollSimpleSheetRowsWithAdapter({
           storage,
-          gateway,
+          provider,
           definitions: [userDefinition],
         });
         assert.equal(result.rowsScanned, 1);
@@ -829,7 +705,7 @@ async function main() {
       assertions += 1;
     });
     await measure("worker_after_delete", "steady_state", async () => {
-      const reports = await runWorkerUntilIdle(storage, gateway, `${prefix}-worker`);
+      const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
       assert.equal(reports.at(-1)?.selected ?? 0, 0);
       assertions += 1;
     });
@@ -838,9 +714,9 @@ async function main() {
       // deleted instance and would return it instead of the SQLite row.
       const readBack = await orm.em.fork().findOne(entity, { id: entityId });
       assert.equal(readBack, null);
-      const userRows = await gateway.readRows(backend.readRequest(userDefinition));
-      const systemRows = await gateway.readRows(backend.readRequest(systemDefinition));
-      if (options.outbound === "direct") {
+      const userRows = await provider.readRows(backend.readRequest(userDefinition));
+      const systemRows = await provider.readRows(backend.readRequest(systemDefinition));
+      if (options.backend === "live") {
         // The conflict fixture row remains; the deleted entity's User_Input
         // row is physically gone and its System_State row is tombstoned.
         assert.equal(
@@ -864,18 +740,18 @@ async function main() {
       assertions += 4;
     });
 
-    if (options.outbound === "direct") {
+    if (options.backend === "live") {
       // Anchor evidence: the fast append path intentionally never materializes
       // anchor metadata (matching the Apps Script batch append), so anchors
       // exist on User_Input rows, which the polling observation pass anchored;
       // System_State rows are located by visible identity instead. Assert both
       // surfaces and that no entity was materialized twice.
       await measure("anchor_evidence", "steady_state", async () => {
-        const systemSnapshot = await gateway.readSnapshot(backend.readRequest(systemDefinition));
+        const systemSnapshot = await provider.readSnapshot(backend.readRequest(systemDefinition));
         assert.equal(systemSnapshot.rows.length, 3);
         const systemIds = systemSnapshot.rows.map((row) => cellValue(row.cells.id?.normalizedCell));
         assert.equal(new Set(systemIds).size, 3);
-        const inputSnapshot = await gateway.readSnapshot(backend.readRequest(userDefinition));
+        const inputSnapshot = await provider.readSnapshot(backend.readRequest(userDefinition));
         assert.equal(inputSnapshot.rows.length, 2);
         assert.ok(inputSnapshot.rows.every((row) => row.physicalAnchor.kind === PRESENT));
         assert.equal(inputSnapshot.unanchoredRows.length, 0);
@@ -910,7 +786,7 @@ async function main() {
 
   const report = createReport({
     backend: options.backend,
-    outbound: options.outbound,
+    outbound: "direct",
     sheetMatched: backend.sheetMatched,
     prefix,
     startedAt,
@@ -919,7 +795,7 @@ async function main() {
     assertions,
     scenarioError,
     cleanupError,
-    gatewayEvents: backend.events ?? backend.calls,
+    providerEvents: backend.events ?? backend.calls,
   });
   await writeJson(options.output, report);
   await writeSummary(options.summary, report);
@@ -1001,8 +877,8 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
     await migrateMikroOrmSqliteStorageSchema(storage);
     const registrations = await registerTypedSheetsEntityMappings(storage, [mapping], writer);
     const definitions = registeredTypedSheetsProjectionDefinitions(registrations);
-    const gateway = backend.createGateway(definitions);
-    const provision = await provisionRegisteredSyncSheets(gateway, definitions);
+    const provider = backend.createProvider(definitions);
+    const provision = await provisionRegisteredSyncSheets(provider, definitions);
     const orm = createMappedTypedSheetsOrm(storage, {
       mappings: [mapping],
       writer,
@@ -1011,7 +887,7 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
       tempRoot,
       storage,
       orm,
-      gateway,
+      provider,
       definitions,
       entity: CiOrder,
       mapping,
@@ -1042,12 +918,12 @@ async function smokeInitializeMappedOrm({ entity, mapping, prefix }) {
   }
 }
 
-async function runWorkerUntilIdle(storage, gateway, workerId, allowConflicts = false) {
+async function runWorkerUntilIdle(storage, provider, workerId, allowConflicts = false) {
   const reports = [];
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const report = await runSyncEffectWorkerWithAdapter({
       storage,
-      gateway,
+      provider,
       workerId,
       now: Date.now(),
       maxEffects: 100,
@@ -1071,10 +947,10 @@ async function cleanupFromManifest(options) {
     return;
   }
   const manifest = JSON.parse(await readFile(options.manifest, "utf8"));
-  // The manifest records which outbound mode produced the fixture, so the
-  // cleanup step uses the matching backend (service-account-only for the
-  // direct workflow, the Apps Script gateway for legacy runs).
-  const backend = new LiveSyncBackend(manifest.outbound);
+  // The manifest records which backend produced the fixture; the direct
+  // service-account mode is the only live mode, so cleanup always uses the
+  // service-account transport.
+  const backend = new LiveSyncBackend();
   await backend.cleanup(manifest.sheetNames);
   process.stdout.write(`cleaned live fixture ${manifest.prefix}\n`);
 }
@@ -1090,14 +966,14 @@ function createReport({
   assertions,
   scenarioError,
   cleanupError,
-  gatewayEvents,
+  providerEvents,
 }) {
   const setupMs = sumStepDuration(steps, "setup");
   const steadyStateSteps = steps.filter((step) => step.phase === "steady_state");
   const steadyStateMs = sumStepDuration(steadyStateSteps);
   const status = scenarioError === undefined && cleanupError === undefined ? "passed" : "failed";
   return {
-    scenario: "internal-sync-gateway-e2e-lifecycle-and-polling",
+    scenario: "internal-sync-provider-e2e-lifecycle-and-polling",
     scenarioVersion: SCENARIO_VERSION,
     backend,
     outbound,
@@ -1110,7 +986,7 @@ function createReport({
     steadyStateMs: roundMs(steadyStateMs),
     steps: steps.map((step) => ({ ...step, durationMs: roundMs(step.durationMs) })),
     assertions,
-    gatewayEvents,
+    providerEvents,
     error: scenarioError === undefined ? undefined : errorMessage(scenarioError),
     cleanupError: cleanupError === undefined ? undefined : errorMessage(cleanupError),
   };
@@ -1119,7 +995,7 @@ function createReport({
 async function writeSummary(summaryPath, report) {
   if (summaryPath === undefined) return;
   const lines = [
-    `## Hikoutei internal sync/gateway E2E (${report.backend})`,
+    `## Hikoutei internal sync/provider E2E (${report.backend})`,
     "",
     `- Status: **${report.status}**`,
     `- Total: ${report.durationMs} ms`,
@@ -1138,7 +1014,7 @@ async function writeSummary(summaryPath, report) {
 function parseOptions(arguments_) {
   const options = {
     backend: undefined,
-    outbound: "gateway",
+    outbound: "direct",
     cleanupOnly: false,
     manifest: process.env.HIKOUTEI_CI_MANIFEST,
     output: process.env.HIKOUTEI_CI_OUTPUT,
@@ -1160,6 +1036,9 @@ function parseOptions(arguments_) {
     else if (key === "--summary") options.summary = value;
     else if (key === "--prefix") options.prefix = value;
     else throw new Error(`unknown option: ${argument}`);
+  }
+  if (options.outbound !== "direct") {
+    throw new Error("--outbound must be direct (the Apps Script gateway mode was removed)");
   }
   if (options.output === undefined) options.output = path.join(os.tmpdir(), "hikoutei-ci-result.json");
   if (options.manifest === undefined) options.manifest = path.join(os.tmpdir(), "hikoutei-ci-manifest.json");

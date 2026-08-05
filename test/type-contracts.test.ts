@@ -84,7 +84,7 @@ describe("internal type contract promotion", () => {
     }))).toThrowError(StorageError);
   });
 
-  it("shares the canonical date predicate used by storage and gateway boundaries", () => {
+  it("shares the canonical date predicate used by storage and provider boundaries", () => {
     expect(isCanonicalUtcIsoDate("2026-01-02T03:04:05.000Z")).toBe(true);
     expect(isCanonicalUtcIsoDate("2026-01-02T03:04:05+00:00")).toBe(false);
   });

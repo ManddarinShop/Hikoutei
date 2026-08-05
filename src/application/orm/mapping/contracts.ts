@@ -10,16 +10,16 @@ import {
   type NormalizedCell,
 } from "../../../domain/index.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../sync/gateway/constants.js";
+  SYNC_PROJECTIONS,
+} from "../../sync/sheets/constants.js";
 import type { RegisterSyncSheetInput } from "../../../infrastructure/storage/index.js";
 import type { TypedSheetsEntityReference } from "../api/contracts.js";
 import type { NormalizedCellKind } from "../../../shared/encoding/constants.js";
 
 /** Physical projections supported by a mapped business entity. */
 export type TypedSheetsEntityProjection =
-  | typeof SYNC_GATEWAY_PROJECTIONS.USER_INPUT
-  | typeof SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE;
+  | typeof SYNC_PROJECTIONS.USER_INPUT
+  | typeof SYNC_PROJECTIONS.SYSTEM_STATE;
 
 /** A string property name declared by one mapped entity. */
 export type TypedSheetsEntityProperty<Entity extends object> = Extract<keyof Entity, string>;

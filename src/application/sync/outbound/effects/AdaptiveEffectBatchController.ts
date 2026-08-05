@@ -90,7 +90,7 @@ export class AdaptiveEffectBatchController {
     return this.limitFor(routeKey);
   }
 
-  /** Updates only the process-local limit from the completed Gateway attempt. */
+  /** Updates only the process-local limit from the completed provider attempt. */
   public observe(routeKey: string, observation: AdaptiveEffectBatchObservation): void {
     const state = this.routeState(routeKey);
     const unhealthy = observation.responseLoss ||
@@ -129,7 +129,7 @@ export class AdaptiveEffectBatchController {
   /**
    * Waits only the time remaining since the last fast-append request started.
    * Regular applyEffects dispatch never waits on this throttle; when the
-   * interval is 0 (direct workers and fake gateways) this returns immediately.
+   * interval is 0 (direct workers and fake providers) this returns immediately.
    */
   public async waitForAppendThrottle(now: number = Date.now()): Promise<number> {
     if (this.appendDispatchIntervalMs === 0 || this.lastAppendDispatchAt === undefined) {

@@ -6,7 +6,7 @@
  *
  *   node --env-file=.env scripts/bench/direct-sheets-api-service-account.mjs
  *
- * It measures the raw Google Sheets REST path (no Apps Script gateway, no
+ * It measures the raw Google Sheets REST path (no Apps Script provider, no
  * receipts, no CAS) on the shared spreadsheet identified by
  * GOOGLE_SHEETS_TEST_SPREADSHEET_ID, authenticating with the service account
  * at GOOGLE_APPLICATION_CREDENTIALS via GoogleAuth (ADC).

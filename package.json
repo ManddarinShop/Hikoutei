@@ -21,9 +21,7 @@
   },
   "files": [
     "dist",
-    "docs",
-    "apps-script/gateway/Code.gs",
-    "apps-script/gateway/appsscript.json"
+    "docs"
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",

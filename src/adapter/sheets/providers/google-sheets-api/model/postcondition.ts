@@ -8,7 +8,7 @@
  * fails, or keeps probing instead of closing the outbox on weak evidence.
  */
 
-import type { SyncEffectPostcondition, SyncGatewayEffect } from "../../../../../application/sync/gateway/syncGateway.js";
+import type { SyncEffectPostcondition, SyncProjectionEffect } from "../../../../../application/sync/sheets/syncSheets.js";
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import type { PreflightContext, PreflightReceipt } from "./preflight.js";
@@ -16,7 +16,7 @@ import {
   currentHash,
   findWorkingRow,
   isDeletionEffect,
-  requireGatewayEffect,
+  requireProviderEffect,
   toWorkingRow,
   type WorkingRow,
 } from "./planner.js";
@@ -27,7 +27,7 @@ import {
  */
 export function classifyPostcondition(
   context: PreflightContext,
-  effect: SyncGatewayEffect,
+  effect: SyncProjectionEffect,
   receipts: ReadonlyMap<string, PreflightReceipt>,
 ): SyncEffectPostcondition {
   const request = {
@@ -38,7 +38,7 @@ export function classifyPostcondition(
     schemaVersion: effect.payload.schemaVersion,
     effects: [effect],
   };
-  requireGatewayEffect(effect, request, context);
+  requireProviderEffect(effect, request, context);
   const receipt = receipts.get(effect.effectId);
   if (receipt !== undefined && receipt.payloadHash !== effect.payloadHash) {
     return postcondition("changed", absentValue(), absentValue());
@@ -96,7 +96,7 @@ export function classifyPostcondition(
 
 function findProbeRow(
   context: PreflightContext,
-  effect: SyncGatewayEffect,
+  effect: SyncProjectionEffect,
 ): WorkingRow | undefined {
   const byAnchor = new Map<string, WorkingRow>();
   const byIdentity = new Map<string, WorkingRow>();
@@ -123,7 +123,7 @@ function postcondition(
     visibleRevision,
     visibleHash,
     // The direct provider never computes a snapshot hash; recovery does not
-    // need it and the Apps Script gateway also returns null here.
+    // need it and the Apps Script provider also returns null here.
     snapshotHash: absentValue(),
   };
   return reason === undefined ? result : { ...result, reason };

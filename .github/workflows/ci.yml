@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   test:
-    name: Unit, type, build, packed sync/gateway E2E, and installed root API smoke
+    name: Unit, type, build, packed sync/provider E2E, and installed root API smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -56,7 +56,7 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run installed-package internal sync/gateway E2E and root API smoke (fake)
+      - name: Run installed-package internal sync/provider E2E and root API smoke (fake)
         shell: bash
         run: |
           set -euo pipefail
@@ -74,7 +74,7 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
-          # Internal sync/gateway E2E: loads dist modules directly and exercises
+          # Internal sync/provider E2E: loads dist modules directly and exercises
           # projection registration, provisioning, the worker, and polling.
           cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
           node "$consumer_dir/run-api-scenario.mjs" \

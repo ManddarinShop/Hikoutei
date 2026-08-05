@@ -15,7 +15,7 @@ import {
 } from "../../../../infrastructure/storage/errors.js";
 
 export function safeErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message.slice(0, 500) : "unknown sync gateway failure";
+  return error instanceof Error ? error.message.slice(0, 500) : "unknown sync provider failure";
 }
 
 export type PresentValue<T> = {

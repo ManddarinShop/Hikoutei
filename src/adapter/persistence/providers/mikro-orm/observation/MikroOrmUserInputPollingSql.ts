@@ -4,8 +4,8 @@ import {
   CONFLICT_STATUSES,
 } from "../../../../../domain/index.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../../../../application/sync/gateway/constants.js";
+  SYNC_PROJECTIONS,
+} from "../../../../../application/sync/sheets/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   type TypedSheetsEntityMapping,
@@ -86,7 +86,7 @@ export async function readMappedPollingRows(
   const logicalSheetIds = unique(mappings.map((mapping) => mapping.logicalSheetId));
   const physicalSheetIds = unique(mappings.map((mapping) => requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   ).physicalSheetId));
   const bindings = await sql.all<RowBindingSqlRow>(
     `SELECT row_binding_id, logical_sheet_id, anchor_reference, entity_id, state, candidate_epoch
@@ -138,7 +138,7 @@ export async function readMappedPollingRows(
             confirmed_visible_revision, confirmed_entity_revision
      FROM sheet_visible_state
      WHERE projection = ? AND physical_sheet_id IN (${placeholders(physicalSheetIds)})`,
-    [SYNC_GATEWAY_PROJECTIONS.USER_INPUT, ...physicalSheetIds],
+    [SYNC_PROJECTIONS.USER_INPUT, ...physicalSheetIds],
   );
   return { bindings, entities, fields, businessKeys, conflicts, visible };
 }

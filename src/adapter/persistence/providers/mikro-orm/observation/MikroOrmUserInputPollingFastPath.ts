@@ -17,10 +17,10 @@ import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";
 import type {
   SyncTableRowsResult,
   SyncTableRow,
-} from "../../../../../application/sync/gateway/syncGateway.js";
+} from "../../../../../application/sync/sheets/syncSheets.js";
 import {
-  SYNC_GATEWAY_PROJECTIONS,
-} from "../../../../../application/sync/gateway/constants.js";
+  SYNC_PROJECTIONS,
+} from "../../../../../application/sync/sheets/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,
@@ -52,11 +52,11 @@ export function inspectFastPollingTable(
 ): FastPollingTableDecision {
   const projection = requireTypedSheetsEntityProjection(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   );
   const expectedHeaders = typedSheetsEntityProjectionHeaders(
     mapping,
-    SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+    SYNC_PROJECTIONS.USER_INPUT,
   );
   validateTableRoute(mapping, result, expectedHeaders, projection);
 

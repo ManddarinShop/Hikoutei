@@ -47,6 +47,6 @@ body:
     id: comparison
     attributes:
       label: Comparison and caveats
-      description: Compare with previous runs and note Apps Script/network/manual-step variance.
+      description: Compare with previous runs and note provider/network/manual-step variance.
     validations:
       required: false

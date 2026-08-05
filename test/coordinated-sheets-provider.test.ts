@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  CoordinatedSyncGateway,
-  type CoordinatedGatewayInner,
-} from "../src/application/sync/gateway/coordinator/CoordinatedSyncGateway.js";
-import type { CoordinatorLaneEvent } from "../src/application/sync/gateway/coordinator/coordinatorTelemetry.js";
-import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/gateway/transportClassification.js";
+  CoordinatedSheetsProvider,
+  type CoordinatedSheetsInner,
+} from "../src/application/sync/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
+import type { CoordinatorLaneEvent } from "../src/application/sync/sheets/mutationCoordinator/laneTelemetry.js";
+import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheets/transportOutcome.js";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
@@ -16,20 +16,23 @@ import type {
   ReadSyncSnapshotRequest,
   ReadSyncTableRowsRequest,
   SyncEffectPostcondition,
-  SyncGatewayEffect,
-  SyncGatewayEffectPostconditionResult,
-  SyncGatewaySnapshot,
+  SyncEffectPostconditionResult,
+  SyncProjectionEffect,
+  SyncSheetsSnapshot,
   SyncObservedSnapshot,
-  SyncSheetGateway,
-  SyncSheetObservationBatchGateway,
-  SyncSheetTableReaderGateway,
+  SyncSheetsProvider,
+  SyncSheetsObservationBatchProvider,
+  SyncSheetsTableReader,
   SyncTableRowsResult,
-} from "../src/application/sync/gateway/syncGateway.js";
-import type { SyncGatewayProvisioner } from "../src/application/sync/gateway/SyncGatewayBootstrap.js";
-import { SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS, SYNC_GATEWAY_PROTOCOL_VERSIONS } from "../src/application/sync/gateway/constants.js";
+} from "../src/application/sync/sheets/syncSheets.js";
+import type {
+  SyncSheetsProvisioner,
+  SyncSheetsProvisionRoute,
+} from "../src/application/sync/sheets/sheetsProvisioning.js";
+import { SYNC_POSTCONDITION_DISPOSITIONS, SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheets/constants.js";
 import { absentValue, presentValue } from "../src/shared/state/index.js";
 
-type Inner = CoordinatedGatewayInner;
+type Inner = CoordinatedSheetsInner;
 
 interface MockStats {
   readonly mutationMaxConcurrent: number;
@@ -43,9 +46,9 @@ interface MockStats {
 
 const SAMPLE_PHYSICAL_SHEET = "sheet-A";
 
-/** A mock inner gateway that records concurrency and call order. */
-class MockGateway
-  implements SyncSheetGateway, SyncSheetTableReaderGateway, SyncSheetObservationBatchGateway, SyncGatewayProvisioner {
+/** A mock inner provider that records concurrency and call order. */
+class MockProvider
+  implements SyncSheetsProvider, SyncSheetsTableReader, SyncSheetsObservationBatchProvider, SyncSheetsProvisioner {
   public mutationActive = 0;
   public mutationMaxConcurrent = 0;
   public mutationCalls = 0;
@@ -93,16 +96,16 @@ class MockGateway
     return this.runMutation("applyEffects", 10, () => ({ results: [], snapshotHash: absentValue(), hasMore: false }));
   }
 
-  public async readEffectPostcondition(_effect: SyncGatewayEffect): Promise<SyncEffectPostcondition> {
+  public async readEffectPostcondition(_effect: SyncProjectionEffect): Promise<SyncEffectPostcondition> {
     return this.runMutation("postcondition", 10, () => ({
-      disposition: SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE,
+      disposition: SYNC_POSTCONDITION_DISPOSITIONS.UNAVAILABLE,
       visibleRevision: absentValue(),
       visibleHash: absentValue(),
       snapshotHash: absentValue(),
     }));
   }
 
-  public async readEffectPostconditions(_request: ReadSyncEffectPostconditionsRequest): Promise<readonly SyncGatewayEffectPostconditionResult[]> {
+  public async readEffectPostconditions(_request: ReadSyncEffectPostconditionsRequest): Promise<readonly SyncEffectPostconditionResult[]> {
     return this.runMutation("postconditions", 10, () => []);
   }
 
@@ -127,7 +130,7 @@ class MockGateway
       })));
   }
 
-  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
+  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncSheetsSnapshot> {
     return this.runRead("readSnapshot", 10, () => emptySnapshot(request));
   }
 
@@ -152,8 +155,8 @@ class MockGateway
   }
 }
 
-/** Inner gateway without the one-request observation capability. */
-class SequentialOnlyGateway implements Inner {
+/** Inner provider without the one-request observation capability. */
+class SequentialOnlyProvider implements Inner {
   public ensureCalls = 0;
   public snapshotCalls = 0;
 
@@ -165,16 +168,16 @@ class SequentialOnlyGateway implements Inner {
     return { results: [], snapshotHash: absentValue(), hasMore: false };
   }
 
-  public async readEffectPostcondition(_effect: SyncGatewayEffect): Promise<SyncEffectPostcondition> {
+  public async readEffectPostcondition(_effect: SyncProjectionEffect): Promise<SyncEffectPostcondition> {
     return {
-      disposition: SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE,
+      disposition: SYNC_POSTCONDITION_DISPOSITIONS.UNAVAILABLE,
       visibleRevision: absentValue(),
       visibleHash: absentValue(),
       snapshotHash: absentValue(),
     };
   }
 
-  public async readEffectPostconditions(_request: ReadSyncEffectPostconditionsRequest): Promise<readonly SyncGatewayEffectPostconditionResult[]> {
+  public async readEffectPostconditions(_request: ReadSyncEffectPostconditionsRequest): Promise<readonly SyncEffectPostconditionResult[]> {
     return [];
   }
 
@@ -183,7 +186,7 @@ class SequentialOnlyGateway implements Inner {
     return { assigned: 0, existing: 0, duplicateAnchors: [] };
   }
 
-  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncGatewaySnapshot> {
+  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncSheetsSnapshot> {
     this.snapshotCalls += 1;
     return emptySnapshot(request);
   }
@@ -197,9 +200,9 @@ class SequentialOnlyGateway implements Inner {
   }
 }
 
-function emptySnapshot(request: ReadSyncSnapshotRequest): SyncGatewaySnapshot {
+function emptySnapshot(request: ReadSyncSnapshotRequest): SyncSheetsSnapshot {
   return {
-    protocolVersion: SYNC_GATEWAY_PROTOCOL_VERSIONS.V1,
+    protocolVersion: SYNC_PROTOCOL_VERSIONS.V1,
     sheetName: request.sheetName,
     registeredRange: request.registeredRange,
     projection: request.projection,
@@ -226,10 +229,10 @@ function sheetRequest(): ReadSyncSnapshotRequest {
   };
 }
 
-describe("CoordinatedSyncGateway", () => {
+describe("CoordinatedSheetsProvider", () => {
   it("serializes concurrent mutations through one lane", async () => {
-    const inner = new MockGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({ inner });
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
 
     await Promise.all([
       coordinator.fastAppendRows({ ...sheetRequest(), rows: [] }),
@@ -250,8 +253,8 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("keeps value reads lock-free and parallel", async () => {
-    const inner = new MockGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({ inner });
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
 
     await Promise.all([
       coordinator.readRows({ ...sheetRequest(), headers: [] }),
@@ -265,8 +268,8 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("lets a value read overlap a mutation because reads bypass the lane", async () => {
-    const inner = new MockGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({ inner });
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
 
     await Promise.all([
       coordinator.fastAppendRows({ ...sheetRequest(), rows: [] }),
@@ -280,9 +283,9 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("releases the lane when a mutation throws so the next mutation proceeds", async () => {
-    const inner = new MockGateway();
+    const inner = new MockProvider();
     inner.fastAppendFail = true;
-    const coordinator = new CoordinatedSyncGateway<Inner>({ inner });
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
 
     await expect(coordinator.fastAppendRows({ ...sheetRequest(), rows: [] })).rejects.toThrow("fast append failed");
 
@@ -294,8 +297,8 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("serializes recovery barrier reads through the mutation lane", async () => {
-    const inner = new MockGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({ inner });
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
     void coordinator;
 
     const effect = sampleEffect();
@@ -308,8 +311,8 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("acquires every involved lane for batch observation without deadlock", async () => {
-    const inner = new MockGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({
       inner,
       // Partition lanes per physical sheet so two sheets have distinct lanes.
       mutationKeyForPhysicalSheet: (sheetId) => sheetId,
@@ -330,8 +333,8 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("delegates batch observation to the inner one-request capability", async () => {
-    const inner = new MockGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({
       inner,
       mutationKeyForPhysicalSheet: (sheetId) => sheetId,
     });
@@ -349,8 +352,8 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("falls back to sequential per-request observation without the batch capability", async () => {
-    const inner = new SequentialOnlyGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({ inner });
+    const inner = new SequentialOnlyProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
 
     const requestA = { ...sheetRequest(), physicalSheetId: "sheet-A" };
     const requestB = { ...sheetRequest(), physicalSheetId: "sheet-B" };
@@ -364,10 +367,10 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("emits redacted lane telemetry without payload or secret material", async () => {
-    const inner = new MockGateway();
+    const inner = new MockProvider();
     const events: CoordinatorLaneEvent[] = [];
     let clockValue = 0;
-    const coordinator = new CoordinatedSyncGateway<Inner>({
+    const coordinator = new CoordinatedSheetsProvider<Inner>({
       inner,
       clock: () => {
         clockValue += 5;
@@ -396,8 +399,8 @@ describe("CoordinatedSyncGateway", () => {
   });
 
   it("reports lane metrics for diagnostics", async () => {
-    const inner = new MockGateway();
-    const coordinator = new CoordinatedSyncGateway<Inner>({ inner });
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
     await coordinator.fastAppendRows({ ...sheetRequest(), rows: [] });
 
     const metrics = coordinator.laneMetrics();
@@ -405,7 +408,7 @@ describe("CoordinatedSyncGateway", () => {
   });
 });
 
-function sampleEffect(): SyncGatewayEffect {
+function sampleEffect(): SyncProjectionEffect {
   return {
     effectId: "effect-1",
     payloadHash: "hash-1",

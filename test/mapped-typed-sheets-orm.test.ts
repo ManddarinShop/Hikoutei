@@ -14,9 +14,9 @@ import {
   NORMALIZED_CELL_KINDS,
 } from "../src/shared/encoding/constants.js";
 import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../src/application/sync/gateway/constants.js";
+import { SYNC_PROJECTIONS } from "../src/application/sync/sheets/constants.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
-import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import { planMappedObservationEntityMutation } from "../src/application/orm/mapping/observationMapping.js";
 import { registerTypedSheetsEntityMappings } from "../src/application/orm/persistence/flush/flushCoordinator.js";
@@ -27,7 +27,7 @@ import {
 } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { persistMappedObservedRowWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
-import { parseSyncProjectionEffectPayload } from "../src/application/sync/gateway/syncGateway.js";
+import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheets/syncSheets.js";
 import type { PersistObservedRowInput } from "../src/infrastructure/storage/index.js";
 
 const OrderSchema = defineEntity({
@@ -415,12 +415,12 @@ describe("mapped typed-sheets ORM", () => {
       mappings: [orderMapping],
       writer,
     });
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "orders-system",
         sheetName: "Orders_System",
         registeredRange: "A:C",
-        projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
         schemaVersion: 1,
         headers: ["id", "status", "__typed_sheets_deleted"],
       },
@@ -428,7 +428,7 @@ describe("mapped typed-sheets ORM", () => {
         physicalSheetId: "orders-input",
         sheetName: "Orders_Input",
         registeredRange: "A:B",
-        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
       },
@@ -440,7 +440,7 @@ describe("mapped typed-sheets ORM", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage,
-      gateway,
+      provider,
       workerId: "mapped-delete-worker",
       now: 1_000,
       maxEffects: 8,
@@ -448,11 +448,11 @@ describe("mapped typed-sheets ORM", () => {
 
     em.remove(order);
     await em.flush();
-    gateway.dropNextResponseAfterApply();
+    provider.dropNextResponseAfterApply();
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage,
-      gateway,
+      provider,
       workerId: "mapped-delete-worker",
       now: 1_001,
       maxEffects: 8,
@@ -463,20 +463,20 @@ describe("mapped typed-sheets ORM", () => {
       responseLossRecovered: 1,
     });
 
-    const userSnapshot = await gateway.readSnapshot({
+    const userSnapshot = await provider.readSnapshot({
       physicalSheetId: "orders-input",
       sheetName: "Orders_Input",
       registeredRange: "A:B",
-      projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+      projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
     });
     expect(userSnapshot.rows).toEqual([]);
 
-    const systemSnapshot = await gateway.readSnapshot({
+    const systemSnapshot = await provider.readSnapshot({
       physicalSheetId: "orders-system",
       sheetName: "Orders_System",
       registeredRange: "A:C",
-      projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
       schemaVersion: 1,
     });
     expect(systemSnapshot.rows[0]?.cells.__typed_sheets_deleted?.normalizedCell).toEqual({
@@ -496,12 +496,12 @@ describe("mapped typed-sheets ORM", () => {
       mappings: [orderMapping],
       writer,
     });
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "orders-system",
         sheetName: "Orders_System",
         registeredRange: "A:C",
-        projection: SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
         schemaVersion: 1,
         headers: ["id", "status", "__typed_sheets_deleted"],
       },
@@ -509,7 +509,7 @@ describe("mapped typed-sheets ORM", () => {
         physicalSheetId: "orders-input",
         sheetName: "Orders_Input",
         registeredRange: "A:B",
-        projection: SYNC_GATEWAY_PROJECTIONS.USER_INPUT,
+        projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
       },
@@ -520,13 +520,13 @@ describe("mapped typed-sheets ORM", () => {
     await em.flush();
     await runSyncEffectWorkerWithAdapter({
       storage,
-      gateway,
+      provider,
       workerId: "mapped-candidate-delete-worker",
       now: 1_000,
       maxEffects: 8,
     });
 
-    gateway.mutateRow(
+    provider.mutateRow(
       "orders-input",
       "entity:order-candidate-delete",
       {
@@ -540,12 +540,12 @@ describe("mapped typed-sheets ORM", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage,
-      gateway,
+      provider,
       workerId: "mapped-candidate-delete-worker",
       now: 1_001,
       maxEffects: 8,
     })).resolves.toMatchObject({ applied: 1, blockedCandidate: 1, failed: 0 });
-    expect(gateway.readRow("orders-input", "entity:order-candidate-delete").fields.status).toEqual({
+    expect(provider.readRow("orders-input", "entity:order-candidate-delete").fields.status).toEqual({
       kind: NORMALIZED_CELL_KINDS.STRING,
       value: "edited-by-user",
     });
@@ -684,7 +684,7 @@ function acceptedObservationInput(): PersistObservedRowInput {
       schemaVersion: 1,
       atomicity: "row_independent",
       baseSnapshotHash: "snapshot-observed",
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
       rows: [row],
@@ -697,7 +697,7 @@ function acceptedObservationInput(): PersistObservedRowInput {
       payloadHash: "payload-observed",
       detectedAt: 1_000,
       receivedAt: 1_000,
-      ingressActorId: "gateway",
+      ingressActorId: "provider",
       editorActorId: { kind: PRESENCE_KINDS.ABSENT },
       editorActorSource: "unavailable",
     },

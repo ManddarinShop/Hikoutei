@@ -5,7 +5,6 @@
 .local/
 review/
 design/
-templates/manual-apps-script-gateway/
 models.json
 
 # Dependencies and build output

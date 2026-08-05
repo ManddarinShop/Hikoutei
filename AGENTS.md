@@ -61,13 +61,13 @@ entity-lifecycle EntityManager: defining entities, opening the runtime, and
 `fork()`, `create()`, `find()`, `persist()`, `remove()`, `flush()`, and
 `transactional()`. Everything else is internal implementation and must not be
 part of the application-facing contract: MikroORM types and provider internals,
-the Apps Script gateway (signing, transport, operations), the outbound sync
+the Google Sheets API provider, the outbound sync
 worker, polling, and effect supervisor, storage schemas
 (canonical/observation/resolution state), hash/compare-and-set evidence, and
 low-level provider or protocol APIs.
 
 The internal write engine may still classify work as insert-like, update-like,
-or delete-like tasks for batching, outbox effects, and Apps Script
+or delete-like tasks for batching, outbox effects, and Sheets projection
 materialization, but do not expose low-level insert/update/delete mechanics
 merely because the engine needs those concepts internally. The EntityManager API
 inherits the MikroORM/JPA workflow style, but MikroORM is the current
@@ -89,26 +89,21 @@ behind contracts; `infrastructure/` owns SQLite storage technology.
 - `src/application/orm/`: public ORM facade, entity definitions, entity mapping,
   and flush planning (`api/`, `mapping/`, `persistence/`).
 - `src/application/sync/`: outbound sync worker, effect supervisor, projection,
-  reconciliation, gateway orchestration, and telemetry (`gateway/`,
+  reconciliation, provider orchestration, and telemetry (`sheets/`,
   `outbound/`, `telemetry/`).
 - `src/adapter/persistence/`: persistence contracts and the current provider
   (`contracts/` for SQL/persistence contracts, `providers/mikro-orm/` for the
   MikroORM + SQLite engine, storage bridge, observation, and entity
   materialization).
-- `src/adapter/sheets/`: Sheets provider contracts and the current signed Apps
-  Script gateway under `providers/apps-script-gateway/`, split into `protocol/`
-  (signing, serialization, response validation), `transport/` (HTTP operation
-  client), and `operations/` (`write/` fast append, `observation/` visible-key
-  snapshot reads, `effect/` guarded update/delete effects).
+- `src/adapter/sheets/`: Sheets provider contracts and the current Google
+  Sheets API provider under `providers/google-sheets-api/` (transport/ and
+  model/), the single sync provider for outbound effects, provisioning, table
+  reads, row anchors, and snapshots.
 - `src/infrastructure/storage/`: SQLite storage technology for canonical state,
   observation/conflict/resolution state, and the durable outbox (`sqlite/`,
   `state/` for canonical/mapped/observation/resolution, `sync/` for the outbound
   outbox and worker SQL).
 - `src/index.ts`: the application-facing public entrypoint only.
-- `apps-script/gateway/`: the deployable Apps Script gateway (`Code.gs`) and the
-  bulk-write benchmark script. The gateway is intentionally thin: it verifies
-  the signed operation, runs the allowlisted Sheet operation, and returns a
-  structured result.
 - `test/`: Vitest unit and provider/contract tests, plus `test/support/`
   fixtures.
 - `docs/`: architecture, sync flow, code guidelines, and current-state notes.
@@ -128,9 +123,10 @@ directory anymore; treat those names as retired.
 - Preview package contents: `npm pack --dry-run`
 
 There is currently no `test:integration` npm script. Live Google Sheets
-verification is opt-in and manual: it requires a deployed Apps Script gateway,
-credentials, a spreadsheet, and external quota, and should never be the default
-verification step. The normal suite uses fake gateways and SQLite/MikroORM
+verification is opt-in and manual: it requires a service account
+(`GOOGLE_APPLICATION_CREDENTIALS`), a spreadsheet shared with it, and external
+quota, and should never be the default
+verification step. The normal suite uses fake providers and SQLite/MikroORM
 fixtures and needs no credentials.
 
 ## Code Modification Rules
@@ -166,7 +162,7 @@ ask before editing `src/**`.
   of truth. The application reads SQLite; the worker observes `User_Input` only
   to evaluate intentional human changes and records conflicts in SQLite.
 - Fail clearly on schema drift, duplicate headers, missing required/key columns,
-  parse errors, stale/conflicting writes, and malformed gateway payloads.
+  parse errors, stale/conflicting writes, and malformed provider payloads.
 - Treat stale-write protection as field-level compare-and-set evidence, not a
   true database transaction. Outbound effects carry expected/target/observed
   visible-hash evidence to distinguish a failed write from a remote edit;
@@ -190,7 +186,7 @@ make the intended lifecycle visible at the type level.
   state-specific type can express the contract. For example, an insert type
   should not carry `beforeRow`, `baseEntityRevision`, or delete evidence at
   all; existing-row and delete types should carry the fields they require.
-- Keep untrusted adapter, gateway, or JSON payloads at an `unknown`/raw input
+- Keep untrusted adapter, provider, or JSON payloads at an `unknown`/raw input
   boundary. Validate them with runtime type guards, then promote them into
   state-specific internal types before evaluator or repository logic runs.
 - A TypeScript type alone does not validate runtime JavaScript data. Pair
@@ -237,8 +233,8 @@ adapter operations, and non-trivial private helpers. Comments should explain
 what the function does, why it exists, and any important safety or concurrency
 behavior. Avoid noisy comments that merely repeat the implementation.
 
-When adding repository operations, adapter methods, setup helpers, or Apps
-Script gateway handlers, include a short comment near each function that helps a
+When adding repository operations, adapter methods, setup helpers, or Sheets
+provider operations, include a short comment near each function that helps a
 new contributor understand the contract and failure mode.
 
 ## Testing Expectations
@@ -273,7 +269,7 @@ Every recorded benchmark should include:
   preparation such as sheet creation, header initialization, Docker startup, or
   other setup work
 - comparison with the previous relevant benchmark when available
-- known caveats such as Apps Script latency, network variance, or manual browser
+- known caveats such as provider latency, network variance, or manual browser
   steps
 
 Do not treat a benchmark as complete if the result only appears in chat.

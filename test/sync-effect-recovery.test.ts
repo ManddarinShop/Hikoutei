@@ -10,9 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
 import { absentValue, presentValue } from "../src/shared/state/index.js";
 import {
-  AppsScriptSyncGatewayError,
-  SYNC_GATEWAY_CLIENT_ERROR_CODES,
-} from "../src/adapter/sheets/providers/apps-script-gateway/errors.js";
+  GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
+  GoogleSheetsApiTransportError,
+} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -21,10 +21,10 @@ import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/infrastructure/storage/s
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/gateway/syncGateway.js";
-import { SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/gateway/constants.js";
+} from "../src/application/sync/sheets/syncSheets.js";
+import { SYNC_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/sheets/constants.js";
 import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
-import { FakeSyncSheetGateway } from "./support/FakeSyncSheetGateway.js";
+import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import type { NewEffect } from "../src/infrastructure/storage/index.js";
@@ -73,7 +73,7 @@ describe("sync effect recovery", () => {
       ["expired-claim", claim.lease.writerEpoch, 900, effect.effectId],
     ));
 
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "physical-recovery",
         sheetName: "Orders",
@@ -86,7 +86,7 @@ describe("sync effect recovery", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "recovery-worker",
       now: 1_001,
       maxEffects: 1,
@@ -102,13 +102,13 @@ describe("sync effect recovery", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "recovery-worker",
       now: 10_000,
       maxEffects: 1,
     })).resolves.toMatchObject({ applied: 1, failed: 0 });
-    expect(gateway.applyPostconditionMode).toBeUndefined();
-    expect(gateway.fastAppendCalls).toBe(1);
+    expect(provider.applyPostconditionMode).toBeUndefined();
+    expect(provider.fastAppendCalls).toBe(1);
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
@@ -139,7 +139,7 @@ describe("sync effect recovery", () => {
       ["postcondition_unavailable", effects[0]!.effectId, effects[1]!.effectId],
     ));
 
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "physical-recovery",
         sheetName: "Orders",
@@ -152,7 +152,7 @@ describe("sync effect recovery", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "batch-recovery-worker",
       now: 2_001,
       maxEffects: 2,
@@ -162,9 +162,74 @@ describe("sync effect recovery", () => {
       failed: 0,
       requeued: 2,
     });
-    expect(gateway.postconditionBatchReads).toBe(1);
+    expect(provider.postconditionBatchReads).toBe(1);
     await expect(readStatus(adapter, effects[0]!.effectId)).resolves.toBe("pending");
     await expect(readStatus(adapter, effects[1]!.effectId)).resolves.toBe("pending");
+  });
+
+  it("recovers failed rows persisted with the legacy retryable error code", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(adapter);
+    await registerProjection(adapter);
+
+    const claim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "sync-effect-worker",
+      writerId: "legacy-code-worker",
+      leaseDurationMs: 10_000,
+      now: 2_200,
+    });
+    if (claim.kind !== "claimed") throw new Error("Expected a writer lease");
+    const fence = {
+      role: claim.lease.role,
+      writerEpoch: claim.lease.writerEpoch,
+      fencingToken: claim.lease.fencingToken,
+      now: 2_200,
+    };
+    const effect = createEffect("legacy-code", 1, { includeId: true });
+    await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
+    // Rows written before the provider rename carry the legacy code; the
+    // recovery selection must still treat them as retryable.
+    await adapter.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = 'failed', last_error_code = ?, next_attempt_at = ? WHERE effect_id = ?",
+      ["gateway_retryable_error", 2_000, effect.effectId],
+    ));
+
+    const provider = new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: "physical-recovery",
+        sheetName: "Orders",
+        registeredRange: "A:B",
+        projection: "system_state",
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+    ]);
+
+    await expect(runSyncEffectWorkerWithAdapter({
+      storage: adapter,
+      provider,
+      workerId: "legacy-code-worker",
+      now: 2_201,
+      maxEffects: 1,
+    })).resolves.toMatchObject({
+      selected: 1,
+      claimed: 1,
+      applied: 0,
+      failed: 0,
+      requeued: 1,
+    });
+    await expect(readStatus(adapter, effect.effectId)).resolves.toBe("pending");
+
+    await expect(runSyncEffectWorkerWithAdapter({
+      storage: adapter,
+      provider,
+      workerId: "legacy-code-worker",
+      now: 10_000,
+      maxEffects: 1,
+    })).resolves.toMatchObject({ applied: 1, failed: 0 });
+    await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
   it("keeps a receipt-less orphan row delivery-uncertain instead of closing or redriving", async () => {
@@ -191,17 +256,17 @@ describe("sync effect recovery", () => {
     await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
     // Simulate the response-loss probe of a two-flush append orphan: the
     // target row exists at the target hash, but the receipt write never
-    // landed, so the gateway classifies the probe as unavailable with a
+    // landed, so the provider classifies the probe as unavailable with a
     // stable reason instead of an applied closure.
     await adapter.transaction(({ sql }) => sql.run(
       "UPDATE sheet_effect_outbox SET status = 'failed', last_error_code = ? WHERE effect_id = ?",
       ["postcondition_unavailable", effect.effectId],
     ));
 
-    const gateway = new ReceiptLessOrphanGateway();
+    const provider = new ReceiptLessOrphanProvider();
     const first = await runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "orphan-worker",
       now: 4_001,
       maxEffects: 1,
@@ -221,8 +286,8 @@ describe("sync effect recovery", () => {
       deferred: 1,
       responseLossRecovered: 0,
     });
-    expect(gateway.orphanProbeReads).toBe(1);
-    expect(gateway.fastAppendCalls).toBe(0);
+    expect(provider.orphanProbeReads).toBe(1);
+    expect(provider.fastAppendCalls).toBe(0);
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("delivery_uncertain");
     const probeRow = await adapter.read(({ sql }) => sql.get<{ readonly next_probe_at: number | null }>(
       "SELECT next_probe_at FROM sheet_effect_outbox WHERE effect_id = ?",
@@ -238,7 +303,7 @@ describe("sync effect recovery", () => {
     // is always selected and re-probed.
     const second = await runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "orphan-worker",
       now: 5_002,
       maxEffects: 1,
@@ -250,17 +315,17 @@ describe("sync effect recovery", () => {
       requeued: 0,
       deferred: 1,
     });
-    expect(gateway.orphanProbeReads).toBe(2);
-    expect(gateway.fastAppendCalls).toBe(0);
+    expect(provider.orphanProbeReads).toBe(2);
+    expect(provider.fastAppendCalls).toBe(0);
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("delivery_uncertain");
   });
 
   it("terminally records an explicit structured remote failure", async () => {
-    const result = await runWorkerWithThrownGateway(openOrms, new AppsScriptSyncGatewayError(
-      SYNC_GATEWAY_CLIENT_ERROR_CODES.REMOTE_ERROR,
-      "the gateway rejected the signed envelope before any operation ran",
-      presentValue(409),
-      presentValue("invalid_signature"),
+    const result = await runWorkerWithThrownProvider(openOrms, new GoogleSheetsApiTransportError(
+      GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+      "the API rejected the batch before any operation ran",
+      presentValue(403),
+      presentValue("PERMISSION_DENIED"),
     ));
 
     expect(result.report).toMatchObject({
@@ -270,9 +335,9 @@ describe("sync effect recovery", () => {
       responseLossRecovered: 0,
       requeued: 0,
     });
-    expect(result.gateway.postconditionBatchReads).toBe(0);
+    expect(result.provider.postconditionBatchReads).toBe(0);
     expect(result.status).toBe("failed");
-    expect(result.errorCode).toBe("gateway_remote_error");
+    expect(result.errorCode).toBe("provider_remote_error");
   });
 
   it("recovers a partial remote write followed by an ambiguous batch failure", async () => {
@@ -298,10 +363,10 @@ describe("sync effect recovery", () => {
     const second = createEffect("partial-second", undefined, { includeId: true });
     await expect(appendPendingEffectsWithAdapter(adapter, fence, [first, second])).resolves.toBe(true);
 
-    const gateway = new PartialBatchFailureGateway();
+    const provider = new PartialBatchFailureProvider();
     const report = await runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "partial-batch-worker",
       now: 5_001,
       maxEffects: 2,
@@ -316,22 +381,22 @@ describe("sync effect recovery", () => {
     });
     await expect(readStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(readStatus(adapter, second.effectId)).resolves.toBe("pending");
-    expect(gateway.postconditionBatchReads).toBe(1);
+    expect(provider.postconditionBatchReads).toBe(1);
   });
 
   it.each([
     [
       "timeout",
-      new AppsScriptSyncGatewayError(
-        SYNC_GATEWAY_CLIENT_ERROR_CODES.TIMEOUT,
+      new GoogleSheetsApiTransportError(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT,
         "request timed out",
         presentValue(504),
       ),
     ],
     [
       "non-json response",
-      new AppsScriptSyncGatewayError(
-        SYNC_GATEWAY_CLIENT_ERROR_CODES.INVALID_RESPONSE,
+      new GoogleSheetsApiTransportError(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.INVALID_RESPONSE,
         "response was not JSON",
         presentValue(502),
       ),
@@ -339,28 +404,28 @@ describe("sync effect recovery", () => {
     ["unknown error", new Error("connection dropped")],
     [
       "structured operation_failed at HTTP 200",
-      new AppsScriptSyncGatewayError(
-        SYNC_GATEWAY_CLIENT_ERROR_CODES.REMOTE_ERROR,
+      new GoogleSheetsApiTransportError(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
         "the batch aborted after a partial remote write",
-        presentValue(200),
-        presentValue("operation_failed"),
+        presentValue(500),
+        presentValue("INTERNAL"),
       ),
     ],
     [
       "structured internal_error at HTTP 200",
-      new AppsScriptSyncGatewayError(
-        SYNC_GATEWAY_CLIENT_ERROR_CODES.REMOTE_ERROR,
-        "the gateway handler failed after the operation ran",
-        presentValue(200),
-        presentValue("internal_error"),
+      new GoogleSheetsApiTransportError(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+        "the batch failed after a partial remote write",
+        presentValue(503),
+        presentValue("UNAVAILABLE"),
       ),
     ],
   ])("recovers %s through postcondition inspection", async (_label, error) => {
-    const result = await runWorkerWithThrownGateway(openOrms, error);
+    const result = await runWorkerWithThrownProvider(openOrms, error);
 
     expect(result.report.failed).toBe(0);
     expect(result.report.requeued).toBe(1);
-    expect(result.gateway.postconditionBatchReads).toBe(1);
+    expect(result.provider.postconditionBatchReads).toBe(1);
     expect(result.status).toBe("pending");
   });
 
@@ -387,10 +452,10 @@ describe("sync effect recovery", () => {
     const effect = createEffect("fast-evidence", 1, { includeId: true });
     await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
 
-    const gateway = new EvidenceOmittingFastAppendGateway();
+    const provider = new EvidenceOmittingFastAppendProvider();
     const report = await runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "fast-evidence-worker",
       now: 2_501,
       maxEffects: 1,
@@ -402,8 +467,8 @@ describe("sync effect recovery", () => {
       responseLossRecovered: 1,
       failed: 0,
     });
-    expect(gateway.fastAppendCalls).toBe(1);
-    expect(gateway.postconditionBatchReads).toBe(1);
+    expect(provider.fastAppendCalls).toBe(1);
+    expect(provider.postconditionBatchReads).toBe(1);
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
@@ -430,7 +495,7 @@ describe("sync effect recovery", () => {
     const effect = createEffect("manual-repair", 1, { includeId: true });
     await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
 
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "physical-recovery",
         sheetName: "Orders",
@@ -440,8 +505,8 @@ describe("sync effect recovery", () => {
         headers: ["id", "status"],
       },
     ]);
-    gateway.dropNextResponseAfterApply();
-    await gateway.fastAppendRows({
+    provider.dropNextResponseAfterApply();
+    await provider.fastAppendRows({
       physicalSheetId: "physical-recovery",
       sheetName: "Orders",
       registeredRange: "A:B",
@@ -459,7 +524,7 @@ describe("sync effect recovery", () => {
     }).catch(() => undefined);
     // The built-in append path never materialized the advisory anchor, so a
     // manual deletion of the appended row is located by registered identity.
-    gateway.removeRowByIdentity("physical-recovery", "order-manual-repair");
+    provider.removeRowByIdentity("physical-recovery", "order-manual-repair");
 
     // Seed the durable effect as failed/recoverable after the simulated
     // response loss so the worker exercises the postcondition path directly.
@@ -469,14 +534,14 @@ describe("sync effect recovery", () => {
     ));
     const first = await runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "manual-repair-worker",
       now: 2_701,
       maxEffects: 1,
     });
     const second = await runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "manual-repair-worker",
       now: 2_702,
       maxEffects: 1,
@@ -484,7 +549,7 @@ describe("sync effect recovery", () => {
 
     expect(first.failed).toBe(1);
     expect(second.selected).toBe(0);
-    expect(gateway.fastAppendCalls).toBe(1);
+    expect(provider.fastAppendCalls).toBe(1);
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("failed");
     await expect(adapter.read(({ sql }) => sql.get<{ readonly last_error_code: string }>(
       "SELECT last_error_code FROM sheet_effect_outbox WHERE effect_id = ?",
@@ -515,7 +580,7 @@ describe("sync effect recovery", () => {
     const effect = createEffect("fast-loss", 1, { includeId: true });
     await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
 
-    const gateway = new FakeSyncSheetGateway([
+    const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "physical-recovery",
         sheetName: "Orders",
@@ -525,11 +590,11 @@ describe("sync effect recovery", () => {
         headers: ["id", "status"],
       },
     ]);
-    gateway.dropNextResponseAfterApply();
+    provider.dropNextResponseAfterApply();
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "fast-loss-worker",
       now: 3_001,
       maxEffects: 1,
@@ -538,12 +603,12 @@ describe("sync effect recovery", () => {
 
     await expect(runSyncEffectWorkerWithAdapter({
       storage: adapter,
-      gateway,
+      provider,
       workerId: "fast-loss-worker",
       now: 3_002,
       maxEffects: 1,
     })).resolves.toMatchObject({ selected: 0, applied: 0, failed: 0 });
-    expect(gateway.fastAppendCalls).toBe(1);
+    expect(provider.fastAppendCalls).toBe(1);
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 });
@@ -561,12 +626,12 @@ async function createOrm() {
 
 type RecoveryOrm = Awaited<ReturnType<typeof createOrm>>;
 
-async function runWorkerWithThrownGateway(
+async function runWorkerWithThrownProvider(
   openOrms: RecoveryOrm[],
   error: Error,
 ): Promise<{
   readonly report: Awaited<ReturnType<typeof runSyncEffectWorkerWithAdapter>>;
-  readonly gateway: ThrowingEffectGateway;
+  readonly provider: ThrowingEffectProvider;
   readonly status: string | undefined;
   readonly errorCode: string | null | undefined;
 }> {
@@ -590,10 +655,10 @@ async function runWorkerWithThrownGateway(
   };
   const effect = createEffect("dispatch-classification");
   await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
-  const gateway = new ThrowingEffectGateway(error);
+  const provider = new ThrowingEffectProvider(error);
   const report = await runSyncEffectWorkerWithAdapter({
     storage: adapter,
-    gateway,
+    provider,
     workerId: "dispatch-classification-worker",
     now: 4_001,
     maxEffects: 1,
@@ -607,13 +672,13 @@ async function runWorkerWithThrownGateway(
   ));
   return {
     report,
-    gateway,
+    provider,
     status: row?.status,
     errorCode: row?.last_error_code,
   };
 }
 
-class EvidenceOmittingFastAppendGateway extends FakeSyncSheetGateway {
+class EvidenceOmittingFastAppendProvider extends FakeSyncSheetsProvider {
   public constructor() {
     super([{
       physicalSheetId: "physical-recovery",
@@ -626,8 +691,8 @@ class EvidenceOmittingFastAppendGateway extends FakeSyncSheetGateway {
   }
 
   public override async fastAppendRows(
-    request: Parameters<FakeSyncSheetGateway["fastAppendRows"]>[0],
-  ): ReturnType<FakeSyncSheetGateway["fastAppendRows"]> {
+    request: Parameters<FakeSyncSheetsProvider["fastAppendRows"]>[0],
+  ): ReturnType<FakeSyncSheetsProvider["fastAppendRows"]> {
     const response = await super.fastAppendRows(request);
     return {
       ...response,
@@ -638,10 +703,10 @@ class EvidenceOmittingFastAppendGateway extends FakeSyncSheetGateway {
 
 /**
  * Models the two-flush append orphan: the target row exists at the target
- * hash, but the receipt write never landed, so the gateway probe stays
+ * hash, but the receipt write never landed, so the provider probe stays
  * fail-closed instead of claiming an applied closure.
  */
-class ReceiptLessOrphanGateway extends FakeSyncSheetGateway {
+class ReceiptLessOrphanProvider extends FakeSyncSheetsProvider {
   public orphanProbeReads = 0;
 
   public constructor() {
@@ -656,10 +721,10 @@ class ReceiptLessOrphanGateway extends FakeSyncSheetGateway {
   }
 
   public override async readEffectPostcondition(
-    effect: Parameters<FakeSyncSheetGateway["readEffectPostcondition"]>[0],
-  ): ReturnType<FakeSyncSheetGateway["readEffectPostcondition"]> {
+    effect: Parameters<FakeSyncSheetsProvider["readEffectPostcondition"]>[0],
+  ): ReturnType<FakeSyncSheetsProvider["readEffectPostcondition"]> {
     return {
-      disposition: SYNC_GATEWAY_POSTCONDITION_DISPOSITIONS.UNAVAILABLE,
+      disposition: SYNC_POSTCONDITION_DISPOSITIONS.UNAVAILABLE,
       visibleRevision: absentValue(),
       visibleHash: absentValue(),
       snapshotHash: absentValue(),
@@ -668,8 +733,8 @@ class ReceiptLessOrphanGateway extends FakeSyncSheetGateway {
   }
 
   public override async readEffectPostconditions(
-    request: Parameters<FakeSyncSheetGateway["readEffectPostconditions"]>[0],
-  ): ReturnType<FakeSyncSheetGateway["readEffectPostconditions"]> {
+    request: Parameters<FakeSyncSheetsProvider["readEffectPostconditions"]>[0],
+  ): ReturnType<FakeSyncSheetsProvider["readEffectPostconditions"]> {
     this.orphanProbeReads += 1;
     return Promise.all(request.effects.map(async (effect) => ({
       effectId: effect.effectId,
@@ -679,7 +744,7 @@ class ReceiptLessOrphanGateway extends FakeSyncSheetGateway {
   }
 }
 
-class ThrowingEffectGateway extends FakeSyncSheetGateway {
+class ThrowingEffectProvider extends FakeSyncSheetsProvider {
   public constructor(private readonly thrown: Error) {
     super([{
       physicalSheetId: "physical-recovery",
@@ -692,20 +757,20 @@ class ThrowingEffectGateway extends FakeSyncSheetGateway {
   }
 
   public override async applyEffects(
-    _request: Parameters<FakeSyncSheetGateway["applyEffects"]>[0],
-  ): Promise<Awaited<ReturnType<FakeSyncSheetGateway["applyEffects"]>>> {
+    _request: Parameters<FakeSyncSheetsProvider["applyEffects"]>[0],
+  ): Promise<Awaited<ReturnType<FakeSyncSheetsProvider["applyEffects"]>>> {
     throw this.thrown;
   }
 
   public override async fastAppendRows(
-    _request: Parameters<FakeSyncSheetGateway["fastAppendRows"]>[0],
-  ): Promise<Awaited<ReturnType<FakeSyncSheetGateway["fastAppendRows"]>>> {
+    _request: Parameters<FakeSyncSheetsProvider["fastAppendRows"]>[0],
+  ): Promise<Awaited<ReturnType<FakeSyncSheetsProvider["fastAppendRows"]>>> {
     throw this.thrown;
   }
 }
 
 /** Applies one append from a batch, then reports a structured batch failure. */
-class PartialBatchFailureGateway extends FakeSyncSheetGateway {
+class PartialBatchFailureProvider extends FakeSyncSheetsProvider {
   public constructor() {
     super([{
       physicalSheetId: "physical-recovery",
@@ -718,14 +783,14 @@ class PartialBatchFailureGateway extends FakeSyncSheetGateway {
   }
 
   public override async fastAppendRows(
-    request: Parameters<FakeSyncSheetGateway["fastAppendRows"]>[0],
-  ): ReturnType<FakeSyncSheetGateway["fastAppendRows"]> {
+    request: Parameters<FakeSyncSheetsProvider["fastAppendRows"]>[0],
+  ): ReturnType<FakeSyncSheetsProvider["fastAppendRows"]> {
     await super.fastAppendRows({ ...request, rows: request.rows.slice(0, 1) });
-    throw new AppsScriptSyncGatewayError(
-      SYNC_GATEWAY_CLIENT_ERROR_CODES.REMOTE_ERROR,
+    throw new GoogleSheetsApiTransportError(
+      GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
       "batch operation failed after a partial remote write",
       presentValue(502),
-      presentValue("operation_failed"),
+      presentValue("INTERNAL"),
     );
   }
 }

@@ -11,7 +11,7 @@ import {
   type FieldManifestEntry,
   type OwnershipManifest,
 } from "../../../domain/index.js";
-import { SYNC_GATEWAY_PROJECTIONS } from "../../sync/gateway/constants.js";
+import { SYNC_PROJECTIONS } from "../../sync/sheets/constants.js";
 import type { RegisterSyncSheetInput, RegisteredProjection } from "../../../infrastructure/storage/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
@@ -50,8 +50,8 @@ export function createTypedSheetsEntityOwnershipManifest(
         fieldName: field.fieldName,
         ownership: field.ownership,
         projection: field.ownership === FIELD_OWNERSHIPS.USER
-          ? SYNC_GATEWAY_PROJECTIONS.USER_INPUT
-          : SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE,
+          ? SYNC_PROJECTIONS.USER_INPUT
+          : SYNC_PROJECTIONS.SYSTEM_STATE,
         type: field.cellKind,
         required: field.required,
         unique: field.unique,
@@ -74,12 +74,12 @@ export function typedSheetsEntityProjectionHeaders(
   mapping: TypedSheetsEntityMapping,
   projection: TypedSheetsEntityProjection,
 ): readonly string[] {
-  const fieldNames = projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE
+  const fieldNames = projection === SYNC_PROJECTIONS.SYSTEM_STATE
     ? mapping.fields.map((field) => field.fieldName)
     : mapping.fields
       .filter((field) => field.ownership === FIELD_OWNERSHIPS.USER)
       .map((field) => field.fieldName);
-  return projection === SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE
+  return projection === SYNC_PROJECTIONS.SYSTEM_STATE
     ? [...fieldNames, mapping.tombstoneFieldName]
     : fieldNames;
 }
@@ -106,9 +106,9 @@ function toRegisteredProjection(
   projection: TypedSheetsEntityProjection,
 ): RegisteredProjection {
   switch (projection) {
-    case SYNC_GATEWAY_PROJECTIONS.USER_INPUT:
+    case SYNC_PROJECTIONS.USER_INPUT:
       return REGISTERED_PROJECTION_KINDS.USER_INPUT;
-    case SYNC_GATEWAY_PROJECTIONS.SYSTEM_STATE:
+    case SYNC_PROJECTIONS.SYSTEM_STATE:
       return REGISTERED_PROJECTION_KINDS.SYSTEM_STATE;
   }
 }
