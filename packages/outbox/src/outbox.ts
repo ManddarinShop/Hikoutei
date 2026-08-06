@@ -1,26 +1,25 @@
 /**
  * Effect outbox claim, apply, and recovery operations.
  *
- * Per design concurrency/writer-rpc.md and storage-schema.md:
  * - Effects are claimed atomically (CAS on status = 'pending').
  * - Only one worker can claim an effect at a time.
  * - Apply results must pass fencing validation (epoch + token).
  * - Supersede/replan atomically closes old effect and inserts new one.
  */
 
-import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
-import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
+import { STORAGE_ERROR_CODES, StorageError } from "./errors.js";
+import { withSqlSavepoint } from "./sqlTransaction.js";
 import {
   fenceParameters,
   isFencingValidWithSql,
-} from "../shared/writerLease.js";
-import type { FencingContext } from "../shared/writerLease.js";
+} from "./writerLease.js";
+import type { FencingContext } from "./writerLease.js";
 import {
   decodeSqlRows,
   type SqlExecutor,
   type SqlRow,
   type SqlStorageAdapter,
-} from "../../../../adapter/persistence/contracts/sql.js";
+} from "./sql.js";
 import type {
   ApplyResultOptions,
   ClaimEffectOptions,
@@ -30,7 +29,7 @@ import type {
   RenewEffectLeaseOptions,
   PendingEffect,
   RetryClaimedEffectOptions,
-} from "./effectOutboxContracts.js";
+} from "./contracts.js";
 import {
   APPLY_EFFECT_RESULT_SQL,
   CLAIM_EFFECT_SQL,
@@ -46,7 +45,7 @@ import {
   SELECT_READY_EFFECTS_SQL,
   SELECT_READY_FAST_APPEND_EFFECTS_SQL,
   SUPERSEDE_EFFECT_SQL,
-} from "./effectOutboxSql.js";
+} from "./outboxSql.js";
 import {
   applyEffectResultParameters,
   assertProjectionConfirmationTargetWithSql,
@@ -62,8 +61,8 @@ import {
   validateEffectLeaseDuration,
   validateReadyEffectLimit,
   writeProjectionConfirmationWithSql,
-} from "./effectOutboxSupport.js";
-export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./effectOutboxContracts.js";
+} from "./support.js";
+export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./contracts.js";
 export type {
   AppliedEffectResultOptions,
   ApplyResultOptions,
@@ -76,7 +75,7 @@ export type {
   NewEffect,
   PendingEffect,
   RetryClaimedEffectOptions,
-} from "./effectOutboxContracts.js";
+} from "./contracts.js";
 
 /**
  * Claims a pending effect through an already-active async SQL context.
@@ -150,17 +149,12 @@ export async function renewEffectLeaseWithAdapter(
 }
 
 /**
- * Appends pending effects under the supplied writer fence.
- *
- * This is used for conflict/quarantine effects that do not accompany a
- * canonical field commit. It owns a savepoint so a duplicate dedupe key or a
- * lost fence cannot leave only part of an effect set behind.
- */
-/**
  * Appends pending effects inside an already-active async SQL transaction.
  *
- * This is the MikroORM-compatible path used when an entity mutation and its
- * Sheets outbox records must commit or roll back together.
+ * This is the transaction-bound path used when an entity mutation and its
+ * delivery-queue records must commit or roll back together. It owns a
+ * savepoint so a duplicate dedupe key or a lost fence cannot leave only part
+ * of an effect set behind.
  */
 export async function appendPendingEffectsWithSql(
   sql: SqlExecutor,
@@ -201,15 +195,10 @@ export async function appendPendingEffectsWithAdapter(
 }
 
 /**
- * Applies a result to a claimed effect.
- * Validates fencing (claim token + writer epoch) before applying.
- * Returns true if the result was applied, false if fencing failed.
- */
-/**
  * Applies a claimed effect result through an already-active async SQL context.
  *
- * If projection confirmation fails, the savepoint rolls the effect transition
- * back too; confirmed visible state can never advance without its outbox row.
+ * If delivery confirmation fails, the savepoint rolls the effect transition
+ * back too; confirmed delivery state can never advance without its outbox row.
  */
 export async function applyEffectResultWithSql(
   sql: SqlExecutor,
@@ -248,11 +237,10 @@ export async function applyEffectResultWithAdapter(
  * Supersedes an old effect and inserts a new replacement effect atomically.
  * Used for repair replan when the canonical target has advanced.
  *
- * Per design: the old effect is marked 'superseded', a new effect with a new
- * effect_id and new dedupe_key is inserted, and the new effect's
- * predecessor_effect_id links to the old one.
+ * The old effect is marked 'superseded', a new effect with a new effect_id and
+ * new dedupe_key is inserted, and the new effect's predecessor_effect_id links
+ * to the old one.
  */
-/** Supersedes and replans an effect through an already-active async SQL context. */
 export async function supersedeAndReplanWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
@@ -304,7 +292,6 @@ export async function supersedeAndReplanWithAdapter(
  * The worker must read the remote postcondition before it schedules a retry;
  * an expired lease is not evidence that the remote write did not happen.
  */
-/** Marks expired effect leases through an already-active async SQL context. */
 export async function recoverExpiredLeasesWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
@@ -359,9 +346,8 @@ export async function markDeliveryUncertainWithAdapter(
  *
  * This is intentionally narrower than a generic redrive: it may be used only
  * after a valid provider response explicitly says the batch budget stopped
- * before this effect.  Unknown response loss remains failed until read-back.
+ * before this effect. Unknown response loss remains failed until read-back.
  */
-/** Returns one acknowledged-but-unprocessed effect through an async SQL context. */
 export async function releaseUnprocessedEffectWithSql(
   sql: SqlExecutor,
   options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
@@ -393,7 +379,6 @@ export async function releaseUnprocessedEffectWithAdapter(
 }
 
 /** Requeues a claimed effect only after the current fence still owns it. */
-/** Requeues a claimed effect through an already-active async SQL context. */
 export async function retryClaimedEffectWithSql(
   sql: SqlExecutor,
   options: RetryClaimedEffectOptions,
@@ -411,10 +396,6 @@ export async function retryClaimedEffectWithAdapter(
   return storage.transaction(({ sql }) => retryClaimedEffectWithSql(sql, options));
 }
 
-/**
- * Finds pending effects for a given stream (target), ordered by stream_sequence.
- * Returns the head-of-line effects for a target stream.
- */
 /** Reads one target stream through an already-active async SQL context. */
 export async function findPendingEffectsByTargetWithSql(
   sql: SqlExecutor,
@@ -448,7 +429,6 @@ export async function findPendingEffectsByTargetWithAdapter(
  * Claiming still performs the authoritative CAS, so a concurrent worker can
  * safely race this advisory selection without processing a later stream item.
  */
-/** Reads bounded head-of-line effects through an already-active async SQL context. */
 export async function listReadyEffectsWithSql(
   sql: SqlExecutor,
   limit: number,
@@ -479,10 +459,9 @@ export async function listReadyEffectsWithAdapter(
  *
  * The query jumps past any regular/recovery backlog in the same ready order,
  * so an arbitrary number of head-of-queue rows cannot starve the bulk append
- * path. Only the SQL-visible append shape is filtered; the worker still
- * validates each row's payload (createIfMissing) before claiming it.
+ * path. Only the SQL-visible append shape is filtered; the caller still
+ * validates each row's payload before claiming it.
  */
-/** Reads bounded ready fast-append candidates through an already-active async SQL context. */
 export async function listReadyFastAppendEffectsWithSql(
   sql: SqlExecutor,
   limit: number,
@@ -508,7 +487,6 @@ export async function listReadyFastAppendEffectsWithAdapter(
   return storage.read(({ sql }) => listReadyFastAppendEffectsWithSql(sql, limit, now));
 }
 
-/** Returns whether normal outbox work is still pending or actively processing. */
 /** Checks whether the durable outbox still has pending or processing work. */
 export async function hasPendingOrProcessingEffectsWithSql(
   sql: SqlExecutor,

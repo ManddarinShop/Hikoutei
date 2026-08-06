@@ -2,8 +2,7 @@
 
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import { isFencingValidWithSql } from "./writerLease.js";
-import type { FencingContext } from "./writerLease.js";
+import { isFencingValidWithSql, type FencingContext } from "@hikoutei/outbox";
 
 const READ_PHYSICAL_AUTHORITY_SQL = `
   SELECT physical.spreadsheet_id, authority.owner_id, authority.authority_epoch,

@@ -18,15 +18,13 @@ import {
 } from "../canonical/canonicalCommit.js";
 import {
   appendPendingEffectsWithSql,
-  type NewEffect,
-} from "../../sync/outbound/effectOutbox.js";
-import {
   claimWriterLeaseWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type ClaimLeaseOptions,
   type FencingContext,
+  type NewEffect,
   type WriterLeaseClaimResult,
-} from "../../sync/shared/writerLease.js";
+} from "@hikoutei/outbox";
 import {
   registerSyncSheetWithSql,
   requireRegisteredSyncSheetWithSql,

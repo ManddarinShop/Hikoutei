@@ -36,14 +36,14 @@ import {
   FENCE_EXISTS_SQL,
   fenceParameters,
   isFencingValidWithSql,
-} from "../../sync/shared/writerLease.js";
-import type { FencingContext } from "../../sync/shared/writerLease.js";
+} from "@hikoutei/outbox";
+import type { FencingContext } from "@hikoutei/outbox";
 
 // Outbound synchronization: accepted canonical changes become outbox effects.
 import {
   appendPendingEffectsWithSql,
   type NewEffect,
-} from "../../sync/outbound/effectOutbox.js";
+} from "@hikoutei/outbox";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   readMappedActiveCanonicalEntityWithSql,

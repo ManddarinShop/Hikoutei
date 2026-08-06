@@ -16,13 +16,13 @@ import {
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import { EMPTY_ARRAY_LENGTH_ZERO, EXPECTED_SINGLE_ROW_CHANGE_COUNT } from "../../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
-import { appendPendingEffectsWithSql } from "../../sync/outbound/effectOutbox.js";
-import type { NewEffect } from "../../sync/outbound/effectOutbox.js";
-import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import {
+  appendPendingEffectsWithSql,
   isFencingValidWithSql,
   type FencingContext,
-} from "../../sync/shared/writerLease.js";
+  type NewEffect,
+} from "@hikoutei/outbox";
+import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import {
   applyCanonicalMutationWithSql,
   assertObservedProjectionBaselineWithSql,

@@ -1,18 +1,17 @@
 /**
  * SQLite writer lease and fencing token management.
  *
- * Per design concurrency/writer-rpc.md:
  * - Single writer owns all canonical/outbox mutations.
  * - Every mutation CAS-checks the current fencing token.
  * - Lease takeover increments epoch + fencing token.
  * - Stale fencing tokens are rejected even if the affected row hasn't changed.
  */
 
-import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
-import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
-import type { LookupResult } from "../../../../shared/state/types.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
+import { STORAGE_ERROR_CODES, StorageError } from "./errors.js";
+import { LOOKUP_RESULT_KINDS } from "./state.js";
+import type { LookupResult } from "./state.js";
+import type { SqlExecutor, SqlStorageAdapter } from "./sql.js";
+import { withSqlSavepoint } from "./sqlTransaction.js";
 
 const READ_WRITER_LEASE_SQL =
   "SELECT role, writer_id, writer_epoch, fencing_token, lease_until FROM writer_lease WHERE role = ?";
