@@ -2,9 +2,10 @@
  * Public SQLite-authoritative Hikoutei runtime and the `createTypedSheets()` factory.
  *
  * This module intentionally knows nothing about Sheet routes or provider
- * provisioning. The internal sync service builds a mapped runtime separately
- * and can reuse the internal construction hook below without expanding the
- * application-facing contract.
+ * provisioning. When `HIKOUTEI_SYNC_SPREADSHEET_URL` is set, the factory
+ * delegates to the internal sync auto-start bridge, which builds a mapped
+ * runtime and provisions the bound spreadsheet separately; the application-
+ * facing contract stays unchanged either way.
  */
 
 import type { ScalarEntityPersistenceProvider } from "../adapter/persistence/contracts/scalar.js";
@@ -90,15 +91,8 @@ export function createInternalHikoutei(
   return new HikouteiImpl(provider, descriptors, beforeClose);
 }
 
-/**
- * Opens the local SQLite runtime for the declared scalar entities.
- *
- * This call validates entity descriptors and initializes the local provider. It
- * never contacts Google Sheets, creates projection tables, or starts a worker.
- */
-export async function createTypedSheets(
-  options: CreateTypedSheetsOptions,
-): Promise<Hikoutei> {
+/** Validates the public factory options before any runtime is constructed. */
+export function validateTypedSheetsOptions(options: CreateTypedSheetsOptions): void {
   if (options === null || typeof options !== "object") {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
@@ -117,7 +111,19 @@ export async function createTypedSheets(
       "createTypedSheets() entities must be an array.",
     );
   }
+}
 
+/**
+ * Opens the plain local-only SQLite runtime with no sync service.
+ *
+ * Internal construction hook shared by `createTypedSheets()` (env absent) and
+ * the sync auto-start bridge (env present but disabled). It deliberately loads
+ * the current provider lazily so importing the root package alone never
+ * requires MikroORM or the Google SDK module graph.
+ */
+export async function createLocalTypedSheetsRuntime(
+  options: CreateTypedSheetsOptions,
+): Promise<Hikoutei> {
   const descriptors = resolveRuntimeDescriptors(options.entities);
   // Load the current provider only when a runtime is opened. Importing the
   // root package alone must not require MikroORM or expose its module graph.
@@ -134,6 +140,42 @@ export async function createTypedSheets(
   });
   const provider = new providerModule.MikroOrmScalarPersistenceProvider(orm, generated.bindings);
   return createInternalHikoutei(provider, descriptors);
+}
+
+/**
+ * Opens the local SQLite runtime for the declared scalar entities.
+ *
+ * When `HIKOUTEI_SYNC_SPREADSHEET_URL` is set, the internal sync auto-start
+ * bridge provisions the spreadsheet, validates the service-account
+ * credentials file, and starts the outbound worker and User_Input polling
+ * before returning. Startup failures are classified into stable
+ * `HikouteiError` codes and fail closed. Without that env var this call never
+ * contacts Google Sheets, creates projection tables, or starts a worker, and
+ * the local-only behavior is byte-identical to previous releases.
+ */
+export async function createTypedSheets(
+  options: CreateTypedSheetsOptions,
+): Promise<Hikoutei> {
+  validateTypedSheetsOptions(options);
+
+  const spreadsheetUrl = process.env.HIKOUTEI_SYNC_SPREADSHEET_URL;
+  if (spreadsheetUrl === undefined || spreadsheetUrl.trim() === "") {
+    // Env absent: the exact local-only path. The sync module graph (MikroORM
+    // and the Google SDK) is never imported here.
+    return createLocalTypedSheetsRuntime(options);
+  }
+
+  // Env present: delegate to the internal sync auto-start bridge. The dynamic
+  // import keeps the module graph out of the env-absent path.
+  const { createTypedSheetsWithSync } = await import(
+    "../application/sync/service/syncAutoStart.js"
+  );
+  const result = await createTypedSheetsWithSync({
+    dbName: options.dbName,
+    entities: [...options.entities],
+    env: process.env,
+  });
+  return result.hikoutei;
 }
 
 /** Validates name/table uniqueness and indexes descriptors by entity name. */

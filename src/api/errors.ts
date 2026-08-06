@@ -4,6 +4,12 @@
  * These codes describe configuration or lifecycle failures raised before or
  * during a local entity flush. They never encode provider-specific failures:
  * the application contract stays stable when the SQLite engine changes.
+ *
+ * The sync_* codes classify env-driven sync auto-start failures so an
+ * application can tell a malformed spreadsheet URL, a missing or invalid
+ * credentials file, an authentication/access problem, and a provisioning
+ * failure apart without parsing messages. They are additive and never change
+ * the local-only lifecycle codes above.
  */
 
 import { CoreErrorException } from "../domain/errors/index.js";
@@ -26,6 +32,24 @@ export const HIKOUTEI_ERROR_CODES = {
   INVALID_SCALAR_VALUE: "invalid_scalar_value",
   /** A provider transaction could not find the row targeted by a managed change. */
   ENTITY_NOT_FOUND: "entity_not_found",
+  /** Sync auto-start failed for an uncategorized reason (timeout, network, option). */
+  SYNC_STARTUP_FAILED: "sync_startup_failed",
+  /** HIKOUTEI_SYNC_SPREADSHEET_URL does not contain a parseable spreadsheet ID. */
+  SYNC_SPREADSHEET_URL_INVALID: "sync_spreadsheet_url_invalid",
+  /** GOOGLE_APPLICATION_CREDENTIALS points at a missing or unreadable file. */
+  SYNC_CREDENTIALS_FILE_MISSING: "sync_credentials_file_missing",
+  /** The credentials file is not a JSON object. */
+  SYNC_CREDENTIALS_INVALID_JSON: "sync_credentials_invalid_json",
+  /** The credentials file is missing required service-account fields. */
+  SYNC_CREDENTIALS_FIELD_MISSING: "sync_credentials_field_missing",
+  /** The remote rejected the credentials (HTTP 401). */
+  SYNC_AUTH_FAILED: "sync_auth_failed",
+  /** The service account is not shared on the spreadsheet or lacks edit rights (HTTP 403). */
+  SYNC_SPREADSHEET_ACCESS_DENIED: "sync_spreadsheet_access_denied",
+  /** The spreadsheet does not exist or the ID is wrong (HTTP 404). */
+  SYNC_SPREADSHEET_NOT_FOUND: "sync_spreadsheet_not_found",
+  /** Sheet provisioning failed (schema drift, invalid tab, malformed payload). */
+  SYNC_PROVISIONING_FAILED: "sync_provisioning_failed",
 } as const;
 
 /** Closed set of Hikoutei API error codes. */
