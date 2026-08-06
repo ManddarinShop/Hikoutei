@@ -5,6 +5,7 @@
 .local/
 review/
 design/
+docs/
 models.json
 
 # Dependencies and build output

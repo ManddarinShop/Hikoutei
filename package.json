@@ -23,8 +23,7 @@
     }
   },
   "files": [
-    "dist",
-    "docs"
+    "dist"
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
