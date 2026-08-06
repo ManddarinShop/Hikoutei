@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { defineTypedSheetsEntity } from "../src/index.js";
 import {
@@ -231,6 +234,21 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 });
+
+class RecordingProvisioner implements SyncSheetsProvisioner {
+  readonly calls: Array<readonly string[]> = [];
+  readonly registrations: SyncSheetsProvisionRoute[][] = [];
+
+  async provisionRegistry(registrations: readonly SyncSheetsProvisionRoute[]) {
+    this.calls.push(registrations.map((registration) => registration.sheetName));
+    this.registrations.push([...registrations]);
+    return {
+      registrations: registrations.map(({ headers: _headers, ...registration }) => registration),
+      createdSheets: registrations.map((registration) => registration.sheetName),
+      initializedHeaders: registrations.map((registration) => registration.sheetName),
+    };
+  }
+}
 
 describe("internal sync service injected-provider mode", () => {
   const services: InternalSyncService[] = [];
@@ -1018,5 +1036,251 @@ describe("internal sync service injected-provider mode", () => {
     const recoveryReport = await service.pollingSupervisor.runOnce();
     expect(recoveryReport.mode).toBe("full");
     expect(recoveryReport.safetyFullScan).toBe(true);
+  });
+});
+
+describe("internal sync service writer lease handoff across close/reopen", () => {
+  const tempDirs: string[] = [];
+  const openedServices: InternalSyncService[] = [];
+
+  afterEach(async () => {
+    await Promise.all(openedServices.splice(0).map((service) => service.close().catch(() => undefined)));
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const SYSTEM_SHEET_ID = "entity:sync_service_users:system_state";
+  const USER_INPUT_SHEET_ID = "entity:sync_service_users:user_input";
+
+  const projections = {
+    spreadsheetId: "sync-service-spreadsheet",
+    entities: {
+      SyncServiceUser: {
+        systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userOwnedFields: ["id", "status"],
+      },
+    },
+  };
+
+  const buildProvider = () =>
+    new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: SYSTEM_SHEET_ID,
+        sheetName: "SyncServiceUsers_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        sheetName: "SyncServiceUsers_Input",
+        registeredRange: "A:B",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+    ]);
+
+  const openService = async (dbName: string, provider: FakeSyncSheetsProvider): Promise<InternalSyncService> => {
+    const service = await createInternalSyncService({
+      dbName,
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      // Keep both auto-started loops asleep between explicit passes so the
+      // lease handoff assertions stay deterministic.
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    openedServices.push(service);
+    return service;
+  };
+
+  const newDbFile = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-lease-handoff-"));
+    tempDirs.push(dir);
+    return join(dir, "lease-handoff.sqlite");
+  };
+
+  it("releases the writer lease on close so a restarted runtime flushes immediately (issue #170)", async () => {
+    const dbName = newDbFile();
+    const first = await openService(dbName, buildProvider());
+    const em = first.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "lease-1", status: "pending" }));
+    await em.flush();
+    await first.close();
+
+    // Before the fix the first runtime's lease row stayed valid for 180 s, so
+    // the second runtime's flush failed with WRITER_LEASE_UNAVAILABLE. After
+    // graceful close the row is expired, and the new claim funnels into the
+    // TAKEOVER path with a strictly higher epoch.
+    const second = await openService(dbName, buildProvider());
+    const restartedEm = second.hikoutei.em.fork();
+    restartedEm.persist(restartedEm.create(User, { id: "lease-2", status: "pending" }));
+    await expect(restartedEm.flush()).resolves.toBeUndefined();
+    await expect(restartedEm.findOne(User, { id: "lease-2" })).resolves.toMatchObject({
+      status: "pending",
+    });
+
+    // The mapped writer role was taken over with epoch + 1, never deleted: a
+    // row DELETE would reset the epoch to 1 and fence the spreadsheet
+    // authority out forever.
+    const lease = await second.storage.read(({ sql }) => sql.get<{ readonly writer_epoch: number }>(
+      "SELECT writer_epoch FROM writer_lease WHERE role = ?",
+      ["typed-sheets-entity-writer"],
+    ));
+    expect(lease?.writer_epoch).toBe(2);
+    await second.close();
+  });
+
+  it("expires both leases even when a supervisor stop() rejects, so close() retry and restart claim immediately (issue #170)", async () => {
+    const dbName = newDbFile();
+    const first = await openService(dbName, buildProvider());
+    // The bootstrap owns the supervisor instances, so simulate a transport
+    // teardown failure by replacing the effect supervisor's stop() for the
+    // first call only; the real stop() runs on the close() retry below.
+    const realEffectStop = first.effectSupervisor.stop.bind(first.effectSupervisor);
+    let effectStopCalls = 0;
+    first.effectSupervisor.stop = () => {
+      effectStopCalls += 1;
+      if (effectStopCalls === 1) {
+        return Promise.reject(new Error("simulated effect supervisor stop failure"));
+      }
+      return realEffectStop();
+    };
+
+    // Before the fix the supervisor error skipped the lease expiry entirely:
+    // stopped stayed false AND both leases stayed valid for the full window,
+    // so the immediate restart failed with WRITER_LEASE_UNAVAILABLE.
+    await expect(first.stop()).rejects.toThrow("simulated effect supervisor stop failure");
+
+    // The finally block must still have expired this runtime's own leases even
+    // though the supervisor error escaped: both rows survive (never deleted)
+    // with lease_until pushed into the past instead of the full claim window.
+    const releasedAt = Date.now();
+    for (const role of ["typed-sheets-entity-writer", "sync-effect-worker"]) {
+      const lease = await first.storage.read(({ sql }) => sql.get<{ readonly lease_until: number }>(
+        "SELECT lease_until FROM writer_lease WHERE role = ?",
+        [role],
+      ));
+      expect(lease?.lease_until).toBeDefined();
+      expect(lease!.lease_until).toBeLessThanOrEqual(releasedAt);
+    }
+
+    // stopped stayed false after the failed attempt, so a second close()
+    // re-runs the stop path (real supervisor stop now) and completes cleanly.
+    await expect(first.close()).resolves.toBeUndefined();
+    expect(effectStopCalls).toBe(2);
+
+    // The release ran before the error escaped, so a restart inside the lease
+    // window takes over both roles immediately (epoch + 1, never deleted).
+    const second = await openService(dbName, buildProvider());
+    const restartedEm = second.hikoutei.em.fork();
+    restartedEm.persist(restartedEm.create(User, { id: "lease-stop-fail-1", status: "pending" }));
+    await expect(restartedEm.flush()).resolves.toBeUndefined();
+    for (const role of ["typed-sheets-entity-writer", "sync-effect-worker"]) {
+      const lease = await second.storage.read(({ sql }) => sql.get<{ readonly writer_epoch: number }>(
+        "SELECT writer_epoch FROM writer_lease WHERE role = ?",
+        [role],
+      ));
+      expect(lease?.writer_epoch).toBe(2);
+    }
+    await second.close();
+  });
+
+  it("expires the claimed writer lease when startup fails, so a retry inside the lease window claims immediately (issue #170)", async () => {
+    const dbName = newDbFile();
+    // Fail only the first provisioning pass: conflict route registration has
+    // already claimed the mapped-role writer lease before provisioning runs.
+    let provisioningCalls = 0;
+    const failFirstProvisioner: SyncSheetsProvisioner = {
+      async provisionRegistry(registrations) {
+        provisioningCalls += 1;
+        if (provisioningCalls === 1) throw new Error("provisioning failed");
+        return {
+          registrations: registrations.map(({ headers: _headers, ...registration }) => registration),
+          createdSheets: registrations.map((registration) => registration.sheetName),
+          initializedHeaders: registrations.map((registration) => registration.sheetName),
+        };
+      },
+    };
+    const provider = buildProvider();
+    await expect(createInternalSyncService({
+      dbName,
+      entities: [User],
+      projections,
+      provider,
+      provisioner: failFirstProvisioner,
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    })).rejects.toThrow("provisioning failed");
+
+    // Before the fix the failed startup left its mapped-role claim valid for
+    // the full 180-second window, so this retry failed at the same claim with
+    // WRITER_LEASE_UNAVAILABLE. The startup catch now expires the claimed
+    // leases, and the retry funnels into the TAKEOVER path immediately.
+    const service = await createInternalSyncService({
+      dbName,
+      entities: [User],
+      projections,
+      provider,
+      provisioner: failFirstProvisioner,
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    openedServices.push(service);
+
+    // The mapped writer role was taken over with epoch + 1, never deleted.
+    const lease = await service.storage.read(({ sql }) => sql.get<{ readonly writer_epoch: number }>(
+      "SELECT writer_epoch FROM writer_lease WHERE role = ?",
+      ["typed-sheets-entity-writer"],
+    ));
+    expect(lease?.writer_epoch).toBe(2);
+  });
+
+  it("drains a pending outbox effect after close and reopen on the same SQLite file", async () => {
+    const dbName = newDbFile();
+    const first = await openService(dbName, buildProvider());
+    // Settle the startup worker pass first: with no effects it is idle, and
+    // the loop then sleeps for the idle interval, so the effect enqueued below
+    // stays pending across close() instead of being dispatched pre-close.
+    await first.effectSupervisor.runOnce();
+    const em = first.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "drain-1", status: "pending" }));
+    await em.flush();
+    await first.close();
+
+    const secondProvider = buildProvider();
+    const second = await openService(dbName, secondProvider);
+    // The restarted worker takes over the sync-effect-worker lease and drains
+    // the surviving effect. Joining the auto-started pass keeps the assertion
+    // race-free: the pass cannot sleep until the ready effect is dispatched.
+    await second.effectSupervisor.runOnce();
+    await second.close();
+
+    expect(secondProvider.applyEffectsCalls).toBeGreaterThanOrEqual(1);
+    const snapshot = await secondProvider.readSnapshot({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "SyncServiceUsers_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    expect(snapshot.rows[0]?.cells).toMatchObject({
+      id: { normalizedCell: { kind: "string", value: "drain-1" } },
+      status: { normalizedCell: { kind: "string", value: "pending" } },
+    });
+  });
+
+  it("keeps close() idempotent after the lease release", async () => {
+    const dbName = newDbFile();
+    const service = await openService(dbName, buildProvider());
+    await expect(service.close()).resolves.toBeUndefined();
+    await expect(service.close()).resolves.toBeUndefined();
   });
 });
