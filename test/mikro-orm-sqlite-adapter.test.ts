@@ -24,17 +24,15 @@ import {
   applyEffectResultWithAdapter,
   appendPendingEffectsWithSql,
   claimEffectWithAdapter,
-  listReadyEffectsWithAdapter,
-} from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
-import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
-import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
-import {
   claimWriterLeaseWithAdapter,
   isFencingValidWithAdapter,
+  listReadyEffectsWithAdapter,
   readWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/infrastructure/storage/sync/shared/writerLease.js";
+} from "../src/infrastructure/storage/index.js";
+import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
   commitCanonicalChangesWithSql,
@@ -47,7 +45,7 @@ import { persistResolutionCommandWithAdapter } from "../src/infrastructure/stora
 import { renewAutomaticConflictResolutionLeaseWithSql } from "../src/application/sync/inbound/autoSystemConflictResolution.js";
 import type {
   NewEffect,
-} from "../src/infrastructure/storage/sync/outbound/effectOutbox.js";
+} from "../src/infrastructure/storage/index.js";
 import type {
   PersistObservedRowInput,
 } from "../src/infrastructure/storage/state/observation/observationWriter.js";
@@ -67,7 +65,8 @@ import {
   serializeSyncProjectionEffectPayload,
 } from "../src/application/sync/sheets/syncSheets.js";
 import type { SyncProjectionEffect } from "../src/application/sync/sheets/syncSheets.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
+import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const OrderSchema = defineEntity({
@@ -616,9 +615,9 @@ describe("MikroOrmSqliteAdapter", () => {
       },
     ]);
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "worker-a",
       writerRole: "sync_worker",
       now: 1000,
@@ -982,9 +981,9 @@ describe("MikroOrmSqliteAdapter", () => {
     );
     expect(applied).toMatchObject({ kind: "applied", commandId: "command-resolved" });
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "late-response-worker",
       now: 1_004,
       maxEffects: 1,

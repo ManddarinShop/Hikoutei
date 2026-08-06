@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AdaptiveEffectBatchController,
-} from "../src/application/sync/outbound/effects/AdaptiveEffectBatchController.js";
+} from "@hikoutei/outbox";
 
 describe("adaptive effect batch controller", () => {
   it("starts at ten, halves unhealthy routes, and grows stable routes", () => {

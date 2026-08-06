@@ -16,14 +16,15 @@ import {
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
+  WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "../src/infrastructure/storage/index.js";
-import { WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/infrastructure/storage/sync/shared/writerLease.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
 } from "../src/application/sync/sheets/syncSheets.js";
 import { SYNC_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/sheets/constants.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
+import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
@@ -84,9 +85,9 @@ describe("sync effect recovery", () => {
       },
     ]);
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "recovery-worker",
       now: 1_001,
       maxEffects: 1,
@@ -100,9 +101,9 @@ describe("sync effect recovery", () => {
     });
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("pending");
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "recovery-worker",
       now: 10_000,
       maxEffects: 1,
@@ -150,9 +151,9 @@ describe("sync effect recovery", () => {
       },
     ]);
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "batch-recovery-worker",
       now: 2_001,
       maxEffects: 2,
@@ -207,9 +208,9 @@ describe("sync effect recovery", () => {
       },
     ]);
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "legacy-code-worker",
       now: 2_201,
       maxEffects: 1,
@@ -222,9 +223,9 @@ describe("sync effect recovery", () => {
     });
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("pending");
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "legacy-code-worker",
       now: 10_000,
       maxEffects: 1,
@@ -264,9 +265,9 @@ describe("sync effect recovery", () => {
     ));
 
     const provider = new ReceiptLessOrphanProvider();
-    const first = await runSyncEffectWorkerWithAdapter({
+    const first = await runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "orphan-worker",
       now: 4_001,
       maxEffects: 1,
@@ -301,9 +302,9 @@ describe("sync effect recovery", () => {
     // the append is never re-dispatched and the outbox row stays open. 5_002
     // is deterministically past the recorded 5_001 probe time, so the effect
     // is always selected and re-probed.
-    const second = await runSyncEffectWorkerWithAdapter({
+    const second = await runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "orphan-worker",
       now: 5_002,
       maxEffects: 1,
@@ -364,9 +365,9 @@ describe("sync effect recovery", () => {
     await expect(appendPendingEffectsWithAdapter(adapter, fence, [first, second])).resolves.toBe(true);
 
     const provider = new PartialBatchFailureProvider();
-    const report = await runSyncEffectWorkerWithAdapter({
+    const report = await runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "partial-batch-worker",
       now: 5_001,
       maxEffects: 2,
@@ -453,9 +454,9 @@ describe("sync effect recovery", () => {
     await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
 
     const provider = new EvidenceOmittingFastAppendProvider();
-    const report = await runSyncEffectWorkerWithAdapter({
+    const report = await runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "fast-evidence-worker",
       now: 2_501,
       maxEffects: 1,
@@ -532,16 +533,16 @@ describe("sync effect recovery", () => {
       "UPDATE sheet_effect_outbox SET status = 'failed', last_error_code = ? WHERE effect_id = ?",
       ["postcondition_unavailable", effect.effectId],
     ));
-    const first = await runSyncEffectWorkerWithAdapter({
+    const first = await runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "manual-repair-worker",
       now: 2_701,
       maxEffects: 1,
     });
-    const second = await runSyncEffectWorkerWithAdapter({
+    const second = await runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "manual-repair-worker",
       now: 2_702,
       maxEffects: 1,
@@ -592,18 +593,18 @@ describe("sync effect recovery", () => {
     ]);
     provider.dropNextResponseAfterApply();
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "fast-loss-worker",
       now: 3_001,
       maxEffects: 1,
     })).resolves.toMatchObject({ applied: 1, failed: 0, responseLossRecovered: 1 });
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage: adapter,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
       workerId: "fast-loss-worker",
       now: 3_002,
       maxEffects: 1,
@@ -630,7 +631,7 @@ async function runWorkerWithThrownProvider(
   openOrms: RecoveryOrm[],
   error: Error,
 ): Promise<{
-  readonly report: Awaited<ReturnType<typeof runSyncEffectWorkerWithAdapter>>;
+  readonly report: Awaited<ReturnType<typeof runEffectWorkerWithAdapter>>;
   readonly provider: ThrowingEffectProvider;
   readonly status: string | undefined;
   readonly errorCode: string | null | undefined;
@@ -656,9 +657,9 @@ async function runWorkerWithThrownProvider(
   const effect = createEffect("dispatch-classification");
   await expect(appendPendingEffectsWithAdapter(adapter, fence, [effect])).resolves.toBe(true);
   const provider = new ThrowingEffectProvider(error);
-  const report = await runSyncEffectWorkerWithAdapter({
+  const report = await runEffectWorkerWithAdapter({
     storage: adapter,
-    provider,
+    dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
     workerId: "dispatch-classification-worker",
     now: 4_001,
     maxEffects: 1,
