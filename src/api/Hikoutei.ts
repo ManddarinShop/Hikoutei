@@ -13,16 +13,33 @@ import { createEntityManager } from "./internalEntityManager.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 import {
   getEntityDescriptor,
+  getRegisteredEntityTokens,
   HikouteiEntity,
   type ResolvedHikouteiEntityDescriptor,
 } from "./entity.js";
 
+/** Environment variable that supplies the default SQLite path. */
+const HIKOUTEI_DB_PATH_ENV = "HIKOUTEI_DB_PATH";
+
+/** SQLite path used when neither `dbName` nor the env var is set. */
+const DEFAULT_DB_PATH = "./hikoutei.sqlite";
+
 /** Options for opening the local Hikoutei runtime. */
 export interface CreateTypedSheetsOptions {
-  /** SQLite database path, URI, or `:memory:`. */
-  readonly dbName: string;
-  /** Entity tokens produced by `defineTypedSheetsEntity()`. */
-  readonly entities: readonly HikouteiEntity[];
+  /**
+   * SQLite database path, URI, or `:memory:`.
+   *
+   * Defaults to the `HIKOUTEI_DB_PATH` environment variable when it is set to
+   * a non-empty value, otherwise `./hikoutei.sqlite`.
+   */
+  readonly dbName?: string;
+  /**
+   * Entity tokens produced by `defineTypedSheetsEntity()`.
+   *
+   * Defaults to the entities registered by `defineTypedSheetsEntity()` at the
+   * time of the call, in registration order.
+   */
+  readonly entities?: readonly HikouteiEntity[];
 }
 
 /**
@@ -91,13 +108,35 @@ export function createInternalHikoutei(
 }
 
 /**
+ * Resolves the default SQLite path for a factory call that omits `dbName`.
+ *
+ * Prefers the `HIKOUTEI_DB_PATH` environment variable when it is set to a
+ * non-empty string, otherwise falls back to `./hikoutei.sqlite`. The `env`
+ * parameter defaults to `process.env` and exists so tests can exercise the
+ * precedence without mutating the process environment.
+ */
+export function resolveDefaultDbPath(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const fromEnv = env[HIKOUTEI_DB_PATH_ENV];
+  if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
+    return fromEnv.trim();
+  }
+  return DEFAULT_DB_PATH;
+}
+
+/**
  * Opens the local SQLite runtime for the declared scalar entities.
  *
  * This call validates entity descriptors and initializes the local provider. It
  * never contacts Google Sheets, creates projection tables, or starts a worker.
+ *
+ * When `dbName` is omitted the `HIKOUTEI_DB_PATH` environment variable or
+ * `./hikoutei.sqlite` is used; when `entities` is omitted the tokens registered
+ * by `defineTypedSheetsEntity()` are used, in registration order.
  */
 export async function createTypedSheets(
-  options: CreateTypedSheetsOptions,
+  options: CreateTypedSheetsOptions = {},
 ): Promise<Hikoutei> {
   if (options === null || typeof options !== "object") {
     throw new HikouteiError(
@@ -105,20 +144,28 @@ export async function createTypedSheets(
       "createTypedSheets() options must be an object.",
     );
   }
-  if (typeof options.dbName !== "string" || options.dbName.trim() === "") {
+  const dbName = options.dbName ?? resolveDefaultDbPath();
+  if (typeof dbName !== "string" || dbName.trim() === "") {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
       "createTypedSheets() dbName must be a non-empty string.",
     );
   }
-  if (!Array.isArray(options.entities)) {
+  const entities = options.entities ?? getRegisteredEntityTokens();
+  if (!Array.isArray(entities)) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
       "createTypedSheets() entities must be an array.",
     );
   }
+  if (options.entities === undefined && entities.length === 0) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+      "createTypedSheets() requires at least one entity; pass `entities` or call defineTypedSheetsEntity() before opening the runtime.",
+    );
+  }
 
-  const descriptors = resolveRuntimeDescriptors(options.entities);
+  const descriptors = resolveRuntimeDescriptors(entities);
   // Load the current provider only when a runtime is opened. Importing the
   // root package alone must not require MikroORM or expose its module graph.
   const [engineModule, providerModule, runtimeModule] = await Promise.all([
@@ -126,9 +173,9 @@ export async function createTypedSheets(
     import("../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js"),
     import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarEntityRuntime.js"),
   ]);
-  const generated = runtimeModule.createMikroOrmScalarEntityRuntime(options.entities);
+  const generated = runtimeModule.createMikroOrmScalarEntityRuntime(entities);
   const orm = await engineModule.initializeTypedSheetsOrm({
-    dbName: options.dbName,
+    dbName,
     entities: generated.entities,
     flushCoordinator: { onFlush: async () => undefined },
   });
