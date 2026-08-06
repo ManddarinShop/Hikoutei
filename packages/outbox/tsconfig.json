@@ -6,14 +6,6 @@
     "lib": ["ES2022"],
     "rootDir": "src",
     "outDir": "dist",
-    "baseUrl": ".",
-    "paths": {
-      // The @hikoutei/outbox workspace package must be built first
-      // (`npm run build -w @hikoutei/outbox`) so this declaration file
-      // exists before the root typecheck runs; the root npm scripts do this
-      // as a prebuild step.
-      "@hikoutei/outbox": ["./packages/outbox/dist/index.d.ts"]
-    },
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
