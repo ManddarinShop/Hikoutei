@@ -1,73 +1,73 @@
-/** Durable result transitions for provider responses and response-loss recovery. */
+/** Durable result transitions for dispatcher outcomes and response-loss recovery. */
 
-import { stableHash } from "../../../../domain/index.js";
-import type { NewEffect } from "../../../../infrastructure/storage/index.js";
-import type { FencingContext } from "../../../../infrastructure/storage/sync/shared/writerLease.js";
+import { EFFECT_KINDS } from "../constants.js";
+import type { ClaimedEffect } from "./contracts.js";
+import type {
+  ApplyEffectResult,
+  Postcondition,
+  PostconditionResult,
+  RepairReplanRequest,
+} from "./dispatcher.js";
+import type { EffectWorkerBaseOptions } from "./options.js";
+import type { MutableReport } from "./report.js";
+import type { EffectWorkerStorage } from "./storage.js";
+import type {
+  FencingContext,
+  NewEffect,
+} from "../index.js";
+import type { Presence } from "../state.js";
 import {
   LOOKUP_RESULT_KINDS,
-} from "../../../../shared/state/constants.js";
-import type { Presence } from "../../../../shared/state/types.js";
-import {
-  SYNC_EFFECT_RESULT_STATUSES,
-  SYNC_POSTCONDITION_DISPOSITIONS,
-} from "../../sheets/constants.js";
-import type {
-  SyncEffectPostcondition,
-  SyncEffectResult,
-} from "../../sheets/syncSheets.js";
+} from "../state.js";
 import {
   OUTBOX_EFFECT_STATUSES,
-  SYNC_EFFECT_KINDS,
   WORKER_ERROR_CODES,
-  type SyncEffectWorkerErrorCode,
-} from "./SyncEffectWorkerConstants.js";
-import { absentValue, presentValue } from "../../../../shared/state/index.js";
+  type WorkerErrorCode,
+} from "./constants.js";
 import {
+  absentValue,
   applicabilityFromSqlNullable,
+  isAbsent,
   isPresent,
   lookupResult,
+  presentValue,
   safeErrorMessage,
-} from "./SyncEffectWorkerHelpers.js";
+} from "./helpers.js";
 import {
-  groupByPostconditionRequest,
   isCandidateProtectingUserInputEffect,
-} from "./SyncEffectWorkerRouting.js";
-import type {
-  ClaimedEffect,
-  EffectWorkerStorage,
-  MutableReport,
-  RepairReplanRequest,
-  SyncEffectWorkerBaseOptions,
-  SyncEffectWorkerFullOptions,
-} from "./SyncEffectWorker.js";
+} from "./routing.js";
 
+/**
+ * Persists one dispatcher per-effect result.
+ *
+ * `applied`/`already_applied` results were already verified by the dispatcher
+ * against the effect target; `delivery_uncertain` results never reach this
+ * function (the pass probes them first).
+ */
 export async function completeProviderResult(
-  options: SyncEffectWorkerBaseOptions,
+  options: EffectWorkerBaseOptions,
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
-  result: SyncEffectResult,
+  result: ApplyEffectResult,
   report: MutableReport,
 ): Promise<void> {
   if (
-    result.status === SYNC_EFFECT_RESULT_STATUSES.APPLIED ||
-    result.status === SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED
+    result.status === "applied" ||
+    result.status === "already_applied"
   ) {
-    if (!isPresent(result.visibleRevision) || !isPresent(result.visibleHash)) {
-      await deferDeliveryUncertain(
-        storage,
-        fence,
-        item,
-        WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
-        "Provider applied result did not include receipt-backed visible evidence.",
-        report,
-      );
-      return;
-    }
-    await completeApplied(storage, fence, item, result.visibleRevision, result.visibleHash, report);
+    await completeApplied(
+      storage,
+      fence,
+      item,
+      result.visibleRevision,
+      result.visibleHash,
+      result.fieldHashes,
+      report,
+    );
     return;
   }
-  if (result.status === SYNC_EFFECT_RESULT_STATUSES.SUPERSEDED) {
+  if (result.status === "superseded") {
     if (await storage.applyEffectResult({
       ...fence,
       effectId: item.pending.effect_id,
@@ -78,9 +78,8 @@ export async function completeProviderResult(
     })) report.superseded += 1;
     return;
   }
-  if (result.status === SYNC_EFFECT_RESULT_STATUSES.GUARD_MISMATCH) {
-    const blocked = isPresent(item.providerEffect) &&
-      isCandidateProtectingUserInputEffect(item.providerEffect.value);
+  if (result.status === "guard_mismatch") {
+    const blocked = isCandidateProtectingUserInputEffect(item.pending);
     const status = blocked
       ? OUTBOX_EFFECT_STATUSES.BLOCKED_CANDIDATE
       : OUTBOX_EFFECT_STATUSES.CONFLICT;
@@ -102,7 +101,7 @@ export async function completeProviderResult(
     }
     return;
   }
-  if (result.status === SYNC_EFFECT_RESULT_STATUSES.REPAIR_REOBSERVE) {
+  if (result.status === "repair_reobserve") {
     await replanOrFail(
       options,
       storage,
@@ -121,7 +120,7 @@ export async function completeProviderResult(
     storage,
     fence,
     item,
-    result.status === SYNC_EFFECT_RESULT_STATUSES.SCHEMA_ERROR
+    result.status === "schema_error"
       ? WORKER_ERROR_CODES.PROVIDER_SCHEMA_ERROR
       : WORKER_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
     result.reason,
@@ -131,8 +130,14 @@ export async function completeProviderResult(
 
 const DURABLE_PROBE_RETRY_DELAY_MS = 1_000;
 
+/**
+ * Recovers response-loss effects by reading their remote postconditions.
+ *
+ * The dispatcher classifies each read-back result; every effect is settled
+ * from durable evidence only, never from the lost response.
+ */
 export async function recoverUnknownResults(
-  options: SyncEffectWorkerFullOptions,
+  options: EffectWorkerBaseOptions,
   storage: EffectWorkerStorage,
   fence: FencingContext,
   items: readonly ClaimedEffect[],
@@ -144,7 +149,7 @@ export async function recoverUnknownResults(
   });
   const usable: ClaimedEffect[] = [];
   for (const item of items) {
-    if (isPresent(item.providerEffect)) {
+    if (isAbsentInvalidPayload(item)) {
       usable.push(item);
       continue;
     }
@@ -157,14 +162,30 @@ export async function recoverUnknownResults(
       report,
     );
   }
-  for (const group of groupByPostconditionRequest(usable)) {
-    let results: readonly {
-      readonly effectId: string;
-      readonly payloadHash: string;
-      readonly postcondition: SyncEffectPostcondition;
-    }[];
+  let groups: readonly { readonly routeKey: string; readonly items: readonly ClaimedEffect[] }[];
+  try {
+    groups = groupByRoute(usable, options);
+  } catch (error: unknown) {
+    // The route predicate is declared never to throw, but a violating
+    // dispatcher must not abort the pass: fail the affected recovery items
+    // per-effect and skip the probe instead.
+    await failUnclassifiableItems(
+      storage,
+      liveFence(),
+      usable,
+      "Dispatcher route classification threw: " + safeErrorMessage(error),
+      report,
+    );
+    return;
+  }
+  for (const group of groups) {
+    let results: readonly PostconditionResult[];
     try {
-      results = await options.provider.readEffectPostconditions(group.request);
+      const outcome = await options.dispatcher.readPostconditions({
+        routeKey: group.routeKey,
+        effects: group.items.map((item) => item.pending),
+      });
+      results = outcome.results;
     } catch (error: unknown) {
       for (const item of group.items) {
         await deferDeliveryUncertain(
@@ -207,15 +228,16 @@ export async function recoverUnknownResults(
   }
 }
 
+/** Settles one response-loss effect from its classified read-back outcome. */
 export async function settleUnknownPostcondition(
-  options: SyncEffectWorkerBaseOptions,
+  options: EffectWorkerBaseOptions,
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
-  postcondition: SyncEffectPostcondition,
+  postcondition: Postcondition,
   report: MutableReport,
 ): Promise<void> {
-  if (!isPresent(item.providerEffect)) {
+  if (isPresentInvalidPayload(item)) {
     await completeFailure(
       storage,
       fence,
@@ -226,24 +248,32 @@ export async function settleUnknownPostcondition(
     );
     return;
   }
-  if (
-    postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.APPLIED &&
-    isPresent(postcondition.visibleRevision) &&
-    isPresent(postcondition.visibleHash)
-  ) {
+  if (postcondition.disposition === "applied") {
     if (await completeApplied(
       storage,
       fence,
       item,
       postcondition.visibleRevision,
       postcondition.visibleHash,
+      postcondition.fieldHashes,
       report,
     )) {
       report.responseLossRecovered += 1;
     }
     return;
   }
-  if (postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.APPLIED) {
+  if (postcondition.disposition === "applied_target_mismatch") {
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
+      presentValue("Provider postcondition visible hash does not match the effect target."),
+      report,
+    );
+    return;
+  }
+  if (postcondition.disposition === "applied_without_visible_state") {
     await deferDeliveryUncertain(
       storage,
       fence,
@@ -254,25 +284,36 @@ export async function settleUnknownPostcondition(
     );
     return;
   }
-  if (
-    postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.CHANGED &&
-    item.providerEffect.value.effectKind === SYNC_EFFECT_KINDS.SYSTEM_REPAIR
-  ) {
-    await replanOrFail(
-      options,
+  if (postcondition.disposition === "changed") {
+    if (item.pending.effect_kind === EFFECT_KINDS.SYSTEM_REPAIR) {
+      await replanOrFail(
+        options,
+        storage,
+        fence,
+        item,
+        {
+          effect: item.pending,
+          providerResult: absentValue(),
+          postcondition: presentValue(postcondition),
+        },
+        report,
+      );
+      return;
+    }
+    await completeFailure(
       storage,
       fence,
       item,
-      {
-        effect: item.pending,
-        providerResult: absentValue(),
-        postcondition: presentValue(postcondition),
-      },
+      WORKER_ERROR_CODES.POSTCONDITION_CHANGED,
+      presentValue(
+        "Provider response was not observed; postcondition=changed" +
+          (postcondition.reason === undefined ? "" : ", reason=" + postcondition.reason),
+      ),
       report,
     );
     return;
   }
-  if (postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.UNAPPLIED) {
+  if (postcondition.disposition === "unapplied") {
     const requeued = await storage.retryClaimedEffect({
       ...fence,
       effectId: item.pending.effect_id,
@@ -287,31 +328,13 @@ export async function settleUnknownPostcondition(
     }
     return;
   }
-  if (postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.UNAVAILABLE) {
-    await deferDeliveryUncertain(
-      storage,
-      fence,
-      item,
-      WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
-      "Provider response was not observed; postcondition=unavailable" +
-        (postcondition.reason === undefined ? "" : ", reason=" + postcondition.reason),
-      report,
-    );
-    return;
-  }
-  const code = postcondition.disposition === SYNC_POSTCONDITION_DISPOSITIONS.CHANGED
-    ? WORKER_ERROR_CODES.POSTCONDITION_CHANGED
-    : WORKER_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE;
-  await completeFailure(
+  await deferDeliveryUncertain(
     storage,
     fence,
     item,
-    code,
-    presentValue(
-      "Provider response was not observed; postcondition=" +
-      postcondition.disposition +
+    WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
+    "Provider response was not observed; postcondition=unavailable" +
       (postcondition.reason === undefined ? "" : ", reason=" + postcondition.reason),
-    ),
     report,
   );
 }
@@ -320,7 +343,7 @@ async function deferDeliveryUncertain(
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
-  code: SyncEffectWorkerErrorCode,
+  code: WorkerErrorCode,
   message: string,
   report: MutableReport,
 ): Promise<void> {
@@ -336,16 +359,20 @@ async function deferDeliveryUncertain(
   if (marked) report.deferred += 1;
 }
 
+/**
+ * Persists a verified applied result, including confirmed projection state
+ * when the effect carries a row binding.
+ */
 export async function completeApplied(
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
-  visibleRevision: Presence<number>,
-  visibleHash: Presence<string>,
+  visibleRevision: number,
+  visibleHash: string,
+  fieldHashes: Readonly<Record<string, string>>,
   report: MutableReport,
 ): Promise<boolean> {
-  const providerEffect = item.providerEffect;
-  if (!isPresent(providerEffect)) {
+  if (isPresentInvalidPayload(item)) {
     await completeFailure(
       storage,
       fence,
@@ -356,48 +383,18 @@ export async function completeApplied(
     );
     return false;
   }
-  if (!isPresent(visibleRevision) || !isPresent(visibleHash)) {
-    await deferDeliveryUncertain(
-      storage,
-      fence,
-      item,
-      WORKER_ERROR_CODES.POSTCONDITION_APPLIED_WITHOUT_VISIBLE_STATE,
-      "Applied effect lacks receipt-backed visible revision and hash evidence.",
-      report,
-    );
-    return false;
-  }
-  if (
-    visibleHash.value !== providerEffect.value.payload.targetVisibleHash
-  ) {
-    await completeFailure(
-      storage,
-      fence,
-      item,
-      WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
-      presentValue("Provider postcondition visible hash does not match the effect target."),
-      report,
-    );
-    return false;
-  }
-  const confirmation =
-    isPresent(providerEffect) &&
-    isPresent(providerEffect.value.rowBindingId) &&
-    isPresent(visibleRevision) &&
-    isPresent(visibleHash)
-    ? {
+  const rowBindingId = item.pending.row_binding_id;
+  const confirmation = rowBindingId === null
+    ? undefined
+    : {
       physicalSheetId: item.pending.physical_sheet_id,
       projection: item.pending.projection,
-      rowBindingId: providerEffect.value.rowBindingId.value,
-      visibleRevision: visibleRevision.value,
-      visibleHash: visibleHash.value,
+      rowBindingId,
+      visibleRevision,
+      visibleHash,
       entityRevision: applicabilityFromSqlNullable(item.pending.target_entity_revision),
-      fieldHashes: Object.fromEntries(
-        Object.entries(providerEffect.value.payload.fields)
-          .map(([fieldName, value]) => [fieldName, stableHash(value)]),
-      ),
-    }
-    : undefined;
+      fieldHashes,
+    };
   const applied = await storage.applyEffectResult({
     ...fence,
     effectId: item.pending.effect_id,
@@ -412,7 +409,7 @@ export async function completeApplied(
 }
 
 export async function replanOrFail(
-  options: SyncEffectWorkerBaseOptions,
+  options: EffectWorkerBaseOptions,
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
@@ -474,7 +471,7 @@ export async function completeFailure(
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
-  code: SyncEffectWorkerErrorCode,
+  code: WorkerErrorCode,
   message: Presence<string>,
   report: MutableReport,
 ): Promise<void> {
@@ -486,4 +483,58 @@ export async function completeFailure(
     lastErrorCode: presentValue(code),
     lastErrorMessage: message,
   })) report.failed += 1;
+}
+
+/**
+ * Fails claimed items whose dispatcher payload-classification predicate threw.
+ *
+ * A throwing route-key/candidacy predicate is treated like an invalid
+ * payload: each affected effect is closed per-effect through the terminal
+ * failure path so the pass continues instead of aborting into supervisor
+ * backoff. Only contract-violating dispatchers trigger this path; compliant
+ * dispatchers never do.
+ */
+export async function failUnclassifiableItems(
+  storage: EffectWorkerStorage,
+  fence: FencingContext,
+  items: readonly ClaimedEffect[],
+  message: string,
+  report: MutableReport,
+): Promise<void> {
+  for (const item of items) {
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      presentValue(message),
+      report,
+    );
+  }
+}
+
+/** Groups usable recovery items by their dispatcher-declared route. */
+function groupByRoute(
+  items: readonly ClaimedEffect[],
+  options: EffectWorkerBaseOptions,
+): readonly { readonly routeKey: string; readonly items: readonly ClaimedEffect[] }[] {
+  const groups = new Map<string, ClaimedEffect[]>();
+  for (const item of items) {
+    const key = options.dispatcher.routeKeyFor(item.pending);
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, [item]);
+    } else {
+      existing.push(item);
+    }
+  }
+  return [...groups.entries()].map(([routeKey, grouped]) => ({ routeKey, items: grouped }));
+}
+
+function isAbsentInvalidPayload(item: ClaimedEffect): boolean {
+  return isAbsent(item.invalidPayloadError);
+}
+
+function isPresentInvalidPayload(item: ClaimedEffect): boolean {
+  return isPresent(item.invalidPayloadError);
 }

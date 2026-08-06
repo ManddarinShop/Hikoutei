@@ -1,9 +1,14 @@
-/** SQL statements used by the effect outbox state machine. */
+/**
+ * SQL statements used by the effect outbox state machine.
+ *
+ * Column and table names are persisted contract: they must never change even
+ * though the kernel treats their values as opaque route/evidence keys.
+ */
 
-import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./effectOutboxContracts.js";
-import { FENCE_EXISTS_SQL } from "../shared/writerLease.js";
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./contracts.js";
+import { FENCE_EXISTS_SQL } from "./writerLease.js";
 
-export { FENCE_EXISTS_SQL } from "../shared/writerLease.js";
+export { FENCE_EXISTS_SQL } from "./writerLease.js";
 
 export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
   SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
@@ -204,9 +209,9 @@ export const SELECT_READY_EFFECTS_SQL = `
  *
  * Only the SQL-visible append shape is filtered here (pending status,
  * readiness, predecessor ordering, and the revision-zero baseline on the
- * System_State/Sync_Conflicts routes); the worker re-validates each returned
- * row's payload (createIfMissing) before claiming. Rows that fail that
- * payload validation drain through the regular claim path instead.
+ * system-state and sync-conflict routes); the caller re-validates each
+ * returned row's payload before claiming. Rows that fail that payload
+ * validation drain through the regular claim path instead.
  */
 export const SELECT_READY_FAST_APPEND_EFFECTS_SQL = `
   SELECT effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
@@ -271,9 +276,3 @@ export const UPSERT_VISIBLE_FIELD_STATE_SQL = `
     last_observed_field_hash = excluded.last_observed_field_hash
   WHERE sheet_visible_field_state.confirmed_visible_revision <= excluded.confirmed_visible_revision
 `;
-
-
-/**
- * Claims a pending effect for processing.
- * Uses CAS on status to ensure only one worker wins.
- */

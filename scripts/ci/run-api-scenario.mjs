@@ -34,7 +34,7 @@ import { defineEntity, p } from "@mikro-orm/sql";
 // root `hikoutei` entrypoint is an application-facing export.
 const packageEntry = import.meta.resolve("hikoutei");
 const packageDist = new URL("./", packageEntry);
-const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, provisioning, worker, encoding] =
+const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, provisioning, sheetsDispatcher, encoding, outboxWorker] =
   await Promise.all([
     import(new URL("./application/orm/mapping/entityMapping.js", packageDist).href),
     import(new URL("./application/orm/persistence/flush/flushCoordinator.js", packageDist).href),
@@ -43,8 +43,9 @@ const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, prov
     import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", packageDist).href),
     import(new URL("./application/sync/inbound/polling/SimpleSheetPolling.js", packageDist).href),
     import(new URL("./application/sync/sheets/sheetsProvisioning.js", packageDist).href),
-    import(new URL("./application/sync/outbound/effects/SyncEffectWorker.js", packageDist).href),
+    import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", packageDist).href),
     import(new URL("./shared/encoding/index.js", packageDist).href),
+    import("@hikoutei/outbox"),
   ]);
 const { defineTypedSheetsEntityMapping } = mapping;
 const { registeredTypedSheetsProjectionDefinitions, registerTypedSheetsEntityMappings } = flush;
@@ -53,7 +54,8 @@ const { initializeMikroOrmSqliteAdapter } = sqliteAdapter;
 const { migrateMikroOrmSqliteStorageSchema } = sqliteSchema;
 const { pollSimpleSheetRowsWithAdapter } = polling;
 const { provisionRegisteredSyncSheets } = provisioning;
-const { runSyncEffectWorkerWithAdapter } = worker;
+const { SheetsEffectDispatcher } = sheetsDispatcher;
+const { runEffectWorkerWithAdapter } = outboxWorker;
 const { stableHash } = encoding;
 const [directSheets, mappedPolling] = await Promise.all([
   import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", packageDist).href),
@@ -919,11 +921,12 @@ async function smokeInitializeMappedOrm({ entity, mapping, prefix }) {
 }
 
 async function runWorkerUntilIdle(storage, provider, workerId, allowConflicts = false) {
+  const dispatcher = new SheetsEffectDispatcher({ provider, storage });
   const reports = [];
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const report = await runSyncEffectWorkerWithAdapter({
+    const report = await runEffectWorkerWithAdapter({
       storage,
-      provider,
+      dispatcher,
       workerId,
       now: Date.now(),
       maxEffects: 100,

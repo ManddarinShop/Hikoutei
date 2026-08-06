@@ -59,10 +59,16 @@ import {
 } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
 import {
-  createSyncEffectWorkerSupervisor,
-  type SyncEffectWorkerSupervisor,
-} from "../outbound/effects/SyncEffectSupervisor.js";
-import type { SyncEffectWorkerReport } from "../outbound/effects/SyncEffectWorker.js";
+  createEffectWorkerSupervisor,
+  APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
+  DEFAULT_EFFECT_LEASE_DURATION_MS,
+  DEFAULT_WRITER_LEASE_DURATION_MS,
+  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
+  FAST_APPEND_BATCH_CANDIDATE_LIMIT,
+  type EffectWorkerSupervisor,
+  type WorkerReport,
+} from "@hikoutei/outbox";
+import { SheetsEffectDispatcher } from "../outbound/SheetsEffectDispatcher.js";
 import {
   MAPPED_USER_INPUT_POLL_MODES,
   pollMappedUserInputWithMikroOrm,
@@ -74,13 +80,6 @@ import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
 } from "./errors.js";
-import {
-  APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
-  DEFAULT_EFFECT_LEASE_DURATION_MS,
-  DEFAULT_WRITER_LEASE_DURATION_MS,
-  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
-  FAST_APPEND_BATCH_CANDIDATE_LIMIT,
-} from "../outbound/effects/SyncEffectWorkerConstants.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,
@@ -118,7 +117,7 @@ export interface InternalSyncServiceOptions {
   readonly effectLeaseDurationMs?: number;
   readonly effectIdleIntervalMs?: number;
   readonly onTiming?: SyncTimingSink;
-  readonly onEffectReport?: (report: SyncEffectWorkerReport) => void;
+  readonly onEffectReport?: (report: WorkerReport) => void;
   readonly onEffectError?: (error: unknown) => void;
   readonly pollingIntervalMs?: number;
   /** Maximum interval between metadata-preserving safety scans. */
@@ -141,7 +140,7 @@ export interface InternalSyncService {
   readonly projectionDefinitions: readonly RegisteredSyncProjectionDefinition[];
   /** Retries durable OPEN system-wins commands after predecessors settle. */
   readonly retryDeferredConflicts: () => Promise<number>;
-  readonly effectSupervisor: SyncEffectWorkerSupervisor;
+  readonly effectSupervisor: EffectWorkerSupervisor;
   readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
   stop(): Promise<void>;
   close(): Promise<void>;
@@ -185,9 +184,12 @@ export async function createInternalSyncService(
       resolveTypedSheetsEntityWriterOptions(writer),
     );
 
-    const effectSupervisor = createSyncEffectWorkerSupervisor({
+    const effectSupervisor = createEffectWorkerSupervisor({
       storage: runtime.storage,
-      provider: remote.provider,
+      dispatcher: new SheetsEffectDispatcher({
+        provider: remote.provider,
+        storage: runtime.storage,
+      }),
       ...optionalWorkerOptions(options),
     });
     const pollingFullScanIntervalMs = options.pollingFullScanIntervalMs
@@ -489,7 +491,7 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   readonly maxFastAppendCandidates?: number;
   readonly appendDispatchIntervalMs?: number;
   readonly onTiming?: SyncTimingSink;
-  readonly onReport?: (report: SyncEffectWorkerReport) => void;
+  readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
 } {
   // The knobs are tied to the ACTIVE provider: the full direct Google

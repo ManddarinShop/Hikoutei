@@ -1,7 +1,7 @@
 /** Status, command, row, and SQL-result contracts for resolution persistence. */
 
 import type { ResolutionCommand } from "../../../../domain/index.js";
-import type { NewEffect } from "../../sync/outbound/effectOutbox.js";
+import type { NewEffect } from "@hikoutei/outbox";
 
 /** Runtime values for the durable resolution-command lifecycle. */
 export const RESOLUTION_COMMAND_STATUSES = {

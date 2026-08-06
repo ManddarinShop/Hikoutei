@@ -20,12 +20,13 @@ import {
   type SyncProjectionEffect,
 } from "../src/application/sync/sheets/syncSheets.js";
 import {
-  chunkProviderEffectGroups,
-  groupByProviderRequest,
-} from "../src/application/sync/outbound/effects/SyncEffectWorkerRouting.js";
-import { EFFECT_BATCH_LIMIT } from "../src/application/sync/outbound/effects/SyncEffectWorkerConstants.js";
-import type { ClaimedEffect } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
+  chunkEffectGroups,
+  EFFECT_BATCH_LIMIT,
+  groupEffectsByRoute,
+  type ClaimedEffect,
+} from "@hikoutei/outbox";
+import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+import { SheetsEffectDispatcher, sheetsRouteKeyFor } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
@@ -83,16 +84,17 @@ describe("outbound effect dispatch batching", () => {
         makeItem(ROUTE_ALPHA, "a-3"),
       ];
 
-      const groups = groupByProviderRequest(items);
+      const groups = groupEffectsByRoute(items, sheetsRouteKeyFor);
 
       expect(groups).toHaveLength(2);
       const alpha = groups.find((group) => group.items[0]!.pending.effect_id === "a-1")!;
       const beta = groups.find((group) => group.items[0]!.pending.effect_id === "b-1")!;
       expect(ids(alpha)).toEqual(["a-1", "a-2", "a-3"]);
       expect(ids(beta)).toEqual(["b-1", "b-2"]);
-      // Each route keeps a single provider request carrying all of its effects.
-      expect(alpha.request.effects.map((effect) => effect.effectId)).toEqual(["a-1", "a-2", "a-3"]);
-      expect(beta.request.effects.map((effect) => effect.effectId)).toEqual(["b-1", "b-2"]);
+      // Each route keeps one dispatcher route key carrying all of its effects.
+      expect(alpha.routeKey).toBe(sheetsRouteKeyFor(alpha.items[0]!.pending));
+      expect(beta.routeKey).toBe(sheetsRouteKeyFor(beta.items[0]!.pending));
+      expect(alpha.routeKey).not.toBe(beta.routeKey);
     });
 
     it("chunks an oversized route at the Apps Script bounded effect batch", () => {
@@ -100,7 +102,7 @@ describe("outbound effect dispatch batching", () => {
         makeItem(ROUTE_ALPHA, `a-${index}`),
       );
 
-      const chunked = chunkProviderEffectGroups(groupByProviderRequest(oversized));
+      const chunked = chunkEffectGroups(groupEffectsByRoute(oversized, sheetsRouteKeyFor));
 
       // Every chunk fits inside the provider batch so applyEffects returns a
       // complete result set (hasMore=false) instead of a partial prefix.
@@ -113,8 +115,8 @@ describe("outbound effect dispatch batching", () => {
       // Selection order is preserved across chunks; no effect is dropped.
       expect(chunked.flatMap(ids)).toEqual(oversized.map((item) => item.pending.effect_id));
       for (const group of chunked) {
-        expect(group.request.effects).toHaveLength(group.items.length);
-        expect(group.request.physicalSheetId).toBe(ROUTE_ALPHA.physicalSheetId);
+        expect(group.items).toHaveLength(group.items.length);
+        expect(group.routeKey).toBe(sheetsRouteKeyFor(group.items[0]!.pending));
       }
     });
 
@@ -123,7 +125,7 @@ describe("outbound effect dispatch batching", () => {
         makeItem(ROUTE_ALPHA, `a-${index}`),
       );
 
-      const chunked = chunkProviderEffectGroups(groupByProviderRequest(items));
+      const chunked = chunkEffectGroups(groupEffectsByRoute(items, sheetsRouteKeyFor));
 
       expect(chunked).toHaveLength(1);
       expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
@@ -137,14 +139,14 @@ describe("outbound effect dispatch batching", () => {
         ...Array.from({ length: 2 }, (_, index) => makeItem(ROUTE_BETA, `b-${index}`)),
       ];
 
-      const chunked = chunkProviderEffectGroups(groupByProviderRequest(items));
+      const chunked = chunkEffectGroups(groupEffectsByRoute(items, sheetsRouteKeyFor));
 
       expect(chunked).toHaveLength(3);
-      expect(chunked[0]!.request.physicalSheetId).toBe(ROUTE_ALPHA.physicalSheetId);
+      expect(chunked[0]!.routeKey).toBe(sheetsRouteKeyFor(chunked[0]!.items[0]!.pending));
       expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
-      expect(chunked[1]!.request.physicalSheetId).toBe(ROUTE_ALPHA.physicalSheetId);
+      expect(chunked[1]!.routeKey).toBe(sheetsRouteKeyFor(chunked[1]!.items[0]!.pending));
       expect(chunked[1]!.items).toHaveLength(3);
-      expect(chunked[2]!.request.physicalSheetId).toBe(ROUTE_BETA.physicalSheetId);
+      expect(chunked[2]!.routeKey).toBe(sheetsRouteKeyFor(chunked[2]!.items[0]!.pending));
       expect(chunked[2]!.items).toHaveLength(2);
     });
   });
@@ -187,9 +189,9 @@ describe("outbound effect dispatch batching", () => {
       // upper bound; only the bounded in-flight window is leased per pass.
       const reports = [];
       for (let pass = 0; pass < 3; pass += 1) {
-        reports.push(await runSyncEffectWorkerWithAdapter({
+        reports.push(await runEffectWorkerWithAdapter({
           storage: adapter,
-          provider,
+          dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
           workerId: "perf-worker",
           now: 1_000 + pass,
           maxEffects: count + 5,
@@ -235,9 +237,9 @@ describe("outbound effect dispatch batching", () => {
       // must still close the effect by reading the postcondition back.
       provider.dropNextResponseAfterApply();
 
-      const report = await runSyncEffectWorkerWithAdapter({
+      const report = await runEffectWorkerWithAdapter({
         storage: adapter,
-        provider,
+        dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
         workerId: "perf-worker",
         now: 1_000,
         maxEffects: 1,
@@ -282,9 +284,9 @@ describe("outbound effect dispatch batching", () => {
 
       // A worker limit smaller than the backlog must still converge: chunked
       // dispatch within each pass keeps every request inside the provider batch.
-      const first = await runSyncEffectWorkerWithAdapter({
+      const first = await runEffectWorkerWithAdapter({
         storage: adapter,
-        provider,
+        dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
         workerId: "perf-worker",
         now: 1_000,
         maxEffects: 10,
@@ -292,9 +294,9 @@ describe("outbound effect dispatch batching", () => {
       expect(first.applied).toBe(10);
       expect(first.deferred).toBe(0);
 
-      const second = await runSyncEffectWorkerWithAdapter({
+      const second = await runEffectWorkerWithAdapter({
         storage: adapter,
-        provider,
+        dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
         workerId: "perf-worker",
         now: 1_001,
         maxEffects: 10,
@@ -302,9 +304,9 @@ describe("outbound effect dispatch batching", () => {
       expect(second.applied).toBe(10);
       expect(second.deferred).toBe(0);
 
-      const third = await runSyncEffectWorkerWithAdapter({
+      const third = await runEffectWorkerWithAdapter({
         storage: adapter,
-        provider,
+        dispatcher: new SheetsEffectDispatcher({ provider, storage: adapter }),
         workerId: "perf-worker",
         now: 1_002,
         maxEffects: 10,
@@ -320,34 +322,47 @@ describe("outbound effect dispatch batching", () => {
 
 function makeItem(route: RouteSpec, effectId: string): ClaimedEffect {
   const fields = { status: { kind: "string" as const, value: "paid" } };
-  const providerEffect: SyncProjectionEffect = {
-    effectId,
-    payloadHash: `payload-${effectId}`,
-    effectKind: "system_projection",
-    physicalSheetId: route.physicalSheetId,
-    projection: route.projection,
-    targetKind: "entity",
-    targetId: effectId,
-    rowBindingId: { kind: PRESENCE_KINDS.ABSENT },
-    conflictId: { kind: PRESENCE_KINDS.ABSENT },
-    expectedVisibleRevision: 1,
-    expectedVisibleHash: "",
-    repairGuardHash: { kind: PRESENCE_KINDS.ABSENT },
-    payload: {
-      sheetName: route.sheetName,
-      registeredRange: route.registeredRange,
-      schemaVersion: route.schemaVersion,
-      targetAnchor: `${effectId}-anchor`,
-      fields,
-      targetVisibleHash: computeSyncVisibleHash(fields),
-      createIfMissing: false,
-      expectedCandidateHash: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
-    },
+  const payload = {
+    sheetName: route.sheetName,
+    registeredRange: route.registeredRange,
+    schemaVersion: route.schemaVersion,
+    targetAnchor: `${effectId}-anchor`,
+    fields,
+    targetVisibleHash: computeSyncVisibleHash(fields),
+    createIfMissing: false,
+    expectedCandidateHash: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
   };
   return {
-    pending: { effect_id: effectId, payload_hash: `payload-${effectId}` } as PendingEffect,
+    pending: {
+      effect_id: effectId,
+      effect_kind: "system_projection",
+      commit_id: `commit-${effectId}`,
+      logical_sheet_id: `logical-${effectId}`,
+      physical_sheet_id: route.physicalSheetId,
+      projection: route.projection,
+      row_binding_id: null,
+      conflict_id: null,
+      target_kind: "entity",
+      target_id: effectId,
+      target_entity_revision: null,
+      target_field_revision_hash: null,
+      target_canonical_commit_id: null,
+      expected_visible_revision: 1,
+      expected_visible_hash: "",
+      repair_guard_hash: null,
+      source_quarantine_id: null,
+      payload_json: serializeSyncProjectionEffectPayload(payload),
+      payload_hash: `payload-${effectId}`,
+      effect_dedupe_key: `dedupe-${effectId}`,
+      stream_sequence: 1,
+      created_at: 0,
+      next_attempt_at: null,
+      uncertain_since: null,
+      next_probe_at: null,
+      dispatch_id: null,
+      status: "pending",
+    } as PendingEffect,
     claimToken: `claim-${effectId}`,
-    providerEffect: { kind: PRESENCE_KINDS.PRESENT, value: providerEffect },
     invalidPayloadError: { kind: PRESENCE_KINDS.ABSENT },
   };
 }

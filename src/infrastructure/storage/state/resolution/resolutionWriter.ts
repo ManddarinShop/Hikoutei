@@ -22,17 +22,15 @@ import type {
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   appendPendingEffectsWithSql,
+  fenceParameters,
+  isFencingValidWithSql,
   supersedeAndReplanWithSql,
+  type FencingContext,
   type NewEffect,
-} from "../../sync/outbound/effectOutbox.js";
+} from "@hikoutei/outbox";
 import { readMappedLatestProjectionEffectWithSql } from "../mapped/mappedPersistenceSql.js";
 import { fromSqlNullable } from "../../sqlite/sqlState.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
-import {
-  fenceParameters,
-  isFencingValidWithSql,
-  type FencingContext,
-} from "../../sync/shared/writerLease.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   PERSIST_RESOLUTION_RESULT_KINDS,

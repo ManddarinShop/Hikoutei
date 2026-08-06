@@ -1,27 +1,22 @@
 /**
  * Keeps the bounded effect worker running until the durable outbox is idle.
  *
- * The supervisor provides liveness around `runSyncEffectWorker*()`: one pass
- * still handles a bounded batch, while this loop starts the next pass and
+ * The supervisor provides liveness around `runEffectWorkerWithAdapter()`: one
+ * pass still handles a bounded batch, while this loop starts the next pass and
  * backs off after failures. It also coalesces manual and background triggers so
  * one process cannot run two effect passes concurrently.
  */
 
 import { randomUUID } from "node:crypto";
 import {
-  NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../../domain/index.js";
-import type { ReconciliationScanReport } from "../reconciliation/ReconciliationScanner.js";
-import {
-  runSyncEffectWorkerWithAdapter,
-  type SyncEffectWorkerReport,
-  type SyncEffectWorkerWithAdapterOptions,
-} from "./SyncEffectWorker.js";
+  runEffectWorkerWithAdapter,
+} from "./worker.js";
+import type { EffectWorkerWithAdapterOptions } from "./options.js";
+import type { WorkerReport } from "./report.js";
 import {
   AdaptiveEffectBatchController,
   type AdaptiveEffectBatchController as AdaptiveEffectBatchControllerType,
-} from "./AdaptiveEffectBatchController.js";
+} from "./batch.js";
 
 const DEFAULT_MAX_EFFECTS = 20;
 const DEFAULT_IDLE_INTERVAL_MS = 1_000;
@@ -30,40 +25,54 @@ const DEFAULT_ERROR_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_JITTER_MAX_MS = 1_000;
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 60_000;
 
-export type SyncEffectWorkerSupervisorWait = (durationMs: number) => Promise<void>;
-type RunPass = () => Promise<SyncEffectWorkerReport>;
+export type EffectWorkerSupervisorWait = (durationMs: number) => Promise<void>;
+type RunPass = () => Promise<WorkerReport>;
 
-/** Periodic reconciliation(불일치 보정) task attached to the effect loop. */
-export interface SyncEffectWorkerSupervisorReconciliationOptions {
+/** Minimal report shape the supervisor reads from an attached scan task. */
+export interface WorkerReconciliationReport {
+  readonly effectsEnqueued: number;
+}
+
+/**
+ * Periodic reconciliation(불일치 보정) task attached to the effect loop. The
+ * report type is generic so host applications keep their own scan contract.
+ */
+export interface EffectWorkerSupervisorReconciliationOptions<
+  TReconciliationReport extends WorkerReconciliationReport = WorkerReconciliationReport,
+> {
   /** Minimum delay between scan attempts. The first scan runs immediately. */
   readonly intervalMs?: number;
   /** Confirms that no pending or processing outbox work remains before scanning. */
   readonly isOutboxIdle?: () => Promise<boolean>;
   /** Runs one scan and enqueues corrections into the durable outbox. */
-  readonly run: () => Promise<ReconciliationScanReport>;
+  readonly run: () => Promise<TReconciliationReport>;
   /** Receives a completed scan without being allowed to stop the loop. */
-  readonly onReport?: (report: ReconciliationScanReport) => void;
+  readonly onReport?: (report: TReconciliationReport) => void;
   /** Receives scan failures; the effect worker continues independently. */
   readonly onError?: (error: unknown) => void;
 }
 
 /** Options for the runtime loop; `runPass` is injectable for deterministic tests. */
-export interface SyncEffectWorkerSupervisorLoopOptions {
+export interface EffectWorkerSupervisorLoopOptions<
+  TReconciliationReport extends WorkerReconciliationReport = WorkerReconciliationReport,
+> {
   readonly runPass: RunPass;
   readonly idleIntervalMs?: number;
   readonly errorBackoffInitialMs?: number;
   readonly errorBackoffMaxMs?: number;
   readonly random?: () => number;
-  readonly wait?: SyncEffectWorkerSupervisorWait;
+  readonly wait?: EffectWorkerSupervisorWait;
   readonly now?: () => number;
-  readonly reconciliation?: SyncEffectWorkerSupervisorReconciliationOptions;
-  readonly onReport?: (report: SyncEffectWorkerReport) => void;
+  readonly reconciliation?: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>;
+  readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
 }
 
 /** Worker options with a clock supplied by the supervisor on every pass. */
-export type CreateSyncEffectWorkerSupervisorOptions = Omit<
-  SyncEffectWorkerWithAdapterOptions,
+export type CreateEffectWorkerSupervisorOptions<
+  TReconciliationReport extends WorkerReconciliationReport = WorkerReconciliationReport,
+> = Omit<
+  EffectWorkerWithAdapterOptions,
   "now" | "workerId" | "maxEffects" | "writerLeaseDurationMs" | "effectLeaseDurationMs" | "requestTimeoutMs"
 > & {
   readonly workerId?: string;
@@ -77,9 +86,9 @@ export type CreateSyncEffectWorkerSupervisorOptions = Omit<
   readonly errorBackoffInitialMs?: number;
   readonly errorBackoffMaxMs?: number;
   readonly random?: () => number;
-  readonly wait?: SyncEffectWorkerSupervisorWait;
-  readonly reconciliation?: SyncEffectWorkerSupervisorReconciliationOptions;
-  readonly onReport?: (report: SyncEffectWorkerReport) => void;
+  readonly wait?: EffectWorkerSupervisorWait;
+  readonly reconciliation?: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>;
+  readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
 };
 
@@ -88,28 +97,32 @@ export type CreateSyncEffectWorkerSupervisorOptions = Omit<
  * progress. `stop()` waits for the current remote call to finish before the
  * loop exits, so the caller does not close SQLite underneath an active pass.
  */
-export class SyncEffectWorkerSupervisor {
+export class EffectWorkerSupervisor<
+  TReconciliationReport extends WorkerReconciliationReport = WorkerReconciliationReport,
+> {
   private readonly runPass: RunPass;
   private readonly idleIntervalMs: number;
   private readonly errorBackoffInitialMs: number;
   private readonly errorBackoffMaxMs: number;
   private readonly random: () => number;
-  private readonly wait: SyncEffectWorkerSupervisorWait;
+  private readonly wait: EffectWorkerSupervisorWait;
   private readonly now: () => number;
-  private readonly reconciliation: SyncEffectWorkerSupervisorReconciliationOptions | undefined;
+  private readonly reconciliation:
+    | EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>
+    | undefined;
   private readonly reconciliationIntervalMs: number;
-  private readonly onReport: ((report: SyncEffectWorkerReport) => void) | undefined;
+  private readonly onReport: ((report: WorkerReport) => void) | undefined;
   private readonly onError: ((error: unknown) => void) | undefined;
   private running = false;
   private acceptingPasses = true;
   private loopPromise: Promise<void> | undefined;
-  private inFlightPass: Promise<SyncEffectWorkerReport> | undefined;
-  private inFlightReconciliation: Promise<ReconciliationScanReport> | undefined;
+  private inFlightPass: Promise<WorkerReport> | undefined;
+  private inFlightReconciliation: Promise<TReconciliationReport> | undefined;
   private stopPromise: Promise<void> | undefined;
   private nextReconciliationAt = 0;
   private wakeWaiter: (() => void) | undefined;
 
-  public constructor(options: SyncEffectWorkerSupervisorLoopOptions) {
+  public constructor(options: EffectWorkerSupervisorLoopOptions<TReconciliationReport>) {
     this.runPass = options.runPass;
     this.idleIntervalMs = requirePositiveSafeInteger(
       options.idleIntervalMs ?? DEFAULT_IDLE_INTERVAL_MS,
@@ -157,7 +170,7 @@ export class SyncEffectWorkerSupervisor {
    * Runs one pass or joins the pass already running in this process.
    * Manual HTTP triggers therefore cannot create a second concurrent worker.
    */
-  public runOnce(): Promise<SyncEffectWorkerReport> {
+  public runOnce(): Promise<WorkerReport> {
     if (!this.acceptingPasses) {
       return Promise.reject(new Error("sync effect supervisor is stopped"));
     }
@@ -242,8 +255,8 @@ export class SyncEffectWorkerSupervisor {
 
   /** Runs the reconciliation task when its interval has elapsed. */
   private async runScheduledReconciliation(
-    workerReport: SyncEffectWorkerReport,
-  ): Promise<ReconciliationScanReport | undefined> {
+    workerReport: WorkerReport,
+  ): Promise<TReconciliationReport | undefined> {
     const reconciliation = this.reconciliation;
     if (reconciliation === undefined || this.now() < this.nextReconciliationAt) return undefined;
 
@@ -267,8 +280,8 @@ export class SyncEffectWorkerSupervisor {
 
   /** Coalesces a manual/scheduled reconciliation call in this process. */
   private runReconciliationOnce(
-    reconciliation: SyncEffectWorkerSupervisorReconciliationOptions,
-  ): Promise<ReconciliationScanReport> {
+    reconciliation: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>,
+  ): Promise<TReconciliationReport> {
     if (this.inFlightReconciliation !== undefined) return this.inFlightReconciliation;
     const pass = Promise.resolve().then(() => reconciliation.run());
     this.inFlightReconciliation = pass;
@@ -280,8 +293,8 @@ export class SyncEffectWorkerSupervisor {
   }
 
   private notifyReconciliationReport(
-    reconciliation: SyncEffectWorkerSupervisorReconciliationOptions,
-    report: ReconciliationScanReport,
+    reconciliation: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>,
+    report: TReconciliationReport,
   ): void {
     try {
       reconciliation.onReport?.(report);
@@ -291,7 +304,7 @@ export class SyncEffectWorkerSupervisor {
   }
 
   private notifyReconciliationError(
-    reconciliation: SyncEffectWorkerSupervisorReconciliationOptions,
+    reconciliation: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>,
     error: unknown,
   ): void {
     if (reconciliation.onError === undefined) {
@@ -305,7 +318,7 @@ export class SyncEffectWorkerSupervisor {
     }
   }
 
-  private notifyReport(report: SyncEffectWorkerReport): void {
+  private notifyReport(report: WorkerReport): void {
     try {
       this.onReport?.(report);
     } catch (error: unknown) {
@@ -341,19 +354,21 @@ export class SyncEffectWorkerSupervisor {
     });
   }
 
-  private clearInFlightPass(pass: Promise<SyncEffectWorkerReport>): void {
+  private clearInFlightPass(pass: Promise<WorkerReport>): void {
     if (this.inFlightPass === pass) this.inFlightPass = undefined;
   }
 
-  private clearInFlightReconciliation(pass: Promise<ReconciliationScanReport>): void {
+  private clearInFlightReconciliation(pass: Promise<TReconciliationReport>): void {
     if (this.inFlightReconciliation === pass) this.inFlightReconciliation = undefined;
   }
 }
 
 /** Creates a supervisor that supplies a fresh timestamp to every worker pass. */
-export function createSyncEffectWorkerSupervisor(
-  options: CreateSyncEffectWorkerSupervisorOptions,
-): SyncEffectWorkerSupervisor {
+export function createEffectWorkerSupervisor<
+  TReconciliationReport extends WorkerReconciliationReport = WorkerReconciliationReport,
+>(
+  options: CreateEffectWorkerSupervisorOptions<TReconciliationReport>,
+): EffectWorkerSupervisor<TReconciliationReport> {
   const workerId = options.workerId ?? `sync-effect-worker:${randomUUID()}`;
   const maxEffects = options.maxEffects ?? DEFAULT_MAX_EFFECTS;
   const now = options.now ?? Date.now;
@@ -366,7 +381,7 @@ export function createSyncEffectWorkerSupervisor(
   });
   const workerOptions = {
     storage: options.storage,
-    provider: options.provider,
+    dispatcher: options.dispatcher,
     batchController,
     clock: now,
     workerId,
@@ -392,16 +407,16 @@ export function createSyncEffectWorkerSupervisor(
       ? {}
       : { makeRepairReplan: options.makeRepairReplan }),
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
-  } satisfies SyncEffectWorkerWithAdapterOptions;
+  } satisfies EffectWorkerWithAdapterOptions;
 
-  return new SyncEffectWorkerSupervisor({
+  return new EffectWorkerSupervisor({
     ...options,
     now,
-    runPass: () => runSyncEffectWorkerWithAdapter({ ...workerOptions, now: now() }),
+    runPass: () => runEffectWorkerWithAdapter({ ...workerOptions, now: now() }),
   });
 }
 
-function hasImmediateProgress(report: SyncEffectWorkerReport): boolean {
+function hasImmediateProgress(report: WorkerReport): boolean {
   return report.claimed > 0;
 }
 
@@ -413,13 +428,13 @@ function hasImmediateProgress(report: SyncEffectWorkerReport): boolean {
  * applied/superseded/conflicted/blocked/replanned/failed effect) keeps the
  * drain loop running immediately.
  */
-function isResponseLossRetryLoop(report: SyncEffectWorkerReport): boolean {
+function isResponseLossRetryLoop(report: WorkerReport): boolean {
   return report.claimed > 0 &&
     report.requeued > 0 &&
     !hasForwardProgress(report);
 }
 
-function hasForwardProgress(report: SyncEffectWorkerReport): boolean {
+function hasForwardProgress(report: WorkerReport): boolean {
   return report.applied > 0 ||
     report.superseded > 0 ||
     report.conflicted > 0 ||
@@ -428,7 +443,7 @@ function hasForwardProgress(report: SyncEffectWorkerReport): boolean {
     report.failed > 0;
 }
 
-function isWorkerPassIdle(report: SyncEffectWorkerReport): boolean {
+function isWorkerPassIdle(report: WorkerReport): boolean {
   return report.selected === 0 &&
     report.claimed === 0 &&
     report.expiredLeasesRecovered === 0 &&
@@ -453,16 +468,16 @@ function validateWorkerOptions(
   maxFastAppendCandidates?: number,
   appendDispatchIntervalMs?: number,
 ): void {
-  if (workerId.length === NON_NEGATIVE_SAFE_INTEGER_MINIMUM) {
+  if (workerId.length === 0) {
     throw new RangeError("sync effect supervisor worker ID is required");
   }
-  if (!Number.isSafeInteger(maxEffects) || maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM) {
+  if (!Number.isSafeInteger(maxEffects) || maxEffects < 1) {
     throw new RangeError("sync effect supervisor maxEffects must be a positive safe integer");
   }
   if (
     maxFastAppendCandidates !== undefined &&
     (!Number.isSafeInteger(maxFastAppendCandidates) ||
-      maxFastAppendCandidates < POSITIVE_SAFE_INTEGER_MINIMUM)
+      maxFastAppendCandidates < 1)
   ) {
     throw new RangeError(
       "sync effect supervisor maxFastAppendCandidates must be a positive safe integer",
@@ -471,7 +486,7 @@ function validateWorkerOptions(
   if (
     appendDispatchIntervalMs !== undefined &&
     (!Number.isSafeInteger(appendDispatchIntervalMs) ||
-      appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)
+      appendDispatchIntervalMs < 0)
   ) {
     throw new RangeError(
       "sync effect supervisor appendDispatchIntervalMs must be a non-negative safe integer",
@@ -480,7 +495,7 @@ function validateWorkerOptions(
 }
 
 function requirePositiveSafeInteger(value: number, name: string): number {
-  if (!Number.isSafeInteger(value) || value < POSITIVE_SAFE_INTEGER_MINIMUM) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new RangeError(name + " must be a positive safe integer");
   }
   return value;

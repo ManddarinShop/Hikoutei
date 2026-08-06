@@ -1,31 +1,30 @@
-/** Validation, projection confirmation, fencing, and SQL parameter helpers. */
+/** Validation, delivery confirmation, fencing, and SQL parameter helpers. */
 
-import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
+import { STORAGE_ERROR_CODES, StorageError } from "./errors.js";
 import {
   EFFECT_KINDS,
   EFFECT_STATUSES,
   EFFECT_TARGET_KINDS,
-} from "../../../../domain/model/constants.js";
-import type { EffectKind, EffectStatus, EffectTargetKind } from "../../../../domain/model/types.js";
+} from "./constants.js";
+import type { EffectKind, EffectStatus, EffectTargetKind } from "./constants.js";
 import {
   isSemanticRevision,
   requireSemanticString,
-  type HikouteiRevision,
+  type OutboxRevision,
   type SemanticString,
-} from "../../../../shared/identity/types.js";
-import { isRecord } from "../../../../shared/encoding/typeGuards.js";
-import { isNonEmptyString } from "../../../../shared/validation.js";
-import { APPLICABILITY_KINDS } from "../../../../shared/state/constants.js";
+} from "./identity.js";
+import { isNonEmptyString, isRecord } from "./validation.js";
+import { APPLICABILITY_KINDS } from "./state.js";
 import {
   fenceParameters,
   isFencingValidWithSql,
-} from "../shared/writerLease.js";
-import type { FencingContext } from "../shared/writerLease.js";
-import { toSqlNullable } from "../../sqlite/sqlState.js";
+} from "./writerLease.js";
+import type { FencingContext } from "./writerLease.js";
+import { toSqlNullable } from "./sqlState.js";
 import {
   UPSERT_VISIBLE_FIELD_STATE_SQL,
   UPSERT_VISIBLE_STATE_SQL,
-} from "./effectOutboxSql.js";
+} from "./outboxSql.js";
 import type {
   ApplyResultOptions,
   ClaimEffectOptions,
@@ -33,13 +32,13 @@ import type {
   MarkDeliveryUncertainOptions,
   NewEffect,
   RetryClaimedEffectOptions,
-} from "./effectOutboxContracts.js";
+} from "./contracts.js";
 import type {
   SqlExecutor,
   SqlParameter,
   SqlRow,
-} from "../../../../adapter/persistence/contracts/sql.js";
-import type { PendingEffect } from "./effectOutboxContracts.js";
+} from "./sql.js";
+import type { PendingEffect } from "./contracts.js";
 
 const READ_CLAIMED_EFFECT_TARGET_SQL = `
   SELECT physical_sheet_id, projection, row_binding_id
@@ -155,7 +154,7 @@ function requireNullableSqlText(value: unknown, label: string): string | null {
   return requireSqlText(value, label);
 }
 
-function requireSqlRevision(value: unknown, label: string): HikouteiRevision {
+function requireSqlRevision(value: unknown, label: string): OutboxRevision {
   if (!isSemanticRevision(value)) {
     throwInvalidPendingEffect(`${label} must be a non-negative safe integer`);
   }

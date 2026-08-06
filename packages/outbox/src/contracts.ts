@@ -1,21 +1,28 @@
-/** Public contracts for durable effect outbox rows and transitions. */
+/**
+ * Public contracts for durable outbox rows and transitions.
+ *
+ * The payload is opaque to the queue: only route keys, ordering keys, and
+ * lifecycle evidence participate in queue mechanics.
+ */
 
 import type {
-  Applicability,
   EffectKind,
   EffectStatus,
   EffectTargetKind,
-  Presence,
-} from "../../../../domain/index.js";
-import type { FencingContext } from "../shared/writerLease.js";
+} from "./constants.js";
 import type {
-  HikouteiEffectDedupeKey,
-  HikouteiEffectId,
-  HikouteiPayloadHash,
-  HikouteiPhysicalSheetId,
-  HikouteiRowBindingId,
-  HikouteiVisibleHash,
-} from "../../../../shared/identity/types.js";
+  Applicability,
+  Presence,
+} from "./state.js";
+import type { FencingContext } from "./writerLease.js";
+import type {
+  OutboxEffectDedupeKey,
+  OutboxEffectId,
+  OutboxPayloadHash,
+  OutboxPhysicalSheetId,
+  OutboxRowBindingId,
+  OutboxVisibleHash,
+} from "./identity.js";
 
 export const SYNC_EFFECT_RECOVERY_ERROR_CODES = {
   LEASE_EXPIRED_REQUIRES_POSTCONDITION: "lease_expired_requires_postcondition",
@@ -86,7 +93,7 @@ export type ApplyResultOptions =
   | AppliedEffectResultOptions
   | NonAppliedEffectResultOptions;
 
-/** Confirmed projection state returned only after a provider postcondition read. */
+/** Confirmed delivery state returned only after a provider postcondition read. */
 export interface EffectProjectionConfirmation {
   readonly physicalSheetId: string;
   readonly projection: string;
@@ -144,13 +151,13 @@ export interface MarkDeliveryUncertainOptions
 }
 
 export interface PendingEffect {
-  readonly effect_id: HikouteiEffectId;
+  readonly effect_id: OutboxEffectId;
   readonly effect_kind: EffectKind;
   readonly commit_id: string;
   readonly logical_sheet_id: string;
-  readonly physical_sheet_id: HikouteiPhysicalSheetId;
+  readonly physical_sheet_id: OutboxPhysicalSheetId;
   readonly projection: string;
-  readonly row_binding_id: HikouteiRowBindingId | null;
+  readonly row_binding_id: OutboxRowBindingId | null;
   readonly conflict_id: string | null;
   readonly target_kind: EffectTargetKind;
   readonly target_id: string;
@@ -158,12 +165,12 @@ export interface PendingEffect {
   readonly target_field_revision_hash: string | null;
   readonly target_canonical_commit_id: string | null;
   readonly expected_visible_revision: number;
-  readonly expected_visible_hash: HikouteiVisibleHash | "";
+  readonly expected_visible_hash: OutboxVisibleHash | "";
   readonly repair_guard_hash: string | null;
   readonly source_quarantine_id: string | null;
   readonly payload_json: string;
-  readonly payload_hash: HikouteiPayloadHash;
-  readonly effect_dedupe_key: HikouteiEffectDedupeKey;
+  readonly payload_hash: OutboxPayloadHash;
+  readonly effect_dedupe_key: OutboxEffectDedupeKey;
   readonly stream_sequence: number;
   readonly created_at: number;
   readonly next_attempt_at: number | null;

@@ -32,7 +32,7 @@ import {
   type CanonicalCommitInput,
 } from "../canonical/canonicalCommit.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
-import type { FencingContext } from "../../sync/shared/writerLease.js";
+import type { FencingContext } from "@hikoutei/outbox";
 import { auditJson } from "./observationAudit.js";
 import {
   candidateHash,

@@ -11,6 +11,9 @@
   },
   "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
   "type": "module",
+  "engines": {
+    "node": ">=22.3"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -25,10 +28,10 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run clean && tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "tsc -p tsconfig.test.json",
-    "test": "vitest run test/*.test.ts"
+    "build": "npm run build -w @hikoutei/outbox && npm run clean && tsc -p tsconfig.json",
+    "typecheck": "npm run build -w @hikoutei/outbox && tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "npm run build -w @hikoutei/outbox && tsc -p tsconfig.test.json && tsc -p packages/outbox/tsconfig.test.json",
+    "test": "npm run build -w @hikoutei/outbox && vitest run"
   },
   "keywords": [
     "google-sheets",
@@ -37,9 +40,13 @@
     "optimistic-locking"
   ],
   "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
   "dependencies": {
     "@googleapis/sheets": "^14.0.0",
     "@hikoutei/kohkai": "0.1.0",
+    "@hikoutei/outbox": "0.1.0",
     "google-auth-library": "^11.0.0"
   },
   "devDependencies": {

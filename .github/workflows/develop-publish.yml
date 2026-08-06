@@ -130,11 +130,16 @@ jobs:
           mkdir -p "$consumer_dir"
           package_file="$(find "$RUNNER_TEMP/hikoutei-develop-package" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
           test -n "$package_file"
+          # The root package depends on the private @hikoutei/outbox workspace
+          # package; pack it too so the consumer install resolves locally.
+          outbox_package_file="$(cd packages/outbox && npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          outbox_package_path="$RUNNER_TEMP/$outbox_package_file"
 
           (
             cd "$consumer_dir"
             npm init -y >/dev/null
             npm install --no-audit --no-fund --ignore-scripts \
+              "$outbox_package_path" \
               "$package_file" \
               "@mikro-orm/core@7.1.7" \
               "@mikro-orm/sql@7.1.7"

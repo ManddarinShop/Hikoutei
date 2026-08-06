@@ -1,12 +1,16 @@
-/** Constants and durable status contracts shared by the effect worker modules. */
+/**
+ * Durable worker constants: error codes and batch/throttle policies.
+ *
+ * The worker error codes are persisted in `last_error_code` and must never
+ * change; the recovery codes reused from the kernel contracts stay
+ * byte-identical to the codes the host application has always persisted.
+ */
 
-import type { EffectKind, EffectStatus, EffectTargetKind } from "../../../../domain/index.js";
+import type { EffectStatus } from "../constants.js";
 import {
-  EFFECT_KINDS as CANONICAL_EFFECT_KINDS,
-  EFFECT_STATUSES as CANONICAL_EFFECT_STATUSES,
-  EFFECT_TARGET_KINDS as CANONICAL_EFFECT_TARGET_KINDS,
-} from "../../../../domain/model/constants.js";
-import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../../../../infrastructure/storage/sync/outbound/effectOutbox.js";
+  EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
+} from "../constants.js";
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contracts.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 /** Outbound writer lease must outlive the longest remote effect request. */
@@ -17,7 +21,7 @@ export const EFFECT_LEASE_PROVIDER_HEADROOM_MS = 30_000;
 export const DEFAULT_EFFECT_LEASE_DURATION_MS = 120_000;
 
 /**
- * Maximum effects one provider `applyEffects` call will acknowledge.
+ * Maximum effects one dispatcher `apply` call will acknowledge.
  *
  * The remote provider caps a single bounded effect batch (see
  * `MAX_EFFECTS_PER_REQUEST` in the Google Sheets API provider defaults).
@@ -46,23 +50,27 @@ export const FAST_APPEND_BATCH_CANDIDATE_LIMIT = 1_000;
  * Minimum interval between fast-append request starts in the real provider
  * runtime. The adaptive batch controller remembers the last append request
  * start across supervisor passes and waits only the remaining time before the
- * next append request; regular applyEffects calls never wait on this throttle.
+ * next append request; regular apply calls never wait on this throttle.
  */
 export const APPEND_DISPATCH_THROTTLE_INTERVAL_MS = 1_100;
 
-export const SYNC_EFFECT_KINDS = CANONICAL_EFFECT_KINDS satisfies Record<string, EffectKind>;
-
-export const EFFECT_TARGET_KINDS = CANONICAL_EFFECT_TARGET_KINDS satisfies Record<string, EffectTargetKind>;
-
+/** Subset of kernel effect statuses the worker transitions between. */
 export const OUTBOX_EFFECT_STATUSES = {
-  DELIVERY_UNCERTAIN: CANONICAL_EFFECT_STATUSES.DELIVERY_UNCERTAIN,
-  FAILED: CANONICAL_EFFECT_STATUSES.FAILED,
-  APPLIED: CANONICAL_EFFECT_STATUSES.APPLIED,
-  BLOCKED_CANDIDATE: CANONICAL_EFFECT_STATUSES.BLOCKED_CANDIDATE,
-  SUPERSEDED: CANONICAL_EFFECT_STATUSES.SUPERSEDED,
-  CONFLICT: CANONICAL_EFFECT_STATUSES.CONFLICT,
+  DELIVERY_UNCERTAIN: KERNEL_EFFECT_STATUSES.DELIVERY_UNCERTAIN,
+  FAILED: KERNEL_EFFECT_STATUSES.FAILED,
+  APPLIED: KERNEL_EFFECT_STATUSES.APPLIED,
+  BLOCKED_CANDIDATE: KERNEL_EFFECT_STATUSES.BLOCKED_CANDIDATE,
+  SUPERSEDED: KERNEL_EFFECT_STATUSES.SUPERSEDED,
+  CONFLICT: KERNEL_EFFECT_STATUSES.CONFLICT,
 } as const satisfies Record<string, EffectStatus>;
 
+/**
+ * Stable machine-readable worker error codes persisted on outbox rows.
+ *
+ * The values are part of the durable contract and must stay byte-identical;
+ * several entries intentionally reuse the kernel recovery codes so recovery
+ * rows written by the worker and by the kernel agree on one vocabulary.
+ */
 export const WORKER_ERROR_CODES = {
   INVALID_EFFECT_PAYLOAD: "invalid_effect_payload",
   ACTIVE_CANDIDATE_PRESERVED: "active_candidate_preserved",
@@ -86,5 +94,5 @@ export const WORKER_ERROR_CODES = {
   PROVIDER_CAPABILITY_MISSING: "provider_capability_missing",
 } as const;
 
-export type SyncEffectWorkerErrorCode =
+export type WorkerErrorCode =
   (typeof WORKER_ERROR_CODES)[keyof typeof WORKER_ERROR_CODES];
