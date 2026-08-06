@@ -314,6 +314,7 @@ export async function registerTypedSheetsPersistenceRoutesWithAdapter(
 ): Promise<TypedSheetsPersistenceRegistrationResult> {
   try {
     return await storage.transaction(async ({ sql }) => {
+      // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
       const claim = await claimWriterLeaseWithSql(sql, lease);
       if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
         return { kind: "fenced_out" };

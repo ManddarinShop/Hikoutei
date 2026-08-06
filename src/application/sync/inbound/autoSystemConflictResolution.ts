@@ -87,6 +87,7 @@ export async function autoResolveExistingMappedConflictsWithAdapter(
 ): Promise<void> {
   await storage.transaction(async ({ sql }) => {
     const initialNow = writer.now();
+    // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,
@@ -141,6 +142,7 @@ export async function renewAutomaticConflictResolutionLeaseWithSql(
   writer: ResolvedWriterOptions,
 ): Promise<FencingContext> {
   const now = Math.max(fence.now, writer.now());
+  // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
   const claim = await claimWriterLeaseWithSql(sql, {
     role: writer.role,
     writerId: writer.writerId,
@@ -330,6 +332,7 @@ export async function retryOpenMappedConflictsWithAdapter(
 
   return storage.transaction(async ({ sql }) => {
     const now = writer.now();
+    // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,

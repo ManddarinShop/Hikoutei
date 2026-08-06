@@ -19,7 +19,14 @@ import {
   type Hikoutei,
 } from "../../../api/Hikoutei.js";
 import { getEntityDescriptor, HikouteiEntity as HikouteiEntityToken } from "../../../api/entity.js";
-import type { TypedSheetsEntityWriterOptions } from "../../orm/persistence/support/contracts.js";
+import {
+  readWriterLeaseWithAdapter,
+  releaseWriterLeaseWithAdapter,
+} from "../../../infrastructure/storage/index.js";
+import {
+  DEFAULT_MAPPED_WRITER_ROLE,
+  type TypedSheetsEntityWriterOptions,
+} from "../../orm/persistence/support/contracts.js";
 import {
   initializeMappedTypedSheetsRuntime,
 } from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js";
@@ -62,9 +69,12 @@ import {
   createEffectWorkerSupervisor,
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
   DEFAULT_EFFECT_LEASE_DURATION_MS,
+  DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
   EFFECT_LEASE_PROVIDER_HEADROOM_MS,
   FAST_APPEND_BATCH_CANDIDATE_LIMIT,
+  LOOKUP_RESULT_KINDS,
+  safeErrorMessage,
   type EffectWorkerSupervisor,
   type WorkerReport,
 } from "@hikoutei/outbox";
@@ -159,6 +169,11 @@ export async function createInternalSyncService(
   validateServiceOptions(options, descriptors);
   const generated = createMikroOrmScalarRuntime(options.entities, options.projections);
   const writer = createWriterOptions(options);
+  // The effect worker claims its own lease role with the same runtime identity
+  // as the mapped writer unless the caller pinned an explicit worker id; one
+  // resolved identity is reused by the supervisor and by the graceful-shutdown
+  // lease release so both roles expire together on stop().
+  const effectWorkerId = options.workerId ?? writer.writerId;
   const runtime = await initializeMappedTypedSheetsRuntime({
     dbName: options.dbName,
     entities: generated.entities,
@@ -191,6 +206,7 @@ export async function createInternalSyncService(
         storage: runtime.storage,
       }),
       ...optionalWorkerOptions(options),
+      workerId: effectWorkerId,
     });
     const pollingFullScanIntervalMs = options.pollingFullScanIntervalMs
       ?? DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS;
@@ -241,8 +257,23 @@ export async function createInternalSyncService(
       // Stop inbound reads first, then the outbound worker. Both supervisors
       // drain manual and background passes before SQLite is closed.
       stopPromise = (async () => {
-        await pollingSupervisor.stop();
-        await effectSupervisor.stop();
+        try {
+          await pollingSupervisor.stop();
+          await effectSupervisor.stop();
+        } finally {
+          // Graceful-shutdown handoff: expire this runtime's own leases so the
+          // next runtime on the same SQLite file claims immediately through the
+          // TAKEOVER path. Abnormal exits keep the full lease window, and the
+          // row is never deleted so authority epoch ordering stays monotonic.
+          // The release ALWAYS runs, even when a supervisor stop fails, so a
+          // restart inside the lease window never fails with
+          // WRITER_LEASE_UNAVAILABLE; a failing release only logs and never
+          // masks the supervisor error. `stopped` still flips only when both
+          // supervisor stops complete, so a rejected stop leaves a retryable
+          // close() that re-runs the stops and the release.
+          await expireRuntimeWriterLeases(runtime.storage, writer, effectWorkerId)
+            .catch(() => undefined);
+        }
         stopped = true;
         stopPromise = undefined;
       })().catch((error: unknown) => {
@@ -268,6 +299,15 @@ export async function createInternalSyncService(
       close: () => hikoutei.close(),
     };
   } catch (error: unknown) {
+    // Conflict-route registration claims this runtime's mapped-role writer
+    // lease before remote provisioning runs; a provisioning failure would
+    // otherwise leave the claim valid for the full lease window and every
+    // immediate retry would fail at the same claim with
+    // WRITER_LEASE_UNAVAILABLE. Expire the claimed leases (CAS-guarded,
+    // warn-and-continue) so the retry takes over at once; the extra guard
+    // ensures this can never mask the original startup error.
+    await expireRuntimeWriterLeases(runtime.storage, writer, effectWorkerId)
+      .catch(() => undefined);
     await runtime.storage.close(true).catch(() => undefined);
     throw error;
   }
@@ -480,6 +520,63 @@ function createWriterOptions(options: InternalSyncServiceOptions): TypedSheetsEn
     writerId: options.writerId ?? `hikoutei-sync:${randomUUID()}`,
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
   };
+}
+
+/**
+ * Expires this runtime's own writer leases on graceful shutdown.
+ *
+ * Each release is CAS-guarded on the exact lease row this runtime holds
+ * (role, writer id, epoch, fencing token), so a concurrent takeover or a
+ * previously crashed runtime's stale row is never expired. The observation
+ * poller and the auto conflict resolver claim under the mapped writer role
+ * with the same writer id, so the single mapped-role release covers them.
+ * A failing release only logs a classified warning and never aborts stop().
+ */
+async function expireRuntimeWriterLeases(
+  storage: MikroOrmSqliteAdapter,
+  writer: TypedSheetsEntityWriterOptions,
+  effectWorkerId: string,
+): Promise<void> {
+  const now = writer.now?.() ?? Date.now();
+  // Every claim site wired into the bootstrap must be mirrored here:
+  // conflict route registration (registerSyncConflictProjectionRoutes), auto
+  // conflict resolution (autoSystemConflictResolution), mapped flush planning
+  // and projection registration (flushCoordinator,
+  // mappedPersistenceContext), and observation polling
+  // (MikroOrmUserInputPolling) claim under the mapped writer role with
+  // writer.writerId; the effect worker supervisor claims under
+  // DEFAULT_WORKER_ROLE with effectWorkerId. A claim added elsewhere must be
+  // added to this list, or graceful close leaves it leased for the window.
+  const ownLeases: ReadonlyArray<{ readonly role: string; readonly writerId: string }> = [
+    { role: DEFAULT_MAPPED_WRITER_ROLE, writerId: writer.writerId },
+    { role: DEFAULT_WORKER_ROLE, writerId: effectWorkerId },
+  ];
+  for (const { role, writerId } of ownLeases) {
+    try {
+      const found = await readWriterLeaseWithAdapter(storage, role);
+      if (found.kind !== LOOKUP_RESULT_KINDS.FOUND || found.value.writerId !== writerId) {
+        // No row, or the lease was already taken over by a newer writer:
+        // nothing this runtime owns to expire.
+        continue;
+      }
+      const released = await releaseWriterLeaseWithAdapter(storage, {
+        role,
+        writerId,
+        writerEpoch: found.value.writerEpoch,
+        fencingToken: found.value.fencingToken,
+        now,
+      });
+      if (!released) {
+        console.warn(
+          `[sync-service] writer lease for role "${role}" changed ownership during shutdown; skipping release.`,
+        );
+      }
+    } catch (error: unknown) {
+      console.warn(
+        `[sync-service] writer lease release failed for role "${role}": ${safeErrorMessage(error)}`,
+      );
+    }
+  }
 }
 
 function optionalWorkerOptions(options: InternalSyncServiceOptions): {
