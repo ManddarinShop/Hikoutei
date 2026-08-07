@@ -130,11 +130,16 @@ jobs:
           mkdir -p "$consumer_dir"
           package_file="$(find "$RUNNER_TEMP/hikoutei-develop-package" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
           test -n "$package_file"
+          # The root package depends on the @hikoutei/ikisaki workspace
+          # package; pack it too so the consumer install resolves locally.
+          ikisaki_package_file="$(cd packages/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          ikisaki_package_path="$RUNNER_TEMP/$ikisaki_package_file"
 
           (
             cd "$consumer_dir"
             npm init -y >/dev/null
             npm install --no-audit --no-fund --ignore-scripts \
+              "$ikisaki_package_path" \
               "$package_file" \
               "@mikro-orm/core@7.1.7" \
               "@mikro-orm/sql@7.1.7"
@@ -157,7 +162,7 @@ jobs:
 
       - name: Upload develop installed-consumer reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: hikoutei-develop-fake-installed-consumer
           path: |
@@ -167,7 +172,7 @@ jobs:
 
       - name: Upload develop package
         if: success()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: hikoutei-develop-package
           path: ${{ runner.temp }}/hikoutei-develop-package
@@ -179,8 +184,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      # contents: write is required for the GITHUB_TOKEN to create a
+      # repository_dispatch event for the example verification workflows.
+      contents: write
       id-token: write
+      packages: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -192,10 +200,31 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Download develop package
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: hikoutei-develop-package
           path: ${{ runner.temp }}/hikoutei-develop-package
+
+      - name: Publish ikisaki package (idempotent)
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NPM_TOKEN secret is required to publish the ikisaki package." >&2
+            exit 1
+          fi
+          # The hikoutei tarball depends on @hikoutei/ikisaki@0.1.0, so the
+          # dependency must exist on the registry before hikoutei is published.
+          # Publish at most once per version; later releases skip the step.
+          if npm view "@hikoutei/ikisaki@0.1.0" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "@hikoutei/ikisaki@0.1.0 already published; skipping."
+          else
+            npm ci
+            npm run build -w @hikoutei/ikisaki
+            (cd packages/ikisaki && npm publish --tag latest --access public)
+          fi
 
       - name: Verify latest dist-tag monotonicity
         shell: bash
@@ -263,3 +292,52 @@ jobs:
             if (pkg.name !== "hikoutei" || !isStable || pkg.version !== expected) process.exit(1);
           ' "$RUNNER_TEMP/hikoutei-develop-package.json" "$expected_version"
           npm publish "$package_file" --tag latest --access public --provenance
+
+      - name: Publish to GitHub Packages mirror
+        shell: bash
+        env:
+          GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected_version="${TAG_NAME#develop-v}"
+          package_dir="$RUNNER_TEMP/hikoutei-develop-package"
+          scoped_dir="$RUNNER_TEMP/hikoutei-develop-gh-packages"
+          rm -rf "$scoped_dir"
+          mkdir -p "$scoped_dir"
+          # The GitHub Packages npm registry only hosts scoped packages, so the
+          # verified tarball is re-packed under @ManddarinShop/hikoutei. The
+          # npmjs release keeps the unscoped name; contents are identical.
+          package_file="$(find "$package_dir" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
+          test -n "$package_file"
+          tar -xzf "$package_file" -C "$scoped_dir"
+          node -e '
+            const fs = require("fs");
+            const dir = process.argv[1];
+            const expected = process.argv[2];
+            const pkg = JSON.parse(fs.readFileSync(dir + "/package/package.json", "utf8"));
+            if (pkg.name !== "hikoutei" || pkg.version !== expected) process.exit(1);
+            pkg.name = "@ManddarinShop/hikoutei";
+            fs.writeFileSync(dir + "/package/package.json", JSON.stringify(pkg, null, 2) + "\n");
+          ' "$scoped_dir" "$expected_version"
+          (cd "$scoped_dir" && tar -czf "$RUNNER_TEMP/hikoutei-develop-gh-packages.tgz" package)
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$GH_PACKAGES_TOKEN" > .npmrc
+          npm publish "$RUNNER_TEMP/hikoutei-develop-gh-packages.tgz" \
+            --registry=https://npm.pkg.github.com \
+            --tag latest --access public
+
+      - name: Dispatch example verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          version="${version#develop-v}"
+          payload="{\"version\":\"$version\"}"
+          if ! gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=examples-verify \
+            -f client_payload="$payload" >/dev/null; then
+            echo "warning: failed to dispatch example verification for $version" >&2
+          fi

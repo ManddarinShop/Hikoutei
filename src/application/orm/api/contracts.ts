@@ -141,7 +141,7 @@ export type TypedSheetsEntityChange =
 
 /** Context available to the typed-sheets sync planner during an entity flush. */
 export interface TypedSheetsFlushContext {
-  /** All entity changes in the current Unit of Work(작업 단위). */
+  /** All entity changes in the current Unit of Work. */
   readonly changes: readonly TypedSheetsEntityChange[];
   /** SQL executor bound to the same transaction as the entity writes. */
   readonly sql: SqlExecutor;

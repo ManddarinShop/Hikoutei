@@ -1,0 +1,60 @@
+name: Example Fastify+Hono verification
+
+# Runs the Fastify+Hono example against an exact published hikoutei version:
+# dispatched automatically by the publish workflows (event type
+# `examples-verify`) or manually via workflow_dispatch with a version input.
+# The scenario itself lives in scripts/ci/examples/fastify-hono.mjs.
+on:
+  repository_dispatch:
+    types: [examples-verify]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "hikoutei version to verify (npm dist-tag or exact version)"
+        required: false
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Resolve version
+        id: version
+        env:
+          VERSION_INPUT: ${{ github.event.client_payload.version || github.event.inputs.version || 'latest' }}
+        shell: bash
+        run: |
+          version="$VERSION_INPUT"
+          if [[ ! "$version" =~ ^[0-9A-Za-z.\-]+$ ]]; then
+            echo "invalid version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install example dependencies with published hikoutei
+        env:
+          HIKOUTEI_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd examples/fastify-hono
+          npm install --no-audit --no-fund --ignore-scripts "hikoutei@${HIKOUTEI_VERSION}"
+
+      - name: Run Fastify+Hono scenario
+        run: node scripts/ci/examples/fastify-hono.mjs --dir examples/fastify-hono --output "$RUNNER_TEMP/result.json"
+
+      - name: Upload scenario result
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: example-fastify-hono-result
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: ignore

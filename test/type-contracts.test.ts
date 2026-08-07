@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   decodePendingEffectRow,
+  StorageError,
   validateApplyResultOptions,
   validateProjectionConfirmation,
-} from "../src/infrastructure/storage/sync/outbound/effectOutboxSupport.js";
-import { StorageError } from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/ikisaki";
 import { isCanonicalUtcIsoDate } from "../src/shared/validation.js";
 
 function rawPendingEffect(overrides: Record<string, unknown> = {}): Record<string, unknown> {

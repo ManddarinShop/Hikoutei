@@ -2,19 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import { PRESENCE_KINDS } from "../src/shared/state/index.js";
 import {
-  SyncEffectWorkerSupervisor,
-} from "../src/application/sync/outbound/effects/SyncEffectSupervisor.js";
-import type { SyncEffectWorkerReport } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
+  EffectWorkerSupervisor,
+  type WorkerReport,
+} from "@hikoutei/ikisaki";
 import type { ReconciliationScanReport } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
 
-describe("SyncEffectWorkerSupervisor", () => {
+describe("EffectWorkerSupervisor", () => {
   it("coalesces concurrent manual and background passes", async () => {
     let calls = 0;
-    let resolvePass!: (report: SyncEffectWorkerReport) => void;
-    const pendingPass = new Promise<SyncEffectWorkerReport>((resolve) => {
+    let resolvePass!: (report: WorkerReport) => void;
+    const pendingPass = new Promise<WorkerReport>((resolve) => {
       resolvePass = resolve;
     });
-    const supervisor = new SyncEffectWorkerSupervisor({
+    const supervisor = new EffectWorkerSupervisor({
       runPass: () => {
         calls += 1;
         return pendingPass;
@@ -34,11 +34,11 @@ describe("SyncEffectWorkerSupervisor", () => {
   });
 
   it("drains an externally triggered pass before stop resolves", async () => {
-    let resolvePass!: (report: SyncEffectWorkerReport) => void;
-    const pendingPass = new Promise<SyncEffectWorkerReport>((resolve) => {
+    let resolvePass!: (report: WorkerReport) => void;
+    const pendingPass = new Promise<WorkerReport>((resolve) => {
       resolvePass = resolve;
     });
-    const supervisor = new SyncEffectWorkerSupervisor({ runPass: () => pendingPass });
+    const supervisor = new EffectWorkerSupervisor({ runPass: () => pendingPass });
     const pass = supervisor.runOnce();
     await Promise.resolve();
 
@@ -58,8 +58,8 @@ describe("SyncEffectWorkerSupervisor", () => {
   it("continues bounded passes until the outbox reports idle", async () => {
     let calls = 0;
     let stopPromise: Promise<void> | undefined;
-    let supervisor!: SyncEffectWorkerSupervisor;
-    supervisor = new SyncEffectWorkerSupervisor({
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
         calls += 1;
         return calls === 1 ? createReport({ selected: 1, claimed: 1, applied: 1 }) : createReport();
@@ -83,8 +83,8 @@ describe("SyncEffectWorkerSupervisor", () => {
     const waits: number[] = [];
     const errors: unknown[] = [];
     let stopPromise: Promise<void> | undefined;
-    let supervisor!: SyncEffectWorkerSupervisor;
-    supervisor = new SyncEffectWorkerSupervisor({
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
         calls += 1;
         if (calls === 1) throw new Error("provider unavailable");
@@ -113,8 +113,8 @@ describe("SyncEffectWorkerSupervisor", () => {
     let workerCalls = 0;
     let reconciliationCalls = 0;
     let stopPromise: Promise<void> | undefined;
-    let supervisor!: SyncEffectWorkerSupervisor;
-    supervisor = new SyncEffectWorkerSupervisor({
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
         workerCalls += 1;
         return createReport({
@@ -150,8 +150,8 @@ describe("SyncEffectWorkerSupervisor", () => {
     let reconciliationCalls = 0;
     const reconciliationErrors: unknown[] = [];
     let stopPromise: Promise<void> | undefined;
-    let supervisor!: SyncEffectWorkerSupervisor;
-    supervisor = new SyncEffectWorkerSupervisor({
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
         workerCalls += 1;
         return createReport();
@@ -188,8 +188,8 @@ describe("SyncEffectWorkerSupervisor", () => {
     let calls = 0;
     const waits: number[] = [];
     let stopPromise: Promise<void> | undefined;
-    let supervisor!: SyncEffectWorkerSupervisor;
-    supervisor = new SyncEffectWorkerSupervisor({
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
         calls += 1;
         return createReport({ selected: 1, claimed: 1, requeued: 1, deferred: 1 });
@@ -224,8 +224,8 @@ describe("SyncEffectWorkerSupervisor", () => {
     let calls = 0;
     const waits: number[] = [];
     let stopPromise: Promise<void> | undefined;
-    let supervisor!: SyncEffectWorkerSupervisor;
-    supervisor = new SyncEffectWorkerSupervisor({
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
         calls += 1;
         return createReport({ selected: 2, claimed: 2, applied: 1, requeued: 1, deferred: 1 });
@@ -256,8 +256,8 @@ describe("SyncEffectWorkerSupervisor", () => {
     let idleChecks = 0;
     let currentTime = 10_000;
     let stopPromise: Promise<void> | undefined;
-    let supervisor!: SyncEffectWorkerSupervisor;
-    supervisor = new SyncEffectWorkerSupervisor({
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
         workerCalls += 1;
         return createReport({
@@ -295,7 +295,7 @@ describe("SyncEffectWorkerSupervisor", () => {
   });
 });
 
-function createReport(overrides: Partial<SyncEffectWorkerReport> = {}): SyncEffectWorkerReport {
+function createReport(overrides: Partial<WorkerReport> = {}): WorkerReport {
   return {
     lease: { kind: PRESENCE_KINDS.ABSENT },
     expiredLeasesRecovered: 0,

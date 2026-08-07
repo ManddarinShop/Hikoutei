@@ -10,7 +10,7 @@ import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   isFencingValidWithSql,
   type FencingContext,
-} from "../../sync/shared/writerLease.js";
+} from "@hikoutei/ikisaki";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 
 /** Parses and validates a normalized cell stored as serialized JSON. */

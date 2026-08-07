@@ -15,7 +15,8 @@ import {
 } from "../src/shared/encoding/constants.js";
 import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheets/constants.js";
-import { runSyncEffectWorkerWithAdapter } from "../src/application/sync/outbound/effects/SyncEffectWorker.js";
+import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import { planMappedObservationEntityMutation } from "../src/application/orm/mapping/observationMapping.js";
@@ -438,9 +439,9 @@ describe("mapped typed-sheets ORM", () => {
     em.persist(order);
     await em.flush();
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
       workerId: "mapped-delete-worker",
       now: 1_000,
       maxEffects: 8,
@@ -450,9 +451,9 @@ describe("mapped typed-sheets ORM", () => {
     await em.flush();
     provider.dropNextResponseAfterApply();
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
       workerId: "mapped-delete-worker",
       now: 1_001,
       maxEffects: 8,
@@ -518,9 +519,9 @@ describe("mapped typed-sheets ORM", () => {
     const order = em.create(Order, { id: "order-candidate-delete", status: "pending" });
     em.persist(order);
     await em.flush();
-    await runSyncEffectWorkerWithAdapter({
+    await runEffectWorkerWithAdapter({
       storage,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
       workerId: "mapped-candidate-delete-worker",
       now: 1_000,
       maxEffects: 8,
@@ -538,9 +539,9 @@ describe("mapped typed-sheets ORM", () => {
     em.remove(order);
     await em.flush();
 
-    await expect(runSyncEffectWorkerWithAdapter({
+    await expect(runEffectWorkerWithAdapter({
       storage,
-      provider,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
       workerId: "mapped-candidate-delete-worker",
       now: 1_001,
       maxEffects: 8,

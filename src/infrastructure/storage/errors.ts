@@ -1,4 +1,14 @@
-import { CoreErrorException } from "../../domain/errors/types.js";
+/**
+ * Stable error categories shared by the storage layer.
+ *
+ * `StorageError` is the single class defined by `@hikoutei/ikisaki` and
+ * re-exported here so host and kernel share one identity; this module keeps
+ * the host's full code table (the kernel table is the shared subset) and the
+ * host-wide `StorageErrorCode` type. Code strings are stable persisted
+ * values and must never change.
+ */
+
+export { StorageError } from "@hikoutei/ikisaki";
 
 /** Stable error categories shared by the storage layer. */
 export const STORAGE_ERROR_CODES = {
@@ -36,10 +46,3 @@ export const STORAGE_ERROR_CODES = {
 
 export type StorageErrorCode =
   (typeof STORAGE_ERROR_CODES)[keyof typeof STORAGE_ERROR_CODES];
-
-/** Error raised when storage input, schema, or runtime prerequisites are invalid. */
-export class StorageError extends CoreErrorException<"storage", StorageErrorCode> {
-  constructor(code: StorageErrorCode, message: string, options?: ErrorOptions) {
-    super("storage", code, message, options);
-  }
-}

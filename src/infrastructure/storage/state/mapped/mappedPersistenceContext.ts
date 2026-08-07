@@ -18,15 +18,13 @@ import {
 } from "../canonical/canonicalCommit.js";
 import {
   appendPendingEffectsWithSql,
-  type NewEffect,
-} from "../../sync/outbound/effectOutbox.js";
-import {
   claimWriterLeaseWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type ClaimLeaseOptions,
   type FencingContext,
+  type NewEffect,
   type WriterLeaseClaimResult,
-} from "../../sync/shared/writerLease.js";
+} from "@hikoutei/ikisaki";
 import {
   registerSyncSheetWithSql,
   requireRegisteredSyncSheetWithSql,
@@ -316,6 +314,7 @@ export async function registerTypedSheetsPersistenceRoutesWithAdapter(
 ): Promise<TypedSheetsPersistenceRegistrationResult> {
   try {
     return await storage.transaction(async ({ sql }) => {
+      // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
       const claim = await claimWriterLeaseWithSql(sql, lease);
       if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
         return { kind: "fenced_out" };

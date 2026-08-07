@@ -28,11 +28,13 @@ export {
   claimWriterLeaseWithSql,
   readWriterLeaseWithAdapter,
   readWriterLeaseWithSql,
+  releaseWriterLeaseWithAdapter,
+  releaseWriterLeaseWithSql,
   isFencingValidWithAdapter,
   isFencingValidWithSql,
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "./sync/shared/writerLease.js";
+} from "@hikoutei/ikisaki";
 export {
   ensureSpreadsheetAuthorityWithAdapter,
   ensureSpreadsheetAuthorityWithSql,
@@ -43,10 +45,11 @@ export type {
   WriterLease,
   ClaimLeaseOptions,
   FencingContext,
+  ReleaseWriterLeaseOptions,
   WriterLeaseClaimFailureReason,
   WriterLeaseClaimResult,
   WriterLeaseClaimResultKind,
-} from "./sync/shared/writerLease.js";
+} from "@hikoutei/ikisaki";
 export type {
   EnsureSpreadsheetAuthorityResult,
   SpreadsheetAuthority,
@@ -80,7 +83,7 @@ export {
   appendPendingEffectsWithAdapter,
   appendPendingEffectsWithSql,
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
-} from "./sync/outbound/effectOutbox.js";
+} from "@hikoutei/ikisaki";
 export type {
   AppliedEffectResultOptions,
   ClaimResult,
@@ -93,7 +96,7 @@ export type {
   NewEffect,
   PendingEffect,
   RetryClaimedEffectOptions,
-} from "./sync/outbound/effectOutbox.js";
+} from "@hikoutei/ikisaki";
 
 export {
   persistObservedRowWithAdapter,
@@ -204,3 +207,53 @@ export {
   hasActiveUserInputCandidateWithSql,
 } from "./sync/outbound/effectWorkerSql.js";
 export type { UserInputCandidateGuardQuery } from "./sync/outbound/effectWorkerSql.js";
+
+export {
+  AdaptiveEffectBatchController,
+  ADAPTIVE_EFFECT_BATCH_LIMITS,
+  APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
+  createEffectWorkerSupervisor,
+  DEFAULT_EFFECT_LEASE_DURATION_MS,
+  DEFAULT_WORKER_ROLE,
+  DEFAULT_WRITER_LEASE_DURATION_MS,
+  dispatchFastAppendGroup,
+  EffectWorkerSupervisor,
+  EFFECT_BATCH_LIMIT,
+  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
+  FAST_APPEND_BATCH_CANDIDATE_LIMIT,
+  handleProviderDispatchError,
+  MAX_IN_FLIGHT_EFFECTS,
+  OUTBOX_EFFECT_STATUSES,
+  runEffectWorkerWithAdapter,
+  WORKER_ERROR_CODES,
+} from "@hikoutei/ikisaki";
+export type {
+  AdaptiveEffectBatchControllerLike,
+  ApplyEffectResult,
+  ApplyOutcome,
+  CandidateGateResult,
+  ClaimedEffect,
+  CreateEffectWorkerSupervisorOptions,
+  Dispatcher,
+  DispatchRequest,
+  EffectRouteGroup,
+  EffectWorkerBaseOptions,
+  EffectWorkerStorage,
+  EffectWorkerSupervisorLoopOptions,
+  EffectWorkerSupervisorReconciliationOptions,
+  EffectWorkerSupervisorWait,
+  EffectWorkerWithAdapterOptions,
+  FastAppendEffectResult,
+  FastAppendOutcome,
+  MutableReport,
+  PostconditionOutcome,
+  PostconditionResult,
+  RepairReplanFactory,
+  RepairReplanRequest,
+  WorkerErrorCode,
+  Postcondition as WorkerPostcondition,
+  WorkerReconciliationReport,
+  WorkerReport,
+  TimingEvent as WorkerTimingEvent,
+  TimingSink as WorkerTimingSink,
+} from "@hikoutei/ikisaki";

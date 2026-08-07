@@ -64,11 +64,16 @@ jobs:
           mkdir -p "$consumer_dir"
           pack_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
           pack_path="$RUNNER_TEMP/$pack_file"
+          # The root package depends on the @hikoutei/ikisaki workspace
+          # package; pack it too so the consumer install resolves locally.
+          ikisaki_pack_file="$(cd packages/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          ikisaki_pack_path="$RUNNER_TEMP/$ikisaki_pack_file"
 
           (
             cd "$consumer_dir"
             npm init -y >/dev/null
             npm install --no-audit --no-fund --ignore-scripts \
+              "$ikisaki_pack_path" \
               "$pack_path" \
               "@mikro-orm/core@7.1.7" \
               "@mikro-orm/sql@7.1.7"
@@ -91,7 +96,7 @@ jobs:
 
       - name: Upload installed-consumer reports (fake)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: hikoutei-fake-installed-consumer
           path: |
