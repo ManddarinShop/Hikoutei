@@ -137,6 +137,37 @@ export function getEntityDescriptor<
   return descriptor;
 }
 
+/**
+ * Tokens created by `defineTypedSheetsEntity()`, in registration order.
+ *
+ * The registry backs the `entities` default of `createTypedSheets()`: a factory
+ * call that omits `entities` consumes a snapshot of this list at call time.
+ * Registration is deliberately lenient — duplicate names or tables may be
+ * stored and are rejected by the factory's resolved-list validation — so
+ * standalone use of `defineTypedSheetsEntity()` keeps its existing behavior.
+ */
+const REGISTERED_ENTITY_TOKENS: HikouteiEntity[] = [];
+
+/**
+ * Returns the registered entity tokens in registration order.
+ *
+ * Internal factory support, not part of the application-facing contract. The
+ * returned array is a snapshot so callers cannot mutate the registry.
+ */
+export function getRegisteredEntityTokens(): readonly HikouteiEntity[] {
+  return [...REGISTERED_ENTITY_TOKENS];
+}
+
+/**
+ * Empties the entity registry.
+ *
+ * Test-only helper for isolated factory tests; not exported from the root
+ * entrypoint and never called by production code.
+ */
+export function clearRegisteredEntityTokens(): void {
+  REGISTERED_ENTITY_TOKENS.length = 0;
+}
+
 /** Keys allowed on a scalar property descriptor; anything else is rejected. */
 const ALLOWED_PROPERTY_OPTION_KEYS: ReadonlySet<string> = new Set([
   "type",
@@ -152,7 +183,9 @@ const ALLOWED_PROPERTY_OPTION_KEYS: ReadonlySet<string> = new Set([
  * Throws a typed `HikouteiError` for an empty name or table name, an invalid
  * table identifier, a missing or duplicate primary key, a non-string primary
  * key, a non-scalar property type, or any unsupported relation/provider option.
- * The returned token is safe to pass to `createTypedSheets({ entities })`.
+ * The returned token is safe to pass to `createTypedSheets({ entities })`, and
+ * is also registered so a later `createTypedSheets()` call that omits
+ * `entities` can use it as the default entity set.
  */
 export function defineTypedSheetsEntity<
   Name extends string,
@@ -160,9 +193,11 @@ export function defineTypedSheetsEntity<
 >(
   input: HikouteiEntityDescriptorInput<Name, Properties>,
 ): HikouteiEntity<HikouteiEntityInstance<Properties>, Name> {
-  return new HikouteiEntity<HikouteiEntityInstance<Properties>, Name>(
+  const entity = new HikouteiEntity<HikouteiEntityInstance<Properties>, Name>(
     resolveEntityDescriptor(input),
   );
+  REGISTERED_ENTITY_TOKENS.push(entity);
+  return entity;
 }
 
 /**

@@ -14,16 +14,33 @@ import { createEntityManager } from "./internalEntityManager.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 import {
   getEntityDescriptor,
+  getRegisteredEntityTokens,
   HikouteiEntity,
   type ResolvedHikouteiEntityDescriptor,
 } from "./entity.js";
 
+/** Environment variable that supplies the default SQLite path. */
+const HIKOUTEI_DB_PATH_ENV = "HIKOUTEI_DB_PATH";
+
+/** SQLite path used when neither `dbName` nor the env var is set. */
+const DEFAULT_DB_PATH = "./hikoutei.sqlite";
+
 /** Options for opening the local Hikoutei runtime. */
 export interface CreateTypedSheetsOptions {
-  /** SQLite database path, URI, or `:memory:`. */
-  readonly dbName: string;
-  /** Entity tokens produced by `defineTypedSheetsEntity()`. */
-  readonly entities: readonly HikouteiEntity[];
+  /**
+   * SQLite database path, URI, or `:memory:`.
+   *
+   * Defaults to the `HIKOUTEI_DB_PATH` environment variable when it is set to
+   * a non-empty value, otherwise `./hikoutei.sqlite`.
+   */
+  readonly dbName?: string;
+  /**
+   * Entity tokens produced by `defineTypedSheetsEntity()`.
+   *
+   * Defaults to the entities registered by `defineTypedSheetsEntity()` at the
+   * time of the call, in registration order.
+   */
+  readonly entities?: readonly HikouteiEntity[];
 }
 
 /**
@@ -91,7 +108,30 @@ export function createInternalHikoutei(
   return new HikouteiImpl(provider, descriptors, beforeClose);
 }
 
-/** Validates the public factory options before any runtime is constructed. */
+/**
+ * Resolves the default SQLite path for a factory call that omits `dbName`.
+ *
+ * Prefers the `HIKOUTEI_DB_PATH` environment variable when it is set to a
+ * non-empty string, otherwise falls back to `./hikoutei.sqlite`. The `env`
+ * parameter defaults to `process.env` and exists so tests can exercise the
+ * precedence without mutating the process environment.
+ */
+export function resolveDefaultDbPath(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const fromEnv = env[HIKOUTEI_DB_PATH_ENV];
+  if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
+    return fromEnv.trim();
+  }
+  return DEFAULT_DB_PATH;
+}
+
+/**
+ * Validates the public factory options before any runtime is constructed.
+ *
+ * Fields are optional; each one is validated only when it is provided. The
+ * registry/env defaults are applied afterwards by `createTypedSheets()`.
+ */
 export function validateTypedSheetsOptions(options: CreateTypedSheetsOptions): void {
   if (options === null || typeof options !== "object") {
     throw new HikouteiError(
@@ -99,13 +139,13 @@ export function validateTypedSheetsOptions(options: CreateTypedSheetsOptions): v
       "createTypedSheets() options must be an object.",
     );
   }
-  if (typeof options.dbName !== "string" || options.dbName.trim() === "") {
+  if (options.dbName !== undefined && (typeof options.dbName !== "string" || options.dbName.trim() === "")) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
       "createTypedSheets() dbName must be a non-empty string.",
     );
   }
-  if (!Array.isArray(options.entities)) {
+  if (options.entities !== undefined && !Array.isArray(options.entities)) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
       "createTypedSheets() entities must be an array.",
@@ -119,12 +159,15 @@ export function validateTypedSheetsOptions(options: CreateTypedSheetsOptions): v
  * Internal construction hook shared by `createTypedSheets()` (env absent) and
  * the sync auto-start bridge (env present but disabled). It deliberately loads
  * the current provider lazily so importing the root package alone never
- * requires MikroORM or the Google SDK module graph.
+ * requires MikroORM or the Google SDK module graph. Omitting `dbName` or
+ * `entities` here applies the same defaults as `createTypedSheets()`.
  */
 export async function createLocalTypedSheetsRuntime(
   options: CreateTypedSheetsOptions,
 ): Promise<Hikoutei> {
-  const descriptors = resolveRuntimeDescriptors(options.entities);
+  const dbName = options.dbName ?? resolveDefaultDbPath();
+  const entities = options.entities ?? getRegisteredEntityTokens();
+  const descriptors = resolveRuntimeDescriptors(entities);
   // Load the current provider only when a runtime is opened. Importing the
   // root package alone must not require MikroORM or expose its module graph.
   const [engineModule, providerModule, runtimeModule] = await Promise.all([
@@ -132,9 +175,9 @@ export async function createLocalTypedSheetsRuntime(
     import("../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js"),
     import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarEntityRuntime.js"),
   ]);
-  const generated = runtimeModule.createMikroOrmScalarEntityRuntime(options.entities);
+  const generated = runtimeModule.createMikroOrmScalarEntityRuntime(entities);
   const orm = await engineModule.initializeTypedSheetsOrm({
-    dbName: options.dbName,
+    dbName,
     entities: generated.entities,
     flushCoordinator: { onFlush: async () => undefined },
   });
@@ -145,6 +188,10 @@ export async function createLocalTypedSheetsRuntime(
 /**
  * Opens the local SQLite runtime for the declared scalar entities.
  *
+ * When `dbName` is omitted the `HIKOUTEI_DB_PATH` environment variable or
+ * `./hikoutei.sqlite` is used; when `entities` is omitted the tokens registered
+ * by `defineTypedSheetsEntity()` are used, in registration order.
+ *
  * When `HIKOUTEI_SYNC_SPREADSHEET_URL` is set, the internal sync auto-start
  * bridge provisions the spreadsheet, validates the service-account
  * credentials file, and starts the outbound worker and User_Input polling
@@ -154,15 +201,24 @@ export async function createLocalTypedSheetsRuntime(
  * the local-only behavior is byte-identical to previous releases.
  */
 export async function createTypedSheets(
-  options: CreateTypedSheetsOptions,
+  options: CreateTypedSheetsOptions = {},
 ): Promise<Hikoutei> {
   validateTypedSheetsOptions(options);
+
+  const dbName = options.dbName ?? resolveDefaultDbPath();
+  const entities = options.entities ?? getRegisteredEntityTokens();
+  if (options.entities === undefined && entities.length === 0) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+      "createTypedSheets() requires at least one entity; pass `entities` or call defineTypedSheetsEntity() before opening the runtime.",
+    );
+  }
 
   const spreadsheetUrl = process.env.HIKOUTEI_SYNC_SPREADSHEET_URL;
   if (spreadsheetUrl === undefined || spreadsheetUrl.trim() === "") {
     // Env absent: the exact local-only path. The sync module graph (MikroORM
     // and the Google SDK) is never imported here.
-    return createLocalTypedSheetsRuntime(options);
+    return createLocalTypedSheetsRuntime({ dbName, entities });
   }
 
   // Env present: delegate to the internal sync auto-start bridge. The dynamic
@@ -171,8 +227,8 @@ export async function createTypedSheets(
     "../application/sync/service/syncAutoStart.js"
   );
   const result = await createTypedSheetsWithSync({
-    dbName: options.dbName,
-    entities: [...options.entities],
+    dbName,
+    entities: [...entities],
     env: process.env,
   });
   return result.hikoutei;
