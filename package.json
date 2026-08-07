@@ -1,7 +1,7 @@
 {
   "name": "hikoutei",
   "version": "0.4.6",
-  "description": "Hikoutei — typed repository and safe write layer for Google Sheets-backed MVPs.",
+  "description": "Typed repository and safe write layer for Google Sheets-backed MVPs. SQLite-authoritative entity lifecycle with asynchronous Google Sheets projection.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git"
@@ -34,7 +34,12 @@
   },
   "keywords": [
     "google-sheets",
+    "spreadsheet",
+    "google sheets orm",
+    "sqlite",
+    "sync",
     "typescript",
+    "orm",
     "repository",
     "optimistic-locking"
   ],
