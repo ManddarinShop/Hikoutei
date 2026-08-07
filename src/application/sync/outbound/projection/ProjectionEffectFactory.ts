@@ -28,13 +28,13 @@ import {
 import {
   SYNC_DELETE_EFFECT_KINDS,
   SYNC_PROJECTIONS,
-} from "../../sheets/constants.js";
+} from "../../sheetsContract/constants.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncEffectKind,
   type SyncProjection,
-} from "../../sheets/syncSheets.js";
+} from "../../sheetsContract/syncSheets.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,

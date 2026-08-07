@@ -21,8 +21,8 @@ import {
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/sheets/syncSheets.js";
-import { SYNC_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/sheets/constants.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
+import { SYNC_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/sheetsContract/constants.js";
 import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";

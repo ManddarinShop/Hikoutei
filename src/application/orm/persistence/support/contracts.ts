@@ -10,7 +10,7 @@ import type {
   EffectStatus,
   EffectTargetKind,
 } from "../../../../domain/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheets/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
 import type {
   SyncTimingSink,
 } from "../../../sync/telemetry/syncTiming.js";

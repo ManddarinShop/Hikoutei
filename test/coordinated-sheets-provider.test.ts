@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CoordinatedSheetsProvider,
   type CoordinatedSheetsInner,
-} from "../src/application/sync/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
-import type { CoordinatorLaneEvent } from "../src/application/sync/sheets/mutationCoordinator/laneTelemetry.js";
-import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheets/transportOutcome.js";
+} from "../src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
+import type { CoordinatorLaneEvent } from "../src/application/sync/sheetsContract/mutationCoordinator/laneTelemetry.js";
+import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
@@ -24,12 +24,12 @@ import type {
   SyncSheetsObservationBatchProvider,
   SyncSheetsTableReader,
   SyncTableRowsResult,
-} from "../src/application/sync/sheets/syncSheets.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../src/application/sync/sheets/sheetsProvisioning.js";
-import { SYNC_POSTCONDITION_DISPOSITIONS, SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheets/constants.js";
+} from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+import { SYNC_POSTCONDITION_DISPOSITIONS, SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheetsContract/constants.js";
 import { absentValue, presentValue } from "../src/shared/state/index.js";
 
 type Inner = CoordinatedSheetsInner;

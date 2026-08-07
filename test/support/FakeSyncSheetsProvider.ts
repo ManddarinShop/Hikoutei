@@ -47,7 +47,7 @@ import {
   type SyncSheetsProvider,
   type SyncSnapshotCell,
   type SyncSnapshotRow,
-} from "../../src/application/sync/sheets/syncSheets.js";
+} from "../../src/application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_DELETE_EFFECT_KINDS,
   SYNC_EFFECT_RESULT_STATUSES,
@@ -57,18 +57,18 @@ import {
   SYNC_POSTCONDITION_STATUSES,
   SYNC_PROJECTIONS,
   SYNC_PROTOCOL_VERSIONS,
-} from "../../src/application/sync/sheets/constants.js";
+} from "../../src/application/sync/sheetsContract/constants.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../src/application/sync/sheets/errors.js";
+} from "../../src/application/sync/sheetsContract/errors.js";
 import {
   requireSyncSheetsNonEmptyList,
   requireSyncSheetsNonNegativeSafeInteger,
   requireSyncSheetsPositiveSafeInteger,
   requireSyncProjectionKind,
   requireSyncSheetsText,
-} from "../../src/application/sync/sheets/validation.js";
+} from "../../src/application/sync/sheetsContract/validation.js";
 
 const FAKE_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",

@@ -18,19 +18,19 @@ import type { NormalizedCell } from "../src/domain/index.js";
 import { stableHash } from "../src/shared/encoding/index.js";
 import type { StableValue } from "../src/shared/encoding/types.js";
 import { presentValue, absentValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheets/syncSheets.js";
+import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../src/application/sync/sheets/constants.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheets/errors.js";
+} from "../src/application/sync/sheetsContract/constants.js";
+import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
 import type {
   ApplySyncEffectsRequest,
   ReadSyncSnapshotRequest,
   SyncSheetsSnapshot,
   SyncProjectionEffect,
-} from "../src/application/sync/sheets/syncSheets.js";
-import type { SyncSheetsProvisionRoute } from "../src/application/sync/sheets/sheetsProvisioning.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
+import type { SyncSheetsProvisionRoute } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import {
   GoogleSheetsApiSyncProvider,
   type GoogleSheetsApiRequestEvent,
@@ -46,7 +46,7 @@ import {
 } from "../src/adapter/sheets/providers/google-sheets-api/model/preflight.js";
 import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheets/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import {
   StubSheet,
   StubSpreadsheet,

@@ -37,7 +37,7 @@ import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
 } from "../../../../../shared/encoding/constants.js";
-import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
 
 /** Generated provider inputs for one mapped internal sync runtime. */
 export interface MikroOrmScalarRuntimeDefinition extends MikroOrmScalarEntityRuntimeDefinition {

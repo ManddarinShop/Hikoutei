@@ -10,7 +10,7 @@
  * succeeds without rewriting anything.
  */
 
-import type { SyncSheetsProvisionRoute } from "../../../../../application/sync/sheets/sheetsProvisioning.js";
+import type { SyncSheetsProvisionRoute } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
 import {
   GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_FIELDS,

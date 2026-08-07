@@ -11,7 +11,7 @@
  */
 
 import type { NormalizedCell } from "../../../../../domain/index.js";
-import type { SyncTableRow } from "../../../../../application/sync/sheets/syncSheets.js";
+import type { SyncTableRow } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { invalidProviderState } from "../errors.js";
 import {
   apiCellNumberFormat,

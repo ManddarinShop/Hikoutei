@@ -27,12 +27,12 @@ import {
   SYNC_PROTOCOL_VERSIONS,
   SYNC_SNAPSHOT_READ_MODES,
   type SyncSnapshotReadMode,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import type {
   SyncSheetsSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { invalidProviderState } from "../errors.js";
 import type {
   GoogleSheetsApiTransport,

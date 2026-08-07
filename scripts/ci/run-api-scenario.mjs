@@ -42,7 +42,7 @@ const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, prov
     import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", packageDist).href),
     import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", packageDist).href),
     import(new URL("./application/sync/inbound/polling/SimpleSheetPolling.js", packageDist).href),
-    import(new URL("./application/sync/sheets/sheetsProvisioning.js", packageDist).href),
+    import(new URL("./application/sync/sheetsContract/sheetsProvisioning.js", packageDist).href),
     import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", packageDist).href),
     import(new URL("./shared/encoding/index.js", packageDist).href),
     import("@hikoutei/ikisaki"),

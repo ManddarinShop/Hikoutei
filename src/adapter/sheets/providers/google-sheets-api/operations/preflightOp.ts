@@ -9,14 +9,14 @@
  * snapshot build target, failing closed on unknown read modes.
  */
 
-import type { ReadSyncSnapshotRequest } from "../../../../../application/sync/sheets/syncSheets.js";
-import { requireSyncSnapshotReadMode } from "../../../../../application/sync/sheets/validation.js";
+import type { ReadSyncSnapshotRequest } from "../../../../../application/sync/sheetsContract/syncSheets.js";
+import { requireSyncSnapshotReadMode } from "../../../../../application/sync/sheetsContract/validation.js";
 import {
   SYNC_SNAPSHOT_READ_MODES,
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheets/constants.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../../../../../application/sync/sheets/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheets/sheetsProvisioning.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
+import { SYNC_SHEETS_ERROR_CODES } from "../../../../../application/sync/sheetsContract/errors.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
 import type { Presence } from "../../../../../shared/state/index.js";
 import { invalidProviderRequest } from "../errors.js";
 import {

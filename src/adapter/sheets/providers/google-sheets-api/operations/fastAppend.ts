@@ -13,12 +13,12 @@ import {
   type FastAppendRowsResult,
   type FastAppendRow,
   type FastAppendRowResult,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../../application/sync/sheets/errors.js";
-import { SYNC_FAST_APPEND_STATUSES } from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/errors.js";
+import { SYNC_FAST_APPEND_STATUSES } from "../../../../../application/sync/sheetsContract/constants.js";
 import { absentValue } from "../../../../../shared/state/index.js";
 import { isNormalizedCell } from "../../../../../shared/encoding/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../constants.js";

@@ -14,7 +14,7 @@ import {
   type NormalizedCellKind,
 } from "../../../shared/encoding/constants.js";
 import { isRecord } from "../../../shared/encoding/typeGuards.js";
-import { SYNC_PROJECTIONS } from "../../sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../../sync/sheetsContract/constants.js";
 import type {
   TypedSheetsEntityFieldCodec,
   TypedSheetsEntityFieldMapping,

@@ -18,7 +18,7 @@ import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncProjectionEffect,
-} from "../src/application/sync/sheets/syncSheets.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
 import {
   chunkEffectGroups,
   EFFECT_BATCH_LIMIT,

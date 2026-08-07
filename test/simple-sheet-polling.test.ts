@@ -10,8 +10,8 @@ import { pollSimpleSheetRowsWithAdapter } from "../src/application/sync/inbound/
 import type {
   SyncSheetsTableReader,
   SyncTableRowsResult,
-} from "../src/application/sync/sheets/syncSheets.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheets/sheetsProvisioning.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 
 const TestEntitySchema = defineEntity({
   name: "SimpleSheetPollingTestEntity",

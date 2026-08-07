@@ -19,7 +19,7 @@
  * - `plannerReceipt` — receipt construction and result encoding
  */
 
-import { computeSyncVisibleHash, type SyncProjectionEffect, type ApplySyncEffectsRequest } from "../../../../../application/sync/sheets/syncSheets.js";
+import { computeSyncVisibleHash, type SyncProjectionEffect, type ApplySyncEffectsRequest } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
 import { APPLICABILITY_KINDS, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";

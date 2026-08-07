@@ -13,7 +13,7 @@ import type {
   SyncObservedSnapshot,
   SyncSheetsObservationProvider,
   SyncTableRowsResult,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   emptySyncTimingOperationCounts,
   SYNC_TIMING_SCOPES,
@@ -22,11 +22,11 @@ import {
 import {
   isSyncSheetsTableReader,
   observeSyncSnapshots,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import type {
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingRegistry,

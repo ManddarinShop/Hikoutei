@@ -44,22 +44,22 @@ import {
 import type {
   SyncSheetsProvisioner,
   RegisteredSyncProjectionDefinition,
-} from "../sheets/sheetsProvisioning.js";
+} from "../sheetsContract/sheetsProvisioning.js";
 import {
   provisionRegisteredSyncSheets,
-} from "../sheets/sheetsProvisioning.js";
+} from "../sheetsContract/sheetsProvisioning.js";
 import {
   registerSyncConflictProjectionRoutes,
-} from "../sheets/conflictProjectionRegistration.js";
+} from "../sheetsContract/conflictProjectionRegistration.js";
 import {
   autoResolveExistingMappedConflictsWithAdapter,
   retryOpenMappedConflictsWithAdapter,
 } from "../inbound/autoSystemConflictResolution.js";
-import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheets/syncSheets.js";
+import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheetsContract/syncSheets.js";
 import {
   CoordinatedSheetsProvider,
-} from "../sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
-import type { CoordinatorLaneEvent } from "../sheets/mutationCoordinator/laneTelemetry.js";
+} from "../sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
+import type { CoordinatorLaneEvent } from "../sheetsContract/mutationCoordinator/laneTelemetry.js";
 import {
   GoogleSheetsApiSyncProvider,
   type GoogleSheetsApiProviderOptions,

@@ -18,7 +18,7 @@ import {
   registerSyncSheetWithSql,
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheets/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
