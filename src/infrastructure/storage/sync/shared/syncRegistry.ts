@@ -16,7 +16,7 @@ import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persist
 import {
   isFencingValidWithSql,
   type FencingContext,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 
 const READ_LOGICAL_SHEET_REGISTRATION_SQL = `
   SELECT schema_version, ownership_manifest_json, business_key_field, anchor_mode, enabled

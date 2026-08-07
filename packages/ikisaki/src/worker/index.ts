@@ -1,5 +1,5 @@
 /**
- * @hikoutei/outbox worker — the generic effect delivery worker.
+ * @hikoutei/ikisaki worker — the generic effect delivery worker.
  *
  * The worker owns selection, claiming, grouping, lease refresh, transitions,
  * and recovery against the kernel. It knows nothing about effect payloads:

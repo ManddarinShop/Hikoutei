@@ -20,7 +20,7 @@ import {
   fenceParameters,
   isFencingValidWithSql,
   type FencingContext,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import { auditJson } from "./observationAudit.js";
 import type { ObservationIntegrityDiscriminator } from "./observationConstants.js";
 import type { PersistObservedRowInput } from "./observationTypes.js";

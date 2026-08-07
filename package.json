@@ -1,7 +1,7 @@
 {
   "name": "hikoutei",
-  "version": "0.4.6",
-  "description": "Hikoutei — typed repository and safe write layer for Google Sheets-backed MVPs.",
+  "version": "0.4.8",
+  "description": "Typed repository and safe write layer for Google Sheets-backed MVPs. SQLite-authoritative entity lifecycle with asynchronous Google Sheets projection.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git"
@@ -27,14 +27,19 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run build -w @hikoutei/outbox && npm run clean && tsc -p tsconfig.json",
-    "typecheck": "npm run build -w @hikoutei/outbox && tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "npm run build -w @hikoutei/outbox && tsc -p tsconfig.test.json && tsc -p packages/outbox/tsconfig.test.json",
-    "test": "npm run build -w @hikoutei/outbox && vitest run"
+    "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json",
+    "typecheck": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json",
+    "test": "npm run build -w @hikoutei/ikisaki && vitest run"
   },
   "keywords": [
     "google-sheets",
+    "spreadsheet",
+    "google sheets orm",
+    "sqlite",
+    "sync",
     "typescript",
+    "orm",
     "repository",
     "optimistic-locking"
   ],
@@ -44,8 +49,8 @@
   ],
   "dependencies": {
     "@googleapis/sheets": "^14.0.0",
+    "@hikoutei/ikisaki": "0.1.0",
     "@hikoutei/kohkai": "0.1.0",
-    "@hikoutei/outbox": "0.1.0",
     "google-auth-library": "^11.0.0"
   },
   "devDependencies": {

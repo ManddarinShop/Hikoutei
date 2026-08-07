@@ -16,7 +16,7 @@ import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import { ROW_OPERATIONS } from "../../../../domain/model/constants.js";
 import { EMPTY_STRING_LENGTH_ZERO } from "../../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
-import type { NewEffect } from "@hikoutei/outbox";
+import type { NewEffect } from "@hikoutei/ikisaki";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   OBSERVED_PROJECTION_EVIDENCE_SOURCES,

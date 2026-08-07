@@ -16,7 +16,7 @@ import type {
   FencingContext,
   PendingEffect,
   Presence,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import {
   DispatchTransportError,
   type ApplyEffectResult,
@@ -29,7 +29,7 @@ import {
   type FastAppendOutcome,
   type Postcondition,
   type PostconditionOutcome,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import type { SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
 import {
   CONFLICT_STATUSES,

@@ -1,5 +1,5 @@
 /**
- * @hikoutei/outbox — the Hikoutei consistency queue kernel.
+ * @hikoutei/ikisaki — the Hikoutei consistency queue kernel.
  *
  * A delivery queue bound to the business transaction, with durability,
  * ordering, idempotency, and recovery contracts. The kernel owns its SQL

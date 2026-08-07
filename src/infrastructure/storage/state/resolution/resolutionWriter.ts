@@ -27,7 +27,7 @@ import {
   supersedeAndReplanWithSql,
   type FencingContext,
   type NewEffect,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import { readMappedLatestProjectionEffectWithSql } from "../mapped/mappedPersistenceSql.js";
 import { fromSqlNullable } from "../../sqlite/sqlState.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";

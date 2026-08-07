@@ -45,7 +45,7 @@ const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, prov
     import(new URL("./application/sync/sheets/sheetsProvisioning.js", packageDist).href),
     import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", packageDist).href),
     import(new URL("./shared/encoding/index.js", packageDist).href),
-    import("@hikoutei/outbox"),
+    import("@hikoutei/ikisaki"),
   ]);
 const { defineTypedSheetsEntityMapping } = mapping;
 const { registeredTypedSheetsProjectionDefinitions, registerTypedSheetsEntityMappings } = flush;

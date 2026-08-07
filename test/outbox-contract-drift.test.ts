@@ -1,5 +1,5 @@
 /**
- * Contract-drift guard between the @hikoutei/outbox kernel package and the
+ * Contract-drift guard between the @hikoutei/ikisaki kernel package and the
  * host application.
  *
  * The kernel is compiled and published independently of the host, but several
@@ -18,7 +18,7 @@ import {
   EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
   EFFECT_TARGET_KINDS as KERNEL_EFFECT_TARGET_KINDS,
   STORAGE_ERROR_CODES as KERNEL_STORAGE_ERROR_CODES,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import {
   EFFECT_KINDS as HOST_EFFECT_KINDS,
   EFFECT_STATUSES as HOST_EFFECT_STATUSES,
