@@ -1,0 +1,34 @@
+name: NPM token diagnostic (temporary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Set up Node.js with registry auth
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Print npm account behind NPM_TOKEN
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NPM_TOKEN secret is empty or missing"
+            exit 1
+          fi
+          echo "npm whoami:"
+          npm whoami 2>&1 || echo "(whoami failed)"
+          echo "---"
+          echo "@hikoutei/kohkai maintainers (public):"
+          npm view @hikoutei/kohkai maintainers 2>&1 || echo "(view failed)"
