@@ -74,6 +74,7 @@ export function createMappedTypedSheetsFlushCoordinator(
       const operationCounts = countsForPlans(plans);
       const leaseStartedAt = Date.now();
       const now = writer.now();
+      // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
       const claim = await claimWriterLeaseWithSql(context.sql, {
         role: writer.role,
         writerId: writer.writerId,
@@ -132,6 +133,7 @@ export async function registerTypedSheetsEntityMappings(
 
   return storage.transaction(async ({ sql }) => {
     const now = writer.now();
+    // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,

@@ -1,0 +1,13 @@
+{
+  "name": "hikoutei-example-express",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "tsx src/server.ts" },
+  "dependencies": {
+    "express": "^4.19.0",
+    "hikoutei": "latest",
+    "@mikro-orm/core": "7.1.7",
+    "@mikro-orm/sql": "7.1.7"
+  },
+  "devDependencies": { "tsx": "^4.7.0", "typescript": "^5.5.0" }
+}

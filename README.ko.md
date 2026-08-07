@@ -122,6 +122,28 @@ Google Sheets 동기화는 서비스 측 관심사입니다. 애플리케이션�
 하나의 Google Sheets API provider(내부 `googleSheetsApi` bootstrap 옵션)를
 사용합니다 — Apps Script 배포가 없습니다.
 
+### 환경 변수 기반 동기화 자동 시작
+
+스프레드시트 URL을 환경 변수로 설정하면 `createTypedSheets()`가 내부적으로
+Sheets 동기화를 시작합니다 — `flush()`는 설정 코드 없이 outbox worker를 통해
+Google Sheets로 흘러갑니다:
+
+```sh
+HIKOUTEI_SYNC_SPREADSHEET_URL=https://docs.google.com/spreadsheets/d/<ID>/edit
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+```
+
+```ts
+const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities: [User] });
+```
+
+`HIKOUTEI_SYNC_SPREADSHEET_URL`이 없으면 `createTypedSheets()`는 로컬 전용
+(SQLite)으로 유지됩니다. 시작 실패는 명확한 메시지로 진단됩니다: 잘못된 URL,
+없거나 잘못된 자격 증명 파일, 스프레드시트에 공유되지 않은 서비스 계정
+(어떤 이메일을 공유해야 하는지 에러가 알려줍니다).
+
+### Service-account provider (googleSheetsApi)
+
 1. **서비스 계정을 만듭니다.** Cloud 프로젝트에서 Google Sheets API를
    활성화하고, `https://www.googleapis.com/auth/spreadsheets` 스코프의
    서비스 계정을 만든 뒤 대상 스프레드시트를 해당 이메일에 **편집자(Editor)**로

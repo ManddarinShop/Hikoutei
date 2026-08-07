@@ -34,6 +34,12 @@ const TAKEOVER_WRITER_LEASE_SQL = `
   WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until <= ?
 `;
 
+const RELEASE_WRITER_LEASE_SQL = `
+  UPDATE writer_lease
+  SET lease_until = ?
+  WHERE role = ? AND writer_id = ? AND writer_epoch = ? AND fencing_token = ?
+`;
+
 export interface WriterLease {
   readonly role: string;
   readonly writerId: string;
@@ -78,6 +84,15 @@ export interface ClaimLeaseOptions {
   readonly role: string;
   readonly writerId: string;
   readonly leaseDurationMs: number;
+  readonly now: number;
+}
+
+/** Identity of one writer lease a runtime may expire on graceful shutdown. */
+export interface ReleaseWriterLeaseOptions {
+  readonly role: string;
+  readonly writerId: string;
+  readonly writerEpoch: number;
+  readonly fencingToken: string;
   readonly now: number;
 }
 
@@ -201,6 +216,43 @@ export async function claimWriterLeaseWithAdapter(
   return storage.transaction(({ sql }) => claimWriterLeaseWithSql(sql, options));
 }
 
+/**
+ * Expires the caller's own writer lease inside an already-active async SQL context.
+ *
+ * Graceful-shutdown handoff: the UPDATE is CAS-guarded on the exact lease row
+ * this writer holds (role, writer id, epoch, fencing token), so an abnormal
+ * exit or a concurrent takeover never expires another writer's lease. The row
+ * is kept, never deleted, because spreadsheet-authority records compare epoch
+ * ordering: deleting the row would reset the epoch to 1 and leave the recorded
+ * authority permanently fenced out. The next claim funnels into the existing
+ * TAKEOVER path and bumps the epoch by one.
+ *
+ * Returns true when this writer's own lease row was expired, false when the
+ * row is absent or already owned by a different (newer) writer.
+ */
+export async function releaseWriterLeaseWithSql(
+  sql: SqlExecutor,
+  options: ReleaseWriterLeaseOptions,
+): Promise<boolean> {
+  validateReleaseOptions(options);
+  const result = await sql.run(RELEASE_WRITER_LEASE_SQL, [
+    options.now,
+    options.role,
+    options.writerId,
+    options.writerEpoch,
+    options.fencingToken,
+  ]);
+  return result.changes === 1;
+}
+
+/** Expires the caller's own writer lease in one adapter-owned transaction. */
+export async function releaseWriterLeaseWithAdapter(
+  storage: SqlStorageAdapter,
+  options: ReleaseWriterLeaseOptions,
+): Promise<boolean> {
+  return storage.transaction(({ sql }) => releaseWriterLeaseWithSql(sql, options));
+}
+
 /** Reads a writer lease through an already-active async SQL context. */
 export async function readWriterLeaseWithSql(
   sql: SqlExecutor,
@@ -274,7 +326,10 @@ function makeLease(
     writerId,
     writerEpoch,
     // Include the owner identity as well as the monotonically increasing epoch;
-    // equal epochs from different roles must never share a remote authority token.
+    // the token is unique per (epoch, writer identity). Roles of one runtime
+    // may legitimately share it at an equal epoch (the mapped writer and the
+    // effect worker default to the same writer id); FENCE_EXISTS_SQL still
+    // keeps the roles distinct because it matches the role column too.
     fencingToken: `fence-${writerEpoch}:${writerId}`,
     leaseUntil,
   };
@@ -291,6 +346,27 @@ function validateClaimOptions(options: ClaimLeaseOptions): void {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS,
       "writer lease duration must be a positive safe integer",
+    );
+  }
+  if (options.role.length === 0 || options.writerId.length === 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS,
+      "writer lease role and writer ID are required",
+    );
+  }
+}
+
+function validateReleaseOptions(options: ReleaseWriterLeaseOptions): void {
+  if (!Number.isSafeInteger(options.now) || options.now < 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS,
+      "writer lease now must be a non-negative safe integer",
+    );
+  }
+  if (!Number.isSafeInteger(options.writerEpoch)) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS,
+      "writer lease epoch must be a safe integer",
     );
   }
   if (options.role.length === 0 || options.writerId.length === 0) {

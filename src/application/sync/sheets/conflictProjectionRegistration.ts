@@ -47,6 +47,7 @@ export async function registerSyncConflictProjectionRoutes(
   }
 
   return storage.transaction(async ({ sql }) => {
+    // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,

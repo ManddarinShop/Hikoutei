@@ -125,6 +125,28 @@ Google Sheets の同期はサービス側の関心事です。アプリケーシ
 使う単一の Google Sheets API provider(内部 `googleSheetsApi` bootstrap オプ
 ション)を使用します — Apps Script のデプロイは不要です。
 
+### 環境変数による同期の自動開始
+
+スプレッドシートの URL を環境変数に設定すると、`createTypedSheets()` が内部で
+Sheets 同期を開始します — `flush()` はセットアップコードなしで outbox
+ワーカー経由で Google Sheets に流れます:
+
+```sh
+HIKOUTEI_SYNC_SPREADSHEET_URL=https://docs.google.com/spreadsheets/d/<ID>/edit
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+```
+
+```ts
+const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities: [User] });
+```
+
+`HIKOUTEI_SYNC_SPREADSHEET_URL` がない場合、`createTypedSheets()` はローカル
+専用 (SQLite) のままです。起動失敗は明確なメッセージで診断されます: URL の
+不正、資格情報ファイルの欠落・不正、スプレッドシートに共有されていない
+サービスアカウント (共有すべきメールアドレスをエラーが教えてくれます)。
+
+### Service-account provider (googleSheetsApi)
+
 1. **サービスアカウントを作成する。** Cloud プロジェクトで Google Sheets API
    を有効化し、`https://www.googleapis.com/auth/spreadsheets` スコープの
    サービスアカウントを作成して、対象スプレッドシートをそのメールアドレスに

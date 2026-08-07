@@ -2,7 +2,7 @@
  * MikroORM bridge for applying accepted Sheet observations to mapped entities.
  *
  * It deliberately uses MikroORM's native write methods rather than the public
- * Unit of Work(작업 단위). The observation has already created its canonical and
+ * Unit of Work. The observation has already created its canonical and
  * outbox records, and replaying `onFlush` here would incorrectly schedule a
  * second outbound Sheets projection.
  */
@@ -54,7 +54,7 @@ export interface PersistMappedObservedRowOptions {
  * Persists a normalized observation and the matching MikroORM entity mutation
  * in one SQLite transaction.
  *
- * Only a `persisted`(저장 완료) observation with a present canonical commit can
+ * Only a `persisted` observation with a present canonical commit can
  * change the entity table. Duplicate, quarantined, stale, fenced-out, and
  * conflict-only observations leave application entities untouched.
  */
