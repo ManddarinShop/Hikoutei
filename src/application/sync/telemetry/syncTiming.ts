@@ -19,7 +19,7 @@ import {
   type TimingEvent,
   type TimingOperationCounts,
   type TimingOperationKind,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 
 /** Host diagnostic scopes: the package worker/provider scopes plus host-only phases. */
 export const SYNC_TIMING_SCOPES = {

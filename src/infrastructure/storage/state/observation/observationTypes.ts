@@ -18,7 +18,7 @@ import type {
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import { CANONICAL_COMMIT_RESULT_KINDS } from "../canonical/canonicalCommit.js";
 import type { CanonicalCommitInput, CanonicalCommitResult } from "../canonical/canonicalCommit.js";
-import type { NewEffect } from "@hikoutei/outbox";
+import type { NewEffect } from "@hikoutei/ikisaki";
 import { OBSERVATION_WRITE_RESULT_KINDS } from "./observationConstants.js";
 import type {
   ObservationDuplicateReason,
