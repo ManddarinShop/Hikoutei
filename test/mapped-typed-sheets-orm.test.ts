@@ -14,7 +14,7 @@ import {
   NORMALIZED_CELL_KINDS,
 } from "../src/shared/encoding/constants.js";
 import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
@@ -28,7 +28,7 @@ import {
 } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { persistMappedObservedRowWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
-import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheets/syncSheets.js";
+import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
 import type { PersistObservedRowInput } from "../src/infrastructure/storage/index.js";
 
 const OrderSchema = defineEntity({

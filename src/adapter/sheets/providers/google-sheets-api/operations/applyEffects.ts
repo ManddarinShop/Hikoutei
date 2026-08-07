@@ -17,8 +17,8 @@ import type {
   SyncEffectPostconditionResult,
   SyncEffectResult,
   SyncProjectionEffect,
-} from "../../../../../application/sync/sheets/syncSheets.js";
-import { SYNC_POSTCONDITION_MODES } from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+import { SYNC_POSTCONDITION_MODES } from "../../../../../application/sync/sheetsContract/constants.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";

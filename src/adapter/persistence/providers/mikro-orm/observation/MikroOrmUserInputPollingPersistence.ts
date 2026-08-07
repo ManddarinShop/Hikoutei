@@ -23,7 +23,7 @@ import {
 import { QUARANTINE_REASONS } from "../../../../../domain/model/constants.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   createTypedSheetsEntityOwnershipManifest,
   requireTypedSheetsEntityProjection,

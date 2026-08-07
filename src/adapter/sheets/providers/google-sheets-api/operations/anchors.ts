@@ -10,7 +10,7 @@
 import type {
   EnsureSyncRowAnchorsRequest,
   EnsureSyncRowAnchorsResult,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { GOOGLE_SHEETS_API_ANCHOR_KEY } from "../constants.js";
 import { invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";

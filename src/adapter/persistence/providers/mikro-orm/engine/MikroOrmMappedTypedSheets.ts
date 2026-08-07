@@ -21,7 +21,7 @@ import type {
   TypedSheetsEntityWriterOptions,
 } from "../../../../../application/orm/persistence/support/contracts.js";
 import type { TypedSheetsOrm } from "../../../../../application/orm/api/TypedSheetsOrm.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheets/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
 import {
   createTypedSheetsOrm,
 } from "./MikroOrmTypedSheetsEngine.js";

@@ -45,16 +45,16 @@ import type {
   SyncSheetsTableReader,
   SyncProjectionEffect,
   SyncTableRowsResult,
-} from "../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../application/sync/sheets/errors.js";
+} from "../../../../application/sync/sheetsContract/errors.js";
 import type {
   RegisteredSyncProjectionDefinition,
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../../../../application/sync/sheets/sheetsProvisioning.js";
+} from "../../../../application/sync/sheetsContract/sheetsProvisioning.js";
 import type { Presence } from "../../../../shared/state/index.js";
 import {
   GOOGLE_SHEETS_API_DEFAULTS,

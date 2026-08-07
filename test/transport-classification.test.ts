@@ -7,7 +7,7 @@ import {
   TRANSPORT_OUTCOME_KINDS,
   classifyTransportOutcome,
   isDeliveryUncertainOutcome,
-} from "../src/application/sync/sheets/transportOutcome.js";
+} from "../src/application/sync/sheetsContract/transportOutcome.js";
 import { absentValue, presentValue } from "../src/shared/state/index.js";
 
 function transportError(

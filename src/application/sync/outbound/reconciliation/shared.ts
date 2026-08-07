@@ -14,7 +14,7 @@ import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js"
 import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import type { SyncSheetsProvider } from "../../sheets/syncSheets.js";
+import type { SyncSheetsProvider } from "../../sheetsContract/syncSheets.js";
 
 export const DEFAULT_RECONCILIATION_ROLE = "typed-sheets-reconciler";
 export const DEFAULT_RECONCILIATION_LEASE_MS = 60_000;

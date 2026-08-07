@@ -23,14 +23,14 @@ import {
 } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
 import { inspectFastPollingTable } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";
 import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import { SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheets/constants.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheets/constants.js";
+import { SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import type {
   SyncObservedSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
   SyncTableRowsResult,
-} from "../src/application/sync/sheets/syncSheets.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
 
 interface Probe {
   readonly id: string;

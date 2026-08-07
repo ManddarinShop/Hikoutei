@@ -14,11 +14,11 @@ import {
   type NormalizedCell,
 } from "../../../../domain/index.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
-import { SYNC_PROJECTIONS } from "../../../sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../../../sync/sheetsContract/constants.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../../../sync/sheets/syncSheets.js";
+} from "../../../sync/sheetsContract/syncSheets.js";
 import {
   createCandidateReconcileEffect,
   createSystemProjectionEffect,

@@ -8,7 +8,7 @@
  * fails, or keeps probing instead of closing the outbox on weak evidence.
  */
 
-import type { SyncEffectPostcondition, SyncProjectionEffect } from "../../../../../application/sync/sheets/syncSheets.js";
+import type { SyncEffectPostcondition, SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import type { PreflightContext, PreflightReceipt } from "./preflight.js";

@@ -18,13 +18,13 @@ import {
   STORAGE_ERROR_CODES,
   StorageError,
 } from "../../../../infrastructure/storage/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../../sheets/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "../../sheetsContract/sheetsProvisioning.js";
 import type {
   ReadSyncTableRowsRequest,
   SyncSheetsTableReader,
   SyncTableRow,
   SyncTableRowsResult,
-} from "../../sheets/syncSheets.js";
+} from "../../sheetsContract/syncSheets.js";
 
 const READ_CANONICAL_ROWS_SQL = `
   SELECT binding.logical_sheet_id, entity.entity_id, entity.status AS entity_status,

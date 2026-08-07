@@ -5,7 +5,7 @@ import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import { inspectFastPollingTable } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";
 import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import type { SyncTableRowsResult } from "../src/application/sync/sheets/syncSheets.js";
+import type { SyncTableRowsResult } from "../src/application/sync/sheetsContract/syncSheets.js";
 
 interface Probe {
   readonly id: string;

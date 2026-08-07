@@ -14,7 +14,7 @@ import type { Presence } from "../../../../shared/state/index.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../application/sync/sheets/errors.js";
+} from "../../../../application/sync/sheetsContract/errors.js";
 
 /** Stable transport error categories emitted by the direct provider. */
 export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {

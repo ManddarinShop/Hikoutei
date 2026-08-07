@@ -14,22 +14,22 @@ import { describe, expect, it } from "vitest";
 
 import type { NormalizedCell } from "../src/domain/index.js";
 import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheets/syncSheets.js";
+import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
 import type {
   ApplySyncEffectsRequest,
   FastAppendRow,
   SyncProjectionEffect,
-} from "../src/application/sync/sheets/syncSheets.js";
-import { SYNC_POSTCONDITION_MODES } from "../src/application/sync/sheets/constants.js";
-import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheets/transportOutcome.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
+import { SYNC_POSTCONDITION_MODES } from "../src/application/sync/sheetsContract/constants.js";
+import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
 import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import { serializeBatchUpdateRequests } from "../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "../src/adapter/sheets/providers/google-sheets-api/model/preflight.js";
 import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
 import { classifyGoogleSheetsApiError } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheets/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheets/sheetsProvisioning.js";
+import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
+import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,

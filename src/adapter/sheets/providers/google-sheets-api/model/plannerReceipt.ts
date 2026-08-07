@@ -7,8 +7,8 @@
  * deferred-mode postcondition relabeling.
  */
 
-import type { SyncEffectResult, SyncProjectionEffect } from "../../../../../application/sync/sheets/syncSheets.js";
-import { SYNC_EFFECT_RESULT_STATUSES, SYNC_POSTCONDITION_STATUSES } from "../../../../../application/sync/sheets/constants.js";
+import type { SyncEffectResult, SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
+import { SYNC_EFFECT_RESULT_STATUSES, SYNC_POSTCONDITION_STATUSES } from "../../../../../application/sync/sheetsContract/constants.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import type { PlannedOutcome, PlannedReceipt } from "./planner.js";
 

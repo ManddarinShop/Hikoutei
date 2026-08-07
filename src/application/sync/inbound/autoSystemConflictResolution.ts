@@ -19,10 +19,10 @@ import {
 import { stableHash } from "../../../shared/encoding/stableEncode.js";
 import {
   SYNC_PROJECTIONS,
-} from "../sheets/constants.js";
+} from "../sheetsContract/constants.js";
 import {
   syncConflictProjectionFields,
-} from "../sheets/conflictProjection.js";
+} from "../sheetsContract/conflictProjection.js";
 import {
   createCandidateReconcileEffect,
   createResolutionProjectionEffect,
@@ -43,7 +43,7 @@ import type {
 } from "../../orm/persistence/support/contracts.js";
 import {
   parseSyncProjectionEffectPayload,
-} from "../sheets/syncSheets.js";
+} from "../sheetsContract/syncSheets.js";
 import type {
   PersistObservedRowInput,
 } from "../../../infrastructure/storage/state/observation/observationTypes.js";

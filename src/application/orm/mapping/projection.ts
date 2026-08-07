@@ -11,7 +11,7 @@ import {
   type FieldManifestEntry,
   type OwnershipManifest,
 } from "../../../domain/index.js";
-import { SYNC_PROJECTIONS } from "../../sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../../sync/sheetsContract/constants.js";
 import type { RegisterSyncSheetInput, RegisteredProjection } from "../../../infrastructure/storage/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

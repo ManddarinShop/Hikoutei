@@ -11,7 +11,7 @@ import {
 } from "../../../domain/index.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../sync/sheets/constants.js";
+} from "../../sync/sheetsContract/constants.js";
 import type { RegisterSyncSheetInput } from "../../../infrastructure/storage/index.js";
 import type { TypedSheetsEntityReference } from "../api/contracts.js";
 import type { NormalizedCellKind } from "../../../shared/encoding/constants.js";

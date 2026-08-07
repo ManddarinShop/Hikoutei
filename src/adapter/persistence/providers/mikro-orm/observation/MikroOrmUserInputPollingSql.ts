@@ -5,7 +5,7 @@ import {
 } from "../../../../../domain/index.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   type TypedSheetsEntityMapping,

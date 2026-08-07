@@ -17,8 +17,8 @@ import {
 import { isRecord } from "../../../../shared/encoding/typeGuards.js";
 import type { NewEffect } from "../../../../infrastructure/storage/index.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
-import { computeSyncVisibleHash } from "../../sheets/syncSheets.js";
-import { SYNC_PROJECTIONS } from "../../sheets/constants.js";
+import { computeSyncVisibleHash } from "../../sheetsContract/syncSheets.js";
+import { SYNC_PROJECTIONS } from "../../sheetsContract/constants.js";
 import { createSystemProjectionEffect } from "../projection/ProjectionEffectFactory.js";
 import {
   READ_LATEST_EFFECT_SQL,

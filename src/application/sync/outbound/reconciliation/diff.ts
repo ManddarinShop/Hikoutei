@@ -17,7 +17,7 @@ import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js"
 import {
   computeSyncVisibleHash,
   type SyncSheetsSnapshot,
-} from "../../sheets/syncSheets.js";
+} from "../../sheetsContract/syncSheets.js";
 import type { DesiredRow } from "./shared.js";
 
 export type DriftKind = "drifted" | "missing";

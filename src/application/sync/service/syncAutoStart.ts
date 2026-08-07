@@ -43,8 +43,8 @@ import { columnLetters } from "../../../adapter/sheets/providers/google-sheets-a
 import { PRESENCE_KINDS } from "../../../shared/state/index.js";
 import {
   SYNC_CONFLICT_PROJECTION_REGISTERED_RANGE,
-} from "../sheets/conflictProjection.js";
-import { SyncSheetsContractError } from "../sheets/errors.js";
+} from "../sheetsContract/conflictProjection.js";
+import { SyncSheetsContractError } from "../sheetsContract/errors.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,

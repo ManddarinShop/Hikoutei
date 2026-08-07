@@ -9,12 +9,12 @@
  * here because every operation shares them.
  */
 
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheets/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../../application/sync/sheets/errors.js";
-import { classifyTransportOutcome } from "../../../../../application/sync/sheets/transportOutcome.js";
+} from "../../../../../application/sync/sheetsContract/errors.js";
+import { classifyTransportOutcome } from "../../../../../application/sync/sheetsContract/transportOutcome.js";
 import { presentValue, absentValue, type Presence } from "../../../../../shared/state/index.js";
 import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";

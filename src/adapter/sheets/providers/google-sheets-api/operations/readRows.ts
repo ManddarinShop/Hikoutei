@@ -15,15 +15,15 @@ import type {
   SyncObservedSnapshot,
   SyncSheetsSnapshot,
   SyncTableRowsResult,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../../application/sync/sheets/errors.js";
+} from "../../../../../application/sync/sheetsContract/errors.js";
 import {
   SYNC_SNAPSHOT_READ_MODES,
   type SyncSnapshotReadMode,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS,
   GOOGLE_SHEETS_API_OBSERVATION_FIELDS,

@@ -63,8 +63,8 @@ import {
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/sheets/syncSheets.js";
-import type { SyncProjectionEffect } from "../src/application/sync/sheets/syncSheets.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
+import type { SyncProjectionEffect } from "../src/application/sync/sheetsContract/syncSheets.js";
 import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";

@@ -15,11 +15,11 @@ import type {
   SyncObservedSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_PROTOCOL_VERSIONS,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,

@@ -17,10 +17,10 @@ import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";
 import type {
   SyncTableRowsResult,
   SyncTableRow,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,

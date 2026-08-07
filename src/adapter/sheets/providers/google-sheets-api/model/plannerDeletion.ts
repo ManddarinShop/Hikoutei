@@ -6,7 +6,7 @@
  * supported effect kinds for the apply-effects request validation.
  */
 
-import type { SyncProjectionEffect } from "../../../../../application/sync/sheets/syncSheets.js";
+import type { SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS, fullRowDeletionReason } from "../constants.js";
 import type { PreflightContext } from "./preflight.js";

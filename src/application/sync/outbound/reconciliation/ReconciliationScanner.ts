@@ -34,11 +34,11 @@ import {
   observeSyncSnapshot,
   type SyncSheetsSnapshot,
   type SyncSheetsProvider,
-} from "../../sheets/syncSheets.js";
+} from "../../sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../../sheets/constants.js";
+} from "../../sheetsContract/constants.js";
 import {
   DEFAULT_RECONCILIATION_LEASE_MS,
   DEFAULT_RECONCILIATION_ROLE,

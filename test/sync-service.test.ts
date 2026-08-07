@@ -16,11 +16,11 @@ import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "../src/infrastructure/storage/index.js";
 import { presentValue } from "../src/shared/state/index.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../src/application/sync/sheets/sheetsProvisioning.js";
+} from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncTimingEvent } from "../src/application/sync/telemetry/syncTiming.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
