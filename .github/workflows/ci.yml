@@ -96,7 +96,7 @@ jobs:
 
       - name: Upload installed-consumer reports (fake)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: hikoutei-fake-installed-consumer
           path: |

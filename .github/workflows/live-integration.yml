@@ -110,7 +110,7 @@ jobs:
 
       - name: Upload internal sync/provider E2E report (live, service account)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: hikoutei-live-google-sheets-direct
           path: |
