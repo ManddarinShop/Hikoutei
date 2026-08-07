@@ -477,6 +477,7 @@ async function claimMappedInboundWriterLease(
   writer: ResolvedWriterOptions,
 ): Promise<FencingContext> {
   const now = writer.now();
+  // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
   const claim = await claimWriterLeaseWithAdapter(storage, {
     role: writer.role,
     writerId: writer.writerId,

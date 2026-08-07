@@ -16,6 +16,7 @@ import {
   applyEffectResultWithSql,
   claimEffectWithAdapter,
   claimEffectWithSql,
+  claimWriterLeaseWithAdapter,
   claimWriterLeaseWithSql,
   findPendingEffectsByTargetWithSql,
   hasPendingOrProcessingEffectsWithSql,
@@ -24,7 +25,9 @@ import {
   listReadyFastAppendEffectsWithSql,
   markDeliveryUncertainWithAdapter,
   markDeliveryUncertainWithSql,
+  readWriterLeaseWithAdapter,
   recoverExpiredLeasesWithSql,
+  releaseWriterLeaseWithAdapter,
   renewEffectLeaseWithSql,
   retryClaimedEffectWithSql,
   STORAGE_ERROR_CODES,
@@ -36,12 +39,13 @@ import {
   type PendingEffect,
   type SqlExecutor,
 } from "../src/index.js";
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/index.js";
+import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS, WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/index.js";
 import {
   claimTestFence,
   createKernelStore,
   newEffect,
   TEST_NOW,
+  TEST_ROLE,
 } from "./support/kernelFixtures.js";
 import { NodeSqliteTestAdapter } from "./support/nodeSqliteAdapter.js";
 
@@ -779,6 +783,206 @@ describe("consistency-queue kernel", () => {
       const staleOk = await withSql(adapter, (sql) =>
         appendPendingEffectsWithSql(sql, fence, [newEffect()]));
       expect(staleOk).toBe(false);
+    });
+  });
+
+  describe("writer lease release", () => {
+    it("expires the owner's lease so a new writer takes over with epoch + 1", async () => {
+      const adapter = createKernelStore();
+      const first = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: 60_000,
+        now: TEST_NOW,
+      });
+      expect(first.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (first.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected claim");
+      expect(first.lease.writerEpoch).toBe(1);
+
+      const released = await releaseWriterLeaseWithAdapter(adapter, {
+        role: first.lease.role,
+        writerId: first.lease.writerId,
+        writerEpoch: first.lease.writerEpoch,
+        fencingToken: first.lease.fencingToken,
+        now: TEST_NOW,
+      });
+      expect(released).toBe(true);
+
+      // The next claim funnels into TAKEOVER: same wall-clock now is enough
+      // because release expired the row to the release timestamp.
+      const next = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-2",
+        leaseDurationMs: 60_000,
+        now: TEST_NOW,
+      });
+      expect(next.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (next.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected takeover");
+      expect(next.lease.writerEpoch).toBe(2);
+      expect(next.lease.fencingToken).toBe("fence-2:writer-2");
+      expect(next.lease.leaseUntil).toBe(TEST_NOW + 60_000);
+    });
+
+    it("does not expire a lease owned by a different writer", async () => {
+      const adapter = createKernelStore();
+      const first = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: 60_000,
+        now: TEST_NOW,
+      });
+      expect(first.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (first.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected claim");
+
+      const released = await releaseWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-9",
+        writerEpoch: first.lease.writerEpoch,
+        fencingToken: first.lease.fencingToken,
+        now: TEST_NOW,
+      });
+      expect(released).toBe(false);
+
+      // The row is untouched: same writer, epoch, and full lease window.
+      const lease = await readWriterLeaseWithAdapter(adapter, TEST_ROLE);
+      expect(lease.kind).toBe(LOOKUP_RESULT_KINDS.FOUND);
+      if (lease.kind !== LOOKUP_RESULT_KINDS.FOUND) throw new Error("expected lease row");
+      expect(lease.value.writerId).toBe("writer-1");
+      expect(lease.value.writerEpoch).toBe(1);
+      expect(lease.value.leaseUntil).toBe(TEST_NOW + 60_000);
+    });
+
+    it("does not expire a lease with a stale epoch or fencing token", async () => {
+      const adapter = createKernelStore();
+      const first = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: 60_000,
+        now: TEST_NOW,
+      });
+      expect(first.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (first.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected claim");
+
+      expect(await releaseWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        writerEpoch: first.lease.writerEpoch + 1,
+        fencingToken: first.lease.fencingToken,
+        now: TEST_NOW,
+      })).toBe(false);
+      expect(await releaseWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        writerEpoch: first.lease.writerEpoch,
+        fencingToken: "fence-1:other",
+        now: TEST_NOW,
+      })).toBe(false);
+
+      const lease = await readWriterLeaseWithAdapter(adapter, TEST_ROLE);
+      expect(lease.kind).toBe(LOOKUP_RESULT_KINDS.FOUND);
+      if (lease.kind !== LOOKUP_RESULT_KINDS.FOUND) throw new Error("expected lease row");
+      expect(lease.value.writerEpoch).toBe(1);
+      expect(lease.value.leaseUntil).toBe(TEST_NOW + 60_000);
+    });
+
+    it("returns false when no lease row exists", async () => {
+      const adapter = createKernelStore();
+      const released = await releaseWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        writerEpoch: 1,
+        fencingToken: "fence-1:writer-1",
+        now: TEST_NOW,
+      });
+      expect(released).toBe(false);
+    });
+
+    it("keeps epochs strictly increasing across repeated release/reclaim cycles", async () => {
+      const adapter = createKernelStore();
+      const epochs: number[] = [];
+      let writerId = "writer-1";
+      for (let cycle = 0; cycle < 4; cycle += 1) {
+        const claim = await claimWriterLeaseWithAdapter(adapter, {
+          role: TEST_ROLE,
+          writerId,
+          leaseDurationMs: 60_000,
+          now: TEST_NOW,
+        });
+        expect(claim.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+        if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected claim");
+        epochs.push(claim.lease.writerEpoch);
+        if (cycle < 3) {
+          expect(await releaseWriterLeaseWithAdapter(adapter, {
+            role: claim.lease.role,
+            writerId: claim.lease.writerId,
+            writerEpoch: claim.lease.writerEpoch,
+            fencingToken: claim.lease.fencingToken,
+            now: TEST_NOW,
+          })).toBe(true);
+        }
+        writerId = writerId === "writer-1" ? "writer-2" : "writer-1";
+      }
+      // The row is never deleted or reset: every release/reclaim round bumps
+      // the epoch exactly once through the TAKEOVER path.
+      expect(epochs).toEqual([1, 2, 3, 4]);
+    });
+
+    it("sends a same-writer re-claim after release through TAKEOVER instead of resetting", async () => {
+      const adapter = createKernelStore();
+      const first = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: 60_000,
+        now: TEST_NOW,
+      });
+      expect(first.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (first.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected claim");
+      expect(await releaseWriterLeaseWithAdapter(adapter, {
+        role: first.lease.role,
+        writerId: first.lease.writerId,
+        writerEpoch: first.lease.writerEpoch,
+        fencingToken: first.lease.fencingToken,
+        now: TEST_NOW,
+      })).toBe(true);
+
+      // The same writer re-claims through TAKEOVER (epoch + 1) because the row
+      // still exists; it must never be treated as a fresh INSERT with epoch 1.
+      const reclaim = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: 60_000,
+        now: TEST_NOW,
+      });
+      expect(reclaim.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (reclaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected same-writer takeover");
+      expect(reclaim.lease.writerEpoch).toBe(2);
+      expect(reclaim.lease.fencingToken).toBe("fence-2:writer-1");
+    });
+
+    it("rejects invalid release options with INVALID_WRITER_LEASE_OPTIONS", async () => {
+      const adapter = createKernelStore();
+      const base = {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        writerEpoch: 1,
+        fencingToken: "fence-1:writer-1",
+        now: TEST_NOW,
+      };
+      await expect(releaseWriterLeaseWithAdapter(adapter, {
+        ...base, now: -1,
+      })).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
+      await expect(releaseWriterLeaseWithAdapter(adapter, {
+        ...base, now: 1.5,
+      })).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
+      await expect(releaseWriterLeaseWithAdapter(adapter, {
+        ...base, writerEpoch: 1.5,
+      })).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
+      await expect(releaseWriterLeaseWithAdapter(adapter, {
+        ...base, role: "",
+      })).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
+      await expect(releaseWriterLeaseWithAdapter(adapter, {
+        ...base, writerId: "",
+      })).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
     });
   });
 });
