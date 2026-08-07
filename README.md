@@ -114,6 +114,26 @@ Google Sheets synchronization is a service-side concern. Applications do not
 import a provider client, pass Sheet routes to `createTypedSheets()`, call
 `setupSheets()`, or choose an operation for each write.
 
+### Env-driven sync auto-start
+
+Set the spreadsheet URL in the environment and `createTypedSheets()` starts
+the Sheets sync internally — `flush()` then flows to Google Sheets through
+the outbox worker with no per-call setup:
+
+```sh
+HIKOUTEI_SYNC_SPREADSHEET_URL=https://docs.google.com/spreadsheets/d/<ID>/edit
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+```
+
+```ts
+const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities: [User] });
+```
+
+Without `HIKOUTEI_SYNC_SPREADSHEET_URL`, `createTypedSheets()` stays
+local-only (SQLite). Startup failures are diagnosed with clear messages:
+invalid URL, missing/invalid credentials file, or a service account not
+shared on the spreadsheet (the error tells you which email to share).
+
 ### Service-account provider (googleSheetsApi)
 
 The sync runtime uses one Google Sheets API provider (the internal
