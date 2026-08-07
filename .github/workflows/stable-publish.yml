@@ -178,7 +178,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      # contents: write is required for the GITHUB_TOKEN to create a
+      # repository_dispatch event for the example verification workflows.
+      contents: write
       id-token: write
       packages: write
     steps:
@@ -317,3 +319,19 @@ jobs:
           npm publish "$RUNNER_TEMP/hikoutei-stable-gh-packages.tgz" \
             --registry=https://npm.pkg.github.com \
             --tag latest --access public
+
+      - name: Dispatch example verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          version="${version#develop-v}"
+          payload="{\"version\":\"$version\"}"
+          if ! gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=examples-verify \
+            -f client_payload="$payload" >/dev/null; then
+            echo "warning: failed to dispatch example verification for $version" >&2
+          fi

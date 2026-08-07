@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { serve } from "@hono/node-server";
 import { hikoutei, User, shutdown } from "./shared.js";
 
 const app = new Hono();
@@ -24,6 +25,12 @@ app.post("/users", async (c) => {
 });
 
 export default app;
+
+// The Hono app only wires routes; @hono/node-server bridges it to a Node
+// http server so `npm run start:hono` actually listens.
+serve({ fetch: app.fetch, port: 3000 }, (info) => {
+  console.log(`listening on http://localhost:${info.port}`);
+});
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getHikoutei, User } from "../../../lib/hikoutei.js";
+import { getHikoutei, User } from "../../../lib/hikoutei";
 
 export async function POST(request: Request) {
   const body = (await request.json()) as { id: string; name: string };
