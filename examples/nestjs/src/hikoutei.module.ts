@@ -1,4 +1,4 @@
-import { Global, Module, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { Global, Inject, Module, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { createTypedSheets, defineTypedSheetsEntity, type EntityManager } from "hikoutei";
 
 export const User = defineTypedSheetsEntity({
@@ -33,7 +33,7 @@ export type HikouteiRuntime = {
   exports: [HIKOUTEI, "EM"],
 })
 export class HikouteiModule implements OnModuleInit, OnModuleDestroy {
-  constructor(private readonly hikoutei: HikouteiRuntime) {}
+  constructor(@Inject(HIKOUTEI) private readonly hikoutei: HikouteiRuntime) {}
   async onModuleInit(): Promise<void> {}
   async onModuleDestroy(): Promise<void> {
     await this.hikoutei.close();

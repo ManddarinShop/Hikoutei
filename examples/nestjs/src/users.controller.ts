@@ -1,9 +1,9 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
 import { UsersService } from "./users.service.js";
 
 @Controller("users")
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(@Inject(UsersService) private readonly users: UsersService) {}
 
   @Post()
   async create(@Body() body: { id: string; name: string }) {
