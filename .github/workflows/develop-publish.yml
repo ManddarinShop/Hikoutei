@@ -162,7 +162,7 @@ jobs:
 
       - name: Upload develop installed-consumer reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: hikoutei-develop-fake-installed-consumer
           path: |
@@ -172,7 +172,7 @@ jobs:
 
       - name: Upload develop package
         if: success()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: hikoutei-develop-package
           path: ${{ runner.temp }}/hikoutei-develop-package
@@ -200,7 +200,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Download develop package
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: hikoutei-develop-package
           path: ${{ runner.temp }}/hikoutei-develop-package
