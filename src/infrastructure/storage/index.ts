@@ -34,7 +34,7 @@ export {
   isFencingValidWithSql,
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 export {
   ensureSpreadsheetAuthorityWithAdapter,
   ensureSpreadsheetAuthorityWithSql,
@@ -49,7 +49,7 @@ export type {
   WriterLeaseClaimFailureReason,
   WriterLeaseClaimResult,
   WriterLeaseClaimResultKind,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 export type {
   EnsureSpreadsheetAuthorityResult,
   SpreadsheetAuthority,
@@ -83,7 +83,7 @@ export {
   appendPendingEffectsWithAdapter,
   appendPendingEffectsWithSql,
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 export type {
   AppliedEffectResultOptions,
   ClaimResult,
@@ -96,7 +96,7 @@ export type {
   NewEffect,
   PendingEffect,
   RetryClaimedEffectOptions,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 
 export {
   persistObservedRowWithAdapter,
@@ -226,7 +226,7 @@ export {
   OUTBOX_EFFECT_STATUSES,
   runEffectWorkerWithAdapter,
   WORKER_ERROR_CODES,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 export type {
   AdaptiveEffectBatchControllerLike,
   ApplyEffectResult,
@@ -256,4 +256,4 @@ export type {
   WorkerReport,
   TimingEvent as WorkerTimingEvent,
   TimingSink as WorkerTimingSink,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";

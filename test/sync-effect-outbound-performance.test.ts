@@ -24,7 +24,7 @@ import {
   EFFECT_BATCH_LIMIT,
   groupEffectsByRoute,
   type ClaimedEffect,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
 import { SheetsEffectDispatcher, sheetsRouteKeyFor } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";

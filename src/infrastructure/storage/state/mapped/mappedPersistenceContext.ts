@@ -24,7 +24,7 @@ import {
   type FencingContext,
   type NewEffect,
   type WriterLeaseClaimResult,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import {
   registerSyncSheetWithSql,
   requireRegisteredSyncSheetWithSql,

@@ -12,15 +12,15 @@ import {
   REQUIRED_V5_COLUMNS as KERNEL_REQUIRED_V5_COLUMNS,
   VISIBLE_STATE_TABLES_DDL,
   WRITER_LEASE_DDL,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 
 /**
  * The outbox kernel owns the required-column contracts and the v5 probe
  * index for the durable delivery columns; the sheets-authority columns and
  * the remaining tables stay here.
  */
-export { REQUIRED_V3_COLUMNS } from "@hikoutei/outbox";
-export { syncSchemaV5IndexesDdl } from "@hikoutei/outbox";
+export { REQUIRED_V3_COLUMNS } from "@hikoutei/ikisaki";
+export { syncSchemaV5IndexesDdl } from "@hikoutei/ikisaki";
 
 /** Current durable schema version managed by the provider migration. */
 export const CURRENT_SCHEMA_VERSION = 5;

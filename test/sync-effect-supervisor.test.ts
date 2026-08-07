@@ -4,7 +4,7 @@ import { PRESENCE_KINDS } from "../src/shared/state/index.js";
 import {
   EffectWorkerSupervisor,
   type WorkerReport,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import type { ReconciliationScanReport } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
 
 describe("EffectWorkerSupervisor", () => {

@@ -77,7 +77,7 @@ import {
   safeErrorMessage,
   type EffectWorkerSupervisor,
   type WorkerReport,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../outbound/SheetsEffectDispatcher.js";
 import {
   MAPPED_USER_INPUT_POLL_MODES,

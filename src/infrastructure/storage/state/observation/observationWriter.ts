@@ -21,7 +21,7 @@ import {
   isFencingValidWithSql,
   type FencingContext,
   type NewEffect,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import {
   applyCanonicalMutationWithSql,

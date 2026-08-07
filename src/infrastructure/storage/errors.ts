@@ -1,14 +1,14 @@
 /**
  * Stable error categories shared by the storage layer.
  *
- * `StorageError` is the single class defined by `@hikoutei/outbox` and
+ * `StorageError` is the single class defined by `@hikoutei/ikisaki` and
  * re-exported here so host and kernel share one identity; this module keeps
  * the host's full code table (the kernel table is the shared subset) and the
  * host-wide `StorageErrorCode` type. Code strings are stable persisted
  * values and must never change.
  */
 
-export { StorageError } from "@hikoutei/outbox";
+export { StorageError } from "@hikoutei/ikisaki";
 
 /** Stable error categories shared by the storage layer. */
 export const STORAGE_ERROR_CODES = {

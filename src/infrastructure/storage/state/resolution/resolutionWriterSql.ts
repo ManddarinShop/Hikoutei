@@ -1,8 +1,8 @@
 /** SQL statements for the fenced resolution-command state machine. */
 
-import { FENCE_EXISTS_SQL } from "@hikoutei/outbox";
+import { FENCE_EXISTS_SQL } from "@hikoutei/ikisaki";
 
-export { FENCE_EXISTS_SQL } from "@hikoutei/outbox";
+export { FENCE_EXISTS_SQL } from "@hikoutei/ikisaki";
 
 export const FIND_EXISTING_COMMAND_SQL = `
   SELECT command_id, request_key, action, actor_id, role, target_conflict_id,

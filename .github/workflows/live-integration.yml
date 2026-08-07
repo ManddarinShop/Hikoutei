@@ -60,16 +60,16 @@ jobs:
           mkdir -p "$consumer_dir"
           pack_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
           pack_path="$RUNNER_TEMP/$pack_file"
-          # The root package depends on the private @hikoutei/outbox workspace
+          # The root package depends on the @hikoutei/ikisaki workspace
           # package; pack it too so the consumer install resolves locally.
-          outbox_pack_file="$(cd packages/outbox && npm pack --silent --pack-destination "$RUNNER_TEMP")"
-          outbox_pack_path="$RUNNER_TEMP/$outbox_pack_file"
+          ikisaki_pack_file="$(cd packages/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          ikisaki_pack_path="$RUNNER_TEMP/$ikisaki_pack_file"
 
           (
             cd "$consumer_dir"
             npm init -y >/dev/null
             npm install --no-audit --no-fund --ignore-scripts \
-              "$outbox_pack_path" \
+              "$ikisaki_pack_path" \
               "$pack_path" \
               "@mikro-orm/core@7.1.7" \
               "@mikro-orm/sql@7.1.7"

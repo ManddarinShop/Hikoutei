@@ -5,7 +5,7 @@ import {
   StorageError,
   validateApplyResultOptions,
   validateProjectionConfirmation,
-} from "@hikoutei/outbox";
+} from "@hikoutei/ikisaki";
 import { isCanonicalUtcIsoDate } from "../src/shared/validation.js";
 
 function rawPendingEffect(overrides: Record<string, unknown> = {}): Record<string, unknown> {
