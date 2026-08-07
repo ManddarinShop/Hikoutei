@@ -329,9 +329,11 @@ jobs:
           set -euo pipefail
           version="${TAG_NAME#v}"
           version="${version#develop-v}"
-          payload="{\"version\":\"$version\"}"
-          if ! gh api repos/${{ github.repository }}/dispatches \
-            -f event_type=examples-verify \
-            -f client_payload="$payload" >/dev/null; then
+          # The repository_dispatch API requires client_payload as a JSON
+          # object; -f would send it as a string and fail with HTTP 422, so
+          # the whole request body is passed through stdin as JSON.
+          body="{\"event_type\":\"examples-verify\",\"client_payload\":{\"version\":\"$version\"}}"
+          if ! printf '%s' "$body" | gh api repos/${{ github.repository }}/dispatches \
+            -X POST --input - >/dev/null; then
             echo "warning: failed to dispatch example verification for $version" >&2
           fi
