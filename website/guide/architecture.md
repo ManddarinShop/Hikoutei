@@ -1,0 +1,85 @@
+---
+title: Architecture
+description: SQLite is the application authority; Google Sheets is an asynchronous human-facing projection. Entity lifecycle, sync service, and source boundaries.
+---
+
+# Architecture
+
+Hikoutei owns a local SQLite entity store and exposes Google Sheets as an
+asynchronous human-facing projection. SQLite is the authority; Sheets is an
+internal service-side projection and human input surface.
+
+## System shape
+
+```text
+Application code
+  └─ hikoutei root API
+       └─ EntityManager
+            └─ SQLite entity tables
+                 └─ [internal sync service in the same process]
+                      ├─ canonical sync state
+                      ├─ durable Sheet effect outbox
+                      ├─ outbound effect worker
+                      ├─ User_Input polling
+                      └─ sync provider (googleSheetsApi)
+                           └─ Google Sheets projections
+```
+
+The internal service reuses the same MikroORM SQLite adapter and transaction
+boundary as the entity manager. A future deployment can extract the worker
+process without changing the root entity lifecycle contract.
+
+## Root public API
+
+The public surface contains entity definition, runtime creation, and the
+request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
+`findOne()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
+MikroORM, raw SQL, provider clients, Sheet routes, provisioning, polling, and
+outbox controls are internal.
+
+## SQLite authority
+
+Business entity tables are the authoritative application data. Normal reads
+always come from SQLite and never from a Sheet. The public local runtime opens
+entity tables only and does not contact Google Sheets or create sync tables.
+
+When the internal sync service is active, its mapped flush coordinator extends
+the same SQLite transaction with:
+
+```text
+entity mutation
+canonical sync state
+projection registry/state
+Sheet effect outbox
+```
+
+The service-side configuration supplies the required `System_State`,
+`User_Input`, and `Sync_Conflicts` routes, spreadsheet identity, and
+user-owned fields. Every internal sync runtime fails closed if any of the
+three physical routes or its fixed headers are missing or drifted.
+
+## Google Sheets projection
+
+The internal service provisions and validates registered projection tabs
+before starting delivery. It owns the Google Sheets API client, effect worker,
+response-loss recovery, reconciliation, and User_Input polling.
+
+A successful public `flush()` means that the local SQLite transaction
+committed. It does not mean that a remote Sheet write has completed.
+
+## Source boundaries
+
+```text
+src/domain/                         pure normalization/evaluation/conflict rules
+src/application/orm/                public ORM facade and mapped flush planning
+src/application/sync/               internal sync engine and service bootstrap
+src/adapter/persistence/            SQLite/MikroORM implementation
+src/adapter/sheets/                 Google Sheets API provider
+src/infrastructure/storage/         canonical, observation, resolution, outbox state
+src/api/                            root-facing entity and EntityManager facade
+src/index.ts                        root public barrel only
+```
+
+`src` does not mean public. The only application-facing package entrypoint is
+`src/index.ts`; provider, sync operations, polling, and sync state are not
+part of the contract.
