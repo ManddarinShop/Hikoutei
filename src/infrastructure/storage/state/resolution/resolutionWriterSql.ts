@@ -21,6 +21,19 @@ export const READ_CONFLICT_SQL = `
   WHERE logical_sheet_id = ? AND conflict_id = ?
 `;
 
+/**
+ * Reads conflict ids that carry a durable pending resolution command for one
+ * logical sheet. `resolution_command` has no logical-sheet column, so the
+ * conflict table supplies the scope through the command's target.
+ */
+export const READ_PENDING_CONFLICT_IDS_SQL = `
+  SELECT DISTINCT c.conflict_id AS conflict_id
+  FROM resolution_command rc
+  JOIN sync_conflict c ON c.conflict_id = rc.target_conflict_id
+  WHERE c.logical_sheet_id = ? AND rc.status = 'pending'
+  ORDER BY c.conflict_id
+`;
+
 export const READ_ACTIVE_CANDIDATE_POINTER_SQL = `
   SELECT physical_sheet_id, projection, candidate_epoch, active_candidate_hash
   FROM sheet_visible_field_state

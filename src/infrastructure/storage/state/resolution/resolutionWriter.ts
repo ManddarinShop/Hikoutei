@@ -60,6 +60,7 @@ import {
   READ_ACTIVE_CANDIDATE_POINTER_SQL,
   READ_CONFLICT_SQL,
   READ_EFFECT_DEDUPE_SQL,
+  READ_PENDING_CONFLICT_IDS_SQL,
   READ_REGISTERED_PROJECTION_SQL,
   READ_PROCESSING_PREDECESSOR_SQL,
 } from "./resolutionWriterSql.js";
@@ -296,26 +297,14 @@ function sameCommandIdentity(existing: CommandRow, command: ResolutionCommand): 
     existing.payload_hash === command.payloadHash;
 }
 
-/** Reads all conflict IDs for one logical entity sheet. */
-export function readConflictIdsWithSql(
+/** Reads conflict ids that carry a durable pending resolution command for one logical entity sheet. */
+export function readPendingConflictIdsWithSql(
   sql: SqlExecutor,
   logicalSheetId: string,
 ): Promise<readonly string[]> {
-  return sql.all<{ readonly conflict_id: string }>(
-    "SELECT conflict_id FROM sync_conflict WHERE logical_sheet_id = ? ORDER BY created_at, conflict_id",
-    [logicalSheetId],
-  ).then((rows) => rows.map((row) => row.conflict_id));
-}
-
-/** Reads unresolved conflict IDs for one logical entity sheet. */
-export function readOpenConflictIdsWithSql(
-  sql: SqlExecutor,
-  logicalSheetId: string,
-): Promise<readonly string[]> {
-  return sql.all<{ readonly conflict_id: string }>(
-    "SELECT conflict_id FROM sync_conflict WHERE logical_sheet_id = ? AND status IN ('OPEN', 'NEEDS_REBASE') ORDER BY created_at, conflict_id",
-    [logicalSheetId],
-  ).then((rows) => rows.map((row) => row.conflict_id));
+  return sql.all<{ readonly conflict_id: string }>(READ_PENDING_CONFLICT_IDS_SQL, [
+    logicalSheetId,
+  ]).then((rows) => rows.map((row) => row.conflict_id));
 }
 
 /** Reads and validates one conflict record through the active async SQL transaction. */
