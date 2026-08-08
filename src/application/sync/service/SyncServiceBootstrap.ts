@@ -52,7 +52,6 @@ import {
   registerSyncConflictProjectionRoutes,
 } from "../sheetsContract/conflictProjectionRegistration.js";
 import {
-  autoResolveExistingMappedConflictsWithAdapter,
   retryOpenMappedConflictsWithAdapter,
 } from "../inbound/autoSystemConflictResolution.js";
 import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheetsContract/syncSheets.js";
@@ -193,11 +192,6 @@ export async function createInternalSyncService(
     ];
     const remote = createRemoteProvider(options, projectionDefinitions);
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
-    await autoResolveExistingMappedConflictsWithAdapter(
-      runtime.storage,
-      runtime.mappings.mappings,
-      resolveTypedSheetsEntityWriterOptions(writer),
-    );
 
     const effectSupervisor = createEffectWorkerSupervisor({
       storage: runtime.storage,
@@ -539,11 +533,10 @@ async function expireRuntimeWriterLeases(
 ): Promise<void> {
   const now = writer.now?.() ?? Date.now();
   // Every claim site wired into the bootstrap must be mirrored here:
-  // conflict route registration (registerSyncConflictProjectionRoutes), auto
-  // conflict resolution (autoSystemConflictResolution), mapped flush planning
-  // and projection registration (flushCoordinator,
-  // mappedPersistenceContext), and observation polling
-  // (MikroOrmUserInputPolling) claim under the mapped writer role with
+  // conflict route registration (registerSyncConflictProjectionRoutes), mapped
+  // flush planning and projection registration (flushCoordinator,
+  // mappedPersistenceContext), and observation polling with deferred-conflict
+  // retry (MikroOrmUserInputPolling) claim under the mapped writer role with
   // writer.writerId; the effect worker supervisor claims under
   // DEFAULT_WORKER_ROLE with effectWorkerId. A claim added elsewhere must be
   // added to this list, or graceful close leaves it leased for the window.
