@@ -129,6 +129,14 @@ export async function completeProviderResult(
 }
 
 const DURABLE_PROBE_RETRY_DELAY_MS = 1_000;
+/**
+ * Maximum continuous delivery uncertainty before a response-loss probe is
+ * force-settled as failed. Bounds the recovery loop so a permanently
+ * unverifiable effect (for example a corrupted target sheet) cannot stay
+ * `delivery_uncertain` forever and keep the in-flight predecessor guard
+ * (`READ_PROCESSING_PREDECESSOR_SQL`) blocking later writes on its stream.
+ */
+const DURABLE_PROBE_MAX_UNCERTAIN_MS = 30_000;
 
 /**
  * Recovers response-loss effects by reading their remote postconditions.
@@ -314,6 +322,15 @@ export async function settleUnknownPostcondition(
     return;
   }
   if (postcondition.disposition === "unapplied") {
+    // The read-back proved the remote did not apply this effect, so it is
+    // returned to `pending` for a fresh dispatch (re-drive) rather than kept
+    // uncertain. This path is intentionally not bounded by
+    // `DURABLE_PROBE_MAX_UNCERTAIN_MS`: `retryClaimedEffect` resets
+    // `uncertain_since` to NULL, so the uncertainty clock does not persist
+    // across the re-queue, and `created_at` measures total enqueue age (not
+    // uncertainty) and would risk force-failing legitimate backlogged
+    // effects. The unbounded delivery_uncertain loop from #193 is closed by
+    // the bound in `deferDeliveryUncertain`, which every defer path reaches.
     const requeued = await storage.retryClaimedEffect({
       ...fence,
       effectId: item.pending.effect_id,
@@ -347,11 +364,30 @@ async function deferDeliveryUncertain(
   message: string,
   report: MutableReport,
 ): Promise<void> {
+  const uncertainSince = item.pending.uncertain_since ?? fence.now;
+  const uncertainForMs = fence.now - uncertainSince;
+  if (uncertainForMs >= DURABLE_PROBE_MAX_UNCERTAIN_MS) {
+    // The remote write stayed unverifiable past the durable probe bound:
+    // force-settle as failed so the in-flight predecessor guard stops
+    // blocking later writes on this target stream. The durable outbox keeps
+    // the failed effect together with its timeout evidence.
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.DELIVERY_UNCERTAIN_TIMEOUT,
+      presentValue(
+        "delivery_uncertain exceeded the durable probe bound; force-settled as failed.",
+      ),
+      report,
+    );
+    return;
+  }
   const marked = await storage.markDeliveryUncertain({
     ...fence,
     effectId: item.pending.effect_id,
     claimToken: item.claimToken,
-    uncertainSince: item.pending.uncertain_since ?? fence.now,
+    uncertainSince,
     nextProbeAt: fence.now + DURABLE_PROBE_RETRY_DELAY_MS,
     lastErrorCode: code,
     lastErrorMessage: message,
