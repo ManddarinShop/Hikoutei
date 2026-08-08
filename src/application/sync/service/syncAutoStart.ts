@@ -281,9 +281,10 @@ export async function validateSyncCredentialsFile(
  * Every entity owns three tabs named `<EntityName>_System`, `<EntityName>_Input`,
  * and `<EntityName>_Conflicts`. The System_State range covers every property
  * plus the `__typed_sheets_deleted` tombstone, the User_Input range covers the
- * user-owned fields (all properties), and Sync_Conflicts uses the fixed
- * 15-header `A:O` audit range. All properties are user-owned so polling can
- * accept human edits on any field.
+ * user-owned fields (all properties) plus the internal `__hikoutei_row_id`
+ * row-anchor system column, and Sync_Conflicts uses the fixed 15-header
+ * `A:O` audit range. All properties are user-owned so polling can accept
+ * human edits on any field.
  */
 export function buildSyncProjections(
   entities: readonly HikouteiEntity[],
@@ -300,7 +301,8 @@ export function buildSyncProjections(
       },
       userInput: {
         tabName: `${descriptor.name}_Input`,
-        registeredRange: `A:${columnLetters(propertyCount)}`,
+        // The last column is the internal __hikoutei_row_id system column.
+        registeredRange: `A:${columnLetters(propertyCount + 1)}`,
       },
       syncConflicts: {
         tabName: `${descriptor.name}_Conflicts`,

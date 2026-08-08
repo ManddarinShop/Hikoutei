@@ -2,21 +2,28 @@
  * Preflight row normalization, indexes, and sheet/grid lookup.
  *
  * Nonblank target rows are normalized into typed `PreflightRow` values with
- * their anchor evidence and visible identity; the anchor/identity indexes
- * fail closed on duplicates and derive the next append row. Sheet and grid
- * lookup helpers resolve titles to validated grids for the preflight data
- * read and the observation/provisioning readers.
+ * their anchor evidence and visible identity; the identity index fails closed
+ * on duplicates while the anchor index keeps only the FIRST row per anchor
+ * value (duplicated anchors are evidence, never rewritten), and both derive
+ * the next append row. Sheet and grid lookup helpers resolve titles to
+ * validated grids for the preflight data read and the observation/
+ * provisioning readers.
  */
 
 import type { NormalizedCell } from "../../../../../domain/index.js";
 import type { Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
-import { GOOGLE_SHEETS_API_ANCHOR_KEY } from "../constants.js";
+import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
+import {
+  GOOGLE_SHEETS_API_ROW_ID_HEADER,
+} from "../constants.js";
 import { invalidProviderState } from "../errors.js";
+import { apiStringValue } from "./preflightParsing.js";
 import {
   identityFromNormalizedCell,
   isBlankApiCell,
   normalizedCellFromApiValue,
+  parseRegisteredRange,
 } from "./valueNormalization.js";
 import type {
   ParsedCellNumberFormat,
@@ -75,15 +82,23 @@ export function readRows(
   range: { readonly startColumn: number; readonly columnCount: number },
   headers: readonly string[],
   identityField: Presence<string>,
+  anchorColumn: number | undefined,
 ): readonly PreflightRow[] {
-  const anchorsByRow = readAnchorIndex(data);  const rows: PreflightRow[] = [];
+  const anchorsByRow = readAnchorIndex(data, anchorColumn);
+  const userFieldCount = anchorColumn === undefined
+    ? range.columnCount
+    : range.columnCount - 1;
+  const rows: PreflightRow[] = [];
   for (let rowIndex = 0; rowIndex < data.rowData.length; rowIndex += 1) {
     const rowNumber = data.startRow + 1 + rowIndex;
     if (rowNumber < 2) continue;
     const rawRow = data.rowData[rowIndex];
     if (rawRow === undefined) continue;
     const values = gridRowCells(data, rowNumber, range.startColumn, range.columnCount);
-    if (values.every((value) => isBlankApiCell(value))) continue;
+    // The system row-id column is invisible to the blank-row rule: a row
+    // whose user fields are all blank stays blank even when the anchor cell
+    // still holds its UUID (same semantics as metadata anchors).
+    if (values.slice(0, userFieldCount).every((value) => isBlankApiCell(value))) continue;
 
     const cells: Record<string, NormalizedCell> = {};
     headers.forEach((header, columnIndex) => {
@@ -121,27 +136,60 @@ export function readRows(
 }
 
 /**
- * Builds the row -> anchor-list index from one grid's row metadata.
+ * Builds the row -> anchor-list index from the system row-id column.
  *
- * Row metadata is index-aligned with rowData; only the shared anchor key
- * counts, and a row may legitimately carry several metadata entries (the
- * caller decides whether multiple anchors are an error).
+ * The anchor is the LAST column cell value of the user_input registered
+ * range: any non-empty string value counts as the row's anchor (the column
+ * position is the identity proof; the `sync-anchor:` prefix is the format of
+ * observation- and append-assigned anchors, but flush-derived anchors keep
+ * the mapping's deterministic format such as `entity:<id>`). The header row
+ * is skipped so the `__hikoutei_row_id` header cell never becomes a
+ * pseudo-anchor. Blank cells, whitespace-only cells, empty strings, and
+ * non-string values are not anchors and are treated as missing by the
+ * caller. `anchorColumn` is 1-based; projections without a system column
+ * pass `undefined` and yield no anchors.
  */
-export function readAnchorIndex(data: ParsedGridData): ReadonlyMap<number, readonly string[]> {
+export function readAnchorIndex(
+  data: ParsedGridData,
+  anchorColumn: number | undefined,
+): ReadonlyMap<number, readonly string[]> {
   const byRow = new Map<number, string[]>();
-  data.rowMetadata.forEach((metadata, index) => {
-    const rowNumber = data.startRow + 1 + index;
-    const anchors = metadata.developerMetadata
-      .filter((item) => item.metadataKey === GOOGLE_SHEETS_API_ANCHOR_KEY)
-      .map((item) => item.metadataValue);
-    if (anchors.length > 0) byRow.set(rowNumber, anchors);
-  });
+  if (anchorColumn === undefined) return byRow;
+  for (let rowIndex = 0; rowIndex < data.rowData.length; rowIndex += 1) {
+    const rowNumber = data.startRow + 1 + rowIndex;
+    if (rowNumber < 2) continue;
+    const [value] = gridRowCells(data, rowNumber, anchorColumn, 1);
+    const anchor = anchorFromColumnValue(value);
+    if (anchor !== undefined) byRow.set(rowNumber, [anchor]);
+  }
   return byRow;
+}
+
+/** Extracts one anchor value from a system-column cell, if any. */
+function anchorFromColumnValue(value: unknown): string | undefined {
+  const raw = apiStringValue(value);
+  // Whitespace-only cells count as missing (re-anchored), mirroring the
+  // header validation's trim rule for the system column.
+  if (raw === undefined || raw.trim().length === 0) return undefined;
+  return raw;
+}
+
+/**
+ * Returns the 1-based system row-id column of one registered range, or
+ * `undefined` for projections without a system column (only user_input tabs
+ * carry one, always as the LAST column of the registered range).
+ */
+export function anchorColumnFor(
+  registeredRange: string,
+  projection: string,
+): number | undefined {
+  if (projection !== SYNC_PROJECTIONS.USER_INPUT) return undefined;
+  const range = parseRegisteredRange(registeredRange);
+  return range.startColumn + range.columnCount - 1;
 }
 
 export function indexRows(
   rows: readonly PreflightRow[],
-  data: ParsedGridData,
 ): {
   readonly byAnchor: ReadonlyMap<string, PreflightRow>;
   readonly byIdentity: ReadonlyMap<string, PreflightRow>;
@@ -151,13 +199,14 @@ export function indexRows(
   const byIdentity = new Map<string, PreflightRow>();
   for (const row of rows) {
     if (row.physicalAnchor.kind === "present") {
-      const existing = byAnchor.get(row.physicalAnchor.value);
-      if (existing !== undefined) {
-        invalidProviderState(
-          `sync anchor is duplicated: ${row.physicalAnchor.value} at rows ${existing.rowNumber} and ${row.rowNumber}`,
-        );
+      // Duplicated anchors are evidence, never rewritten: a human copy-paste
+      // copies the UUID cell, so only the FIRST row carrying each anchor
+      // value enters the index and later rows fall back to identity/targetId
+      // lookup in findWorkingRow. The duplicate itself is still reported by
+      // the observation/anchor-ensure evidence path.
+      if (!byAnchor.has(row.physicalAnchor.value)) {
+        byAnchor.set(row.physicalAnchor.value, row);
       }
-      byAnchor.set(row.physicalAnchor.value, row);
     }
     if (row.identity.kind === "present") {
       const existing = byIdentity.get(row.identity.value);
@@ -169,10 +218,14 @@ export function indexRows(
       byIdentity.set(row.identity.value, row);
     }
   }
-  // The API omits trailing empty rows from grid data, so the last data row is
-  // the sheet's last content row; appends start one row below it (min row 2,
-  // matching the Apps Script nextAppendRow = max(lastRow + 1, 2)).
-  const lastContentRow = data.startRow + data.rowData.length;
+  // The API omits trailing empty rows from grid data, so the last nonblank
+  // row is the sheet's last content row; appends start one row below it
+  // (min row 2, matching the Apps Script nextAppendRow = max(lastRow + 1, 2)).
+  // Computed from the normalized rows (not grid rowData) so a row whose only
+  // remaining content is the system anchor cell does not extend the append
+  // position, exactly like the metadata-anchor era.
+  const lastRow = rows.length === 0 ? undefined : rows[rows.length - 1]?.rowNumber;
+  const lastContentRow = lastRow === undefined ? 0 : lastRow;
   return {
     byAnchor,
     byIdentity,

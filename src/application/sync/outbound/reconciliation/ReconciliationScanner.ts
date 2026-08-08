@@ -168,7 +168,8 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
   } as const;
   // Fast append intentionally skips metadata. Reconciliation is the lazy
-  // repair point that assigns stable anchors before comparing the snapshot.
+  // repair point; system_state rows are identity-located and never receive
+  // anchors (only user_input tabs carry the row-id system column).
   const observed = await observeSyncSnapshot(context.provider, snapshotRequest);
   const snapshot = observed.snapshot;
 

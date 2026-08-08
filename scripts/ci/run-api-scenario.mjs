@@ -858,7 +858,8 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
         physicalSheetId: `${prefix}-orders-input`,
         spreadsheetId,
         tabName: sheetNames[1],
-        registeredRange: "A:B",
+        // Last column is the internal __hikoutei_row_id system column.
+        registeredRange: "A:C",
         projection: "user_input",
       },
     ],

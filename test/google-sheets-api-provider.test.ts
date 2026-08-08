@@ -75,7 +75,11 @@ function definition(overrides: {
       physicalSheetId: overrides.physicalSheetId,
       spreadsheetId: SPREADSHEET_ID,
       tabName: overrides.tabName,
-      registeredRange: "A:" + columnLetters(overrides.headers.length),
+      // user_input tabs reserve the last column for the internal
+      // __hikoutei_row_id system column.
+      registeredRange: "A:" + columnLetters(
+        overrides.headers.length + (overrides.projection === "user_input" ? 1 : 0),
+      ),
       projection: overrides.projection as RegisteredSyncProjectionDefinition["sheet"]["projection"],
       schemaVersion: 1,
       ownershipManifestJson: "{}",
@@ -144,10 +148,12 @@ function seedSystemTab(
     readonly identity?: string;
   }[],
 ): void {
+  // System_State rows carry no physical anchors; rows are located by their
+  // visible business key (id) on every apply/probe.
+  void rows[0]?.anchor;
   spreadsheet.addTab("Users_System", {
     headers: SYSTEM_HEADERS,
     rows: rows.map((row) => SYSTEM_HEADERS.map((header) => row.fields[header] ?? null)),
-    anchors: new Map(rows.map((row, index) => [index + 1, row.anchor])),
   });
 }
 
@@ -158,10 +164,13 @@ function seedUserInputTab(
     readonly fields: Readonly<Record<string, NormalizedCell>>;
   }[],
 ): void {
+  // The row anchor is the LAST column cell value (sync-anchor:<uuid>).
   spreadsheet.addTab("Users_Input", {
-    headers: USER_INPUT_HEADERS,
-    rows: rows.map((row) => USER_INPUT_HEADERS.map((header) => row.fields[header] ?? null)),
-    anchors: new Map(rows.map((row, index) => [index + 1, row.anchor])),
+    headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+    rows: rows.map((row) => [
+      ...USER_INPUT_HEADERS.map((header) => row.fields[header] ?? null),
+      row.anchor,
+    ]),
   });
 }
 
@@ -211,7 +220,7 @@ function effect(seed: EffectSeed): SyncProjectionEffect {
   const projection = seed.projection ?? "system_state";
   const physicalSheetId = seed.physicalSheetId ?? SYSTEM_SHEET_ID;
   const route = projection === "user_input"
-    ? { sheetName: "Users_Input", registeredRange: "A:B" }
+    ? { sheetName: "Users_Input", registeredRange: "A:C" }
     : projection === "sync_conflicts"
       ? { sheetName: "Users_Conflicts", registeredRange: "A:O" }
       : { sheetName: "Users_System", registeredRange: "A:C" };
@@ -331,17 +340,15 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
 
   it("requests a valid REST field mask for preflight grid reads", async () => {
     // GridData has no sheetId of its own (the parent sheet properties
-    // identify the grid) and developer metadata uses the REST
-    // metadataKey/metadataValue names; the mask must never request a
-    // nonexistent path.
+    // identify the grid) and row anchors are plain cell values now, so the
+    // mask must never request a nonexistent metadata path.
     expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).toBe(
       "sheets.properties(sheetId,title,hidden)," +
       "sheets.data(startRow,startColumn," +
-      "rowMetadata.developerMetadata(metadataId,metadataKey,metadataValue)," +
       "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
     );
     expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).not.toContain("sheets.data(sheetId");
-    expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).not.toContain("developerMetadata(key");
+    expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).not.toContain("developerMetadata");
     // The enumeration mask is the minimal identity-only subset; it must never
     // request grid data paths.
     expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).toBe(
@@ -350,7 +357,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).not.toContain("sheets.data(");
 
     // The end-to-end preflight parses the REAL wire shape the stub now
-    // produces (grids without sheetId, metadataKey/metadataValue anchors).
+    // produces (grids without sheetId, anchors as plain cell values).
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
       {
@@ -368,6 +375,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
       effect({
         effectId: "mask-1",
         targetAnchor: "anchor-1",
+        targetId: "entity:users:u1",
         expectedVisibleRevision: 1,
         expectedVisibleHash: computeSyncVisibleHash({
           id: cell.string("u1"),
@@ -396,16 +404,101 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
-  it("fails closed on duplicate anchors and duplicate identities", async () => {
+  it("tolerates duplicated anchors from a copy-paste and still processes other rows", async () => {
+    // Copying a row copies its UUID cell, so two rows carry the same anchor.
+    // The preflight must not throw: the anchor index keeps the FIRST row per
+    // value, duplicated rows are evidence (never rewritten), and writes for
+    // other rows still proceed.
+    const spreadsheet = new StubSpreadsheet();
+    seedUserInputTab(spreadsheet, [
+      { anchor: "sync-anchor:dup", fields: { id: cell.string("u1"), status: cell.string("x") } },
+      { anchor: "sync-anchor:dup", fields: { id: cell.string("u2"), status: cell.string("y") } },
+      { anchor: "sync-anchor:ok", fields: { id: cell.string("u3"), status: cell.string("z") } },
+    ]);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const result = await applyRequest(provider, [
+      // A unique row still processes normally.
+      effect({
+        effectId: "update-unique",
+        projection: "user_input",
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        targetAnchor: "sync-anchor:ok",
+        targetId: "entity:users:u3",
+        expectedVisibleRevision: 1,
+        expectedVisibleHash: computeSyncVisibleHash({
+          id: cell.string("u3"),
+          status: cell.string("z"),
+        }),
+        fields: { id: cell.string("u3"), status: cell.string("updated") },
+      }),
+      // An effect for the duplicated anchor resolves to the first row that
+      // carries it (the original), never rewriting the copy row.
+      effect({
+        effectId: "update-original",
+        projection: "user_input",
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        targetAnchor: "sync-anchor:dup",
+        targetId: "entity:users:u1",
+        expectedVisibleRevision: 1,
+        expectedVisibleHash: computeSyncVisibleHash({
+          id: cell.string("u1"),
+          status: cell.string("x"),
+        }),
+        fields: { id: cell.string("u1"), status: cell.string("x2") },
+      }),
+    ]);
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
+    expect(transport.batchUpdateCalls).toBe(1);
+    const inputTab = spreadsheet.findTab("Users_Input");
+    expect(inputTab).toBeDefined();
+    if (inputTab === undefined) throw new Error("input tab missing");
+    expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS)).toMatchObject({
+      id: cell.string("u1"),
+      status: cell.string("x2"),
+    });
+    // The copy row keeps its duplicated anchor and untouched fields.
+    expect(stubRowFields(inputTab, 3, USER_INPUT_HEADERS)).toMatchObject({
+      id: cell.string("u2"),
+      status: cell.string("y"),
+    });
+    expect(stubRowFields(inputTab, 4, USER_INPUT_HEADERS)).toMatchObject({
+      id: cell.string("u3"),
+      status: cell.string("updated"),
+    });
+  });
+
+  it("still fails closed on duplicate identities", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
-      { anchor: "dup", fields: { id: cell.string("u1"), status: cell.string("x") } },
-      { anchor: "dup", fields: { id: cell.string("u2"), status: cell.string("y") } },
+      {
+        anchor: "anchor-1",
+        fields: {
+          id: cell.string("u1"),
+          status: cell.string("x"),
+          __typed_sheets_deleted: cell.bool(false),
+        },
+      },
+      {
+        anchor: "anchor-2",
+        fields: {
+          id: cell.string("u1"),
+          status: cell.string("y"),
+          __typed_sheets_deleted: cell.bool(false),
+        },
+      },
     ]);
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
     await expect(applyRequest(provider, [
-      effect({ targetAnchor: "a1", fields: { id: cell.string("u3"), status: cell.string("z") } }),
+      effect({
+        targetAnchor: "anchor-3",
+        fields: {
+          id: cell.string("u3"),
+          status: cell.string("z"),
+          __typed_sheets_deleted: cell.bool(false),
+        },
+      }),
     ])).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
     expect(transport.batchUpdateCalls).toBe(0);
   });
@@ -413,7 +506,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
 });
 
 describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => {
-  it("plans multiple creates into one target+receipt batch with anchors and receipts", async () => {
+  it("plans multiple creates into one target+receipt batch", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
     const transport = new StubSheetsTransport(spreadsheet);
@@ -442,7 +535,9 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
       expect(entry.visibleRevision).toEqual({ kind: "present", value: 1 });
     }
 
-    // One atomic batchUpdate carrying inserts, values, anchors, and receipts.
+    // One atomic batchUpdate carrying inserts, values, and receipts. System
+    // rows carry no physical anchors (identity-located), so no anchor write
+    // appears in the batch.
     expect(transport.batchUpdateCalls).toBe(1);
     const batch = transport.appliedBatchUpdates[0];
     expect(batch).toBeDefined();
@@ -450,12 +545,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     const kinds = batch.map((request) => request.kind);
     expect(kinds).toContain("insertDimension");
     expect(kinds).toContain("updateCells");
-    expect(kinds).toContain("createDeveloperMetadata");
-    const anchors = batch.filter((request) => request.kind === "createDeveloperMetadata");
-    expect(anchors.map((request) => request.kind === "createDeveloperMetadata" ? request.value : "")).toEqual([
-      "anchor-new-1",
-      "anchor-new-2",
-    ]);
+    expect(kinds).not.toContain("createDeveloperMetadata");
     // The receipt tab was created in the SAME batch (addSheet + header + rows).
     expect(kinds).toContain("addSheet");
     expect(kinds).toContain("updateSheetProperties");
@@ -467,7 +557,6 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
       id: cell.string("u-new-1"),
       status: cell.string("pending"),
     });
-    expect(systemTab.anchorsFor(1)).toEqual(["anchor-new-1"]);
     const receiptTab = spreadsheet.findTab("__typed_sheets_internal_effect_receipts");
     expect(receiptTab?.hidden).toBe(true);
     expect(receiptTab?.cell(1, 0)?.userEnteredValue?.stringValue).toBe("create-1");
@@ -935,11 +1024,11 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
   it("deletes contiguous and noncontiguous rows with descending deleteDimension requests", async () => {
     const spreadsheet = new StubSpreadsheet();
     const rows = [
-      { anchor: "anchor-1", id: "u1" },
-      { anchor: "anchor-2", id: "u2" },
-      { anchor: "anchor-3", id: "u3" },
-      { anchor: "anchor-4", id: "u4" },
-      { anchor: "anchor-5", id: "u5" },
+      { anchor: "sync-anchor:anchor-1", id: "u1" },
+      { anchor: "sync-anchor:anchor-2", id: "u2" },
+      { anchor: "sync-anchor:anchor-3", id: "u3" },
+      { anchor: "sync-anchor:anchor-4", id: "u4" },
+      { anchor: "sync-anchor:anchor-5", id: "u5" },
     ];
     seedUserInputTab(spreadsheet, rows.map((row) => ({
       anchor: row.anchor,
@@ -985,7 +1074,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
   it("rejects a delete whose fields do not cover every header", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedUserInputTab(spreadsheet, [
-      { anchor: "anchor-1", fields: { id: cell.string("u1"), status: cell.string("x") } },
+      { anchor: "sync-anchor:anchor-1", fields: { id: cell.string("u1"), status: cell.string("x") } },
     ]);
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
@@ -994,7 +1083,8 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
       effectKind: "user_input_delete",
       physicalSheetId: USER_INPUT_SHEET_ID,
       projection: "user_input",
-      targetAnchor: "anchor-1",
+      targetAnchor: "sync-anchor:anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       expectedVisibleHash: computeSyncVisibleHash({
         id: cell.string("u1"),
@@ -1188,7 +1278,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     await expect(provider.fastAppendRows({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: "user_input",
       schemaVersion: 1,
       rows: appendRows(1),
@@ -1431,8 +1521,8 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     if (batch === undefined) throw new Error("expected a batch");
     const internalBytes = new TextEncoder().encode(JSON.stringify({ requests: batch })).byteLength;
     const wireBytes = new TextEncoder().encode(serializeBatchUpdateRequests(batch)).byteLength;
-    // The SDK-wrapped body (addSheet/updateCells/createDeveloperMetadata
-    // wrappers) is larger than the internal request union serialization.
+    // The SDK-wrapped body (addSheet/updateCells wrappers) is larger than the
+    // internal request union serialization.
     expect(wireBytes).toBeGreaterThan(internalBytes);
     // A budget between the internal-union size and the wire size must trim:
     // the old internal measurement would have sent the whole batch.
@@ -1480,6 +1570,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     const probe = effect({
       effectId: "effect-1",
       targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       expectedVisibleHash: computeSyncVisibleHash({
         id: cell.string("u1"),
@@ -1572,6 +1663,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     const probe = effect({
       effectId: "effect-1",
       targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       expectedVisibleHash: computeSyncVisibleHash({
         id: cell.string("u1"),
@@ -1613,6 +1705,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     const unapplied = effect({
       effectId: "effect-unapplied",
       targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       expectedVisibleHash: baseline,
       fields: {
@@ -1631,6 +1724,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     const changed = effect({
       effectId: "effect-changed",
       targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       // The row holds "pending" but the effect expected the stale "y" state,
       // so the current hash matches neither the expectation nor the target.
@@ -1667,6 +1761,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     const first = effect({
       effectId: "batch-1",
       targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       expectedVisibleHash: baseline,
       fields: {
@@ -1678,6 +1773,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     const second = effect({
       effectId: "batch-2",
       targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       // The row holds "pending", not the stale "y" the effect expected.
       expectedVisibleHash: computeSyncVisibleHash({
@@ -1903,6 +1999,7 @@ describe("GoogleSheetsApiSyncProvider inline postcondition mode", () => {
     const update = effect({
       effectId: "inline-1",
       targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
       expectedVisibleRevision: 1,
       expectedVisibleHash: baseline,
       fields: {

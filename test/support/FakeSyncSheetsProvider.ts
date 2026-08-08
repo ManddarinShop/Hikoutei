@@ -91,7 +91,7 @@ type FakeSyncSheetsErrorCode =
 /** Initial state for one fake projection row. */
 export interface FakeSyncRowInput {
   readonly targetId: string;
-  /** `null` models a row without Developer Metadata anchor assignment. */
+  /** `null` models a row without physical anchor assignment (fast append). */
   readonly physicalAnchor?: string | null;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
   readonly visibleRevision?: number;
@@ -576,8 +576,8 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
       ));
     const rowsByAnchor = new Map<string, FakeRow[]>();
     for (const initial of input.rows ?? []) {
-      // `null` marks a row the fake appends/reads without Developer Metadata
-      // anchor assignment, mirroring the built-in append path of the MVP.
+      // `null` marks a row the fake appends/reads without physical anchor
+      // assignment, mirroring the built-in append path of the MVP.
       const anchor = initial.physicalAnchor === undefined || initial.physicalAnchor === null
         ? this.nextAnchor()
         : requireSyncSheetsText(
@@ -658,9 +658,9 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
       };
     }
     // The built-in append path ignores the advisory row anchor and never
-    // materializes anchors as Developer Metadata: the internal anchor is
-    // only a fake storage key, so the row replays by registered identity
-    // until observation assigns physical metadata.
+    // materializes a physical anchor (the internal anchor is only a fake
+    // storage key), so the row replays by registered identity until
+    // observation assigns physical anchors.
     const anchor = this.nextAnchor();
     const fields = { ...row.fields };
     const visibleHash = computeSyncVisibleHash(fields);

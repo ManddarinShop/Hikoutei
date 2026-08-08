@@ -14,6 +14,7 @@ import { presentValue, absentValue } from "../../../../../shared/state/index.js"
 import {
   GOOGLE_SHEETS_API_RECEIPT_HEADERS,
   GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
+  GOOGLE_SHEETS_API_ROW_ID_HEADER,
 } from "../constants.js";
 import {
   GOOGLE_SHEETS_API_ENUMERATION_FIELDS,
@@ -36,6 +37,7 @@ import {
   parseSpreadsheetDocument,
 } from "./preflightParsing.js";
 import {
+  anchorColumnFor,
   findSheetByTitle,
   gridRowCells,
   indexRows,
@@ -90,6 +92,11 @@ export interface PreflightContext {
   readonly nextAppendRow: number;
   readonly identityField: Presence<string>;
   readonly checkboxHeaders: readonly string[];
+  /**
+   * 1-based absolute column of the User_Input system row-id column; undefined
+   * for projections without one (system_state, sync_conflicts).
+   */
+  readonly anchorColumn: number | undefined;
   readonly receiptSheetId: Presence<number>;
   /** Receipt tab last content row; 0 when the tab is absent. */
   readonly receiptLastRow: number;
@@ -106,6 +113,8 @@ export interface PreflightRouteOptions {
   readonly headers: readonly string[];
   readonly identityField: Presence<string>;
   readonly checkboxHeaders: readonly string[];
+  /** Registered projection kind; user_input routes carry the system row-id column. */
+  readonly projection: string;
 }
 
 export interface ParsedSheet {
@@ -125,18 +134,10 @@ export interface ParsedGridData {
   readonly startRow: number;
   readonly startColumn: number;
   readonly rowData: readonly ParsedRowData[];
-  readonly rowMetadata: readonly ParsedRowMetadata[];
 }
 
 export interface ParsedRowData {
   readonly values: readonly unknown[];
-}
-
-export interface ParsedRowMetadata {
-  readonly developerMetadata: readonly {
-    readonly metadataKey: string;
-    readonly metadataValue: string;
-  }[];
 }
 
 /** One validated REST `CellFormat.numberFormat` object from an SDK cell. */
@@ -222,13 +223,22 @@ export async function readPreflightData(
   const dataDocument = parseSpreadsheetDocument(dataRaw, "grid data");
   const targetData = requireGridDataForSheet(dataDocument, targetSheet.sheetId);
 
-  const headers = readRegisteredHeaders(targetData, parsedRange, route.headers);
+  // user_input tabs carry the row anchor as the LAST column cell value; the
+  // system column is validated as part of the header row (fail-closed on
+  // legacy tabs provisioned without it).
+  const anchorColumn = anchorColumnFor(route.registeredRange, route.projection);
+  const headers = readRegisteredHeaders(
+    targetData,
+    parsedRange,
+    route.headers,
+    anchorColumn === undefined ? undefined : GOOGLE_SHEETS_API_ROW_ID_HEADER,
+  );
   const positions = new Map<string, number>();
   headers.forEach((header, index) => positions.set(header, index));
 
   const identityField = route.identityField;
-  const rows = readRows(targetData, parsedRange, headers, identityField);
-  const { byAnchor, byIdentity, nextAppendRow } = indexRows(rows, targetData);
+  const rows = readRows(targetData, parsedRange, headers, identityField, anchorColumn);
+  const { byAnchor, byIdentity, nextAppendRow } = indexRows(rows);
 
   const checkboxHeaders = validateCheckboxHeaders(route.checkboxHeaders, headers);
 
@@ -255,6 +265,7 @@ export async function readPreflightData(
     nextAppendRow,
     identityField,
     checkboxHeaders,
+    anchorColumn,
     receiptSheetId,
     receiptLastRow,
     receipts,

@@ -24,6 +24,7 @@ import {
   readPreflightData,
   type PreflightContext,
 } from "../model/preflight.js";
+import { anchorColumnFor } from "../model/preflightRows.js";
 import type { SnapshotBuildTarget } from "../model/observation.js";
 import {
   definitionForPhysicalSheet,
@@ -57,6 +58,7 @@ export async function readPreflight(
       headers: definition.headers,
       identityField: routeOptions.identityField,
       checkboxHeaders: routeOptions.checkboxHeaders,
+      projection: definition.sheet.projection,
     }, sheets, deps.readTimeoutMs));
 }
 
@@ -93,5 +95,6 @@ export function observationTargetFor(
     headers: definition.headers,
     checkboxHeaders: definition.checkboxHeaders ?? [],
     readMode,
+    anchorColumn: anchorColumnFor(request.registeredRange, request.projection),
   };
 }

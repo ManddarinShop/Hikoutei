@@ -81,7 +81,7 @@ const orderMapping = defineTypedSheetsEntityMapping({
       physicalSheetId: "orders-input",
       spreadsheetId: "spreadsheet-orders",
       tabName: "Orders_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: "user_input",
     },
   ],
@@ -222,7 +222,7 @@ describe("mapped typed-sheets ORM", () => {
           physicalSheetId: "invalid-orders-input",
           spreadsheetId: "spreadsheet-orders",
           tabName: "Orders_Input",
-          registeredRange: "A:B",
+          registeredRange: "A:C",
           projection: "user_input",
         },
       ],
@@ -428,7 +428,7 @@ describe("mapped typed-sheets ORM", () => {
       {
         physicalSheetId: "orders-input",
         sheetName: "Orders_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -467,7 +467,7 @@ describe("mapped typed-sheets ORM", () => {
     const userSnapshot = await provider.readSnapshot({
       physicalSheetId: "orders-input",
       sheetName: "Orders_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
     });
@@ -509,7 +509,7 @@ describe("mapped typed-sheets ORM", () => {
       {
         physicalSheetId: "orders-input",
         sheetName: "Orders_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],

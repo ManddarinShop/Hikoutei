@@ -4,17 +4,17 @@
  * Each mask selects exactly the response fields one read path needs; keeping
  * the masks narrow bounds response size and parse cost. GridData has no
  * `sheetId` of its own; the parent sheet's `sheets.properties.sheetId`
- * identifies the grid, and developer metadata uses the REST
- * `metadataKey`/`metadataValue` field names.
+ * identifies the grid. Row anchors are no longer developer metadata: they
+ * live as cell values in the User_Input tab's last system column, so no mask
+ * requests `rowMetadata.developerMetadata` anymore.
  */
 
 /**
- * Preflight field mask: sheet identity plus grid values, formats, anchors.
+ * Preflight field mask: sheet identity plus grid values and formats.
  */
 export const GOOGLE_SHEETS_API_PREFLIGHT_FIELDS = [
   "sheets.properties(sheetId,title,hidden),",
   "sheets.data(startRow,startColumn,",
-  "rowMetadata.developerMetadata(metadataId,metadataKey,metadataValue),",
   "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
 ].join("");
 
@@ -67,19 +67,17 @@ export const GOOGLE_SHEETS_API_VALUES_FIELDS = [
 ].join("");
 
 /**
- * Full observation mask: values, computed values, merged ranges, anchors.
+ * Full observation mask: values, computed values, merged ranges.
  *
  * This is the metadata-preserving read used by snapshots and anchor
  * assignment. Merged regions live on the SHEET object as `sheets.merges`
- * (GridRange entries), NOT on GridData, and `rowMetadata.developerMetadata`
- * returns the row anchor evidence under the REST `metadataKey`/
- * `metadataValue` names.
+ * (GridRange entries), NOT on GridData. Row anchors are cell values in the
+ * User_Input tab's last column, so they arrive with `rowData.values`.
  */
 export const GOOGLE_SHEETS_API_OBSERVATION_FIELDS = [
   "sheets.properties(sheetId,title,hidden),",
   "sheets.merges,",
   "sheets.data(startRow,startColumn,",
-  "rowMetadata.developerMetadata(metadataId,metadataKey,metadataValue),",
   "rowData.values(userEnteredValue,effectiveValue,formattedValue,",
   "userEnteredFormat.numberFormat,effectiveFormat.numberFormat,dataValidation))",
 ].join("");
@@ -96,7 +94,6 @@ export const GOOGLE_SHEETS_API_OBSERVATION_FIELDS = [
 export const GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS = [
   "sheets.properties(sheetId,title,hidden),",
   "sheets.data(startRow,startColumn,",
-  "rowMetadata.developerMetadata(metadataId,metadataKey,metadataValue),",
   "rowData.values(userEnteredValue,effectiveValue,formattedValue,",
   "userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
 ].join("");

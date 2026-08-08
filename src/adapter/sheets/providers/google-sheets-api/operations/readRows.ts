@@ -31,7 +31,6 @@ import {
   parseSpreadsheetDocument,
   type ParsedGridData,
 } from "../model/preflight.js";
-import { GOOGLE_SHEETS_API_ANCHOR_KEY } from "../constants.js";
 import { invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import {
@@ -43,6 +42,7 @@ import {
   type SnapshotBuildTarget,
 } from "../model/observation.js";
 import { buildTableRowsFromGrid } from "../model/tableRead.js";
+import { anchorColumnFor } from "../model/preflightRows.js";
 import {
   columnLetters,
   parseRegisteredRange,
@@ -118,6 +118,7 @@ export async function readRowsBatch(
       registeredRange: request.registeredRange,
       headers: definition.headers,
       checkboxHeaders: definition.checkboxHeaders ?? [],
+      anchorColumn: anchorColumnFor(request.registeredRange, request.projection),
     });
     results.push({
       sheetName: request.sheetName,
@@ -190,22 +191,27 @@ export async function observeSnapshots(
       registeredRange: request.registeredRange,
       headers: target.headers,
       checkboxHeaders: target.checkboxHeaders,
+      anchorColumn: target.anchorColumn,
     });
     assignedTotal += anchors.assigned;
     plans.push({ request, target, tab, anchors });
   }
 
   if (assignedTotal > 0) {
-    // One atomic write for every planned anchor across all requested tabs.
+    // One atomic write for every planned anchor across all requested tabs:
+    // updateCells on each tab's system row-id column.
     const anchorRequests: GoogleSheetsApiWriteRequest[] = [];
     for (const entry of plans) {
+      const anchorColumn = entry.target.anchorColumn;
+      if (anchorColumn === undefined) continue;
       for (const planned of entry.anchors.planned) {
         anchorRequests.push({
-          kind: "createDeveloperMetadata" as const,
+          kind: "updateCells",
           sheetId: entry.tab.sheetId,
-          rowIndex: planned.rowIndex,
-          key: GOOGLE_SHEETS_API_ANCHOR_KEY,
-          value: planned.anchor,
+          startRowIndex: planned.rowIndex,
+          startColumnIndex: anchorColumn - 1,
+          rows: [[{ userEnteredValue: { stringValue: planned.anchor } }]],
+          fields: "userEnteredValue",
         });
       }
     }

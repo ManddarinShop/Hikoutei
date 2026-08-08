@@ -15,8 +15,8 @@
  * - a `spreadsheets.get` with ranges returns ONLY the sheets intersecting
  *   those ranges; with no ranges every sheet is returned, hidden ones
  *   included (the real API's behavior the preflight's enumeration relies on)
- * - rowMetadata is index-aligned with rowData and carries the anchor key
- *   under the REST developerMetadata names (metadataKey/metadataValue)
+ * - row anchors are ordinary cell values in the tab's last system column
+ *   (no developer metadata anywhere in the model)
  * - number formats are `{ type, pattern }` objects, never bare strings
  * - batchUpdate applies requests sequentially and returns one reply each
  * - a range that names a missing tab is rejected (400 INVALID_ARGUMENT)
@@ -30,7 +30,6 @@ import type {
   GoogleSheetsApiWriteRequest,
 } from "../../src/adapter/sheets/providers/google-sheets-api/index.js";
 import {
-  GOOGLE_SHEETS_API_ANCHOR_KEY,
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
 } from "../../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import {
@@ -98,11 +97,6 @@ export class StubSheet {
 
   /** Cells keyed by `${row},${col}` with 0-based coordinates. */
   public readonly cells = new Map<string, StubCell>();
-  /**
-   * Developer-metadata anchors keyed by 0-based row index. A row may carry
-   * several anchors (a single string value is treated as one anchor).
-   */
-  public readonly anchors = new Map<number, string | readonly string[]>();
   /** Checkbox data-validation ranges recorded for assertions. */
   public readonly dataValidationRanges: {
     readonly startRowIndex: number;
@@ -122,13 +116,6 @@ export class StubSheet {
     return this.cells.get(`${row},${col}`);
   }
 
-  /** Returns the anchors of one row as an array (empty when absent). */
-  public anchorsFor(row: number): readonly string[] {
-    const anchors = this.anchors.get(row);
-    if (anchors === undefined) return [];
-    return typeof anchors === "string" ? [anchors] : anchors;
-  }
-
   /** Returns the data-validation rule covering one cell, if any. */
   public dataValidationFor(row: number, col: number): StubCell["dataValidation"] {
     const range = this.dataValidationRanges.find((candidate) =>
@@ -146,9 +133,6 @@ export class StubSheet {
     let last = -1;
     for (const key of this.cells.keys()) {
       const row = Number(key.split(",")[0]);
-      if (row > last) last = row;
-    }
-    for (const row of this.anchors.keys()) {
       if (row > last) last = row;
     }
     return last;
@@ -177,7 +161,6 @@ export class StubSpreadsheet {
       readonly headers?: readonly string[];
       readonly rows?: readonly (readonly (NormalizedCell | string | number | boolean | null)[])[];
       readonly hidden?: boolean;
-      readonly anchors?: ReadonlyMap<number, string>;
     } = {},
   ): StubSheet {
     const sheet = new StubSheet(this.nextSheetId, title, options.hidden === true);
@@ -193,9 +176,6 @@ export class StubSpreadsheet {
         sheet.cells.set(`${rowIndex + 1},${columnIndex}`, toStubCell(value));
       });
     });
-    if (options.anchors !== undefined) {
-      for (const [row, anchor] of options.anchors) sheet.anchors.set(row, anchor);
-    }
     return sheet;
   }
 
@@ -396,7 +376,6 @@ function transportFaultError(fault: StubTransportFault): Error {
 function gridDataFor(sheet: StubSheet): unknown {
   const lastRow = sheet.lastContentRow();
   const rowData: unknown[] = [];
-  const rowMetadata: unknown[] = [];
   for (let row = 0; row <= lastRow; row += 1) {
     const lastColumn = sheet.lastContentColumn();
     const values: unknown[] = [];
@@ -405,19 +384,11 @@ function gridDataFor(sheet: StubSheet): unknown {
       values.push(stubCellWire(cell, sheet.dataValidationFor(row, col)));
     }
     rowData.push({ values });
-    const anchors = sheet.anchorsFor(row);
-    rowMetadata.push({
-      developerMetadata: anchors.map((anchor) => ({
-        metadataKey: GOOGLE_SHEETS_API_ANCHOR_KEY,
-        metadataValue: anchor,
-      })),
-    });
   }
   return {
     startRow: 0,
     startColumn: 0,
     rowData,
-    rowMetadata,
   };
 }
 
@@ -502,12 +473,6 @@ function applyRequest(spreadsheet: StubSpreadsheet, request: GoogleSheetsApiWrit
       });
       return {};
     }
-    case "createDeveloperMetadata": {
-      const sheet = requireSheet(spreadsheet, request.sheetId);
-      const existing = sheet.anchorsFor(request.rowIndex);
-      sheet.anchors.set(request.rowIndex, [...existing, request.value]);
-      return {};
-    }
     case "deleteSheet": {
       const index = spreadsheet.sheets.findIndex((sheet) => sheet.sheetId === request.sheetId);
       if (index < 0) {
@@ -537,7 +502,7 @@ function requireSheet(spreadsheet: StubSpreadsheet, sheetId: number): StubSheet 
   return sheet;
 }
 
-/** Shifts cells and anchors at/after `startRow` down by `count` rows. */
+/** Shifts cells at/after `startRow` down by `count` rows. */
 function shiftRows(sheet: StubSheet, startRow: number, count: number): void {
   const shiftedCells = new Map<string, StubCell>();
   for (const [key, cell] of sheet.cells) {
@@ -550,13 +515,6 @@ function shiftRows(sheet: StubSheet, startRow: number, count: number): void {
   }
   sheet.cells.clear();
   for (const [key, cell] of shiftedCells) sheet.cells.set(key, cell);
-
-  const shiftedAnchors = new Map<number, string | readonly string[]>();
-  for (const [row, anchor] of sheet.anchors) {
-    shiftedAnchors.set(row >= startRow ? row + count : row, anchor);
-  }
-  sheet.anchors.clear();
-  for (const [row, anchor] of shiftedAnchors) sheet.anchors.set(row, anchor);
 }
 
 /** Deletes `count` rows starting at `startRow` and shifts the rest up. */
@@ -572,17 +530,6 @@ function deleteRows(sheet: StubSheet, startRow: number, count: number): void {
   }
   sheet.cells.clear();
   for (const [key, cell] of keptCells) sheet.cells.set(key, cell);
-
-  const keptAnchors = new Map<number, string | readonly string[]>();
-  for (const [row, anchor] of sheet.anchors) {
-    if (row < startRow) {
-      keptAnchors.set(row, anchor);
-    } else if (row >= startRow + count) {
-      keptAnchors.set(row - count, anchor);
-    }
-  }
-  sheet.anchors.clear();
-  for (const [row, anchor] of keptAnchors) sheet.anchors.set(row, anchor);
 }
 
 /** Computes the visible hash of a stub row over all headers (append rule). */

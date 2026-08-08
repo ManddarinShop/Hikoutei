@@ -14,7 +14,6 @@ import type {
   ParsedGridData,
   ParsedMergedCell,
   ParsedRowData,
-  ParsedRowMetadata,
   ParsedSheet,
   ParsedSpreadsheetDocument,
 } from "./preflightContext.js";
@@ -150,8 +149,7 @@ function parseGridDataArray(
       `${label}[${index}].startColumn`,
     );
     const rowData = parseRowData(data.rowData, `${label}[${index}].rowData`);
-    const rowMetadata = parseRowMetadata(data.rowMetadata, `${label}[${index}].rowMetadata`);
-    grids.set(sheetId, { startRow, startColumn, rowData, rowMetadata });
+    grids.set(sheetId, { startRow, startColumn, rowData });
   });
 }
 
@@ -214,51 +212,6 @@ function parseRowData(value: unknown, label: string): readonly ParsedRowData[] {
       invalidProviderState(`${label}[${index}].values must be an array`);
     }
     return { values: row.values };
-  });
-}
-
-function parseRowMetadata(value: unknown, label: string): readonly ParsedRowMetadata[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) invalidProviderState(`${label} must be an array`);
-  return value.map((entry, index) => {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      invalidProviderState(`${label}[${index}] must be an object`);
-    }
-    const metadata = entry as Record<string, unknown>;
-    if (metadata.developerMetadata === undefined) return { developerMetadata: [] };
-    if (!Array.isArray(metadata.developerMetadata)) {
-      invalidProviderState(`${label}[${index}].developerMetadata must be an array`);
-    }
-    return {
-      developerMetadata: metadata.developerMetadata.map((item, itemIndex) => {
-        if (item === null || typeof item !== "object" || Array.isArray(item)) {
-          invalidProviderState(
-            `${label}[${index}].developerMetadata[${itemIndex}] must be an object`,
-          );
-        }
-        const itemRecord = item as Record<string, unknown>;
-        if (
-          typeof itemRecord.metadataKey !== "string" ||
-          itemRecord.metadataKey.length === 0
-        ) {
-          invalidProviderState(
-            `${label}[${index}].developerMetadata[${itemIndex}].metadataKey is invalid`,
-          );
-        }
-        if (
-          itemRecord.metadataValue !== undefined &&
-          typeof itemRecord.metadataValue !== "string"
-        ) {
-          invalidProviderState(
-            `${label}[${index}].developerMetadata[${itemIndex}].metadataValue is invalid`,
-          );
-        }
-        return {
-          metadataKey: itemRecord.metadataKey,
-          metadataValue: itemRecord.metadataValue === undefined ? "" : itemRecord.metadataValue,
-        };
-      }),
-    };
   });
 }
 

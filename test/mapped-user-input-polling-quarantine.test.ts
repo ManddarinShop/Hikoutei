@@ -70,7 +70,7 @@ const mapping = defineTypedSheetsEntityMapping<Probe>({
       physicalSheetId: "quarantine-probe-input",
       spreadsheetId: "spreadsheet",
       tabName: "Probe_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: "user_input",
     },
   ],
@@ -163,7 +163,7 @@ function observed(statusCell: SyncSnapshotCell): SyncObservedSnapshot {
   const snapshot = {
     protocolVersion: SYNC_PROTOCOL_VERSIONS.V1,
     sheetName: "Probe_Input",
-    registeredRange: "A:B",
+    registeredRange: "A:C",
     projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: 1,
     headers: ["id", "status"],
@@ -272,7 +272,7 @@ describe("full metadata observation quarantines non-literal User_Input cells", (
     // The periodic safety full scan (above) is what eventually quarantines it.
     const valuesResult: SyncTableRowsResult = {
       sheetName: "Probe_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       headers: ["id", "status"],
       rows: [{ rowNumber: 2, fields: { id: probeId, status: pendingStatus } }],
     };
