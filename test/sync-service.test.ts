@@ -310,6 +310,120 @@ describe("internal sync service injected-provider mode", () => {
       },
     ]);
 
+  // Shared provider fixture for the human-resolution-flow tests: the
+  // Sync_Conflicts tab starts with one OPEN row that has no corresponding
+  // pending resolution command, mirroring a conflict the automatic resolver
+  // must leave alone.
+  const buildPollingProviderWithOpenConflictRow = () =>
+    new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: SYSTEM_SHEET_ID,
+        sheetName: "SyncServiceUsers_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        sheetName: "SyncServiceUsers_Input",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+      {
+        physicalSheetId: CONFLICT_SHEET_ID,
+        sheetName: "SyncServiceUsers_Conflicts",
+        registeredRange: "A:O",
+        projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
+        schemaVersion: 1,
+        headers: [
+          "Conflict_ID",
+          "Conflict_Group_ID",
+          "Event_ID",
+          "Entity_ID",
+          "Field_Name",
+          "User_Value",
+          "User_Base_Revision",
+          "Canonical_Value_At_Detection",
+          "Canonical_Revision_At_Detection",
+          "Current_Canonical_Value",
+          "Current_Canonical_Revision",
+          "Candidate_Epoch",
+          "Status",
+          "Resolution",
+          "Resolution_Command_ID",
+        ],
+        rows: [{
+          targetId: "conflict-open-1",
+          physicalAnchor: "conflict-open-anchor",
+          fields: {
+            Conflict_ID: { kind: "string", value: "conflict-open-1" },
+            Entity_ID: { kind: "string", value: "open-user" },
+            Field_Name: { kind: "string", value: "status" },
+            User_Value: { kind: "string", value: "human-edit" },
+            Status: { kind: "string", value: "OPEN" },
+            Resolution: { kind: "string", value: "" },
+          },
+        }],
+      },
+    ]);
+
+  // Seeds one OPEN conflict row (with its event ledger) through direct SQL so
+  // a test can model a conflict that has no durable pending resolution
+  // command, exactly the state a human resolver must handle on the
+  // Sync_Conflicts tab.
+  const insertOpenConflictWithSql = async (
+    service: InternalSyncService,
+    conflictId: string,
+  ): Promise<void> => {
+    const binding = await service.storage.read(({ sql }) => sql.get<{
+      readonly row_binding_id: string;
+      readonly entity_id: string | null;
+    }>(
+      "SELECT row_binding_id, entity_id FROM row_binding WHERE logical_sheet_id = ? LIMIT 1",
+      ["entity:sync_service_users"],
+    ));
+    if (binding === undefined || binding.entity_id === null) {
+      throw new Error("expected a mapped row binding with an entity id");
+    }
+    const now = Date.now();
+    const batchId = `batch-${conflictId}`;
+    const eventId = `event-${conflictId}`;
+    await service.storage.transaction(async ({ sql }) => {
+      await sql.run(
+        "INSERT INTO event_batch (batch_id, logical_sheet_id, physical_sheet_id, source, projection, atomicity, base_snapshot_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [batchId, "entity:sync_service_users", USER_INPUT_SHEET_ID, "polling", "user_input", "row_independent", "snapshot"],
+      );
+      await sql.run(
+        "INSERT INTO event_log (event_id, logical_sheet_id, physical_sheet_id, event_key, payload_hash, event_sequence, batch_id, row_binding_id, operation, status, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [eventId, "entity:sync_service_users", USER_INPUT_SHEET_ID, `event-key-${conflictId}`, "payload", 1, batchId, binding.row_binding_id, "update", "conflict", now],
+      );
+      await sql.run(
+        "INSERT INTO sync_conflict (conflict_id, event_id, logical_sheet_id, entity_id, row_binding_id, field_name, user_value, user_base_revision, canonical_value_at_detection, canonical_revision_at_detection, current_canonical_value, current_canonical_revision, candidate_epoch, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          conflictId,
+          eventId,
+          "entity:sync_service_users",
+          binding.entity_id,
+          binding.row_binding_id,
+          "status",
+          JSON.stringify({ kind: "string", value: "human-edit" }),
+          1,
+          JSON.stringify({ kind: "string", value: "canonical" }),
+          2,
+          JSON.stringify({ kind: "string", value: "canonical" }),
+          2,
+          3,
+          "OPEN",
+          now,
+          now,
+        ],
+      );
+    });
+  };
+
   it("provisions projections and delivers ORM outbox effects through the injected provider", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -662,7 +776,7 @@ describe("internal sync service injected-provider mode", () => {
     expect(provider.snapshotReadCount).toBe(beforeReScanSnapshots + 1);
   });
 
-  it("automatically resolves a User_Input conflict to canonical state and audits it", async () => {
+  it("defers automatic system-wins while a predecessor is in flight, then resolves the durable pending command on the next polling pass", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: SYSTEM_SHEET_ID,
@@ -826,6 +940,99 @@ describe("internal sync service injected-provider mode", () => {
         }),
       })],
     });
+  });
+
+  it("leaves a new OPEN conflict without a pending command untouched by a polling pass", async () => {
+    const provider = buildPollingProviderWithOpenConflictRow();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      // Keep the auto-started loop asleep after its first pass so explicit
+      // passes stay deterministic.
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "open-user", status: "canonical" }));
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    await insertOpenConflictWithSql(service, "conflict-open-1");
+
+    await service.pollingSupervisor.runOnce();
+
+    // The polling pass must not resolve, audit, or even claim the conflict:
+    // without a durable pending resolution command the row is a human
+    // resolution target, not an automatic system-wins retry.
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+      "SELECT status FROM sync_conflict WHERE conflict_id = ?",
+      ["conflict-open-1"],
+    ))).resolves.toEqual({ status: "OPEN" });
+    await expect(service.storage.read(({ sql }) => sql.all<{ readonly command_id: string }>(
+      "SELECT command_id FROM resolution_command",
+    ))).resolves.toEqual([]);
+    expect(provider.readRow(CONFLICT_SHEET_ID, "conflict-open-anchor").fields.Status).toEqual({
+      kind: "string",
+      value: "OPEN",
+    });
+  });
+
+  it("does not auto-resolve an existing OPEN conflict at service boot", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-boot-open-conflict-"));
+    try {
+      const dbName = join(dir, "boot-open-conflict.sqlite");
+      const provider = buildPollingProviderWithOpenConflictRow();
+      const first = await createInternalSyncService({
+        dbName,
+        entities: [User],
+        projections,
+        provider,
+        provisioner: new RecordingProvisioner(),
+        pollingIntervalMs: 3_600_000,
+        effectIdleIntervalMs: 3_600_000,
+      });
+      services.push(first);
+      const em = first.hikoutei.em.fork();
+      em.persist(em.create(User, { id: "boot-user", status: "canonical" }));
+      await em.flush();
+      await first.effectSupervisor.runOnce();
+      await insertOpenConflictWithSql(first, "conflict-boot-1");
+      // Release the leases so the restarted runtime claims immediately; the
+      // OPEN conflict row survives in SQLite and must stay OPEN across boot.
+      await first.close();
+
+      const second = await createInternalSyncService({
+        dbName,
+        entities: [User],
+        projections,
+        provider,
+        provisioner: new RecordingProvisioner(),
+        pollingIntervalMs: 3_600_000,
+        effectIdleIntervalMs: 3_600_000,
+      });
+      services.push(second);
+      await second.pollingSupervisor.runOnce();
+
+      // Boot used to auto-resolve every OPEN conflict before the supervisors
+      // started; it must now leave the human resolution target untouched.
+      await expect(second.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+        "SELECT status FROM sync_conflict WHERE conflict_id = ?",
+        ["conflict-boot-1"],
+      ))).resolves.toEqual({ status: "OPEN" });
+      await expect(second.storage.read(({ sql }) => sql.all<{ readonly command_id: string }>(
+        "SELECT command_id FROM resolution_command",
+      ))).resolves.toEqual([]);
+      expect(provider.readRow(CONFLICT_SHEET_ID, "conflict-open-anchor").fields.Status).toEqual({
+        kind: "string",
+        value: "OPEN",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("reports inbound polling phases through the timing sink with empty operation counts", async () => {

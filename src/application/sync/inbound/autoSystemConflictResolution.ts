@@ -48,11 +48,9 @@ import type {
   PersistObservedRowInput,
 } from "../../../infrastructure/storage/state/observation/observationTypes.js";
 import {
-  appendResolutionEffectsWithSql,
   persistResolutionCommandWithSql,
-  readConflictIdsWithSql,
   readConflictWithSql,
-  readOpenConflictIdsWithSql,
+  readPendingConflictIdsWithSql,
 } from "../../../infrastructure/storage/state/resolution/resolutionWriter.js";
 import { PERSIST_RESOLUTION_RESULT_KINDS } from "../../../infrastructure/storage/state/resolution/resolutionWriterContracts.js";
 import {
@@ -66,7 +64,6 @@ import {
   requireRegisteredSyncSheetWithSql,
 } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import {
-  claimWriterLeaseWithAdapter,
   claimWriterLeaseWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
@@ -78,62 +75,6 @@ const RESOLUTION_ACTOR_ID = "sync:auto-system-wins";
 const MAX_CONFLICTS_PER_LEASE_RENEWAL = 16;
 const PROJECTION_ROW_TARGET_KIND = "projection_row" as const;
 const CONFLICT_TARGET_KIND = "conflict" as const;
-
-/** Resolves existing unresolved conflicts before the sync supervisors start. */
-export async function autoResolveExistingMappedConflictsWithAdapter(
-  storage: SqlStorageAdapter,
-  mappings: readonly TypedSheetsEntityMapping[],
-  writer: ResolvedWriterOptions,
-): Promise<void> {
-  await storage.transaction(async ({ sql }) => {
-    const initialNow = writer.now();
-    // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
-    const claim = await claimWriterLeaseWithSql(sql, {
-      role: writer.role,
-      writerId: writer.writerId,
-      leaseDurationMs: writer.leaseDurationMs,
-      now: initialNow,
-    });
-    if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
-      throw new TypedSheetsOrmError(
-        TYPED_SHEETS_ORM_ERROR_CODES.WRITER_LEASE_UNAVAILABLE,
-        `automatic conflict resolver lease is unavailable: ${claim.reason}.`,
-      );
-    }
-    let fence: FencingContext = {
-      role: claim.lease.role,
-      writerEpoch: claim.lease.writerEpoch,
-      fencingToken: claim.lease.fencingToken,
-      now: initialNow,
-    };
-    for (const mapping of mappings) {
-      const conflictIds = await readOpenConflictIdsWithSql(sql, mapping.logicalSheetId);
-      const handledConflictIds = new Set(conflictIds);
-      for (const conflictBatch of chunkConflictIds(conflictIds)) {
-        fence = await renewAutomaticConflictResolutionLeaseWithSql(sql, fence, writer);
-        await autoResolveMappedConflictsWithSql(
-          sql,
-          fence,
-          writer,
-          mapping,
-          undefined,
-          conflictBatch,
-        );
-      }
-      const allConflictIds = await readConflictIdsWithSql(sql, mapping.logicalSheetId);
-      for (const conflictBatch of chunkConflictIds(allConflictIds)) {
-        fence = await renewAutomaticConflictResolutionLeaseWithSql(sql, fence, writer);
-        for (const conflictId of conflictBatch) {
-          if (handledConflictIds.has(conflictId)) continue;
-          const result = await readConflictWithSql(sql, mapping.logicalSheetId, conflictId);
-          if (result.kind === LOOKUP_RESULT_KINDS.FOUND && result.value.status === CONFLICT_STATUSES.RESOLVED) {
-            await ensureMappedConflictAuditWithSql(sql, fence, writer, mapping, result.value);
-          }
-        }
-      }
-    }
-  });
-}
 
 /** Renews the startup resolver fence without accepting a silent epoch takeover. */
 export async function renewAutomaticConflictResolutionLeaseWithSql(
@@ -173,50 +114,6 @@ function chunkConflictIds(conflictIds: readonly string[]): readonly (readonly st
     batches.push(conflictIds.slice(index, index + MAX_CONFLICTS_PER_LEASE_RENEWAL));
   }
   return batches;
-}
-
-/** Ensures one resolved conflict has an idempotent Sync_Conflicts audit effect. */
-export async function ensureMappedConflictAuditWithSql(
-  sql: SqlExecutor,
-  fence: FencingContext,
-  writer: ResolvedWriterOptions,
-  mapping: TypedSheetsEntityMapping,
-  conflict: SyncConflict,
-): Promise<void> {
-  const conflictSheet = await requireRegisteredSyncSheetWithSql(
-    sql,
-    `${mapping.logicalSheetId}:sync_conflicts`,
-  );
-  const baseline = await nextEffectBaseline(
-    sql,
-    mapping.logicalSheetId,
-    CONFLICT_TARGET_KIND,
-    conflict.conflictId,
-    0,
-    "",
-    true,
-    false,
-  );
-  const commitId = `audit:${conflict.conflictId}`;
-  const effect = createResolutionProjectionEffect({
-    effectId: identifiedValue("effect", writer),
-    commitId,
-    logicalSheetId: mapping.logicalSheetId,
-    physicalSheetId: conflictSheet.physicalSheetId,
-    sheetName: conflictSheet.tabName,
-    registeredRange: conflictSheet.registeredRange,
-    schemaVersion: mapping.schemaVersion,
-    targetId: conflict.conflictId,
-    rowBindingId: absentValue(),
-    conflictId: presentValue(conflict.conflictId),
-    targetAnchor: `conflict:${conflict.conflictId}`,
-    fields: syncConflictProjectionFields(conflict, "SYSTEM_WINS"),
-    createIfMissing: baseline.createIfMissing,
-    expectedVisibleRevision: baseline.expectedVisibleRevision,
-    expectedVisibleHash: baseline.expectedVisibleHash,
-    streamSequence: baseline.streamSequence,
-  });
-  await appendResolutionEffectsWithSql(sql, fence, [effect]);
 }
 
 /** Resolves newly persisted conflicts inside the caller's SQLite transaction. */
@@ -290,13 +187,16 @@ export async function autoResolveMappedConflictsWithSql(
 }
 
 /**
- * Retries durable open conflicts after a later polling pass.
+ * Retries deferred system-wins attempts after a later polling pass.
  *
- * A conflict deliberately remains OPEN while an older effect is processing so
- * a late remote response cannot overwrite the system-wins decision. The open
- * conflict row is the durable retry record; this pass re-reads it on every
- * polling cycle and retries the same fenced resolution after the predecessor
- * has become applied, superseded, or otherwise recoverable.
+ * Only conflicts that carry a durable pending resolution command are retried.
+ * A conflict remains OPEN while an older effect is processing so a late remote
+ * response cannot overwrite the system-wins decision; the pending command is
+ * the durable retry record, and this pass re-reads it on every polling cycle
+ * and retries the same fenced resolution after the predecessor has become
+ * applied, superseded, or otherwise recoverable. New OPEN conflicts without a
+ * pending command are left untouched so a human can resolve them on the
+ * Sync_Conflicts tab.
  */
 export async function retryOpenMappedConflictsWithAdapter(
   storage: SqlStorageAdapter,
@@ -313,7 +213,7 @@ export async function retryOpenMappedConflictsWithAdapter(
       if (!mapping.projections.some((projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT)) {
         continue;
       }
-      const conflictIds = await readOpenConflictIdsWithSql(sql, mapping.logicalSheetId);
+      const conflictIds = await readPendingConflictIdsWithSql(sql, mapping.logicalSheetId);
       if (conflictIds.length > 0) result.push({ mapping, conflictIds });
     }
     return result;
@@ -351,7 +251,7 @@ export async function retryOpenMappedConflictsWithAdapter(
     };
     let attempted = 0;
     for (const candidate of candidates) {
-      const currentIds = await readOpenConflictIdsWithSql(sql, candidate.mapping.logicalSheetId);
+      const currentIds = await readPendingConflictIdsWithSql(sql, candidate.mapping.logicalSheetId);
       for (const conflictBatch of chunkConflictIds(currentIds)) {
         fence = await renewAutomaticConflictResolutionLeaseWithSql(sql, fence, writer);
         for (const conflictId of conflictBatch) {
