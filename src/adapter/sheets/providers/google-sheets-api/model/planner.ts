@@ -136,7 +136,11 @@ export function planEffectBatch(
   for (const row of context.rows) {
     const copy = toWorkingRow(row);
     working.set(copy.rowNumber, copy);
-    if (copy.anchor.kind === PRESENCE_KINDS.PRESENT) {
+    // Mirrors indexRows: only the FIRST row per anchor value enters the
+    // index (duplicated anchors are evidence, never rewritten), so a
+    // duplicated anchor resolves deterministically instead of drifting to
+    // the last row carrying it.
+    if (copy.anchor.kind === PRESENCE_KINDS.PRESENT && !byAnchor.has(copy.anchor.value)) {
       byAnchor.set(copy.anchor.value, copy);
     }
     if (copy.identity.kind === PRESENCE_KINDS.PRESENT) {

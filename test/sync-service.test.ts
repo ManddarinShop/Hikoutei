@@ -52,7 +52,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       SyncServiceUser: {
         systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
         syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
-        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:C" },
         userOwnedFields: ["id", "status"],
       },
     },
@@ -267,7 +267,7 @@ describe("internal sync service injected-provider mode", () => {
       SyncServiceUser: {
         systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
         syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
-        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:C" },
         userOwnedFields: ["id", "status"],
       },
     },
@@ -303,7 +303,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -323,7 +323,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -393,7 +393,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -503,7 +503,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -538,7 +538,7 @@ describe("internal sync service injected-provider mode", () => {
     const inputSnapshot = await provider.readSnapshot({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "SyncServiceUsers_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
     });
@@ -637,7 +637,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -687,7 +687,7 @@ describe("internal sync service injected-provider mode", () => {
     const inputSnapshot = await provider.readSnapshot({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "SyncServiceUsers_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
     });
@@ -1059,7 +1059,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
       SyncServiceUser: {
         systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
         syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
-        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:C" },
         userOwnedFields: ["id", "status"],
       },
     },
@@ -1078,7 +1078,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],

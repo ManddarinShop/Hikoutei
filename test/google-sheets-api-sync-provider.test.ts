@@ -118,7 +118,8 @@ const USER_INPUT_DEFINITION = definition({
   physicalSheetId: USER_INPUT_SHEET_ID,
   tabName: "Users_Input",
   projection: "user_input",
-  registeredRange: "A:B",
+  // The last column is the internal __hikoutei_row_id system column.
+  registeredRange: "A:C",
   headers: USER_INPUT_HEADERS,
 });
 const CONFLICT_DEFINITION = definition({
@@ -181,7 +182,7 @@ function userInputSnapshotRequest(overrides: Partial<ReadSyncSnapshotRequest> = 
   return {
     physicalSheetId: USER_INPUT_SHEET_ID,
     sheetName: "Users_Input",
-    registeredRange: "A:B",
+    registeredRange: "A:C",
     projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: 1,
     ...overrides,
@@ -247,6 +248,9 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(systemTab).toBeDefined();
     expect(systemTab?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
     expect(systemTab?.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__typed_sheets_deleted");
+    const inputTab = spreadsheet.findTab("Users_Input");
+    expect(inputTab?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
+    expect(inputTab?.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
     const conflictsTab = spreadsheet.findTab("Users_Conflicts");
     expect(conflictsTab?.cell(0, 12)?.userEnteredValue?.stringValue).toBe("Status");
   });
@@ -254,7 +258,9 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
   it("treats an existing exact header row as a no-op with zero mutations", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
-    spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+    });
     spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
@@ -264,6 +270,25 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
     expect(result.createdSheets).toEqual([]);
     expect(result.initializedHeaders).toEqual([]);
+  });
+
+  it("rejects a legacy User_Input content tab without the system column", async () => {
+    // A tab provisioned by an older version has only the user-field headers;
+    // provisioning must fail closed with the re-provision message instead of
+    // silently extending the tab.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Users_Input", {
+      headers: USER_INPUT_HEADERS,
+      rows: [["u1", "pending"]],
+    });
+    spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.provisionRegistry(provisionRoutes()))
+      .rejects.toThrow(/missing the __hikoutei_row_id system column; re-provision the route/);
+    expect(transport.batchUpdateCalls).toBe(0);
   });
 
   it("initializes headers on a truly empty existing tab without recreating it", async () => {
@@ -419,7 +444,8 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
       physicalSheetId: "entity:users:wide",
       tabName: "My Tab",
       projection: "user_input",
-      registeredRange: "AA:AB",
+      // user_input ranges reserve the last column for the system row-id.
+      registeredRange: "AA:AC",
       headers: ["left", "right"],
     });
     const provider = new GoogleSheetsApiSyncProvider({
@@ -432,7 +458,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
 
     const result = await provider.provisionRegistry([{
       sheetName: "My Tab",
-      registeredRange: "AA:AB",
+      registeredRange: "AA:AC",
       projection: "user_input",
       schemaVersion: 1,
       headers: ["left", "right"],
@@ -442,12 +468,13 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(tab).toBeDefined();
     expect(tab?.cell(0, 26)?.userEnteredValue?.stringValue).toBe("left");
     expect(tab?.cell(0, 27)?.userEnteredValue?.stringValue).toBe("right");
+    expect(tab?.cell(0, 28)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
 
     // The values-only read on the same route round-trips.
     const read = await provider.readRows({
       physicalSheetId: "entity:users:wide",
       sheetName: "My Tab",
-      registeredRange: "AA:AB",
+      registeredRange: "AA:AC",
       projection: "user_input",
       schemaVersion: 1,
       headers: ["left", "right"],
@@ -462,8 +489,8 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 2);
     spreadsheet.addTab("Users_Input", {
-      headers: USER_INPUT_HEADERS,
-      rows: [["u1", "pending"], ["u2", "paid"]],
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending", null], ["u2", "paid", null]],
     });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
@@ -472,7 +499,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "Users_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: USER_INPUT_HEADERS,
@@ -489,7 +516,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
 
     expect(transport.getSpreadsheetCalls).toBe(1);
     expect(transport.getSpreadsheetRequests[0]?.ranges).toEqual([
-      "'Users_Input'!A1:B1048576",
+      "'Users_Input'!A1:C1048576",
       "'Users_System'!A1:C1048576",
     ]);
     expect(results.map((result) => result.sheetName)).toEqual(["Users_Input", "Users_System"]);
@@ -502,7 +529,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
 
   it("normalizes strings, numbers, booleans, dates, and blanks with getValues semantics", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", { userEnteredValue: { numberValue: 42 } });
     tab.cells.set("2,0", { userEnteredValue: { boolValue: true } });
@@ -519,7 +546,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     const result = await provider.readRows({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
@@ -543,7 +570,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
 
   it("resolves formula cells to their computed effective value", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", formulaCell("=B2*2", { numberValue: 84 }, "84"));
     const transport = new StubSheetsTransport(spreadsheet);
@@ -552,7 +579,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     const result = await provider.readRows({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
@@ -562,7 +589,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
 
   it("returns error cells as their formatted error string literal", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", {
       userEnteredValue: { formulaValue: "=1/0" },
@@ -575,7 +602,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     const result = await provider.readRows({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
@@ -585,13 +612,13 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
 
   it("fails closed on a missing tab, header drift, and malformed payloads", async () => {
     const spreadsheet = new StubSpreadsheet();
-    spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
     const request = {
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "Users_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: USER_INPUT_HEADERS,
@@ -636,25 +663,31 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
 describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
   it("assigns missing anchors in one batch and re-reads so the snapshot sees them", async () => {
     const spreadsheet = new StubSpreadsheet();
-    seedSystemTab(spreadsheet, 1);
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending", null]],
+    });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
 
-    const observed = await provider.observeSnapshot(systemSnapshotRequest());
+    const observed = await provider.observeSnapshot(userInputSnapshotRequest());
 
     expect(observed.anchors.assigned).toBe(1);
     expect(observed.anchors.existing).toBe(0);
     expect(observed.anchors.duplicateAnchors).toEqual([]);
-    // One anchor write batch; the snapshot was built from a re-read.
+    // One anchor write batch (updateCells on the system column); the
+    // snapshot was built from a re-read.
     expect(transport.batchUpdateCalls).toBe(1);
     const anchorBatch = transport.appliedBatchUpdates[0];
-    expect(anchorBatch?.every((request) => request.kind === "createDeveloperMetadata")).toBe(true);
+    expect(anchorBatch?.every((request) =>
+      request.kind === "updateCells" && request.startColumnIndex === 2 &&
+      request.fields === "userEnteredValue")).toBe(true);
     expect(observed.snapshot.rows[0]?.physicalAnchor.kind).toBe("present");
     expect(presenceValue(observed.snapshot.rows[0]?.physicalAnchor)).toMatch(/^sync-anchor:/);
     expect(observed.snapshot.unanchoredRows).toEqual([]);
 
     // The second pass is idempotent: zero writes, same anchor evidence.
-    const again = await provider.observeSnapshot(systemSnapshotRequest());
+    const again = await provider.observeSnapshot(userInputSnapshotRequest());
     expect(again.anchors.assigned).toBe(0);
     expect(again.anchors.existing).toBe(1);
     expect(transport.batchUpdateCalls).toBe(1);
@@ -679,42 +712,85 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
 
   it("reports duplicate anchors across rows as evidence", async () => {
     const spreadsheet = new StubSpreadsheet();
-    spreadsheet.addTab("Users_System", {
-      headers: SYSTEM_HEADERS,
-      rows: [["u1", "pending", false], ["u2", "pending", false]],
-      anchors: new Map([[1, "shared-anchor"], [2, "shared-anchor"]]),
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [
+        ["u1", "pending", "sync-anchor:shared"],
+        ["u2", "pending", "sync-anchor:shared"],
+      ],
     });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
 
-    const ensured = await provider.ensureRowAnchors(systemSnapshotRequest());
+    const ensured = await provider.ensureRowAnchors(userInputSnapshotRequest());
     expect(ensured.duplicateAnchors).toEqual([
-      { anchor: "shared-anchor", rowNumbers: [2, 3] },
+      { anchor: "sync-anchor:shared", rowNumbers: [2, 3] },
     ]);
     expect(ensured.assigned).toBe(0);
     expect(ensured.existing).toBe(2);
 
-    const snapshot = await provider.readSnapshot(systemSnapshotRequest());
+    const snapshot = await provider.readSnapshot(userInputSnapshotRequest());
     expect(snapshot.duplicateAnchors).toEqual([
-      { anchor: "shared-anchor", rowNumbers: [2, 3] },
+      { anchor: "sync-anchor:shared", rowNumbers: [2, 3] },
     ]);
   });
 
-  it("fails closed when one row carries multiple anchors", async () => {
+  it("treats system-column edits as anchor state, never as user-field edits", async () => {
+    // A user overwrites or blanks the UUID column. The column is invisible to
+    // user-field hashing, so no conflict or quarantine can arise; the ensure
+    // pass re-anchors ONLY blank cells with a fresh sync-anchor value while a
+    // replaced (but non-empty) value is kept as the row's anchor evidence.
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_System", {
-      headers: SYSTEM_HEADERS,
-      rows: [["u1", "pending", false]],
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [
+        ["u1", "pending", "sync-anchor:keep"],
+        ["u2", "pending", "user-typed-garbage"],
+        ["u3", "pending", null],
+      ],
     });
-    tab.anchors.set(1, ["anchor-a", "anchor-b"]);
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
 
-    await expect(provider.observeSnapshot(systemSnapshotRequest()))
-      .rejects.toThrow(/row has multiple sync anchors: 2/);
-    await expect(provider.readSnapshot(systemSnapshotRequest()))
-      .rejects.toThrow(/row has multiple sync anchors: 2/);
-    expect(transport.batchUpdateCalls).toBe(0);
+    const ensured = await provider.ensureRowAnchors(userInputSnapshotRequest());
+    expect(ensured.assigned).toBe(1);
+    expect(ensured.existing).toBe(2);
+    expect(ensured.duplicateAnchors).toEqual([]);
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0];
+    const writes = batch?.filter((request) => request.kind === "updateCells");
+    expect(writes?.map((request) => request.kind === "updateCells" ? request.startRowIndex : -1))
+      .toEqual([3]);
+    const inputTab = spreadsheet.findTab("Users_Input");
+    // The blanked cell was reassigned; the garbage value and the valid anchor
+    // were left untouched.
+    expect(inputTab?.cell(3, 2)?.userEnteredValue?.stringValue).toMatch(/^sync-anchor:/);
+    expect(inputTab?.cell(2, 2)?.userEnteredValue?.stringValue).toBe("user-typed-garbage");
+    expect(inputTab?.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
+  });
+
+  it("treats whitespace-only anchor cells as missing and re-anchors them", async () => {
+    // Mirroring the header validation's trim rule, a system-column cell made
+    // of only whitespace is not an anchor: the ensure pass re-anchors it with
+    // a fresh sync-anchor value instead of keeping it as anchor evidence.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [
+        ["u1", "pending", "sync-anchor:keep"],
+        ["u2", "pending", "   "],
+      ],
+    });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    const ensured = await provider.ensureRowAnchors(userInputSnapshotRequest());
+    expect(ensured.assigned).toBe(1);
+    expect(ensured.existing).toBe(1);
+    expect(ensured.duplicateAnchors).toEqual([]);
+    const inputTab = spreadsheet.findTab("Users_Input");
+    expect(inputTab?.cell(1, 2)?.userEnteredValue?.stringValue).toBe("sync-anchor:keep");
+    expect(inputTab?.cell(2, 2)?.userEnteredValue?.stringValue).toMatch(/^sync-anchor:/);
   });
 
   it("skips checkbox-false-only rows as blank for anchors and snapshots", async () => {
@@ -733,17 +809,104 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
       projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
       schemaVersion: 1,
     });
-    expect(observed.anchors.assigned).toBe(1);
+    // Only user_input tabs carry anchors; the conflicts row is identity- and
+    // row-number-located, so the pass assigns nothing and reports the row as
+    // unanchored.
+    expect(observed.anchors.assigned).toBe(0);
     expect(observed.snapshot.rows.map((row) => row.rowNumber)).toEqual([3]);
+    expect(observed.snapshot.unanchoredRows).toEqual([3]);
+  });
+
+  it("fails closed when a user property collides with the system row-id header", async () => {
+    // A mapping whose user fields include __hikoutei_row_id is a header
+    // collision: the provider rejects it before any read or mutation.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+    });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const collidingDefinition = definition({
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      tabName: "Users_Input",
+      projection: "user_input",
+      registeredRange: "A:C",
+      headers: ["id", "__hikoutei_row_id"],
+    });
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [collidingDefinition],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 1,
+    });
+
+    await expect(provider.observeSnapshot(userInputSnapshotRequest()))
+      .rejects.toThrow(/registered header __hikoutei_row_id collides with the system row-id column/);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("rejects a legacy User_Input tab without the system column with a re-provision error", async () => {
+    // A tab provisioned by an older version has only the user-field headers.
+    // Every read path must fail closed with the re-provision message instead
+    // of silently treating the missing column as a blank anchor area.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_Input", {
+      headers: USER_INPUT_HEADERS,
+      rows: [["u1", "pending"]],
+    });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.observeSnapshot(userInputSnapshotRequest()))
+      .rejects.toThrow(/missing the __hikoutei_row_id system column; re-provision the route/);
+    await expect(provider.readSnapshot(userInputSnapshotRequest()))
+      .rejects.toThrow(/missing the __hikoutei_row_id system column; re-provision the route/);
+    await expect(provider.ensureRowAnchors(userInputSnapshotRequest()))
+      .rejects.toThrow(/missing the __hikoutei_row_id system column; re-provision the route/);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("assigns anchors to 500 rows in one atomic batch (no metadata quota bound)", async () => {
+    // The old developer-metadata scheme capped a User_Input tab at roughly
+    // 410-420 rows per sheet quota; anchors as cell values have no such
+    // bound, so a 500-row tab is fully anchored in one batch.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: Array.from({ length: 500 }, (_, index) => [
+        `u${index + 1}`,
+        "pending",
+        null,
+      ]),
+    });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    const observed = await provider.observeSnapshot(userInputSnapshotRequest());
+
+    expect(observed.anchors.assigned).toBe(500);
+    expect(observed.anchors.existing).toBe(0);
+    expect(observed.anchors.duplicateAnchors).toEqual([]);
+    // One atomic anchor batch carrying one updateCells per anchored row.
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0];
+    expect(batch?.filter((request) => request.kind === "updateCells")).toHaveLength(500);
+    expect(observed.snapshot.rows).toHaveLength(500);
     expect(observed.snapshot.unanchoredRows).toEqual([]);
+
+    // The second pass reuses every anchor: zero writes, zero assignments.
+    const again = await provider.observeSnapshot(userInputSnapshotRequest());
+    expect(again.anchors.assigned).toBe(0);
+    expect(again.anchors.existing).toBe(500);
+    expect(transport.batchUpdateCalls).toBe(1);
   });
 
   it("observeSnapshots shares one anchor write and one re-read across tabs", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
     spreadsheet.addTab("Users_Input", {
-      headers: USER_INPUT_HEADERS,
-      rows: [["u1", "pending"]],
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending", null]],
     });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
@@ -755,18 +918,20 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
 
     expect(transport.batchUpdateCalls).toBe(1);
     expect(transport.getSpreadsheetCalls).toBe(2); // one read + one shared re-read
-    expect(results.map((result) => result.anchors.assigned)).toEqual([1, 1]);
+    // Anchors are user_input-only: the system tab gets no anchor writes.
+    expect(results.map((result) => result.anchors.assigned)).toEqual([0, 1]);
     expect(results.map((result) => result.snapshot.rows.length)).toEqual([1, 1]);
-    expect(results[0]?.snapshot.rows[0]?.physicalAnchor.kind).toBe("present");
+    expect(results[0]?.snapshot.rows[0]?.physicalAnchor.kind).toBe("absent");
     expect(results[1]?.snapshot.rows[0]?.physicalAnchor.kind).toBe("present");
   });
 });
 
 describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
   it("keeps the outbound preflight masks and adds separate observation/values masks", () => {
+    // Row anchors are cell values in the User_Input system column, so no
+    // mask requests developer metadata anymore.
     expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).toBe(
       "sheets.properties(sheetId,title,hidden),sheets.data(startRow,startColumn," +
-      "rowMetadata.developerMetadata(metadataId,metadataKey,metadataValue)," +
       "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
     );
     expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).toBe("sheets.properties(sheetId,title,hidden)");
@@ -779,11 +944,12 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(GOOGLE_SHEETS_API_OBSERVATION_FIELDS).toContain("dataValidation");
     // The lightweight user_input mask drops merges and dataValidation (the
     // lightweight branch never consults either), keeping effectiveValue and
-    // the anchor metadata the snapshot needs.
+    // the system-column anchor values the snapshot needs.
     expect(GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS).not.toContain("merges");
     expect(GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS).not.toContain("dataValidation");
     expect(GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS).toContain("effectiveValue");
-    expect(GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS).toContain("developerMetadata");
+    expect(GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS).not.toContain("developerMetadata");
+    expect(GOOGLE_SHEETS_API_OBSERVATION_FIELDS).not.toContain("developerMetadata");
     expect(GOOGLE_SHEETS_API_VALUES_FIELDS).toContain("effectiveValue");
     expect(GOOGLE_SHEETS_API_VALUES_FIELDS).toContain("dataValidation");
     expect(GOOGLE_SHEETS_API_VALUES_FIELDS).not.toContain("mergedCells");
@@ -794,7 +960,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
 
   it("classifies formula cells with the sha256 formula hash", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", formulaCell("=B2*2", { numberValue: 84 }, "84"));
     const transport = new StubSheetsTransport(spreadsheet);
@@ -813,7 +979,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
 
   it("classifies every covered cell of one merged range with its full A1 notation", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", { userEnteredValue: { stringValue: "pending" } });
     tab.cells.set("2,0", { userEnteredValue: { stringValue: "merged-anchor" } });
@@ -847,7 +1013,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
   it("classifies every supported displayed error code", async () => {
     const codes = ["#REF!", "#DIV/0!", "#N/A", "#VALUE!", "#NAME?", "#NUM!", "#ERROR!", "#NULL!"];
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     codes.forEach((code, index) => {
       tab.cells.set(`${index + 1},0`, { userEnteredValue: { stringValue: `row-${index}` } });
       tab.cells.set(`${index + 1},1`, {
@@ -871,7 +1037,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
 
   it("emits stableHash evidence for literals AND blank cells (stableHash(null))", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", { userEnteredValue: { stringValue: "paid" } });
     tab.cells.set("2,0", { userEnteredValue: { stringValue: "u2" } });
@@ -893,7 +1059,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
 
   it("normalizes canonical-format numbers as dates in snapshots", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", {
       userEnteredValue: { numberValue: dateSerialFromIso("2024-02-01T00:00:00.000Z") },
@@ -910,7 +1076,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
 
   it("lightweight mode omits stableHash and merge/formula detection", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", formulaCell("=B2*2", { numberValue: 84 }, "84"));
     // Merge A2:B2 over the formula row: full mode classifies it as merged,
@@ -945,7 +1111,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
 
   it("detects displayed error strings in lightweight mode from raw values", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", {
       userEnteredValue: { formulaValue: "=1/0" },
@@ -965,10 +1131,10 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
 
   it("produces stable snapshot hashes equal to the wire-shape computation", async () => {
     const spreadsheet = new StubSpreadsheet();
-    const tab = spreadsheet.addTab("Users_Input", { headers: USER_INPUT_HEADERS });
+    const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
     tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
     tab.cells.set("1,1", { userEnteredValue: { stringValue: "paid" } });
-    tab.anchors.set(1, "anchor-1");
+    tab.cells.set("1,2", { userEnteredValue: { stringValue: "sync-anchor:anchor-1" } });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
 
@@ -984,8 +1150,8 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
     spreadsheet.addTab("Users_Input", {
-      headers: USER_INPUT_HEADERS,
-      rows: [["u1", "pending"]],
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending", null]],
     });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);

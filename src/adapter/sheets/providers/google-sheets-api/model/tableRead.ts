@@ -12,6 +12,9 @@
 
 import type { NormalizedCell } from "../../../../../domain/index.js";
 import type { SyncTableRow } from "../../../../../application/sync/sheetsContract/syncSheets.js";
+import {
+  GOOGLE_SHEETS_API_ROW_ID_HEADER,
+} from "../constants.js";
 import { invalidProviderState } from "../errors.js";
 import {
   apiCellNumberFormat,
@@ -30,26 +33,37 @@ export interface TableReadTarget {
   readonly registeredRange: string;
   readonly headers: readonly string[];
   readonly checkboxHeaders: readonly string[];
+  /** 1-based system row-id column; undefined for projections without one. */
+  readonly anchorColumn: number | undefined;
 }
 
 /**
  * Builds the nonblank rows of one validated grid as normalized table rows.
- * Header validation is strict (exact match, non-empty, no duplicates) and
- * blank rows are skipped with the checkbox-false rule.
+ * Header validation is strict (exact match, non-empty, no duplicates; the
+ * system row-id column must close a user_input range) and blank rows are
+ * skipped with the checkbox-false rule, ignoring the system column.
  */
 export function buildTableRowsFromGrid(
   grid: ParsedGridData,
   target: TableReadTarget,
 ): readonly SyncTableRow[] {
   const range = parseRegisteredRange(target.registeredRange);
-  const headers = readRegisteredHeaders(grid, range, target.headers);
+  const headers = readRegisteredHeaders(
+    grid,
+    range,
+    target.headers,
+    target.anchorColumn === undefined ? undefined : GOOGLE_SHEETS_API_ROW_ID_HEADER,
+  );
   const checkboxIndexes = checkboxColumnIndexes(headers, target.checkboxHeaders);
+  const userFieldCount = target.anchorColumn === undefined
+    ? range.columnCount
+    : range.columnCount - 1;
   const rows: SyncTableRow[] = [];
   for (let rowIndex = 0; rowIndex < grid.rowData.length; rowIndex += 1) {
     const rowNumber = grid.startRow + 1 + rowIndex;
     if (rowNumber < 2) continue;
     const values = gridRowCells(grid, rowNumber, range.startColumn, range.columnCount);
-    if (values.every((value, index) =>
+    if (values.slice(0, userFieldCount).every((value, index) =>
       isComputedBlankCell(value, checkboxIndexes.has(index)))) {
       continue;
     }

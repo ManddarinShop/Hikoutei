@@ -4,11 +4,14 @@
  *
  * The provider first enumerates every tab (no ranges, so hidden sheets are
  * returned), then reads the target grid (values, date formats, row-level
- * developer-metadata anchors) and the hidden receipt tab through the narrow
- * transport. Every untrusted SDK payload is validated with runtime guards
- * and promoted into a typed context the planner can mutate. Any drift —
- * header changes, duplicate anchors or identities, malformed receipts,
- * invalid cells — fails closed before a single mutation request is built.
+ * anchors) and the hidden receipt tab through the narrow transport. Every
+ * untrusted SDK payload is validated with runtime guards and promoted into
+ * a typed context the planner can mutate. Any drift — header changes,
+ * duplicate identities, malformed receipts, invalid cells — fails closed
+ * before a single mutation request is built. Duplicated row anchors do not
+ * fail the preflight: the anchor index keeps the first row per value and
+ * duplicated rows fall back to identity lookup (the duplicate stays
+ * reported as observation evidence).
  *
  * The enumeration and the data read are separate functions so the provider
  * can pace and report each transport request individually; the composite
@@ -45,7 +48,6 @@ export type {
   ParsedSheet,
   ParsedGridData,
   ParsedRowData,
-  ParsedRowMetadata,
   ParsedCellNumberFormat,
 } from "./preflightContext.js";
 export {

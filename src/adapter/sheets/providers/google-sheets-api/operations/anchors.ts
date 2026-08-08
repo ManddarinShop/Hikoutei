@@ -1,17 +1,19 @@
 /**
  * Row-anchor assignment for the Google Sheets API sync provider.
  *
- * Ensures every nonblank row of one registered tab carries a
- * developer-metadata anchor, writing all planned anchors in ONE atomic
- * batchUpdate. Rows with more than one anchor fail closed; duplicate anchors
- * across rows are reported as evidence. No re-read is performed.
+ * Ensures every nonblank row of one registered tab carries an anchor in the
+ * tab's LAST system column (a `sync-anchor:<uuid>` cell value), writing all
+ * planned anchors in ONE atomic batchUpdate. Rows with more than one anchor
+ * fail closed; duplicate anchors across rows are reported as evidence. A
+ * user_input tab without the system column fails closed (legacy format); a
+ * user-edited system cell is simply reassigned a fresh anchor. No re-read is
+ * performed.
  */
 
 import type {
   EnsureSyncRowAnchorsRequest,
   EnsureSyncRowAnchorsResult,
 } from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import { GOOGLE_SHEETS_API_ANCHOR_KEY } from "../constants.js";
 import { invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import {
@@ -19,6 +21,7 @@ import {
   type AnchorPlanResult,
   type ObservedTab,
 } from "../model/observation.js";
+import { anchorColumnFor } from "../model/preflightRows.js";
 import {
   definitionForPhysicalSheet,
   requireValidBatchUpdateReply,
@@ -29,10 +32,10 @@ import {
 import { readObservedTabs } from "./readRows.js";
 
 /**
- * Ensures every nonblank row of one registered tab carries a
- * developer-metadata anchor, writing all planned anchors in ONE atomic
- * batchUpdate. Rows with more than one anchor fail closed; duplicate
- * anchors across rows are reported as evidence. No re-read is performed.
+ * Ensures every nonblank row of one registered tab carries a system-column
+ * anchor, writing all planned anchors in ONE atomic batchUpdate. Rows with
+ * more than one anchor fail closed; duplicate anchors across rows are
+ * reported as evidence. No re-read is performed.
  */
 export async function ensureRowAnchors(
   deps: GoogleSheetsApiProviderDeps,
@@ -45,13 +48,15 @@ export async function ensureRowAnchors(
   if (tab === undefined) {
     invalidProviderState(`Registered sync sheet does not exist: ${request.sheetName}`);
   }
+  const anchorColumn = anchorColumnFor(request.registeredRange, request.projection);
   const plan = planRowAnchors(tab, {
     registeredRange: request.registeredRange,
     headers: definition.headers,
     checkboxHeaders: definition.checkboxHeaders ?? [],
+    anchorColumn,
   });
   if (plan.planned.length > 0) {
-    await writeAnchors(deps, tab, plan);
+    await writeAnchors(deps, tab, plan, anchorColumn);
   }
   return {
     assigned: plan.assigned,
@@ -65,13 +70,16 @@ export async function writeAnchors(
   deps: GoogleSheetsApiProviderDeps,
   tab: ObservedTab,
   plan: AnchorPlanResult,
+  anchorColumn: number | undefined,
 ): Promise<void> {
+  if (anchorColumn === undefined) return;
   const requests: GoogleSheetsApiWriteRequest[] = plan.planned.map((planned) => ({
-    kind: "createDeveloperMetadata",
+    kind: "updateCells",
     sheetId: tab.sheetId,
-    rowIndex: planned.rowIndex,
-    key: GOOGLE_SHEETS_API_ANCHOR_KEY,
-    value: planned.anchor,
+    startRowIndex: planned.rowIndex,
+    startColumnIndex: anchorColumn - 1,
+    rows: [[{ userEnteredValue: { stringValue: planned.anchor } }]],
+    fields: "userEnteredValue",
   }));
   const response = await runWrite(deps, () =>
     deps.transport.batchUpdate({

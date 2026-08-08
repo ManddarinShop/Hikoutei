@@ -3,15 +3,16 @@
  *
  * These helpers port the Apps Script observation operation's semantics to
  * the REST wire shapes: nonblank rows are detected with the checkbox rule,
- * anchors come from row-level developer metadata, and every cell is
- * classified merged / error / formula / literal / blank with the same
- * precedence and the same stableHash evidence as the Apps Script source, so
- * snapshot hashes are byte-compatible across providers.
+ * anchors come from the User_Input tab's LAST system column (cell values,
+ * never developer metadata), and every cell is classified merged / error /
+ * formula / literal / blank with the same precedence and the same stableHash
+ * evidence as the Apps Script source, so snapshot hashes are byte-compatible
+ * across providers. The system column is excluded from user-field cells,
+ * blank-row detection, and visible hashes.
  *
  * Every untrusted SDK payload is validated by the preflight guards before it
  * reaches this module; all functions here fail closed on drift (header
- * mismatch, duplicate anchors, multi-anchor rows) exactly like the Apps
- * Script source throws.
+ * mismatch, duplicate anchors) exactly like the Apps Script source throws.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -44,11 +45,17 @@ import {
   parseRegisteredRange,
 } from "./valueNormalization.js";
 import {
+  GOOGLE_SHEETS_API_ANCHOR_VALUE_PREFIX,
+  GOOGLE_SHEETS_API_ROW_ID_HEADER,
+} from "../constants.js";
+import {
+  readRegisteredHeaders,
+} from "./preflightHeaders.js";
+import {
   apiCellNumberFormat,
   gridRowCells,
   parseSpreadsheetDocument,
   readAnchorIndex,
-  readRegisteredHeaders,
   GOOGLE_SHEETS_API_OBSERVATION_FIELDS,
   type ParsedGridData,
   type ParsedMergedCell,
@@ -80,11 +87,16 @@ export interface AnchorPlanningTarget {
   readonly registeredRange: string;
   readonly headers: readonly string[];
   readonly checkboxHeaders: readonly string[];
+  /**
+   * 1-based absolute column of the system row-id column; `undefined` for
+   * projections without one (no anchors are planned or read).
+   */
+  readonly anchorColumn: number | undefined;
 }
 
 /** One anchor write planned for a missing anchor. */
 export interface PlannedAnchorWrite {
-  /** 0-based row index for the createDeveloperMetadata request. */
+  /** 0-based row index for the updateCells request. */
   readonly rowIndex: number;
   readonly anchor: string;
 }
@@ -165,32 +177,56 @@ function findSheetByTitle(
  * than one anchor fail closed; missing anchors get a fresh
  * `sync-anchor:<uuid>` value; duplicate anchors across rows are reported as
  * evidence (never rewritten). Blank rows are skipped, matching the Apps
- * Script ensureAnchorsFromValues_ behavior.
+ * Script ensureAnchorsFromValues_ behavior. The system column is validated
+ * (fail-closed on legacy tabs) and its cell value is the anchor source.
  */
 export function planRowAnchors(
   tab: ObservedTab,
   target: AnchorPlanningTarget,
 ): AnchorPlanResult {
   const range = parseRegisteredRange(target.registeredRange);
-  const anchorsByRow = readAnchorIndex(tab.grid);
+  const anchorColumn = target.anchorColumn;
+  if (anchorColumn !== undefined) {
+    // user_input tabs must carry the system column; a legacy tab (provisioned
+    // by an older version) fails closed with the re-provision message instead
+    // of being silently assigned anchors in a new column.
+    readRegisteredHeaders(
+      tab.grid,
+      range,
+      target.headers,
+      GOOGLE_SHEETS_API_ROW_ID_HEADER,
+    );
+  }
+  const anchorsByRow = readAnchorIndex(tab.grid, anchorColumn);
   const checkboxIndexes = checkboxColumnIndexes(target.headers, target.checkboxHeaders);
   const anchorRows = new Map<string, number[]>();
   let assigned = 0;
   let existing = 0;
   const planned: PlannedAnchorWrite[] = [];
 
+  // Only user_input tabs carry anchors (system_state and sync_conflicts rows
+  // are identity-located), so a tab without a system column never plans or
+  // counts anchors.
+  if (anchorColumn === undefined) {
+    return { assigned, existing, duplicateAnchors: [], planned };
+  }
+
   for (let rowIndex = 0; rowIndex < tab.grid.rowData.length; rowIndex += 1) {
     const rowNumber = tab.grid.startRow + 1 + rowIndex;
     if (rowNumber < 2) continue;
     const values = gridRowCells(tab.grid, rowNumber, range.startColumn, range.columnCount);
-    if (isBlankRow(values, checkboxIndexes)) continue;
+    // The system column is invisible to the blank-row rule.
+    const userValues = anchorColumn === undefined
+      ? values
+      : values.slice(0, range.columnCount - 1);
+    if (isBlankRow(userValues, checkboxIndexes)) continue;
     const anchors = anchorsByRow.get(rowNumber) ?? [];
     if (anchors.length > 1) {
       invalidProviderState(`row has multiple sync anchors: ${rowNumber}`);
     }
     const anchor = anchors[0];
     if (anchor === undefined) {
-      const value = `sync-anchor:${randomUUID()}`;
+      const value = `${GOOGLE_SHEETS_API_ANCHOR_VALUE_PREFIX}${randomUUID()}`;
       planned.push({ rowIndex: rowNumber - 1, anchor: value });
       assigned += 1;
       anchorRows.set(value, [rowNumber]);
@@ -222,9 +258,15 @@ export function buildSnapshotFromTab(
   target: SnapshotBuildTarget,
 ): SyncSheetsSnapshot {
   const range = parseRegisteredRange(target.registeredRange);
-  const headers = readRegisteredHeaders(tab.grid, range, target.headers);
+  const anchorColumn = target.anchorColumn;
+  const headers = readRegisteredHeaders(
+    tab.grid,
+    range,
+    target.headers,
+    anchorColumn === undefined ? undefined : GOOGLE_SHEETS_API_ROW_ID_HEADER,
+  );
   const lightweight = target.readMode === SYNC_SNAPSHOT_READ_MODES.USER_INPUT;
-  const anchorsByRow = readAnchorIndex(tab.grid);
+  const anchorsByRow = readAnchorIndex(tab.grid, anchorColumn);
   const checkboxIndexes = checkboxColumnIndexes(headers, target.checkboxHeaders);
   const merged = lightweight ? new Map<string, string>() : mergedRangesFor(tab);
 
@@ -236,7 +278,11 @@ export function buildSnapshotFromTab(
     const rowNumber = tab.grid.startRow + 1 + rowIndex;
     if (rowNumber < 2) continue;
     const values = gridRowCells(tab.grid, rowNumber, range.startColumn, range.columnCount);
-    if (isBlankRow(values, checkboxIndexes)) continue;
+    // The system column is invisible to the blank-row rule.
+    const userValues = anchorColumn === undefined
+      ? values
+      : values.slice(0, range.columnCount - 1);
+    if (isBlankRow(userValues, checkboxIndexes)) continue;
     const anchors = anchorsByRow.get(rowNumber) ?? [];
     if (anchors.length > 1) {
       invalidProviderState(`row has multiple sync anchors: ${rowNumber}`);

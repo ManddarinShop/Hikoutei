@@ -102,7 +102,9 @@ function findProbeRow(
   const byIdentity = new Map<string, WorkingRow>();
   for (const row of context.rows) {
     const working = toWorkingRow(row);
-    if (working.anchor.kind === PRESENCE_KINDS.PRESENT) {
+    // Mirrors indexRows: only the FIRST row per anchor value enters the
+    // index (duplicated anchors are evidence, never rewritten).
+    if (working.anchor.kind === PRESENCE_KINDS.PRESENT && !byAnchor.has(working.anchor.value)) {
       byAnchor.set(working.anchor.value, working);
     }
     if (working.identity.kind === PRESENCE_KINDS.PRESENT) {

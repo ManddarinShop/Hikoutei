@@ -11,6 +11,7 @@
  */
 
 import type { SyncSheetsProvisionRoute } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
+import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_FIELDS,
@@ -18,6 +19,8 @@ import {
   parseSpreadsheetDocument,
   type ParsedGridData,
 } from "../model/preflight.js";
+import { SYSTEM_COLUMN_REPROVISION_MESSAGE } from "../model/preflightHeaders.js";
+import { GOOGLE_SHEETS_API_ROW_ID_HEADER } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import { allocateSheetId } from "../model/sheetIdAllocator.js";
@@ -37,10 +40,12 @@ import {
  * Creates missing tabs and their header rows, or verifies existing tabs,
  * in ONE atomic batchUpdate. An existing tab with no content anywhere in
  * its used grid gets its headers initialized; an existing tab with content
- * must match the registered headers exactly (order, duplicates, width),
- * otherwise provisioning fails closed BEFORE any mutation. The operation
- * is idempotent: a retry after a lost response re-enumerates, sees the
- * exact headers, and succeeds without rewriting anything.
+ * must match the registered headers exactly (order, duplicates, width;
+ * user_input tabs additionally require the `__hikoutei_row_id` system
+ * column as the last header), otherwise provisioning fails closed BEFORE
+ * any mutation. The operation is idempotent: a retry after a lost response
+ * re-enumerates, sees the exact headers, and succeeds without rewriting
+ * anything.
  */
 export async function provisionRegistry(
   deps: GoogleSheetsApiProviderDeps,
@@ -109,9 +114,7 @@ export async function provisionRegistry(
   for (const registration of registrations) {
     const range = parseRegisteredRange(registration.registeredRange);
     const existing = existingByTitle.get(registration.sheetName);
-    const headerCells = registration.headers.map((header) => ({
-      userEnteredValue: { stringValue: header },
-    }));
+    const headerCells = provisionHeaderCells(registration);
     if (existing === undefined) {
       const sheetId = allocateSheetId(usedSheetIds);
       usedSheetIds.add(sheetId);
@@ -185,7 +188,9 @@ function validateProvisionRegistrations(
     }
     tabNames.add(registration.sheetName);
     const range = parseRegisteredRange(registration.registeredRange);
-    if (range.columnCount !== registration.headers.length) {
+    const expectedColumnCount = registration.headers.length +
+      (registration.projection === SYNC_PROJECTIONS.USER_INPUT ? 1 : 0);
+    if (range.columnCount !== expectedColumnCount) {
       invalidProviderRequest(
         "provisioning",
         `headers do not match registeredRange for ${registration.sheetName}`,
@@ -204,7 +209,31 @@ function validateProvisionRegistrations(
         `headers must not contain duplicates for ${registration.sheetName}`,
       );
     }
+    if (
+      registration.projection === SYNC_PROJECTIONS.USER_INPUT &&
+      registration.headers.includes(GOOGLE_SHEETS_API_ROW_ID_HEADER)
+    ) {
+      invalidProviderRequest(
+        "provisioning",
+        `header ${GOOGLE_SHEETS_API_ROW_ID_HEADER} collides with the system row-id column for ${registration.sheetName}`,
+      );
+    }
   }
+}
+
+/**
+ * Builds the header cells written for one registration, appending the
+ * reserved system row-id header on user_input tabs.
+ */
+function provisionHeaderCells(registration: SyncSheetsProvisionRoute): {
+  readonly userEnteredValue: { readonly stringValue: string };
+}[] {
+  const headers = registration.projection === SYNC_PROJECTIONS.USER_INPUT
+    ? [...registration.headers, GOOGLE_SHEETS_API_ROW_ID_HEADER]
+    : registration.headers;
+  return headers.map((header) => ({
+    userEnteredValue: { stringValue: header },
+  }));
 }
 
 /**
@@ -258,10 +287,12 @@ function cellHasEnteredValue(value: unknown): boolean {
 /**
  * Verifies one content tab's header row against the registered schema:
  * exact order, non-empty strings, no duplicates, and full registered-range
- * coverage. Any drift fails closed BEFORE any mutation, mirroring the Apps
- * Script "operational provisioning header mismatch" behavior (including a
- * blank header row on a tab whose content lives outside the registered
- * range).
+ * coverage. user_input tabs additionally require the system row-id header
+ * as the last column; a legacy tab (provisioned without it) fails closed
+ * with a re-provision message. Any drift fails closed BEFORE any mutation,
+ * mirroring the Apps Script "operational provisioning header mismatch"
+ * behavior (including a blank header row on a tab whose content lives
+ * outside the registered range).
  */
 function assertProvisioningHeaders(
   grid: ParsedGridData,
@@ -269,25 +300,50 @@ function assertProvisioningHeaders(
 ): void {
   const range = parseRegisteredRange(registration.registeredRange);
   const headerValues = gridHeaderCells(grid, range);
-  const actual = headerValues.map((value, index) => {
-    const raw = provisioningHeaderString(value);
+  const systemColumn = registration.projection === SYNC_PROJECTIONS.USER_INPUT
+    ? GOOGLE_SHEETS_API_ROW_ID_HEADER
+    : undefined;
+  const expectedCount = registration.headers.length + (systemColumn === undefined ? 0 : 1);
+  const actual: string[] = [];
+  for (let index = 0; index < headerValues.length; index += 1) {
+    const isSystemPosition = systemColumn !== undefined &&
+      index === registration.headers.length;
+    const raw = provisioningHeaderString(headerValues[index]);
     if (raw === null) {
+      if (isSystemPosition) {
+        invalidProviderState(
+          `operational provisioning header mismatch: ${registration.sheetName}` +
+          ` (${SYSTEM_COLUMN_REPROVISION_MESSAGE})`,
+        );
+      }
       invalidProviderState(
         `operational provisioning header mismatch: ${registration.sheetName}` +
         ` (header is missing at column ${index + 1})`,
       );
     }
-    return raw;
-  });
-  if (new Set(actual).size !== actual.length) {
+    actual.push(raw);
+  }
+  const userHeaders = actual.slice(0, registration.headers.length);
+  if (new Set(userHeaders).size !== userHeaders.length) {
     invalidProviderState(
       `operational provisioning header mismatch: ${registration.sheetName} (duplicate header)`,
     );
   }
   if (
-    actual.length !== registration.headers.length ||
-    actual.some((header, index) => header !== registration.headers[index])
+    actual.length !== expectedCount ||
+    userHeaders.some((header, index) => header !== registration.headers[index]) ||
+    (systemColumn !== undefined && actual[registration.headers.length] !== systemColumn)
   ) {
+    if (
+      systemColumn !== undefined &&
+      (actual.length !== expectedCount ||
+        actual[registration.headers.length] !== systemColumn)
+    ) {
+      invalidProviderState(
+        `operational provisioning header mismatch: ${registration.sheetName}` +
+        ` (${SYSTEM_COLUMN_REPROVISION_MESSAGE})`,
+      );
+    }
     invalidProviderState(
       `operational provisioning header mismatch: ${registration.sheetName}`,
     );

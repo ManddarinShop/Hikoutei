@@ -521,7 +521,7 @@ describe("env-driven sync auto-start", () => {
       entities: {
         SyncAutoUser: {
           systemState: { tabName: SYSTEM_TAB, registeredRange: "A:C" },
-          userInput: { tabName: INPUT_TAB, registeredRange: "A:B" },
+          userInput: { tabName: INPUT_TAB, registeredRange: "A:C" },
           syncConflicts: { tabName: CONFLICTS_TAB, registeredRange: "A:O" },
           userOwnedFields: ["id", "status"],
         },
@@ -534,10 +534,10 @@ describe("env-driven sync auto-start", () => {
       spreadsheetId: "spreadsheet-1",
       entities: {
         SyncAutoSingle: {
-          // User_Input becomes a single column; System_State adds only the
-          // tombstone column next to it.
+          // User_Input becomes the system row-id column next to the single
+          // property; System_State adds only the tombstone column.
           systemState: { tabName: "SyncAutoSingle_System", registeredRange: "A:B" },
-          userInput: { tabName: "SyncAutoSingle_Input", registeredRange: "A:A" },
+          userInput: { tabName: "SyncAutoSingle_Input", registeredRange: "A:B" },
           syncConflicts: { tabName: "SyncAutoSingle_Conflicts", registeredRange: "A:O" },
           userOwnedFields: ["id"],
         },
@@ -553,7 +553,7 @@ describe("env-driven sync auto-start", () => {
       entities: {
         SyncAutoWide: {
           systemState: { tabName: "SyncAutoWide_System", registeredRange: "A:AB" },
-          userInput: { tabName: "SyncAutoWide_Input", registeredRange: "A:AA" },
+          userInput: { tabName: "SyncAutoWide_Input", registeredRange: "A:AB" },
           syncConflicts: { tabName: "SyncAutoWide_Conflicts", registeredRange: "A:O" },
           userOwnedFields: wideUserOwnedFields,
         },
@@ -629,11 +629,12 @@ describe("env-driven sync auto-start", () => {
       "SyncAutoSingle_Conflicts",
     ]);
 
-    // The User_Input tab carries exactly one header column.
+    // The User_Input tab carries the property header plus the internal
+    // __hikoutei_row_id system column.
     const inputTab = spreadsheet.findTab("SyncAutoSingle_Input");
     expect(inputTab).toBeDefined();
     expect(inputTab?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
-    expect(inputTab?.cell(0, 1)).toBeUndefined();
+    expect(inputTab?.cell(0, 1)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
 
     // The drained append writes the single value into the first column.
     const em = service.hikoutei.em.fork();
