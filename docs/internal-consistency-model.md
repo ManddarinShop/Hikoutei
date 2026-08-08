@@ -244,6 +244,11 @@ OPEN → NEEDS_REBASE → RESOLVED
 
 - Sheet의 **물리적 행 번호는 identity로 쓰지 않는다** (행 삽입/삭제로 바뀌므로).
   각 행에는 별도 physical anchor가 붙는다.
+- **앵커 저장 위치**: User_Input 탭의 마지막 컬럼 `__hikoutei_row_id`
+  (셀 값 `sync-anchor:<uuid>`). developer-metadata 앵커는 PR #189에서
+  컬럼 방식으로 대체되어 시트당 ~420행 메타데이터 쿼터가 제거됐다.
+  시스템 컬럼은 항상 마지막 열이므로 사용자 필드 인덱스/해시에 영향이
+  없고, 사용자가 이 컬럼을 바꿔도 conflict로 취급하지 않는다.
 - SQLite 쪽 `row_binding_id`는 `"binding:" + stableHash(logicalSheetId,
   physicalAnchor)`로 안정적으로 유도된다.
 - `projection_row_binding`은 다음을 보장한다:
