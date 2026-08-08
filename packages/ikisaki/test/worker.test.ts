@@ -12,9 +12,11 @@ import { describe, expect, it } from "vitest";
 import {
   AdaptiveEffectBatchController,
   appendPendingEffectsWithAdapter,
+  claimEffectWithAdapter,
   createEffectWorkerSupervisor,
   DispatchTransportError,
   EFFECT_BATCH_LIMIT,
+  markDeliveryUncertainWithAdapter,
   runEffectWorkerWithAdapter,
   type ApplyOutcome,
   type Dispatcher,
@@ -281,6 +283,139 @@ describe("effect worker", () => {
     await expect(outboxError(adapter, effect.effectId)).resolves.toMatchObject({
       last_error_code: WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
       last_error_message: "probe transport failed",
+    });
+  });
+
+  it("force-settles delivery_uncertain effects past the probe bound as failed", async () => {
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const effect = regularEffect("uncertain-timeout");
+    await appendPendingEffectsWithAdapter(adapter, fence, [effect]);
+    await claimEffectWithAdapter(adapter, {
+      ...fence,
+      effectId: effect.effectId,
+      claimToken: "claim-1",
+      leaseDurationMs: 30_000,
+    });
+
+    // Stage the effect as delivery_uncertain with an uncertainty window older
+    // than the durable probe bound and a probe already due.
+    const uncertainSince = 1_000;
+    await markDeliveryUncertainWithAdapter(adapter, {
+      ...fence,
+      effectId: effect.effectId,
+      claimToken: "claim-1",
+      uncertainSince,
+      nextProbeAt: uncertainSince + 1_000,
+      lastErrorCode: WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
+      lastErrorMessage: "response lost",
+    });
+
+    const dispatcher = new FakeDispatcher({
+      readPostconditions: async (request) => ({
+        results: request.effects.map((pending) => ({
+          effectId: pending.effect_id,
+          payloadHash: pending.payload_hash,
+          postcondition: { disposition: "unavailable" as const },
+        })),
+      }),
+    });
+
+    // now is 31s past uncertainty start: beyond the 30s durable probe bound.
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: uncertainSince + 31_000,
+      maxEffects: 5,
+    });
+
+    expect(report).toMatchObject({
+      selected: 1,
+      claimed: 1,
+      applied: 0,
+      failed: 1,
+      deferred: 0,
+      requeued: 0,
+    });
+    expect(dispatcher.probeCalls).toBe(1);
+    await expect(outboxStatus(adapter, effect.effectId)).resolves.toBe("failed");
+    await expect(outboxError(adapter, effect.effectId)).resolves.toMatchObject({
+      status: "failed",
+      last_error_code: WORKER_ERROR_CODES.DELIVERY_UNCERTAIN_TIMEOUT,
+    });
+
+    // A failed effect is terminal and no longer an in-flight predecessor, so
+    // a later write on the same target stream is unblocked. This mirrors the
+    // READ_PROCESSING_PREDECESSOR guard that #193 reported as stuck forever.
+    const inFlight = await adapter.read(async ({ sql }) => {
+      const rows = await sql.all<{ readonly effect_id: string }>(
+        `SELECT effect_id FROM sheet_effect_outbox
+         WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
+           AND stream_sequence < ? AND status IN ('processing', 'delivery_uncertain')`,
+        [effect.logicalSheetId, effect.targetKind, effect.targetId, effect.streamSequence + 1],
+      );
+      return rows.map((row) => row.effect_id);
+    });
+    expect(inFlight).toEqual([]);
+  });
+
+  it("keeps deferring delivery_uncertain effects within the probe bound", async () => {
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const effect = regularEffect("uncertain-defer");
+    await appendPendingEffectsWithAdapter(adapter, fence, [effect]);
+    await claimEffectWithAdapter(adapter, {
+      ...fence,
+      effectId: effect.effectId,
+      claimToken: "claim-1",
+      leaseDurationMs: 30_000,
+    });
+
+    const uncertainSince = 1_000;
+    await markDeliveryUncertainWithAdapter(adapter, {
+      ...fence,
+      effectId: effect.effectId,
+      claimToken: "claim-1",
+      uncertainSince,
+      nextProbeAt: uncertainSince + 1_000,
+      lastErrorCode: WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
+      lastErrorMessage: "response lost",
+    });
+
+    const dispatcher = new FakeDispatcher({
+      readPostconditions: async (request) => ({
+        results: request.effects.map((pending) => ({
+          effectId: pending.effect_id,
+          payloadHash: pending.payload_hash,
+          postcondition: { disposition: "unavailable" as const },
+        })),
+      }),
+    });
+
+    // now is 5s past uncertainty start: well within the 30s bound, so the
+    // existing defer behavior is preserved.
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: uncertainSince + 5_000,
+      maxEffects: 5,
+    });
+
+    expect(report).toMatchObject({
+      selected: 1,
+      claimed: 1,
+      applied: 0,
+      failed: 0,
+      deferred: 1,
+      requeued: 0,
+    });
+    expect(dispatcher.probeCalls).toBe(1);
+    await expect(outboxStatus(adapter, effect.effectId)).resolves.toBe("delivery_uncertain");
+    await expect(outboxError(adapter, effect.effectId)).resolves.toMatchObject({
+      status: "delivery_uncertain",
+      last_error_code: WORKER_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
     });
   });
 
