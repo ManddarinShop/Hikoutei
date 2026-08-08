@@ -444,6 +444,44 @@ describe("internal sync service injected-provider mode", () => {
     ]);
   });
 
+  it("wires periodic System_State reconciliation that re-detects a removed system_state row", async () => {
+    const provider = buildPollingProvider();
+    const reports: Array<{ readonly effectsEnqueued: number }> = [];
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      pollingIntervalMs: 60_000,
+      effectIdleIntervalMs: 5,
+      reconciliationIntervalMs: 5,
+      onReconciliationReport: (report) => reports.push({ effectsEnqueued: report.effectsEnqueued }),
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "u1", status: "pending" }));
+    await em.flush();
+    // Fast-append the System_State projection so the canonical row exists.
+    await service.effectSupervisor.runOnce();
+
+    // The supervisor loop (started by the bootstrap) runs the reconciliation
+    // task in its first idle iteration; wait for at least one report so the
+    // wiring is proven to execute against the real runtime.
+    await waitForCondition(() => reports.length > 0, 5_000);
+    expect(reports.length).toBeGreaterThan(0);
+
+    // Remove the projected row so the next scan observes it as missing and
+    // enqueues a system_projection correction through the durable outbox.
+    provider.removeRowByIdentity(SYSTEM_SHEET_ID, "u1");
+    await waitForCondition(
+      () => reports.some((report) => report.effectsEnqueued > 0),
+      5_000,
+    );
+    expect(reports.some((report) => report.effectsEnqueued > 0)).toBe(true);
+  });
+
   it("fails startup when provisioning fails", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -1284,3 +1322,15 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     await expect(service.close()).resolves.toBeUndefined();
   });
 });
+
+/** Polls `predicate` until it returns true or `timeoutMs` elapses. */
+async function waitForCondition(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (!predicate()) {
+    throw new Error(`waitForCondition timed out after ${timeoutMs}ms`);
+  }
+}
