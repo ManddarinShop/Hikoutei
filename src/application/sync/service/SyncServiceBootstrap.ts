@@ -79,6 +79,11 @@ import {
 } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../outbound/SheetsEffectDispatcher.js";
 import {
+  runReconciliationScan,
+  RECONCILIATION_DEFAULTS,
+} from "../outbound/reconciliation/ReconciliationScanner.js";
+import { SYNC_PROJECTIONS } from "../sheetsContract/constants.js";
+import {
   MAPPED_USER_INPUT_POLL_MODES,
   pollMappedUserInputWithMikroOrm,
   type MappedUserInputPollingReport,
@@ -95,6 +100,8 @@ import type {
 } from "./contracts.js";
 
 const DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS = 60_000;
+/** Minimum delay between System_State reconciliation scans attached to the loop. */
+const DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS = 60_000;
 
 /** Provider capability required by internal service startup (incl. table reads). */
 export type InternalSyncProvider = SyncSheetsProvider & SyncSheetsTableReader;
@@ -139,6 +146,12 @@ export interface InternalSyncServiceOptions {
   readonly onCoordinatorLaneEvent?: (event: CoordinatorLaneEvent) => void;
   readonly onPollingReport?: (report: MappedUserInputPollingReport) => void;
   readonly onPollingError?: (error: unknown) => void;
+  /** Minimum delay between System_State reconciliation scans (default 60s). */
+  readonly reconciliationIntervalMs?: number;
+  /** Observability sink for one completed System_State reconciliation scan. */
+  readonly onReconciliationReport?: (report: { readonly effectsEnqueued: number }) => void;
+  /** Error sink for System_State reconciliation scan failures. */
+  readonly onReconciliationError?: (error: unknown) => void;
 }
 
 /** Runtime returned to an internal service entrypoint, not to root consumers. */
@@ -193,6 +206,39 @@ export async function createInternalSyncService(
     const remote = createRemoteProvider(options, projectionDefinitions);
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
 
+    // Periodic System_State reconciliation is a lazy repair net, not part of
+    // the normal write path: one scan per system_state projection reads a
+    // provider snapshot, compares it against canonical SQLite state, and
+    // enqueues normal system_projection corrections on the durable outbox for
+    // the effect worker to apply through the same CAS-guarded slow path. The
+    // scanner never writes to the Sheet; it only feeds the existing outbox.
+    const runSystemStateReconciliation = async (): Promise<{ readonly effectsEnqueued: number }> => {
+      let effectsEnqueued = 0;
+      for (const mapping of runtime.mappings.mappings) {
+        const systemStateProjection = mapping.projections.find(
+          (projection) => projection.projection === SYNC_PROJECTIONS.SYSTEM_STATE,
+        );
+        if (systemStateProjection === undefined) continue;
+        const report = await runReconciliationScan({
+          storage: runtime.storage,
+          provider: remote.provider,
+          physicalSheetId: systemStateProjection.physicalSheetId,
+          logicalSheetId: mapping.logicalSheetId,
+          // The scanner compares exactly the System_State headers: every
+          // canonical field plus the soft-delete tombstone column.
+          systemFields: [
+            ...mapping.fields.map((field) => field.fieldName),
+            mapping.tombstoneFieldName,
+          ],
+          tombstoneField: mapping.tombstoneFieldName,
+          schemaVersion: mapping.schemaVersion,
+          writerId: writer.writerId,
+          now: options.now ?? Date.now,
+        });
+        effectsEnqueued += report.effectsEnqueued;
+      }
+      return { effectsEnqueued };
+    };
     const effectSupervisor = createEffectWorkerSupervisor({
       storage: runtime.storage,
       dispatcher: new SheetsEffectDispatcher({
@@ -201,6 +247,24 @@ export async function createInternalSyncService(
       }),
       ...optionalWorkerOptions(options),
       workerId: effectWorkerId,
+      reconciliation: {
+        intervalMs: options.reconciliationIntervalMs ?? DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS,
+        // isOutboxIdle is optional on the supervisor contract and the scanner
+        // already defers while corrections are in flight, so it is omitted.
+        run: runSystemStateReconciliation,
+        ...(options.onReconciliationReport === undefined
+          ? {}
+          : { onReport: (report: { readonly effectsEnqueued: number }) =>
+            options.onReconciliationReport!(report) }),
+        onError: options.onReconciliationError ??
+          ((error: unknown) => {
+            // A scan failure must never stop the effect loop; classify and log
+            // it exactly like the graceful-shutdown lease warnings.
+            console.warn(
+              `[sync-service] system state reconciliation scan failed: ${safeErrorMessage(error)}`,
+            );
+          }),
+      },
     });
     const pollingFullScanIntervalMs = options.pollingFullScanIntervalMs
       ?? DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS;
@@ -354,6 +418,15 @@ function validateServiceOptions(
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
       "sync service pollingFullScanIntervalMs must be a positive safe integer.",
+    );
+  }
+  if (
+    options.reconciliationIntervalMs !== undefined &&
+    (!Number.isSafeInteger(options.reconciliationIntervalMs) || options.reconciliationIntervalMs < 1)
+  ) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service reconciliationIntervalMs must be a positive safe integer.",
     );
   }
   requireText(options.projections.spreadsheetId, "sync service spreadsheetId");
@@ -535,14 +608,20 @@ async function expireRuntimeWriterLeases(
   // Every claim site wired into the bootstrap must be mirrored here:
   // conflict route registration (registerSyncConflictProjectionRoutes), mapped
   // flush planning and projection registration (flushCoordinator,
-  // mappedPersistenceContext), and observation polling with deferred-conflict
-  // retry (MikroOrmUserInputPolling) claim under the mapped writer role with
-  // writer.writerId; the effect worker supervisor claims under
-  // DEFAULT_WORKER_ROLE with effectWorkerId. A claim added elsewhere must be
-  // added to this list, or graceful close leaves it leased for the window.
+  // mappedPersistenceContext), observation polling with deferred-conflict
+  // retry (MikroOrmUserInputPolling), and System_State reconciliation
+  // (ReconciliationScanner) claim under the mapped writer role (or the
+  // dedicated reconciler role) with writer.writerId; the effect worker
+  // supervisor claims under DEFAULT_WORKER_ROLE with effectWorkerId. A claim
+  // added elsewhere must be added to this list, or graceful close leaves it
+  // leased for the window.
   const ownLeases: ReadonlyArray<{ readonly role: string; readonly writerId: string }> = [
     { role: DEFAULT_MAPPED_WRITER_ROLE, writerId: writer.writerId },
     { role: DEFAULT_WORKER_ROLE, writerId: effectWorkerId },
+    // The reconciliation scanner claims under the dedicated reconciler role
+    // with the mapped writer id; mirror that claim site here so a graceful
+    // close does not leave it leased for the full scan window.
+    { role: RECONCILIATION_DEFAULTS.ROLE, writerId: writer.writerId },
   ];
   for (const { role, writerId } of ownLeases) {
     try {
