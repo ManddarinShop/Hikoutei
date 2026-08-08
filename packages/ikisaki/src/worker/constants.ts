@@ -88,6 +88,8 @@ export const WORKER_ERROR_CODES = {
   POSTCONDITION_CHANGED: "postcondition_changed",
   POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE:
     SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
+  /** Response-loss probing exceeded the durable uncertainty bound and was force-settled. */
+  DELIVERY_UNCERTAIN_TIMEOUT: "delivery_uncertain_timeout",
   REPAIR_REOBSERVE_REQUIRES_WRITER_REPLAN: "repair_reobserve_requires_writer_replan",
   REPAIR_REPLAN_FAILED: "repair_replan_failed",
   REPAIR_REPLAN_DEFERRED: "repair_replan_deferred",
