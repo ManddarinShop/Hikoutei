@@ -102,6 +102,15 @@ export interface EffectProjectionConfirmation {
   readonly visibleHash: string;
   readonly entityRevision: Applicability<number>;
   readonly fieldHashes: Readonly<Record<string, string>>;
+  /**
+   * Set when the confirmed effect applied from an empty visible baseline
+   * (a create-if-missing repair): the fresh row restarts the provider's
+   * revision counter at 1, so the durable confirmation may advance past a
+   * higher confirmed revision (confirmed + 1) instead of being rejected as
+   * a regression. Never set for effects that applied against existing
+   * visible state; those keep the strict backwards-move rejection.
+   */
+  readonly allowCreateRebaseline?: boolean;
 }
 
 /** A pending outbox row prepared by the writer transaction. */

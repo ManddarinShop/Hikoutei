@@ -2,6 +2,7 @@
 
 import { EFFECT_KINDS } from "../constants.js";
 import type { ClaimedEffect } from "./contracts.js";
+import type { PendingEffect } from "../contracts.js";
 import type {
   ApplyEffectResult,
   Postcondition,
@@ -430,6 +431,13 @@ export async function completeApplied(
       visibleHash,
       entityRevision: applicabilityFromSqlNullable(item.pending.target_entity_revision),
       fieldHashes,
+      // A create-if-missing repair restarts the provider's revision counter
+      // at 1, so its confirmation may advance a higher durable confirmed
+      // revision instead of being rejected as a regression (which would
+      // wedge the applied effect in delivery_uncertain forever).
+      ...(isCreateIfMissingBaseline(item.pending)
+        ? { allowCreateRebaseline: true }
+        : {}),
     };
   const applied = await storage.applyEffectResult({
     ...fence,
@@ -569,6 +577,19 @@ function groupByRoute(
 
 function isAbsentInvalidPayload(item: ClaimedEffect): boolean {
   return isAbsent(item.invalidPayloadError);
+}
+
+/**
+ * True when the pending effect applied from an empty visible baseline.
+ *
+ * Only create-if-missing repairs carry revision 0 with an empty visible
+ * hash (the kernel forbids an empty hash at any other revision, and the
+ * provider only creates rows from that baseline), so only those effects may
+ * produce a receipt revision below a binding's confirmed revision without
+ * being stale evidence.
+ */
+function isCreateIfMissingBaseline(pending: PendingEffect): boolean {
+  return pending.expected_visible_revision === 0 && pending.expected_visible_hash === "";
 }
 
 function isPresentInvalidPayload(item: ClaimedEffect): boolean {
