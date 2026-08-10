@@ -137,6 +137,10 @@ export {
   retryClaimedEffectWithSql,
   supersedeAndReplanWithAdapter,
   supersedeAndReplanWithSql,
+  supersedeEffectWithAdapter,
+  supersedeEffectWithSql,
+  RECOVERABLE_EFFECT_ERROR_CODES,
+  isRecoverableEffectErrorCode,
 } from "./outbox.js";
 
 export {
