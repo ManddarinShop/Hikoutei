@@ -5,13 +5,19 @@
  * that surface is corrupted (duplicated business keys or anchors, empty-ID
  * rows, orphan rows) the scan rewrites the tab from SQLite canonical state:
  * bound rows get full-row candidate_reconcile rewrites carrying canonical
- * values (blocked by the existing candidate guard while a candidate is
- * durable), and every surplus row (duplicates beyond the kept row, empty-ID
+ * values, and every surplus row (duplicates beyond the kept row, empty-ID
  * rows, orphans) gets a `user_input_delete` effect carrying the full observed
- * row as its compare-and-set guard. All corrections flow through the durable
- * outbox and the effect worker's CAS-guarded slow path, so cleanup never
- * mutates the Sheet directly and can never touch a row that a human or
- * candidate pipeline changed concurrently.
+ * row as its compare-and-set guard. Bound-row corrections stream under the
+ * binding key (`projection-row:<sheet>:<binding>`) shared with flush
+ * projections and resolution reconciles, so the resolution's
+ * supersede-and-replan covers them; unbound rows keep the physical anchor as
+ * their stream key. A binding with an OPEN/NEEDS_REBASE conflict (durable
+ * active candidate pointer) is never planned: the candidate evidence is
+ * re-read after the snapshot and again before effect building, and the
+ * conflicted row converges exclusively through resolution. All corrections
+ * flow through the durable outbox and the effect worker's CAS-guarded slow
+ * path, so cleanup never mutates the Sheet directly and can never touch a
+ * row that a human or candidate pipeline changed concurrently.
  *
  * Duplicated-anchor groups are converged one row per scan because the real
  * provider only resolves the first row per anchor value; the group's rewrite
