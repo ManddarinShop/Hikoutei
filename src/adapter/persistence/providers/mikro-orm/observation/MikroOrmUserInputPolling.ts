@@ -308,7 +308,7 @@ export async function pollMappedUserInputWithMikroOrm(
       POLLING_TIMING_PHASES.PERSISTENCE,
       Date.now() - persistenceStartedAt,
     );
-    await retryDeferredConflicts(options, mappings, observedInputs);
+    await retryDeferredConflicts(options, mappings);
     const report = createPollingReport(startedAt, accumulators, {
       mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
       safetyFullScan: false,
@@ -346,7 +346,7 @@ export async function pollMappedUserInputWithMikroOrm(
     POLLING_TIMING_PHASES.PERSISTENCE,
     Date.now() - persistenceStartedAt,
   );
-  await retryDeferredConflicts(options, mappings, observedInputs);
+  await retryDeferredConflicts(options, mappings);
   const report = createPollingReport(startedAt, accumulators, {
     mode: MAPPED_USER_INPUT_POLL_MODES.FULL,
     safetyFullScan: options.forceFull === true,
@@ -462,13 +462,11 @@ async function persistPreparedRowsIfNeeded(
 async function retryDeferredConflicts(
   options: PollMappedUserInputWithMikroOrmOptions,
   mappings: readonly TypedSheetsEntityMapping[],
-  observedInputs: readonly PersistObservedRowInput[] = [],
 ): Promise<void> {
   await retryOpenMappedConflictsWithAdapter(
     options.storage,
     mappings,
     resolveTypedSheetsEntityWriterOptions(options.writer),
-    observedInputs,
   );
 }
 

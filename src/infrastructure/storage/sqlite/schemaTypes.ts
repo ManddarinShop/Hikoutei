@@ -12,4 +12,6 @@ export type SchemaMigrationColumnName =
   | "created_at"
   | "uncertain_since"
   | "next_probe_at"
-  | "dispatch_id";
+  | "dispatch_id"
+  | "candidate_visible_revision"
+  | "candidate_visible_hash";

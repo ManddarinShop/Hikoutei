@@ -91,6 +91,16 @@ export const CONFLICT_STATUSES = {
 export type ConflictStatus =
   (typeof CONFLICT_STATUSES)[keyof typeof CONFLICT_STATUSES];
 
+/** Runtime values describing whether candidate-time visible evidence is stored. */
+export const CANDIDATE_VISIBLE_EVIDENCE_STATUSES = {
+  AVAILABLE: "available",
+  UNAVAILABLE: "unavailable",
+} as const;
+
+/** Closed set of candidate-time visible evidence availability statuses. */
+export type CandidateVisibleEvidenceStatus =
+  (typeof CANDIDATE_VISIBLE_EVIDENCE_STATUSES)[keyof typeof CANDIDATE_VISIBLE_EVIDENCE_STATUSES];
+
 /** Runtime values for projections persisted and materialized by the sync engine. */
 export const PROJECTION_KINDS = {
   USER_INPUT: "user_input",

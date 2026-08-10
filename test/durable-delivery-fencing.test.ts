@@ -30,7 +30,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     await migrateMikroOrmSqliteSchema(adapter);
 
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 5 });
+      .resolves.toEqual({ user_version: 6 });
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sheet_effect_outbox)",
     ));
@@ -115,8 +115,8 @@ describe("durable delivery and spreadsheet fencing", () => {
     // does not exist yet); the rebuild must run and then recreate the index.
     await expect(migrateMikroOrmSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 4,
-      toVersion: 5,
-      appliedVersions: [5],
+      toVersion: 6,
+      appliedVersions: [5, 6],
     });
 
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(

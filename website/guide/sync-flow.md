@@ -73,10 +73,25 @@ preflight cannot certify it as unchanged.
 
 Accepted observation writes update canonical state and the application entity
 in the same SQLite transaction. Conflicts, stale writes, duplicate keys, and
-malformed cells remain visible in SQLite evidence tables. A conflict is not
-left open indefinitely: the internal resolver submits a fenced
-`acknowledge_system` command using the current canonical revision, active
-candidate hash, and candidate epoch.
+malformed cells remain visible in SQLite evidence tables.
+
+When polling detects a `User_Input` value A against canonical value B, it
+persists the active candidate, candidate-time full-row visible revision/hash,
+and an `OPEN` conflict, then queues an `OPEN` `Sync_Conflicts` audit effect.
+Detection creates no resolution command. Repeated polling and a process restart
+alone leave the conflict open.
+
+Only a later local commit that strictly increases the canonical revision of the
+same conflicted field triggers implicit system-wins resolution. An unrelated
+field change or a same-value write that does not advance that field revision is
+not approval. The command is fenced by canonical revision, candidate hash, and
+candidate epoch; its Sheet reconcile also compares the stored candidate-time
+row visible revision/hash. A later human edit therefore fails the guard instead
+of being overwritten. Legacy conflicts without that visible evidence remain
+unresolved rather than using a guessed baseline.
+
+In this policy scope, deleting an entity with an unresolved conflict fails
+closed before the local entity, canonical state, or outbox changes commit.
 
 ## Failure model
 

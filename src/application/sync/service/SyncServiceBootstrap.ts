@@ -41,6 +41,7 @@ import {
   registeredTypedSheetsProjectionDefinitions,
   resolveTypedSheetsEntityWriterOptions,
 } from "../../orm/persistence/flush/flushCoordinator.js";
+import type { MappedFlushSyncHook } from "../../orm/persistence/support/contracts.js";
 import type {
   SyncSheetsProvisioner,
   RegisteredSyncProjectionDefinition,
@@ -53,6 +54,7 @@ import {
 } from "../sheetsContract/conflictProjectionRegistration.js";
 import {
   retryOpenMappedConflictsWithAdapter,
+  planMappedFlushConflictSyncWithSql,
 } from "../inbound/autoSystemConflictResolution.js";
 import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheetsContract/syncSheets.js";
 import {
@@ -187,11 +189,29 @@ export async function createInternalSyncService(
   // resolved identity is reused by the supervisor and by the graceful-shutdown
   // lease release so both roles expire together on stop().
   const effectWorkerId = options.workerId ?? writer.writerId;
+  // Implicit system-wins planning runs inside the mapped flush transaction:
+  // the same commit that advances a conflicted field's canonical revision
+  // rebases the conflict and plans its resolution atomically.
+  const syncFlushHook: MappedFlushSyncHook = (input) =>
+    planMappedFlushConflictSyncWithSql(
+      input.sql,
+      input.fence,
+      input.writer,
+      input.plan.mapping,
+      {
+        entityId: input.plan.entityId,
+        rowBindingId: input.plan.rowBindingId,
+        commitId: input.plan.commitId,
+        changedFieldNames: input.plan.changedFields.map((field) => field.fieldName),
+        suppressedUserProjection: input.plan.suppressedUserProjection,
+      },
+    );
   const runtime = await initializeMappedTypedSheetsRuntime({
     dbName: options.dbName,
     entities: generated.entities,
     mappings: generated.mappings,
     writer,
+    syncFlushHook,
   });
 
   try {

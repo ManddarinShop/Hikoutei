@@ -16,7 +16,9 @@ export const READ_CONFLICT_SQL = `
   SELECT conflict_id, conflict_group_id, event_id, row_binding_id, entity_id, field_name,
          user_value, user_base_revision, canonical_value_at_detection,
          canonical_revision_at_detection, current_canonical_value,
-         current_canonical_revision, candidate_epoch, status, resolution_command_id
+         current_canonical_revision, candidate_epoch,
+         candidate_visible_revision, candidate_visible_hash,
+         status, resolution_command_id
   FROM sync_conflict
   WHERE logical_sheet_id = ? AND conflict_id = ?
 `;
@@ -32,6 +34,57 @@ export const READ_PENDING_CONFLICT_IDS_SQL = `
   JOIN sync_conflict c ON c.conflict_id = rc.target_conflict_id
   WHERE c.logical_sheet_id = ? AND rc.status = 'pending'
   ORDER BY c.conflict_id
+`;
+
+/** Reads every durable pending command targeting one conflict. */
+export const READ_PENDING_COMMANDS_FOR_CONFLICT_SQL = `
+  SELECT command_id, request_key, action, actor_id, role, target_conflict_id,
+         expected_revision, active_candidate_hash, expected_candidate_epoch,
+         payload_hash, status
+  FROM resolution_command
+  WHERE target_conflict_id = ? AND status = 'pending'
+  ORDER BY command_id
+`;
+
+/** Marks one durable pending command stale idempotently (status guarded). */
+export const MARK_PENDING_COMMAND_STALE_SQL = `
+  UPDATE resolution_command
+  SET status = 'stale'
+  WHERE command_id = ? AND status = 'pending'
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+/**
+ * Stales every pending automatic command superseded by a newer resolution
+ * identity.
+ *
+ * Only the latest automatic generation for a conflict may stay pending; older
+ * generations are obsolete the moment a newer canonical revision is planned.
+ * Manual or unknown pending commands are never superseded by polling-owned
+ * planning: actor, action, and identity prefix must all match one of the two
+ * automatic identities (retired legacy `sync:auto-system-wins` and current
+ * implicit `sync:system-wins`).
+ */
+export const STALE_SUPERSEDED_PENDING_COMMANDS_SQL = `
+  UPDATE resolution_command
+  SET status = 'stale'
+  WHERE target_conflict_id = ? AND command_id != ? AND status = 'pending'
+    AND action = 'acknowledge_system'
+    AND (
+      (actor_id = 'sync:system-wins' AND command_id LIKE 'sync:system-wins:%')
+      OR (actor_id = 'sync:auto-system-wins' AND command_id LIKE 'auto-system-wins:%')
+    )
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+/** Rebases an unresolved conflict to the current canonical field state. */
+export const REBASE_ACTIVE_CONFLICT_SQL = `
+  UPDATE sync_conflict
+  SET current_canonical_value = ?, current_canonical_revision = ?,
+      status = 'NEEDS_REBASE', last_rebased_commit_id = ?, updated_at = ?
+  WHERE conflict_id = ?
+    AND status IN ('OPEN', 'NEEDS_REBASE')
+    AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 
 export const READ_ACTIVE_CANDIDATE_POINTER_SQL = `

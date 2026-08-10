@@ -1203,6 +1203,21 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
     const matches = fakeRows(sheet).filter((row) =>
       normalizedCellIdentity(row.fields[sheet.identityField as string]) === targetId,
     );
+    if (matches.length === 0) {
+      // Mirror the real provider's findWorkingRow contract: entity target IDs
+      // carry the full entity id (`entity:<logical>:<id>`) while fast-appended
+      // rows are indexed only by their visible business key, so the targetId
+      // tail is the second identity fallback before failing closed.
+      const separator = targetId.lastIndexOf(":");
+      if (separator >= 0) {
+        const visibleIdentity = targetId.slice(separator + 1);
+        if (visibleIdentity.length > 0) {
+          matches.push(...fakeRows(sheet).filter((row) =>
+            normalizedCellIdentity(row.fields[sheet.identityField as string]) === visibleIdentity,
+          ));
+        }
+      }
+    }
     if (matches.length > 1) {
       throw new SyncSheetsContractError(
         SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
