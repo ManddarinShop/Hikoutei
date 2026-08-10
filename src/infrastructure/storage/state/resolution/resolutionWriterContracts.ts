@@ -96,6 +96,8 @@ export interface ConflictRow {
   readonly current_canonical_value: string;
   readonly current_canonical_revision: number;
   readonly candidate_epoch: number;
+  readonly candidate_visible_revision: number | null;
+  readonly candidate_visible_hash: string | null;
   readonly status: string;
   readonly resolution_command_id: string | null;
 }

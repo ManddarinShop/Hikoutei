@@ -73,7 +73,41 @@ export interface TypedSheetsEntityWriterOptions {
 export interface CreateMappedTypedSheetsFlushCoordinatorOptions {
   readonly mappings: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[];
   readonly writer: TypedSheetsEntityWriterOptions;
+  /**
+   * Internal sync behavior injected after each mapped flush commit.
+   *
+   * The callback runs inside the same SQLite transaction as the entity,
+   * canonical, and outbox writes so NEEDS_REBASE auditing and implicit
+   * system-wins resolution stay atomic with the flush. It is service-side
+   * only and never part of the root application contract.
+   */
+  readonly syncFlushHook?: MappedFlushSyncHook;
 }
+
+/** One committed mapped flush result handed to the internal sync hook. */
+export interface MappedFlushSyncPlan {
+  readonly mapping: TypedSheetsEntityMapping;
+  readonly change: TypedSheetsEntityChange;
+  readonly changedFields: readonly TypedSheetsEntityFieldMapping[];
+  readonly entityId: string;
+  readonly rowBindingId: string;
+  readonly commitId: string;
+  /** True when an active row candidate suppressed the User_Input projection. */
+  readonly suppressedUserProjection: boolean;
+}
+
+/**
+ * Internal flush/runtime callback contract injected by the sync service.
+ *
+ * The hook may plan conflict audits and resolutions but never changes the
+ * public ORM surface; `src/index.ts` does not expose it.
+ */
+export type MappedFlushSyncHook = (input: {
+  readonly sql: SqlExecutor;
+  readonly fence: FencingContext;
+  readonly writer: ResolvedWriterOptions;
+  readonly plan: MappedFlushSyncPlan;
+}) => Promise<void>;
 
 /** A registered route with headers ready for provider-side provisioning. */
 export interface RegisteredTypedSheetsMappedProjection {
