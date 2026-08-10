@@ -17,6 +17,7 @@ import {
 } from "../src/infrastructure/storage/index.js";
 import { presentValue } from "../src/shared/state/index.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { runReconciliationScan } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
@@ -596,6 +597,101 @@ describe("internal sync service injected-provider mode", () => {
     expect(reports.some((report) => report.effectsEnqueued > 0)).toBe(true);
   });
 
+  it("recovers a terminal failed System_State head so later em.flush() writes converge", async () => {
+    const provider = buildPollingProvider();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      pollingIntervalMs: 60_000,
+      pollingFullScanIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+      reconciliationIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "u1", status: "pending" }));
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    // The auto-started effect loop runs its first reconciliation right after
+    // its first pass (one snapshot read per projection); settle it before
+    // staging the corruption so the manual scans below stay deterministic.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    const logicalSheetId = await service.storage.read(async ({ sql }) => {
+      const row = await sql.get<{ readonly sheet_id: string }>(
+        "SELECT sheet_id FROM sheet_registry LIMIT 1",
+      );
+      if (row === undefined) throw new Error("expected a registered logical sheet");
+      return row.sheet_id;
+    });
+    // The auto reconciliation never claims the reconciler lease while the
+    // sheet is clean; the manual scans below own that lease under a fixed
+    // test writer id (the first scan creates it, later scans renew it).
+
+    // A human edit removes the System_State row; the scanner enqueues a
+    // createIfMissing correction whose delivery is lost past the durable
+    // probe bound, so the effect force-settles as a terminal failed head and
+    // wedges the stream.
+    provider.removeRowByIdentity(SYSTEM_SHEET_ID, "u1");
+
+    const scan = (): Promise<{ readonly effectsEnqueued: number }> => runReconciliationScan({
+      storage: service.storage,
+      provider,
+      physicalSheetId: SYSTEM_SHEET_ID,
+      logicalSheetId,
+      systemFields: ["id", "status", "__typed_sheets_deleted"],
+      tombstoneField: "__typed_sheets_deleted",
+      schemaVersion: 1,
+      writerId: "manual-reconciler",
+    });
+    const firstScan = await scan();
+    expect(firstScan.effectsEnqueued).toBe(1);
+
+    await service.storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = 'failed', claim_token = NULL, lease_until = NULL, next_attempt_at = NULL, last_error_code = 'delivery_uncertain_timeout', last_error_message = 'seeded terminal failure' WHERE target_kind = 'entity' AND projection = 'system_state' AND status = 'pending'",
+    ));
+
+    // The next scan supersedes the terminal failed head and appends a fresh
+    // repair; the worker applies it and the Sheet converges again.
+    const recoveryScan = await scan();
+    expect(recoveryScan.effectsEnqueued).toBe(1);
+    await service.effectSupervisor.runOnce();
+    const converged = await provider.readSnapshot({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "SyncServiceUsers_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    const convergedRow = converged.rows[0];
+    if (convergedRow === undefined) throw new Error("expected the repaired System_State row");
+    expect(convergedRow.cells.status?.normalizedCell)
+      .toEqual({ kind: "string", value: "pending" });
+
+    // A subsequent canonical write flushes normally and the projection keeps
+    // converging past the recovered stream.
+    const user = await em.findOne(User, { id: "u1" });
+    if (user === null) throw new Error("expected the flushed user");
+    user.status = "completed";
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    const completed = await provider.readSnapshot({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "SyncServiceUsers_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    expect(completed.rows[0]?.cells.status?.normalizedCell)
+      .toEqual({ kind: "string", value: "completed" });
+    await expect(service.hikoutei.em.fork().findOne(User, { id: "u1" }))
+      .resolves.toMatchObject({ status: "completed" });
+  });
+
   it("fails startup when provisioning fails", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -744,6 +840,12 @@ describe("internal sync service injected-provider mode", () => {
     em.persist(em.create(User, { id: "safe-1", status: "pending" }));
     await em.flush();
     await service.effectSupervisor.runOnce();
+    // The auto-started effect loop runs the scheduled reconciliation right
+    // after its first pass; that task reads one snapshot per projection
+    // (System_State repair scan plus User_Input cleanup scan). Settle it
+    // before capturing the polling read counters so the adaptive-pass
+    // assertions below measure polling behavior only.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
     // The auto-started loop's first pass is always a safety full scan.
     const firstReport = await firstSafetyScan;

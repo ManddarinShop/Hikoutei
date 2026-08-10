@@ -47,6 +47,12 @@ pending → processing → applied / failed / superseded / blocked_candidate / c
   as evidence.
 - Idempotency: same effect ID + same payload hash retries safely; same ID with
   a different payload fails closed.
+- A `failed` effect with a **recoverable** error code stays on the worker retry
+  path. A `failed` effect with a terminal code (for example
+  `delivery_uncertain_timeout`) can never be claimed again, so the periodic
+  reconciliation scan supersedes it (fence-checked, in the same SQLite
+  transaction as its replacement effect) and the stream keeps progressing.
+  Recoverable failed heads are never superseded by reconciliation.
 
 ## Human edits: candidates and epochs
 

@@ -64,6 +64,13 @@ The internal service provisions and validates registered projection tabs
 before starting delivery. It owns the Google Sheets API client, effect worker,
 response-loss recovery, reconciliation, and User_Input polling.
 
+Reconciliation is a lazy repair net with its own schedule: it compares the
+projected tabs against the SQLite authority and enqueues CAS-carrying
+corrections (repairs for System_State drift, full-row deletion effects for
+surplus User_Input rows). It also supersedes terminal failed stream heads that
+would otherwise wedge later writes forever; recoverable failures stay on the
+worker retry path.
+
 A successful public `flush()` means that the local SQLite transaction
 committed. It does not mean that a remote Sheet write has completed.
 

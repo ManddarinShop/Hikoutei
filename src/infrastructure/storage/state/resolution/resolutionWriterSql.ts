@@ -156,6 +156,38 @@ export const ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL = `
     AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 
+/**
+ * Supersedes pending User_Input candidate_reconcile rewrites for one row
+ * binding the moment the conflict that owned the row resolves.
+ *
+ * A cleanup or repair scan can enqueue a full-row rewrite carrying a stale
+ * canonical snapshot while a conflict is open. Such rewrites stream under the
+ * physical anchor (`target_id` = anchor) instead of the binding stream key
+ * (`projection-row:<sheet>:<binding>`), so the resolution's normal
+ * supersede-and-replan lookup never sees them, and the worker candidate gate
+ * blocks them only while the conflict stays OPEN or NEEDS_REBASE. Once a
+ * resolution command applies, the gate opens and the stale rewrite would
+ * otherwise deliver (it was enqueued before the resolution's own fresh
+ * reconcile, whose visible-hash CAS it then breaks) and overwrite the row
+ * with a stale value. The resolution's reconcile is now authoritative for
+ * the row, so any such pending rewrite is superseded in the same
+ * transaction. Only non-terminal `pending` rewrites are touched:
+ * in-flight (`processing`/`delivery_uncertain`) writes are left to settle
+ * and `blocked_candidate` heads are already terminal and converge through a
+ * later re-scan.
+ */
+export const SUPERSEDE_PENDING_USER_INPUT_REWRITES_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'superseded', supersedes_effect_id = ?
+  WHERE logical_sheet_id = ?
+    AND projection = 'user_input'
+    AND effect_kind = 'candidate_reconcile'
+    AND row_binding_id = ?
+    AND effect_id != ?
+    AND status = 'pending'
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
 export const MARK_COMMAND_APPLIED_SQL = `
   UPDATE resolution_command
   SET status = 'applied', applied_commit_id = ?

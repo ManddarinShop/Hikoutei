@@ -250,6 +250,45 @@ describe("EffectWorkerSupervisor", () => {
     expect(waits).toEqual([]);
   });
 
+  it("runs reconciliation on schedule while the worker stays busy", async () => {
+    // The old pass-idle gate starved reconciliation while a wedged stream
+    // kept the worker busy. Reconciliation is a lazy repair net that must run
+    // on its own interval; the scanner's own in-flight deferral and fenced
+    // writer lease prevent races with the busy worker.
+    let workerCalls = 0;
+    let reconciliationCalls = 0;
+    let stopPromise: Promise<void> | undefined;
+    let supervisor!: EffectWorkerSupervisor;
+    supervisor = new EffectWorkerSupervisor({
+      runPass: async () => {
+        workerCalls += 1;
+        return createReport({ selected: 1, claimed: 1, applied: 1 });
+      },
+      wait: async () => {},
+      reconciliation: {
+        intervalMs: 1,
+        run: async () => {
+          reconciliationCalls += 1;
+          return createReconciliationReport();
+        },
+        onReport: () => {
+          stopPromise = supervisor.stop();
+        },
+      },
+    });
+
+    supervisor.start();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await stopPromise;
+
+    expect(reconciliationCalls).toBe(1);
+    // The worker pass reported busy work and reconciliation still ran on its
+    // schedule inside that same pass; the old pass-idle gate would have
+    // deferred it until the outbox drained.
+    expect(workerCalls).toBe(1);
+    expect(supervisor.isRunning()).toBe(false);
+  });
+
   it("waits for the outbox to become idle before reconciliation", async () => {
     let workerCalls = 0;
     let reconciliationCalls = 0;
