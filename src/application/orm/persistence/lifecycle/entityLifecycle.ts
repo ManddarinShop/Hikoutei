@@ -65,7 +65,8 @@ export async function applyMappedChange(
   fence: FencingContext,
   writer: ResolvedWriterOptions,
   plan: MappedChangePlan,
-): Promise<void> {
+  options: { readonly suppressUserProjection?: boolean } = {},
+): Promise<{ readonly commitId: string }> {
   const changeStartedAt = Date.now();
   const { mapping, change, changedFields } = plan;
   const operationKind = timingOperationKind(change.kind);
@@ -87,8 +88,9 @@ export async function applyMappedChange(
   });
 
   const canonicalStartedAt = Date.now();
+  let commitId: string;
   if (change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE) {
-    await createMappedEntity(
+    commitId = await createMappedEntity(
       sql,
       fence,
       writer,
@@ -97,9 +99,10 @@ export async function applyMappedChange(
       rowBindingId,
       anchor,
       encodedEntity,
+      options,
     );
   } else if (change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE) {
-    await updateMappedEntity(
+    commitId = await updateMappedEntity(
       sql,
       fence,
       writer,
@@ -109,9 +112,10 @@ export async function applyMappedChange(
       anchor,
       encodedEntity,
       changedFields,
+      options,
     );
   } else {
-    await deleteMappedEntity(
+    commitId = await deleteMappedEntity(
       sql,
       fence,
       writer,
@@ -136,6 +140,7 @@ export async function applyMappedChange(
     operationKinds: [operationKind],
     operationCounts: countsForOperationKind(operationKind),
   });
+  return { commitId };
 }
 
 async function createMappedEntity(
@@ -147,7 +152,8 @@ async function createMappedEntity(
   rowBindingId: string,
   anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
-): Promise<void> {
+  options: { readonly suppressUserProjection?: boolean },
+): Promise<string> {
   await insertActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
   const commitId = identifiedValue("commit", writer);
   const effects = await projectionEffects(
@@ -162,6 +168,7 @@ async function createMappedEntity(
     mapping.fields,
     commitId,
     POSITIVE_SAFE_INTEGER_MINIMUM,
+    { includeUserProjection: !options.suppressUserProjection },
   );
   const commit: CanonicalCommitInput = {
     kind: ROW_OPERATIONS.INSERT,
@@ -177,6 +184,7 @@ async function createMappedEntity(
   };
   await requireAppliedCanonicalCommit(sql, fence, commit);
   await claimBusinessKey(sql, mapping, entityId, encodedEntity);
+  return commitId;
 }
 
 async function updateMappedEntity(
@@ -189,7 +197,8 @@ async function updateMappedEntity(
   anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
   changedFields: readonly TypedSheetsEntityFieldMapping[],
-): Promise<void> {
+  options: { readonly suppressUserProjection?: boolean },
+): Promise<string> {
   await requireActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
   const entityRevision = await requireActiveCanonicalEntityRevision(sql, mapping, entityId);
   const fieldRevisions = await canonicalFieldRevisions(sql, entityId);
@@ -222,6 +231,7 @@ async function updateMappedEntity(
     changedFields,
     commitId,
     nextEntityRevision,
+    { includeUserProjection: !options.suppressUserProjection },
   );
   const commit: CanonicalCommitInput = {
     kind: ROW_OPERATIONS.UPDATE,
@@ -234,6 +244,7 @@ async function updateMappedEntity(
   if (changedFields.some((field) => field.fieldName === mapping.businessKey.fieldName)) {
     await rotateBusinessKey(sql, mapping, entityId, encodedEntity);
   }
+  return commitId;
 }
 
 async function deleteMappedEntity(
@@ -245,7 +256,7 @@ async function deleteMappedEntity(
   rowBindingId: string,
   anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
-): Promise<void> {
+): Promise<string> {
   await requireActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
   const entityRevision = await requireActiveCanonicalEntityRevision(sql, mapping, entityId);
   const nextEntityRevision = entityRevision + 1;
@@ -273,6 +284,7 @@ async function deleteMappedEntity(
   await requireAppliedCanonicalCommit(sql, fence, commit);
   await tombstoneActiveRowBinding(sql, mapping, rowBindingId, entityId);
   await retireEntityBusinessKeys(sql, mapping, entityId);
+  return commitId;
 }
 
 function acceptedSnapshotHash(
