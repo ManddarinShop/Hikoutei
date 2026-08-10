@@ -34,16 +34,21 @@ import {
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
   markDeliveryUncertainWithAdapter,
+  appendPendingEffectsWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "../src/infrastructure/storage/index.js";
-import { presentValue, absentValue } from "../src/shared/state/index.js";
+import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
   SYNC_CONFLICT_RESOLUTIONS,
 } from "../src/application/sync/sheetsContract/conflictProjection.js";
-import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
+import {
+  computeSyncVisibleHash,
+  parseSyncProjectionEffectPayload,
+} from "../src/application/sync/sheetsContract/syncSheets.js";
+import { createCandidateReconcileEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
 import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
 import {
   advanceCandidateVisibleEvidence,
@@ -1502,6 +1507,108 @@ describe("issue #196 system-advance conflict resolution", () => {
     await expect(service.hikoutei.em.fork().findOne(User, { id: "u1" })).resolves.toMatchObject({
       status: "overwrite",
     });
+    expect(provider.readRow(USER_INPUT_SHEET_ID, anchor).fields.status).toEqual({
+      kind: "string",
+      value: "human-edit",
+    });
+  });
+
+  it("17. a pending cleanup rewrite for the row is superseded when the conflict resolves so only the fresh reconcile converges User_Input", async () => {
+    const provider = buildProvider();
+    const service = await openService(provider);
+    const anchor = await createEntity(service, provider, "u1", "pending");
+    humanEdit(provider, anchor, "u1", "human-edit");
+    await advanceCanonicalStatus(service, "u1", "canonical");
+
+    // Reproduce the cleanup scan's mid-race rewrite: a full-row
+    // candidate_reconcile carrying the stale canonical snapshot, streamed
+    // under the physical anchor (NOT the binding stream key the resolution
+    // replan looks up) with CAS evidence from the observed row and no
+    // candidate hash (the scan's evidence read predates detection).
+    const binding = await service.storage.read(({ sql }) => sql.get<{
+      readonly row_binding_id: string;
+    }>(
+      "SELECT row_binding_id FROM row_binding WHERE logical_sheet_id = ? AND anchor_reference = ?",
+      ["entity:conflict_users", anchor],
+    ));
+    if (binding === undefined) throw new Error("expected a row binding");
+    const cleanupRewrite = createCandidateReconcileEffect({
+      effectId: "effect:test-cleanup-rewrite",
+      commitId: "cleanup:test",
+      logicalSheetId: "entity:conflict_users",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "ConflictUsers_Input",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+      targetKind: "projection_row",
+      targetId: anchor,
+      rowBindingId: presentValue(binding.row_binding_id),
+      conflictId: absentValue(),
+      targetAnchor: anchor,
+      fields: {
+        id: { kind: "string", value: "u1" },
+        status: { kind: "string", value: "canonical" },
+      },
+      createIfMissing: false,
+      expectedVisibleRevision: 2,
+      expectedVisibleHash: computeSyncVisibleHash({
+        id: { kind: "string", value: "u1" },
+        status: { kind: "string", value: "human-edit" },
+      }),
+      expectedCandidateHash: notApplicableValue(),
+      streamSequence: 1,
+    });
+    const leaseNow = Date.now();
+    const lease = await claimWriterLeaseWithAdapter(service.storage, {
+      role: "test-cleanup-rewrite-worker",
+      writerId: "test-cleanup-rewrite-worker",
+      leaseDurationMs: 60_000,
+      now: leaseNow,
+    });
+    if (lease.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("expected a rewrite writer lease");
+    }
+    const fence = {
+      role: lease.lease.role,
+      writerEpoch: lease.lease.writerEpoch,
+      fencingToken: lease.lease.fencingToken,
+      now: leaseNow,
+    };
+    const appended = await service.storage.transaction(({ sql }) =>
+      appendPendingEffectsWithSql(sql, fence, [cleanupRewrite]));
+    expect(appended).toBe(true);
+
+    // Detection records the candidate; the worker candidate gate blocks the
+    // stale rewrite only while the conflict stays OPEN.
+    await service.pollingSupervisor.runOnce();
+    await expect(readConflictRow(service)).resolves.toMatchObject({
+      status: CONFLICT_STATUSES.OPEN,
+    });
+
+    // A real same-field advance resolves; the stale rewrite is superseded in
+    // the same transaction, attributed to the resolution's fresh reconcile,
+    // so it can never deliver after the gate opens.
+    await advanceCanonicalStatus(service, "u1", "human-edit");
+    await expect(readConflictRow(service)).resolves.toMatchObject({
+      status: CONFLICT_STATUSES.RESOLVED,
+    });
+    const superseded = await service.storage.read(({ sql }) => sql.get<{
+      readonly status: string;
+      readonly supersedes_effect_id: string | null;
+    }>(
+      "SELECT status, supersedes_effect_id FROM sheet_effect_outbox WHERE effect_id = ?",
+      [cleanupRewrite.effectId],
+    ));
+    expect(superseded).toMatchObject({ status: "superseded" });
+    expect(superseded?.supersedes_effect_id).toMatch(/^effect:/);
+    await expect(readCommands(service)).resolves.toEqual([
+      expect.objectContaining({ status: "applied" }),
+    ]);
+
+    // Only the resolution's own reconcile converges the row; the stale
+    // snapshot never lands on the sheet.
+    await service.effectSupervisor.runOnce();
+    await service.effectSupervisor.runOnce();
     expect(provider.readRow(USER_INPUT_SHEET_ID, anchor).fields.status).toEqual({
       kind: "string",
       value: "human-edit",

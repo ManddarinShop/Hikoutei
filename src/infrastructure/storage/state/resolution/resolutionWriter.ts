@@ -7,7 +7,7 @@
  * resolution projection effect in one SQLite transaction.
  */
 
-import { applyResolution } from "../../../../domain/index.js";
+import { applyResolution, PROJECTION_KINDS } from "../../../../domain/index.js";
 import { CONFLICT_TRANSITION_KINDS } from "../../../../domain/conflict/transitions.js";
 import {
   LOOKUP_RESULT_KINDS,
@@ -70,6 +70,7 @@ import {
   READ_PROCESSING_PREDECESSOR_SQL,
   READ_REGISTERED_PROJECTION_SQL,
   REBASE_ACTIVE_CONFLICT_SQL,
+  SUPERSEDE_PENDING_USER_INPUT_REWRITES_SQL,
   STALE_SUPERSEDED_PENDING_COMMANDS_SQL,
 } from "./resolutionWriterSql.js";
 import {
@@ -569,6 +570,23 @@ async function applyResolvedCommandWithSql(
   if (binding.changes !== 1) throw new FenceLostError();
 
   await appendResolutionEffectsWithSql(sql, fence, input.effects);
+  // A cleanup/repair rewrite enqueued before this resolution streams under
+  // the physical anchor, so the append above could not supersede it. The
+  // resolution's own reconcile is authoritative for the row: supersede any
+  // such pending rewrite in the same transaction, attributed to the
+  // reconcile, so the stale snapshot can never deliver after the gate opens.
+  const reconcileEffect = input.effects.find(
+    (effect) => effect.projection === PROJECTION_KINDS.USER_INPUT,
+  );
+  if (reconcileEffect !== undefined) {
+    await sql.run(SUPERSEDE_PENDING_USER_INPUT_REWRITES_SQL, [
+      reconcileEffect.effectId,
+      input.logicalSheetId,
+      conflict.rowBindingId,
+      reconcileEffect.effectId,
+      ...fenceParameters(fence),
+    ]);
+  }
   const commandResult = await sql.run(MARK_COMMAND_APPLIED_SQL, [
     input.commitId,
     command.commandId,
