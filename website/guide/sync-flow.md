@@ -89,5 +89,21 @@ authority epoch/token; provider mutations carrying an older token are
 rejected. The SQLite commit is the application success boundary; remote
 delivery is at-least-once and asynchronous.
 
+## Reconciliation and cleanup
+
+The periodic reconciliation scanner runs on its own schedule, independently
+of whether the effect worker is busy: corruption that keeps the outbox busy
+(a terminal failed head) is exactly what reconciliation must repair. When a
+target stream is wedged behind a terminal `failed` head (a non-recoverable
+error such as `delivery_uncertain_timeout`), the scanner supersedes that head
+with its correction inside the same fenced SQLite transaction, so the repair
+becomes the claimable stream head. Recoverable failed heads stay on the
+worker retry path and are never superseded. On registered `User_Input` tabs
+the same pass cleans surplus rows (duplicates of a bound business key,
+evidence-free empty-ID rows, and unambiguous orphan identities) through
+full-row CAS `user_input_delete` effects; rows referenced by active
+candidates or conflicts are never deleted, and ambiguous orphans stay for
+human review.
+
 See [Internal consistency model](/guide/internal-consistency) for the detailed
 state machine and recovery rules.
