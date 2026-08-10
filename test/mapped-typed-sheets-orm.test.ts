@@ -19,6 +19,7 @@ import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
+import { typedSheetsEntityRowBindingId } from "../src/application/orm/mapping/identity.js";
 import { planMappedObservationEntityMutation } from "../src/application/orm/mapping/observationMapping.js";
 import { registerTypedSheetsEntityMappings } from "../src/application/orm/persistence/flush/flushCoordinator.js";
 import { createMappedTypedSheetsOrm } from "../src/adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js";
@@ -403,6 +404,115 @@ describe("mapped typed-sheets ORM", () => {
     expect(thirdUser.expected_visible_hash).toBe(secondUserPayload.targetVisibleHash);
     expect(thirdUserPayload.targetVisibleHash).toBe(thirdUser.expected_visible_hash);
     expect(thirdUserPayload.fields).toEqual(secondUserPayload.fields);
+  });
+
+  it("floors the follower system effect revision at the confirmed state while a create-baseline effect is in flight", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteSchema(storage);
+    const writer = deterministicWriter("mapped-chain-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
+      mappings: [orderMapping],
+      writer,
+    });
+    const provider = new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: "orders-system",
+        sheetName: "Orders_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: "orders-input",
+        sheetName: "Orders_Input",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+    ]);
+    const em = typedSheetsOrm.em.fork();
+    const order = em.create(Order, { id: "order-1", status: "pending" });
+    em.persist(order);
+    await em.flush();
+
+    // The binding already has a higher confirmed revision (3) from an
+    // earlier lifecycle: the row was deleted from the Sheet, and the create
+    // effect above is the create-baseline repair (expected revision 0)
+    // still in flight.
+    const rowBindingId = typedSheetsEntityRowBindingId(orderMapping, "order-1");
+    const createSystem = requireEffect(
+      (await readOutbox(storage)).filter((effect) => effect.physical_sheet_id === "orders-system"),
+      0,
+    );
+    const createSystemPayload = parseSyncProjectionEffectPayload(createSystem.payload_json);
+    await storage.transaction(({ sql }) => sql.run(
+      "INSERT INTO sheet_visible_state (physical_sheet_id, projection, row_binding_id, confirmed_snapshot_hash, confirmed_visible_revision, confirmed_entity_revision, last_observed_hash) VALUES (?, 'system_state', ?, ?, 3, 1, ?)",
+      ["orders-system", rowBindingId, createSystemPayload.targetVisibleHash, createSystemPayload.targetVisibleHash],
+    ));
+
+    // Canonical content changes while the create-baseline effect is still in
+    // flight. The follower system effect must be floored at the confirmed
+    // revision (3), not the create effect's expected + 1 (1): after the
+    // create-baseline effect confirms, the durable revision clamps to
+    // confirmed + 1, and a follower whose receipt echoes 1 + 1 = 2 would be
+    // rejected by the confirmation upsert guard as a regression.
+    order.status = "shipped";
+    await em.flush();
+
+    const effects = await readOutbox(storage);
+    const systemEffects = effects.filter((effect) => effect.physical_sheet_id === "orders-system");
+    expect(systemEffects.map((effect) => effect.stream_sequence)).toEqual([1, 2]);
+    const follower = requireEffect(systemEffects, 1);
+    const followerPayload = parseSyncProjectionEffectPayload(follower.payload_json);
+    expect(follower.expected_visible_revision).toBe(3);
+    // The follower still carries the create-baseline effect's target hash:
+    // that is the hash the sheet will show once the repair applies.
+    expect(follower.expected_visible_hash).toBe(createSystemPayload.targetVisibleHash);
+    expect(followerPayload.fields.status).toEqual({
+      kind: NORMALIZED_CELL_KINDS.STRING,
+      value: "shipped",
+    });
+
+    // The worker applies the create-baseline effects first (the system
+    // repair clamps the durable revision to 4); the follower effects become
+    // claimable only after their predecessors settle. The system follower's
+    // receipt revision 4 then clears the confirmation guard instead of
+    // regressing it. The user-input stream confirms normally at 1 then 2.
+    const workerOptions = {
+      storage,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+      workerId: "mapped-chain-worker",
+      now: 1_000,
+      maxEffects: 8,
+    };
+    await expect(runEffectWorkerWithAdapter(workerOptions)).resolves.toMatchObject({ applied: 2, failed: 0 });
+    await expect(runEffectWorkerWithAdapter(workerOptions)).resolves.toMatchObject({ applied: 2, failed: 0 });
+
+    await expect(storage.read(({ sql }) => sql.all<{ readonly status: string }>(
+      "SELECT status FROM sheet_effect_outbox WHERE physical_sheet_id = ? AND target_kind = 'entity' ORDER BY stream_sequence",
+      ["orders-system"],
+    ))).resolves.toEqual([{ status: "applied" }, { status: "applied" }]);
+    await expect(storage.read(({ sql }) => sql.get<{ readonly confirmed_visible_revision: number }>(
+      "SELECT confirmed_visible_revision FROM sheet_visible_state WHERE physical_sheet_id = ? AND projection = 'system_state' AND row_binding_id = ?",
+      ["orders-system", rowBindingId],
+    ))).resolves.toEqual({ confirmed_visible_revision: 4 });
+
+    const systemSnapshot = await provider.readSnapshot({
+      physicalSheetId: "orders-system",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    expect(systemSnapshot.rows[0]?.cells.status?.normalizedCell).toEqual({
+      kind: NORMALIZED_CELL_KINDS.STRING,
+      value: "shipped",
+    });
   });
 
   it("physically removes the User_Input row after a guarded mapped delete and response loss", async () => {
