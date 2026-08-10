@@ -14,6 +14,7 @@ import {
   REQUIRED_V2_COLUMNS,
   REQUIRED_V3_COLUMNS,
   REQUIRED_V5_COLUMNS,
+  REQUIRED_V6_COLUMNS,
   SQLITE_CONNECTION_PRAGMAS,
   syncSchemaIndexesDdl,
   syncSchemaTablesDdl,
@@ -97,6 +98,14 @@ export async function migrateSqliteSchema(
       await writeSchemaVersion(sql, 5);
       appliedVersions.push(5);
     }
+    if (fromVersion < 6) {
+      // Add nullable candidate-time visible evidence columns to sync_conflict.
+      // Legacy conflicts keep both columns absent (NULL); only fresh conflicts
+      // populated after this migration carry resolution CAS evidence.
+      await applyVersion6CandidateEvidenceMigration(sql);
+      await writeSchemaVersion(sql, 6);
+      appliedVersions.push(6);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
     // v5-only indexes are created after every migration so an upgraded v4
@@ -163,6 +172,11 @@ async function applyVersion5DurableDeliveryMigration(sql: SqlExecutor): Promise<
   await executeSqlScript(sql, syncSchemaTablesDdl());
 }
 
+async function applyVersion6CandidateEvidenceMigration(sql: SqlExecutor): Promise<void> {
+  await addColumnIfMissing(sql, "sync_conflict", "candidate_visible_revision", "INTEGER");
+  await addColumnIfMissing(sql, "sync_conflict", "candidate_visible_hash", "TEXT");
+}
+
 async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
   await verifyRequiredColumns(sql);
   if (!(await indexExists(sql, "sync_conflict_candidate_attempt_uq"))) {
@@ -198,6 +212,9 @@ async function verifyRequiredColumns(sql: SqlExecutor): Promise<void> {
   ];
   for (const tableName of versionFiveTables) {
     await verifyTableColumns(sql, tableName, REQUIRED_V5_COLUMNS[tableName]);
+  }
+  for (const tableName of ["sync_conflict"] as const) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V6_COLUMNS[tableName]);
   }
 }
 
