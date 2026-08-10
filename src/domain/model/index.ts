@@ -34,6 +34,8 @@ export type {
   ExistingSheetChangeEvent,
   DeleteSheetChangeEvent,
   ConflictStatus,
+  CandidateVisibleEvidence,
+  CandidateVisibleEvidenceStatus,
   SyncConflict,
   QuarantineReason,
   QuarantinePlan,
@@ -59,6 +61,7 @@ export type {
 } from "./types.js";
 export {
   CANONICAL_RESOLUTION_STATUSES,
+  CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   CONFLICT_STATUSES,
   EFFECT_KINDS,
   EFFECT_STATUSES,

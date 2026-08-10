@@ -23,7 +23,7 @@ export { REQUIRED_V3_COLUMNS } from "@hikoutei/ikisaki";
 export { syncSchemaV5IndexesDdl } from "@hikoutei/ikisaki";
 
 /** Current durable schema version managed by the provider migration. */
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
@@ -104,6 +104,13 @@ export const REQUIRED_V5_COLUMNS: Readonly<
 > = {
   ...KERNEL_REQUIRED_V5_COLUMNS,
   ...REQUIRED_V5_SCHEMA_COLUMNS,
+};
+
+/** Candidate-evidence columns added to sync_conflict by the v6 migration. */
+export const REQUIRED_V6_COLUMNS: Readonly<
+  Record<"sync_conflict", readonly string[]>
+> = {
+  sync_conflict: ["candidate_visible_revision", "candidate_visible_hash"],
 };
 
 /** Returns table DDL only, so migration transactions never change connection pragmas. */
@@ -312,6 +319,9 @@ const CONFLICT_AND_QUARANTINE_TABLES_DDL = `
     status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'NEEDS_REBASE', 'RESOLVED')),
     last_rebased_commit_id TEXT,
     resolution_command_id TEXT,
+    /* v6: candidate-time full-row visible evidence used as resolution CAS. */
+    candidate_visible_revision INTEGER,
+    candidate_visible_hash TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );

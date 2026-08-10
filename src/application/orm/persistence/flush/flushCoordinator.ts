@@ -19,7 +19,10 @@ import {
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
-import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import {
+  hasMappedRowActiveCandidateWithSql,
+} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
   type TypedSheetsEntityChange,
@@ -29,11 +32,18 @@ import {
 import {
   createTypedSheetsEntityMappingRegistry,
   createTypedSheetsMappedProjectionDefinitions,
+  typedSheetsCanonicalEntityId,
+  typedSheetsEntityAnchor,
   typedSheetsEntityId,
+  typedSheetsEntityRowBindingId,
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
 } from "../../mapping/entityMapping.js";
+import {
+  requireTypedSheetsEntityProjection,
+} from "../../mapping/projection.js";
+import { SYNC_PROJECTIONS } from "../../../sync/sheetsContract/constants.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -43,11 +53,19 @@ import {
   DEFAULT_MAPPED_WRITER_ROLE,
   type CreateMappedTypedSheetsFlushCoordinatorOptions,
   type MappedChangePlan,
+  type MappedFlushSyncHook,
   type RegisteredTypedSheetsMappedProjection,
   type ResolvedWriterOptions,
   type TypedSheetsEntityWriterOptions,
 } from "../support/contracts.js";
 import { applyMappedChange } from "../lifecycle/entityLifecycle.js";
+import {
+  existingCanonicalEntityId,
+} from "../support/canonicalState.js";
+import {
+  requireChangeEntityId,
+  throwProjectionBlocked,
+} from "../support/helpers.js";
 import {
   countsForPlans,
   emitTiming,
@@ -64,6 +82,7 @@ export function createMappedTypedSheetsFlushCoordinator(
 ): TypedSheetsFlushCoordinator {
   const mappings = mappingRegistry(options.mappings);
   const writer = resolveTypedSheetsEntityWriterOptions(options.writer);
+  const syncFlushHook = options.syncFlushHook;
 
   return {
     async onFlush(context: TypedSheetsFlushContext): Promise<void> {
@@ -102,7 +121,51 @@ export function createMappedTypedSheetsFlushCoordinator(
         now,
       };
       for (const plan of plans) {
-        await applyMappedChange(context.sql, fence, writer, plan);
+        const hasActiveCandidate = await hasActiveRowCandidateWithSql(
+          context.sql,
+          plan,
+        );
+        if (
+          plan.change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE &&
+          hasActiveCandidate
+        ) {
+          // Fail closed BEFORE any entity, canonical, or outbox change: a
+          // delete must never materialize over a live user candidate.
+          throwProjectionBlocked(
+            plan.mapping,
+            requireTypedSheetsEntityProjection(plan.mapping, SYNC_PROJECTIONS.USER_INPUT),
+            "delete is blocked by an unresolved User_Input candidate",
+          );
+        }
+        const { commitId } = await applyMappedChange(
+          context.sql,
+          fence,
+          writer,
+          plan,
+          {
+            suppressUserProjection: hasActiveCandidate &&
+              plan.change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE,
+          },
+        );
+        if (syncFlushHook !== undefined) {
+          await syncFlushHook({
+            sql: context.sql,
+            fence,
+            writer,
+            plan: {
+              mapping: plan.mapping,
+              change: plan.change,
+              changedFields: plan.changedFields,
+              entityId: await planEntityId(context.sql, plan),
+              rowBindingId: typedSheetsEntityRowBindingId(
+                plan.mapping,
+                requireChangeEntityId(plan.mapping, plan.change),
+              ),
+              commitId,
+              suppressedUserProjection: hasActiveCandidate,
+            },
+          });
+        }
       }
       emitTiming(writer, {
         scope: SYNC_TIMING_SCOPES.ORM_FLUSH,
@@ -182,6 +245,38 @@ export function registeredTypedSheetsProjectionDefinitions(
     identityField: sheet.businessKeyField,
     entityIdForBusinessKey: mapping.canonicalEntityIdFor,
   }));
+}
+
+/** Resolves and validates the entity identity for one mapped change plan. */
+async function planEntityId(
+  sql: SqlExecutor,
+  plan: MappedChangePlan,
+): Promise<string> {
+  const mapping = plan.mapping;
+  const visibleEntityId = requireChangeEntityId(mapping, plan.change);
+  const proposedCanonicalEntityId = typedSheetsCanonicalEntityId(mapping, visibleEntityId);
+  const rowBindingId = typedSheetsEntityRowBindingId(mapping, visibleEntityId);
+  const anchor = typedSheetsEntityAnchor(mapping, visibleEntityId);
+  return plan.change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE
+    ? proposedCanonicalEntityId
+    : await existingCanonicalEntityId(sql, mapping, rowBindingId, anchor) ?? proposedCanonicalEntityId;
+}
+
+/** Returns whether one mapped row carries an unresolved active candidate. */
+async function hasActiveRowCandidateWithSql(
+  sql: SqlExecutor,
+  plan: MappedChangePlan,
+): Promise<boolean> {
+  const userProjection = plan.mapping.projections.find(
+    (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
+  );
+  if (userProjection === undefined) return false;
+  return hasMappedRowActiveCandidateWithSql(
+    sql,
+    userProjection.physicalSheetId,
+    SYNC_PROJECTIONS.USER_INPUT,
+    typedSheetsEntityRowBindingId(plan.mapping, requireChangeEntityId(plan.mapping, plan.change)),
+  );
 }
 
 function collectMappedChanges(

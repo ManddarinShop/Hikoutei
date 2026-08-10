@@ -34,7 +34,7 @@ import {
   TypedSheetsOrmError,
 } from "../../../../../application/orm/errors.js";
 import {
-  autoResolveMappedConflictsWithSql,
+  planOpenConflictAuditEffectsWithSql,
 } from "../../../../../application/sync/inbound/autoSystemConflictResolution.js";
 import type { ResolvedWriterOptions } from "../../../../../application/orm/persistence/support/contracts.js";
 import type {
@@ -77,12 +77,13 @@ export async function persistMappedObservedRowWithMikroOrm(
       result.kind === OBSERVATION_WRITE_RESULT_KINDS.PERSISTED &&
       result.conflictIds.length > 0
     ) {
-      await autoResolveMappedConflictsWithSql(
+      // A detection only persists the OPEN audit projection; zero resolution
+      // commands are created so polling and restart alone never resolve.
+      await planOpenConflictAuditEffectsWithSql(
         sql,
         options.fence,
         options.writer,
         mapping,
-        options.input,
         result.conflictIds,
       );
     }
