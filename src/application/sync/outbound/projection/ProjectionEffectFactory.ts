@@ -318,7 +318,11 @@ function validateInput(input: ProjectionEffectInput): void {
   }
   if (
     input.rowBindingId.kind === PRESENCE_KINDS.ABSENT &&
-    input.targetKind !== PROJECTION_TARGET_KINDS.CONFLICT
+    input.targetKind !== PROJECTION_TARGET_KINDS.CONFLICT &&
+    // Orphan/empty-ID User_Input deletes have no real binding to protect or
+    // confirm; the outbox row binding stays NULL and the worker writes no
+    // projection confirmation for a binding that does not exist.
+    input.effectKind !== PROJECTION_EFFECT_KINDS.USER_INPUT_DELETE
   ) {
     throwEffectError("non-conflict projection effect requires a row binding ID");
   }
