@@ -570,11 +570,13 @@ async function applyResolvedCommandWithSql(
   if (binding.changes !== 1) throw new FenceLostError();
 
   await appendResolutionEffectsWithSql(sql, fence, input.effects);
-  // A cleanup/repair rewrite enqueued before this resolution streams under
-  // the physical anchor, so the append above could not supersede it. The
-  // resolution's own reconcile is authoritative for the row: supersede any
-  // such pending rewrite in the same transaction, attributed to the
-  // reconcile, so the stale snapshot can never deliver after the gate opens.
+  // A legacy anchor-keyed cleanup/repair rewrite enqueued before this
+  // resolution streams under the physical anchor, so the append above could
+  // not supersede it; new cleanup rewrites stream under the binding key and
+  // are already covered by the replan above. The resolution's own reconcile
+  // is authoritative for the row: supersede any such pending rewrite in the
+  // same transaction, attributed to the reconcile, so the stale snapshot can
+  // never deliver after the gate opens.
   const reconcileEffect = input.effects.find(
     (effect) => effect.projection === PROJECTION_KINDS.USER_INPUT,
   );

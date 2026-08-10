@@ -13,14 +13,26 @@
  * - Every physical row bound in SQLite (row_binding -> active entity ->
  *   canonical user-owned fields) gets a full-row `candidate_reconcile`
  *   rewrite carrying the canonical values with the row's observed cells as
- *   compare-and-set evidence. When the binding has a durable active candidate
- *   (sheet_visible_field_state pointer joined to an OPEN conflict) the
- *   rewrite carries that candidate hash as `expectedCandidateHash`, so the
- *   existing candidate guard (worker gate plus provider guard) blocks it and
- *   the candidate/conflict evidence converges through resolution instead.
+ *   compare-and-set evidence. A binding with a durable active candidate
+ *   (sheet_visible_field_state pointer joined to an OPEN/NEEDS_REBASE
+ *   conflict) is NEVER planned by this scan: the conflict/candidate evidence
+ *   is re-read after the snapshot (and again right before effect building),
+ *   and the binding is skipped while a candidate is durable, so a rewrite
+ *   can never be enqueued into a conflicted row. The conflict converges
+ *   exclusively through resolution, whose binding-keyed reconcile
+ *   supersedes any earlier rewrite on the same stream.
  * - Every physical row NOT matching a bound binding (a duplicate of a bound
  *   key beyond the kept row, empty-ID rows, and orphan rows) gets a
  *   `user_input_delete` carrying the full observed row as its CAS guard.
+ *
+ * Bound-row corrections stream under the BINDING key
+ * (`projection-row:<physicalSheetId>:<rowBindingId>`), the same target key
+ * flush projections and resolution reconciles use, so the resolution's
+ * supersede-and-replan covers any pending cleanup rewrite in the same
+ * transaction and an in-flight flush/reconcile head defers the scan. Only
+ * unbound rows (orphans, empty-ID rows without a binding) keep the physical
+ * anchor as their stream key, because no binding exists to own the stream;
+ * their deletes already write no projection confirmation.
  *
  * Duplicated anchors are resolved the way the real provider resolves them:
  * its preflight anchor index keeps only the FIRST row per anchor value
@@ -38,8 +50,6 @@ import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
 import type { NormalizedCell } from "../../../../domain/index.js";
 import {
   PRESENCE_KINDS,
-  applicableValue,
-  notApplicableValue,
 } from "../../../../shared/state/index.js";
 import { isRecoverableEffectErrorCode } from "../../../../infrastructure/storage/index.js";
 import type { NewEffect } from "../../../../infrastructure/storage/index.js";
@@ -99,11 +109,6 @@ export interface CleanupTarget {
    * no projection confirmation for a binding that does not exist.
    */
   readonly rowBindingId?: string;
-  /**
-   * Rewrite-only: durable active candidate hash the rewrite must expect so
-   * the existing candidate guard blocks it. Absent when no candidate exists.
-   */
-  readonly expectedCandidateHash?: string;
 }
 
 /** Durable evidence consulted before any row may be corrected. */
@@ -187,10 +192,21 @@ const READ_CLEANUP_CANONICAL_SQL = `
 `;
 
 /**
+ * Stable binding-keyed stream target id shared with flush projections and
+ * resolution reconciles. Bound-row cleanup corrections must stream under the
+ * same key so the resolution's supersede-and-replan lookup and the durable
+ * stream predecessor guard cover them.
+ */
+export function cleanupBindingStreamTargetId(physicalSheetId: string, rowBindingId: string): string {
+  return `projection-row:${physicalSheetId}:${rowBindingId}`;
+}
+
+/**
  * Durable active candidate hashes for user_input bindings. A binding is
  * candidate-protected when any of its fields carries an active candidate
- * pointer whose conflict is still open; the rewrite must then carry that hash
- * as its candidate expectation so the worker gate blocks it until resolution.
+ * pointer joined to an OPEN/NEEDS_REBASE conflict; the scan must never plan
+ * a rewrite/delete for such a binding (the conflict converges exclusively
+ * through resolution).
  */
 const READ_CLEANUP_CANDIDATE_HASHES_SQL = `
   SELECT visible.row_binding_id AS row_binding_id,
@@ -224,6 +240,24 @@ const READ_CLEANUP_LATEST_EFFECT_SQL = `
   ORDER BY stream_sequence DESC
   LIMIT 1
 `;
+
+/**
+ * Reads the set of row bindings carrying a durable active candidate pointer
+ * joined to an OPEN/NEEDS_REBASE conflict. The scan must never plan a
+ * rewrite/delete for one of these bindings: the conflict converges only
+ * through resolution, whose binding-keyed reconcile supersedes any pending
+ * rewrite on the same stream.
+ */
+export async function readCleanupProtectedBindingsWithSql(
+  sql: SqlExecutor,
+  physicalSheetId: string,
+): Promise<ReadonlySet<string>> {
+  const candidateRows = await sql.all<CleanupCandidateHashSqlShape>(
+    READ_CLEANUP_CANDIDATE_HASHES_SQL,
+    [physicalSheetId],
+  );
+  return new Set(candidateRows.map((row) => row.row_binding_id));
+}
 
 /** Reads the durable binding/canonical/candidate evidence for one tab. */
 export async function readCleanupEvidenceWithSql(
@@ -380,6 +414,14 @@ export function classifyCleanupRows(
     const anchor = resolvable.anchor;
     if (anchor === null) continue;
     const binding = bindingByAnchor.get(anchor);
+    if (binding !== undefined && evidence.candidateHashes.has(binding.rowBindingId)) {
+      // The duplicate group belongs to a binding with an OPEN/NEEDS_REBASE
+      // conflict: never plan the delete while the candidate is durable; the
+      // group converges after resolution. The whole group stays handled so
+      // no member is re-classified as a rewrite either.
+      for (const row of group) handled.add(row.rowNumber);
+      continue;
+    }
     targets.push({
       kind: "duplicate",
       row: resolvable,
@@ -403,13 +445,16 @@ export function classifyCleanupRows(
       if (observedCanonicalHash(row, canonical.fields) === canonical.fieldRevisionHash) {
         continue;
       }
-      const candidateHash = evidence.candidateHashes.get(canonical.rowBindingId);
+      // A binding with a durable active candidate (OPEN/NEEDS_REBASE
+      // conflict) is skipped entirely: the conflict converges through
+      // resolution, whose binding-keyed reconcile supersedes any pending
+      // rewrite, so a scan-planned rewrite can never race the resolution.
+      if (evidence.candidateHashes.has(canonical.rowBindingId)) continue;
       targets.push({
         kind: "rewrite",
         row,
         canonicalFields: canonical.fields,
         rowBindingId: canonical.rowBindingId,
-        ...(candidateHash === undefined ? {} : { expectedCandidateHash: candidateHash }),
       });
       continue;
     }
@@ -418,7 +463,13 @@ export function classifyCleanupRows(
       // Candidate bindings without an entity are human rows pending
       // acceptance; tombstoned/ambiguous bindings are lifecycle-protected.
       // Only an empty-ID row can never bind, so only that shape is deleted.
-      if (binding.state === "candidate" && row.identity === undefined) {
+      if (
+        binding.state === "candidate" &&
+        row.identity === undefined &&
+        // An open conflict on the candidate binding means the row is a
+        // disputed human edit; the delete must wait for resolution.
+        !evidence.candidateHashes.has(binding.rowBindingId)
+      ) {
         targets.push({ kind: "empty_id", row, rowBindingId: binding.rowBindingId });
       }
       continue;
@@ -460,8 +511,12 @@ export type CleanupBaseline =
 /**
  * Resolves the outbox baseline for one cleanup stream.
  *
- * Streams are keyed by (logical sheet, projection_row, row anchor) so each
- * physical row owns an independent predecessor chain. An in-flight head
+ * Bound rows stream under the BINDING key
+ * (`projection-row:<physicalSheetId>:<rowBindingId>`, the same key flush
+ * projections and resolution reconciles use) so the cleanup correction joins
+ * the row's real predecessor chain and the resolution replan covers it;
+ * unbound rows (orphans, empty-ID rows without a binding) keep the physical
+ * anchor as their stream key. An in-flight head
  * (pending/processing/delivery_uncertain) defers the scan; a recoverable
  * failed head stays on the worker retry path; terminal heads (non-recoverable
  * failed, blocked_candidate, conflict) are superseded with the new correction
@@ -470,11 +525,11 @@ export type CleanupBaseline =
 export async function resolveCleanupBaselineWithSql(
   sql: SqlExecutor,
   logicalSheetId: string,
-  anchor: string,
+  targetId: string,
 ): Promise<CleanupBaseline> {
   const latest = await sql.get<CleanupLatestEffectSqlShape>(READ_CLEANUP_LATEST_EFFECT_SQL, [
     logicalSheetId,
-    anchor,
+    targetId,
   ]);
   if (latest === undefined) {
     return { kind: "append", streamSequence: POSITIVE_SAFE_INTEGER_MINIMUM, supersedeEffectId: null };
@@ -533,10 +588,32 @@ export async function buildCleanupEffects(
   const plans: CleanupPlan[] = [];
   const commitId = "cleanup:" + context.createId();
   await context.storage.read(async ({ sql }) => {
+    // Re-read the durable candidate evidence right before effect building:
+    // a conflict that opened after the snapshot classification must also
+    // suppress the correction, so a rewrite can never be enqueued while a
+    // conflict is open (the resolution's binding-keyed reconcile supersedes
+    // anything that still slipped through as pending).
+    const protectedBindings = await readCleanupProtectedBindingsWithSql(
+      sql,
+      context.physicalSheetId,
+    );
     for (const target of targets) {
       const anchor = target.row.anchor;
       if (anchor === null) continue;
-      const baseline = await resolveCleanupBaselineWithSql(sql, context.logicalSheetId, anchor);
+      if (target.rowBindingId !== undefined && protectedBindings.has(target.rowBindingId)) {
+        continue;
+      }
+      // Bound rows share the binding-keyed stream with flush projections and
+      // resolution reconciles so the supersede-on-resolution covers them;
+      // unbound rows keep the physical anchor as their stream key.
+      const streamTargetId = target.rowBindingId === undefined
+        ? anchor
+        : cleanupBindingStreamTargetId(context.physicalSheetId, target.rowBindingId);
+      const baseline = await resolveCleanupBaselineWithSql(
+        sql,
+        context.logicalSheetId,
+        streamTargetId,
+      );
       if (baseline.kind === "defer") continue;
       const expectedVisibleRevision = await resolveCleanupExpectedVisibleRevisionWithSql(
         sql,
@@ -544,8 +621,8 @@ export async function buildCleanupEffects(
         target,
       );
       const effect = target.kind === "rewrite"
-        ? buildRewriteEffect(context, sheet, commitId, anchor, target, baseline.streamSequence, expectedVisibleRevision)
-        : buildDeleteEffect(context, sheet, commitId, anchor, target, baseline.streamSequence, expectedVisibleRevision);
+        ? buildRewriteEffect(context, sheet, commitId, streamTargetId, anchor, target, baseline.streamSequence, expectedVisibleRevision)
+        : buildDeleteEffect(context, sheet, commitId, streamTargetId, anchor, target, baseline.streamSequence, expectedVisibleRevision);
       plans.push({ effect, supersedeEffectId: baseline.supersedeEffectId });
     }
   });
@@ -586,6 +663,7 @@ function buildRewriteEffect(
   context: CleanupEffectContext,
   sheet: { readonly tabName: string; readonly registeredRange: string },
   commitId: string,
+  targetId: string,
   anchor: string,
   target: CleanupTarget,
   streamSequence: number,
@@ -602,7 +680,7 @@ function buildRewriteEffect(
     projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: context.schemaVersion,
     targetKind: "projection_row",
-    targetId: anchor,
+    targetId,
     rowBindingId: {
       kind: PRESENCE_KINDS.PRESENT,
       value: target.rowBindingId ?? anchor,
@@ -613,9 +691,6 @@ function buildRewriteEffect(
     createIfMissing: false,
     expectedVisibleRevision,
     expectedVisibleHash: observedCanonicalHash(target.row, canonicalFields),
-    expectedCandidateHash: target.expectedCandidateHash === undefined
-      ? notApplicableValue()
-      : applicableValue(target.expectedCandidateHash),
     streamSequence,
   });
 }
@@ -624,6 +699,7 @@ function buildDeleteEffect(
   context: CleanupEffectContext,
   sheet: { readonly tabName: string; readonly registeredRange: string },
   commitId: string,
+  targetId: string,
   anchor: string,
   target: CleanupTarget,
   streamSequence: number,
@@ -639,7 +715,7 @@ function buildDeleteEffect(
     projection: SYNC_PROJECTIONS.USER_INPUT,
     schemaVersion: context.schemaVersion,
     targetKind: "projection_row",
-    targetId: anchor,
+    targetId,
     // Unbound rows carry no binding id: the worker candidate gate has
     // nothing to protect and the applied delete writes no projection
     // confirmation for a binding that does not exist.

@@ -160,18 +160,19 @@ export const ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL = `
  * Supersedes pending User_Input candidate_reconcile rewrites for one row
  * binding the moment the conflict that owned the row resolves.
  *
- * A cleanup or repair scan can enqueue a full-row rewrite carrying a stale
- * canonical snapshot while a conflict is open. Such rewrites stream under the
- * physical anchor (`target_id` = anchor) instead of the binding stream key
- * (`projection-row:<sheet>:<binding>`), so the resolution's normal
- * supersede-and-replan lookup never sees them, and the worker candidate gate
- * blocks them only while the conflict stays OPEN or NEEDS_REBASE. Once a
- * resolution command applies, the gate opens and the stale rewrite would
- * otherwise deliver (it was enqueued before the resolution's own fresh
- * reconcile, whose visible-hash CAS it then breaks) and overwrite the row
- * with a stale value. The resolution's reconcile is now authoritative for
- * the row, so any such pending rewrite is superseded in the same
- * transaction. Only non-terminal `pending` rewrites are touched:
+ * Cleanup scans now stream bound-row rewrites under the binding key
+ * (`projection-row:<sheet>:<binding>`), so the resolution's own
+ * supersede-and-replan covers them. This statement is the safety net for
+ * LEGACY anchor-keyed rewrites (`target_id` = physical anchor) that were
+ * already durable before that change (or were enqueued by an older scan):
+ * the resolution's normal replan lookup never sees them, and the worker
+ * candidate gate blocks them only while the conflict stays OPEN or
+ * NEEDS_REBASE. Once a resolution command applies, the gate opens and a
+ * stale rewrite would otherwise deliver (it was enqueued before the
+ * resolution's own fresh reconcile, whose visible-hash CAS it then breaks)
+ * and overwrite the row with a stale value. The resolution's reconcile is
+ * now authoritative for the row, so any such pending rewrite is superseded
+ * in the same transaction. Only non-terminal `pending` rewrites are touched:
  * in-flight (`processing`/`delivery_uncertain`) writes are left to settle
  * and `blocked_candidate` heads are already terminal and converge through a
  * later re-scan.

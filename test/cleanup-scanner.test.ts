@@ -100,7 +100,9 @@ describe("runUserInputCleanupScan", () => {
     expect(pending[0]).toMatchObject({
       effect_kind: "user_input_delete",
       target_kind: "projection_row",
-      target_id: "input-a",
+      // Bound-row corrections stream under the binding key shared with
+      // flush projections and resolution reconciles, not the anchor.
+      target_id: "projection-row:physical-input:binding-a",
       row_binding_id: "binding-a",
       status: "pending",
     });
@@ -135,7 +137,7 @@ describe("runUserInputCleanupScan", () => {
     expect(rewrite[0]).toMatchObject({
       effect_kind: "candidate_reconcile",
       target_kind: "projection_row",
-      target_id: "input-a",
+      target_id: "projection-row:physical-input:binding-a",
       row_binding_id: "binding-a",
       status: "pending",
     });
@@ -237,18 +239,19 @@ describe("runUserInputCleanupScan", () => {
     });
   });
 
-  it("protects candidate rows: rewrites carry the candidate expectation and both rewrites and deletes are blocked by the candidate guards", async () => {
+  it("skips bindings with an OPEN conflict: no rewrite or delete is planned for a conflicted binding", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
         inputRow("bound-a", "user-1", "open"),
-        // Bound row drifted from canonical state; a durable active candidate
-        // must block the rewrite.
+        // Bound row drifted from canonical state; the durable OPEN conflict
+        // must suppress the rewrite entirely (never enqueued).
         inputRow("bound-cand", "user-2", "candidate-edit"),
         // Orphan duplicate of the bound key with a remote candidate marker:
-        // the delete is enqueued and the provider CAS blocks it.
+        // genuinely surplus (no binding), so the delete is enqueued and the
+        // provider CAS blocks it.
         inputRow("dup-cand", "user-1", "duplicate", "candidate-hash"),
-        // Empty-ID row under a candidate binding: deleted, then blocked by
-        // the worker candidate gate through the binding's visible state.
+        // Empty-ID row under a candidate binding with an OPEN conflict: the
+        // disputed row is skipped, never deleted, until resolution.
         inputRow("empty-cand", "", "open"),
       ],
       bindings: [
@@ -268,26 +271,26 @@ describe("runUserInputCleanupScan", () => {
       ],
     });
 
-    const report = await runCleanupScan(adapter, provider);
+    const createId = counter();
+    const report = await runCleanupScan(adapter, provider, createId);
     expect(report).toMatchObject({
       duplicateRows: 0,
-      emptyIdRows: 1,
+      emptyIdRows: 0,
       extraRows: 1,
-      rewrittenRows: 1,
-      effectsEnqueued: 3,
+      rewrittenRows: 0,
+      effectsEnqueued: 1,
       fenceClaimed: true,
     });
 
     const pending = await listReadyEffectsWithAdapter(adapter, 10);
-    expect(pending).toHaveLength(3);
-    const rewrite = pending.find((effect) => effect.effect_kind === "candidate_reconcile");
-    expect(rewrite).toBeDefined();
-    // The rewrite carries the durable candidate hash so the existing
-    // candidate guard blocks it until resolution converges the row.
-    const payload = JSON.parse(rewrite!.payload_json) as {
-      readonly expectedCandidateHash: string | null;
-    };
-    expect(payload.expectedCandidateHash).toBe("candidate-hash");
+    expect(pending).toHaveLength(1);
+    // Only the genuinely surplus orphan delete was enqueued; the conflicted
+    // bindings never produced a rewrite or a delete.
+    expect(pending[0]).toMatchObject({
+      effect_kind: "user_input_delete",
+      target_id: "dup-cand",
+      row_binding_id: null,
+    });
 
     const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
     const workerReport = await runEffectWorkerWithAdapter({
@@ -297,16 +300,63 @@ describe("runUserInputCleanupScan", () => {
       now: 5_000,
       maxEffects: 10,
     });
-    // The rewrite and the empty-ID delete are blocked by the worker candidate
-    // gate (durable visible state); the orphan delete is blocked by the
-    // provider's candidate CAS. Nothing is applied.
-    expect(workerReport).toMatchObject({ blockedCandidate: 3, applied: 0 });
+    // The orphan delete is blocked by the provider's candidate CAS; the
+    // conflicted rows are untouched and nothing was enqueued for them.
+    expect(workerReport).toMatchObject({ blockedCandidate: 1, applied: 0 });
     expect(provider.readRow("physical-input", "bound-cand").fields.status)
       .toEqual({ kind: "string", value: "candidate-edit" });
     expect(provider.readRow("physical-input", "dup-cand").fields.id)
       .toEqual({ kind: "string", value: "user-1" });
     expect(provider.readRow("physical-input", "empty-cand").fields.id)
       .toEqual({ kind: "string", value: "" });
+
+    // A re-scan after the worker pass still plans nothing for the conflicted
+    // bindings; the orphan delete is re-attempted by superseding its
+    // terminal blocked_candidate head (the existing recovery contract).
+    const rescan = await runCleanupScan(adapter, provider, createId);
+    expect(rescan).toMatchObject({
+      duplicateRows: 0,
+      emptyIdRows: 0,
+      extraRows: 1,
+      rewrittenRows: 0,
+      effectsEnqueued: 1,
+      fenceClaimed: true,
+    });
+  });
+
+  it("enqueues no rewrite for a drifted bound row whose binding has an OPEN conflict (restart-style scan)", async () => {
+    const { adapter, provider } = await bootstrap({
+      sheetRows: [
+        // The live #196 restart shape: the row still carries the human edit
+        // while canonical has advanced, and the conflict is already OPEN.
+        inputRow("bound-a", "user-1", "stale"),
+      ],
+      bindings: [
+        binding("binding-a", "bound-a", "active", {
+          entityId: "entity:u1",
+          canonicalFields: { id: cell("user-1"), status: cell("open") },
+        }),
+      ],
+      candidates: [
+        { conflictId: "conflict-1", bindingId: "binding-a", entityId: "entity:u1" },
+      ],
+    });
+
+    const report = await runCleanupScan(adapter, provider);
+    expect(report).toMatchObject({
+      rowsScanned: 1,
+      duplicateRows: 0,
+      emptyIdRows: 0,
+      extraRows: 0,
+      rewrittenRows: 0,
+      effectsEnqueued: 0,
+      fenceClaimed: false,
+    });
+    await expect(listReadyEffectsWithAdapter(adapter, 10)).resolves.toHaveLength(0);
+
+    // The conflicted row is untouched on the sheet.
+    expect(provider.readRow("physical-input", "bound-a").fields.status)
+      .toEqual({ kind: "string", value: "stale" });
   });
 
   it("leaves rows bound to candidate, tombstoned, or ambiguous bindings untouched", async () => {
@@ -433,6 +483,11 @@ describe("runUserInputCleanupScan", () => {
     // state (3), not the snapshot fallback revision 1, so the confirmation
     // mirror can never see a backwards move.
     expect(pending[0]?.expected_visible_revision).toBe(3);
+    // Bound-row rewrites stream under the binding key, not the anchor.
+    expect(pending[0]).toMatchObject({
+      target_id: "projection-row:physical-input:binding-a",
+      row_binding_id: "binding-a",
+    });
 
     const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
     const workerReport = await runEffectWorkerWithAdapter({
@@ -493,6 +548,7 @@ describe("runUserInputCleanupScan", () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({
       effect_kind: "user_input_delete",
+      target_id: "projection-row:physical-input:binding-a",
       row_binding_id: "binding-a",
     });
     expect(pending[0]?.expected_visible_revision).toBe(3);

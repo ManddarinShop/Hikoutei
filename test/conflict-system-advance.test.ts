@@ -49,6 +49,7 @@ import {
   parseSyncProjectionEffectPayload,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
 import { createCandidateReconcileEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
+import { runUserInputCleanupScan } from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
 import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
 import {
   advanceCandidateVisibleEvidence,
@@ -1613,6 +1614,189 @@ describe("issue #196 system-advance conflict resolution", () => {
       kind: "string",
       value: "human-edit",
     });
+  });
+
+  it("18. a restart-style cleanup scan during an OPEN conflict enqueues nothing and the later system-wins flush converges without regression", async () => {
+    const provider = buildProvider();
+    const service = await openService(provider);
+    const anchor = await createEntity(service, provider, "u1", "pending");
+    humanEdit(provider, anchor, "u1", "human-edit");
+    await advanceCanonicalStatus(service, "u1", "canonical");
+    await service.pollingSupervisor.runOnce();
+    await service.effectSupervisor.runOnce();
+    await expect(readConflictRow(service)).resolves.toMatchObject({
+      status: CONFLICT_STATUSES.OPEN,
+    });
+
+    // The live #196+#194 restart shape: the row still shows the human edit
+    // while canonical has advanced, and the conflict is OPEN. The cleanup
+    // scan must plan NO rewrite for the conflicted binding.
+    const cleanupReport = await runUserInputCleanupScan({
+      storage: service.storage,
+      provider,
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      logicalSheetId: "entity:conflict_users",
+      identityField: "id",
+      schemaVersion: 1,
+      writerId: "restart-cleaner",
+      now: () => Date.now(),
+    });
+    expect(cleanupReport).toMatchObject({
+      rowsScanned: 1,
+      duplicateRows: 0,
+      emptyIdRows: 0,
+      extraRows: 0,
+      rewrittenRows: 0,
+      effectsEnqueued: 0,
+      fenceClaimed: false,
+    });
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly count: number }>(
+      "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE projection = ? AND effect_kind = 'candidate_reconcile' AND commit_id LIKE 'cleanup:%'",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ))).resolves.toEqual({ count: 0 });
+
+    // The later same-field C flush resolves system-wins; the worker
+    // converges User_Input to C with zero wedged effects and zero
+    // confirmation-regression errors.
+    await advanceCanonicalStatus(service, "u1", "revised");
+    await expect(readConflictRow(service)).resolves.toMatchObject({
+      status: CONFLICT_STATUSES.RESOLVED,
+    });
+    await service.effectSupervisor.runOnce();
+    await service.effectSupervisor.runOnce();
+    expect(provider.readRow(USER_INPUT_SHEET_ID, anchor).fields.status).toEqual({
+      kind: "string",
+      value: "revised",
+    });
+    const userEffects = await service.storage.read(({ sql }) => sql.all<{
+      readonly status: string;
+      readonly last_error_code: string | null;
+    }>(
+      "SELECT status, last_error_code FROM sheet_effect_outbox WHERE projection = ?",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ));
+    expect(userEffects.length).toBeGreaterThan(0);
+    for (const effect of userEffects) {
+      expect(["applied", "superseded"]).toContain(effect.status);
+      expect(effect.last_error_code).not.toBe("projection_confirmation_regression");
+    }
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly count: number }>(
+      "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE projection = ? AND status IN ('processing', 'delivery_uncertain', 'failed')",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ))).resolves.toEqual({ count: 0 });
+  });
+
+  it("19. a cleanup-scan rewrite enqueued before detection streams under the binding key and is superseded by the resolution", async () => {
+    const provider = buildProvider();
+    const service = await openService(provider);
+    const anchor = await createEntity(service, provider, "u1", "pending");
+    await service.effectSupervisor.runOnce();
+
+    // Human edit A; the B2 canonical flush enqueues a binding-keyed reconcile
+    // whose visible-hash CAS fails against the edited row.
+    humanEdit(provider, anchor, "u1", "human-edit");
+    await advanceCanonicalStatus(service, "u1", "canonical");
+    const binding = await service.storage.read(({ sql }) => sql.get<{
+      readonly row_binding_id: string;
+    }>(
+      "SELECT row_binding_id FROM row_binding WHERE logical_sheet_id = ? AND anchor_reference = ?",
+      ["entity:conflict_users", anchor],
+    ));
+    if (binding === undefined) throw new Error("expected a row binding");
+    const cleanupOptions = {
+      storage: service.storage,
+      provider,
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      logicalSheetId: "entity:conflict_users",
+      identityField: "id",
+      schemaVersion: 1,
+      writerId: "restart-cleaner",
+      now: () => Date.now(),
+    } as const;
+
+    // While the flush reconcile is still in flight on the binding stream the
+    // cleanup scan defers instead of stacking a second correction.
+    const deferredScan = await runUserInputCleanupScan(cleanupOptions);
+    expect(deferredScan).toMatchObject({
+      rewrittenRows: 1,
+      effectsEnqueued: 0,
+      fenceClaimed: true,
+    });
+
+    // Settle the stale reconcile: the provider CAS fails (the row is still
+    // A), so it closes as blocked_candidate.
+    await service.effectSupervisor.runOnce();
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+      "SELECT status FROM sheet_effect_outbox WHERE projection = ? AND commit_id NOT LIKE 'cleanup:%' AND effect_kind = 'candidate_reconcile' ORDER BY stream_sequence DESC LIMIT 1",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ))).resolves.toMatchObject({ status: "blocked_candidate" });
+
+    // A restart-style cleanup scan before detection now supersedes the
+    // terminal blocked_candidate head and enqueues a BINDING-KEYED rewrite
+    // carrying the canonical snapshot (no candidate hash: detection has not
+    // run yet).
+    const cleanupReport = await runUserInputCleanupScan(cleanupOptions);
+    expect(cleanupReport).toMatchObject({
+      rewrittenRows: 1,
+      effectsEnqueued: 1,
+      fenceClaimed: true,
+    });
+    const rewrite = await service.storage.read(({ sql }) => sql.get<{
+      readonly effect_id: string;
+      readonly target_id: string;
+      readonly status: string;
+    }>(
+      "SELECT effect_id, target_id, status FROM sheet_effect_outbox WHERE projection = ? AND commit_id LIKE 'cleanup:%' ORDER BY stream_sequence DESC LIMIT 1",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ));
+    expect(rewrite).toMatchObject({
+      target_id: `projection-row:${USER_INPUT_SHEET_ID}:${binding.row_binding_id}`,
+      status: "pending",
+    });
+
+    // Detection opens the conflict; the worker candidate gate blocks the
+    // rewrite (it carries the canonical snapshot into a candidate-owned row).
+    await service.pollingSupervisor.runOnce();
+    await expect(readConflictRow(service)).resolves.toMatchObject({
+      status: CONFLICT_STATUSES.OPEN,
+    });
+    await service.effectSupervisor.runOnce();
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+      "SELECT status FROM sheet_effect_outbox WHERE effect_id = ?",
+      [rewrite!.effect_id],
+    ))).resolves.toMatchObject({ status: "blocked_candidate" });
+
+    // The same-field C flush resolves; the pending rewrite is superseded in
+    // the same transaction by the resolution's own binding-keyed reconcile,
+    // so the stale canonical snapshot can never deliver.
+    await advanceCanonicalStatus(service, "u1", "revised");
+    await expect(readConflictRow(service)).resolves.toMatchObject({
+      status: CONFLICT_STATUSES.RESOLVED,
+    });
+    await expect(service.storage.read(({ sql }) => sql.get<{
+      readonly status: string;
+      readonly supersedes_effect_id: string | null;
+    }>(
+      "SELECT status, supersedes_effect_id FROM sheet_effect_outbox WHERE effect_id = ?",
+      [rewrite!.effect_id],
+    ))).resolves.toMatchObject({ status: "superseded" });
+
+    // The worker delivers only the resolution reconcile: User_Input
+    // converges to C with no regression error and no wedged effect.
+    await service.effectSupervisor.runOnce();
+    await service.effectSupervisor.runOnce();
+    expect(provider.readRow(USER_INPUT_SHEET_ID, anchor).fields.status).toEqual({
+      kind: "string",
+      value: "revised",
+    });
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly count: number }>(
+      "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE projection = ? AND status IN ('processing', 'delivery_uncertain', 'failed')",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ))).resolves.toEqual({ count: 0 });
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly count: number }>(
+      "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE projection = ? AND last_error_code = 'projection_confirmation_regression'",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ))).resolves.toEqual({ count: 0 });
   });
 });
 
