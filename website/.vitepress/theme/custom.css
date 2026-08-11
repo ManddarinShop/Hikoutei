@@ -1,0 +1,193 @@
+/*
+ * Hikoutei Docs — clean, modern documentation theme.
+ * Design language: white surfaces, charcoal text, blue accent,
+ * Inter typography (family.co/docs style).
+ */
+
+:root {
+  /* Typography */
+  --vp-font-family-base: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --vp-font-family-mono: "SF Mono", "SFMono-Regular", "Consolas",
+    "Liberation Mono", Menlo, Courier, monospace;
+
+  /* Brand — blue accent */
+  --vp-c-brand-1: #1a88f8;
+  --vp-c-brand-2: #008cff;
+  --vp-c-brand-3: #0b6ed6;
+  --vp-c-brand-soft: #d8ecfc;
+
+  /* Text — charcoal scale */
+  --vp-c-text-1: #171717;
+  --vp-c-text-2: #4e5360;
+  --vp-c-text-3: #848281;
+
+  /* Surfaces — white with subtle grays */
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-alt: #fafafa;
+  --vp-c-bg-soft: #f6f7f9;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-divider: #e7e9ee;
+  --vp-c-divider-light: #eef0f3;
+
+  /* Buttons */
+  --vp-button-brand-bg: #1a88f8;
+  --vp-button-brand-hover-bg: #008cff;
+  --vp-button-brand-active-bg: #0b6ed6;
+  --vp-button-brand-text: #ffffff;
+  --vp-button-alt-bg: #f6f7f9;
+  --vp-button-alt-hover-bg: #eef0f3;
+  --vp-button-alt-text: #171717;
+  --vp-button-alt-border: #e7e9ee;
+
+  /* Code */
+  --vp-code-block-bg: #fafafa;
+  --vp-code-bg: #f2f4f7;
+  --vp-code-color: #343433;
+
+  /* Custom blocks */
+  --vp-custom-block-tip-bg: #eef7fe;
+  --vp-custom-block-tip-border: #b8ddfc;
+  --vp-custom-block-tip-text: #0b6ed6;
+}
+
+/* ---------- Base ---------- */
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  letter-spacing: -0.005em;
+}
+
+/* ---------- Navigation ---------- */
+
+.VPNav {
+  border-bottom: 1px solid var(--vp-c-divider-light);
+}
+
+.VPNavBarTitle .title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.VPNavBarMenuLink {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ---------- Hero ---------- */
+
+.VPHero .name {
+  letter-spacing: -0.03em;
+  font-weight: 800;
+  line-height: 1.05;
+}
+
+.VPHero .text {
+  letter-spacing: -0.02em;
+}
+
+.VPHero .tagline {
+  color: var(--vp-c-text-2);
+  font-weight: 450;
+  letter-spacing: -0.01em;
+}
+
+.VPHero .actions .brand {
+  border-radius: 8px;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(23, 23, 23, 0.08);
+}
+
+.VPHero .actions .alt {
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+/* ---------- Feature cards ---------- */
+
+.VPFeature {
+  border: 1px solid var(--vp-c-divider-light);
+  border-radius: 12px;
+  background: var(--vp-c-bg);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.VPFeature:hover {
+  border-color: var(--vp-c-brand-soft);
+  box-shadow: 0 4px 16px rgba(23, 23, 23, 0.06);
+}
+
+.VPFeature .title {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- Doc content ---------- */
+
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3 {
+  letter-spacing: -0.02em;
+}
+
+.vp-doc h1 {
+  font-weight: 800;
+}
+
+.vp-doc h2 {
+  font-weight: 700;
+  border-top: 1px solid var(--vp-c-divider-light);
+  padding-top: 24px;
+}
+
+.vp-doc h3 {
+  font-weight: 650;
+}
+
+.vp-doc p {
+  line-height: 1.7;
+}
+
+/* Inline code */
+.vp-doc :not(pre) > code {
+  border-radius: 5px;
+  font-weight: 500;
+}
+
+/* Code blocks */
+.vp-doc div[class*="language-"] {
+  border: 1px solid var(--vp-c-divider-light);
+  border-radius: 10px;
+}
+
+/* Tables */
+.vp-doc table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.vp-doc th {
+  background: var(--vp-c-bg-alt);
+  font-weight: 600;
+}
+
+/* ---------- Sidebar ---------- */
+
+.VPSidebarItem.level-0 > .item > .text {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.VPSidebarItem .text {
+  font-size: 13.5px;
+}
+
+/* ---------- Footer ---------- */
+
+.VPFooter {
+  border-top: 1px solid var(--vp-c-divider-light);
+}

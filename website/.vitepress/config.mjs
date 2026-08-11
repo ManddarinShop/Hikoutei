@@ -17,6 +17,25 @@ export default defineConfig({
           "Typed repository and safe write layer for Google Sheets-backed MVPs. Keep your app fast with SQLite, keep your workflow visible in Google Sheets.",
       },
     ],
+    ["link", { rel: "preconnect", href: "https://fonts.googleapis.com" }],
+    [
+      "link",
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" },
+    ],
+    [
+      "link",
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;650;700;800&display=swap",
+      },
+    ],
+    [
+      "link",
+      {
+        rel: "icon",
+        href: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%231a88f8'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='Inter,sans-serif' font-weight='700'%3EH%3C/text%3E%3C/svg%3E",
+      },
+    ],
   ],
   themeConfig: {
     nav: [
