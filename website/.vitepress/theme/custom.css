@@ -191,3 +191,182 @@ body {
 .VPFooter {
   border-top: 1px solid var(--vp-c-divider-light);
 }
+
+/* ============================================================
+ * family.co/docs-style layout overrides
+ * ========================================================== */
+
+/* ---------- Topbar ---------- */
+
+.VPNavBar {
+  border-bottom: 1px solid var(--vp-c-divider-light);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+}
+
+.VPNavBarTitle .logo {
+  border-radius: 6px;
+}
+
+.VPNavBarTitle .title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Get Started CTA button (injected via nav-bar-content-after slot) */
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 16px;
+  margin-left: 12px;
+  border-radius: 7px;
+  background: var(--vp-c-brand-1);
+  color: #ffffff !important;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 2px rgba(23, 23, 23, 0.12);
+}
+
+.nav-cta:hover {
+  background: var(--vp-c-brand-2);
+  color: #ffffff !important;
+}
+
+/* ---------- Nav dropdown menus ---------- */
+
+.VPNavBarMenuLink {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--vp-c-text-1);
+}
+
+.VPDropdown .text {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.VPDropdown .menu {
+  border: 1px solid var(--vp-c-divider-light);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(23, 23, 23, 0.08);
+  padding: 6px;
+}
+
+.VPDropdown .menu-link {
+  border-radius: 6px;
+  font-size: 13.5px;
+  padding: 7px 10px;
+}
+
+.VPDropdown .menu-link:hover {
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-brand-1);
+}
+
+/* ---------- Sidebar ---------- */
+
+.VPSidebar {
+  padding-top: 20px;
+}
+
+/* Group headers: small uppercase labels like family.co docs */
+.VPSidebarItem.level-0 > .item > .text {
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-3);
+  padding: 0 8px;
+}
+
+.VPSidebarItem.level-0:not(:first-child) {
+  margin-top: 20px;
+}
+
+.VPSidebarItem .text {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.VPSidebarItem.is-active > .item .text {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
+/* ---------- Hero (home) ---------- */
+
+.VPHero .container {
+  padding-top: 72px;
+  padding-bottom: 72px;
+}
+
+.VPHero .name {
+  font-size: 52px;
+  letter-spacing: -0.035em;
+  font-weight: 800;
+  line-height: 1.06;
+  background: none;
+  -webkit-text-fill-color: initial;
+  color: var(--vp-c-text-1);
+}
+
+.VPHero .text {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  font-weight: 650;
+  color: var(--vp-c-text-1);
+}
+
+.VPHero .tagline {
+  font-size: 16px;
+  font-weight: 450;
+  color: var(--vp-c-text-2);
+  max-width: 560px;
+  line-height: 1.6;
+}
+
+.VPHero .actions {
+  margin-top: 28px;
+}
+
+.VPHero .actions .brand {
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 10px 22px;
+  box-shadow: 0 1px 2px rgba(23, 23, 23, 0.12);
+}
+
+.VPHero .actions .alt {
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 10px 22px;
+  border: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+}
+
+.VPHero .actions .alt:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+
+/* ---------- Home feature section ---------- */
+
+.VPFeatures .container {
+  padding-top: 12px;
+}
+
+/* ---------- Links ---------- */
+
+.vp-doc a {
+  color: var(--vp-c-brand-1);
+  font-weight: 500;
+}
+
+.vp-doc a:hover {
+  color: var(--vp-c-brand-2);
+}

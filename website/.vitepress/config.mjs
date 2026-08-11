@@ -7,6 +7,7 @@ export default defineConfig({
   lang: "en-US",
   base: "/Hikoutei/",
   cleanUrls: true,
+  logo: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231a88f8'/%3E%3Ctext x='50' y='70' font-size='56' text-anchor='middle' fill='white' font-family='Inter,sans-serif' font-weight='700'%3EH%3C/text%3E%3C/svg%3E",
   head: [
     ["meta", { property: "og:title", content: "Hikoutei" }],
     [
@@ -39,12 +40,31 @@ export default defineConfig({
   ],
   themeConfig: {
     nav: [
-      { text: "Guide", link: "/guide/quick-start" },
-      { text: "Benchmarks", link: "/guide/benchmarks" },
       {
-        text: "GitHub",
-        link: "https://github.com/ManddarinShop/Hikoutei",
+        text: "Guide",
+        items: [
+          { text: "What is Hikoutei", link: "/guide/what-is-hikoutei" },
+          { text: "Quick start", link: "/guide/quick-start" },
+          { text: "Google Sheets setup", link: "/guide/setup" },
+          { text: "Architecture", link: "/guide/architecture" },
+          { text: "Write and synchronization flow", link: "/guide/sync-flow" },
+          { text: "Benchmarks", link: "/guide/benchmarks" },
+          { text: "Limitations", link: "/guide/limitations" },
+          { text: "Project status", link: "/guide/status" },
+        ],
       },
+      {
+        text: "Resources",
+        items: [
+          {
+            text: "Internal consistency model",
+            link: "/guide/internal-consistency",
+          },
+          { text: "Contributing", link: "/guide/contributing" },
+          { text: "Release process", link: "/guide/release-process" },
+        ],
+      },
+      { text: "GitHub", link: "https://github.com/ManddarinShop/Hikoutei" },
       {
         text: "npm",
         link: "https://www.npmjs.com/package/hikoutei",
