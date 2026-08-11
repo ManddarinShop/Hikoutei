@@ -64,6 +64,8 @@ export {
   applyEffectResultWithSql,
   supersedeAndReplanWithAdapter,
   supersedeAndReplanWithSql,
+  supersedeEffectWithAdapter,
+  supersedeEffectWithSql,
   recoverExpiredLeasesWithAdapter,
   recoverExpiredLeasesWithSql,
   markDeliveryUncertainWithAdapter,
@@ -82,6 +84,8 @@ export {
   hasPendingOrProcessingEffectsWithSql,
   appendPendingEffectsWithAdapter,
   appendPendingEffectsWithSql,
+  RECOVERABLE_EFFECT_ERROR_CODES,
+  isRecoverableEffectErrorCode,
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
 } from "@hikoutei/ikisaki";
 export type {

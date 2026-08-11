@@ -524,6 +524,89 @@ describe("consistency-queue kernel", () => {
       expect(secondRow?.status).toBe("processing");
     });
 
+    it("advances a create-if-missing confirmation past a higher confirmed revision instead of rejecting it", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      const first = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [first]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: first.effectId,
+        claimToken: "claim-1",
+        leaseDurationMs: 30_000,
+      });
+
+      const baseConfirmation: EffectProjectionConfirmation = {
+        physicalSheetId: "physical-1",
+        projection: "system_state",
+        rowBindingId: "binding-1",
+        visibleRevision: 3,
+        visibleHash: "visible-hash-3",
+        entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+        fieldHashes: { name: "field-hash-3" },
+      };
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: first.effectId,
+          claimToken: "claim-1",
+          status: "applied",
+          projectionConfirmation: baseConfirmation,
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      // A create-if-missing repair restarted the provider revision at 1, so
+      // the confirmation is allowed to advance the durable revision past the
+      // confirmed 3 (confirmed + 1) instead of being rejected as a regression.
+      const second = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [second]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: second.effectId,
+        claimToken: "claim-2",
+        leaseDurationMs: 30_000,
+      });
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: second.effectId,
+          claimToken: "claim-2",
+          status: "applied",
+          projectionConfirmation: {
+            ...baseConfirmation,
+            visibleRevision: 1,
+            visibleHash: "visible-hash-1",
+            fieldHashes: { name: "field-hash-1" },
+            allowCreateRebaseline: true,
+          },
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      const visible = await adapter.read(({ sql }) =>
+        sql.get(
+          `SELECT confirmed_snapshot_hash, confirmed_visible_revision
+           FROM sheet_visible_state
+           WHERE physical_sheet_id = 'physical-1' AND projection = 'system_state' AND row_binding_id = 'binding-1'`,
+        ));
+      expect(visible).toMatchObject({
+        confirmed_snapshot_hash: "visible-hash-1",
+        confirmed_visible_revision: 4,
+      });
+      const field = await adapter.read(({ sql }) =>
+        sql.get(
+          `SELECT confirmed_field_hash, confirmed_visible_revision
+           FROM sheet_visible_field_state
+           WHERE physical_sheet_id = 'physical-1' AND projection = 'system_state'
+             AND row_binding_id = 'binding-1' AND field_name = 'name'`,
+        ));
+      expect(field).toMatchObject({
+        confirmed_field_hash: "field-hash-1",
+        confirmed_visible_revision: 4,
+      });
+    });
+
     it("rejects confirmation evidence that does not belong to the claimed effect", async () => {
       const adapter = createKernelStore();
       const fence = await claimTestFence(adapter);

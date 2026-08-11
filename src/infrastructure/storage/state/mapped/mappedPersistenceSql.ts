@@ -8,11 +8,14 @@
  */
 
 import type { EffectStatus, NormalizedCell } from "../../../../domain/index.js";
-import { ROW_BINDING_STATES } from "../../../../domain/model/constants.js";
+import {
+  ROW_BINDING_STATES,
+} from "../../../../domain/model/constants.js";
 import type {
   SqlExecutor,
   SqlMutationResult,
 } from "../../../../adapter/persistence/contracts/sql.js";
+import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import { parseNormalizedCell } from "../resolution/resolutionWriterHelpers.js";
 
 /** Raw row-binding state returned by SQLite. */
@@ -67,6 +70,13 @@ export interface MappedLatestProjectionEffectSqlRow {
   readonly expected_visible_revision: number;
   readonly expected_visible_hash: string;
   readonly stream_sequence: number;
+}
+
+/** One raw unresolved active-candidate row (any owned field). */
+export interface MappedActiveCandidateSqlRow {
+  readonly active_candidate_conflict_id: string | null;
+  readonly active_candidate_hash: string | null;
+  readonly conflict_status: string | null;
 }
 
 const READ_ROW_BINDING_SQL = `
@@ -150,6 +160,29 @@ const READ_LATEST_PROJECTION_EFFECT_SQL = `
   WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
   ORDER BY stream_sequence DESC
   LIMIT 1
+`;
+
+const READ_LATEST_APPLIED_PROJECTION_EFFECT_SQL = `
+  SELECT effect_id, physical_sheet_id, projection, status, payload_json,
+         expected_visible_revision, expected_visible_hash, stream_sequence
+  FROM sheet_effect_outbox
+  WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
+    AND status = 'applied'
+  ORDER BY stream_sequence DESC
+  LIMIT 1
+`;
+
+const READ_ROW_ACTIVE_CANDIDATE_SQL = `
+  SELECT visible.active_candidate_conflict_id AS active_candidate_conflict_id,
+         visible.active_candidate_hash AS active_candidate_hash,
+         conflict.status AS conflict_status
+  FROM sheet_visible_field_state AS visible
+  LEFT JOIN sync_conflict AS conflict
+    ON conflict.conflict_id = visible.active_candidate_conflict_id
+  WHERE visible.physical_sheet_id = ? AND visible.projection = ?
+    AND visible.row_binding_id = ?
+    AND (visible.active_candidate_conflict_id IS NOT NULL
+      OR visible.active_candidate_hash IS NOT NULL)
 `;
 
 /** Reads one mapped row binding inside the caller-owned transaction. */
@@ -316,4 +349,64 @@ export function readMappedLatestProjectionEffectWithSql(
     targetKind,
     targetId,
   ]);
+}
+
+/**
+ * Reads the newest applied effect on one target stream.
+ *
+ * Superseded and still-pending effects never materialize, so the row state
+ * a successor must guard against is the newest effect that actually reached
+ * the provider.
+ */
+export function readMappedLatestAppliedProjectionEffectWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+  targetKind: string,
+  targetId: string,
+): Promise<MappedLatestProjectionEffectSqlRow | undefined> {
+  return sql.get<MappedLatestProjectionEffectSqlRow>(READ_LATEST_APPLIED_PROJECTION_EFFECT_SQL, [
+    logicalSheetId,
+    targetKind,
+    targetId,
+  ]);
+}
+
+/**
+ * Returns whether one projection row carries an unresolved active candidate.
+ *
+ * An orphaned candidate pointer (no conflict row) blocks too, mirroring the
+ * outbound candidate gate: the projection must never be overwritten while
+ * any candidate evidence is present. Any two-sided pointer blocks regardless
+ * of conflict status: a pointer that survives a RESOLVED conflict is a
+ * malformed state that normal resolution clears in the same transaction, and
+ * the row must fail closed instead of being overwritten. A one-sided pointer
+ * (only the conflict ID or only the hash set) is a storage-consistency
+ * failure: the row must never be treated as candidate-free, so the read
+ * throws instead of letting a mapped update/delete overwrite it.
+ */
+export async function hasMappedRowActiveCandidateWithSql(
+  sql: SqlExecutor,
+  physicalSheetId: string,
+  projection: string,
+  rowBindingId: string,
+): Promise<boolean> {
+  const rows = await sql.all<MappedActiveCandidateSqlRow>(
+    READ_ROW_ACTIVE_CANDIDATE_SQL,
+    [physicalSheetId, projection, rowBindingId],
+  );
+  let blocked = false;
+  for (const row of rows) {
+    const conflictIdSet = row.active_candidate_conflict_id !== null;
+    const hashSet = row.active_candidate_hash !== null;
+    if (conflictIdSet !== hashSet) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
+        `row binding ${rowBindingId} carries one-sided active candidate pointer state`,
+      );
+    }
+    if (conflictIdSet) {
+      blocked = true;
+    }
+  }
+  return blocked;
 }

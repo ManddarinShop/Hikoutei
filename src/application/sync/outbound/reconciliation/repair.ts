@@ -16,14 +16,19 @@ import {
 } from "../../../../shared/state/index.js";
 import { isRecord } from "../../../../shared/encoding/typeGuards.js";
 import type { NewEffect } from "../../../../infrastructure/storage/index.js";
+import {
+  isRecoverableEffectErrorCode,
+} from "../../../../infrastructure/storage/index.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import { computeSyncVisibleHash } from "../../sheetsContract/syncSheets.js";
 import { SYNC_PROJECTIONS } from "../../sheetsContract/constants.js";
 import { createSystemProjectionEffect } from "../projection/ProjectionEffectFactory.js";
 import {
+  READ_FAILED_HEAD_SQL,
   READ_LATEST_EFFECT_SQL,
   READ_LATEST_VISIBLE_STATE_SQL,
   type DesiredRow,
+  type FailedHeadSqlShape,
   type LatestEffectSqlShape,
   type LatestVisibleSqlShape,
   type ScanContext,
@@ -34,13 +39,39 @@ export async function buildCorrectionEffects(
   context: ScanContext,
   sheet: { readonly tabName: string; readonly registeredRange: string },
   drifts: readonly DriftTarget[],
-): Promise<readonly NewEffect[]> {
-  const effects: NewEffect[] = [];
+): Promise<readonly CorrectionPlan[]> {
+  const effects: CorrectionPlan[] = [];
   const commitId = "reconciliation:" + context.createId();
 
   for (const drift of drifts) {
     const baseline = await resolveCorrectionBaseline(context, drift.desired);
-    if (baseline.skip) continue;
+    if (baseline.skip) {
+      // An equivalent correction is already in flight behind a terminal
+      // failed head that blocks the stream. No new effect is appended; the
+      // scanner instead supersedes the failed head with the in-flight
+      // correction (supersede-only plan) so that correction becomes
+      // claimable. Without a failed head, a skip is a plain no-op.
+      if (baseline.supersedeFailedEffectId !== null && baseline.supersedeByEffectId !== null) {
+        effects.push({
+          effect: null,
+          supersedeFailedEffectId: baseline.supersedeFailedEffectId,
+          supersedeByEffectId: baseline.supersedeByEffectId,
+        });
+      }
+      continue;
+    }
+    // A missing drift means the row is not observable in the Sheet at all,
+    // so the repair must create it from the empty visible baseline even when
+    // a confirmed visible state exists from an earlier lifecycle (a row
+    // deleted after it was applied). The confirmed-state baseline would make
+    // the provider reject the correction with a guard mismatch forever.
+    const createIfMissing = drift.kind === "missing" ? true : baseline.createIfMissing;
+    const expectedVisibleRevision = drift.kind === "missing"
+      ? 0
+      : baseline.expectedVisibleRevision;
+    const expectedVisibleHash = drift.kind === "missing"
+      ? ""
+      : baseline.expectedVisibleHash;
     const effect = createSystemProjectionEffect({
       effectId: "effect:" + context.createId(),
       commitId,
@@ -56,9 +87,9 @@ export async function buildCorrectionEffects(
       conflictId: { kind: PRESENCE_KINDS.ABSENT },
       targetAnchor: drift.desired.anchorReference,
       fields: drift.desired.fields,
-      createIfMissing: baseline.createIfMissing,
-      expectedVisibleRevision: baseline.expectedVisibleRevision,
-      expectedVisibleHash: baseline.expectedVisibleHash,
+      createIfMissing,
+      expectedVisibleRevision,
+      expectedVisibleHash,
       targetEntityRevision: {
         kind: APPLICABILITY_KINDS.APPLICABLE,
         value: drift.desired.entityRevision,
@@ -70,9 +101,35 @@ export async function buildCorrectionEffects(
       targetCanonicalCommitId: { kind: APPLICABILITY_KINDS.APPLICABLE, value: commitId },
       streamSequence: baseline.streamSequence,
     });
-    effects.push(effect);
+    effects.push({
+      effect,
+      // When the stream head is a terminal failed effect, the repair must
+      // supersede that head so it can become the new claimable stream head;
+      // otherwise the durable predecessor guard would block it forever.
+      supersedeFailedEffectId: baseline.supersedeFailedEffectId,
+      supersedeByEffectId: baseline.supersedeByEffectId,
+    });
   }
   return effects;
+}
+
+/**
+ * One reconciliation correction and the durable transition it requires.
+ *
+ * `supersedeFailedEffectId` is set only when a terminal (non-recoverable)
+ * failed effect blocks the target stream and must be superseded so the
+ * repair can become (or unblock) the stream head. Recoverable failed heads
+ * stay on the worker retry path and are never superseded.
+ */
+export interface CorrectionPlan {
+  /**
+   * The correction effect to append, or null for a supersede-only plan
+   * (the in-flight correction that already covers this drift is unblocked
+   * by superseding the terminal failed head with its effect id).
+   */
+  readonly effect: NewEffect | null;
+  readonly supersedeFailedEffectId: string | null;
+  readonly supersedeByEffectId: string | null;
 }
 
 export interface CorrectionBaseline {
@@ -81,6 +138,23 @@ export interface CorrectionBaseline {
   readonly expectedVisibleHash: string;
   readonly createIfMissing: boolean;
   readonly streamSequence: number;
+  /**
+   * Terminal failed stream head to supersede when appending this correction.
+   *
+   * `null` means append normally. Set only when an active `failed` effect with
+   * a non-recoverable error code blocks the target stream, so the correction
+   * can supersede that head and become the new stream head instead of being
+   * blocked behind the terminal failed predecessor forever.
+   */
+  readonly supersedeFailedEffectId: string | null;
+  /**
+   * Existing effect that owns the stream after the failed head is superseded.
+   *
+   * Set only when the baseline skips appending (an equivalent correction is
+   * already in flight behind the failed head). The failed head is superseded
+   * with this effect id so the blocked correction becomes claimable.
+   */
+  readonly supersedeByEffectId: string | null;
 }
 
 export async function resolveCorrectionBaseline(
@@ -101,6 +175,7 @@ export async function resolveCorrectionBaselineWithSql(
     context.logicalSheetId,
     desired.entityId,
   ]);
+  const failedHead = await readTerminalFailedHeadWithSql(sql, context.logicalSheetId, desired.entityId);
 
   if (latestEffect !== undefined && latestEffect.stream_sequence !== null) {
     const streamSequence = latestEffect.stream_sequence + 1;
@@ -115,38 +190,95 @@ export async function resolveCorrectionBaselineWithSql(
       const payload = latestEffect.payload_json;
       const expectedHash =
         payload === null ? "" : extractTargetVisibleHash(payload);
+      // The in-flight effect may be a create-baseline repair (expected
+      // revision 0) whose confirmation clamps the durable confirmed
+      // revision forward (confirmed + 1) when it settles. A follower
+      // planned against the repair's expected revision alone could then
+      // confirm below the clamped revision and be rejected by the
+      // visible-state upsert guard as a regression, wedging the stream.
+      // Floor the follower revision at the last confirmed revision so the
+      // chain stays monotonic; the hash still comes from the in-flight
+      // effect's target because that is what the sheet will show after it
+      // applies.
+      const visible = await sql.get<LatestVisibleSqlShape>(READ_LATEST_VISIBLE_STATE_SQL, [
+        context.physicalSheetId,
+        desired.rowBindingId,
+      ]);
+      const expectedVisibleRevision = Math.max(
+        (latestEffect.expected_visible_revision ?? 0) + 1,
+        visible?.confirmed_visible_revision ?? 0,
+      );
       if (expectedHash === computeSyncVisibleHash(desired.fields)) {
         // A canonical write already has an equivalent correction in flight.
         // Do not append another stream item on every periodic scan while the
         // first item is waiting for the provider or its recovery read-back.
+        // Even when skipping the append, a terminal failed head that blocks
+        // this in-flight repair must still be superseded so the stream can
+        // progress (live recovery from a previously wedged outbox).
         return {
           skip: true,
-          expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
+          expectedVisibleRevision,
           expectedVisibleHash: expectedHash,
           createIfMissing: false,
           streamSequence,
+          supersedeFailedEffectId: failedHead,
+          supersedeByEffectId: latestEffect.effect_id,
         };
       }
+      // The in-flight correction does not match the current canonical
+      // target, so a fresh repair is appended behind it. The terminal failed
+      // head is superseded with the NEW repair id (not the stale in-flight
+      // id): the failed head is closed by the effect that replaces its
+      // intent, and the stale in-flight correction becomes claimable as a
+      // side effect because the failed head no longer blocks it.
       return {
         skip: false,
-        expectedVisibleRevision: (latestEffect.expected_visible_revision ?? 0) + 1,
+        expectedVisibleRevision,
         expectedVisibleHash: expectedHash,
         createIfMissing: false,
         streamSequence,
+        supersedeFailedEffectId: failedHead,
+        supersedeByEffectId: null,
       };
     }
     const visible = await sql.get<LatestVisibleSqlShape>(READ_LATEST_VISIBLE_STATE_SQL, [
       context.physicalSheetId,
       desired.rowBindingId,
     ]);
-    return baselineFromVisible(visible, streamSequence);
+    return withSupersede(baselineFromVisible(visible, streamSequence), failedHead);
   }
 
   const visible = await sql.get<LatestVisibleSqlShape>(READ_LATEST_VISIBLE_STATE_SQL, [
     context.physicalSheetId,
     desired.rowBindingId,
   ]);
-  return baselineFromVisible(visible, POSITIVE_SAFE_INTEGER_MINIMUM);
+  return withSupersede(baselineFromVisible(visible, POSITIVE_SAFE_INTEGER_MINIMUM), failedHead);
+}
+
+/**
+ * Returns the terminal failed head id for one target stream, or null.
+ *
+ * A `failed` effect whose `last_error_code` is recoverable stays on the worker
+ * retry path and is never superseded by reconciliation; only non-recoverable
+ * (terminal) failed heads such as `delivery_uncertain_timeout` are returned.
+ */
+async function readTerminalFailedHeadWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+  entityId: string,
+): Promise<string | null> {
+  const failed = await sql.get<FailedHeadSqlShape>(READ_FAILED_HEAD_SQL, [logicalSheetId, entityId]);
+  if (failed === undefined) return null;
+  return isRecoverableEffectErrorCode(failed.last_error_code) ? null : failed.effect_id;
+}
+
+/** Attaches a terminal failed head supersession to a visible-state baseline. */
+function withSupersede(
+  baseline: CorrectionBaseline,
+  failedHead: string | null,
+): CorrectionBaseline {
+  if (failedHead === null) return baseline;
+  return { ...baseline, supersedeFailedEffectId: failedHead };
 }
 
 export function baselineFromVisible(
@@ -165,6 +297,8 @@ export function baselineFromVisible(
       expectedVisibleHash: "",
       createIfMissing: true,
       streamSequence,
+      supersedeFailedEffectId: null,
+      supersedeByEffectId: null,
     };
   }
   return {
@@ -173,6 +307,8 @@ export function baselineFromVisible(
     expectedVisibleHash: visible.confirmed_snapshot_hash,
     createIfMissing: false,
     streamSequence,
+    supersedeFailedEffectId: null,
+    supersedeByEffectId: null,
   };
 }
 

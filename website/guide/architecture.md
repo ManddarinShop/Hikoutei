@@ -64,8 +64,33 @@ The internal service provisions and validates registered projection tabs
 before starting delivery. It owns the Google Sheets API client, effect worker,
 response-loss recovery, reconciliation, and User_Input polling.
 
+Reconciliation is a lazy repair net with its own schedule: it compares the
+projected tabs against the SQLite authority and enqueues CAS-carrying
+corrections (repairs for System_State drift, full-row deletion effects for
+surplus User_Input rows). It also supersedes terminal failed stream heads that
+would otherwise wedge later writes forever; recoverable failures stay on the
+worker retry path.
+
 A successful public `flush()` means that the local SQLite transaction
 committed. It does not mean that a remote Sheet write has completed.
+
+## Conflict safety
+
+When polling detects a `User_Input` value A against canonical value B, the
+service persists the active candidate and an `OPEN` conflict in SQLite and
+queues an `OPEN` `Sync_Conflicts` projection. Detection creates no resolution
+command; polling and process restarts alone never resolve the conflict.
+
+Only a later local commit that strictly increases the canonical revision of the
+same conflicted field is an implicit system-wins signal. Unrelated-field changes
+and same-value writes that do not advance that field revision are not approval.
+Candidate-time row visible revision/hash and candidate hash/epoch fence the
+resolution, so a later human edit is not overwritten. A legacy conflict without
+candidate visible evidence remains unresolved.
+
+In this policy scope, deleting an entity with an unresolved conflict fails
+closed before its entity row, canonical state, or outbox effects can commit.
+All queued Sheet audit and repair effects remain asynchronous.
 
 ## Source boundaries
 

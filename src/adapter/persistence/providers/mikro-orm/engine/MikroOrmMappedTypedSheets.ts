@@ -17,6 +17,7 @@ import {
   type TypedSheetsEntityMappingRegistry,
 } from "../../../../../application/orm/mapping/entityMapping.js";
 import type {
+  MappedFlushSyncHook,
   RegisteredTypedSheetsMappedProjection,
   TypedSheetsEntityWriterOptions,
 } from "../../../../../application/orm/persistence/support/contracts.js";
@@ -36,6 +37,14 @@ import { migrateMikroOrmSqliteStorageSchema } from "../storage/MikroOrmSqliteSch
 export interface CreateMappedTypedSheetsOrmOptions {
   readonly mappings: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[];
   readonly writer: TypedSheetsEntityWriterOptions;
+  /**
+   * Internal sync behavior injected into the mapped flush transaction.
+   *
+   * Never part of the root application contract; the sync service bootstrap
+   * supplies it so NEEDS_REBASE audits and implicit system-wins resolution
+   * stay atomic with entity/canonical/outbox writes.
+   */
+  readonly syncFlushHook?: MappedFlushSyncHook;
 }
 
 /** Options for opening, migrating, registering, and mapping a dedicated SQLite runtime. */
@@ -73,6 +82,7 @@ export function createMappedTypedSheetsOrm(
     flushCoordinator: createMappedTypedSheetsFlushCoordinator({
       mappings,
       writer: options.writer,
+      ...(options.syncFlushHook === undefined ? {} : { syncFlushHook: options.syncFlushHook }),
     }),
   });
 }
@@ -91,6 +101,7 @@ export async function initializeMappedTypedSheetsRuntime(
     mappings: mappingsInput,
     writer,
     onRegisteredProjections,
+    syncFlushHook,
     ...adapterOptions
   } = options;
   const mappings = mappingRegistry(mappingsInput);
@@ -103,7 +114,11 @@ export async function initializeMappedTypedSheetsRuntime(
     }
     return {
       storage,
-      orm: createMappedTypedSheetsOrm(storage, { mappings, writer }),
+      orm: createMappedTypedSheetsOrm(storage, {
+        mappings,
+        writer,
+        ...(syncFlushHook === undefined ? {} : { syncFlushHook }),
+      }),
       mappings,
       registrations,
     };

@@ -260,10 +260,12 @@ export class EffectWorkerSupervisor<
     const reconciliation = this.reconciliation;
     if (reconciliation === undefined || this.now() < this.nextReconciliationAt) return undefined;
 
-    // Reconciliation is a safety net, not part of the normal write path. Wait
-    // until the just-completed worker pass reports no remaining ready work.
-    if (!isWorkerPassIdle(workerReport)) return undefined;
-
+    // Reconciliation is a lazy repair net: it runs on its own schedule even
+    // while the worker pass is busy, because the corruption it repairs can
+    // itself be what keeps the outbox busy (a terminal failed head wedges
+    // every later effect on its stream). The scanner owns its own in-flight
+    // deferral and its fenced writer lease, so a busy worker cannot race it.
+    // Hosts that want an extra outbox-drain gate can supply isOutboxIdle.
     this.nextReconciliationAt = this.now() + this.reconciliationIntervalMs;
     try {
       if (reconciliation.isOutboxIdle !== undefined && !(await reconciliation.isOutboxIdle())) {
@@ -441,15 +443,6 @@ function hasForwardProgress(report: WorkerReport): boolean {
     report.blockedCandidate > 0 ||
     report.replanned > 0 ||
     report.failed > 0;
-}
-
-function isWorkerPassIdle(report: WorkerReport): boolean {
-  return report.selected === 0 &&
-    report.claimed === 0 &&
-    report.expiredLeasesRecovered === 0 &&
-    report.deferred === 0 &&
-    report.requeued === 0 &&
-    report.replanned === 0;
 }
 
 function nextBackoff(current: number, maximum: number): number {

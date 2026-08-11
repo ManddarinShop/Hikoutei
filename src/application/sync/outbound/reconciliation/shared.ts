@@ -48,10 +48,12 @@ export interface LatestVisibleSqlShape {
 }
 
 export interface LatestEffectSqlShape {
+  readonly effect_id: string;
   readonly stream_sequence: number | null;
   readonly expected_visible_revision: number | null;
   readonly expected_visible_hash: string | null;
   readonly status: string;
+  readonly last_error_code: string | null;
   readonly payload_json: string | null;
 }
 
@@ -82,12 +84,33 @@ export const READ_LATEST_VISIBLE_STATE_SQL = `
 `;
 
 export const READ_LATEST_EFFECT_SQL = `
-  SELECT stream_sequence, expected_visible_revision, expected_visible_hash, status, payload_json
+  SELECT effect_id, stream_sequence, expected_visible_revision, expected_visible_hash, status, last_error_code, payload_json
   FROM sheet_effect_outbox
   WHERE logical_sheet_id = ? AND target_kind = 'entity' AND target_id = ?
   ORDER BY stream_sequence DESC
   LIMIT 1
 `;
+
+/**
+ * Reads the active `failed` effect for one target stream.
+ *
+ * At most one `failed` effect can be active per stream: a failed effect is
+ * never in `('applied','superseded')`, so the durable predecessor guard blocks
+ * every later effect until it is superseded. The caller decides whether the
+ * code is terminal (non-recoverable) and must be superseded by a repair.
+ */
+export const READ_FAILED_HEAD_SQL = `
+  SELECT effect_id, last_error_code
+  FROM sheet_effect_outbox
+  WHERE logical_sheet_id = ? AND target_kind = 'entity' AND target_id = ? AND status = 'failed'
+  ORDER BY stream_sequence DESC
+  LIMIT 1
+`;
+
+export interface FailedHeadSqlShape {
+  readonly effect_id: string;
+  readonly last_error_code: string | null;
+}
 
 export interface ScanContext {
   readonly storage: SqlStorageAdapter;

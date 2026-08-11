@@ -25,6 +25,7 @@ import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
   requireRegisteredSyncSheetWithAdapter,
+  supersedeEffectWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
 } from "../../../../infrastructure/storage/index.js";
@@ -53,7 +54,13 @@ import {
   countExtraRows,
   countMatchedRows,
 } from "./diff.js";
-import { buildCorrectionEffects } from "./repair.js";
+import {
+  appendEffectsWithSupersedes,
+} from "./enqueue.js";
+import {
+  buildCorrectionEffects,
+  type CorrectionPlan,
+} from "./repair.js";
 
 export type { ReconciliationIdFactory } from "./shared.js";
 
@@ -204,8 +211,8 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     });
   }
 
-  const effects = await buildCorrectionEffects(context, sheet, drifts);
-  if (effects.length === 0) {
+  const plans = await buildCorrectionEffects(context, sheet, drifts);
+  if (plans.length === 0) {
     return freezeReport(context.physicalSheetId, snapshot, desired, {
       matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
       drifted: drifts.filter((drift) => drift.kind === "drifted").length,
@@ -216,8 +223,8 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     });
   }
 
-  const enqueued = await appendPendingEffectsWithAdapter(context.storage, fence, effects);
-  if (!enqueued) {
+  const enqueued = await enqueueCorrections(context, fence, plans);
+  if (enqueued === 0) {
     return freezeReport(context.physicalSheetId, snapshot, desired, {
       matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
       drifted: drifts.filter((drift) => drift.kind === "drifted").length,
@@ -233,9 +240,70 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     drifted: drifts.filter((drift) => drift.kind === "drifted").length,
     missing: drifts.filter((drift) => drift.kind === "missing").length,
     extra: countExtraRows(snapshot, desired, sheet.businessKeyField),
-    effects: effects.length,
+    effects: enqueued,
     fenceClaimed: true,
   });
+}
+
+/**
+ * Enqueues planned corrections under the reconciler fence.
+ *
+ * Supersede-only plans (an equivalent correction already in flight behind a
+ * terminal failed head) are recovered by superseding that head with the
+ * in-flight correction id. Append plans whose stream head is a terminal
+ * failed effect commit the append and the supersede in ONE fenced
+ * transaction, so the durable predecessor guard can never observe the new
+ * repair while the failed head still blocks it; a lost race (the head was
+ * already superseded) rolls the append back and the next scan re-plans.
+ * Returns the number of effects appended (0 when the fence was lost or the
+ * recovery raced away).
+ */
+async function enqueueCorrections(
+  context: ScanContext,
+  fence: FencingContext,
+  plans: readonly CorrectionPlan[],
+): Promise<number> {
+  const appends = plans.filter((plan) => plan.effect !== null);
+  const supersedeOnly = plans.filter((plan) => plan.effect === null);
+
+  for (const plan of supersedeOnly) {
+    if (plan.supersedeFailedEffectId === null || plan.supersedeByEffectId === null) continue;
+    try {
+      // Best-effort: when the failed head was already superseded by a
+      // concurrent pass, the now-claimable correction is exactly the same and
+      // the next scan re-evaluates the stream.
+      await supersedeEffectWithAdapter(
+        context.storage,
+        fence,
+        plan.supersedeFailedEffectId,
+        plan.supersedeByEffectId,
+      );
+    } catch (error: unknown) {
+      if (
+        error instanceof StorageError &&
+        (error.code === STORAGE_ERROR_CODES.EFFECT_REPLAN_CONFLICT ||
+          error.code === STORAGE_ERROR_CODES.STALE_WRITER_FENCE)
+      ) {
+        // A lost reconciler fence or a supersede that raced away is not a
+        // scan failure: the next scan re-evaluates the stream, and this scan
+        // settles as a 0-effect report instead of aborting sibling appends
+        // or surfacing a reconciliation error on every interval.
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (appends.length === 0) return 0;
+
+  const appended = await appendEffectsWithSupersedes(
+    context.storage,
+    fence,
+    appends.map((plan) => ({
+      effect: plan.effect as NonNullable<CorrectionPlan["effect"]>,
+      supersedeEffectId: plan.supersedeFailedEffectId,
+    })),
+  );
+  return appended ? appends.length : 0;
 }
 
 async function claimReconcilerFence(context: ScanContext): Promise<FencingContext | null> {

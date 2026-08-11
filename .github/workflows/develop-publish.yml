@@ -215,11 +215,13 @@ jobs:
             echo "NPM_TOKEN secret is required to publish the ikisaki package." >&2
             exit 1
           fi
-          # The hikoutei tarball depends on @hikoutei/ikisaki@0.1.0, so the
-          # dependency must exist on the registry before hikoutei is published.
-          # Publish at most once per version; later releases skip the step.
-          if npm view "@hikoutei/ikisaki@0.1.0" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "@hikoutei/ikisaki@0.1.0 already published; skipping."
+          # The hikoutei tarball depends on the exact @hikoutei/ikisaki version
+          # declared in the workspace manifest, so that version must exist on
+          # the registry before hikoutei is published. Publish at most once per
+          # version; later releases skip the step.
+          ikisaki_version="$(node -p "require('./packages/ikisaki/package.json').version")"
+          if npm view "@hikoutei/ikisaki@${ikisaki_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "@hikoutei/ikisaki@${ikisaki_version} already published; skipping."
           else
             npm ci
             npm run build -w @hikoutei/ikisaki

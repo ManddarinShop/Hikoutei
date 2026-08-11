@@ -22,6 +22,7 @@ import {
 import type { FencingContext } from "./writerLease.js";
 import { toSqlNullable } from "./sqlState.js";
 import {
+  READ_CONFIRMED_VISIBLE_REVISION_SQL,
   UPSERT_VISIBLE_FIELD_STATE_SQL,
   UPSERT_VISIBLE_STATE_SQL,
 } from "./outboxSql.js";
@@ -212,7 +213,9 @@ export function validateProjectionConfirmation(confirmation: EffectProjectionCon
     !isSemanticRevision(confirmation.visibleRevision) ||
     confirmation.visibleRevision < 1 ||
     !isApplicabilityNumber(confirmation.entityRevision) ||
-    !isRecord(confirmation.fieldHashes)
+    !isRecord(confirmation.fieldHashes) ||
+    (confirmation.allowCreateRebaseline !== undefined &&
+      typeof confirmation.allowCreateRebaseline !== "boolean")
   ) {
     throwInvalidProjectionConfirmation(
       "projection confirmation has an invalid identity, revision, or field state",
@@ -307,12 +310,13 @@ export async function writeProjectionConfirmationWithSql(
   sql: SqlExecutor,
   confirmation: EffectProjectionConfirmation,
 ): Promise<void> {
+  const visibleRevision = await resolveConfirmationVisibleRevisionWithSql(sql, confirmation);
   const row = await sql.run(UPSERT_VISIBLE_STATE_SQL, [
     confirmation.physicalSheetId,
     confirmation.projection,
     confirmation.rowBindingId,
     confirmation.visibleHash,
-    confirmation.visibleRevision,
+    visibleRevision,
     toSqlNullable(confirmation.entityRevision),
     confirmation.visibleHash,
   ]);
@@ -330,7 +334,7 @@ export async function writeProjectionConfirmationWithSql(
       confirmation.rowBindingId,
       fieldName,
       hash,
-      confirmation.visibleRevision,
+      visibleRevision,
       hash,
     ]);
     if (field.changes !== 1) {
@@ -340,6 +344,37 @@ export async function writeProjectionConfirmationWithSql(
       );
     }
   }
+}
+
+/**
+ * Resolves the durable revision a confirmation may write.
+ *
+ * A create-if-missing repair applies against an empty visible baseline, so
+ * its provider receipt restarts at revision 1 even when the binding already
+ * has a higher confirmed revision (the row was deleted and re-created). The
+ * confirmation must then advance the durable revision past the confirmed
+ * value (confirmed + 1) instead of being rejected as a regression, which
+ * would wedge the applied effect in the delivery_uncertain recovery loop
+ * forever. Confirmations that are not create-if-missing repairs keep their
+ * receipt revision unchanged, so genuinely stale read-backs still fail
+ * closed through the upsert guard.
+ */
+async function resolveConfirmationVisibleRevisionWithSql(
+  sql: SqlExecutor,
+  confirmation: EffectProjectionConfirmation,
+): Promise<number> {
+  if (confirmation.allowCreateRebaseline !== true) {
+    return confirmation.visibleRevision;
+  }
+  const current = await sql.get<{ readonly confirmed_visible_revision: number | null }>(
+    READ_CONFIRMED_VISIBLE_REVISION_SQL,
+    [confirmation.physicalSheetId, confirmation.projection, confirmation.rowBindingId],
+  );
+  const confirmed = current?.confirmed_visible_revision;
+  if (confirmed === undefined || confirmed === null || confirmed < confirmation.visibleRevision) {
+    return confirmation.visibleRevision;
+  }
+  return confirmed + 1;
 }
 
 export async function requireCurrentFenceWithSql(

@@ -121,11 +121,19 @@ export interface FakeSyncProviderOptions {
    * rejects duplicate anchors exactly like the real provider.
    */
   readonly allowDuplicateAnchors?: boolean;
+  /**
+   * Emit snapshots with the real provider's shape: visibleRevision and
+   * visibleHash are ABSENT on every snapshot row (the real provider leaves
+   * visible state to SQLite). Defaults to false for source compatibility
+   * with fixtures that assert the legacy present shape.
+   */
+  readonly realProviderSnapshotShape?: boolean;
 }
 
 interface FakeRow {
   readonly targetId: string;
-  readonly anchor: string;
+  /** Mutable like the real provider's system-column cell: anchor assignment rewrites it. */
+  anchor: string;
   physicalAnchorPresent: boolean;
   fields: Record<string, NormalizedCell>;
   visibleRevision: number;
@@ -175,6 +183,7 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
   private readonly receipts = new Map<string, Receipt>();
   private readonly maxEffectsPerApply: Presence<number>;
   private readonly allowDuplicateAnchors: boolean;
+  private readonly realProviderSnapshotShape: boolean;
   private anchorSequence = 0;
   private dropResponse = false;
   private snapshotReadError: Error | undefined;
@@ -194,6 +203,7 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
         SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
       ));
     this.allowDuplicateAnchors = options.allowDuplicateAnchors === true;
+    this.realProviderSnapshotShape = options.realProviderSnapshotShape === true;
     for (const input of inputs) this.addSheet(input);
   }
 
@@ -238,6 +248,39 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
     }
   }
 
+  /**
+   * Simulates a remote row reappearing without an effect receipt.
+   *
+   * Mirrors the row shape a create-if-missing write leaves behind (anchored,
+   * revision 1), so snapshot reads observe the row while the outbox still
+   * treats the write that produced it as in flight (delivery-uncertain).
+   */
+  public restoreRow(
+    physicalSheetId: string,
+    anchor: string,
+    targetId: string,
+    fields: Readonly<Record<string, NormalizedCell>>,
+  ): void {
+    const sheet = this.requireSheet(physicalSheetId);
+    if (this.findRowByAnchorOrIdentity(sheet, anchor, targetId).kind === LOOKUP_RESULT_KINDS.FOUND) {
+      throw new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
+        `fake row already exists at ${anchor} for ${targetId}`,
+      );
+    }
+    const bucket = sheet.rowsByAnchor.get(anchor) ?? [];
+    bucket.push({
+      targetId,
+      anchor,
+      physicalAnchorPresent: true,
+      fields: { ...fields },
+      visibleRevision: 1,
+      visibleHash: computeSyncVisibleHash(fields),
+      activeCandidateHash: notApplicableValue(),
+    });
+    sheet.rowsByAnchor.set(anchor, bucket);
+  }
+
   /** Simulates a manual deletion of an anchorless fast-appended row. */
   public removeRowByIdentity(physicalSheetId: string, identity: string): void {
     const sheet = this.requireSheet(physicalSheetId);
@@ -268,12 +311,37 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
 
   public async ensureRowAnchors(request: EnsureSyncRowAnchorsRequest): Promise<EnsureSyncRowAnchorsResult> {
     const sheet = this.requireMatchingSheet(request);
+    // Mirror the real provider's anchor pass: only user_input tabs carry the
+    // system row-id column, so only their unanchored rows are assigned fresh
+    // sync-anchor values (system_state and sync_conflicts rows are
+    // identity-located and never anchored; the real planRowAnchors returns
+    // zeros for them). Duplicated anchors are reported as evidence, never
+    // rewritten.
+    if (sheet.projection !== SYNC_PROJECTIONS.USER_INPUT) {
+      return { assigned: 0, existing: 0, duplicateAnchors: [] };
+    }
     const rows = fakeRows(sheet);
-    const grouped = groupDuplicateAnchors(rows.map((row) => row.anchor));
+    const anchors: string[] = [];
+    let assigned = 0;
+    let existing = 0;
+    for (const row of rows) {
+      if (!row.physicalAnchorPresent) {
+        const anchor = this.nextAnchorWithPrefix();
+        sheet.rowsByAnchor.delete(row.anchor);
+        row.anchor = anchor;
+        row.physicalAnchorPresent = true;
+        sheet.rowsByAnchor.set(anchor, [row]);
+        anchors.push(anchor);
+        assigned += 1;
+        continue;
+      }
+      anchors.push(row.anchor);
+      existing += 1;
+    }
     return {
-      assigned: 0,
-      existing: rows.length,
-      duplicateAnchors: grouped,
+      assigned,
+      existing,
+      duplicateAnchors: groupDuplicateAnchors(anchors),
     };
   }
 
@@ -865,10 +933,10 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
     }
 
     if (isProjectionDeletionEffect(effect.effectKind)) {
-      if (
-        row.visibleRevision !== effect.expectedVisibleRevision ||
-        row.visibleHash !== effect.expectedVisibleHash
-      ) {
+      // The real provider's deletion CAS is hash-only (the expected visible
+      // revision is echoed into the receipt but never gates the mutation), so
+      // the fake must not reject on a revision mismatch either.
+      if (row.visibleHash !== effect.expectedVisibleHash) {
         return this.result(
           effect,
           SYNC_EFFECT_RESULT_STATUSES.GUARD_MISMATCH,
@@ -890,9 +958,20 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
       const deletionReceipt: Receipt = {
         payloadHash: effect.payloadHash,
         targetVisibleHash: effect.payload.targetVisibleHash,
-        visibleRevision: row.visibleRevision,
+        // Echo the effect's expected revision exactly like the real
+        // provider's deletion receipt (makeReceipt with the expected
+        // revision), so the confirmation mirror sees the same evidence.
+        visibleRevision: effect.expectedVisibleRevision,
       };
-      sheet.rowsByAnchor.delete(row.anchor);
+      // A duplicated anchor bucket resolves to its first row; only that row
+      // is deleted, so the remaining rows become resolvable on later passes
+      // exactly like the real provider's anchor index.
+      const bucket = sheet.rowsByAnchor.get(row.anchor);
+      if (bucket !== undefined && bucket.length > 1) {
+        bucket.shift();
+      } else {
+        sheet.rowsByAnchor.delete(row.anchor);
+      }
       this.receipts.set(effect.effectId, deletionReceipt);
       return this.result(
         effect,
@@ -924,16 +1003,20 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
     }
 
     if (row.visibleHash === effect.payload.targetVisibleHash) {
-      this.receipts.set(effect.effectId, {
+      const receipt: Receipt = {
         payloadHash: effect.payloadHash,
         targetVisibleHash: effect.payload.targetVisibleHash,
-        visibleRevision: row.visibleRevision,
-      });
+        // Echo expected + 1 exactly like the real provider's already-applied
+        // receipt.
+        visibleRevision: effect.expectedVisibleRevision + 1,
+      };
+      this.receipts.set(effect.effectId, receipt);
       return this.result(
         effect,
         SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED,
         foundValue(row),
         absentValue(),
+        receipt,
       );
     }
 
@@ -949,10 +1032,11 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
           presentValue("repair_guard_mismatch"),
         );
       }
-    } else if (
-      row.visibleRevision !== effect.expectedVisibleRevision ||
-      row.visibleHash !== effect.expectedVisibleHash
-    ) {
+    } else if (row.visibleHash !== effect.expectedVisibleHash) {
+      // The real provider's write CAS is hash-only; the expected visible
+      // revision is never compared remotely, so the fake must not reject on
+      // a revision mismatch either (rows with write history carry higher
+      // revisions than a fresh snapshot fallback).
       return this.result(
         effect,
         SYNC_EFFECT_RESULT_STATUSES.GUARD_MISMATCH,
@@ -967,16 +1051,20 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
     if (effect.effectKind === FAKE_EFFECT_KINDS.RESOLUTION_PROJECTION) {
       row.activeCandidateHash = notApplicableValue();
     }
-    this.receipts.set(effect.effectId, {
+    const writeReceipt: Receipt = {
       payloadHash: effect.payloadHash,
       targetVisibleHash: effect.payload.targetVisibleHash,
-      visibleRevision: row.visibleRevision,
-    });
+      // Echo expected + 1 exactly like the real provider's write receipt
+      // (makeReceipt with expectedVisibleRevision + 1).
+      visibleRevision: effect.expectedVisibleRevision + 1,
+    };
+    this.receipts.set(effect.effectId, writeReceipt);
     return this.result(
       effect,
       SYNC_EFFECT_RESULT_STATUSES.APPLIED,
       foundValue(row),
       absentValue(),
+      writeReceipt,
     );
   }
 
@@ -1073,8 +1161,12 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
       physicalAnchor: row.physicalAnchorPresent
         ? presentValue(row.anchor)
         : absentValue(),
-      visibleRevision: presentValue(row.visibleRevision),
-      visibleHash: presentValue(row.visibleHash),
+      visibleRevision: this.realProviderSnapshotShape
+        ? absentValue()
+        : presentValue(row.visibleRevision),
+      visibleHash: this.realProviderSnapshotShape
+        ? absentValue()
+        : presentValue(row.visibleHash),
       cells,
     };
   }
@@ -1098,14 +1190,10 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
   ): LookupResult<FakeRow> {
     const bucket = sheet.rowsByAnchor.get(anchor);
     if (bucket !== undefined) {
-      // The real provider fails closed on duplicated anchors; the fake must
-      // never silently pick one of the rows either.
-      if (bucket.length > 1) {
-        throw new SyncSheetsContractError(
-          SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
-          `fake sync anchor is duplicated: ${anchor}`,
-        );
-      }
+      // Mirrors the real provider's indexRows first-wins rule: only the FIRST
+      // row per anchor value enters the anchor index (duplicated anchors are
+      // evidence, never rewritten), so a duplicated anchor resolves
+      // deterministically instead of drifting to the last row carrying it.
       const anchored = lookupResult(bucket[0]);
       if (anchored.kind === LOOKUP_RESULT_KINDS.FOUND || sheet.identityField === undefined) {
         return anchored;
@@ -1115,13 +1203,48 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
     const matches = fakeRows(sheet).filter((row) =>
       normalizedCellIdentity(row.fields[sheet.identityField as string]) === targetId,
     );
+    if (matches.length === 0) {
+      // Mirror the real provider's findWorkingRow contract: entity target IDs
+      // carry the full entity id (`entity:<logical>:<id>`) while fast-appended
+      // rows are indexed only by their visible business key, so the targetId
+      // tail is the second identity fallback before failing closed.
+      const separator = targetId.lastIndexOf(":");
+      if (separator >= 0) {
+        const visibleIdentity = targetId.slice(separator + 1);
+        if (visibleIdentity.length > 0) {
+          matches.push(...fakeRows(sheet).filter((row) =>
+            normalizedCellIdentity(row.fields[sheet.identityField as string]) === visibleIdentity,
+          ));
+        }
+      }
+    }
     if (matches.length > 1) {
       throw new SyncSheetsContractError(
         SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
         `fake sync identity is duplicated: ${targetId}`,
       );
     }
-    return matches[0] === undefined ? notFoundValue() : { kind: LOOKUP_RESULT_KINDS.FOUND, value: matches[0] };
+    if (matches[0] !== undefined) {
+      return { kind: LOOKUP_RESULT_KINDS.FOUND, value: matches[0] };
+    }
+    // Mirror the real provider's fallback: canonical target ids are
+    // namespaced (`entity:<entity>:<visibleId>`), so a row re-created by the
+    // append path (which never materializes anchor metadata) is located by
+    // the visible identity tail of the target id.
+    const separator = targetId.lastIndexOf(":");
+    const visibleIdentity = separator >= 0 ? targetId.slice(separator + 1) : targetId;
+    const tailMatches = fakeRows(sheet).filter((row) =>
+      normalizedCellIdentity(row.fields[sheet.identityField as string]) === visibleIdentity,
+    );
+    if (tailMatches.length > 1) {
+      throw new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
+        `fake sync identity is duplicated: ${visibleIdentity}`,
+      );
+    }
+    return tailMatches[0] === undefined
+      ? notFoundValue()
+      : { kind: LOOKUP_RESULT_KINDS.FOUND, value: tailMatches[0] };
   }
 
   private requireRow(sheet: FakeSheet, anchor: string): FakeRow {
@@ -1173,6 +1296,12 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
   private nextAnchor(): string {
     this.anchorSequence += 1;
     return "fake-anchor:" + this.anchorSequence;
+  }
+
+  /** Mirrors the real provider's observation-assigned anchor format. */
+  private nextAnchorWithPrefix(): string {
+    this.anchorSequence += 1;
+    return "sync-anchor:" + this.anchorSequence;
   }
 }
 

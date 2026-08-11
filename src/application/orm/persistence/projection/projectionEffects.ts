@@ -276,7 +276,29 @@ export async function projectionBaseline(
       if (!isNonNegativeSafeInteger(latest.expected_visible_revision)) {
         throwProjectionBlocked(mapping, projection, "latest effect has an invalid expected visible revision");
       }
-      const expectedVisibleRevision = latest.expected_visible_revision + 1;
+      // The in-flight effect may be a create-baseline repair (expected
+      // revision 0) whose confirmation clamps the durable confirmed
+      // revision forward (confirmed + 1) when it settles. A follower
+      // planned against the repair's expected revision alone could then
+      // confirm below the clamped revision and be rejected by the
+      // visible-state upsert guard as a regression, wedging the stream.
+      // Floor the follower revision at the last confirmed revision so the
+      // chain stays monotonic; the hash still comes from the in-flight
+      // effect's target because that is what the sheet will show after it
+      // applies.
+      const visible = await readMappedVisibleProjectionStateWithSql(
+        sql,
+        projection.physicalSheetId,
+        projection.projection,
+        rowBindingId,
+      );
+      if (visible !== undefined && !isNonNegativeSafeInteger(visible.confirmed_visible_revision)) {
+        throwProjectionBlocked(mapping, projection, "confirmed visible state is invalid");
+      }
+      const expectedVisibleRevision = Math.max(
+        latest.expected_visible_revision + 1,
+        visible === undefined ? 0 : visible.confirmed_visible_revision,
+      );
       if (!isNonNegativeSafeInteger(expectedVisibleRevision)) {
         throwProjectionBlocked(mapping, projection, "projection visible revision overflowed");
       }

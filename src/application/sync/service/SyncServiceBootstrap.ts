@@ -41,6 +41,7 @@ import {
   registeredTypedSheetsProjectionDefinitions,
   resolveTypedSheetsEntityWriterOptions,
 } from "../../orm/persistence/flush/flushCoordinator.js";
+import type { MappedFlushSyncHook } from "../../orm/persistence/support/contracts.js";
 import type {
   SyncSheetsProvisioner,
   RegisteredSyncProjectionDefinition,
@@ -53,6 +54,7 @@ import {
 } from "../sheetsContract/conflictProjectionRegistration.js";
 import {
   retryOpenMappedConflictsWithAdapter,
+  planMappedFlushConflictSyncWithSql,
 } from "../inbound/autoSystemConflictResolution.js";
 import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheetsContract/syncSheets.js";
 import {
@@ -82,6 +84,7 @@ import {
   runReconciliationScan,
   RECONCILIATION_DEFAULTS,
 } from "../outbound/reconciliation/ReconciliationScanner.js";
+import { runUserInputCleanupScan } from "../outbound/reconciliation/CleanupScanner.js";
 import { SYNC_PROJECTIONS } from "../sheetsContract/constants.js";
 import {
   MAPPED_USER_INPUT_POLL_MODES,
@@ -186,11 +189,29 @@ export async function createInternalSyncService(
   // resolved identity is reused by the supervisor and by the graceful-shutdown
   // lease release so both roles expire together on stop().
   const effectWorkerId = options.workerId ?? writer.writerId;
+  // Implicit system-wins planning runs inside the mapped flush transaction:
+  // the same commit that advances a conflicted field's canonical revision
+  // rebases the conflict and plans its resolution atomically.
+  const syncFlushHook: MappedFlushSyncHook = (input) =>
+    planMappedFlushConflictSyncWithSql(
+      input.sql,
+      input.fence,
+      input.writer,
+      input.plan.mapping,
+      {
+        entityId: input.plan.entityId,
+        rowBindingId: input.plan.rowBindingId,
+        commitId: input.plan.commitId,
+        changedFieldNames: input.plan.changedFields.map((field) => field.fieldName),
+        suppressedUserProjection: input.plan.suppressedUserProjection,
+      },
+    );
   const runtime = await initializeMappedTypedSheetsRuntime({
     dbName: options.dbName,
     entities: generated.entities,
     mappings: generated.mappings,
     writer,
+    syncFlushHook,
   });
 
   try {
@@ -212,6 +233,10 @@ export async function createInternalSyncService(
     // enqueues normal system_projection corrections on the durable outbox for
     // the effect worker to apply through the same CAS-guarded slow path. The
     // scanner never writes to the Sheet; it only feeds the existing outbox.
+    // The User_Input cleanup scan runs on the same schedule for tabs that
+    // register a user_input projection, removing surplus rows (duplicated
+    // business keys, empty-ID rows, unambiguous orphans) through the same
+    // CAS-carrying user_input_delete effects.
     const runSystemStateReconciliation = async (): Promise<{ readonly effectsEnqueued: number }> => {
       let effectsEnqueued = 0;
       for (const mapping of runtime.mappings.mappings) {
@@ -236,6 +261,23 @@ export async function createInternalSyncService(
           now: options.now ?? Date.now,
         });
         effectsEnqueued += report.effectsEnqueued;
+        const userInputProjection = mapping.projections.find(
+          (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
+        );
+        if (userInputProjection === undefined) continue;
+        const cleanupReport = await runUserInputCleanupScan({
+          storage: runtime.storage,
+          provider: remote.provider,
+          physicalSheetId: userInputProjection.physicalSheetId,
+          logicalSheetId: mapping.logicalSheetId,
+          // The business key is the identity column the polling pipeline uses
+          // to match User_Input rows to bindings.
+          identityField: mapping.businessKey.fieldName,
+          schemaVersion: mapping.schemaVersion,
+          writerId: writer.writerId,
+          now: options.now ?? Date.now,
+        });
+        effectsEnqueued += cleanupReport.effectsEnqueued;
       }
       return { effectsEnqueued };
     };
