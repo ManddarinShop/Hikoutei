@@ -1,5 +1,6 @@
 <script setup>
 import DefaultTheme from "vitepress/theme";
+import SiteFooter from "./components/SiteFooter.vue";
 
 const { Layout } = DefaultTheme;
 </script>
@@ -8,6 +9,9 @@ const { Layout } = DefaultTheme;
   <Layout>
     <template #nav-bar-content-after>
       <a class="nav-cta" href="/guide/quick-start">Get Started</a>
+    </template>
+    <template #layout-bottom>
+      <SiteFooter />
     </template>
   </Layout>
 </template>

@@ -72,9 +72,12 @@ export default defineConfig({
     ],
     sidebar: [
       {
-        text: "Guide",
+        text: "Overview",
+        items: [{ text: "What is Hikoutei", link: "/guide/what-is-hikoutei" }],
+      },
+      {
+        text: "Guide 0.5.13",
         items: [
-          { text: "What is Hikoutei", link: "/guide/what-is-hikoutei" },
           { text: "Quick start", link: "/guide/quick-start" },
           { text: "Google Sheets setup", link: "/guide/setup" },
           { text: "Architecture", link: "/guide/architecture" },
@@ -89,10 +92,17 @@ export default defineConfig({
         ],
       },
       {
-        text: "Repository",
+        text: "Resources",
         items: [
           { text: "Contributing", link: "/guide/contributing" },
           { text: "Release process", link: "/guide/release-process" },
+        ],
+      },
+      {
+        text: "Community",
+        items: [
+          { text: "GitHub", link: "https://github.com/ManddarinShop/Hikoutei" },
+          { text: "npm", link: "https://www.npmjs.com/package/hikoutei" },
         ],
       },
     ],

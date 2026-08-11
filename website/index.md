@@ -7,7 +7,7 @@ hero:
   tagline: Keep your app fast with SQLite. Keep your workflow visible in Google Sheets.
   actions:
     - theme: brand
-      text: Quick start
+      text: Get Started →
       link: /guide/quick-start
     - theme: alt
       text: View on GitHub
@@ -20,16 +20,19 @@ features:
     details: Committed changes are asynchronously projected to Google Sheets for review, operations, and lightweight collaboration.
   - title: Safe writes
     details: Durable outbox, idempotent delivery, and conflict-aware updates protect against overwriting newer Sheet edits.
+  - title: Type-first API
+    details: Define entities once with a typed schema and get an entity-lifecycle manager modeled on the MikroORM/JPA workflow.
 ---
 
-## What is Hikoutei?
+## See it in action
 
-Hikoutei gives TypeScript applications a typed entity API backed by local
-SQLite, then asynchronously synchronizes committed changes to Google Sheets.
-It is not a raw Sheets API wrapper, not a replacement for PostgreSQL, and it
-does not treat Google Sheets as the authoritative application database.
+Add a row below — this mirrors the Hikoutei write path: commit to SQLite,
+queue in the durable outbox, then project to Sheets.
 
-- [What is Hikoutei](/guide/what-is-hikoutei)
-- [Quick start](/guide/quick-start)
-- [Architecture](/guide/architecture)
-- [Internal consistency model](/guide/internal-consistency)
+<SyncDemo />
+
+## Community & support
+
+Questions, ideas, or a project that needs Sheets as a human interface?
+Open an issue on [GitHub](https://github.com/ManddarinShop/Hikoutei), or
+start with the [quick start](/guide/quick-start) guide.
