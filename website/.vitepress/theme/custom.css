@@ -40,15 +40,64 @@
   --vp-button-alt-text: #171717;
   --vp-button-alt-border: #e7e9ee;
 
-  /* Code */
-  --vp-code-block-bg: #fafafa;
+  /* Code — dark blocks in both themes (high contrast) */
+  --vp-code-block-bg: #0d1117;
+  --vp-code-block-color: #e6edf3;
   --vp-code-bg: #f2f4f7;
   --vp-code-color: #343433;
+  --vp-code-line-number-color: #6e7681;
+  --vp-code-lang-color: #8b949e;
+  --vp-code-copy-code-bg: #161b22;
+  --vp-code-copy-code-hover-bg: #1c2128;
+  --vp-code-copy-code-active-text: #e6edf3;
 
   /* Custom blocks */
   --vp-custom-block-tip-bg: #eef7fe;
   --vp-custom-block-tip-border: #b8ddfc;
   --vp-custom-block-tip-text: #0b6ed6;
+}
+
+/* ---------- Dark mode (system theme base) ---------- */
+
+.dark {
+  /* Brand — brighter blue on dark */
+  --vp-c-brand-1: #4ea1ff;
+  --vp-c-brand-2: #1a88f8;
+  --vp-c-brand-3: #0b6ed6;
+  --vp-c-brand-soft: rgba(26, 136, 248, 0.18);
+
+  /* Text */
+  --vp-c-text-1: #e6edf3;
+  --vp-c-text-2: #9aa4b2;
+  --vp-c-text-3: #6e7681;
+
+  /* Surfaces — charcoal scale */
+  --vp-c-bg: #0f1115;
+  --vp-c-bg-alt: #16181d;
+  --vp-c-bg-soft: #1c1f26;
+  --vp-c-bg-elv: #16181d;
+  --vp-c-divider: #262a33;
+  --vp-c-divider-light: #22262f;
+
+  /* Buttons */
+  --vp-button-brand-bg: #1a88f8;
+  --vp-button-brand-hover-bg: #4ea1ff;
+  --vp-button-brand-active-bg: #0b6ed6;
+  --vp-button-alt-bg: #1c1f26;
+  --vp-button-alt-hover-bg: #22262f;
+  --vp-button-alt-text: #e6edf3;
+  --vp-button-alt-border: #2a2e37;
+
+  /* Code */
+  --vp-code-bg: #1c2128;
+  --vp-code-color: #e6edf3;
+  --vp-code-copy-code-bg: #1c2128;
+  --vp-code-copy-code-hover-bg: #262b33;
+
+  /* Custom blocks */
+  --vp-custom-block-tip-bg: rgba(26, 136, 248, 0.12);
+  --vp-custom-block-tip-border: rgba(78, 161, 255, 0.35);
+  --vp-custom-block-tip-text: #7cc0ff;
 }
 
 /* ---------- Base ---------- */
@@ -592,4 +641,34 @@ body {
 
 .vp-doc .home-section {
   padding-top: 16px;
+}
+
+/* ---------- Dark-mode component overrides ---------- */
+
+.dark .VPNavBar {
+  background: rgba(15, 17, 21, 0.92);
+}
+
+.dark .sync-demo__synced {
+  color: #7cc0ff;
+}
+
+.dark .sync-demo__form input {
+  background: var(--vp-c-bg-elv);
+}
+
+.dark .VPDropdown .menu {
+  background: var(--vp-c-bg-elv);
+}
+
+.dark .VPSidebar {
+  background: var(--vp-c-bg);
+}
+
+.dark .VPFeature {
+  background: var(--vp-c-bg);
+}
+
+.dark .vp-doc div[class*="language-"] {
+  border-color: var(--vp-c-divider);
 }

@@ -7,6 +7,11 @@ export default defineConfig({
   lang: "en-US",
   base: "/Hikoutei/",
   cleanUrls: true,
+  markdown: {
+    // High-contrast code blocks in both themes (Linear/Stripe-style dark
+    // code on light pages); visibility was poor with light blocks.
+    theme: { light: "github-dark", dark: "github-dark" },
+  },
   logo: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231a88f8'/%3E%3Ctext x='50' y='70' font-size='56' text-anchor='middle' fill='white' font-family='Inter,sans-serif' font-weight='700'%3EH%3C/text%3E%3C/svg%3E",
   head: [
     ["meta", { property: "og:title", content: "Hikoutei" }],
