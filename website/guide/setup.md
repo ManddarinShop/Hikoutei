@@ -9,6 +9,59 @@ Google Sheets synchronization is a service-side concern. Applications do not
 import a provider client, pass Sheet routes to `createTypedSheets()`, or choose
 an operation for each write.
 
+## Automatic setup with `hikoutei setup` (recommended)
+
+The `hikoutei setup` CLI automates the Google Cloud service-account bootstrap:
+it creates (or reuses) a Cloud project, enables the Sheets API, creates a
+service account and key, creates a spreadsheet owned by that service account,
+and writes a ready-to-use `.env` — no console clicking and no spreadsheet
+sharing step.
+
+**Prerequisites:** the `gcloud` CLI is installed and you have logged in once:
+
+```sh
+gcloud auth login
+```
+
+Then run the setup from your project directory:
+
+```sh
+npx hikoutei setup
+```
+
+What happens:
+
+1. **Preflight** — verifies `gcloud` is installed and an active account is
+   logged in.
+2. **Project** — creates `hikoutei-<slug>` (idempotent: reused when it already
+   exists), or use an existing project with `--project <id>`.
+3. **API** — enables `sheets.googleapis.com` for the project.
+4. **Service account** — creates `hikoutei-sa` (reused when it already exists)
+   and a key file secured with `chmod 600`.
+5. **Spreadsheet** — creates a spreadsheet titled `hikoutei-sync-<project>`
+   using the new key, so the service account owns it and no sharing is needed.
+6. **Output** — writes `GOOGLE_APPLICATION_CREDENTIALS` and
+   `HIKOUTEI_SYNC_SPREADSHEET_URL` into `.env`, preserving any unrelated lines
+   already in the file.
+
+The command asks for a y/N confirmation before creating cloud resources; pass
+`--yes` for non-interactive runs. Preview the exact command sequence without
+executing anything with `--dry-run`. Key material is never printed.
+
+Options:
+
+```text
+--project <id>              Use an existing Google Cloud project.
+--sa-name <name>            Service-account name (default: hikoutei-sa).
+--spreadsheet-title <title> Spreadsheet title (default: hikoutei-sync-<project>).
+--output <path>             .env file to write or update (default: .env).
+--yes                       Skip interactive confirmation.
+--dry-run                   Print the command plan without executing.
+```
+
+When the setup finishes, the sync runtime picks the spreadsheet up from the
+environment automatically (see below).
+
 ## Env-driven sync auto-start
 
 Set the spreadsheet URL in the environment and `createTypedSheets()` starts
@@ -29,7 +82,12 @@ local-only (SQLite). Startup failures are diagnosed with clear messages:
 invalid URL, missing/invalid credentials file, or a service account not
 shared on the spreadsheet (the error tells you which email to share).
 
-## Service-account provider (googleSheetsApi)
+## Manual / advanced setup
+
+Skip the CLI and wire everything by hand when you need an existing project or
+spreadsheet, or when you prefer to manage Google Cloud resources yourself.
+
+### Service-account provider (googleSheetsApi)
 
 The sync runtime uses one Google Sheets API provider (the internal
 `googleSheetsApi` bootstrap option) with a service account — no Apps Script

@@ -125,6 +125,12 @@ an operation for each write. The sync runtime uses one Google Sheets API
 provider (the internal `googleSheetsApi` bootstrap option) with a service
 account — no Apps Script deployment.
 
+**Fastest path:** install the gcloud CLI, run `gcloud auth login`, then
+`npx hikoutei setup` — it creates the project, service account, key, and a
+spreadsheet owned by that service account, and writes
+`GOOGLE_APPLICATION_CREDENTIALS` plus `HIKOUTEI_SYNC_SPREADSHEET_URL` into
+your `.env`. The manual steps below remain available for advanced setups.
+
 ### Env-driven sync auto-start
 
 Set the spreadsheet URL in the environment and `createTypedSheets()` starts

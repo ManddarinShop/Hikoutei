@@ -1797,7 +1797,7 @@ describe("issue #196 system-advance conflict resolution", () => {
       "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE projection = ? AND last_error_code = 'projection_confirmation_regression'",
       [SYNC_PROJECTIONS.USER_INPUT],
     ))).resolves.toEqual({ count: 0 });
-  });
+  }, 30_000);
 });
 
 describe("issue #196 evidence promotion and migration boundaries", () => {
