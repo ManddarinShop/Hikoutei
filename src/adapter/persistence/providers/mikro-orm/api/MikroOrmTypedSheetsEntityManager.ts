@@ -9,14 +9,17 @@
 import type { FlushEventArgs } from "@mikro-orm/core";
 
 import type {
+  TypedSheetsEntityClass,
   TypedSheetsEntityData,
   TypedSheetsEntityEngineManager,
   TypedSheetsEntityFilter,
   TypedSheetsEntityFlushListener,
   TypedSheetsEntityReference,
   TypedSheetsFindOptions,
+  TypedSheetsQueryOptions,
   TypedSheetsForkOptions,
 } from "../../../../../application/orm/api/contracts.js";
+import type { ScalarEntityPredicate } from "../../../contracts/scalar.js";
 import { collectMikroOrmFlushChanges } from "../storage/MikroOrmFlushChanges.js";
 import type {
   MikroOrmSqliteAdapter,
@@ -94,6 +97,39 @@ export class MikroOrmSqliteTypedSheetsEntityManager
     return this.entityManager.findOne(entityName, where, options);
   }
 
+  /** Executes a validated neutral query after translating it to MikroORM-private syntax. */
+  async findByQuery<Entity extends object>(
+    entityName: TypedSheetsEntityReference<Entity>,
+    predicate: ScalarEntityPredicate,
+    primaryKeyColumn: string,
+    options: TypedSheetsQueryOptions,
+  ): Promise<readonly Entity[]> {
+    const target = this.resolveEntityTarget(entityName);
+    return this.entityManager.find(
+      target,
+      toMikroOrmFilter(predicate, primaryKeyColumn),
+      toMikroOrmQueryOptions(options),
+    );
+  }
+
+  /** Counts a validated neutral query without changing this manager's identity map. */
+  async countByQuery<Entity extends object>(
+    entityName: TypedSheetsEntityReference<Entity>,
+    predicate: ScalarEntityPredicate,
+    primaryKeyColumn: string,
+  ): Promise<number> {
+    const target = this.resolveEntityTarget(entityName);
+    const result: unknown = await Reflect.apply(
+      this.entityManager.count,
+      this.entityManager,
+      [target, toMikroOrmFilter(predicate, primaryKeyColumn)],
+    );
+    if (typeof result !== "number" || !Number.isSafeInteger(result) || result < 0) {
+      throw new TypeError("MikroORM count result must be a non-negative safe integer");
+    }
+    return result;
+  }
+
   /** Marks one or more entities for MikroORM insertion or update. */
   persist<Entity extends object>(entity: Entity | Iterable<Entity>): void {
     this.entityManager.persist(entity);
@@ -150,6 +186,14 @@ export class MikroOrmSqliteTypedSheetsEntityManager
     this.flushListener = listener;
   }
 
+  private resolveEntityTarget<Entity extends object>(
+    entityName: TypedSheetsEntityReference<Entity>,
+  ): TypedSheetsEntityClass<Entity> {
+    if (typeof entityName !== "string") return entityName;
+    return this.entityManager.getMetadata().getByUniqueName(entityName)
+      .class as TypedSheetsEntityClass<Entity>;
+  }
+
   /** Converts a MikroORM flush event into one typed-sheets planning callback. */
   private async coordinateFlush(args: FlushEventArgs): Promise<void> {
     if (args.em !== this.entityManager) return;
@@ -161,5 +205,46 @@ export class MikroOrmSqliteTypedSheetsEntityManager
       changes,
       sql: this.storage.createSqlExecutor(this.entityManager),
     });
+  }
+}
+
+function toMikroOrmQueryOptions(options: TypedSheetsQueryOptions): Record<string, unknown> {
+  const orderBy = options.orderBy.map((order) => ({ [order.field]: order.direction }));
+  return {
+    ...(orderBy.length === 0 ? {} : { orderBy }),
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+    ...(options.offset === undefined ? {} : { offset: options.offset }),
+  };
+}
+
+function toMikroOrmFilter(
+  predicate: ScalarEntityPredicate,
+  primaryKeyColumn = "id",
+): Record<string, unknown> {
+  switch (predicate.kind) {
+    case "comparison":
+      return { [predicate.field]: { [`$${predicate.operator}`]: predicate.value } };
+    case "set":
+      return { [predicate.field]: { [`$${predicate.operator}`]: [...predicate.values] } };
+    case "like":
+      return { [predicate.field]: { $like: predicate.pattern } };
+    case "null":
+      return predicate.operator === "is_null"
+        ? { [predicate.field]: null }
+        : { [predicate.field]: { $ne: null } };
+    case "constant":
+      return predicate.value ? {} : { [primaryKeyColumn]: { $in: [] } };
+    case "all":
+      return {
+        $and: predicate.predicates.map((child) =>
+          toMikroOrmFilter(child, primaryKeyColumn)
+        ),
+      };
+    case "any":
+      return {
+        $or: predicate.predicates.map((child) =>
+          toMikroOrmFilter(child, primaryKeyColumn)
+        ),
+      };
   }
 }

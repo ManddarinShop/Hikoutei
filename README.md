@@ -267,38 +267,59 @@ entity API.
 - Schema changes, manual edits, and conflicting updates still need an
   operational policy from the application.
 
+## Local queries
+
+Reads use Hikoutei-owned typed operators and always execute against SQLite:
+
+```ts
+const [users, total] = await em.findAndCount(
+  User,
+  {
+    name: { like: "Ada%" },
+    age: { gte: 18, lt: 65 },
+    active: { in: [true] },
+  },
+  {
+    orderBy: { age: "desc", name: "asc" },
+    limit: 20,
+    offset: 0,
+  },
+);
+```
+
+`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, and `nin` are available where
+valid for the declared scalar type; `like` is string-only. Equality shorthand
+such as `{ active: true }` remains supported. `count()` returns the unpaged
+filter total, and `findAndCount()` reads its page and total from one SQLite
+snapshot. Explicit ordering gets the primary key as a final tie-breaker;
+pagination without `orderBy` uses primary-key ascending order.
+
 ## Project status
 
 Hikoutei is in active development. The current EntityManager supports scalar
-entity lifecycle operations, equality-filtered `find()` / `findOne()`,
-`limit` / `offset` pagination on `find()`, and callback-style
-`transactional()` work.
-Normal reads always come from SQLite, never Google Sheets. Sheet edit ingestion
-and conflict presentation are still evolving. Review release notes before
-upgrading minor versions.
+entity lifecycle operations, typed local filters and ordering, `limit` /
+`offset` pagination, `count()`, snapshot-consistent `findAndCount()`, and
+callback-style `transactional()` work. Normal reads always come from SQLite,
+never Google Sheets. Sheet edit ingestion and conflict presentation are still
+evolving. Review release notes before upgrading minor versions.
 
 ## Roadmap
 
-The EntityManager roadmap follows the implementation order below. The sequence
-is committed, but no milestone is tied to a date or release number.
+The first EntityManager milestone, rich local reads, is complete. Remaining
+milestones follow the implementation order below; no milestone is tied to a
+date or release number.
 
-1. **Rich local reads**
-   - Add a Hikoutei-owned typed query contract for explicit `eq`, `ne`, `gt`,
-     `gte`, `lt`, `lte`, `in`, `nin`, and `like` conditions, plus `orderBy`,
-     `count()`, and `findAndCount()`.
-   - Compose these capabilities with the existing `limit` / `offset`
-     pagination without exposing MikroORM query types.
-2. **Lifecycle-safe writes**
+1. **Lifecycle-safe writes**
    - Add `upsert` and direct/bulk mutation capabilities only through a
      Hikoutei-owned contract that preserves one SQLite transaction across the
      entity table, canonical state, and durable Sheet effect outbox.
    - Do not promise raw `nativeInsert`, `nativeUpdate`, `nativeDelete`, or SQL
      pass-through APIs that could bypass that atomic lifecycle.
-3. **Relationships and loading**
+2. **Relationships and loading**
    - Add many-to-one, one-to-many, and `populate()` capabilities.
    - Design SQLite relationship mapping, Sheets projection representation,
      schema behavior, and conflict semantics together before public release.
-4. **Schema operations**
+3. **Schema operations**
    - Add migration and schema drift management.
    - Integrate validation and operational workflows with the existing setup
      tooling.

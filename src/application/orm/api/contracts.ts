@@ -11,6 +11,10 @@ import {
   type Presence,
 } from "../../../shared/state/index.js";
 import type { SqlExecutor } from "../../../adapter/persistence/contracts/sql.js";
+import type {
+  ScalarEntityOrder,
+  ScalarEntityPredicate,
+} from "../../../adapter/persistence/contracts/scalar.js";
 
 /** Constructor accepted by the initial entity-style public API. */
 export interface TypedSheetsEntityClass<Entity extends object> {
@@ -28,10 +32,15 @@ export type TypedSheetsEntityData<Entity extends object> = Readonly<Partial<Enti
 /** Equality filter accepted by the initial `find()` and `findOne()` surface. */
 export type TypedSheetsEntityFilter<Entity extends object> = Readonly<Partial<Entity>>;
 
-/** Read options intentionally supported by the initial public entity API. */
+/** Paging options supported by equality-filtered internal reads. */
 export interface TypedSheetsFindOptions {
   readonly limit?: number;
   readonly offset?: number;
+}
+
+/** Validated query options used by the provider-neutral scalar bridge. */
+export interface TypedSheetsQueryOptions extends TypedSheetsFindOptions {
+  readonly orderBy: readonly ScalarEntityOrder[];
 }
 
 /** Entity-manager fork behavior supported without leaking the underlying ORM. */
@@ -75,6 +84,19 @@ export interface TypedSheetsEntityEngineManager {
     where: TypedSheetsEntityFilter<Entity>,
     options?: TypedSheetsFindOptions,
   ): Promise<Entity | null>;
+  /** Executes a validated provider-neutral predicate without leaking ORM query types. */
+  findByQuery<Entity extends object>(
+    entityName: TypedSheetsEntityReference<Entity>,
+    predicate: ScalarEntityPredicate,
+    primaryKeyColumn: string,
+    options: TypedSheetsQueryOptions,
+  ): Promise<readonly Entity[]>;
+  /** Counts rows for a validated provider-neutral predicate without materializing them. */
+  countByQuery<Entity extends object>(
+    entityName: TypedSheetsEntityReference<Entity>,
+    predicate: ScalarEntityPredicate,
+    primaryKeyColumn: string,
+  ): Promise<number>;
   persist<Entity extends object>(entity: Entity | Iterable<Entity>): void;
   remove<Entity extends object>(entity: Entity | Iterable<Entity>): void;
   flush(): Promise<void>;
