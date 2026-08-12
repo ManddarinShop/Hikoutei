@@ -212,15 +212,47 @@ entity API.
 
 ## Project status
 
-Hikoutei is in active development. The entity API is usable, while Sheet edit
-ingestion and conflict presentation are still evolving. Review release notes
-before upgrading minor versions.
+Hikoutei is in active development. The current EntityManager supports scalar
+entity lifecycle operations, equality-filtered `find()` / `findOne()`,
+`limit` / `offset` pagination on `find()`, and callback-style
+`transactional()` work.
+Normal reads always come from SQLite, never Google Sheets. Sheet edit ingestion
+and conflict presentation are still evolving. Review release notes before
+upgrading minor versions.
 
 ## Roadmap
 
+The EntityManager roadmap follows the implementation order below. The sequence
+is committed, but no milestone is tied to a date or release number.
+
+1. **Rich local reads**
+   - Add a Hikoutei-owned typed query contract for explicit `eq`, `ne`, `gt`,
+     `gte`, `lt`, `lte`, `in`, `nin`, and `like` conditions, plus `orderBy`,
+     `count()`, and `findAndCount()`.
+   - Compose these capabilities with the existing `limit` / `offset`
+     pagination without exposing MikroORM query types.
+2. **Lifecycle-safe writes**
+   - Add `upsert` and direct/bulk mutation capabilities only through a
+     Hikoutei-owned contract that preserves one SQLite transaction across the
+     entity table, canonical state, and durable Sheet effect outbox.
+   - Do not promise raw `nativeInsert`, `nativeUpdate`, `nativeDelete`, or SQL
+     pass-through APIs that could bypass that atomic lifecycle.
+3. **Relationships and loading**
+   - Add many-to-one, one-to-many, and `populate()` capabilities.
+   - Design SQLite relationship mapping, Sheets projection representation,
+     schema behavior, and conflict semantics together before public release.
+4. **Schema operations**
+   - Add migration and schema drift management.
+   - Integrate validation and operational workflows with the existing setup
+     tooling.
+
+### Synchronization and operations
+
+The following work continues in parallel with the EntityManager milestones:
+
 - Complete ingestion of intentional user edits from Google Sheets.
 - Improve update/delete conflict handling and presentation.
-- Add setup tooling for registry and direct provider deployment.
+- Improve setup tooling for registry and direct-provider deployment.
 
 See the [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
 for current work.
