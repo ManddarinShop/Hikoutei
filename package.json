@@ -51,6 +51,7 @@
     "packages/*"
   ],
   "dependencies": {
+    "@googleapis/drive": "^21.0.0",
     "@googleapis/sheets": "^14.0.0",
     "@hikoutei/ikisaki": "0.1.1",
     "@hikoutei/kohkai": "0.1.0",

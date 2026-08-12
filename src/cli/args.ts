@@ -6,6 +6,7 @@
  * entry can branch on help / valid / invalid without inspecting message text.
  */
 
+import { isValidGcpProjectId, isValidServiceAccountName } from "./checkpoint.js";
 import { SETUP_ERROR_CODES, setupFailure, type SetupFailure } from "./errors.js";
 
 /** Default service-account name when `--sa-name` is not given. */
@@ -49,10 +50,12 @@ const SETUP_FLAGS = {
 
 export const SETUP_HELP_TEXT = [
   "hikoutei setup - bootstrap a Google Cloud project, service account, key, and",
-  "spreadsheet for Hikoutei sync, then write a ready-to-use .env file.",
+  "a human-owned spreadsheet for Hikoutei sync, then write a ready-to-use .env file.",
   "",
-  "Prerequisites: the gcloud CLI is installed and `gcloud auth login` has been",
-  "run once (an active account is required).",
+  "Prerequisites: the gcloud CLI is installed and `gcloud auth login",
+  "--enable-gdrive-access` has been run once. Setup creates the spreadsheet as",
+  "the logged-in user and shares it with the service account as a writer, so the",
+  "active account must grant Drive access.",
   "",
   "Usage:",
   "  hikoutei setup [options]",
@@ -68,9 +71,48 @@ export const SETUP_HELP_TEXT = [
   "                             the current directory).",
   "  --yes                      Skip interactive confirmation (non-interactive",
   "                             mode).",
-  "  --dry-run                  Print the exact gcloud command sequence and",
-  "                             simulated outcomes without executing anything.",
+  "  --dry-run                  Print the exact command sequence and",
+  "                             simulated outcomes without executing anything",
+  "                             (read-only local path-safety checks only;",
+  "                             no subprocess, network, cloud, or file",
+  "                             mutations; the gcloud key create shows the",
+  "                             private staging placeholder",
+  "                             <private-key-staging-dir>/key.json — never the",
+  "                             final key path).",
   "  -h, --help                 Show this help and exit.",
+  "",
+  "Automatic setup runs on macOS and Linux. On Windows, non-dry-run setup",
+  "is refused before any subprocess, network, cloud, lock, checkpoint, key,",
+  "or file mutation (Windows cannot guarantee no-follow or owner-only ACL",
+  "semantics); manual setup remains available.",
+  "",
+  "Interrupted runs resume from .hikoutei-setup-state.json in the current",
+  "directory. A spreadsheet create whose outcome is unknown is reconciled by",
+  "its creation marker on the next run; setup never creates a second",
+  "spreadsheet. A create rejected up front (HTTP 400/403) with no matching",
+  "file rolls the checkpoint back to key_ready so a corrected rerun starts a",
+  "fresh marker. The service-account key is created under a write-ahead",
+  "contract: the user-managed key list is recorded as a baseline before the",
+  "single gcloud key create, and key_create_started/key_ready checkpoints",
+  "let a crashed run recover a staged or installed key instead of creating a",
+  "second one. Only the invocation that just persisted key_create_started",
+  "may issue the one key create; resumed runs are reconcile-only and poll",
+  "the key list plus staged/final evidence for up to two minutes (2, 4, 8,",
+  "16, 30, 30, 30 s) before failing with key_create_uncertain — the create",
+  "is never retried automatically. An unmatched user-managed key with no",
+  "local credential is never deleted automatically: setup fails with",
+  "key_create_uncertain and you inspect the key list in the Google Cloud",
+  "console before rerunning (verified-absent states require removing the",
+  "setup state file to reset the key checkpoint).",
+  "Reused keys are enforced to owner-only mode 600.",
+  "An exclusive lock directory (.hikoutei-setup-state.json.lock)",
+  "prevents concurrent runs and is never removed automatically: a leftover",
+  "lock directory (for example after a crash) requires manual removal only",
+  "when you are certain no setup is running.",
+  "Starting fresh requires removing or moving BOTH the checkpoint and the",
+  "service-account key file (or passing --project <id> to recover an",
+  "existing key); checkpointed or identity-matched cloud resources are",
+  "reused, and setup never deletes cloud resources.",
   "",
 ].join("\n");
 
@@ -128,9 +170,37 @@ export function parseSetupArgs(argv: readonly string[]): SetupArgsParseResult {
       }
       switch (flagName) {
         case SETUP_FLAGS.PROJECT:
+          // Strict GCP project id format (the canonical shared guard): an
+          // option-like or malformed value (for example `--project=--flag`)
+          // is rejected BEFORE it can reach gcloud, an API, or a file.
+          if (!isValidGcpProjectId(value)) {
+            return {
+              status: "invalid",
+              failure: setupFailure(
+                SETUP_ERROR_CODES.INVALID_ARGS,
+                `invalid value for ${flagName}: GCP project ids must start with a lowercase ` +
+                  `letter and contain only lowercase letters, digits, and hyphens (6-30 characters)`,
+              ),
+            };
+          }
           projectId = value;
           break;
         case SETUP_FLAGS.SA_NAME:
+          // Strict service-account name format (the canonical shared guard):
+          // an option-like or malformed value (for example
+          // `--sa-name=--flag`) is rejected before it can reach gcloud, an
+          // API, or a file.
+          if (!isValidServiceAccountName(value)) {
+            return {
+              status: "invalid",
+              failure: setupFailure(
+                SETUP_ERROR_CODES.INVALID_ARGS,
+                `invalid value for ${flagName}: service-account names must start with a ` +
+                  `lowercase letter and contain only lowercase letters, digits, and hyphens ` +
+                  `(6-30 characters)`,
+              ),
+            };
+          }
           saName = value;
           break;
         case SETUP_FLAGS.SPREADSHEET_TITLE:
