@@ -12,7 +12,7 @@ import type {
   HikouteiEntity,
   ResolvedHikouteiProperty,
 } from "../../../../../api/entity.js";
-import type { TypedSheetsEntityReference } from "../../../../../application/orm/api/contracts.js";
+import type { MappedEntityReference } from "../../../../../application/orm/mapping/contracts.js";
 import type { MikroOrmSqliteEntity } from "../storage/MikroOrmSqliteAdapter.js";
 import type { MikroOrmScalarEntityBinding } from "../api/MikroOrmScalarPersistenceProvider.js";
 
@@ -42,7 +42,7 @@ export function createMikroOrmScalarEntityRuntime(
     });
     const GeneratedEntity = class extends schema.class {};
     schema.setClass(GeneratedEntity);
-    const reference: TypedSheetsEntityReference<Record<string, unknown>> = GeneratedEntity;
+    const reference: MappedEntityReference<Record<string, unknown>> = GeneratedEntity;
     generatedEntities.push(schema);
     bindings.push({ descriptor, entity: reference });
   }

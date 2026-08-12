@@ -4,6 +4,7 @@ import type {
   EntitySchema,
   QueryResult,
 } from "@mikro-orm/core";
+import { FlushMode } from "@mikro-orm/core";
 import {
   MikroORM,
   NodeSqliteDialect,
@@ -81,17 +82,12 @@ export interface MikroOrmSqliteTransaction extends SqlStorageContext {
 export class MikroOrmSqliteAdapter implements SqlStorageAdapter {
   constructor(private readonly orm: MikroOrmSqlite) {}
 
-  /** Creates an isolated MikroORM manager for one typed-sheets EntityManager facade. */
+  /** Creates a clean manager for one provider read or lifecycle transaction. */
   forkEntityManager(): MikroOrmSqliteEntityManager {
-    return this.orm.em.fork();
+    return this.orm.em.fork({ clear: true, flushMode: FlushMode.COMMIT });
   }
 
-  /**
-   * Creates a SQL executor bound to the supplied manager's current transaction.
-   *
-   * This is adapter-specific plumbing for the typed-sheets ORM facade; callers
-   * should use the facade rather than mixing raw entity and sync writes.
-   */
+  /** Creates a SQL executor bound to the supplied manager's active transaction. */
   createSqlExecutor(entityManager: MikroOrmSqliteEntityManager): SqlExecutor {
     return new MikroOrmSqlExecutor(entityManager);
   }
@@ -114,9 +110,10 @@ export class MikroOrmSqliteAdapter implements SqlStorageAdapter {
   async transactional<T>(
     operation: (context: MikroOrmSqliteTransaction) => Promise<T>,
   ): Promise<T> {
-    return this.orm.em.transactional(async (entityManager) => {
-      return operation(createMikroOrmTransaction(entityManager));
-    });
+    return this.orm.em.transactional(
+      async (entityManager) => operation(createMikroOrmTransaction(entityManager)),
+      { clear: true, flushMode: FlushMode.COMMIT },
+    );
   }
 
   /** Closes the SQLite connection owned by this adapter. */
