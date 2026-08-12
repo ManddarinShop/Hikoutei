@@ -125,11 +125,64 @@ an operation for each write. The sync runtime uses one Google Sheets API
 provider (the internal `googleSheetsApi` bootstrap option) with a service
 account — no Apps Script deployment.
 
-**Fastest path:** install the gcloud CLI, run `gcloud auth login`, then
-`npx hikoutei setup` — it creates the project, service account, key, and a
-spreadsheet owned by that service account, and writes
-`GOOGLE_APPLICATION_CREDENTIALS` plus `HIKOUTEI_SYNC_SPREADSHEET_URL` into
-your `.env`. The manual steps below remain available for advanced setups.
+**Fastest path:** install the gcloud CLI and log in once with Drive access
+(`gcloud auth login --enable-gdrive-access`), then `npx hikoutei setup` — it
+creates the project, service account, and key, creates a spreadsheet owned
+by your account, shares it with the service account as an Editor, verifies
+service-account access, and writes `GOOGLE_APPLICATION_CREDENTIALS` plus
+`HIKOUTEI_SYNC_SPREADSHEET_URL` into your `.env`. The human access token is
+used in memory only and never stored. Automatic setup runs on macOS and
+Linux; on Windows a non-dry-run is refused before any mutation and manual
+setup is available. Interrupted runs resume from a local checkpoint
+(`.hikoutei-setup-state.json`); a spreadsheet create whose outcome is
+unknown is reconciled by its creation marker on the next run and setup
+never creates a second spreadsheet (inspect Drive and rerun if setup
+reports `sheet_create_uncertain`, and a create rejected up front with
+HTTP 400/403 plus a confirmed-zero marker lookup rolls back to `key_ready`
+so a corrected rerun starts a fresh marker). Sharing is write-ahead too:
+`spreadsheet_share_started` is persisted before the idempotent SA writer
+permission ensure and `spreadsheet_shared` after it, so a crash between
+the remote permission mutation and the checkpoint write resumes the
+ensure on the next run and never creates a second spreadsheet. The
+service-account key is
+created under a write-ahead contract too: the user-managed key list is
+recorded as a baseline before the single gcloud key create, and
+`key_create_started`/`key_ready` checkpoints let a crashed run recover a
+staged or installed key instead of creating a second one. Only the
+invocation that just persisted `key_create_started` may issue the one key
+create; resumed runs are reconcile-only and, when no credential and no
+post-baseline key are visible, poll the key list plus staged/final
+evidence for up to two minutes (2, 4, 8, 16, 30, 30, 30 s) before failing
+with `key_create_uncertain` — the create is never retried automatically.
+An unmatched user-managed key with no local credential is never deleted
+automatically — setup fails with `key_create_uncertain` and you inspect
+the key list in the Google Cloud console before rerunning (a
+verified-absent state requires removing the setup state file to reset the
+key checkpoint); reused keys are enforced to owner-only mode 600. An exclusive lock directory
+(`.hikoutei-setup-state.json.lock`) prevents concurrent runs and is never
+removed automatically: a crash leaves an empty lock directory behind, and
+removing it manually is required only when you are certain no setup is
+running. Starting fresh requires removing or moving both the checkpoint and
+the key file, or passing `--project` to recover an existing key —
+checkpointed or identity-matched cloud resources are reused, and setup
+never deletes cloud resources. The manual steps below remain available for
+advanced setups.
+
+**Keep setup artifacts out of Git.** `hikoutei setup` writes its defaults
+into the current directory: the service-account key
+(`hikoutei-service-account.json`, owner-only mode 600 — a secret), the
+resume checkpoint (`.hikoutei-setup-state.json` and its `.tmp`/unique-temp
+and `.lock` siblings), private key staging/cleanup directories
+(`.hikoutei-key-stage-*`, `.hikoutei-key-cleanup-*`), and
+`.hikoutei-env-*` temporary env writes. The repository's `.gitignore`
+already ignores these defaults, so a plain `git add .` does not pick them
+up. A `.gitignore` is **not a security boundary**, though: it only keeps
+untracked files out of `git add`, and it does not protect files that are
+already tracked (remove a mistakenly tracked key from history and rotate
+it — delete the user-managed key in the Cloud console and rerun setup).
+When you use a custom `--output` or keep the key or checkpoint at custom
+paths, add those exact paths to your application's ignore rules and never
+commit them.
 
 ### Env-driven sync auto-start
 
@@ -161,7 +214,11 @@ shared on the spreadsheet (the error tells you which email to share).
    access is not enough.
 2. **Keep the key server-side.** Put the service-account key path in
    `GOOGLE_APPLICATION_CREDENTIALS` on the server and the spreadsheet ID in an
-   untracked secret store. Never put the key in browser code or Git.
+   untracked secret store. Never put the key in browser code or Git: add the
+   key path (and any custom `.env`/checkpoint paths) to the application's
+   `.gitignore` — the defaults created by `hikoutei setup` are already
+   ignored, but a `.gitignore` is not a security boundary and does not
+   protect already-tracked files.
 3. **Start the internal sync bootstrap** with `googleSheetsApi` configured. It
    creates and verifies headers on the registered tabs, then starts outbox
    delivery and User_Input polling.

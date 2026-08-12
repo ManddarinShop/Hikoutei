@@ -7,11 +7,12 @@
  * injected-runner setup flow, and print the summary or the dry-run plan.
  * Exit codes: 0 success, 2 argument errors, 1 runtime failures. Errors are
  * printed as `hikoutei-setup:<code>: <message>` for machine consumption, and
- * key material is never printed.
+ * key material and the user access token are never printed.
  */
 
 import { resolve } from "node:path";
 import { parseSetupArgs } from "./args.js";
+import { SETUP_STATE_FILE_NAME } from "./checkpoint.js";
 import { confirmSetup } from "./confirm.js";
 import {
   SETUP_ARG_ERROR_EXIT_CODE,
@@ -19,9 +20,13 @@ import {
   SETUP_RUNTIME_ERROR_EXIT_CODE,
 } from "./errors.js";
 import { createGcloudRunner } from "./gcloudRunner.js";
-import { createGoogleSheetsSpreadsheetCreator } from "./sheetsFactory.js";
+import { createTokeninfoValidator } from "./humanAuth.js";
+import { createSaAccessVerifier } from "./saVerify.js";
+import { safeReasonOf } from "./sdkError.js";
+import { createHumanSheetApiFactory } from "./sheetsFactory.js";
 import {
   DEFAULT_KEY_FILE_NAME,
+  findSetupPathCollision,
   formatPlan,
   formatSummary,
   runSetup,
@@ -44,6 +49,19 @@ async function main(): Promise<number> {
 
   const options = parsed.options;
   const cwd = process.cwd();
+  const keyPath = resolve(cwd, DEFAULT_KEY_FILE_NAME);
+  const outputPath = resolve(cwd, options.output);
+  const statePath = resolve(cwd, SETUP_STATE_FILE_NAME);
+
+  // Reject canonical path collisions (--output aliasing the key or the
+  // checkpoint, symlink aliases included) BEFORE asking for confirmation or
+  // running anything.
+  const collision = findSetupPathCollision({ keyPath, outputPath, statePath });
+  if (collision.status === "collision") {
+    process.stderr.write(`hikoutei-setup:${SETUP_ERROR_CODES.INVALID_ARGS}: ${collision.message}\n`);
+    process.stderr.write("Run `hikoutei setup --help` for usage.\n");
+    return SETUP_ARG_ERROR_EXIT_CODE;
+  }
 
   const confirmed = await confirmSetup({
     yes: options.yes,
@@ -58,12 +76,23 @@ async function main(): Promise<number> {
 
   const result = await runSetup({
     runner: createGcloudRunner(),
-    createSpreadsheet: createGoogleSheetsSpreadsheetCreator(),
+    validateToken: createTokeninfoValidator(),
+    createHumanApi: createHumanSheetApiFactory(),
+    verifySaAccess: createSaAccessVerifier({
+      sleeper: {
+        sleep(ms: number): Promise<void> {
+          return new Promise((resolveSleep) => {
+            setTimeout(resolveSleep, ms);
+          });
+        },
+      },
+    }),
     projectId: options.projectId,
     saName: options.saName,
     spreadsheetTitle: options.spreadsheetTitle,
-    keyPath: resolve(cwd, DEFAULT_KEY_FILE_NAME),
-    outputPath: resolve(cwd, options.output),
+    keyPath,
+    outputPath,
+    statePath,
     dryRun: options.dryRun,
   });
 
@@ -72,7 +101,9 @@ async function main(): Promise<number> {
     return SETUP_RUNTIME_ERROR_EXIT_CODE;
   }
   if (result.dryRun) {
-    process.stdout.write("Hikoutei setup dry run (nothing was executed). Planned steps:\n");
+    process.stdout.write(
+      "Hikoutei setup dry run (read-only path-safety checks only; no subprocess, network, cloud, or file mutations). Planned steps:\n",
+    );
     process.stdout.write(`${formatPlan(result.commands)}\n`);
     return 0;
   }
@@ -85,8 +116,8 @@ main()
     process.exitCode = code;
   })
   .catch((error: unknown) => {
-    process.stderr.write(
-      `hikoutei-setup:unexpected: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
+    // The strict sanitizer: arbitrary thrown messages may carry tokens or
+    // key material, so only whitelisted/HTTP reasons are ever printed.
+    process.stderr.write(`hikoutei-setup:unexpected: ${safeReasonOf(error)}\n`);
     process.exitCode = SETUP_RUNTIME_ERROR_EXIT_CODE;
   });
