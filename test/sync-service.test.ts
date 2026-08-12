@@ -14,7 +14,7 @@ import {
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import { presentValue } from "../src/shared/state/index.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import { runReconciliationScan } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
@@ -250,6 +250,64 @@ class RecordingProvisioner implements SyncSheetsProvisioner {
     };
   }
 }
+
+describe("internal sync service descriptor registry validation", () => {
+  it("rejects a non-token entity value with INVALID_OPTIONS before any provider work", async () => {
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [{} as never],
+      projections: { spreadsheetId: "sync-service-spreadsheet", entities: {} },
+      provider: new FakeSyncSheetsProvider([]),
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service entities must be tokens produced by defineTypedSheetsEntity().",
+    });
+  });
+
+  it("rejects duplicate entity names with INVALID_OPTIONS and the sync message", async () => {
+    const Dup = defineTypedSheetsEntity({
+      name: "SyncRegistryDup",
+      tableName: "sync_registry_dup_a",
+      properties: { id: { type: "string", primary: true } },
+    });
+    const DupAgain = defineTypedSheetsEntity({
+      name: "SyncRegistryDup",
+      tableName: "sync_registry_dup_b",
+      properties: { id: { type: "string", primary: true } },
+    });
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [Dup, DupAgain],
+      projections: { spreadsheetId: "sync-service-spreadsheet", entities: {} },
+      provider: new FakeSyncSheetsProvider([]),
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: 'sync service entity "SyncRegistryDup" is registered more than once.',
+    });
+  });
+
+  it("rejects a shared table name with INVALID_OPTIONS and the sync message", async () => {
+    const SharedOne = defineTypedSheetsEntity({
+      name: "SyncRegistrySharedOne",
+      tableName: "sync_registry_shared_table",
+      properties: { id: { type: "string", primary: true } },
+    });
+    const SharedTwo = defineTypedSheetsEntity({
+      name: "SyncRegistrySharedTwo",
+      tableName: "sync_registry_shared_table",
+      properties: { id: { type: "string", primary: true } },
+    });
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [SharedOne, SharedTwo],
+      projections: { spreadsheetId: "sync-service-spreadsheet", entities: {} },
+      provider: new FakeSyncSheetsProvider([]),
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: 'sync service table "sync_registry_shared_table" is shared by "SyncRegistrySharedOne" and "SyncRegistrySharedTwo".',
+    });
+  });
+});
 
 describe("internal sync service injected-provider mode", () => {
   const services: InternalSyncService[] = [];

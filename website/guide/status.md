@@ -8,8 +8,10 @@ description: Hikoutei is in active development — the entity API is usable whil
 Hikoutei is in active development. The scalar EntityManager supports typed
 local filters and ordering, pagination, `count()`, and snapshot-consistent
 `findAndCount()`. Reads use the SQLite authority and do not query Sheets.
-Sheet edit ingestion and conflict presentation are still evolving. Review
-release notes before upgrading minor versions.
+Sheet edit ingestion and conflict presentation are still evolving. Internal
+sync verification uses the same mapped polling path as production; private
+`dist/**` files are not treated as package API. Review release notes before
+upgrading minor versions.
 
 ## EntityManager roadmap
 

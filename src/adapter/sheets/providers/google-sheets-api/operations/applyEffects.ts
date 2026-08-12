@@ -22,16 +22,15 @@ import { SYNC_POSTCONDITION_MODES } from "../../../../../application/sync/sheets
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
-import type { PreflightContext, PreflightRow } from "../model/preflight.js";
+import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
+import { planEffectBatch } from "../model/planner.js";
+import { currentHash } from "../model/plannerWorkingRow.js";
 import {
-  currentHash,
   encodeOutcomeResult,
   encodeSchemaErrorResult,
-  planEffectBatch,
   withDeferredPostcondition,
-  type EffectPlan,
-  type PlannedReceipt,
-} from "../model/planner.js";
+} from "../model/plannerReceipt.js";
+import type { EffectPlan, PlannedReceipt } from "../model/plannerContracts.js";
 import {
   buildAppendBatchRequests,
   buildApplyBatchRequests,

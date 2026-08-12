@@ -128,14 +128,6 @@ export async function initializeMappedTypedSheetsRuntime(
   }
 }
 
-/** Opens a mapped runtime and returns only its ORM facade for existing callers. */
-export async function initializeMappedTypedSheetsOrm(
-  options: InitializeMappedTypedSheetsOrmOptions,
-): Promise<TypedSheetsOrm> {
-  const runtime = await initializeMappedTypedSheetsRuntime(options);
-  return runtime.orm;
-}
-
 function mappingRegistry(
   input: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[],
 ): TypedSheetsEntityMappingRegistry {

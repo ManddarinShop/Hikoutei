@@ -10,7 +10,7 @@
  * result instead of a mutation.
  */
 
-import type { NormalizedCell } from "../../../../../domain/index.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
@@ -23,8 +23,8 @@ import type {
   GoogleSheetsApiWriteRequest,
 } from "../transport/googleSheetsApiTransport.js";
 import { serializeBatchUpdateRequests } from "../transport/googleSheetsApiTransport.js";
-import type { PreflightContext } from "./preflight.js";
-import type { EffectPlan, PlanMutation, PlannedReceipt, WorkingRow } from "./planner.js";
+import type { PreflightContext } from "./preflightContext.js";
+import type { EffectPlan, PlanMutation, PlannedReceipt, WorkingRow } from "./plannerContracts.js";
 import { toApiUserEnteredValue } from "./valueNormalization.js";
 import { allocateSheetId } from "./sheetIdAllocator.js";
 

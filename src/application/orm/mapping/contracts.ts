@@ -5,14 +5,12 @@
  * registration, and value conversion live in their respective modules.
  */
 
-import {
-  type FieldOwnership,
-  type NormalizedCell,
-} from "../../../domain/index.js";
+import type { FieldOwnership } from "../../../domain/model/constants.js";
+import type { NormalizedCell } from "../../../shared/encoding/types.js";
 import {
   SYNC_PROJECTIONS,
 } from "../../sync/sheetsContract/constants.js";
-import type { RegisterSyncSheetInput } from "../../../infrastructure/storage/index.js";
+import type { RegisterSyncSheetInput } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import type { TypedSheetsEntityReference } from "../api/contracts.js";
 import type { NormalizedCellKind } from "../../../shared/encoding/constants.js";
 

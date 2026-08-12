@@ -8,13 +8,13 @@
  */
 
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
+import type { FencingContext } from "@hikoutei/ikisaki";
+import type { CanonicalCommitInput } from "../../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
 import {
   persistObservedRowWithSql,
-  type CanonicalCommitInput,
-  type FencingContext,
   type PersistObservedRowInput,
   type PersistObservedRowResult,
-} from "../../../../../infrastructure/storage/index.js";
+} from "../../../../../infrastructure/storage/state/observation/observationWriter.js";
 import { OBSERVATION_WRITE_RESULT_KINDS } from "../../../../../infrastructure/storage/state/observation/observationConstants.js";
 import {
   createTypedSheetsEntityMappingRegistry,

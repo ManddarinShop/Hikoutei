@@ -10,14 +10,16 @@ import { isPositiveSafeInteger } from "../../../../shared/validation.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
   commitCanonicalChangesWithSql,
+  type CanonicalCommitInput,
+} from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+import {
   insertMappedActiveRowBindingWithSql,
   readMappedActiveCanonicalEntityWithSql,
   readMappedCanonicalFieldRevisionsWithSql,
   readMappedRowBindingWithSql,
   tombstoneMappedActiveRowBindingWithSql,
-  type CanonicalCommitInput,
-  type FencingContext,
-} from "../../../../infrastructure/storage/index.js";
+} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+import type { FencingContext } from "@hikoutei/ikisaki";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {

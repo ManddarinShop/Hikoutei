@@ -5,7 +5,9 @@
  * preserved without JSON coercion silently hiding malformed data.
  */
 
-import { computeRowHash, stableHash, type NormalizedRow } from "../../../../domain/index.js";
+import { computeRowHash } from "../../../../domain/evaluate/identity.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { NormalizedRow } from "../../../../domain/model/types.js";
 import {
   isJavaScriptType,
   isRecord,

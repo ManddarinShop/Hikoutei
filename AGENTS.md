@@ -86,14 +86,18 @@ cases and synchronization; `adapter/` isolates persistence and Sheets providers
 behind contracts; `infrastructure/` owns SQLite storage technology.
 
 - `src/domain/`: normalization values, field evaluation, conflict transitions,
-  and domain errors (`conflict/`, `errors/`, `evaluate/`, `model/`).
+  and domain errors (`conflict/`, `errors/`, `evaluate/`, `model/`). Internal
+  callers import the owning module directly; there is no broad domain barrel.
 - `src/shared/`: cross-domain constants, stable encoding, and shared state
   contracts (`encoding/`, `state/`).
-- `src/application/orm/`: public ORM facade, entity definitions, entity mapping,
-  and flush planning (`api/`, `mapping/`, `persistence/`).
-- `src/application/sync/`: outbound sync worker, effect supervisor, projection,
-  reconciliation, provider orchestration, and telemetry (`sheets/`,
-  `outbound/`, `telemetry/`).
+- `src/application/orm/`: internal entity mapping and canonical/outbox flush
+  planning (`api/`, `mapping/`, `persistence/`). The application-facing
+  EntityManager lives under `src/api/`, not in this internal facade.
+- `src/application/sync/`: outbound sync, projection, reconciliation, provider
+  orchestration, and telemetry. `service/SyncServiceBootstrap.ts` is the thin
+  concrete composition root; sibling service modules own validation, remote
+  provider construction, effect/reconciliation supervision, polling, and
+  shutdown.
 - `src/adapter/persistence/`: persistence contracts and the current provider
   (`contracts/` for SQL/persistence contracts, `providers/mikro-orm/` for the
   MikroORM + SQLite engine, storage bridge, observation, and entity
@@ -102,19 +106,20 @@ behind contracts; `infrastructure/` owns SQLite storage technology.
   Sheets API provider under `providers/google-sheets-api/` (transport/ and
   model/), the single sync provider for outbound effects, provisioning, table
   reads, row anchors, and snapshots.
-- `src/infrastructure/storage/`: SQLite storage technology for canonical state,
-  observation/conflict/resolution state, and the durable outbox (`sqlite/`,
-  `state/` for canonical/mapped/observation/resolution, `sync/` for the outbound
-  outbox and worker SQL).
+- `src/infrastructure/storage/`: focused SQLite modules for canonical,
+  observation/conflict/resolution, registry, and reconciliation state. Import
+  the owning module directly; there is no storage mega-barrel.
+- `src/cli/`: the setup CLI and its service-account/Google Cloud helpers.
 - `src/index.ts`: the application-facing public entrypoint only.
 - `test/`: Vitest unit and provider/contract tests, plus `test/support/`
   fixtures.
-- `docs/`: architecture, sync flow, code guidelines, and current-state notes.
-- `scripts/`: build and CI helper scripts (`clean-dist.mjs`,
-  `ci/run-api-scenario.mjs`).
+- `website/`: VitePress architecture, usage, and status documentation.
+- `scripts/`: build and CI helpers. `ci/run-api-scenario.mjs` is a
+  repository-owned internal sync/provider harness over the checkout's built
+  `dist/`; packed consumers run only root/public API scenarios.
 
-There is no `src/core/`, `src/setup/`, `src/runtime/`, `src/cli/`, or `spikes/`
-directory anymore; treat those names as retired.
+There is no `src/core/`, `src/setup/`, `src/runtime/`, or `spikes/` directory;
+treat those names as retired.
 
 ## Development Commands
 
@@ -124,9 +129,12 @@ directory anymore; treat those names as retired.
 - Run test typecheck: `npm run typecheck:test`
 - Build package: `npm run build`
 - Preview package contents: `npm pack --dry-run`
+- Run the repository internal fake sync/provider E2E after building:
+  `node scripts/ci/run-api-scenario.mjs --backend=fake`
 
-There is currently no `test:integration` npm script. Live Google Sheets
-verification is opt-in and manual: it requires a service account
+There is currently no `test:integration` npm script. The internal fake harness
+loads the repository's own built modules and is not a package API contract.
+Live Google Sheets verification is opt-in and manual: it requires a service account
 (`GOOGLE_APPLICATION_CREDENTIALS`), a spreadsheet shared with it, and external
 quota, and should never be the default
 verification step. The normal suite uses fake providers and SQLite/MikroORM
