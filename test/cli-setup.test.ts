@@ -133,12 +133,14 @@ import {
 import { safeError, safeReasonOf } from "../src/cli/sdkError.js";
 import { createSafeRunner } from "../src/cli/gcloudRunner.js";
 import {
+  KEY_LIST_COMMAND,
   KEY_SETTLE_POLL_DELAYS_MS,
   KEY_STAGE_PLACEHOLDER,
   cleanupOwnedStage,
   keyCleanupDir,
   keyResourceNameFor,
   keyStageDir,
+  normalizeUserManagedKeyLine,
   parseUserManagedKeyList,
   prepareStageDir,
   stagedKeyPath,
@@ -7338,6 +7340,125 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(parsed).toStrictEqual([keyResourceNameFor(projectId, saEmail, FIXED_KEY_ID)]);
     // A foreign project/email line is still refused after normalization.
     expect(parseUserManagedKeyList(`${keyResourceName("other-proj", saEmail, FIXED_KEY_ID)}\n`, projectId, saEmail)).toBeNull();
+  });
+
+  it("parses bare key ids emitted by newer gcloud (574+) as full resource names", () => {
+    const projectId = "proj-1";
+    const saEmail = "sa@proj-1.iam.gserviceaccount.com";
+    // gcloud 574 emits only the bare 40-hex key id (the last segment of
+    // the resource name) for `keys list --format=value(name)`. The list is
+    // scoped to this service account and project by the command flags, so
+    // the bare id is reconstructed into the canonical resource name.
+    const bareId = "82bb5bd206111e9f6499afb82836712c27d335db";
+    const parsed = parseUserManagedKeyList(`${bareId}\n`, projectId, saEmail);
+    expect(parsed).toStrictEqual([keyResourceNameFor(projectId, saEmail, bareId)]);
+    expect(parsed).toStrictEqual([
+      `projects/${projectId}/serviceAccounts/${saEmail}/keys/${bareId}`,
+    ]);
+    // The shorter 16-hex form is accepted too.
+    const shortBare = FIXED_KEY_ID;
+    expect(parseUserManagedKeyList(`${shortBare}\n`, projectId, saEmail)).toStrictEqual([
+      keyResourceNameFor(projectId, saEmail, shortBare),
+    ]);
+  });
+
+  it("case-folds bare key ids so baseline comparisons are exact", () => {
+    const projectId = "proj-1";
+    const saEmail = "sa@proj-1.iam.gserviceaccount.com";
+    const upperBare = FIXED_KEY_ID.toUpperCase();
+    const parsed = parseUserManagedKeyList(`${upperBare}\n`, projectId, saEmail);
+    expect(parsed).toStrictEqual([keyResourceNameFor(projectId, saEmail, FIXED_KEY_ID)]);
+    // The reconstructed name carries the lowercased id (matches the
+    // metadata-derived local-file resource name).
+    expect(parsed?.[0]).toBe(
+      `projects/${projectId}/serviceAccounts/${saEmail}/keys/${FIXED_KEY_ID}`,
+    );
+  });
+
+  it("parses a mix of bare ids and full names, trimming/sorting/deduping the baseline", () => {
+    const projectId = "proj-1";
+    const saEmail = "sa@proj-1.iam.gserviceaccount.com";
+    const a = "82bb5bd206111e9f6499afb82836712c27d335db";
+    const b = "1122334455667788";
+    // `a` appears twice (bare and via its full name) and `b` twice (bare
+    // and as uppercased whitespace-padded bare): all dedupe to one entry
+    // each, then sort.
+    const stdout = [
+      a,
+      keyResourceName(projectId, saEmail, a),
+      b,
+      "",
+      `  ${b.toUpperCase()}  `,
+    ].join("\n");
+    const parsed = parseUserManagedKeyList(stdout, projectId, saEmail);
+    expect(parsed).toStrictEqual(
+      [keyResourceNameFor(projectId, saEmail, a), keyResourceNameFor(projectId, saEmail, b)].sort(),
+    );
+  });
+
+  it("refuses malformed bare ids and foreign resource names (fail closed)", () => {
+    const projectId = "proj-1";
+    const saEmail = "sa@proj-1.iam.gserviceaccount.com";
+    // Too short / too long / non-hex bare ids are refused.
+    expect(parseUserManagedKeyList(`1234567\n`, projectId, saEmail)).toBeNull();
+    expect(parseUserManagedKeyList(`${"0".repeat(41)}\n`, projectId, saEmail)).toBeNull();
+    expect(parseUserManagedKeyList(`zzzzzzzzzzzzzzzz\n`, projectId, saEmail)).toBeNull();
+    // A full resource name for a foreign project or service account is
+    // still refused (the foreign-key guard is preserved even though bare
+    // ids are now accepted).
+    expect(
+      parseUserManagedKeyList(
+        `${keyResourceName("other-proj", saEmail, FIXED_KEY_ID)}\n`,
+        projectId,
+        saEmail,
+      ),
+    ).toBeNull();
+    // A well-shaped resource name for THIS account whose id segment is
+    // malformed is refused too (not silently accepted as a bare id).
+    expect(
+      parseUserManagedKeyList(
+        `projects/${projectId}/serviceAccounts/${saEmail}/keys/zz\n`,
+        projectId,
+        saEmail,
+      ),
+    ).toBeNull();
+    // A valid bare id followed by a malformed line refuses the ENTIRE list
+    // so a checkpoint baseline never silently drops a key.
+    expect(
+      parseUserManagedKeyList(`${FIXED_KEY_ID}\nnot-a-key-id\n`, projectId, saEmail),
+    ).toBeNull();
+  });
+
+  it("normalizeUserManagedKeyLine reconstructs a bare id and refuses malformed input", () => {
+    const projectId = "proj-1";
+    const saEmail = "sa@proj-1.iam.gserviceaccount.com";
+    // Bare id -> canonical resource name.
+    expect(normalizeUserManagedKeyLine(FIXED_KEY_ID, projectId, saEmail)).toBe(
+      keyResourceNameFor(projectId, saEmail, FIXED_KEY_ID),
+    );
+    // Full name -> canonical resource name (case-folded id).
+    expect(
+      normalizeUserManagedKeyLine(keyResourceName(projectId, saEmail, FIXED_KEY_ID.toUpperCase()), projectId, saEmail),
+    ).toBe(keyResourceNameFor(projectId, saEmail, FIXED_KEY_ID));
+    // Malformed / foreign lines are refused with an explicit null.
+    expect(normalizeUserManagedKeyLine("not-a-key-id", projectId, saEmail)).toBeNull();
+    expect(
+      normalizeUserManagedKeyLine(keyResourceName("other-proj", saEmail, FIXED_KEY_ID), projectId, saEmail),
+    ).toBeNull();
+  });
+
+  it("exposes a stable keys-list command contract", () => {
+    // The command form is a stable machine-readable projection; the
+    // bare-id vs full-name output variance is handled at the parser
+    // boundary (`parseUserManagedKeyList`), not by changing the command.
+    expect(KEY_LIST_COMMAND).toStrictEqual([
+      "iam",
+      "service-accounts",
+      "keys",
+      "list",
+      "--managed-by=user",
+      "--format=value(name)",
+    ]);
   });
 
   it("passes keyFresh=false when the key pre-existed the setup", async () => {
