@@ -765,10 +765,12 @@ function isValidKeyBaseline(value: unknown, projectId: string, saEmail: string):
  * True when a name is a user-managed service-account key resource name for
  * the given project and service account.
  *
- * The format is `projects/<project>/serviceAccounts/<email>/keys/<id>` with
- * a hex key id, as emitted by `gcloud iam service-accounts keys list
- * --format=value(name)`. The comparison uses exact string equality on the
- * project and email segments (no regex interpolation of user-controlled
+ * The format is `projects/<project>/serviceAccounts/<email>/keys/<id>`
+ * with a hex key id. Older gcloud emits this full resource name for `keys
+ * list --format=value(name)`; newer gcloud (e.g. 574) emits only the bare
+ * key id (the last segment), which `parseUserManagedKeyList` reconstructs
+ * into this canonical shape. The comparison uses exact string equality on
+ * the project and email segments (no regex interpolation of user-controlled
  * text).
  */
 export function isServiceAccountKeyResourceName(name: string, projectId: string, saEmail: string): boolean {

@@ -119,6 +119,7 @@ import { dirname, join } from "node:path";
 import {
   isServiceAccountKeyResourceName,
   readServiceAccountKeySecurely,
+  SERVICE_ACCOUNT_KEY_ID_PATTERN,
   type SecureKeyReadResult,
   type ServiceAccountKeyMetadata,
 } from "./checkpoint.js";
@@ -188,13 +189,15 @@ export function keyResourceNameFor(projectId: string, saEmail: string, keyId: st
  * Parses and validates the machine-readable output of the keys list
  * command.
  *
- * Every non-empty line must be a user-managed key resource name for the
- * expected project and service account; anything else is refused (the
- * caller treats the list as unusable). Each accepted name is normalized
- * (the hex key-id segment is case-folded) so baseline comparisons and
- * local-file matching against `keyResourceNameFor` are exact regardless of
- * the id casing gcloud emits. The returned list is sorted and
- * deduplicated so it can be stored as a checkpoint baseline.
+ * Each non-empty line is normalized into the canonical IAM key resource
+ * name (`projects/<project>/serviceAccounts/<email>/keys/<id>`) by
+ * {@link normalizeUserManagedKeyLine}; any line that matches neither the
+ * full-resource-name shape nor the bare key-id shape is refused, and the
+ * caller treats the whole list as unusable (fail closed). The hex key-id
+ * segment is case-folded so baseline comparisons and local-file matching
+ * against {@link keyResourceNameFor} are exact regardless of the casing
+ * gcloud emits. The returned list is sorted and deduplicated so it can be
+ * stored as a checkpoint baseline.
  */
 export function parseUserManagedKeyList(
   stdout: string,
@@ -207,15 +210,57 @@ export function parseUserManagedKeyList(
     if (name === "") {
       continue;
     }
-    if (!isServiceAccountKeyResourceName(name, projectId, saEmail)) {
+    const normalized = normalizeUserManagedKeyLine(name, projectId, saEmail);
+    if (normalized === null) {
+      // A foreign resource name, a malformed id, or stray text: refuse the
+      // entire list so a checkpoint baseline never silently drops keys or
+      // admits an unscoped value.
       return null;
     }
-    // Rebuild from the validated segments with the key id case-folded; the
-    // project and email segments are already exact string matches.
-    const parts = name.split("/");
-    names.push(`projects/${parts[1]}/serviceAccounts/${parts[3]}/keys/${(parts[5] ?? "").toLowerCase()}`);
+    names.push(normalized);
   }
   return [...new Set(names)].sort();
+}
+
+/**
+ * Normalizes one line of `keys list --format=value(name)` output into the
+ * canonical IAM key resource name, or returns `null` when the line is
+ * refused.
+ *
+ * gcloud emits the user-managed key list in two known shapes for the same
+ * `--format=value(name)` projection:
+ * - older versions print the full resource name
+ *   `projects/<project>/serviceAccounts/<email>/keys/<id>`; a line for a
+ *   foreign project or service account fails the exact project/email
+ *   comparison and is refused, preserving the foreign-key guard;
+ * - newer versions (e.g. gcloud 574) print only the bare key id — the last
+ *   segment of the resource name, e.g. `82bb5bd2…335db`. The list is scoped
+ *   to exactly this service account and project by the `--iam-account` and
+ *   `--project` flags of the command, so a bare id that matches the key-id
+ *   pattern is the same key and is reconstructed into the canonical
+ *   resource name with {@link keyResourceNameFor}.
+ *
+ * The hex key-id segment is case-folded in both shapes so the result is
+ * comparable against local-file metadata and the checkpoint baseline.
+ */
+export function normalizeUserManagedKeyLine(
+  line: string,
+  projectId: string,
+  saEmail: string,
+): string | null {
+  if (isServiceAccountKeyResourceName(line, projectId, saEmail)) {
+    // Rebuild from the validated segments with the key id case-folded; the
+    // project and email segments are already exact string matches.
+    const parts = line.split("/");
+    return `projects/${parts[1]}/serviceAccounts/${parts[3]}/keys/${(parts[5] ?? "").toLowerCase()}`;
+  }
+  if (SERVICE_ACCOUNT_KEY_ID_PATTERN.test(line)) {
+    // Bare key id (no project/email): the command already scoped the list
+    // to this service account and project, so reconstruct the canonical
+    // resource name. `keyResourceNameFor` case-folds the id.
+    return keyResourceNameFor(projectId, saEmail, line);
+  }
+  return null;
 }
 
 /**
