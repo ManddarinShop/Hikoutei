@@ -7,9 +7,14 @@
  * registration, provider provisioning, the bounded effect worker, polling,
  * and the MikroORM-backed storage/CAS/hash machinery end to end.
  *
- * The scenario is a repository-owned internal harness. It exercises internal
- * sync/provider behavior rather than the supported packed root API, which is
- * covered separately by `run-root-api-scenario.mjs`.
+ * The scenario loads implementation modules from the repository's own built
+ * `dist/` tree (the artifact `npm run build` produces), never from an
+ * installed consumer package. The `hikoutei/orm` and `hikoutei/mikro-orm`
+ * package subpaths are intentionally rejected; the public contract is the
+ * high-level `hikoutei` root API, which the packed-consumer root API smoke
+ * (`run-root-api-scenario.mjs`) covers against an installed package. This
+ * scenario remains focused on internal sync/provider behavior rather than
+ * public API CRUD coverage.
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -27,36 +32,28 @@ import process from "node:process";
 import { performance } from "node:perf_hooks";
 
 import { defineEntity, p } from "@mikro-orm/sql";
-// Internal harness imports are resolved from the repository source tree. The
-// package's private dist layout is not treated as an internal compatibility
-// contract.
-const sourceRoot = new URL("../../src/", import.meta.url);
-const [entityApi, entityManagerApi, scalarProviderApi, mappedFlushApi, mapping, mappedRuntime, sqliteAdapter, sqliteSchema, provisioning, sheetsDispatcher, encoding, outboxWorker] =
+// This is a repository-owned internal harness, not application code. Resolve
+// the implementation modules from the repository's own built dist/ tree
+// (../../dist relative to scripts/ci/), the exact artifact `npm run build`
+// produces. Only the root `hikoutei` entrypoint is an application-facing
+// export; packed-consumer scenarios cover that surface from an installed
+// package instead.
+const packageDist = new URL("../../dist/", import.meta.url);
+const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, provisioning, sheetsDispatcher, encoding, outboxWorker] =
   await Promise.all([
-    import(new URL("./api/entity.js", sourceRoot).href),
-    import(new URL("./api/internalEntityManager.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js", sourceRoot).href),
-    import(new URL("./application/orm/persistence/flush/flushCoordinator.js", sourceRoot).href),
-    import(new URL("./application/orm/mapping/entityMapping.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", sourceRoot).href),
-    import(new URL("./application/sync/sheetsContract/sheetsProvisioning.js", sourceRoot).href),
-    import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", sourceRoot).href),
-    import(new URL("./shared/encoding/index.js", sourceRoot).href),
+    import(new URL("./application/orm/mapping/entityMapping.js", packageDist).href),
+    import(new URL("./application/orm/persistence/flush/flushCoordinator.js", packageDist).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js", packageDist).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", packageDist).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", packageDist).href),
+    import(new URL("./application/sync/sheetsContract/sheetsProvisioning.js", packageDist).href),
+    import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", packageDist).href),
+    import(new URL("./shared/encoding/index.js", packageDist).href),
     import("@hikoutei/ikisaki"),
   ]);
-const { defineTypedSheetsEntity } = entityApi;
-const { getEntityDescriptor } = entityApi;
-const { createEntityManager } = entityManagerApi;
-const { MikroOrmScalarPersistenceProvider } = scalarProviderApi;
-const {
-  createMappedTypedSheetsFlushCoordinator,
-  registeredTypedSheetsProjectionDefinitions,
-  registerTypedSheetsEntityMappings,
-} = mappedFlushApi;
 const { defineTypedSheetsEntityMapping } = mapping;
-const { initializeMappedRuntime } = mappedRuntime;
+const { registeredTypedSheetsProjectionDefinitions, registerTypedSheetsEntityMappings } = flush;
+const { createMappedTypedSheetsOrm, initializeMappedTypedSheetsRuntime } = mappedRuntime;
 const { initializeMikroOrmSqliteAdapter } = sqliteAdapter;
 const { migrateMikroOrmSqliteStorageSchema } = sqliteSchema;
 const { provisionRegisteredSyncSheets } = provisioning;
@@ -64,8 +61,8 @@ const { SheetsEffectDispatcher } = sheetsDispatcher;
 const { runEffectWorkerWithAdapter } = outboxWorker;
 const { stableHash } = encoding;
 const [directSheets, mappedPolling] = await Promise.all([
-  import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", sourceRoot).href),
-  import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", sourceRoot).href),
+  import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", packageDist).href),
+  import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", packageDist).href),
 ]);
 const { GoogleSheetsApiSyncProvider, GoogleSheetsApiHttpTransport } = directSheets;
 const { pollMappedUserInputWithMikroOrm } = mappedPolling;
@@ -542,17 +539,16 @@ async function main() {
       sheetNames,
       recordTiming: (event) => timings.push({ phase: "internal", ...event }),
     }));
-    const { manager, storage, provider, definitions, entity, entityToken, mapping, writer, provision } = runtime;
+    const { orm, storage, provider, definitions, entity, mapping, writer, provision } = runtime;
     const systemDefinition = requireDefinition(definitions, "system_state");
     const userDefinition = requireDefinition(definitions, "user_input");
-    const em = manager;
+    const em = orm.em.fork();
     const entityId = `${prefix}-order-1`;
     const conflictEntityId = `${prefix}-order-conflict`;
     const systemGuardEntityId = `${prefix}-order-system-guard`;
 
-    await measure("initialize_mapped_runtime", "setup", () => smokeInitializeMappedRuntime({
+    await measure("initialize_mapped_orm", "setup", () => smokeInitializeMappedOrm({
       entity,
-      entityToken,
       mapping,
       prefix,
     }));
@@ -568,7 +564,7 @@ async function main() {
     }
 
     await measure("create_and_flush", "steady_state", async () => {
-      const order = em.create(entityToken, { id: entityId, status: "pending" });
+      const order = em.create(entity, { id: entityId, status: "pending" });
       em.persist(order);
       await em.flush();
       assertions += 1;
@@ -588,7 +584,7 @@ async function main() {
       });
     }
     await measure("read_after_create", "steady_state", async () => {
-      const loaded = await em.findOne(entityToken, { id: entityId });
+      const loaded = await em.findOne(entity, { id: entityId });
       assert.notEqual(loaded, null);
       assert.equal(loaded.status, "pending");
       const rows = await provider.readRows(backend.readRequest(systemDefinition));
@@ -596,7 +592,7 @@ async function main() {
       assert.equal(cellValue(rows.rows[0]?.fields.id), entityId);
       assertions += 3;
     });
-    const loaded = await em.findOne(entityToken, { id: entityId });
+    const loaded = await em.findOne(entity, { id: entityId });
     assert.notEqual(loaded, null);
 
     await measure("update_and_flush", "steady_state", async () => {
@@ -610,7 +606,7 @@ async function main() {
       assertions += 1;
     });
     await measure("read_after_update", "steady_state", async () => {
-      const readBack = await em.findOne(entityToken, { id: entityId });
+      const readBack = await em.findOne(entity, { id: entityId });
       assert.notEqual(readBack, null);
       assert.equal(readBack.status, "paid");
       assertions += 2;
@@ -622,8 +618,8 @@ async function main() {
       // simulated human edit flows through full observation into SQLite, and
       // verify both CAS guards (candidate on User_Input, visible on System).
       await measure("seed_conflict_entity", "steady_state", async () => {
-        const conflictEm = manager.fork();
-        conflictEm.persist(conflictEm.create(entityToken, { id: conflictEntityId, status: "pending" }));
+        const conflictEm = orm.em.fork();
+        conflictEm.persist(conflictEm.create(entity, { id: conflictEntityId, status: "pending" }));
         await conflictEm.flush();
         const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
         assert.equal(reports.at(-1)?.selected ?? 0, 0);
@@ -635,8 +631,8 @@ async function main() {
         // user_input projection is blocked (blocked_candidate) can no longer
         // enqueue further projection effects, so the system guard must target
         // a fresh entity with an unblocked input projection.
-        const guardEm = manager.fork();
-        guardEm.persist(guardEm.create(entityToken, { id: systemGuardEntityId, status: "pending" }));
+        const guardEm = orm.em.fork();
+        guardEm.persist(guardEm.create(entity, { id: systemGuardEntityId, status: "pending" }));
         await guardEm.flush();
         const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
         assert.equal(reports.at(-1)?.selected ?? 0, 0);
@@ -662,7 +658,7 @@ async function main() {
         // The long-lived em fork's identity map predates the polling write;
         // read the persisted entity through a fresh fork so the assertion
         // observes the SQLite row, not the stale managed instance.
-        const reloaded = await manager.fork().findOne(entityToken, { id: entityId });
+        const reloaded = await orm.em.fork().findOne(entity, { id: entityId });
         assert.notEqual(reloaded, null);
         assert.equal(reloaded.status, "edited-by-user");
         assertions += 2;
@@ -678,8 +674,8 @@ async function main() {
           field: "status",
           value: "human-2",
         });
-        const em5 = manager.fork();
-        const target = await em5.findOne(entityToken, { id: conflictEntityId });
+        const em5 = orm.em.fork();
+        const target = await em5.findOne(entity, { id: conflictEntityId });
         assert.notEqual(target, null);
         if (target === null) throw new Error("conflict target entity missing");
         target.status = "paid-v2";
@@ -705,8 +701,8 @@ async function main() {
           field: "status",
           value: "human-sys",
         });
-        const em5b = manager.fork();
-        const target = await em5b.findOne(entityToken, { id: systemGuardEntityId });
+        const em5b = orm.em.fork();
+        const target = await em5b.findOne(entity, { id: systemGuardEntityId });
         assert.notEqual(target, null);
         if (target === null) throw new Error("system guard target entity missing");
         target.status = "paid-v4";
@@ -742,7 +738,7 @@ async function main() {
         // The long-lived em fork's identity map predates the polling write;
         // read the persisted entity through a fresh fork so the assertion
         // observes the SQLite row, not the stale managed instance.
-        const reloaded = await manager.fork().findOne(entityToken, { id: entityId });
+        const reloaded = await orm.em.fork().findOne(entity, { id: entityId });
         assert.notEqual(reloaded, null);
         assert.equal(reloaded.status, "edited-by-user");
         assertions += 2;
@@ -765,7 +761,7 @@ async function main() {
         });
         assert.equal(mapped.appliedRows, 1);
         assertions += 1;
-        const reloaded = await manager.fork().findOne(entityToken, { id: entityId });
+        const reloaded = await orm.em.fork().findOne(entity, { id: entityId });
         assert.notEqual(reloaded, null);
         assert.equal(reloaded.status, "paid");
         assertions += 2;
@@ -776,8 +772,8 @@ async function main() {
       // Read through a fresh fork: the long-lived em identity map predates the
       // polling-applied human edit, and the mapped delete fails closed when the
       // managed entity fields diverge from the User_Input row.
-      const deleteEm = manager.fork();
-      const fresh = await deleteEm.findOne(entityToken, { id: entityId });
+      const deleteEm = orm.em.fork();
+      const fresh = await deleteEm.findOne(entity, { id: entityId });
       assert.notEqual(fresh, null);
       if (fresh !== null) {
         deleteEm.remove(fresh);
@@ -793,7 +789,7 @@ async function main() {
     await measure("read_after_delete", "steady_state", async () => {
       // Fresh fork again: the long-lived em identity map still holds the
       // deleted instance and would return it instead of the SQLite row.
-      const readBack = await manager.findOne(entityToken, { id: entityId });
+      const readBack = await orm.em.fork().findOne(entity, { id: entityId });
       assert.equal(readBack, null);
       const userRows = await provider.readRows(backend.readRequest(userDefinition));
       const systemRows = await provider.readRows(backend.readRequest(systemDefinition));
@@ -852,7 +848,7 @@ async function main() {
   } finally {
     if (runtime !== undefined) {
       try {
-        await runtime.storage.close(true);
+        await runtime.orm.close(true);
       } catch (error) {
         cleanupError = error;
       }
@@ -903,14 +899,6 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
   class CiOrder extends OrderSchema.class {}
   OrderSchema.setClass(CiOrder);
 
-  const entityToken = defineTypedSheetsEntity({
-    name: "CiOrder",
-    tableName: "ci_orders",
-    properties: {
-      id: { type: "string", primary: true },
-      status: { type: "string" },
-    },
-  });
   const mapping = defineTypedSheetsEntityMapping({
     entity: CiOrder,
     entityName: "CiOrder",
@@ -969,24 +957,17 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
     const definitions = registeredTypedSheetsProjectionDefinitions(registrations);
     const provider = backend.createProvider(definitions);
     const provision = await provisionRegisteredSyncSheets(provider, definitions);
-    const coordinator = createMappedTypedSheetsFlushCoordinator({ mappings: [mapping], writer });
-    const scalarProvider = new MikroOrmScalarPersistenceProvider(
-      storage,
-      [{ descriptor: getEntityDescriptor(entityToken), entity: CiOrder }],
-      coordinator,
-    );
-    const manager = createEntityManager(
-      scalarProvider,
-      new Map([[getEntityDescriptor(entityToken).name, getEntityDescriptor(entityToken)]]),
-    );
+    const orm = createMappedTypedSheetsOrm(storage, {
+      mappings: [mapping],
+      writer,
+    });
     return {
       tempRoot,
       storage,
-      manager,
+      orm,
       provider,
       definitions,
       entity: CiOrder,
-      entityToken,
       mapping,
       writer,
       provision,
@@ -998,10 +979,10 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
   }
 }
 
-async function smokeInitializeMappedRuntime({ entity, entityToken, mapping, prefix }) {
+async function smokeInitializeMappedOrm({ entity, mapping, prefix }) {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "hikoutei-ci-init-"));
   try {
-    const runtime = await initializeMappedRuntime({
+    const runtime = await initializeMappedTypedSheetsRuntime({
       dbName: path.join(tempRoot, "initializer.sqlite"),
       entities: [entity],
       mappings: [mapping],
@@ -1010,7 +991,7 @@ async function smokeInitializeMappedRuntime({ entity, entityToken, mapping, pref
       },
     });
     // The runtime facade owns the adapter; closing the ORM closes storage.
-    await runtime.storage.close(true);
+    await runtime.orm.close(true);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
