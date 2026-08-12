@@ -9,9 +9,10 @@ Hikoutei is in active development. The scalar EntityManager supports typed
 local filters and ordering, pagination, `count()`, and snapshot-consistent
 `findAndCount()`. Reads use the SQLite authority and do not query Sheets.
 Sheet edit ingestion and conflict presentation are still evolving. Internal
-sync verification uses the same mapped polling path as production; private
-`dist/**` files are not treated as package API. Review release notes before
-upgrading minor versions.
+sync verification uses the same mapped polling path as production and loads
+repository source through a checked-in TypeScript loader; private `dist/**`
+files are not treated as package API. Review release notes before upgrading
+minor versions.
 
 ## EntityManager roadmap
 
@@ -22,6 +23,13 @@ Rich local reads are complete. The remaining sequence is:
 2. Design relationships and population together with their Sheets projection
    and conflict semantics.
 3. Add migration and schema-drift operations integrated with setup tooling.
+
+## Persistence and synchronization
+
+The public EntityManager delegates to Hikoutei's scalar Unit of Work and
+provider SPI. The MikroORM adapter executes the provider-neutral insert,
+update, and delete plan together with mapped canonical state and the durable
+Sheet outbox in one SQLite transaction. Sheets delivery remains asynchronous.
 
 ## Synchronization and operations
 

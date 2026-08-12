@@ -26,9 +26,13 @@ Application code
 ```
 
 The internal service reuses the same MikroORM SQLite adapter and transaction
-boundary as the entity manager. Its concrete composition root is intentionally
-small: validation, remote-provider construction, effect/reconciliation
-supervision, polling, and shutdown each have one directly named service module.
+boundary as the entity manager. Hikoutei's scalar Unit of Work owns lifecycle,
+snapshots, identity maps, and the provider-neutral flush plan. The concrete
+provider schedules that plan on a transaction-bound MikroORM manager, invokes
+mapped canonical/outbox planning before entity SQL, and flushes both in one
+SQLite transaction. Its composition root is intentionally small: validation,
+remote-provider construction, effect/reconciliation supervision, polling, and
+shutdown each have one directly named service module.
 A future deployment can extract the worker process without changing the root
 entity lifecycle contract.
 
@@ -47,15 +51,20 @@ Business entity tables are the authoritative application data. Normal reads
 always come from SQLite and never from a Sheet. The public local runtime opens
 entity tables only and does not contact Google Sheets or create sync tables.
 
-When the internal sync service is active, its mapped flush coordinator extends
-the same SQLite transaction with:
+When the internal sync service is active, the scalar persistence provider
+extends the same SQLite transaction with:
 
 ```text
-entity mutation
-canonical sync state
-projection registry/state
-Sheet effect outbox
+public EntityManager
+  → scalar Unit of Work flush plan
+  → scalar persistence provider transaction
+       ├─ mapped canonical/outbox planner
+       └─ MikroORM entity SQL
 ```
+
+The mapped planner writes canonical sync state, projection registry/state, and
+the durable Sheet effect outbox before the scheduled entity statements. Any
+failure rolls the complete transaction back.
 
 The service-side configuration supplies the required `System_State`,
 `User_Input`, and `Sync_Conflicts` routes, spreadsheet identity, and
@@ -106,13 +115,13 @@ src/application/sync/               internal sync use cases and concrete composi
 src/adapter/persistence/            persistence SPI and SQLite/MikroORM implementation
 src/adapter/sheets/                 Google Sheets API provider
 src/infrastructure/storage/         focused canonical/observation/resolution SQL modules
-src/api/                            root-facing entity and EntityManager facade
+src/api/                            root-facing entity and EntityManager
 src/index.ts                        root public barrel only
 ```
 
 `src` does not mean public. The only application-facing package entrypoint is
 `src/index.ts`; provider, sync operations, polling, and sync state are not
 part of the contract. Internal code imports focused owner modules rather than
-using domain or storage mega-barrels. The sync/provider end-to-end harness also
-runs against the repository's own build; installed-package scenarios exercise
-only the supported root API.
+using domain or storage mega-barrels. The sync/provider end-to-end harness runs
+against repository source through its checked-in TypeScript loader;
+installed-package scenarios exercise only the supported root API.
