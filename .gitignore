@@ -18,6 +18,16 @@ dist/
 .env.*
 !.env.example
 
+# hikoutei setup artifacts (defaults; custom --output/key/checkpoint
+# locations must be added to the application's ignore rules explicitly)
+hikoutei-service-account.json
+.hikoutei-setup-state.json
+.hikoutei-setup-state.json.tmp*
+.hikoutei-setup-state.json.lock
+.hikoutei-key-stage-*
+.hikoutei-key-cleanup-*
+.hikoutei-env-*
+
 # typed-sheets local credentials/config
 .typed-sheets/
 .typed-sheets.json
