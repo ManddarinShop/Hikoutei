@@ -7,8 +7,8 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
-  stableHash,
-} from "../../../domain/index.js";
+} from "../../../shared/constants.js";
+import { stableHash } from "../../../shared/encoding/stableEncode.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,

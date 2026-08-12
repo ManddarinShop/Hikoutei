@@ -13,9 +13,10 @@ import { computeSyncVisibleHash, type SyncProjectionEffect } from "../../../../.
 import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
 import { PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/index.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
-import type { PreflightContext, PreflightRow } from "./preflight.js";
-import type { EffectPlan, PlannedReceipt, WorkingRow } from "./planner.js";
+import type { PreflightContext, PreflightRow } from "./preflightContext.js";
+import type { EffectPlan, PlannedReceipt, WorkingRow } from "./plannerContracts.js";
 import { isDeletionEffect } from "./plannerDeletion.js";
 
 /** Receipt replay branch: a receipt already exists for this effect ID. */
@@ -86,9 +87,9 @@ export function planReceiptReplay(
 /** Computes the visible hash of a row restricted to the effect's fields. */
 export function currentHash(
   row: WorkingRow | PreflightRow,
-  fields: Readonly<Record<string, import("../../../../../domain/index.js").NormalizedCell>>,
+  fields: Readonly<Record<string, NormalizedCell>>,
 ): string {
-  const values: Record<string, import("../../../../../domain/index.js").NormalizedCell> = {};
+  const values: Record<string, NormalizedCell> = {};
   for (const fieldName of Object.keys(fields)) {
     values[fieldName] = row.cells[fieldName] ?? null;
   }
@@ -142,7 +143,7 @@ export function toWorkingRow(row: PreflightRow): WorkingRow {
 }
 
 export function createWorkingRow(effect: SyncProjectionEffect, rowNumber: number): WorkingRow {
-  const cells: Record<string, import("../../../../../domain/index.js").NormalizedCell> = {};
+  const cells: Record<string, NormalizedCell> = {};
   return {
     rowNumber,
     anchor: presentValue(effect.payload.targetAnchor),

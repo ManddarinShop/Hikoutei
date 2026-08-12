@@ -26,8 +26,11 @@ Application code
 ```
 
 The internal service reuses the same MikroORM SQLite adapter and transaction
-boundary as the entity manager. A future deployment can extract the worker
-process without changing the root entity lifecycle contract.
+boundary as the entity manager. Its concrete composition root is intentionally
+small: validation, remote-provider construction, effect/reconciliation
+supervision, polling, and shutdown each have one directly named service module.
+A future deployment can extract the worker process without changing the root
+entity lifecycle contract.
 
 ## Root public API
 
@@ -96,15 +99,19 @@ All queued Sheet audit and repair effects remain asynchronous.
 
 ```text
 src/domain/                         pure normalization/evaluation/conflict rules
-src/application/orm/                public ORM facade and mapped flush planning
-src/application/sync/               internal sync engine and service bootstrap
-src/adapter/persistence/            SQLite/MikroORM implementation
+src/shared/                         shared encoding, constants, and state contracts
+src/application/orm/                internal entity mapping and mapped flush planning
+src/application/sync/               internal sync use cases and concrete composition
+src/adapter/persistence/            persistence SPI and SQLite/MikroORM implementation
 src/adapter/sheets/                 Google Sheets API provider
-src/infrastructure/storage/         canonical, observation, resolution, outbox state
+src/infrastructure/storage/         focused canonical/observation/resolution SQL modules
 src/api/                            root-facing entity and EntityManager facade
 src/index.ts                        root public barrel only
 ```
 
 `src` does not mean public. The only application-facing package entrypoint is
 `src/index.ts`; provider, sync operations, polling, and sync state are not
-part of the contract.
+part of the contract. Internal code imports focused owner modules rather than
+using domain or storage mega-barrels. The sync/provider end-to-end harness also
+runs against the repository's own build; installed-package scenarios exercise
+only the supported root API.

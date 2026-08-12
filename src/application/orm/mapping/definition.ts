@@ -6,9 +6,11 @@
  */
 
 import {
-  EMPTY_STRING_LENGTH_ZERO,
   FIELD_OWNERSHIPS,
-} from "../../../domain/index.js";
+} from "../../../domain/model/constants.js";
+import {
+  EMPTY_STRING_LENGTH_ZERO,
+} from "../../../shared/constants.js";
 import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,

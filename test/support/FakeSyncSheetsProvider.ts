@@ -10,13 +10,15 @@
 import {
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-  stableHash,
-  type Applicability,
-  type EffectKind,
-  type LookupResult,
-  type NormalizedCell,
-  type Presence,
-} from "../../src/domain/index.js";
+} from "../../src/shared/constants.js";
+import { stableHash } from "../../src/shared/encoding/stableEncode.js";
+import type { EffectKind } from "../../src/domain/model/constants.js";
+import type {
+  Applicability,
+  LookupResult,
+  Presence,
+} from "../../src/shared/state/types.js";
+import type { NormalizedCell } from "../../src/shared/encoding/types.js";
 import { CELL_OBSERVATION_KINDS } from "../../src/shared/encoding/constants.js";
 import {
   APPLICABILITY_KINDS,

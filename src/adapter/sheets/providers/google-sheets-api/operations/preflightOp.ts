@@ -23,7 +23,7 @@ import {
   enumerateSheetProperties,
   readPreflightData,
   type PreflightContext,
-} from "../model/preflight.js";
+} from "../model/preflightContext.js";
 import { anchorColumnFor } from "../model/preflightRows.js";
 import type { SnapshotBuildTarget } from "../model/observation.js";
 import {

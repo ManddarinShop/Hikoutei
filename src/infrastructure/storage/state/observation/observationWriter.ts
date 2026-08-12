@@ -10,9 +10,11 @@ import {
   APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-  type Applicability,
-  type Presence,
-} from "../../../../domain/index.js";
+} from "../../../../shared/state/constants.js";
+import type {
+  Applicability,
+  Presence,
+} from "../../../../shared/state/types.js";
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import { EMPTY_ARRAY_LENGTH_ZERO, EXPECTED_SINGLE_ROW_CHANGE_COUNT } from "../../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
