@@ -27,8 +27,8 @@ consistent with those before inventing new structure.
 The public API is an entity-lifecycle EntityManager modeled on the MikroORM/JPA
 workflow. Applications define entities with `defineTypedSheetsEntity()` and open
 the runtime with `createTypedSheets()`, then use a request-local manager for
-`fork()`, `create()`, `find()`, `persist()`, `remove()`, `flush()`, and
-`transactional()`:
+`fork()`, `create()`, typed `find()` / `findOne()`, `count()`,
+`findAndCount()`, `persist()`, `remove()`, `flush()`, and `transactional()`:
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -58,8 +58,11 @@ Keep the public API and the internal sync/provider engine separate.
 
 The public surface exposes only Google Sheet setup/registration plus the
 entity-lifecycle EntityManager: defining entities, opening the runtime, and
-`fork()`, `create()`, `find()`, `persist()`, `remove()`, `flush()`, and
-`transactional()`. Everything else is internal implementation and must not be
+`fork()`, `create()`, typed `find()` / `findOne()`, `count()`,
+`findAndCount()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
+Query operators and ordering are Hikoutei-owned contracts; MikroORM filter,
+ordering, and query-builder types remain internal. Everything else is internal
+implementation and must not be
 part of the application-facing contract: MikroORM types and provider internals,
 the Google Sheets API provider, the outbound sync
 worker, polling, and effect supervisor, storage schemas

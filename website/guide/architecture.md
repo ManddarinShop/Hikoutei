@@ -32,10 +32,11 @@ process without changing the root entity lifecycle contract.
 ## Root public API
 
 The public surface contains entity definition, runtime creation, and the
-request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
-`findOne()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
-MikroORM, raw SQL, provider clients, Sheet routes, provisioning, polling, and
-outbox controls are internal.
+request-local `EntityManager` lifecycle: `fork()`, `create()`, typed `find()` /
+`findOne()`, `count()`, snapshot-consistent `findAndCount()`, `persist()`,
+`remove()`, `flush()`, and `transactional()`. MikroORM query types, raw SQL,
+provider clients, Sheet routes, provisioning, polling, and outbox controls are
+internal.
 
 ## SQLite authority
 

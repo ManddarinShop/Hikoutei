@@ -13,10 +13,13 @@ import type {
 } from "../../../../../api/entity.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "../../../../../api/errors.js";
 import type {
+  ScalarEntityCountQuery,
   ScalarEntityDelete,
   ScalarEntityInsert,
   ScalarEntityPersistenceProvider,
+  ScalarEntityPredicate,
   ScalarEntityQuery,
+  ScalarEntityReader,
   ScalarEntityRow,
   ScalarEntityTransaction,
   ScalarEntityUpdate,
@@ -24,7 +27,7 @@ import type {
 } from "../../../contracts/scalar.js";
 import type {
   TypedSheetsEntityReference,
-  TypedSheetsFindOptions,
+  TypedSheetsQueryOptions,
 } from "../../../../../application/orm/api/contracts.js";
 import type {
   TypedSheetsEntityManager,
@@ -64,6 +67,22 @@ export class MikroOrmScalarPersistenceProvider implements ScalarEntityPersistenc
     return readRows(manager, binding, query);
   }
 
+  /** Counts rows through a fresh internal manager without materializing entities. */
+  async count(query: ScalarEntityCountQuery): Promise<number> {
+    const binding = this.requireBindingByTable(query.tableName);
+    const manager = this.orm.em.fork();
+    return countRows(manager, binding, query);
+  }
+
+  /** Runs read work through one short SQLite snapshot transaction. */
+  async readSnapshot<Result>(
+    work: (reader: ScalarEntityReader) => Promise<Result>,
+  ): Promise<Result> {
+    return this.orm.em.transactional(async (manager) => {
+      return work(new MikroOrmScalarReader(manager, this.bindings));
+    });
+  }
+
   /** Runs one common-UoW transaction through the mapped MikroORM facade. */
   async beginTransaction<Result>(
     work: (transaction: ScalarEntityTransaction) => Promise<Result>,
@@ -90,12 +109,44 @@ export class MikroOrmScalarPersistenceProvider implements ScalarEntityPersistenc
   }
 }
 
-/** Transaction-bound translation from scalar plans to mapped entity writes. */
-class MikroOrmScalarTransaction implements ScalarEntityTransaction {
+/** Shared transaction-bound reader for scalar rows and counts. */
+class MikroOrmScalarReader implements ScalarEntityReader {
   constructor(
-    private readonly manager: TypedSheetsEntityManager,
-    private readonly bindings: ReadonlyMap<string, MikroOrmScalarEntityBinding>,
+    protected readonly manager: TypedSheetsEntityManager,
+    protected readonly bindings: ReadonlyMap<string, MikroOrmScalarEntityBinding>,
   ) {}
+
+  async read(query: ScalarEntityQuery): Promise<readonly ScalarEntityRow[]> {
+    const binding = this.requireBindingByTable(query.tableName);
+    return readRows(this.manager, binding, query);
+  }
+
+  async count(query: ScalarEntityCountQuery): Promise<number> {
+    const binding = this.requireBindingByTable(query.tableName);
+    return countRows(this.manager, binding, query);
+  }
+
+  protected requireBindingByTable(tableName: string): MikroOrmScalarEntityBinding {
+    for (const binding of this.bindings.values()) {
+      if (binding.descriptor.tableName === tableName) return binding;
+    }
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.UNREGISTERED_ENTITY,
+      `entity table "${tableName}" is not registered with this runtime.`,
+    );
+  }
+}
+
+/** Transaction-bound translation from scalar plans to mapped entity writes. */
+class MikroOrmScalarTransaction
+  extends MikroOrmScalarReader
+  implements ScalarEntityTransaction {
+  constructor(
+    manager: TypedSheetsEntityManager,
+    bindings: ReadonlyMap<string, MikroOrmScalarEntityBinding>,
+  ) {
+    super(manager, bindings);
+  }
 
   async insert(row: ScalarEntityInsert): Promise<void> {
     const binding = this.requireBindingByTable(row.tableName);
@@ -131,11 +182,6 @@ class MikroOrmScalarTransaction implements ScalarEntityTransaction {
     this.manager.remove(existing);
   }
 
-  async read(query: ScalarEntityQuery): Promise<readonly ScalarEntityRow[]> {
-    const binding = this.requireBindingByTable(query.tableName);
-    return readRows(this.manager, binding, query);
-  }
-
   /** Forces MikroORM's mapped flush before the common UoW advances snapshots. */
   async flush(): Promise<void> {
     await this.manager.flush();
@@ -153,15 +199,6 @@ class MikroOrmScalarTransaction implements ScalarEntityTransaction {
     return result;
   }
 
-  private requireBindingByTable(tableName: string): MikroOrmScalarEntityBinding {
-    for (const binding of this.bindings.values()) {
-      if (binding.descriptor.tableName === tableName) return binding;
-    }
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.UNREGISTERED_ENTITY,
-      `entity table "${tableName}" is not registered with this runtime.`,
-    );
-  }
 }
 
 async function readRows(
@@ -169,31 +206,65 @@ async function readRows(
   binding: MikroOrmScalarEntityBinding,
   query: ScalarEntityQuery,
 ): Promise<readonly ScalarEntityRow[]> {
-  const entities = await manager.find(
+  const entities = await manager.findByQuery(
     binding.entity,
-    toInternalFilter(binding.descriptor, query.where),
+    toInternalPredicate(binding.descriptor, query.predicate),
+    query.primaryKeyColumn,
     toFindOptions(query),
   );
   return entities.map((entity) => fromInternalEntity(binding.descriptor, entity));
 }
 
-function toFindOptions(query: ScalarEntityQuery): TypedSheetsFindOptions {
+async function countRows(
+  manager: TypedSheetsEntityManager,
+  binding: MikroOrmScalarEntityBinding,
+  query: ScalarEntityCountQuery,
+): Promise<number> {
+  return manager.countByQuery(
+    binding.entity,
+    toInternalPredicate(binding.descriptor, query.predicate),
+    query.primaryKeyColumn,
+  );
+}
+
+function toFindOptions(query: ScalarEntityQuery): TypedSheetsQueryOptions {
   return {
+    orderBy: [...query.orderBy],
     ...(query.limit === undefined ? {} : { limit: query.limit }),
     ...(query.offset === undefined ? {} : { offset: query.offset }),
   };
 }
 
-function toInternalFilter(
+function toInternalPredicate(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  where: Readonly<Record<string, ScalarEntityValue>>,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(where).map(([property, value]) => [
-      property,
-      toInternalValue(descriptor, property, value),
-    ]),
-  );
+  predicate: ScalarEntityPredicate,
+): ScalarEntityPredicate {
+  switch (predicate.kind) {
+    case "comparison":
+      return {
+        ...predicate,
+        value: toInternalValue(descriptor, predicate.field, predicate.value),
+      };
+    case "set":
+      return {
+        ...predicate,
+        values: predicate.values.map((value) =>
+          toInternalValue(descriptor, predicate.field, value)
+        ),
+      };
+    case "all":
+    case "any":
+      return {
+        ...predicate,
+        predicates: predicate.predicates.map((child) =>
+          toInternalPredicate(descriptor, child)
+        ),
+      };
+    case "like":
+    case "null":
+    case "constant":
+      return predicate;
+  }
 }
 
 function toInternalData(
@@ -208,6 +279,16 @@ function toInternalData(
   );
 }
 
+function toInternalValue(
+  descriptor: ResolvedHikouteiEntityDescriptor,
+  propertyName: string,
+  value: Exclude<ScalarEntityValue, null>,
+): Exclude<ScalarEntityValue, null> | string;
+function toInternalValue(
+  descriptor: ResolvedHikouteiEntityDescriptor,
+  propertyName: string,
+  value: ScalarEntityValue,
+): ScalarEntityValue | string;
 function toInternalValue(
   descriptor: ResolvedHikouteiEntityDescriptor,
   propertyName: string,

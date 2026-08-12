@@ -6,12 +6,20 @@
  */
 
 import type { HikouteiEntity } from "./entity.js";
+import type {
+  HikouteiFilter,
+  HikouteiFindOneOptions,
+  HikouteiFindOptions,
+} from "./query.js";
 
-/** Equality filter options shared by all provider implementations. */
-export interface HikouteiFindOptions {
-  readonly limit?: number;
-  readonly offset?: number;
-}
+export type {
+  HikouteiFilter,
+  HikouteiFindOneOptions,
+  HikouteiFindOptions,
+  HikouteiOperatorFilter,
+  HikouteiOrderBy,
+  HikouteiSortDirection,
+} from "./query.js";
 
 /**
  * Request-local entity manager exposed by `createTypedSheets()`.
@@ -27,13 +35,23 @@ export interface EntityManager {
   ): Entity;
   find<Entity extends object>(
     entity: HikouteiEntity<Entity>,
-    where?: Readonly<Partial<Entity>>,
-    options?: HikouteiFindOptions,
+    where?: HikouteiFilter<Entity>,
+    options?: HikouteiFindOptions<Entity>,
   ): Promise<readonly Entity[]>;
   findOne<Entity extends object>(
     entity: HikouteiEntity<Entity>,
-    where: Readonly<Partial<Entity>>,
+    where: HikouteiFilter<Entity>,
+    options?: HikouteiFindOneOptions<Entity>,
   ): Promise<Entity | null>;
+  count<Entity extends object>(
+    entity: HikouteiEntity<Entity>,
+    where?: HikouteiFilter<Entity>,
+  ): Promise<number>;
+  findAndCount<Entity extends object>(
+    entity: HikouteiEntity<Entity>,
+    where?: HikouteiFilter<Entity>,
+    options?: HikouteiFindOptions<Entity>,
+  ): Promise<readonly [readonly Entity[], number]>;
   persist<Entity extends object>(input: Entity | Iterable<Entity>): EntityManager;
   remove<Entity extends object>(input: Entity | Iterable<Entity>): EntityManager;
   flush(): Promise<void>;

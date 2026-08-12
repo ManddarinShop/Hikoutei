@@ -30,6 +30,8 @@ export const HIKOUTEI_ERROR_CODES = {
   UNMANAGED_ENTITY: "unmanaged_entity",
   /** A scalar property value could not be stored in its declared column type. */
   INVALID_SCALAR_VALUE: "invalid_scalar_value",
+  /** A query uses malformed operators, unsupported operator types, or invalid ordering. */
+  INVALID_QUERY: "invalid_query",
   /** A provider transaction could not find the row targeted by a managed change. */
   ENTITY_NOT_FOUND: "entity_not_found",
   /** Sync auto-start failed for an uncategorized reason (timeout, network, option). */

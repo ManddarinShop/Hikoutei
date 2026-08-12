@@ -240,9 +240,11 @@ async function main() {
       assert.equal(typeof manager.remove, "function");
       assert.equal(typeof manager.flush, "function");
       assert.equal(typeof manager.transactional, "function");
+      assert.equal(typeof manager.count, "function");
+      assert.equal(typeof manager.findAndCount, "function");
       return manager;
     });
-    assertions += 7;
+    assertions += 9;
 
     await measure("create_persist_100_records", async () => {
       for (let index = 0; index < 100; index += 1) {
@@ -281,6 +283,29 @@ async function main() {
       assert.equal(named[0].id, "u-007");
     });
     assertions += 3;
+
+    await measure("rich_query_order_count", async () => {
+      const rich = await em.find(
+        User,
+        {
+          id: { gte: "u-010", lt: "u-020" },
+          name: { like: "User-01_" },
+          active: { in: [true, false] },
+        },
+        { orderBy: { name: "desc" }, limit: 3 },
+      );
+      assert.deepEqual(rich.map((user) => user.id), ["u-019", "u-018", "u-017"]);
+      assert.equal(await em.count(User, { id: { in: ["u-001", "u-002", "missing"] } }), 2);
+
+      const [page, total] = await em.findAndCount(
+        User,
+        { active: true, id: { nin: ["u-000"] } },
+        { orderBy: { id: "asc" }, limit: 2, offset: 1 },
+      );
+      assert.deepEqual(page.map((user) => user.id), ["u-004", "u-006"]);
+      assert.equal(total, 49);
+    });
+    assertions += 4;
 
     await measure("mutate_10_records", async () => {
       for (let index = 0; index < 10; index += 1) {
