@@ -1545,11 +1545,6 @@ function isValidRsaPrivateKey(pem: string): boolean {
 /** Filesystem operations the exclusive setup lock uses; injectable for tests. */
 export interface LockFs {
   mkdirSync(path: string, options: { readonly mode: number }): void;
-  lstatSync(path: string): {
-    readonly dev: number;
-    readonly ino: number;
-    isDirectory(): boolean;
-  };
   openSync(path: string, flags: number): number;
   fstatSync(fd: number): {
     readonly dev: number;
@@ -1562,17 +1557,48 @@ export interface LockFs {
 
 const defaultLockFs: LockFs = {
   mkdirSync,
-  lstatSync,
   openSync,
   fstatSync,
   closeSync,
   rmdirSync,
 };
 
-/** Identity of the lock directory a run created (device/inode). */
+/**
+ * Identity of the lock directory a run created.
+ *
+ * `dev`/`ino` describe the directory; `token` is an opaque process-local
+ * owner token registered in a per-process acquisition registry that ties
+ * the identity to the open descriptor of the directory, held from acquire
+ * until release. While that descriptor stays open the original inode
+ * cannot be recycled, and because the token is process-unique and the
+ * registry entry is removed on release, a stale identity — or a fresh
+ * directory that reused the device/inode — can never be mistaken for this
+ * run's lock. Never serialized or persisted: process-local only.
+ */
 export interface LockIdentity {
   readonly dev: number;
   readonly ino: number;
+  readonly token: number;
+}
+
+/**
+ * Per-process setup lock acquisition registry.
+ *
+ * Maps each held lock's opaque token to the open descriptor of the
+ * directory that run created. The descriptor is held exclusively from
+ * acquire until release, so its inode cannot be recycled while the lock is
+ * held; entries are removed on release (and die with the process), so a
+ * stale token is never resolvable again even after the descriptor number
+ * itself is reused by a later acquire in the same process.
+ */
+const setupLockOwners = new Map<number, { readonly fd: number }>();
+
+let setupLockTokenCounter = 0;
+
+/** Next process-unique owner token (monotonic; never reused within a process). */
+function nextSetupLockToken(): number {
+  setupLockTokenCounter += 1;
+  return setupLockTokenCounter;
 }
 
 /** Result of acquiring the exclusive setup lock. */
@@ -1591,10 +1617,19 @@ export type SetupLockResult =
  * replaced, regardless of what it is; automatic stale-lock takeover is
  * deliberately disabled because a probe-then-remove takeover is racy.
  * Any other acquire failure (EACCES, ENOENT, EROFS, ...) is `failed`
- * (`setup_lock_failed`), never `busy`. The returned identity is the
- * device/inode of the directory created; `releaseSetupLock` removes only
- * that exact directory, so a replacement acquired after release is never
- * deleted.
+ * (`setup_lock_failed`), never `busy`.
+ *
+ * The created directory is opened WITHOUT following symlinks and its
+ * identity is taken THROUGH that descriptor; the descriptor is kept open
+ * for the whole lock lifetime and registered under a process-unique owner
+ * token in the per-process acquisition registry (the opaque `token` in
+ * `LockIdentity`). While the descriptor stays open the original inode
+ * cannot be recycled, so a replacement directory created after this lock
+ * is removed can never carry the same device/inode; `releaseSetupLock`
+ * removes only the directory the registered owner descriptor still
+ * refers to. A directory that cannot be opened or verified is removed
+ * again and the acquire fails closed rather than hold a lock of unknown
+ * identity.
  */
 export function acquireSetupLock(lockPath: string, fs: LockFs = defaultLockFs): SetupLockResult {
   try {
@@ -1608,12 +1643,39 @@ export function acquireSetupLock(lockPath: string, fs: LockFs = defaultLockFs): 
       message: `could not create the setup lock directory ${lockPath}: ${messageOf(error)}`,
     };
   }
+  let fd: number;
   try {
-    const stat = fs.lstatSync(lockPath);
-    return { status: "held", identity: { dev: stat.dev, ino: stat.ino } };
+    fd = fs.openSync(lockPath, constants.O_RDONLY | noFollowFlag() | directoryFlag());
   } catch (error) {
-    // The directory we just created cannot be inspected; remove it and fail
-    // closed rather than hold a lock of unknown identity.
+    // The directory we just created cannot be opened without following
+    // symlinks; remove it and fail closed rather than hold a lock of
+    // unknown identity.
+    try {
+      fs.rmdirSync(lockPath);
+    } catch {
+      // Best-effort; the acquire failure is the one to report.
+    }
+    return {
+      status: "failed",
+      message: `could not verify the setup lock directory ${lockPath}: ${messageOf(error)}`,
+    };
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isDirectory()) {
+      throw new Error("not a directory");
+    }
+    const token = nextSetupLockToken();
+    setupLockOwners.set(token, { fd });
+    return { status: "held", identity: { dev: stat.dev, ino: stat.ino, token } };
+  } catch (error) {
+    // The opened descriptor cannot be verified as the directory we just
+    // created; close it, remove the directory, and fail closed.
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // Best-effort; the acquire failure is the one to report.
+    }
     try {
       fs.rmdirSync(lockPath);
     } catch {
@@ -1629,29 +1691,85 @@ export function acquireSetupLock(lockPath: string, fs: LockFs = defaultLockFs): 
 /**
  * Releases the setup lock by removing the exact directory this run created.
  *
- * The directory is opened WITHOUT following symlinks (`O_NOFOLLOW` where
- * the platform defines it) and its identity/type are verified THROUGH the
- * opened descriptor before the `rmdir`: a replacement lock acquired by
+ * Ownership is proven through the per-process acquisition registry: the
+ * identity's opaque `token` must still map to the open descriptor this
+ * run registered at acquire. The path is opened WITHOUT following symlinks
+ * (`O_NOFOLLOW` where the platform defines it) and its identity is
+ * compared against the identity of the OWNED descriptor, never against
+ * `{dev, ino}` numbers alone. While the owned descriptor stays open the
+ * original inode cannot be recycled, so a replacement lock acquired by
  * another process after this run's directory disappeared — or a symlink
- * planted at the path — is never deleted. Node offers no atomic
- * owner-bound directory removal (no `rmdirat`/`unlinkat` without a raw
- * libuv binding), so this descriptor-verified check-then-remove is the
+ * planted at the path — can never match and is never deleted; and because
+ * the registry entry is removed on release, a stale identity cannot
+ * resolve again even after the filesystem (or the process's descriptor
+ * table) reused the old numbers. Node offers no atomic owner-bound
+ * directory removal (no `rmdirat`/`unlinkat` without a raw libuv
+ * binding), so this descriptor-verified check-then-remove is the
  * strengthened boundary; the setup lock's own semantics (an empty
  * directory that is non-removable and non-reacquirable until the owner
  * removes it) keep cooperating setup runs from racing. On uncertain
  * identity the release FAILS CLOSED: a leftover lock directory simply
- * fails the next acquire with `busy` until removed manually. Never
- * throws; failures are ignored because a leftover lock directory is never
- * deleted on uncertain identity.
+ * fails the next acquire with `busy` until removed manually. The owned
+ * descriptor is always closed and its registry entry dropped on release,
+ * so no descriptor leaks; a stale identity whose token is no longer
+ * registered is ignored and removes nothing. Never throws; failures are
+ * ignored because a leftover lock directory is never deleted on uncertain
+ * identity.
  */
 export function releaseSetupLock(lockPath: string, identity: LockIdentity, fs: LockFs = defaultLockFs): void {
+  const owned = setupLockOwners.get(identity.token);
+  if (owned === undefined) {
+    // Stale or foreign identity: the token was never registered, or its
+    // run already released (the registry entry is removed on release). A
+    // later acquire may have reused the directory's device/inode — and
+    // even the descriptor number — so nothing can be removed on this
+    // token alone.
+    return;
+  }
+  let ownedStat: { readonly dev: number; readonly ino: number; isDirectory(): boolean };
+  try {
+    ownedStat = fs.fstatSync(owned.fd);
+  } catch {
+    // The owned descriptor is no longer valid; ownership cannot be
+    // proven. Close it best-effort before dropping the registry entry —
+    // a still-valid descriptor must never leak just because its fstat
+    // failed — then fail closed without removing anything (the identity
+    // is uncertain, so no rmdir). The registry entry is dropped so the
+    // identity is spent and cannot resolve again.
+    try {
+      fs.closeSync(owned.fd);
+    } catch {
+      // Best-effort; the release verdict is already decided. The inner
+      // catch also absorbs a double-close attempt on an already-invalid
+      // descriptor, so the close above is the only one issued.
+    }
+    setupLockOwners.delete(identity.token);
+    return;
+  }
+  if (!ownedStat.isDirectory()) {
+    try {
+      fs.closeSync(owned.fd);
+    } catch {
+      // Best-effort; the release verdict is already decided.
+    }
+    setupLockOwners.delete(identity.token);
+    return;
+  }
   let fd: number;
   try {
     fd = fs.openSync(lockPath, constants.O_RDONLY | noFollowFlag() | directoryFlag());
   } catch {
     // Missing, or replaced by an entry that cannot be opened as a
-    // directory (file, symlink, ...): nothing is removed on uncertain
+    // directory (file, symlink, ...): nothing of ours remains at the
+    // path. Close the owned descriptor and drop the registry entry — the
+    // lock is gone either way — but never remove anything on uncertain
     // identity.
+    try {
+      fs.closeSync(owned.fd);
+    } catch {
+      // Best-effort; the release verdict is already decided.
+    }
+    setupLockOwners.delete(identity.token);
     return;
   }
   let stat: { readonly dev: number; readonly ino: number; isDirectory(): boolean };
@@ -1663,14 +1781,30 @@ export function releaseSetupLock(lockPath: string, identity: LockIdentity, fs: L
     } catch {
       // Best-effort; the release verdict is already decided.
     }
+    try {
+      fs.closeSync(owned.fd);
+    } catch {
+      // Best-effort; the release verdict is already decided.
+    }
+    setupLockOwners.delete(identity.token);
     return;
   }
-  if (stat.dev !== identity.dev || stat.ino !== identity.ino || !stat.isDirectory()) {
+  if (stat.dev !== ownedStat.dev || stat.ino !== ownedStat.ino || !stat.isDirectory()) {
+    // The path is a DIFFERENT directory than the one this run created: a
+    // foreign lock is not ours to touch. Close both descriptors — the
+    // owned one still refers to the original, now-removed directory — and
+    // leave the replacement untouched.
     try {
       fs.closeSync(fd);
     } catch {
       // Best-effort; a foreign lock is not ours to touch.
     }
+    try {
+      fs.closeSync(owned.fd);
+    } catch {
+      // Best-effort; the release verdict is already decided.
+    }
+    setupLockOwners.delete(identity.token);
     return;
   }
   try {
@@ -1684,6 +1818,12 @@ export function releaseSetupLock(lockPath: string, identity: LockIdentity, fs: L
   } catch {
     // Best-effort; the release verdict is already decided.
   }
+  try {
+    fs.closeSync(owned.fd);
+  } catch {
+    // Best-effort; the release verdict is already decided.
+  }
+  setupLockOwners.delete(identity.token);
 }
 
 /** Guidance for a busy lock; never includes any lock contents. */

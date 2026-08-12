@@ -1154,15 +1154,28 @@ describe("setup path collisions", () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
     const caseKey = join(dir, "CaseKey.json");
+    const caseOutput = join(dir, "casekey.json");
     writeFileSync(caseKey, "case-content", "utf8");
 
-    const result = await harness.run({ keyPath: caseKey, outputPath: join(dir, "casekey.json") });
     if (process.platform === "darwin" || process.platform === "win32") {
+      // On case-insensitive filesystems the two spellings name the SAME
+      // file, so the preflight must reject the run before any gcloud call.
+      const result = await harness.run({ keyPath: caseKey, outputPath: caseOutput });
       expectError(result, SETUP_ERROR_CODES.INVALID_ARGS);
       expect(harness.calls).toHaveLength(0);
     } else {
-      // Case-sensitive platform: the two spellings are distinct files.
-      expect(result.status).not.toBe("error");
+      // Case-sensitive platform: the two spellings are distinct files, so
+      // the pure collision check accepts them. A full setup run is NOT
+      // attempted here: the fixture key content is intentionally not a
+      // real service-account key, which would fail the run for an
+      // unrelated reason.
+      expect(
+        findSetupPathCollision({
+          keyPath: caseKey,
+          outputPath: caseOutput,
+          statePath: harness.statePath,
+        }),
+      ).toStrictEqual({ status: "ok" });
     }
   });
 
@@ -2826,9 +2839,6 @@ describe("setup lock", () => {
         error.code = code;
         throw error;
       },
-      lstatSync() {
-        throw new Error("unreachable");
-      },
       openSync() {
         throw new Error("unreachable");
       },
@@ -2864,13 +2874,38 @@ describe("setup lock", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
     let removed = false;
+    let closed = 0;
     const failingFs: LockFs = {
       mkdirSync() {},
-      lstatSync() {
+      openSync: () => 41,
+      fstatSync() {
         throw new Error("stat failed");
       },
+      closeSync() {
+        closed += 1;
+      },
+      rmdirSync(path: string) {
+        expect(path).toBe(lockPath);
+        removed = true;
+      },
+    };
+    const result = acquireSetupLock(lockPath, failingFs);
+    expect(result.status).toBe("failed");
+    expect(removed).toBe(true);
+    // The opened descriptor is closed again on the failed acquire.
+    expect(closed).toBe(1);
+  });
+
+  it("fails closed when the created directory cannot be opened and removes it", () => {
+    const dir = makeTempDir();
+    const lockPath = lockPathFor(dir);
+    let removed = false;
+    const failingFs: LockFs = {
+      mkdirSync() {},
       openSync() {
-        throw new Error("unreachable");
+        const error = new Error("EACCES") as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
       },
       fstatSync() {
         throw new Error("unreachable");
@@ -2896,7 +2931,9 @@ describe("setup lock", () => {
     if (lock.status !== "held") return;
 
     // A foreign actor replaced the lock directory with a new one; our
-    // release must not delete the replacement.
+    // release must not delete the replacement. The held owner descriptor
+    // pins the original inode, so the replacement can never match even on
+    // filesystems that would otherwise recycle inode numbers after rmdir.
     rmdirSync(lockPath);
     mkdirSync(lockPath, { mode: 0o700 });
     releaseSetupLock(lockPath, lock.identity);
@@ -2919,7 +2956,9 @@ describe("setup lock", () => {
     if (second.status !== "held") return;
 
     // Releasing with the FIRST run's identity must not delete the second
-    // process's lock.
+    // process's lock: the first identity's owner descriptor was closed by
+    // its own release, so ownership cannot be proven even if the
+    // filesystem reused the first directory's device/inode numbers.
     releaseSetupLock(lockPath, first.identity);
     expect(existsSync(lockPath)).toBe(true);
     expect(lstatSync(lockPath).isDirectory()).toBe(true);
@@ -2928,29 +2967,67 @@ describe("setup lock", () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
-  it("fails closed when the descriptor identity differs from the owned identity (injected race)", () => {
+  it("fails closed when the path descriptor differs from the owned descriptor (injected race)", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
-    const lock = acquireSetupLock(lockPath);
+    // Acquire through a transparent wrapper around the real filesystem so
+    // the test knows the exact descriptor number the registry holds for
+    // this run: every operation is the production one (the real directory
+    // is really created, opened, verified, and held), only the number is
+    // captured.
+    let ownedFd = -1;
+    const acquireFs: LockFs = {
+      mkdirSync: (path, options) => mkdirSync(path, options),
+      openSync: (path, flags) => {
+        ownedFd = openSync(path, flags);
+        return ownedFd;
+      },
+      fstatSync,
+      closeSync,
+      rmdirSync,
+    };
+    const lock = acquireSetupLock(lockPath, acquireFs);
     expect(lock.status).toBe("held");
     if (lock.status !== "held") return;
+    expect(ownedFd).toBeGreaterThanOrEqual(0);
 
-    // Injected replacement: the opened descriptor reports a DIFFERENT
-    // device/inode than the one this run created. The release must fail
-    // closed — the replacement is never rmdir'd.
+    // Injected replacement: the lock path now opens as a DIFFERENT
+    // directory than the owned descriptor refers to (a foreign lock
+    // acquired after this run's directory was removed). Release must fail
+    // closed — the replacement is never rmdir'd — and both descriptors
+    // are closed again, exactly once each: first the path descriptor,
+    // then the owned descriptor, whose number the test knows exactly. The
+    // real owned descriptor is actually closed so the test leaks no
+    // descriptor.
     let rmdirCalls = 0;
     const closed: number[] = [];
+    // A fake path descriptor derived from the captured owned number, so
+    // it is provably different from the real owned descriptor.
+    const FAKE_PATH_FD = ownedFd + 4096;
     const fs: LockFs = {
       mkdirSync: () => {
         throw new Error("unreachable");
       },
-      lstatSync: () => {
-        throw new Error("unreachable");
-      },
-      openSync: () => 77,
-      fstatSync: () => ({ dev: 9, ino: 9, isDirectory: () => true }),
-      closeSync: (fd) => {
+      openSync: () => FAKE_PATH_FD,
+      fstatSync: (fd: number) =>
+        fd === FAKE_PATH_FD
+          ? {
+              // A guaranteed-different foreign directory identity.
+              dev: lock.identity.dev + 1,
+              ino: lock.identity.ino + 1,
+              isDirectory: () => true,
+            }
+          : { dev: lock.identity.dev, ino: lock.identity.ino, isDirectory: () => true },
+      closeSync: (fd: number) => {
         closed.push(fd);
+        if (fd === ownedFd) {
+          // Forward the real close exactly once so the held directory
+          // descriptor the test acquired is not leaked; a second close of
+          // the same descriptor would throw here and fail the test.
+          closeSync(fd);
+        } else if (fd !== FAKE_PATH_FD) {
+          throw new Error(`release closed an unexpected descriptor ${fd}`);
+        }
       },
       rmdirSync: () => {
         rmdirCalls += 1;
@@ -2958,8 +3035,18 @@ describe("setup lock", () => {
     };
     releaseSetupLock(lockPath, lock.identity, fs);
     expect(rmdirCalls).toBe(0);
-    expect(closed).toStrictEqual([77]);
-    // The real lock directory is still in place.
+    // The fake path descriptor and the real owned descriptor are each
+    // closed exactly once, in that order: the exact owned number proves
+    // the second close is the owned descriptor (not a repeated path
+    // close), and the strict array length proves neither is closed twice.
+    expect(closed).toStrictEqual([FAKE_PATH_FD, ownedFd]);
+    // The replacement (foreign) lock directory is still in place.
+    expect(existsSync(lockPath)).toBe(true);
+    expect(lstatSync(lockPath).isDirectory()).toBe(true);
+    // The registry entry was dropped: releasing again with the same
+    // identity (now stale) is a no-op that touches nothing — the real
+    // owned descriptor is already closed and is never closed twice.
+    releaseSetupLock(lockPath, lock.identity);
     expect(existsSync(lockPath)).toBe(true);
   });
 
@@ -2971,14 +3058,13 @@ describe("setup lock", () => {
     if (lock.status !== "held") return;
 
     // Injected replacement: the path no longer opens as a directory (for
-    // example a symlink planted at the lock path). Nothing is removed.
+    // example a symlink planted at the lock path). Nothing is removed;
+    // the owned descriptor is closed (and the registry entry dropped)
+    // because the lock is gone either way.
     let rmdirCalls = 0;
     let closeCalls = 0;
     const fs: LockFs = {
       mkdirSync: () => {
-        throw new Error("unreachable");
-      },
-      lstatSync: () => {
         throw new Error("unreachable");
       },
       openSync: () => {
@@ -2986,11 +3072,14 @@ describe("setup lock", () => {
         error.code = "ENOTDIR";
         throw error;
       },
-      fstatSync: () => {
-        throw new Error("unreachable");
-      },
-      closeSync: () => {
+      fstatSync: () => ({
+        dev: lock.identity.dev,
+        ino: lock.identity.ino,
+        isDirectory: () => true,
+      }),
+      closeSync: (fd: number) => {
         closeCalls += 1;
+        closeSync(fd);
       },
       rmdirSync: () => {
         rmdirCalls += 1;
@@ -2998,7 +3087,62 @@ describe("setup lock", () => {
     };
     releaseSetupLock(lockPath, lock.identity, fs);
     expect(rmdirCalls).toBe(0);
-    expect(closeCalls).toBe(0);
+    // Only the owned descriptor is closed; nothing was opened at the path.
+    expect(closeCalls).toBe(1);
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  it("closes the owned descriptor exactly once when its fstat fails (injected)", () => {
+    const dir = makeTempDir();
+    const lockPath = lockPathFor(dir);
+    const lock = acquireSetupLock(lockPath);
+    expect(lock.status).toBe("held");
+    if (lock.status !== "held") return;
+
+    // Injected failure: the owned descriptor's fstat throws (for example
+    // the descriptor turned invalid mid-release). Ownership cannot be
+    // proven, so the release fails closed — the path is never opened and
+    // the lock directory is never removed — but the owned descriptor is
+    // still closed exactly once BEFORE the registry entry is dropped, so
+    // a still-valid descriptor never leaks.
+    let rmdirCalls = 0;
+    let opened = 0;
+    let closeCalls = 0;
+    const fs: LockFs = {
+      mkdirSync: () => {
+        throw new Error("unreachable");
+      },
+      openSync: () => {
+        opened += 1;
+        throw new Error("unreachable");
+      },
+      fstatSync: () => {
+        throw new Error("owned descriptor fstat failed");
+      },
+      closeSync: (fd: number) => {
+        closeCalls += 1;
+        // Forward to the real close so the held directory descriptor the
+        // test acquired is not leaked.
+        closeSync(fd);
+      },
+      rmdirSync: () => {
+        rmdirCalls += 1;
+      },
+    };
+    releaseSetupLock(lockPath, lock.identity, fs);
+    // Fail closed: the path was never opened and nothing was removed on
+    // the unprovable identity.
+    expect(opened).toBe(0);
+    expect(rmdirCalls).toBe(0);
+    // The owned descriptor is closed exactly once (no double close).
+    expect(closeCalls).toBe(1);
+    // The real lock directory is still in place.
+    expect(existsSync(lockPath)).toBe(true);
+    expect(lstatSync(lockPath).isDirectory()).toBe(true);
+
+    // The registry entry was dropped: releasing again with the same
+    // identity (now stale) is a no-op that touches nothing.
+    releaseSetupLock(lockPath, lock.identity);
     expect(existsSync(lockPath)).toBe(true);
   });
 });
@@ -7562,9 +7706,6 @@ describe("runSetup — exclusive lock", () => {
         const error = new Error("EACCES") as NodeJS.ErrnoException;
         error.code = "EACCES";
         throw error;
-      },
-      lstatSync() {
-        throw new Error("unreachable");
       },
       openSync() {
         throw new Error("unreachable");
