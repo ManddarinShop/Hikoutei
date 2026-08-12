@@ -150,7 +150,8 @@ class EntityManagerImpl implements EntityManager {
   /** Marks one entity or iterable of entities for removal at the next flush. */
   remove<Entity extends object>(input: Entity | Iterable<Entity>): this {
     for (const entity of toEntities(input)) {
-      this.unitOfWork.remove(entity);
+      const canceledInsert = this.unitOfWork.remove(entity);
+      if (canceledInsert) this.forgetIdentity(entity);
     }
     return this;
   }
@@ -193,6 +194,7 @@ class EntityManagerImpl implements EntityManager {
   ): Promise<Result> {
     const checkpoint = this.unitOfWork.checkpoint();
     const identityCheckpoint = new Map(this.identityMap);
+    this.unitOfWork.beginRecovery(checkpoint);
     try {
       return await this.provider.beginTransaction(async (transaction) => {
         const previousTransaction = this.activeTransaction;
@@ -212,12 +214,17 @@ class EntityManagerImpl implements EntityManager {
       });
     } catch (error: unknown) {
       // A provider can reject after an explicit inner flush (for example when
-      // the outer callback throws). Restore both snapshots and identity keys so
-      // the caller can inspect/fix the entity and retry the transaction.
+      // the outer callback throws). Restore snapshots, values, and identity
+      // keys so entities loaded inside the failed callback remain retryable.
       this.unitOfWork.restore(checkpoint);
       this.identityMap.clear();
       for (const [key, entity] of identityCheckpoint) this.identityMap.set(key, entity);
+      for (const { descriptor, entity } of this.unitOfWork.managedEntities()) {
+        this.rememberIdentity(descriptor, entity);
+      }
       throw error;
+    } finally {
+      this.unitOfWork.endRecovery(checkpoint);
     }
   }
 
@@ -229,10 +236,9 @@ class EntityManagerImpl implements EntityManager {
 
   private completeFlush(plan: ScalarEntityFlushPlan): void {
     this.unitOfWork.afterFlush(plan);
-    for (const change of plan.changes) {
-      if (change.kind === "delete") {
-        this.identityMap.delete(identityKey(change.entry.descriptor, change.entry.entity));
-      }
+    this.identityMap.clear();
+    for (const { descriptor, entity } of this.unitOfWork.managedEntities()) {
+      this.rememberIdentity(descriptor, entity);
     }
   }
 
@@ -280,12 +286,12 @@ class EntityManagerImpl implements EntityManager {
       instance[property.name] = row[property.name] ?? null;
     }
     this.entityDescriptors.set(instance, descriptor);
-    this.identityMap.set(identityKey(descriptor, instance), instance);
     this.unitOfWork.manageLoaded(
       descriptor,
       instance,
       readEntityValues(descriptor, instance),
     );
+    this.rememberIdentity(descriptor, instance);
     return instance;
   }
 
@@ -293,9 +299,25 @@ class EntityManagerImpl implements EntityManager {
     descriptor: ResolvedHikouteiEntityDescriptor,
     entity: object,
   ): void {
+    this.forgetIdentity(entity);
+    if (!this.unitOfWork.isPrimaryKeyStable(entity)) return;
     const primaryKey = Reflect.get(entity, descriptor.primaryKey);
     if (typeof primaryKey === "string" && primaryKey.length > 0) {
-      this.identityMap.set(identityKey(descriptor, entity), entity);
+      const key = identityKey(descriptor, entity);
+      const existing = this.identityMap.get(key);
+      if (existing !== undefined && existing !== entity) {
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.ENTITY_IDENTITY_CONFLICT,
+          `entity identity ${descriptor.name}:${primaryKey} is already managed by this EntityManager.`,
+        );
+      }
+      this.identityMap.set(key, entity);
+    }
+  }
+
+  private forgetIdentity(entity: object): void {
+    for (const [key, candidate] of this.identityMap) {
+      if (candidate === entity) this.identityMap.delete(key);
     }
   }
 }
