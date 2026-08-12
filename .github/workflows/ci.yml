@@ -60,10 +60,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Internal sync/provider E2E: loads the repository's source modules
-          # through the checked-in TypeScript loader. It is not a packed
-          # consumer compatibility test.
-          node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs \
+          # Internal sync/provider E2E: loads the repository's own built dist
+          # modules and exercises projection registration, provisioning, the
+          # worker, and polling. This is a repository-owned harness; it is NOT
+          # copied into an installed consumer.
+          node scripts/ci/run-api-scenario.mjs \
             --backend=fake \
             --output="$RUNNER_TEMP/hikoutei-fake-result.json" \
             --manifest="$RUNNER_TEMP/hikoutei-fake-manifest.json"

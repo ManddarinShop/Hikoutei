@@ -44,8 +44,8 @@ jobs:
         run: npm run build
 
       - name: Run repository internal sync/provider E2E (live, service account)
-        # The internal harness runs from checked-out source through the
-        # repository TypeScript loader; no consumer install is involved. The
+        # The internal harness runs from the checked-out repository against its
+        # own built dist/ tree; no consumer install is involved. The
         # service-account key is materialized in the runner temp dir and the
         # credential/spreadsheet env vars are scoped to this step and the
         # cleanup step only, not the whole job, so checkout/setup/install/build
@@ -58,7 +58,7 @@ jobs:
           set -euo pipefail
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON" > "$RUNNER_TEMP/gcp-sa-key.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
-          node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs \
+          node scripts/ci/run-api-scenario.mjs \
             --backend=live \
             --outbound=direct \
             --output="$RUNNER_TEMP/hikoutei-live-result.json" \
@@ -84,7 +84,7 @@ jobs:
           fi
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON" > "$RUNNER_TEMP/gcp-sa-key.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
-          node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs \
+          node scripts/ci/run-api-scenario.mjs \
             --backend=live \
             --outbound=direct \
             --cleanup-only \

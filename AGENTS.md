@@ -91,8 +91,8 @@ behind contracts; `infrastructure/` owns SQLite storage technology.
 - `src/shared/`: cross-domain constants, stable encoding, and shared state
   contracts (`encoding/`, `state/`).
 - `src/application/orm/`: internal entity mapping and canonical/outbox flush
-  planning (`mapping/`, `persistence/`). The application-facing EntityManager
-  and Unit of Work live under `src/api/` and `src/application/orm/persistence/scalar/`.
+  planning (`api/`, `mapping/`, `persistence/`). The application-facing
+  EntityManager lives under `src/api/`, not in this internal facade.
 - `src/application/sync/`: outbound sync, projection, reconciliation, provider
   orchestration, and telemetry. `service/SyncServiceBootstrap.ts` is the thin
   concrete composition root; sibling service modules own validation, remote
@@ -115,8 +115,8 @@ behind contracts; `infrastructure/` owns SQLite storage technology.
   fixtures.
 - `website/`: VitePress architecture, usage, and status documentation.
 - `scripts/`: build and CI helpers. `ci/run-api-scenario.mjs` is a
-  repository-owned internal sync/provider harness over `src/**` via the checked-
-  in TypeScript loader; packed consumers run only root/public API scenarios.
+  repository-owned internal sync/provider harness over the checkout's built
+  `dist/`; packed consumers run only root/public API scenarios.
 
 There is no `src/core/`, `src/setup/`, `src/runtime/`, or `spikes/` directory;
 treat those names as retired.
@@ -129,8 +129,8 @@ treat those names as retired.
 - Run test typecheck: `npm run typecheck:test`
 - Build package: `npm run build`
 - Preview package contents: `npm pack --dry-run`
-- Run the repository internal fake sync/provider E2E:
-  `node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs --backend=fake`
+- Run the repository internal fake sync/provider E2E after building:
+  `node scripts/ci/run-api-scenario.mjs --backend=fake`
 
 There is currently no `test:integration` npm script. The internal fake harness
 loads the repository's own built modules and is not a package API contract.
