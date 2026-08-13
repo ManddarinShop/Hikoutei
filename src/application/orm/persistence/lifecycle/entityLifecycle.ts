@@ -19,10 +19,10 @@ import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import type { Presence } from "../../../../shared/state/types.js";
 import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
-  TYPED_SHEETS_ENTITY_CHANGE_KINDS,
-} from "../../api/contracts.js";
+  SCALAR_ENTITY_CHANGE_KINDS,
+} from "../../../../adapter/persistence/contracts/scalar.js";
 import {
-  encodeTypedSheetsEntity,
+  encodeTypedSheetsEntityValues,
   typedSheetsCanonicalEntityId,
   typedSheetsEntityAnchor,
   typedSheetsEntityRowBindingId,
@@ -30,6 +30,7 @@ import {
   type TypedSheetsEntityMapping,
 } from "../../mapping/entityMapping.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import { readMappedCanonicalFieldsWithSql } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import type { FencingContext, CanonicalFieldWrite, CanonicalCommitInput } from "../support/contracts.js";
 import type { ResolvedWriterOptions, MappedChangePlan } from "../support/contracts.js";
 import {
@@ -57,7 +58,7 @@ import {
   requireChangeEntityId,
   requireEncodedField,
 } from "../support/helpers.js";
-import { presentValue } from "../../../../shared/state/index.js";
+import { absentValue, presentValue } from "../../../../shared/state/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -78,11 +79,11 @@ export async function applyMappedChange(
   const proposedCanonicalEntityId = typedSheetsCanonicalEntityId(mapping, visibleEntityId);
   const rowBindingId = typedSheetsEntityRowBindingId(mapping, visibleEntityId);
   const anchor = typedSheetsEntityAnchor(mapping, visibleEntityId);
-  const entityId = change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE
+  const entityId = change.kind === SCALAR_ENTITY_CHANGE_KINDS.INSERT
     ? proposedCanonicalEntityId
     : await existingCanonicalEntityId(sql, mapping, rowBindingId, anchor) ?? proposedCanonicalEntityId;
   const preparationStartedAt = Date.now();
-  const encodedEntity = encodeTypedSheetsEntity(mapping, change.entity);
+  const encodedEntity = encodeTypedSheetsEntityValues(mapping, change.row.values);
   emitTiming(writer, {
     scope: SYNC_TIMING_SCOPES.ORM_FLUSH,
     phase: "entity_prepare",
@@ -93,7 +94,7 @@ export async function applyMappedChange(
 
   const canonicalStartedAt = Date.now();
   let commitId: string;
-  if (change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE) {
+  if (change.kind === SCALAR_ENTITY_CHANGE_KINDS.INSERT) {
     commitId = await createMappedEntity(
       sql,
       fence,
@@ -105,7 +106,7 @@ export async function applyMappedChange(
       encodedEntity,
       options,
     );
-  } else if (change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE) {
+  } else if (change.kind === SCALAR_ENTITY_CHANGE_KINDS.UPDATE) {
     commitId = await updateMappedEntity(
       sql,
       fence,
@@ -168,7 +169,7 @@ async function createMappedEntity(
     rowBindingId,
     anchor,
     encodedEntity,
-    TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE,
+    SCALAR_ENTITY_CHANGE_KINDS.INSERT,
     mapping.fields,
     commitId,
     POSITIVE_SAFE_INTEGER_MINIMUM,
@@ -223,26 +224,29 @@ async function updateMappedEntity(
   });
   const nextEntityRevision = entityRevision + 1;
   const commitId = identifiedValue("commit", writer);
-  const effects = await projectionEffects(
-    sql,
-    writer,
-    mapping,
-    entityId,
-    rowBindingId,
-    anchor,
-    encodedEntity,
-    TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE,
-    changedFields,
-    commitId,
-    nextEntityRevision,
-    { includeUserProjection: !options.suppressUserProjection },
-  );
   const commit: CanonicalCommitInput = {
     kind: ROW_OPERATIONS.UPDATE,
     entityId,
     acceptedSnapshotHash: acceptedSnapshotHash(entityId, encodedEntity),
     fields,
-    effects,
+    effects: [],
+    effectsFactory: async () => {
+      const canonicalFields = await readMappedCanonicalFieldsWithSql(sql, entityId);
+      return projectionEffects(
+        sql,
+        writer,
+        mapping,
+        entityId,
+        rowBindingId,
+        anchor,
+        canonicalFields,
+        SCALAR_ENTITY_CHANGE_KINDS.UPDATE,
+        changedFields,
+        commitId,
+        nextEntityRevision,
+        { includeUserProjection: !options.suppressUserProjection },
+      );
+    },
   };
   await requireAppliedCanonicalCommit(sql, fence, commit);
   if (changedFields.some((field) => field.fieldName === mapping.businessKey.fieldName)) {
@@ -265,25 +269,33 @@ async function deleteMappedEntity(
   const entityRevision = await requireActiveCanonicalEntityRevision(sql, mapping, entityId);
   const nextEntityRevision = entityRevision + 1;
   const commitId = identifiedValue("commit", writer);
-  const effects = await projectionEffects(
-    sql,
-    writer,
-    mapping,
-    entityId,
-    rowBindingId,
-    anchor,
-    encodedEntity,
-    TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE,
-    [],
-    commitId,
-    nextEntityRevision,
-  );
   const commit: CanonicalCommitInput = {
     kind: ROW_OPERATIONS.DELETE,
     entityId,
-    acceptedSnapshotHash: acceptedSnapshotHash(entityId, encodedEntity),
+    acceptedSnapshotHash: absentValue(),
     expectedEntityRevision: entityRevision,
-    effects,
+    effects: [],
+    effectsFactory: async (effectsSql, result) => {
+      const canonicalFields = await readMappedCanonicalFieldsWithSql(effectsSql, entityId);
+      const encodedCanonicalFields: Record<string, NormalizedCell> = {};
+      for (const field of mapping.fields) {
+        const value = canonicalFields[field.fieldName];
+        if (value !== undefined) encodedCanonicalFields[field.fieldName] = value;
+      }
+      return projectionEffects(
+        effectsSql,
+        writer,
+        mapping,
+        entityId,
+        rowBindingId,
+        anchor,
+        encodedCanonicalFields,
+        SCALAR_ENTITY_CHANGE_KINDS.DELETE,
+        [],
+        commitId,
+        result.entityRevision,
+      );
+    },
   };
   await requireAppliedCanonicalCommit(sql, fence, commit);
   await tombstoneActiveRowBinding(sql, mapping, rowBindingId, entityId);

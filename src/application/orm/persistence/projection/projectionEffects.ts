@@ -45,9 +45,9 @@ import {
   type ResolvedWriterOptions,
 } from "../support/contracts.js";
 import {
-  TYPED_SHEETS_ENTITY_CHANGE_KINDS,
-  type TypedSheetsEntityChange,
-} from "../../api/contracts.js";
+  SCALAR_ENTITY_CHANGE_KINDS,
+  type ScalarEntityFlushChange,
+} from "../../../../adapter/persistence/contracts/scalar.js";
 import {
   requireTypedSheetsEntityProjection,
   type TypedSheetsEntityFieldMapping,
@@ -83,7 +83,7 @@ export async function projectionEffects(
   rowBindingId: string,
   anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
-  changeKind: TypedSheetsEntityChange["kind"],
+  changeKind: ScalarEntityFlushChange["kind"],
   changedFields: readonly TypedSheetsEntityFieldMapping[],
   commitId: string,
   targetEntityRevision: number,
@@ -110,7 +110,7 @@ export async function projectionEffects(
     ...encodedEntity,
     [mapping.tombstoneFieldName]: {
       kind: NORMALIZED_CELL_KINDS.BOOLEAN,
-      value: changeKind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE,
+      value: changeKind === SCALAR_ENTITY_CHANGE_KINDS.DELETE,
     },
   };
   const effects: NewEffect[] = [
@@ -143,11 +143,11 @@ export async function projectionEffects(
   if (userProjection === undefined) return effects;
   const shouldReconcileUserInput = options.includeUserProjection !== false &&
     userProjection !== undefined &&
-    changeKind !== TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE &&
-    (changeKind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE ||
+    changeKind !== SCALAR_ENTITY_CHANGE_KINDS.DELETE &&
+    (changeKind === SCALAR_ENTITY_CHANGE_KINDS.INSERT ||
       changedFields.some((field) => field.ownership === FIELD_OWNERSHIPS.USER));
   if (
-    changeKind !== TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE &&
+    changeKind !== SCALAR_ENTITY_CHANGE_KINDS.DELETE &&
     !shouldReconcileUserInput
   ) return effects;
 
@@ -172,7 +172,7 @@ export async function projectionEffects(
     userTarget.targetKind,
     userTarget.targetId,
   );
-  if (changeKind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE) {
+  if (changeKind === SCALAR_ENTITY_CHANGE_KINDS.DELETE) {
     const userFieldHash = computeSyncVisibleHash(userFields);
     if (userFieldHash !== userBaseline.expectedVisibleHash) {
       throwProjectionBlocked(

@@ -11,8 +11,17 @@ import {
   SYNC_PROJECTIONS,
 } from "../../sync/sheetsContract/constants.js";
 import type { RegisterSyncSheetInput } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import type { TypedSheetsEntityReference } from "../api/contracts.js";
 import type { NormalizedCellKind } from "../../../shared/encoding/constants.js";
+
+/** Provider-neutral entity reference retained by private mapping metadata. */
+export interface MappedEntityClass<Entity extends object> {
+  new (...arguments_: never[]): Entity;
+}
+
+/** Stable entity reference used only by internal mapping and observation code. */
+export type MappedEntityReference<Entity extends object> =
+  | string
+  | MappedEntityClass<Entity>;
 
 /** Physical projections supported by a mapped business entity. */
 export type TypedSheetsEntityProjection =
@@ -66,7 +75,7 @@ export type TypedSheetsEntityFieldMappingInputForEntity<Entity extends object> =
 /** User-facing declaration used to construct one validated entity mapping. */
 export interface TypedSheetsEntityMappingInput<Entity extends object> {
   /** Entity class or stable entity name handled by the execution engine. */
-  readonly entity: TypedSheetsEntityReference<Entity>;
+  readonly entity: MappedEntityReference<Entity>;
   /** Overrides the execution engine's class name when a stable alias is needed. */
   readonly entityName?: string;
   /** Stable logical Sheets identifier shared by its physical projections. */
@@ -118,7 +127,7 @@ export interface TypedSheetsEntityIdentityMapping {
 
 /** Adapter-neutral mapping consumed by the flush and observation bridges. */
 export interface TypedSheetsEntityMapping {
-  readonly entity: TypedSheetsEntityReference<object>;
+  readonly entity: MappedEntityReference<object>;
   readonly entityName: string;
   readonly logicalSheetId: string;
   readonly primaryKey: string;
