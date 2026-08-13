@@ -199,36 +199,57 @@ MikroORM은 구현 세부 사항이며 Hikoutei의 공개 엔티티 API에는 �
 - 스키마 변경, 수동 편집, 충돌 업데이트에는 여전히 애플리케이션의 운영 정책이
   필요합니다.
 
+## 로컬 쿼리
+
+읽기는 Hikoutei가 정의한 타입 연산자를 사용하며 항상 SQLite에서 실행됩니다.
+
+```ts
+const [users, total] = await em.findAndCount(
+  User,
+  {
+    name: { like: "Ada%" },
+    age: { gte: 18, lt: 65 },
+    active: { in: [true] },
+  },
+  {
+    orderBy: { age: "desc", name: "asc" },
+    limit: 20,
+    offset: 0,
+  },
+);
+```
+
+`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`은 선언된 스칼라 타입에
+허용되는 범위에서 사용할 수 있고, `like`는 문자열 전용입니다. `{ active: true }`
+같은 동등 조건 축약도 계속 지원합니다. `count()`는 페이지네이션 전 필터 전체 개수를
+반환하고, `findAndCount()`는 한 SQLite 스냅샷에서 페이지와 전체 개수를 읽습니다.
+명시적 정렬에는 마지막 동률 해소 기준으로 PK가 추가되며, `orderBy` 없는
+페이지네이션은 PK 오름차순을 사용합니다.
+
 ## 프로젝트 상태
 
-Hikoutei는 활발히 개발 중입니다. 현재 EntityManager는 스칼라 엔티티의 생명주기
-작업, 동등 조건을 사용하는 `find()` / `findOne()`, `find()`의 `limit` /
-`offset` 페이지네이션, 콜백형 `transactional()`을 지원합니다. 일반 읽기는
+Hikoutei는 활발히 개발 중입니다. 현재 EntityManager는 스칼라 엔티티 생명주기,
+타입 로컬 필터와 정렬, `limit` / `offset` 페이지네이션, `count()`, 스냅샷이
+일관된 `findAndCount()`, 콜백형 `transactional()`을 지원합니다. 일반 읽기는
 Google Sheets가 아니라 항상 SQLite에서 수행됩니다. 시트 편집 수집과 충돌 표시는
 아직 발전 중입니다. 마이너 버전 업그레이드 전에 릴리스 노트를 확인하세요.
 
 ## 로드맵
 
-EntityManager 로드맵은 아래 구현 순서를 따릅니다. 단계 순서는 확정되어 있지만,
-일정이나 릴리스 번호는 약속하지 않습니다.
+첫 EntityManager 단계인 풍부한 로컬 읽기는 완료됐습니다. 남은 단계는 아래 구현
+순서를 따르며, 일정이나 릴리스 번호는 약속하지 않습니다.
 
-1. **풍부한 로컬 읽기**
-   - Hikoutei가 정의한 타입 쿼리 계약에 명시적 `eq`, `ne`, `gt`, `gte`,
-     `lt`, `lte`, `in`, `nin`, `like` 조건과 `orderBy`, `count()`,
-     `findAndCount()`를 추가합니다.
-   - MikroORM 쿼리 타입을 노출하지 않고 이 기능들을 기존 `limit` / `offset`
-     페이지네이션과 조합합니다.
-2. **생명주기 안전 쓰기**
+1. **생명주기 안전 쓰기**
    - `upsert`와 direct/bulk mutation 기능은 엔티티 테이블, canonical state,
      내구성 있는 Sheet effect outbox를 하나의 SQLite 트랜잭션에서 처리하는
      Hikoutei 정의 계약을 통해서만 추가합니다.
    - 이 원자적 생명주기를 우회할 수 있는 원시 `nativeInsert`, `nativeUpdate`,
      `nativeDelete` 또는 SQL 패스스루 API는 약속하지 않습니다.
-3. **관계와 로딩**
+2. **관계와 로딩**
    - many-to-one, one-to-many, `populate()` 기능을 추가합니다.
    - 공개 전에 관계의 SQLite 매핑, Sheets 프로젝션 표현, 스키마 동작, 충돌
      의미론을 함께 설계합니다.
-4. **스키마 운영**
+3. **스키마 운영**
    - 마이그레이션과 스키마 드리프트 관리를 추가합니다.
    - 검증 및 운영 흐름을 기존 설정 도구와 통합합니다.
 
