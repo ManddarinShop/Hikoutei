@@ -479,8 +479,12 @@ function createHarness(dir: string): Harness {
       keyFresh: boolean;
       shareFresh: boolean;
       credentials: { readonly client_email: string; readonly private_key: string };
+      onVerifyProgress?: (event: unknown) => void;
     }): Promise<void> {
-      harness.verifyCalls.push(request);
+      // The progress callback is internal CLI machinery; strip it from the
+      // recorded snapshot so existing toStrictEqual assertions stay exact.
+      const { onVerifyProgress: _onVerifyProgress, ...recorded } = request;
+      harness.verifyCalls.push(recorded);
       if (harness.beforeVerify !== undefined) {
         harness.beforeVerify();
       }
@@ -8584,6 +8588,50 @@ describe("runSetupCli — interactive login handoff", () => {
     };
     expect(await runSetupCli(context)).toBe(1);
     expect(setup.calls()).toBe(1);
+  });
+
+  it("does not run the login subprocess on a CI pseudo-TTY (no prompt, no retry)", async () => {
+    // CI runners allocate a pseudo-TTY, so `isTTY` alone is not a safe
+    // gate: the handoff must also be refused when the session is an
+    // automation run (`isCi` true, as production main derives it from a
+    // non-empty `CI` environment value) — help/docs promise a manual login
+    // command and one static progress line per event in CI, never an
+    // interactive prompt or a spawned browser login.
+    const setup = scriptedRunSetup([
+      errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
+    ]);
+    const context: RunSetupCliContext = {
+      options: baseOptions(),
+      cwd: "/tmp",
+      runSetup: setup.runSetup,
+      loginRunner: neverLogin,
+      stdin: makeStdin(["y\n"], true),
+      stdout: capturingStdout(true).stdout,
+      stderr: capturingStderr().stderr,
+      isCi: true,
+    };
+    expect(await runSetupCli(context)).toBe(1);
+    expect(setup.calls()).toBe(1);
+  });
+
+  it("still offers the login handoff when isCi is absent (scripted tests, real TTY)", async () => {
+    const setup = scriptedRunSetup([
+      errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
+      okResult(),
+    ]);
+    const login = scriptedLogin({ status: "ok" });
+    const context: RunSetupCliContext = {
+      options: baseOptions(),
+      cwd: "/tmp",
+      runSetup: setup.runSetup,
+      loginRunner: login.runner,
+      stdin: makeStdin(["y\n", "\n"], true),
+      stdout: capturingStdout(true).stdout,
+      stderr: capturingStderr().stderr,
+    };
+    expect(await runSetupCli(context)).toBe(0);
+    expect(setup.calls()).toBe(2);
+    expect(login.calls()).toBe(1);
   });
 
   it("cancels (no login, no retry) when the prompt gets non-Enter input", async () => {
