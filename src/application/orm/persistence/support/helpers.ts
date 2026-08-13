@@ -8,21 +8,20 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
-  PRESENCE_KINDS,
-  type NormalizedCell,
-} from "../../../../domain/index.js";
+} from "../../../../shared/constants.js";
+import {
+  SCALAR_ENTITY_CHANGE_KINDS,
+  type ScalarEntityFlushChange,
+} from "../../../../adapter/persistence/contracts/scalar.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import {
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
 } from "../../../../shared/validation.js";
-import type {
-  TypedSheetsEntityChange,
-} from "../../api/contracts.js";
 import {
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
   requireTypedSheetsEntityProjection,
-  typedSheetsEntityId,
 } from "../../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
@@ -57,25 +56,29 @@ export function requireEncodedField(
   return value;
 }
 
-/** Validates the entity identity collected by the underlying flush engine. */
+/** Validates the primary-key value promoted by Hikoutei's scalar flush plan. */
 export function requireChangeEntityId(
   mapping: TypedSheetsEntityMapping,
-  change: TypedSheetsEntityChange,
+  change: ScalarEntityFlushChange,
 ): string {
-  const entityId = typedSheetsEntityId(mapping, change.entity);
-  if (change.primaryKey.kind !== PRESENCE_KINDS.PRESENT) {
+  const row = change.row;
+  const value = change.kind === SCALAR_ENTITY_CHANGE_KINDS.INSERT
+    ? row.values[mapping.primaryKey]
+    : "primaryKeyValue" in row ? row.primaryKeyValue : undefined;
+  if (typeof value !== "string" || value.length === EMPTY_STRING_LENGTH_ZERO) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
-      `${mapping.entityName} has no serialized primary key during flush.`,
+      `${mapping.entityName}.${mapping.primaryKey} must be a non-empty string before flush.`,
     );
   }
-  if (change.primaryKey.value !== entityId) {
+  const rowValue = row.values[mapping.primaryKey];
+  if (rowValue !== value) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
-      `${mapping.entityName} primary-key metadata does not match its entity property.`,
+      `${mapping.entityName} primary-key value does not match its row snapshot.`,
     );
   }
-  return entityId;
+  return value;
 }
 
 /** Builds the stable target ID used by a physical projection row effect. */
