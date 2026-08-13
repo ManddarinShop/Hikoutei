@@ -232,6 +232,57 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await em.findOne(User, { id: "retry" })).toMatchObject({ name: "Retry" });
   });
 
+  it("restores entities loaded inside a failed transaction for retry", async () => {
+    const hikoutei = await openRuntime();
+    const seed = hikoutei.em.fork();
+    seed.persist(seed.create(User, { id: "loaded-retry", name: "Before", age: 1, active: true }));
+    await seed.flush();
+
+    const em = hikoutei.em.fork();
+    let loaded: { name: string } | undefined;
+    await expect(em.transactional(async (transactionalEm) => {
+      const inside = await transactionalEm.findOne(User, { id: "loaded-retry" });
+      if (inside === null) throw new Error("expected loaded retry entity");
+      loaded = inside;
+      inside.name = "Inside";
+      await transactionalEm.flush();
+      throw new Error("rollback loaded entity");
+    })).rejects.toThrow("rollback loaded entity");
+
+    if (loaded === undefined) throw new Error("expected loaded retry entity");
+    loaded.name = "After rollback";
+    await em.flush();
+    await expect(em.findOne(User, { id: "loaded-retry" })).resolves.toMatchObject({
+      name: "After rollback",
+    });
+  });
+
+  it("rejects primary-key mutation before deleting a managed entity", async () => {
+    const hikoutei = await openRuntime();
+    const em = hikoutei.em.fork();
+    const user = em.create(User, { id: "immutable-id", name: "Immutable", age: 1, active: true });
+    em.persist(user);
+    await em.flush();
+    user.id = "changed-id";
+    em.remove(user);
+    await expect(em.flush()).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
+    });
+  });
+
+  it("removes a canceled insert from the identity map", async () => {
+    const hikoutei = await openRuntime();
+    const em = hikoutei.em.fork();
+    const pending = em.create(User, { id: "canceled", name: "Canceled", age: 1, active: true });
+    em.remove(pending);
+    const replacement = em.create(User, { id: "canceled", name: "Replacement", age: 2, active: true });
+    expect(replacement).not.toBe(pending);
+    await em.flush();
+    await expect(em.findOne(User, { id: "canceled" })).resolves.toMatchObject({
+      name: "Replacement",
+    });
+  });
+
   it("supports equality filters with paging on find()", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();

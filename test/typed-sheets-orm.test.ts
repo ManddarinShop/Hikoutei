@@ -7,13 +7,14 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PRESENCE_KINDS } from "../src/shared/state/index.js";
+import { defineTypedSheetsEntity } from "../src/index.js";
+import { getEntityDescriptor } from "../src/api/entity.js";
+import { createEntityManager } from "../src/api/internalEntityManager.js";
 import {
-  TYPED_SHEETS_ENTITY_CHANGE_KINDS,
-  type TypedSheetsEntityChange,
-  type TypedSheetsFlushCoordinator,
-} from "../src/application/orm/api/contracts.js";
-import { createTypedSheetsOrm } from "../src/adapter/persistence/providers/mikro-orm/engine/MikroOrmTypedSheetsEngine.js";
+  SCALAR_ENTITY_CHANGE_KINDS,
+  type ScalarEntityFlushCoordinator,
+} from "../src/adapter/persistence/contracts/scalar.js";
+import { MikroOrmScalarPersistenceProvider } from "../src/adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
 import {
   createMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
@@ -35,168 +36,134 @@ class Order extends OrderSchema.class {
 
 OrderSchema.setClass(Order);
 
+const OrderToken = defineTypedSheetsEntity({
+  name: "TypedSheetsFacadeOrder",
+  tableName: "typed_sheets_facade_order",
+  properties: {
+    id: { type: "string", primary: true },
+    status: { type: "string" },
+  },
+});
+const orderDescriptor = getEntityDescriptor(OrderToken);
+
 interface FlushAuditRow {
   readonly change_kind: string;
   readonly entity_name: string;
-  readonly primary_key: string | null;
+  readonly primary_key: string;
 }
 
-describe("TypedSheetsOrm", () => {
+describe("scalar provider persistence boundary", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
   afterEach(async () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
-  it("uses our MikroORM-shaped entity lifecycle and writes its plan atomically", async () => {
+  it("executes Hikoutei's insert/update/delete plan atomically", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = createMikroOrmSqliteAdapter(orm);
     await createFlushAudit(adapter);
+    const observedKinds: string[] = [];
+    const manager = createManager(adapter, createAuditCoordinator(observedKinds));
 
-    const observedChanges: TypedSheetsEntityChange[] = [];
-    const typedSheetsOrm = createTypedSheetsOrm(adapter, {
-      flushCoordinator: createAuditFlushCoordinator(observedChanges),
-    });
-    const em = typedSheetsOrm.em.fork();
+    const order = manager.create(OrderToken, { id: "order-1", status: "pending" });
+    manager.persist(order);
+    await manager.flush();
 
-    const order = em.create(Order, { id: "order-1", status: "pending" });
-    em.persist(order);
-    await em.flush();
+    const loaded = await manager.findOne(OrderToken, { id: "order-1" });
+    expect(loaded).not.toBeNull();
+    if (loaded === null) throw new Error("expected persisted order");
+    loaded.status = "paid";
+    await manager.flush();
 
-    const loadedOrder = await em.findOne(Order, { id: order.id });
-    if (loadedOrder === null) {
-      throw new Error("Expected the persisted order to be readable from SQLite.");
-    }
-    loadedOrder.status = "paid";
-    await em.flush();
+    manager.remove(loaded);
+    await manager.flush();
 
-    em.remove(loadedOrder);
-    await em.flush();
-
-    expect((await orm.em.fork().find(Order, {})).map((candidate) => candidate.id)).toEqual([]);
-    expect(observedChanges.map((change) => change.kind)).toEqual([
-      TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE,
-      TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE,
-      TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE,
+    expect(await manager.find(OrderToken, {})).toEqual([]);
+    expect(observedKinds).toEqual([
+      SCALAR_ENTITY_CHANGE_KINDS.INSERT,
+      SCALAR_ENTITY_CHANGE_KINDS.UPDATE,
+      SCALAR_ENTITY_CHANGE_KINDS.DELETE,
     ]);
-    expect(observedChanges.map((change) => change.primaryKey)).toEqual([
-      { kind: PRESENCE_KINDS.PRESENT, value: "order-1" },
-      { kind: PRESENCE_KINDS.PRESENT, value: "order-1" },
-      { kind: PRESENCE_KINDS.PRESENT, value: "order-1" },
-    ]);
-
-    const auditRows = await adapter.read(({ sql }) => {
-      return sql.all<FlushAuditRow>(
-        "SELECT change_kind, entity_name, primary_key FROM typed_sheets_flush_audit ORDER BY sequence",
-      );
-    });
-    expect(auditRows).toEqual([
-      {
-        change_kind: TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE,
-        entity_name: "TypedSheetsFacadeOrder",
-        primary_key: "order-1",
-      },
-      {
-        change_kind: TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE,
-        entity_name: "TypedSheetsFacadeOrder",
-        primary_key: "order-1",
-      },
-      {
-        change_kind: TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE,
-        entity_name: "TypedSheetsFacadeOrder",
-        primary_key: "order-1",
-      },
+    await expect(adapter.read(({ sql }) => sql.all<FlushAuditRow>(
+      "SELECT change_kind, entity_name, primary_key FROM typed_sheets_flush_audit ORDER BY sequence",
+    ))).resolves.toEqual([
+      { change_kind: "insert", entity_name: orderDescriptor.name, primary_key: "order-1" },
+      { change_kind: "update", entity_name: orderDescriptor.name, primary_key: "order-1" },
+      { change_kind: "delete", entity_name: orderDescriptor.name, primary_key: "order-1" },
     ]);
   });
 
-  it("uses the same lifecycle coordinator for transactional work", async () => {
+  it("flushes pending work at the end of transactional()", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = createMikroOrmSqliteAdapter(orm);
-    await createFlushAudit(adapter);
+    const manager = createManager(adapter);
 
-    const observedChanges: TypedSheetsEntityChange[] = [];
-    const typedSheetsOrm = createTypedSheetsOrm(adapter, {
-      flushCoordinator: createAuditFlushCoordinator(observedChanges),
+    await manager.transactional(async (transactionalManager) => {
+      transactionalManager.persist(
+        transactionalManager.create(OrderToken, {
+          id: "order-transactional",
+          status: "pending",
+        }),
+      );
     });
 
-    await typedSheetsOrm.em.transactional(async (em) => {
-      const order = em.create(Order, { id: "order-transactional", status: "pending" });
-      em.persist(order);
-    });
-
-    expect((await orm.em.fork().find(Order, {})).map((order) => order.id)).toEqual([
-      "order-transactional",
-    ]);
-    expect(observedChanges.map((change) => change.kind)).toEqual([
-      TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE,
-    ]);
+    await expect(manager.findOne(OrderToken, { id: "order-transactional" }))
+      .resolves.toMatchObject({ id: "order-transactional" });
   });
 
-  it("rolls entity writes and planned Sheets work back when the coordinator rejects a flush", async () => {
+  it("rolls entity and planner SQL back when the planner rejects", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = createMikroOrmSqliteAdapter(orm);
     await createFlushAudit(adapter);
-
-    const typedSheetsOrm = createTypedSheetsOrm(adapter, {
-      flushCoordinator: {
-        async onFlush({ changes, sql }) {
-          const change = changes[0];
-          if (change === undefined) return;
-          await sql.run(
-            "INSERT INTO typed_sheets_flush_audit (change_kind, entity_name, primary_key, payload_json) VALUES (?, ?, ?, ?)",
-            [
-              change.kind,
-              change.entityName,
-              primaryKeyValue(change),
-              JSON.stringify(change.payload),
-            ],
-          );
-          throw new Error("flush plan rejected");
-        },
+    const manager = createManager(adapter, {
+      async onFlush({ changes, sql }) {
+        const change = changes[0];
+        if (change === undefined) return;
+        await sql.run(
+          "INSERT INTO typed_sheets_flush_audit (change_kind, entity_name, primary_key) VALUES (?, ?, ?)",
+          [change.kind, change.row.entityName, String(change.row.values.id)],
+        );
+        throw new Error("flush plan rejected");
       },
     });
-    const em = typedSheetsOrm.em.fork();
 
-    em.persist(em.create(Order, { id: "order-rolled-back", status: "pending" }));
-
-    await expect(em.flush()).rejects.toThrow("flush plan rejected");
-    expect(await orm.em.fork().find(Order, {})).toEqual([]);
-    expect(await adapter.read(({ sql }) => {
-      return sql.all<FlushAuditRow>(
-        "SELECT change_kind, entity_name, primary_key FROM typed_sheets_flush_audit",
-      );
-    })).toEqual([]);
+    manager.persist(manager.create(OrderToken, { id: "order-rolled-back", status: "pending" }));
+    await expect(manager.flush()).rejects.toThrow("flush plan rejected");
+    expect(await manager.find(OrderToken, {})).toEqual([]);
+    await expect(adapter.read(({ sql }) => sql.all<FlushAuditRow>(
+      "SELECT change_kind, entity_name, primary_key FROM typed_sheets_flush_audit",
+    ))).resolves.toEqual([]);
   });
 });
 
-function createAuditFlushCoordinator(
-  observedChanges: TypedSheetsEntityChange[],
-): TypedSheetsFlushCoordinator {
+function createManager(
+  adapter: MikroOrmSqliteAdapter,
+  flushCoordinator?: ScalarEntityFlushCoordinator,
+) {
+  const provider = new MikroOrmScalarPersistenceProvider(
+    adapter,
+    [{ descriptor: orderDescriptor, entity: Order as unknown as new (...arguments_: never[]) => Record<string, unknown> }],
+    flushCoordinator,
+  );
+  return createEntityManager(provider, new Map([[orderDescriptor.name, orderDescriptor]]));
+}
+
+function createAuditCoordinator(observedKinds: string[]): ScalarEntityFlushCoordinator {
   return {
     async onFlush({ changes, sql }) {
-      observedChanges.push(...changes);
       for (const change of changes) {
+        observedKinds.push(change.kind);
         await sql.run(
-          "INSERT INTO typed_sheets_flush_audit (change_kind, entity_name, primary_key, payload_json) VALUES (?, ?, ?, ?)",
-          [
-            change.kind,
-            change.entityName,
-            primaryKeyValue(change),
-            JSON.stringify(change.payload),
-          ],
+          "INSERT INTO typed_sheets_flush_audit (change_kind, entity_name, primary_key) VALUES (?, ?, ?)",
+          [change.kind, change.row.entityName, String(change.row.values.id)],
         );
       }
     },
   };
-}
-
-function primaryKeyValue(change: TypedSheetsEntityChange): string | null {
-  return change.primaryKey.kind === PRESENCE_KINDS.PRESENT
-    ? change.primaryKey.value
-    : null;
 }
 
 async function createOrm() {
@@ -217,8 +184,7 @@ async function createFlushAudit(adapter: MikroOrmSqliteAdapter): Promise<void> {
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         change_kind TEXT NOT NULL,
         entity_name TEXT NOT NULL,
-        primary_key TEXT,
-        payload_json TEXT NOT NULL
+        primary_key TEXT NOT NULL
       )
     `);
   });

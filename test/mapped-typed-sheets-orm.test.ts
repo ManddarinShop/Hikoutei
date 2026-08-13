@@ -16,17 +16,23 @@ import {
 import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+import { defineTypedSheetsEntity } from "../src/index.js";
+import { getEntityDescriptor } from "../src/api/entity.js";
+import { createEntityManager } from "../src/api/internalEntityManager.js";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import { typedSheetsEntityRowBindingId } from "../src/application/orm/mapping/identity.js";
 import { planMappedObservationEntityMutation } from "../src/application/orm/mapping/observationMapping.js";
-import { registerTypedSheetsEntityMappings } from "../src/application/orm/persistence/flush/flushCoordinator.js";
-import { createMappedTypedSheetsOrm } from "../src/adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js";
+import {
+  createMappedTypedSheetsFlushCoordinator,
+  registerTypedSheetsEntityMappings,
+} from "../src/application/orm/persistence/flush/flushCoordinator.js";
 import {
   createMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { MikroOrmScalarPersistenceProvider } from "../src/adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
 import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { persistMappedObservedRowWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
 import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
@@ -47,6 +53,16 @@ class Order extends OrderSchema.class {
 }
 
 OrderSchema.setClass(Order);
+
+const OrderToken = defineTypedSheetsEntity({
+  name: "MappedTypedSheetsOrder",
+  tableName: "mapped_typed_sheets_order",
+  properties: {
+    id: { type: "string", primary: true },
+    status: { type: "string" },
+  },
+});
+const orderDescriptor = getEntityDescriptor(OrderToken);
 
 const orderMapping = defineTypedSheetsEntityMapping({
   entity: Order,
@@ -301,13 +317,9 @@ describe("mapped typed-sheets ORM", () => {
       },
     };
     await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
-    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
-      mappings: [orderMapping],
-      writer,
-    });
-    const em = typedSheetsOrm.em.fork();
+    const em = createMappedManager(storage, writer);
 
-    const order = em.create(Order, { id: "order-1", status: "pending" });
+    const order = em.create(OrderToken, { id: "order-1", status: "pending" });
     em.persist(order);
     await em.flush();
 
@@ -325,7 +337,7 @@ describe("mapped typed-sheets ORM", () => {
     ]);
     expect(timingEvents.some((event) => event.phase === "flush_total")).toBe(true);
 
-    expect(await orm.em.fork().find(Order, {})).toEqual([]);
+    await expect(em.find(OrderToken, {})).resolves.toEqual([]);
     await expect(storage.read(({ sql }) => {
       return sql.get<CanonicalEntityRow>(
         "SELECT entity_revision, status FROM entity_state WHERE entity_id = ?",
@@ -413,10 +425,7 @@ describe("mapped typed-sheets ORM", () => {
     await migrateMikroOrmSqliteSchema(storage);
     const writer = deterministicWriter("mapped-chain-writer");
     await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
-    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
-      mappings: [orderMapping],
-      writer,
-    });
+    const em = createMappedManager(storage, writer);
     const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "orders-system",
@@ -435,8 +444,7 @@ describe("mapped typed-sheets ORM", () => {
         headers: ["id", "status"],
       },
     ]);
-    const em = typedSheetsOrm.em.fork();
-    const order = em.create(Order, { id: "order-1", status: "pending" });
+    const order = em.create(OrderToken, { id: "order-1", status: "pending" });
     em.persist(order);
     await em.flush();
 
@@ -522,10 +530,7 @@ describe("mapped typed-sheets ORM", () => {
     await migrateMikroOrmSqliteSchema(storage);
     const writer = deterministicWriter("mapped-delete-writer");
     await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
-    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
-      mappings: [orderMapping],
-      writer,
-    });
+    const em = createMappedManager(storage, writer);
     const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "orders-system",
@@ -544,8 +549,7 @@ describe("mapped typed-sheets ORM", () => {
         headers: ["id", "status"],
       },
     ]);
-    const em = typedSheetsOrm.em.fork();
-    const order = em.create(Order, { id: "order-delete", status: "pending" });
+    const order = em.create(OrderToken, { id: "order-delete", status: "pending" });
     em.persist(order);
     await em.flush();
 
@@ -603,10 +607,7 @@ describe("mapped typed-sheets ORM", () => {
     await migrateMikroOrmSqliteSchema(storage);
     const writer = deterministicWriter("mapped-candidate-delete-writer");
     await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
-    const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
-      mappings: [orderMapping],
-      writer,
-    });
+    const em = createMappedManager(storage, writer);
     const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: "orders-system",
@@ -625,8 +626,7 @@ describe("mapped typed-sheets ORM", () => {
         headers: ["id", "status"],
       },
     ]);
-    const em = typedSheetsOrm.em.fork();
-    const order = em.create(Order, { id: "order-candidate-delete", status: "pending" });
+    const order = em.create(OrderToken, { id: "order-candidate-delete", status: "pending" });
     em.persist(order);
     await em.flush();
     await runEffectWorkerWithAdapter({
@@ -706,7 +706,8 @@ describe("mapped typed-sheets ORM", () => {
     });
 
     expect(result).toMatchObject({ kind: "persisted", outcome: ROW_OUTCOMES.ACCEPTED });
-    await expect(orm.em.fork().findOne(Order, { id: "order-observed" })).resolves.toMatchObject({
+    const observedManager = createMappedManager(storage, deterministicWriter("observed-read"));
+    await expect(observedManager.findOne(OrderToken, { id: "order-observed" })).resolves.toMatchObject({
       id: "order-observed",
       status: "pending",
     });
@@ -715,6 +716,18 @@ describe("mapped typed-sheets ORM", () => {
     })).resolves.toEqual([]);
   });
 });
+
+function createMappedManager(
+  storage: MikroOrmSqliteAdapter,
+  writer: ReturnType<typeof deterministicWriter>,
+) {
+  const provider = new MikroOrmScalarPersistenceProvider(
+    storage,
+    [{ descriptor: orderDescriptor, entity: Order as unknown as new (...arguments_: never[]) => Record<string, unknown> }],
+    createMappedTypedSheetsFlushCoordinator({ mappings: [orderMapping], writer }),
+  );
+  return createEntityManager(provider, new Map([[orderDescriptor.name, orderDescriptor]]));
+}
 
 function deterministicWriter(role: string) {
   let nextId = 0;
