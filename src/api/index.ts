@@ -24,6 +24,14 @@ export type {
 } from "./entity.js";
 export { createTypedSheets } from "./Hikoutei.js";
 export type { CreateTypedSheetsOptions, Hikoutei } from "./Hikoutei.js";
-export type { EntityManager, HikouteiFindOptions } from "./EntityManager.js";
+export type {
+  EntityManager,
+  HikouteiFilter,
+  HikouteiFindOneOptions,
+  HikouteiFindOptions,
+  HikouteiOperatorFilter,
+  HikouteiOrderBy,
+  HikouteiSortDirection,
+} from "./EntityManager.js";
 export { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 export type { HikouteiErrorCode } from "./errors.js";

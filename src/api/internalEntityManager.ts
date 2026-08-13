@@ -11,14 +11,24 @@
 
 import { getEntityDescriptor, type HikouteiEntity } from "./entity.js";
 import type { ResolvedHikouteiEntityDescriptor } from "./entity.js";
-import type { EntityManager, HikouteiFindOptions } from "./EntityManager.js";
+import type { EntityManager } from "./EntityManager.js";
+import type {
+  HikouteiFilter,
+  HikouteiFindOneOptions,
+  HikouteiFindOptions,
+} from "./query.js";
+import {
+  normalizeEntityFindOneQuery,
+  normalizeEntityQuery,
+} from "./queryNormalization.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 import type {
+  ScalarEntityCountQuery,
   ScalarEntityPersistenceProvider,
   ScalarEntityQuery,
+  ScalarEntityReader,
   ScalarEntityRow,
   ScalarEntityTransaction,
-  ScalarEntityValue,
 } from "../adapter/persistence/contracts/scalar.js";
 import {
   readEntityValues,
@@ -65,29 +75,65 @@ class EntityManagerImpl implements EntityManager {
     return instance;
   }
 
-  /** Reads every entity matching an equality filter from the local authority. */
+  /** Reads every entity matching one validated local query. */
   async find<Entity extends object>(
     entity: HikouteiEntity<Entity>,
-    where?: Readonly<Partial<Entity>>,
-    options?: HikouteiFindOptions,
+    where?: HikouteiFilter<Entity>,
+    options?: HikouteiFindOptions<Entity>,
   ): Promise<readonly Entity[]> {
     const descriptor = this.requireDescriptor(entity);
-    const query = toQuery(descriptor, where ?? {}, options);
-    const rows = this.activeTransaction === undefined
-      ? await this.provider.read(query)
-      : await this.activeTransaction.read(query);
-    return rows.map((row) =>
-      promoteManagedEntity<Entity>(this.materialize(descriptor, row)),
-    );
+    const query = normalizeEntityQuery(descriptor, where ?? {}, options);
+    const reader = this.activeTransaction ?? this.provider;
+    const rows = await reader.read(query);
+    return this.materializeRows<Entity>(descriptor, rows);
   }
 
-  /** Reads one entity matching an equality filter, or null when none match. */
+  /** Reads one entity matching a validated query, or null when none match. */
   async findOne<Entity extends object>(
     entity: HikouteiEntity<Entity>,
-    where: Readonly<Partial<Entity>>,
+    where: HikouteiFilter<Entity>,
+    options?: HikouteiFindOneOptions<Entity>,
   ): Promise<Entity | null> {
-    const matches = await this.find(entity, where, { limit: 1 });
-    return matches[0] ?? null;
+    const descriptor = this.requireDescriptor(entity);
+    const query = normalizeEntityFindOneQuery(descriptor, where, options);
+    const reader = this.activeTransaction ?? this.provider;
+    const rows = await reader.read(query);
+    const row = rows[0];
+    return row === undefined
+      ? null
+      : promoteManagedEntity<Entity>(this.materialize(descriptor, row));
+  }
+
+  /** Counts all rows matching a validated filter without changing the identity map. */
+  async count<Entity extends object>(
+    entity: HikouteiEntity<Entity>,
+    where?: HikouteiFilter<Entity>,
+  ): Promise<number> {
+    const descriptor = this.requireDescriptor(entity);
+    const query = countQuery(normalizeEntityQuery(descriptor, where ?? {}, undefined));
+    const reader = this.activeTransaction ?? this.provider;
+    return reader.count(query);
+  }
+
+  /** Reads one page and its unpaged total from the same SQLite snapshot. */
+  async findAndCount<Entity extends object>(
+    entity: HikouteiEntity<Entity>,
+    where?: HikouteiFilter<Entity>,
+    options?: HikouteiFindOptions<Entity>,
+  ): Promise<readonly [readonly Entity[], number]> {
+    const descriptor = this.requireDescriptor(entity);
+    const query = normalizeEntityQuery(descriptor, where ?? {}, options);
+    const operation = async (
+      reader: ScalarEntityReader,
+    ): Promise<readonly [readonly ScalarEntityRow[], number]> => {
+      const rows = await reader.read(query);
+      const total = await reader.count(countQuery(query));
+      return [rows, total];
+    };
+    const [rows, total] = this.activeTransaction === undefined
+      ? await this.provider.readSnapshot(operation)
+      : await operation(this.activeTransaction);
+    return [this.materializeRows<Entity>(descriptor, rows), total];
   }
 
   /** Marks one entity or iterable of entities for insertion or update at flush. */
@@ -213,6 +259,15 @@ class EntityManagerImpl implements EntityManager {
     );
   }
 
+  private materializeRows<Entity extends object>(
+    descriptor: ResolvedHikouteiEntityDescriptor,
+    rows: readonly ScalarEntityRow[],
+  ): readonly Entity[] {
+    return rows.map((row) =>
+      promoteManagedEntity<Entity>(this.materialize(descriptor, row)),
+    );
+  }
+
   private materialize(
     descriptor: ResolvedHikouteiEntityDescriptor,
     row: ScalarEntityRow,
@@ -277,90 +332,12 @@ function buildEntityInstance(
   return instance;
 }
 
-function toQuery(
-  descriptor: ResolvedHikouteiEntityDescriptor,
-  where: object,
-  options?: HikouteiFindOptions,
-): ScalarEntityQuery {
-  const filter: Record<string, ScalarEntityValue> = {};
-  for (const [key, value] of Object.entries(where)) {
-    const property = descriptor.properties.find((candidate) => candidate.name === key);
-    if (property === undefined) {
-      throw new HikouteiError(
-        HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-        `"${key}" is not a declared property of entity "${descriptor.name}".`,
-      );
-    }
-    filter[key] = requireFilterValue(descriptor, key, property, value);
-  }
-  requirePageValue(options?.limit, "limit");
-  requirePageValue(options?.offset, "offset");
+function countQuery(query: ScalarEntityQuery): ScalarEntityCountQuery {
   return {
-    tableName: descriptor.tableName,
-    primaryKeyColumn: descriptor.primaryKey,
-    where: filter,
-    ...(options?.limit === undefined ? {} : { limit: options.limit }),
-    ...(options?.offset === undefined ? {} : { offset: options.offset }),
+    tableName: query.tableName,
+    primaryKeyColumn: query.primaryKeyColumn,
+    predicate: query.predicate,
   };
-}
-
-function requireFilterValue(
-  descriptor: ResolvedHikouteiEntityDescriptor,
-  key: string,
-  property: ResolvedHikouteiEntityDescriptor["properties"][number],
-  value: unknown,
-): ScalarEntityValue {
-  if (value === undefined) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `filter "${key}" must not be undefined in entity "${descriptor.name}".`,
-    );
-  }
-  if (value === null) {
-    if (property.nullable) return null;
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `filter "${key}" cannot be null in non-nullable entity "${descriptor.name}".`,
-    );
-  }
-
-  switch (property.type) {
-    case "date":
-      if (value instanceof Date && Number.isFinite(value.getTime())) return value;
-      throw new HikouteiError(
-        HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-        `filter "${key}" expected a valid Date in entity "${descriptor.name}".`,
-      );
-    case "string":
-      if (typeof value === "string") return value;
-      break;
-    case "number":
-      if (typeof value === "number" && Number.isFinite(value)) return value;
-      if (typeof value === "number") {
-        throw new HikouteiError(
-          HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-          `filter "${key}" must be a finite number.`,
-        );
-      }
-      break;
-    case "boolean":
-      if (typeof value === "boolean") return value;
-      break;
-  }
-  throw new HikouteiError(
-    HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-    `filter "${key}" expected ${property.type} but received ${typeof value}.`,
-  );
-}
-
-function requirePageValue(value: number | undefined, label: string): void {
-  if (value === undefined) return;
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
-      `${label} must be a non-negative safe integer.`,
-    );
-  }
 }
 
 async function applyFlushPlan(

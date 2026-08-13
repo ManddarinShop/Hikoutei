@@ -12,9 +12,11 @@ import type {
   TypedSheetsEntityFilter,
   TypedSheetsEntityReference,
   TypedSheetsFindOptions,
+  TypedSheetsQueryOptions,
   TypedSheetsForkOptions,
   TypedSheetsFlushCoordinator,
 } from "./contracts.js";
+import type { ScalarEntityPredicate } from "../../../adapter/persistence/contracts/scalar.js";
 
 /** Options for creating our public typed-sheets ORM around one execution engine. */
 export interface CreateTypedSheetsOrmOptions {
@@ -105,6 +107,30 @@ export class TypedSheetsEntityManager {
     options?: TypedSheetsFindOptions,
   ): Promise<Entity | null> {
     return this.entityManager.findOne(entityName, where, options);
+  }
+
+  /** Executes one validated provider-neutral scalar query against SQLite. */
+  async findByQuery<Entity extends object>(
+    entityName: TypedSheetsEntityReference<Entity>,
+    predicate: ScalarEntityPredicate,
+    primaryKeyColumn: string,
+    options: TypedSheetsQueryOptions,
+  ): Promise<readonly Entity[]> {
+    return this.entityManager.findByQuery(
+      entityName,
+      predicate,
+      primaryKeyColumn,
+      options,
+    );
+  }
+
+  /** Counts one validated provider-neutral scalar query without materializing entities. */
+  async countByQuery<Entity extends object>(
+    entityName: TypedSheetsEntityReference<Entity>,
+    predicate: ScalarEntityPredicate,
+    primaryKeyColumn: string,
+  ): Promise<number> {
+    return this.entityManager.countByQuery(entityName, predicate, primaryKeyColumn);
   }
 
   /** Marks one entity or iterable of entities for insertion or update at the next flush. */
