@@ -8,7 +8,7 @@
  * binary is reported distinctly (`not_found`) from a failed invocation.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 /** Outcome of one gcloud invocation. */
 export type GcloudRunResult =
@@ -67,6 +67,105 @@ export function createSafeRunner(runner: GcloudRunner): GcloudRunner {
 
 const GCLOUD_BINARY = "gcloud";
 const MAX_BUFFER_BYTES = 1024 * 1024;
+
+/**
+ * Exact `gcloud auth login` arguments used for the interactive handoff.
+ *
+ * These mirror {@link DRIVE_ACCESS_COMMAND} in `humanAuth.ts`; the constant
+ * is duplicated here so `gcloudRunner` (which `humanAuth` imports) stays free
+ * of a runtime import cycle. `--enable-gdrive-access` grants the Drive scope
+ * needed to create and own the spreadsheet; `--force` refreshes the cached
+ * credentials of an already-logged-in account that lacks the scope.
+ */
+export const LOGIN_ARGS = ["auth", "login", "--enable-gdrive-access", "--force"] as const;
+
+/**
+ * Sanitized outcome of the interactive `gcloud auth login` handoff.
+ *
+ * Only the process exit result is exposed: stdout, stderr, and any access
+ * token stay in the user's own gcloud credential store and are never
+ * captured, stored, checkpointed, or forwarded by Hikoutei.
+ */
+export type GcloudLoginResult =
+  | { readonly status: "ok" }
+  | { readonly status: "not_found" }
+  | { readonly status: "spawn_error" }
+  | { readonly status: "failed"; readonly code: number | null };
+
+/**
+ * Minimal child-process surface the login runner observes.
+ *
+ * The real `spawn` returns a `ChildProcess`; tests inject a fake that emits
+ * `error`/`exit`. Only the two lifecycle events the runner maps to a sanitized
+ * result are required.
+ */
+export interface LoginChildProcess {
+  on(event: "error", listener: (error: NodeJS.ErrnoException) => void): unknown;
+  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
+/** Spawns the login subprocess; injectable so tests assert the exact command and stdio. */
+export type LoginSpawner = (
+  command: string,
+  args: readonly string[],
+  options: { readonly stdio: "inherit" },
+) => LoginChildProcess;
+
+/** Runs the interactive `gcloud auth login` handoff attached to the terminal. */
+export interface GcloudLoginRunner {
+  runInteractiveLogin(): Promise<GcloudLoginResult>;
+}
+
+/**
+ * Production interactive login runner.
+ *
+ * Spawns `gcloud auth login --enable-gdrive-access --force` with the terminal
+ * streams inherited (`stdio: "inherit"`) so the user completes the browser
+ * OAuth flow in their own gcloud session and Hikoutei never touches the
+ * resulting token. Only the exit outcome is reduced to a sanitized result:
+ * `ENOENT` (gcloud not installed) is `not_found`, any other spawn failure is
+ * `spawn_error`, a non-zero exit is `failed` with the exit code, and a clean
+ * exit is `ok`. The runner resolves exactly once even if both `error` and
+ * `exit` arrive.
+ *
+ * @param spawner Process spawner; defaults to Node's `spawn`. Injectable so
+ *   tests assert the exact command and the inherited stdio without spawning.
+ */
+export function createInteractiveLoginRunner(spawner: LoginSpawner = spawnAsLoginSpawner): GcloudLoginRunner {
+  return {
+    runInteractiveLogin(): Promise<GcloudLoginResult> {
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result: GcloudLoginResult): void => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(result);
+        };
+        const child = spawner(GCLOUD_BINARY, LOGIN_ARGS, { stdio: "inherit" });
+        child.on("error", (error: NodeJS.ErrnoException) => {
+          // The subprocess could not be started. `ENOENT` means gcloud is
+          // absent from PATH; anything else is an opaque spawn failure.
+          // The error text may carry transport detail and is never forwarded.
+          finish(error.code === "ENOENT" ? { status: "not_found" } : { status: "spawn_error" });
+        });
+        child.on("exit", (code: number | null) => {
+          finish(code === 0 ? { status: "ok" } : { status: "failed", code });
+        });
+      });
+    },
+  };
+}
+
+/** Default spawner backed by Node's `child_process.spawn`. */
+function spawnAsLoginSpawner(
+  command: string,
+  args: readonly string[],
+  options: { readonly stdio: "inherit" },
+): LoginChildProcess {
+  return spawn(command, [...args], options);
+}
 
 /**
  * Production runner: executes `gcloud <args>` with `execFile`.

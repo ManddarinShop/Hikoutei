@@ -15,6 +15,8 @@ export const SETUP_ERROR_CODES = {
   GCLOUD_NOT_LOGGED_IN: "gcloud_not_logged_in",
   /** The active gcloud account lacks the Drive scope needed to create and own the spreadsheet. */
   GCLOUD_DRIVE_ACCESS_REQUIRED: "gcloud_drive_access_required",
+  /** The interactive `gcloud auth login --enable-gdrive-access --force` handoff did not complete successfully. */
+  GCLOUD_LOGIN_FAILED: "gcloud_login_failed",
   /** The user access token could not be retrieved or validated through tokeninfo. */
   USER_TOKEN_FAILED: "user_token_failed",
   /** `gcloud projects create` failed for a reason other than "already exists". */
