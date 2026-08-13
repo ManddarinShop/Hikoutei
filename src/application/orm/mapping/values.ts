@@ -28,12 +28,20 @@ export function encodeTypedSheetsEntity(
   mapping: TypedSheetsEntityMapping,
   entity: object,
 ): Readonly<Record<string, NormalizedCell>> {
+  return encodeTypedSheetsEntityValues(mapping, readEntityValues(entity, mapping.fields));
+}
+
+/** Encodes a complete provider-neutral entity row without requiring a managed object. */
+export function encodeTypedSheetsEntityValues(
+  mapping: TypedSheetsEntityMapping,
+  values: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, NormalizedCell>> {
   const encoded: Record<string, NormalizedCell> = {};
   for (const field of mapping.fields) {
     encoded[field.fieldName] = encodeTypedSheetsEntityField(
       mapping,
       field,
-      readEntityProperty(entity, field.property),
+      values[field.property],
     );
   }
   return encoded;
@@ -85,8 +93,13 @@ export function requireTypedSheetsEntityField(
   return field;
 }
 
-function readEntityProperty(entity: object, property: string): unknown {
-  return Reflect.get(entity, property);
+function readEntityValues(
+  entity: object,
+  fields: readonly TypedSheetsEntityFieldMapping[],
+): Readonly<Record<string, unknown>> {
+  const values: Record<string, unknown> = {};
+  for (const field of fields) values[field.property] = Reflect.get(entity, field.property);
+  return values;
 }
 
 function defaultEncode(field: TypedSheetsEntityFieldMapping, value: unknown): NormalizedCell {

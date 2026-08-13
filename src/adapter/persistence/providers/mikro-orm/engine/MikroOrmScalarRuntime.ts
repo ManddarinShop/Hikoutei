@@ -13,7 +13,7 @@ import type {
   ResolvedHikouteiEntityDescriptor,
   ResolvedHikouteiProperty,
 } from "../../../../../api/entity.js";
-import type { TypedSheetsEntityReference } from "../../../../../application/orm/api/contracts.js";
+import type { MappedEntityReference } from "../../../../../application/orm/mapping/contracts.js";
 import { defineTypedSheetsEntityMapping } from "../../../../../application/orm/mapping/definition.js";
 import type {
   TypedSheetsEntityMapping,
@@ -76,7 +76,7 @@ export function createMikroOrmScalarRuntime(
 
 function createMapping(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  reference: TypedSheetsEntityReference<Record<string, unknown>>,
+  reference: MappedEntityReference<Record<string, unknown>>,
   entityConfig: InternalSyncEntityConfig,
   spreadsheetId: string,
 ): TypedSheetsEntityMapping {

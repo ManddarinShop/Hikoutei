@@ -171,17 +171,16 @@ export async function createLocalTypedSheetsRuntime(
   // Load the current provider only when a runtime is opened. Importing the
   // root package alone must not require MikroORM or expose its module graph.
   const [engineModule, providerModule, runtimeModule] = await Promise.all([
-    import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmTypedSheetsEngine.js"),
+    import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarStorage.js"),
     import("../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js"),
     import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarEntityRuntime.js"),
   ]);
   const generated = runtimeModule.createMikroOrmScalarEntityRuntime(entities);
-  const orm = await engineModule.initializeTypedSheetsOrm({
+  const storage = await engineModule.initializeMikroOrmScalarStorage({
     dbName,
     entities: generated.entities,
-    flushCoordinator: { onFlush: async () => undefined },
   });
-  const provider = new providerModule.MikroOrmScalarPersistenceProvider(orm, generated.bindings);
+  const provider = new providerModule.MikroOrmScalarPersistenceProvider(storage, generated.bindings);
   return createInternalHikoutei(provider, descriptors);
 }
 

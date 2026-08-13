@@ -32,6 +32,8 @@ export const HIKOUTEI_ERROR_CODES = {
   INVALID_SCALAR_VALUE: "invalid_scalar_value",
   /** A provider transaction could not find the row targeted by a managed change. */
   ENTITY_NOT_FOUND: "entity_not_found",
+  /** Two different managed objects claim one descriptor/primary-key identity. */
+  ENTITY_IDENTITY_CONFLICT: "entity_identity_conflict",
   /** Sync auto-start failed for an uncategorized reason (timeout, network, option). */
   SYNC_STARTUP_FAILED: "sync_startup_failed",
   /** HIKOUTEI_SYNC_SPREADSHEET_URL does not contain a parseable spreadsheet ID. */

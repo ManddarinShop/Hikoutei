@@ -24,17 +24,16 @@ import {
   hasMappedRowActiveCandidateWithSql,
 } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import {
-  TYPED_SHEETS_ENTITY_CHANGE_KINDS,
-  type TypedSheetsEntityChange,
-  type TypedSheetsFlushContext,
-  type TypedSheetsFlushCoordinator,
-} from "../../api/contracts.js";
+  SCALAR_ENTITY_CHANGE_KINDS,
+  type ScalarEntityFlushChange,
+  type ScalarEntityFlushContext,
+  type ScalarEntityFlushCoordinator,
+} from "../../../../adapter/persistence/contracts/scalar.js";
 import {
   createTypedSheetsEntityMappingRegistry,
   createTypedSheetsMappedProjectionDefinitions,
   typedSheetsCanonicalEntityId,
   typedSheetsEntityAnchor,
-  typedSheetsEntityId,
   typedSheetsEntityRowBindingId,
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
@@ -79,13 +78,13 @@ import {
  */
 export function createMappedTypedSheetsFlushCoordinator(
   options: CreateMappedTypedSheetsFlushCoordinatorOptions,
-): TypedSheetsFlushCoordinator {
+): ScalarEntityFlushCoordinator {
   const mappings = mappingRegistry(options.mappings);
   const writer = resolveTypedSheetsEntityWriterOptions(options.writer);
   const syncFlushHook = options.syncFlushHook;
 
   return {
-    async onFlush(context: TypedSheetsFlushContext): Promise<void> {
+    async onFlush(context: ScalarEntityFlushContext): Promise<void> {
       const flushStartedAt = Date.now();
       const plans = collectMappedChanges(mappings, context.changes);
       if (plans.length === 0) return;
@@ -126,7 +125,7 @@ export function createMappedTypedSheetsFlushCoordinator(
           plan,
         );
         if (
-          plan.change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE &&
+          plan.change.kind === SCALAR_ENTITY_CHANGE_KINDS.DELETE &&
           hasActiveCandidate
         ) {
           // Fail closed BEFORE any entity, canonical, or outbox change: a
@@ -144,7 +143,7 @@ export function createMappedTypedSheetsFlushCoordinator(
           plan,
           {
             suppressUserProjection: hasActiveCandidate &&
-              plan.change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE,
+              plan.change.kind === SCALAR_ENTITY_CHANGE_KINDS.UPDATE,
           },
         );
         if (syncFlushHook !== undefined) {
@@ -257,7 +256,7 @@ async function planEntityId(
   const proposedCanonicalEntityId = typedSheetsCanonicalEntityId(mapping, visibleEntityId);
   const rowBindingId = typedSheetsEntityRowBindingId(mapping, visibleEntityId);
   const anchor = typedSheetsEntityAnchor(mapping, visibleEntityId);
-  return plan.change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE
+  return plan.change.kind === SCALAR_ENTITY_CHANGE_KINDS.INSERT
     ? proposedCanonicalEntityId
     : await existingCanonicalEntityId(sql, mapping, rowBindingId, anchor) ?? proposedCanonicalEntityId;
 }
@@ -281,15 +280,15 @@ async function hasActiveRowCandidateWithSql(
 
 function collectMappedChanges(
   mappings: TypedSheetsEntityMappingRegistry,
-  changes: readonly TypedSheetsEntityChange[],
+  changes: readonly ScalarEntityFlushChange[],
 ): readonly MappedChangePlan[] {
   const plans: MappedChangePlan[] = [];
   for (const change of changes) {
-    const mapping = mappings.findByEntityName(change.entityName);
+    const mapping = mappings.findByEntityName(change.row.entityName);
     if (mapping === undefined) continue;
     const changedFields = changedMappingFields(mapping, change);
     if (
-      change.kind === TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE &&
+      change.kind === SCALAR_ENTITY_CHANGE_KINDS.UPDATE &&
       changedFields.length === 0
     ) continue;
     plans.push({ mapping, change, changedFields });
@@ -299,20 +298,10 @@ function collectMappedChanges(
 
 function changedMappingFields(
   mapping: TypedSheetsEntityMapping,
-  change: TypedSheetsEntityChange,
+  change: ScalarEntityFlushChange,
 ): readonly TypedSheetsEntityFieldMapping[] {
-  if (change.kind !== TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE) return mapping.fields;
-  if (hasOwn(change.payload, mapping.primaryKey)) {
-    const nextPrimaryKey = change.payload[mapping.primaryKey];
-    const entityId = typedSheetsEntityId(mapping, change.entity);
-    if (nextPrimaryKey !== entityId) {
-      throw new TypedSheetsOrmError(
-        TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
-        `${mapping.entityName}.${mapping.primaryKey} cannot change after it is mapped to Sheets.`,
-      );
-    }
-  }
-  return mapping.fields.filter((field) => hasOwn(change.payload, field.property));
+  if (change.kind !== SCALAR_ENTITY_CHANGE_KINDS.UPDATE) return mapping.fields;
+  return mapping.fields.filter((field) => hasOwn(change.row.changedValues, field.property));
 }
 
 function mappingRegistry(

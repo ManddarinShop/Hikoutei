@@ -22,12 +22,11 @@ import type {
   RegisteredSyncSheet,
 } from "../../../../infrastructure/storage/index.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import {
-  TYPED_SHEETS_ENTITY_CHANGE_KINDS,
-  type TypedSheetsEntityChange,
-  type TypedSheetsFlushContext,
-  type TypedSheetsFlushCoordinator,
-} from "../../api/contracts.js";
+import type {
+  ScalarEntityFlushChange,
+  ScalarEntityFlushContext,
+  ScalarEntityFlushCoordinator,
+} from "../../../../adapter/persistence/contracts/scalar.js";
 import type {
   TypedSheetsEntityFieldMapping,
   TypedSheetsEntityMapping,
@@ -87,7 +86,7 @@ export interface CreateMappedTypedSheetsFlushCoordinatorOptions {
 /** One committed mapped flush result handed to the internal sync hook. */
 export interface MappedFlushSyncPlan {
   readonly mapping: TypedSheetsEntityMapping;
-  readonly change: TypedSheetsEntityChange;
+  readonly change: ScalarEntityFlushChange;
   readonly changedFields: readonly TypedSheetsEntityFieldMapping[];
   readonly entityId: string;
   readonly rowBindingId: string;
@@ -137,12 +136,15 @@ export interface ProjectionBaseline {
 /** One validated mapped entity lifecycle change and its selected fields. */
 export interface MappedChangePlan {
   readonly mapping: TypedSheetsEntityMapping;
-  readonly change: TypedSheetsEntityChange;
+  readonly change: ScalarEntityFlushChange;
   readonly changedFields: readonly TypedSheetsEntityFieldMapping[];
 }
 
-/** Public coordinator shape re-exported by the persistence barrel. */
-export type { TypedSheetsFlushCoordinator, TypedSheetsFlushContext };
+/** Provider-neutral coordinator shape used by the scalar persistence provider. */
+export type {
+  ScalarEntityFlushCoordinator as TypedSheetsFlushCoordinator,
+  ScalarEntityFlushContext as TypedSheetsFlushContext,
+};
 
 /** Keeps the API imports used by persistence modules explicit in one contract file. */
 export type {
@@ -156,4 +158,8 @@ export type {
   SqlStorageAdapter,
 };
 
-export { TYPED_SHEETS_ENTITY_CHANGE_KINDS };
+export type {
+  ScalarEntityFlushChange,
+  ScalarEntityFlushContext,
+  ScalarEntityFlushCoordinator,
+};
