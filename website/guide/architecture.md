@@ -21,7 +21,7 @@ Application code
                       ├─ durable Sheet effect outbox
                       ├─ outbound effect worker
                       ├─ User_Input polling
-                      └─ sync provider (googleSheetsApi)
+                      └─ sync provider (direct Google Sheets API)
                            └─ Google Sheets projections
 ```
 
@@ -35,7 +35,9 @@ The public surface contains entity definition, runtime creation, and the
 request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
 `findOne()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
 MikroORM, raw SQL, provider clients, Sheet routes, provisioning, polling, and
-outbox controls are internal.
+outbox controls are internal. Sync auto-start is environment-driven
+(`HIKOUTEI_SYNC_SPREADSHEET_URL` plus `GOOGLE_APPLICATION_CREDENTIALS`);
+there is no public bootstrap option for the direct provider.
 
 ## SQLite authority
 
@@ -102,6 +104,7 @@ src/adapter/persistence/            SQLite/MikroORM implementation
 src/adapter/sheets/                 Google Sheets API provider
 src/infrastructure/storage/         canonical, observation, resolution, outbox state
 src/api/                            root-facing entity and EntityManager facade
+src/cli/                            `hikoutei setup` CLI (service-side provisioning)
 src/index.ts                        root public barrel only
 ```
 

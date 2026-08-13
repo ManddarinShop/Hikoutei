@@ -121,9 +121,12 @@ API クライアントを直接使ってください。
 
 Google Sheets の同期はサービス側の関心事です。アプリケーションは provider
 クライアントを import したり、`createTypedSheets()` にシートルートを渡したり、
-書き込みごとに操作を選んだりしません。同期ランタイムはサービスアカウントを
-使う単一の Google Sheets API provider(内部 `googleSheetsApi` bootstrap オプ
-ション)を使用します — Apps Script のデプロイは不要です。
+書き込みごとに操作を選んだりしません — ルート API が受け取るのは `dbName` と
+`entities` だけです。同期ランタイムはサービスアカウントを使う単一の内部
+Google Sheets API provider を使用します — Apps Script のデプロイは不要です。
+同期の自動開始は `HIKOUTEI_SYNC_SPREADSHEET_URL` と
+`GOOGLE_APPLICATION_CREDENTIALS` で選択され、設定する公開
+`googleSheetsApi` bootstrap オプションはありません。
 
 ### 環境変数による同期の自動開始
 
@@ -145,7 +148,7 @@ const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities
 不正、資格情報ファイルの欠落・不正、スプレッドシートに共有されていない
 サービスアカウント (共有すべきメールアドレスをエラーが教えてくれます)。
 
-### Service-account provider (googleSheetsApi)
+### 手動でのサービスアカウント設定
 
 1. **サービスアカウントを作成する。** Cloud プロジェクトで Google Sheets API
    を有効化し、`https://www.googleapis.com/auth/spreadsheets` スコープの
@@ -157,9 +160,17 @@ const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities
    `GOOGLE_APPLICATION_CREDENTIALS` に、スプレッドシート ID は追跡されない
    シークレットストアに置きます。キーをブラウザコードや Git に入れないで
    ください。
-3. **内部 sync bootstrap を起動する。** `googleSheetsApi` を設定すると、
-   登録済みタブのヘッダーを作成・検証した後、outbox 配信と User_Input ポー
-   リングを開始します。
+3. **アプリケーションを通常どおり実行する。** `GOOGLE_APPLICATION_CREDENTIALS`
+   と `HIKOUTEI_SYNC_SPREADSHEET_URL` を設定した状態でアプリを起動すると、
+   `createTypedSheets()` がそれを検出して内部 sync bootstrap を開始します —
+   登録済みタブのヘッダーを作成・検証した後、outbox 配信と User_Input
+   ポーリングを開始します。渡す provider オプションも、手動で開始する内部
+   bootstrap もありません。
+
+> **レガシースプレッドシートの注意。** 旧 Apps Script provider が developer
+> metadata の行アンカーでプロビジョニングしたスプレッドシートは移行されませ
+> ん。`User_Input` タブは `__hikoutei_row_id` システム列を必要とするため、
+> レガシータブは再プロビジョニングが必要です。
 
 Hikoutei は、永続的なローカル outbox・冪等な配信・競合を考慮した更新を使う
 ため、一時的な API 障害でコミット済みのアプリケーション書き込みが失われる
@@ -211,8 +222,11 @@ Hikoutei は活発に開発中です。現在の EntityManager は、スカラ�
 `limit` / `offset` ページネーション、コールバック形式の `transactional()` を
 サポートします。通常の読み取り元は常に SQLite であり、Google Sheets では
 ありません。
-シート編集の取り込みと競合表示はまだ発展途上です。マイナーバージョンの
-アップグレード前にリリースノートを確認してください。
+`hikoutei setup` CLI がスプレッドシートとサービスアカウントをプロビジョニ
+ングし、direct Google Sheets API provider(環境変数による自動開始)が唯一の
+同期経路です — Apps Script ゲートウェイはありません。シート編集の取り込みと
+競合表示はまだ発展途上です。マイナーバージョンのアップグレード前にリリース
+ノートを確認してください。
 
 ## ロードマップ
 
@@ -245,7 +259,6 @@ EntityManager のロードマップは、以下の実装順序に従います。
 
 - Google Sheets からの意図的なユーザー編集の取り込みを完了する
 - 更新・削除の競合処理と表示を改善する
-- レジストリと direct-provider デプロイのセットアップツールを改善する
 
 現在の作業は[オープンな Issues](https://github.com/ManddarinShop/Hikoutei/issues)を
 参照してください。
