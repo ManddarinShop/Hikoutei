@@ -113,7 +113,12 @@ import { defaultSetupStateWriteFs } from "./checkpoint.js";
 import { SETUP_ERROR_CODES, type SetupErrorCode } from "./errors.js";
 import { describeGcloudFailure, errorResult, outcomeOf, type PlannedCommand, type SetupErrorResult } from "./flowResult.js";
 import { createSafeRunner, type GcloudRunner, type GcloudRunResult } from "./gcloudRunner.js";
-import { checkHumanDriveAccess, type HumanAuthResult, type TokenValidator } from "./humanAuth.js";
+import {
+  checkHumanDriveAccess,
+  DRIVE_ACCESS_COMMAND,
+  type HumanAuthResult,
+  type TokenValidator,
+} from "./humanAuth.js";
 import {
   KEY_STAGE_PLACEHOLDER,
   listUserManagedServiceAccountKeys,
@@ -719,15 +724,30 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
   const auth = await runner.run([...AUTH_LIST_ARGS]);
   executed.push({ kind: "gcloud", command: [...AUTH_LIST_ARGS], outcome: outcomeOf(auth, "active account found") });
   if (auth.status !== "ok") {
+    // Both auth-list failure branches (invocation failure here, empty list
+    // below) must point non-interactive/CI/non-TTY users at the exact
+    // Drive-enabled re-login command, never the bare `gcloud auth login`.
+    // Only a missing gcloud binary keeps the install guidance; everything
+    // else is an account problem a Drive-enabled login fixes. The failure
+    // description is status-only: raw stdout/stderr (which can carry tokens)
+    // is never forwarded.
+    const failure = describeGcloudFailure(auth);
+    const guidance =
+      auth.status === "not_found"
+        ? "install it from https://cloud.google.com/sdk and try again"
+        : `run \`gcloud ${DRIVE_ACCESS_COMMAND.join(" ")}\` and try again`;
     return errorResult(
       SETUP_ERROR_CODES.GCLOUD_NOT_LOGGED_IN,
-      `could not list active gcloud accounts: ${describeGcloudFailure(auth)}`,
+      `could not list active gcloud accounts: ${failure}; ${guidance}`,
     );
   }
   if (auth.stdout.trim() === "") {
     return errorResult(
       SETUP_ERROR_CODES.GCLOUD_NOT_LOGGED_IN,
-      "no active gcloud account; run `gcloud auth login` first",
+      // Reuse the shared exact re-login command so non-interactive/CI/non-TTY
+      // guidance matches the Drive-scope guidance (docs/policy require the
+      // Drive-enabled login, never the bare `gcloud auth login`).
+      `no active gcloud account; run \`gcloud ${DRIVE_ACCESS_COMMAND.join(" ")}\` and try again`,
     );
   }
 
