@@ -26,7 +26,11 @@ Application code
 ```
 
 The internal service reuses the same MikroORM SQLite adapter and transaction
-boundary as the entity manager. A future deployment can extract the worker
+boundary as the entity manager. Hikoutei's scalar Unit of Work owns lifecycle,
+snapshots, identity maps, and the provider-neutral flush plan. The concrete
+provider schedules that plan on a transaction-bound MikroORM manager, invokes
+mapped canonical/outbox planning before entity SQL, and flushes both in one
+SQLite transaction. A future deployment can extract the worker
 process without changing the root entity lifecycle contract.
 
 ## Root public API
@@ -43,15 +47,20 @@ Business entity tables are the authoritative application data. Normal reads
 always come from SQLite and never from a Sheet. The public local runtime opens
 entity tables only and does not contact Google Sheets or create sync tables.
 
-When the internal sync service is active, its mapped flush coordinator extends
-the same SQLite transaction with:
+When the internal sync service is active, the scalar persistence provider
+extends the same SQLite transaction with:
 
 ```text
-entity mutation
-canonical sync state
-projection registry/state
-Sheet effect outbox
+public EntityManager
+  → scalar Unit of Work flush plan
+  → scalar persistence provider transaction
+       ├─ mapped canonical/outbox planner
+       └─ MikroORM entity SQL
 ```
+
+The mapped planner writes canonical sync state, projection registry/state, and
+the durable Sheet effect outbox before the scheduled entity statements. Any
+failure rolls the complete transaction back.
 
 The service-side configuration supplies the required `System_State`,
 `User_Input`, and `Sync_Conflicts` routes, spreadsheet identity, and
@@ -101,7 +110,7 @@ src/application/sync/               internal sync engine and service bootstrap
 src/adapter/persistence/            SQLite/MikroORM implementation
 src/adapter/sheets/                 Google Sheets API provider
 src/infrastructure/storage/         canonical, observation, resolution, outbox state
-src/api/                            root-facing entity and EntityManager facade
+src/api/                            root-facing entity and EntityManager
 src/index.ts                        root public barrel only
 ```
 
