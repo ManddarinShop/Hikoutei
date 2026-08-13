@@ -171,6 +171,23 @@ checkpointed or identity-matched cloud resources are reused, and setup
 never deletes cloud resources. The manual steps below remain available for
 advanced setups.
 
+**Setup progress.** `hikoutei setup` reports step-by-step progress to
+**stderr** across the ten setup phases (cloud auth, Drive access, project,
+APIs, service account, service-account key, spreadsheet, share,
+service-account access, output): an **overall bar** advances only when a
+phase actually completes — it is never an ETA and never guesses a
+percentage — and a **detail line** shows the bounded propagation checks
+(how many of the eight key/access checks have run) and the known 2, 4, 8,
+16, 30, 30, 30 s waits, with a fixed `working…` label for unknown-duration
+steps. On an interactive terminal the four-line block redraws in place;
+in CI, non-TTY, or `NO_COLOR` sessions one static line is printed per
+phase/retry event with no control sequences. Progress pauses and the
+block is cleared during the interactive `gcloud auth login` handoff and
+resumes with the retry. Progress never prints credentials, tokens, keys,
+project ids, emails, paths, or raw command output, and it can never
+change the setup result or exit code; `--dry-run` prints the command
+plan only.
+
 **Keep setup artifacts out of Git.** `hikoutei setup` writes its defaults
 into the current directory: the service-account key
 (`hikoutei-service-account.json`, owner-only mode 600 — a secret), the
