@@ -8,7 +8,8 @@
  * sequence: resolve paths, reject canonical path collisions, ask for the
  * one-time y/N confirmation (skipped by `--yes`/`--dry-run`), run setup, and
  * on an auth preflight failure offer a single interactive Enter-to-login
- * handoff into `gcloud auth login` before retrying exactly once. Exit codes:
+ * handoff into `gcloud auth login` before retrying exactly once (interactive
+ * TTY only, never in CI/`--yes`/`--dry-run`). Exit codes:
  * 0 success, 2 argument errors, 1 runtime failures. Errors are printed as
  * `hikoutei-setup:<code>: <message>` for machine consumption, and key
  * material and the user access token are never printed.
@@ -40,6 +41,11 @@ import {
   createHumanSheetApiFactory,
   type HumanSheetApiFactory,
 } from "./sheetsFactory.js";
+import {
+  createSetupProgressRenderer,
+  isCiEnvironment,
+  type SetupProgressController,
+} from "./setupProgress.js";
 import {
   DEFAULT_KEY_FILE_NAME,
   findSetupPathCollision,
@@ -101,6 +107,22 @@ export interface RunSetupCliContext {
   readonly stdout: CliStdout;
   readonly stderr: CliStderr;
   /**
+   * True when the session runs in an automation environment (a non-empty
+   * `CI` value). Gates the interactive login handoff so a CI pseudo-TTY
+   * can never prompt, hang, or spawn the browser login; production main
+   * passes the real process CI state via {@link isCiEnvironment}.
+   * Optional so scripted tests that do not exercise the handoff run
+   * unchanged (absent means not CI).
+   */
+  readonly isCi?: boolean;
+  /**
+   * Optional progress controller (the stderr renderer in production). When
+   * present it is suspended before the inherited `gcloud auth login`
+   * handoff, marked failed on a final error, and finished on success. Tests
+   * that drive a scripted `runSetup` callable omit it.
+   */
+  readonly progress?: SetupProgressController;
+  /**
    * Releases the shared stdin after every prompt and the inherited gcloud
    * login have finished; called exactly once on every setup outcome
    * (collision, declined confirmation, success, dry run, errors, login
@@ -131,7 +153,10 @@ const AUTH_RETRY_CODES: ReadonlySet<string> = new Set([
  * The handoff runs ONLY when the first attempt fails with an auth preflight
  * error (`gcloud_not_logged_in` or `gcloud_drive_access_required`) AND the
  * session is a real interactive terminal (`stdin.isTTY && stdout.isTTY`) AND
- * neither `--yes` nor `--dry-run` was given. The preflight runs before any
+ * the session is not an automation run (`isCi` absent/false; production
+ * passes the non-empty `CI` environment state, so a CI pseudo-TTY can never
+ * prompt or spawn the browser login) AND neither `--yes` nor `--dry-run`
+ * was given. The preflight runs before any
  * lock, checkpoint, cloud, or file mutation, so retrying after a successful
  * login cannot create duplicate resources. The login is attempted at most
  * once and the setup retried at most once; if the retry still lacks the
@@ -198,15 +223,25 @@ export async function runSetupCli(context: RunSetupCliContext): Promise<number> 
       AUTH_RETRY_CODES.has(result.code) &&
       !options.dryRun &&
       !options.yes &&
+      !context.isCi &&
       context.stdin.isTTY === true &&
       context.stdout.isTTY === true
     ) {
+      // Clear the in-place progress block and stop its animation timer so
+      // the inherited gcloud login subprocess owns the terminal cleanly.
+      context.progress?.suspend();
       const handoff = await promptLoginHandoff({ input: context.stdin, output: context.stdout });
       if (handoff.status === "proceed") {
         const login = await context.loginRunner.runInteractiveLogin();
         if (login.status === "ok") {
-          // Exactly one retry with the same options; no second confirmation
-          // and no login loop.
+          // The suspension is over: the retry owns the progress block and
+          // the terminal again, and a later failure must be labeled
+          // against the retry's own tracker state — never the phase the
+          // first attempt died in.
+          context.progress?.resume();
+          // Exactly one retry with the same options and the same progress
+          // controller; no second confirmation and no login loop. The retry
+          // re-emits phase events, so the block redraws after suspend.
           result = await context.runSetup(params);
         } else {
           result = errorResult(SETUP_ERROR_CODES.GCLOUD_LOGIN_FAILED, describeLoginFailure(login));
@@ -215,6 +250,10 @@ export async function runSetupCli(context: RunSetupCliContext): Promise<number> 
     }
 
     if (result.status === "error") {
+      // Mark the in-progress phase failed (the flow returns a stable error
+      // result but never knows it is the final attempt — the login retry
+      // may have just rescued an auth preflight failure).
+      context.progress?.fail(result.code);
       context.stderr.write(`hikoutei-setup:${result.code}: ${result.message}\n`);
       return SETUP_RUNTIME_ERROR_EXIT_CODE;
     }
@@ -225,6 +264,9 @@ export async function runSetupCli(context: RunSetupCliContext): Promise<number> 
       context.stdout.write(`${formatPlan(result.commands)}\n`);
       return 0;
     }
+    // Render the final 100% block and release any animation timer before
+    // the success summary (progress is on stderr; the summary on stdout).
+    context.progress?.finish();
     context.stdout.write(`${formatSummary(result.summary)}\n`);
     return 0;
   } finally {
@@ -348,6 +390,14 @@ async function main(): Promise<number> {
   const validateToken = createTokeninfoValidator();
   const createHumanApi = createHumanSheetApiFactory();
   const verifySaAccess = createSaAccessVerifier({ sleeper: realSleeper });
+  // The progress renderer writes step-by-step bars to stderr (TTY: an
+  // in-place animated block; CI/non-TTY/NO_COLOR: one static line per
+  // event). It is suspended before the inherited gcloud login, marked
+  // failed on a final error, and finished on success by `runSetupCli`.
+  const progress = createSetupProgressRenderer({
+    output: process.stderr,
+    isTty: process.stderr.isTTY === true,
+  });
 
   // Production setup callable: closes over the real infrastructure so the
   // orchestration retry reuses one set of factories across attempts.
@@ -364,6 +414,7 @@ async function main(): Promise<number> {
       outputPath: params.outputPath,
       statePath: params.statePath,
       dryRun: params.dryRun,
+      progress,
     } satisfies RunSetupOptions);
 
   return runSetupCli({
@@ -374,6 +425,11 @@ async function main(): Promise<number> {
     stdin: process.stdin,
     stdout: process.stdout,
     stderr: process.stderr,
+    // The real process CI state: a CI pseudo-TTY must never trigger the
+    // interactive login handoff (help/docs promise a manual login command
+    // and one static progress line per event in CI).
+    isCi: isCiEnvironment(process.env),
+    progress,
     finalizeStdin: createStdinFinalizer(),
   });
 }

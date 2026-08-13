@@ -36,7 +36,7 @@ import {
   markDeliveryUncertainWithAdapter,
   appendPendingEffectsWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import {
@@ -61,8 +61,8 @@ import {
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   CONFLICT_STATUSES,
   type ConflictStatus,
-  type SyncConflict,
-} from "../src/domain/index.js";
+} from "../src/domain/model/constants.js";
+import type { SyncConflict } from "../src/domain/model/types.js";
 import type { SyncSheetsProvisioner } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 

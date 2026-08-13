@@ -16,7 +16,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import type { NormalizedCell } from "../../../../../domain/index.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import type { Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { stableHash } from "../../../../../shared/encoding/index.js";
@@ -51,16 +51,18 @@ import {
 import {
   readRegisteredHeaders,
 } from "./preflightHeaders.js";
+import { GOOGLE_SHEETS_API_OBSERVATION_FIELDS } from "./preflightFields.js";
+import { parseSpreadsheetDocument } from "./preflightParsing.js";
 import {
   apiCellNumberFormat,
   gridRowCells,
-  parseSpreadsheetDocument,
   readAnchorIndex,
-  GOOGLE_SHEETS_API_OBSERVATION_FIELDS,
-  type ParsedGridData,
-  type ParsedMergedCell,
-  type ParsedSheet,
-} from "./preflight.js";
+} from "./preflightRows.js";
+import type {
+  ParsedGridData,
+  ParsedMergedCell,
+  ParsedSheet,
+} from "./preflightContext.js";
 import {
   computedValueFromApiCell,
   isComputedBlankCell,

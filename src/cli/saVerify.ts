@@ -58,6 +58,8 @@ export interface SaAccessVerifier {
     request: { keyPath: string; spreadsheetId: string } & VerifyFreshness & {
       /** In-memory validated credentials; the verifier never reopens the key path. */
       readonly credentials: SaAccessCredentials;
+      /** Optional reporter for the bounded verify attempts and waits; never affects the result. */
+      readonly onVerifyProgress?: SaVerifyProgressReporter;
     },
   ): Promise<void>;
 }
@@ -74,6 +76,54 @@ export const SA_VERIFY_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 30000, 30000,
 /** Injectable timer used between retry attempts. */
 export interface Sleeper {
   sleep(ms: number): Promise<void>;
+}
+
+/**
+ * Events reported by the bounded service-account access verify attempts.
+ *
+ * `check_started` / `check_completed` bracket one verify attempt (1-based
+ * attempt within the bounded window: the immediate attempt is 1/8 and
+ * each retry after a retryable failure advances 2/8..8/8). `wait_started`
+ * precedes a scheduled sleep with the delay before the NEXT attempt and
+ * carries the 1-based index of the attempt that just failed. Only numbers
+ * are reported — never credentials, paths, ids, or raw provider payloads.
+ * The reporter is decoupled from the progress UI so this module never
+ * imports the CLI renderer; `setupFlow` wires it to the progress sink.
+ */
+export type SaVerifyProgressEvent =
+  | { readonly type: "check_started"; readonly attempt: number; readonly maxAttempts: number }
+  | { readonly type: "check_completed"; readonly attempt: number; readonly maxAttempts: number }
+  | { readonly type: "wait_started"; readonly attempt: number; readonly maxAttempts: number; readonly delayMs: number };
+
+/**
+ * Optional reporter for the bounded verify attempts and waits. A throwing
+ * callback is swallowed so it can never affect the verification result.
+ */
+export interface SaVerifyProgressReporter {
+  (event: SaVerifyProgressEvent): void;
+}
+
+/** Total verify attempts the access check performs (immediate + the scheduled delays). */
+export const SA_VERIFY_MAX_ATTEMPTS = SA_VERIFY_RETRY_DELAYS_MS.length + 1;
+
+/**
+ * Reports one verify progress event, swallowing any callback throw.
+ *
+ * Progress is purely observational: a throwing reporter must never change
+ * the verification verdict, the in-memory credential handling, or the run.
+ */
+function reportSafely(
+  reporter: SaVerifyProgressReporter | undefined,
+  event: SaVerifyProgressEvent,
+): void {
+  if (reporter === undefined) {
+    return;
+  }
+  try {
+    reporter(event);
+  } catch {
+    // Progress reporting must never affect the verification result.
+  }
 }
 
 /** The minimal Sheets surface the verifier needs (injectable in tests). */
@@ -98,6 +148,8 @@ export function createSaAccessVerifier(options: SaAccessVerifierOptions): SaAcce
     async verify(
       request: { keyPath: string; spreadsheetId: string } & VerifyFreshness & {
         readonly credentials: SaAccessCredentials;
+        /** Optional reporter for the bounded verify attempts and waits; never affects the result. */
+        readonly onVerifyProgress?: SaVerifyProgressReporter;
       },
     ): Promise<void> {
       // Reject a malformed spreadsheet id BEFORE the client factory runs or
@@ -112,15 +164,42 @@ export function createSaAccessVerifier(options: SaAccessVerifierOptions): SaAcce
       const client = getClient(request.credentials);
       let attempt = 0;
       for (;;) {
+        const attemptNumber = attempt + 1;
+        reportSafely(request.onVerifyProgress, {
+          type: "check_started",
+          attempt: attemptNumber,
+          maxAttempts: SA_VERIFY_MAX_ATTEMPTS,
+        });
         try {
           const response = await client.get({ spreadsheetId: request.spreadsheetId });
           requireSpreadsheetId(response.data, request.spreadsheetId);
+          reportSafely(request.onVerifyProgress, {
+            type: "check_completed",
+            attempt: attemptNumber,
+            maxAttempts: SA_VERIFY_MAX_ATTEMPTS,
+          });
           return;
         } catch (error) {
+          reportSafely(request.onVerifyProgress, {
+            type: "check_completed",
+            attempt: attemptNumber,
+            maxAttempts: SA_VERIFY_MAX_ATTEMPTS,
+          });
           const delay = SA_VERIFY_RETRY_DELAYS_MS[attempt];
           if (delay === undefined || !isRetryableVerifyError(error, request)) {
+            // Non-retryable failure (or the bounded window exhausted): fail
+            // immediately with no wait and no raw payload.
             throw safeError(`could not verify service-account access: ${safeReasonOf(error)}`);
           }
+          // Only a retryable failure schedules a wait; the wait carries the
+          // index of the attempt that just failed and the exact delay
+          // before the next attempt (2, 4, 8, 16, 30, 30, 30 s).
+          reportSafely(request.onVerifyProgress, {
+            type: "wait_started",
+            attempt: attemptNumber,
+            maxAttempts: SA_VERIFY_MAX_ATTEMPTS,
+            delayMs: delay,
+          });
           await options.sleeper.sleep(delay);
           attempt += 1;
         }

@@ -10,7 +10,7 @@
  * provisioning readers.
  */
 
-import type { NormalizedCell } from "../../../../../domain/index.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import type { Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
@@ -57,23 +57,6 @@ export function requireGridDataForSheet(
     invalidProviderState(`grid data is missing for sheet ${sheetId}`);
   }
   return grid;
-}
-
-/** Returns the parsed grid for one sheet by title, failing closed when absent. */
-export function requireGridDataByTitle(
-  document: ParsedSpreadsheetDocument,
-  sheets: readonly ParsedSheet[],
-  title: string,
-): { readonly sheet: ParsedSheet; readonly grid: ParsedGridData } {
-  const sheet = findSheetByTitle(sheets, title);
-  if (sheet === undefined) {
-    invalidProviderState(`Registered sync sheet does not exist: ${title}`);
-  }
-  const grid = document.grids.get(sheet.sheetId);
-  if (grid === undefined) {
-    invalidProviderState(`grid data is missing for sheet ${sheet.sheetId}`);
-  }
-  return { sheet, grid };
 }
 
 /** Normalizes nonblank grid rows into typed preflight rows. */

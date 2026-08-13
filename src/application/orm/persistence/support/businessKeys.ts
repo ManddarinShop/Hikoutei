@@ -6,7 +6,8 @@
  * the entity lifecycle change.
  */
 
-import { stableHash, type NormalizedCell } from "../../../../domain/index.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {
@@ -19,7 +20,7 @@ import {
   readMappedBusinessKeyOwnerWithSql,
   retireMappedActiveBusinessKeyWithSql,
   retireMappedEntityBusinessKeysWithSql,
-} from "../../../../infrastructure/storage/index.js";
+} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import { requireEncodedField } from "./helpers.js";
 
 /** Claims the mapped entity's normalized business key during creation. */

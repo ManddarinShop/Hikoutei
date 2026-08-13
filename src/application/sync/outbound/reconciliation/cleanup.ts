@@ -46,13 +46,13 @@
  * the durable outbox and the worker's CAS-guarded slow path.
  */
 
-import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
-import type { NormalizedCell } from "../../../../domain/index.js";
+import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../shared/constants.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import {
   PRESENCE_KINDS,
 } from "../../../../shared/state/index.js";
-import { isRecoverableEffectErrorCode } from "../../../../infrastructure/storage/index.js";
-import type { NewEffect } from "../../../../infrastructure/storage/index.js";
+import { isRecoverableEffectErrorCode } from "@hikoutei/ikisaki";
+import type { NewEffect } from "@hikoutei/ikisaki";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   computeSyncVisibleHash,

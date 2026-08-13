@@ -12,12 +12,14 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-  stableHash,
-  type Applicability,
-  type EffectTargetKind,
-  type NormalizedCell,
-  type Presence,
-} from "../../../../domain/index.js";
+} from "../../../../shared/constants.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { EffectTargetKind } from "../../../../domain/model/constants.js";
+import type {
+  Applicability,
+  Presence,
+} from "../../../../shared/state/types.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
@@ -39,7 +41,7 @@ import {
   STORAGE_ERROR_CODES,
   StorageError,
 } from "../../../../infrastructure/storage/errors.js";
-import type { NewEffect } from "../../../../infrastructure/storage/index.js";
+import type { NewEffect } from "@hikoutei/ikisaki";
 
 const PROJECTION_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",

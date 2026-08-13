@@ -30,7 +30,7 @@ import {
   readWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
 import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
 import {
@@ -45,7 +45,7 @@ import { persistResolutionCommandWithAdapter } from "../src/infrastructure/stora
 import { renewAutomaticConflictResolutionLeaseWithSql } from "../src/application/sync/inbound/autoSystemConflictResolution.js";
 import type {
   NewEffect,
-} from "../src/infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import type {
   PersistObservedRowInput,
 } from "../src/infrastructure/storage/state/observation/observationWriter.js";
@@ -56,16 +56,14 @@ import {
   initializeMikroOrmSqliteAdapter,
   MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import {
-  migrateMikroOrmSqliteSchema,
-  migrateMikroOrmSqliteStorageSchema,
-} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
 import type { SyncProjectionEffect } from "../src/application/sync/sheetsContract/syncSheets.js";
-import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
@@ -314,8 +312,8 @@ describe("MikroOrmSqliteAdapter", () => {
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
 
-    const firstMigration = await migrateMikroOrmSqliteSchema(adapter);
-    const secondMigration = await migrateMikroOrmSqliteSchema(adapter);
+    const firstMigration = await migrateSqliteSchema(adapter);
+    const secondMigration = await migrateSqliteSchema(adapter);
 
     const tables = await adapter.read(({ sql }) => {
       return sql.all<{ readonly name: string }>(
@@ -337,7 +335,7 @@ describe("MikroOrmSqliteAdapter", () => {
     await adapter.transaction(async ({ sql }) => {
       await sql.run("PRAGMA user_version = 3");
     });
-    await expect(migrateMikroOrmSqliteSchema(adapter)).resolves.toEqual({
+    await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 3,
       toVersion: 6,
       appliedVersions: [4, 5, 6],
@@ -353,7 +351,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
 
     const firstClaim = await claimWriterLeaseWithAdapter(adapter, {
       role: "sync_writer",
@@ -414,7 +412,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
 
     const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
       role: "sync_writer",
@@ -469,7 +467,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
@@ -551,7 +549,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
@@ -644,7 +642,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
@@ -701,7 +699,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
     await adapter.transaction(({ sql }) => {
       return sql.run(
@@ -767,7 +765,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     let now = 1_000;
     const writer = {
       writerId: "automatic-resolver",
@@ -820,7 +818,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
     await seedResolvableConflict(adapter);
 
@@ -881,7 +879,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
     await seedResolvableConflict(adapter);
 
@@ -1005,7 +1003,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
     await seedResolvableConflict(adapter);
 
@@ -1085,7 +1083,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
@@ -1155,7 +1153,7 @@ describe("MikroOrmSqliteAdapter", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {

@@ -5,8 +5,8 @@
  * adapter input never creates a partial receipt or event occurrence.
  */
 
-import { stableHash } from "../../../../domain/index.js";
-import type { ObservedEditBatch } from "../../../../domain/index.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { ObservedEditBatch } from "../../../../domain/model/types.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
