@@ -122,7 +122,19 @@ jobs:
           (cd "$package_dir" && sha256sum "$package_file" > hikoutei-develop-package.sha256)
           echo "Packed $package_path"
 
-      - name: Run installed-package internal sync/provider E2E and root API smoke (fake)
+      - name: Run repository internal sync/provider E2E (fake)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Internal sync/provider E2E: loads repository source modules through
+          # the checked-in TypeScript loader; it is not a package compatibility
+          # test.
+          node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs \
+            --backend=fake \
+            --output="$RUNNER_TEMP/hikoutei-develop-fake-result.json" \
+            --manifest="$RUNNER_TEMP/hikoutei-develop-manifest.json"
+
+      - name: Run installed public API scenarios (packed consumer)
         shell: bash
         run: |
           set -euo pipefail
@@ -145,29 +157,24 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
-          # Internal sync/provider E2E: loads dist modules directly and exercises
-          # projection registration, provisioning, the worker, and polling.
-          cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
-          node "$consumer_dir/run-api-scenario.mjs" \
-            --backend=fake \
-            --output="$RUNNER_TEMP/hikoutei-develop-fake-result.json" \
-            --manifest="$RUNNER_TEMP/hikoutei-develop-manifest.json"
-
-          # Installed root API smoke: imports ONLY the installed `hikoutei` root
-          # entrypoint and drives the public entity-lifecycle contract.
+          # Both installed scenarios import ONLY the installed `hikoutei` root.
           cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
+          cp scripts/ci/run-public-api-surface.mjs "$consumer_dir/run-public-api-surface.mjs"
           cp scripts/ci/root-api-options.mjs "$consumer_dir/root-api-options.mjs"
           node "$consumer_dir/run-root-api-scenario.mjs" \
             --output="$RUNNER_TEMP/hikoutei-develop-root-api-smoke-result.json"
+          node "$consumer_dir/run-public-api-surface.mjs" \
+            --output="$RUNNER_TEMP/hikoutei-develop-public-api-surface-result.json"
 
-      - name: Upload develop installed-consumer reports
+      - name: Upload repository and installed-consumer reports
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: hikoutei-develop-fake-installed-consumer
+          name: hikoutei-develop-fake-reports
           path: |
             ${{ runner.temp }}/hikoutei-develop-fake-result.json
             ${{ runner.temp }}/hikoutei-develop-root-api-smoke-result.json
+            ${{ runner.temp }}/hikoutei-develop-public-api-surface-result.json
           if-no-files-found: ignore
 
       - name: Upload develop package
@@ -215,11 +222,13 @@ jobs:
             echo "NPM_TOKEN secret is required to publish the ikisaki package." >&2
             exit 1
           fi
-          # The hikoutei tarball depends on @hikoutei/ikisaki@0.1.0, so the
-          # dependency must exist on the registry before hikoutei is published.
-          # Publish at most once per version; later releases skip the step.
-          if npm view "@hikoutei/ikisaki@0.1.0" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "@hikoutei/ikisaki@0.1.0 already published; skipping."
+          # The hikoutei tarball depends on the exact @hikoutei/ikisaki version
+          # declared in the workspace manifest, so that version must exist on
+          # the registry before hikoutei is published. Publish at most once per
+          # version; later releases skip the step.
+          ikisaki_version="$(node -p "require('./packages/ikisaki/package.json').version")"
+          if npm view "@hikoutei/ikisaki@${ikisaki_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "@hikoutei/ikisaki@${ikisaki_version} already published; skipping."
           else
             npm ci
             npm run build -w @hikoutei/ikisaki
@@ -335,9 +344,11 @@ jobs:
           set -euo pipefail
           version="${TAG_NAME#v}"
           version="${version#develop-v}"
-          payload="{\"version\":\"$version\"}"
-          if ! gh api repos/${{ github.repository }}/dispatches \
-            -f event_type=examples-verify \
-            -f client_payload="$payload" >/dev/null; then
+          # The repository_dispatch API requires client_payload as a JSON
+          # object; -f would send it as a string and fail with HTTP 422, so
+          # the whole request body is passed through stdin as JSON.
+          body="{\"event_type\":\"examples-verify\",\"client_payload\":{\"version\":\"$version\"}}"
+          if ! printf '%s' "$body" | gh api repos/${{ github.repository }}/dispatches \
+            -X POST --input - >/dev/null; then
             echo "warning: failed to dispatch example verification for $version" >&2
           fi

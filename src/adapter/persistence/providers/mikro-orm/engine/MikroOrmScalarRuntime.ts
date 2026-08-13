@@ -13,7 +13,7 @@ import type {
   ResolvedHikouteiEntityDescriptor,
   ResolvedHikouteiProperty,
 } from "../../../../../api/entity.js";
-import type { TypedSheetsEntityReference } from "../../../../../application/orm/api/contracts.js";
+import type { MappedEntityReference } from "../../../../../application/orm/mapping/contracts.js";
 import { defineTypedSheetsEntityMapping } from "../../../../../application/orm/mapping/definition.js";
 import type {
   TypedSheetsEntityMapping,
@@ -37,7 +37,7 @@ import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
 } from "../../../../../shared/encoding/constants.js";
-import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
 
 /** Generated provider inputs for one mapped internal sync runtime. */
 export interface MikroOrmScalarRuntimeDefinition extends MikroOrmScalarEntityRuntimeDefinition {
@@ -76,7 +76,7 @@ export function createMikroOrmScalarRuntime(
 
 function createMapping(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  reference: TypedSheetsEntityReference<Record<string, unknown>>,
+  reference: MappedEntityReference<Record<string, unknown>>,
   entityConfig: InternalSyncEntityConfig,
   spreadsheetId: string,
 ): TypedSheetsEntityMapping {

@@ -118,9 +118,11 @@ Hikoutei는 `google-spreadsheet`나 `@googleapis/sheets`를 대체하지 않습�
 
 Google Sheets 동기화는 서비스 측 관심사입니다. 애플리케이션은 provider
 클라이언트를 import하거나, Sheet 라우트를 `createTypedSheets()`에 넘기거나,
-쓰기마다 연산을 선택하지 않습니다. 동기화 런타임은 서비스 계정을 사용하는
-하나의 Google Sheets API provider(내부 `googleSheetsApi` bootstrap 옵션)를
-사용합니다 — Apps Script 배포가 없습니다.
+쓰기마다 연산을 선택하지 않습니다 — 루트 API는 `dbName`과 `entities`만
+받습니다. 동기화 런타임은 서비스 계정을 사용하는 하나의 내부 Google Sheets
+API provider를 사용합니다 — Apps Script 배포가 없습니다. 동기화 자동 시작은
+`HIKOUTEI_SYNC_SPREADSHEET_URL`과 `GOOGLE_APPLICATION_CREDENTIALS`로
+선택되며, 설정할 공개 `googleSheetsApi` bootstrap 옵션은 없습니다.
 
 ### 환경 변수 기반 동기화 자동 시작
 
@@ -142,7 +144,7 @@ const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities
 없거나 잘못된 자격 증명 파일, 스프레드시트에 공유되지 않은 서비스 계정
 (어떤 이메일을 공유해야 하는지 에러가 알려줍니다).
 
-### Service-account provider (googleSheetsApi)
+### 수동 서비스 계정 설정
 
 1. **서비스 계정을 만듭니다.** Cloud 프로젝트에서 Google Sheets API를
    활성화하고, `https://www.googleapis.com/auth/spreadsheets` 스코프의
@@ -152,9 +154,16 @@ const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities
 2. **키를 서버 측에 둡니다.** 서비스 계정 키 경로를 서버의
    `GOOGLE_APPLICATION_CREDENTIALS`에, 스프레드시트 ID는 추적되지 않는
    비밀 저장소에 둡니다. 키를 브라우저 코드나 Git에 넣지 마세요.
-3. **내부 sync bootstrap을 기동합니다.** `googleSheetsApi`를 설정하면
+3. **애플리케이션을 정상적으로 실행합니다.** `GOOGLE_APPLICATION_CREDENTIALS`와
+   `HIKOUTEI_SYNC_SPREADSHEET_URL`을 설정한 상태로 앱을 시작하면
+   `createTypedSheets()`가 이를 감지해 내부 sync bootstrap을 시작합니다 —
    등록된 탭의 헤더를 만들고 검증한 뒤 outbox 전달과 User_Input 폴링을
-   시작합니다.
+   시작합니다. 넘길 provider 옵션이나 직접 시작할 내부 bootstrap은 없습니다.
+
+> **레거시 스프레드시트 참고.** 이전 Apps Script provider가 developer
+> metadata 행 anchor로 프로비저닝한 스프레드시트는 마이그레이션되지
+> 않습니다. `User_Input` 탭은 이제 `__hikoutei_row_id` 시스템 컬럼이
+> 필요하므로 레거시 탭을 다시 프로비저닝해야 합니다.
 
 Hikoutei는 내구성 있는 로컬 outbox, 멱등 전달, 충돌을 인지하는 업데이트를
 사용하므로 일시적인 API 실패가 커밋된 애플리케이션 쓰기를 잃게 하지 않습니다.
@@ -201,15 +210,46 @@ MikroORM은 구현 세부 사항이며 Hikoutei의 공개 엔티티 API에는 �
 
 ## 프로젝트 상태
 
-Hikoutei는 활발히 개발 중입니다. 엔티티 API는 사용 가능하지만, 시트 편집
-수집과 충돌 표시는 아직 발전 중입니다. 마이너 버전 업그레이드 전에 릴리스
-노트를 확인하세요.
+Hikoutei는 활발히 개발 중입니다. 현재 EntityManager는 스칼라 엔티티의 생명주기
+작업, 동등 조건을 사용하는 `find()` / `findOne()`, `find()`의 `limit` /
+`offset` 페이지네이션, 콜백형 `transactional()`을 지원합니다. 일반 읽기는
+Google Sheets가 아니라 항상 SQLite에서 수행됩니다. `hikoutei setup` CLI가
+스프레드시트와 서비스 계정을 프로비저닝하며, direct Google Sheets API
+provider(환경 변수 자동 시작)가 유일한 sync 경로입니다 — Apps Script
+gateway가 없습니다. 시트 편집 수집과 충돌 표시는
+아직 발전 중입니다. 마이너 버전 업그레이드 전에 릴리스 노트를 확인하세요.
 
 ## 로드맵
 
+EntityManager 로드맵은 아래 구현 순서를 따릅니다. 단계 순서는 확정되어 있지만,
+일정이나 릴리스 번호는 약속하지 않습니다.
+
+1. **풍부한 로컬 읽기**
+   - Hikoutei가 정의한 타입 쿼리 계약에 명시적 `eq`, `ne`, `gt`, `gte`,
+     `lt`, `lte`, `in`, `nin`, `like` 조건과 `orderBy`, `count()`,
+     `findAndCount()`를 추가합니다.
+   - MikroORM 쿼리 타입을 노출하지 않고 이 기능들을 기존 `limit` / `offset`
+     페이지네이션과 조합합니다.
+2. **생명주기 안전 쓰기**
+   - `upsert`와 direct/bulk mutation 기능은 엔티티 테이블, canonical state,
+     내구성 있는 Sheet effect outbox를 하나의 SQLite 트랜잭션에서 처리하는
+     Hikoutei 정의 계약을 통해서만 추가합니다.
+   - 이 원자적 생명주기를 우회할 수 있는 원시 `nativeInsert`, `nativeUpdate`,
+     `nativeDelete` 또는 SQL 패스스루 API는 약속하지 않습니다.
+3. **관계와 로딩**
+   - many-to-one, one-to-many, `populate()` 기능을 추가합니다.
+   - 공개 전에 관계의 SQLite 매핑, Sheets 프로젝션 표현, 스키마 동작, 충돌
+     의미론을 함께 설계합니다.
+4. **스키마 운영**
+   - 마이그레이션과 스키마 드리프트 관리를 추가합니다.
+   - 검증 및 운영 흐름을 기존 설정 도구와 통합합니다.
+
+### 동기화 및 운영
+
+다음 작업은 EntityManager 단계와 병행합니다.
+
 - Google Sheets에서 의도적인 사용자 편집 수집 완성
 - 업데이트·삭제 충돌 처리와 표시 개선
-- 레지스트리 및 직접 provider 배포를 위한 설정 도구 추가
 
 현재 작업은 [오픈 이슈](https://github.com/ManddarinShop/Hikoutei/issues)를
 참고하세요.

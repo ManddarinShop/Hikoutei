@@ -12,10 +12,9 @@ import {
   type SyncTimingSink,
 } from "../../../sync/telemetry/syncTiming.js";
 import {
-  TYPED_SHEETS_ENTITY_CHANGE_KINDS,
-  type TypedSheetsEntityChange,
-  type TypedSheetsEntityChangeKind,
-} from "../../api/contracts.js";
+  SCALAR_ENTITY_CHANGE_KINDS,
+  type ScalarEntityFlushChange,
+} from "../../../../adapter/persistence/contracts/scalar.js";
 import type {
   MappedChangePlan,
   ResolvedWriterOptions,
@@ -23,14 +22,14 @@ import type {
 
 /** Stable translation from entity lifecycle states to timing operation states. */
 const SYNC_TIMING_OPERATION_BY_ENTITY_CHANGE_KIND = {
-  [TYPED_SHEETS_ENTITY_CHANGE_KINDS.CREATE]: SYNC_TIMING_OPERATION_KINDS.APPEND,
-  [TYPED_SHEETS_ENTITY_CHANGE_KINDS.UPDATE]: SYNC_TIMING_OPERATION_KINDS.UPDATE,
-  [TYPED_SHEETS_ENTITY_CHANGE_KINDS.DELETE]: SYNC_TIMING_OPERATION_KINDS.DELETE,
-} as const satisfies Record<TypedSheetsEntityChangeKind, SyncTimingOperationKind>;
+  [SCALAR_ENTITY_CHANGE_KINDS.INSERT]: SYNC_TIMING_OPERATION_KINDS.APPEND,
+  [SCALAR_ENTITY_CHANGE_KINDS.UPDATE]: SYNC_TIMING_OPERATION_KINDS.UPDATE,
+  [SCALAR_ENTITY_CHANGE_KINDS.DELETE]: SYNC_TIMING_OPERATION_KINDS.DELETE,
+} as const satisfies Record<ScalarEntityFlushChange["kind"], SyncTimingOperationKind>;
 
 /** Converts public entity lifecycle kinds into timing operation kinds. */
 export function timingOperationKind(
-  value: TypedSheetsEntityChange["kind"],
+  value: ScalarEntityFlushChange["kind"],
 ): SyncTimingOperationKind {
   return SYNC_TIMING_OPERATION_BY_ENTITY_CHANGE_KIND[value];
 }

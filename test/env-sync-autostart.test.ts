@@ -521,7 +521,7 @@ describe("env-driven sync auto-start", () => {
       entities: {
         SyncAutoUser: {
           systemState: { tabName: SYSTEM_TAB, registeredRange: "A:C" },
-          userInput: { tabName: INPUT_TAB, registeredRange: "A:B" },
+          userInput: { tabName: INPUT_TAB, registeredRange: "A:C" },
           syncConflicts: { tabName: CONFLICTS_TAB, registeredRange: "A:O" },
           userOwnedFields: ["id", "status"],
         },
@@ -534,10 +534,10 @@ describe("env-driven sync auto-start", () => {
       spreadsheetId: "spreadsheet-1",
       entities: {
         SyncAutoSingle: {
-          // User_Input becomes a single column; System_State adds only the
-          // tombstone column next to it.
+          // User_Input becomes the system row-id column next to the single
+          // property; System_State adds only the tombstone column.
           systemState: { tabName: "SyncAutoSingle_System", registeredRange: "A:B" },
-          userInput: { tabName: "SyncAutoSingle_Input", registeredRange: "A:A" },
+          userInput: { tabName: "SyncAutoSingle_Input", registeredRange: "A:B" },
           syncConflicts: { tabName: "SyncAutoSingle_Conflicts", registeredRange: "A:O" },
           userOwnedFields: ["id"],
         },
@@ -553,7 +553,7 @@ describe("env-driven sync auto-start", () => {
       entities: {
         SyncAutoWide: {
           systemState: { tabName: "SyncAutoWide_System", registeredRange: "A:AB" },
-          userInput: { tabName: "SyncAutoWide_Input", registeredRange: "A:AA" },
+          userInput: { tabName: "SyncAutoWide_Input", registeredRange: "A:AB" },
           syncConflicts: { tabName: "SyncAutoWide_Conflicts", registeredRange: "A:O" },
           userOwnedFields: wideUserOwnedFields,
         },
@@ -629,11 +629,12 @@ describe("env-driven sync auto-start", () => {
       "SyncAutoSingle_Conflicts",
     ]);
 
-    // The User_Input tab carries exactly one header column.
+    // The User_Input tab carries the property header plus the internal
+    // __hikoutei_row_id system column.
     const inputTab = spreadsheet.findTab("SyncAutoSingle_Input");
     expect(inputTab).toBeDefined();
     expect(inputTab?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
-    expect(inputTab?.cell(0, 1)).toBeUndefined();
+    expect(inputTab?.cell(0, 1)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
 
     // The drained append writes the single value into the first column.
     const em = service.hikoutei.em.fork();
@@ -780,7 +781,7 @@ describe("env-driven sync auto-start", () => {
     await session3.hikoutei.close();
   });
 
-  it("records a human edit during downtime as a durable conflict and resolves system-wins", async () => {
+  it("records a human edit during downtime as a durable OPEN conflict and resolves only after a later same-field canonical advance (issue #196)", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const dbName = tempDbName("conflict");
     const { spreadsheet, transport } = newTransport();
@@ -809,9 +810,9 @@ describe("env-driven sync auto-start", () => {
       inputTab.cells.set("1,1", { userEnteredValue: { stringValue: "human-edit" } });
     }
 
-    // Session 2: startup must classify the divergence as a conflict (the
-    // candidate is based on the pre-update revision), never silently apply
-    // the human value over the queued canonical update.
+    // Session 2: startup classifies the divergence as a conflict (the
+    // candidate is based on the pre-update revision) and never silently
+    // applies the human value over the queued canonical update.
     const session2 = await openSync(transport, credentialsPath, dbName);
     await session2.pollingSupervisor.runOnce();
 
@@ -822,9 +823,30 @@ describe("env-driven sync auto-start", () => {
       ));
     expect(conflicts.some((conflict) => conflict.field_name === "status")).toBe(true);
 
-    // The queued canonical update drains: its visible guard no longer matches
-    // the human-edited row, so the conflict resolution (system-wins) converges
-    // the sheet back to the canonical value and closes the conflict.
+    // Polling/restart alone must never resolve: zero resolution commands and
+    // the queued canonical update must not overwrite the human edit.
+    await expect(session2.storage.read(({ sql }) =>
+      sql.all<{ readonly command_id: string }>("SELECT command_id FROM resolution_command"))).resolves.toEqual([]);
+    await expect(session2.storage.read(({ sql }) =>
+      sql.get<{ readonly status: string }>(
+        "SELECT status FROM sync_conflict WHERE logical_sheet_id = ? AND field_name = 'status' ORDER BY updated_at DESC LIMIT 1",
+        ["entity:sync_auto_users"],
+      ))).resolves.toEqual({ status: "OPEN" });
+    await drainOutbox(session2);
+    expect(stubRowFields(inputTab as never, 2, [...INPUT_HEADERS]).status).toEqual({
+      kind: "string",
+      value: "human-edit",
+    });
+
+    // Only a later REAL field revision increase on the same conflicted field
+    // is the implicit system-wins trigger; the sheet then converges back to
+    // the canonical value and the conflict closes.
+    const em2 = session2.hikoutei.em.fork();
+    const u2 = await em2.findOne(User, { id: "u1" });
+    if (u2 === null) throw new Error("expected the session-2 entity");
+    u2.status = "completed";
+    await em2.flush();
+
     for (let index = 0; index < 10; index += 1) {
       const row = stubRowFields(inputTab as never, 2, [...INPUT_HEADERS]);
       const resolved = await session2.storage.read(({ sql }) =>
@@ -834,7 +856,7 @@ describe("env-driven sync auto-start", () => {
         ));
       if (
         row.status?.kind === "string" &&
-        row.status.value === "server-update" &&
+        row.status.value === "completed" &&
         resolved?.status === "RESOLVED"
       ) {
         break;
@@ -844,11 +866,11 @@ describe("env-driven sync auto-start", () => {
     }
 
     await expect(session2.hikoutei.em.fork().findOne(User, { id: "u1" })).resolves.toMatchObject({
-      status: "server-update",
+      status: "completed",
     });
     expect(stubRowFields(inputTab as never, 2, [...INPUT_HEADERS]).status).toEqual({
       kind: "string",
-      value: "server-update",
+      value: "completed",
     });
     const finalConflict = await session2.storage.read(({ sql }) =>
       sql.get<{ readonly status: string }>(
@@ -862,6 +884,8 @@ describe("env-driven sync auto-start", () => {
     expect(conflictsTab?.cell(1, 0)?.userEnteredValue?.stringValue).toBeTypeOf("string");
     await session2.hikoutei.close();
   });
+
+
 
   // -------------------------------------------------------------------------
   // Public createTypedSheets wiring

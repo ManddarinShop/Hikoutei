@@ -10,7 +10,16 @@ import { FENCE_EXISTS_SQL } from "./writerLease.js";
 
 export { FENCE_EXISTS_SQL } from "./writerLease.js";
 
-export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
+/**
+ * The recoverable `failed` error codes that the worker retries on its own.
+ *
+ * This set is the single source of truth: the SQL fragment below and the
+ * terminal-failed-head recovery check in the reconciliation scanner both
+ * derive from it. A `failed` head whose `last_error_code` is NOT in this set
+ * is terminal (for example `delivery_uncertain_timeout`) and must be
+ * superseded by a scanner repair effect before its stream can progress.
+ */
+export const RECOVERABLE_EFFECT_ERROR_CODES: ReadonlySet<string> = new Set([
   SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
   SYNC_EFFECT_RECOVERY_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
   // Pre-rename databases may carry the legacy provider code; failed rows
@@ -19,8 +28,23 @@ export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [
   SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED,
   SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAVAILABLE,
   SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_UNAPPLIED_REQUIRES_REDRIVE,
-].map((code) => `'${code}'`)
+]);
+
+export const RECOVERABLE_EFFECT_ERROR_CODE_SQL = [...RECOVERABLE_EFFECT_ERROR_CODES]
+  .map((code) => `'${code}'`)
   .join(", ");
+
+/**
+ * Returns true when a `failed` effect's error code keeps it on the retry path.
+ *
+ * Recoverable failed heads stay owned by the worker retry loop and must not
+ * be superseded by reconciliation; terminal failed heads (non-recoverable
+ * codes such as `delivery_uncertain_timeout`) are superseded so a repair can
+ * become the stream head.
+ */
+export function isRecoverableEffectErrorCode(code: string | null | undefined): boolean {
+  return code !== null && code !== undefined && RECOVERABLE_EFFECT_ERROR_CODES.has(code);
+}
 
 export const CLAIM_EFFECT_SQL = `
   UPDATE sheet_effect_outbox AS candidate
@@ -247,6 +271,13 @@ export const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
   SELECT COUNT(*) AS count
   FROM sheet_effect_outbox
   WHERE status IN ('pending', 'processing', 'delivery_uncertain')
+`;
+
+/** Reads the durable confirmed revision for one projection binding. */
+export const READ_CONFIRMED_VISIBLE_REVISION_SQL = `
+  SELECT confirmed_visible_revision
+  FROM sheet_visible_state
+  WHERE physical_sheet_id = ? AND projection = ? AND row_binding_id = ?
 `;
 
 export const UPSERT_VISIBLE_STATE_SQL = `

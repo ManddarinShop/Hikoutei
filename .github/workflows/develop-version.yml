@@ -77,6 +77,32 @@ jobs:
             --base-version="$base_version" \
             --bump=patch)"
           npm version "$next_version" --no-git-tag-version
+          # Bump the @hikoutei/ikisaki kernel patch version only when its
+          # source or manifest changed since the last develop release, and keep
+          # the root dependency in lockstep so hikoutei never references a
+          # kernel version that lacks the merged changes.
+          ikisaki_changed="false"
+          last_tag="$(git describe --tags --match 'develop-v*' --abbrev=0 2>/dev/null || true)"
+          if [[ -n "$last_tag" ]] && git diff --name-only "$last_tag"..HEAD -- packages/ikisaki/src packages/ikisaki/package.json | grep -q .; then
+            ikisaki_changed="true"
+          fi
+          ikisaki_next_version=""
+          if [[ "$ikisaki_changed" == "true" ]]; then
+            ikisaki_base_version="$(node -p "require('./packages/ikisaki/package.json').version")"
+            ikisaki_next_version="$(node scripts/ci/release-version.mjs \
+              --base-version="$ikisaki_base_version" \
+              --bump=patch)"
+            npm version "$ikisaki_next_version" --no-git-tag-version -w packages/ikisaki
+            node -e '
+              const fs = require("node:fs");
+              const next = process.argv[1];
+              const pkgPath = "./package.json";
+              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+              pkg.dependencies["@hikoutei/ikisaki"] = next;
+              fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+            ' "$ikisaki_next_version"
+            npm install --package-lock-only --no-audit --no-fund --ignore-scripts
+          fi
           node -e '
             const expected = process.argv[1];
             const pkg = require("./package.json");
@@ -84,13 +110,20 @@ jobs:
             if (pkg.name !== "hikoutei" || pkg.version !== expected || lock.version !== expected || lock.packages[""].version !== expected) process.exit(1);
           ' "$next_version"
           echo "version=$next_version" >> "$GITHUB_OUTPUT"
+          echo "ikisaki_changed=$ikisaki_changed" >> "$GITHUB_OUTPUT"
+          echo "ikisaki_version=$ikisaki_next_version" >> "$GITHUB_OUTPUT"
 
       - name: Verify version bump scope
         shell: bash
+        env:
+          IKISAKI_CHANGED: ${{ steps.version.outputs.ikisaki_changed }}
         run: |
           set -euo pipefail
           changed="$(git diff --name-only | sort)"
           expected=$'package-lock.json\npackage.json'
+          if [[ "$IKISAKI_CHANGED" == "true" ]]; then
+            expected=$'package-lock.json\npackage.json\npackages/ikisaki/package.json'
+          fi
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
             exit 1
@@ -100,11 +133,15 @@ jobs:
         shell: bash
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          IKISAKI_CHANGED: ${{ steps.version.outputs.ikisaki_changed }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json
+          if [[ "$IKISAKI_CHANGED" == "true" ]]; then
+            git add packages/ikisaki/package.json
+          fi
           git commit -m "chore(release): bump develop version to $RELEASE_VERSION"
           git tag -a "develop-v$RELEASE_VERSION" \
             -m "chore(release): develop $RELEASE_VERSION"

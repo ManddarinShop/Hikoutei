@@ -17,18 +17,18 @@ import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/sheets/syncSheets.js";
-import { SYNC_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/sheets/constants.js";
-import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
+import { SYNC_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
-import type { NewEffect } from "../src/infrastructure/storage/index.js";
+import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import type { NewEffect } from "@hikoutei/ikisaki";
 
 const EntitySchema = defineEntity({
   name: "SyncEffectRecoveryEntity",
@@ -51,7 +51,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const claim = await claimWriterLeaseWithAdapter(adapter, {
@@ -117,7 +117,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const claim = await claimWriterLeaseWithAdapter(adapter, {
@@ -172,7 +172,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const claim = await claimWriterLeaseWithAdapter(adapter, {
@@ -237,7 +237,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const claim = await claimWriterLeaseWithAdapter(adapter, {
@@ -345,7 +345,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
     const claim = await claimWriterLeaseWithAdapter(adapter, {
       role: "sync-effect-worker",
@@ -434,7 +434,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const claim = await claimWriterLeaseWithAdapter(adapter, {
@@ -477,7 +477,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const claim = await claimWriterLeaseWithAdapter(adapter, {
@@ -562,7 +562,7 @@ describe("sync effect recovery", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
     await registerProjection(adapter);
 
     const claim = await claimWriterLeaseWithAdapter(adapter, {
@@ -639,7 +639,7 @@ async function runWorkerWithThrownProvider(
   const orm = await createOrm();
   openOrms.push(orm);
   const adapter = new MikroOrmSqliteAdapter(orm);
-  await migrateMikroOrmSqliteSchema(adapter);
+  await migrateSqliteSchema(adapter);
   await registerProjection(adapter);
   const claim = await claimWriterLeaseWithAdapter(adapter, {
     role: "sync-effect-worker",

@@ -31,6 +31,7 @@ import type {
   RetryClaimedEffectOptions,
 } from "./contracts.js";
 import {
+  isRecoverableEffectErrorCode,
   APPLY_EFFECT_RESULT_SQL,
   CLAIM_EFFECT_SQL,
   COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL,
@@ -63,6 +64,11 @@ import {
   writeProjectionConfirmationWithSql,
 } from "./support.js";
 export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./contracts.js";
+export {
+  RECOVERABLE_EFFECT_ERROR_CODES,
+  RECOVERABLE_EFFECT_ERROR_CODE_SQL,
+  isRecoverableEffectErrorCode,
+} from "./outboxSql.js";
 export type {
   AppliedEffectResultOptions,
   ApplyResultOptions,
@@ -284,6 +290,44 @@ export async function supersedeAndReplanWithAdapter(
   newEffect: NewEffect,
 ): Promise<void> {
   await storage.transaction(({ sql }) => supersedeAndReplanWithSql(sql, fence, oldEffectId, newEffect));
+}
+
+/**
+ * Supersedes one effect without inserting a replacement.
+ *
+ * Used by reconciliation recovery to clear a terminal `failed` stream head
+ * when a later correction already exists on the stream (for example a repair
+ * that the old scanner enqueued while blocked). The durable outbox keeps the
+ * `last_error_*` evidence; only the lifecycle advances to `superseded`, with
+ * `supersedes_effect_id` linking to the effect that now owns the stream.
+ *
+ * Returns true when exactly one effect was superseded under the current fence.
+ */
+export async function supersedeEffectWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  effectId: string,
+  supersededByEffectId: string,
+): Promise<boolean> {
+  await requireCurrentFenceWithSql(sql, fence);
+  const result = await sql.run(SUPERSEDE_EFFECT_SQL, [
+    supersededByEffectId,
+    effectId,
+    ...fenceParameters(fence),
+  ]);
+  return result.changes === 1;
+}
+
+/** Supersedes one effect without replacement inside an adapter transaction. */
+export async function supersedeEffectWithAdapter(
+  storage: SqlStorageAdapter,
+  fence: FencingContext,
+  effectId: string,
+  supersededByEffectId: string,
+): Promise<boolean> {
+  return storage.transaction(({ sql }) =>
+    supersedeEffectWithSql(sql, fence, effectId, supersededByEffectId),
+  );
 }
 
 /**

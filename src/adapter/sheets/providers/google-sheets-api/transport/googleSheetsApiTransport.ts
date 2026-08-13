@@ -92,14 +92,6 @@ export type GoogleSheetsApiWriteRequest =
     readonly strict: boolean;
   }
   | {
-    readonly kind: "createDeveloperMetadata";
-    readonly sheetId: number;
-    /** 0-based row index for the metadata location. */
-    readonly rowIndex: number;
-    readonly key: string;
-    readonly value: string;
-  }
-  | {
     /**
      * Harness/cleanup-only request kind: the provider itself never emits
      * deleteSheet. Live scenario cleanup uses it to remove fixture tabs;
@@ -385,27 +377,6 @@ function toSdkRequest(request: GoogleSheetsApiWriteRequest): unknown {
           rule: {
             condition: { type: "BOOLEAN" },
             strict: request.strict,
-          },
-        },
-      };
-    case "createDeveloperMetadata":
-      return {
-        createDeveloperMetadata: {
-          developerMetadata: {
-            metadataKey: request.key,
-            metadataValue: request.value,
-            location: {
-              dimensionRange: {
-                sheetId: request.sheetId,
-                dimension: "ROWS",
-                startIndex: request.rowIndex,
-                endIndex: request.rowIndex + 1,
-              },
-            },
-            // DOCUMENT-scoped metadata is visible across Cloud projects, so
-            // anchors written by the service-account project stay findable by
-            // any other project (and vice versa) that shares the spreadsheet.
-            visibility: "DOCUMENT",
           },
         },
       };

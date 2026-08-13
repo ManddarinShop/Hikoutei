@@ -7,11 +7,9 @@
  * registration, provider provisioning, the bounded effect worker, polling,
  * and the MikroORM-backed storage/CAS/hash machinery end to end.
  *
- * The scenario loads implementation modules directly from the installed
- * package's `dist/` tree. The `hikoutei/orm` and `hikoutei/mikro-orm` package
- * subpaths are intentionally rejected; the public contract is the high-level
- * `hikoutei` root API. This scenario remains focused on internal sync/provider
- * behavior rather than public API CRUD coverage.
+ * The scenario is a repository-owned internal harness. It exercises internal
+ * sync/provider behavior rather than the supported packed root API, which is
+ * covered separately by `run-root-api-scenario.mjs`.
  */
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -29,43 +27,57 @@ import process from "node:process";
 import { performance } from "node:perf_hooks";
 
 import { defineEntity, p } from "@mikro-orm/sql";
-// This is an internal package-consumer harness, not application code. Resolve
-// the implementation modules directly from the installed package; only the
-// root `hikoutei` entrypoint is an application-facing export.
-const packageEntry = import.meta.resolve("hikoutei");
-const packageDist = new URL("./", packageEntry);
-const [mapping, flush, mappedRuntime, sqliteAdapter, sqliteSchema, polling, provisioning, sheetsDispatcher, encoding, outboxWorker] =
+// Internal harness imports are resolved from the repository source tree. The
+// package's private dist layout is not treated as an internal compatibility
+// contract.
+const sourceRoot = new URL("../../src/", import.meta.url);
+const [entityApi, entityManagerApi, scalarProviderApi, mappedFlushApi, mapping, mappedRuntime, sqliteAdapter, sqliteSchema, provisioning, sheetsDispatcher, encoding, outboxWorker] =
   await Promise.all([
-    import(new URL("./application/orm/mapping/entityMapping.js", packageDist).href),
-    import(new URL("./application/orm/persistence/flush/flushCoordinator.js", packageDist).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js", packageDist).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", packageDist).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", packageDist).href),
-    import(new URL("./application/sync/inbound/polling/SimpleSheetPolling.js", packageDist).href),
-    import(new URL("./application/sync/sheets/sheetsProvisioning.js", packageDist).href),
-    import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", packageDist).href),
-    import(new URL("./shared/encoding/index.js", packageDist).href),
+    import(new URL("./api/entity.js", sourceRoot).href),
+    import(new URL("./api/internalEntityManager.js", sourceRoot).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js", sourceRoot).href),
+    import(new URL("./application/orm/persistence/flush/flushCoordinator.js", sourceRoot).href),
+    import(new URL("./application/orm/mapping/entityMapping.js", sourceRoot).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", sourceRoot).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", sourceRoot).href),
+    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", sourceRoot).href),
+    import(new URL("./application/sync/sheetsContract/sheetsProvisioning.js", sourceRoot).href),
+    import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", sourceRoot).href),
+    import(new URL("./shared/encoding/index.js", sourceRoot).href),
     import("@hikoutei/ikisaki"),
   ]);
+const { defineTypedSheetsEntity } = entityApi;
+const { getEntityDescriptor } = entityApi;
+const { createEntityManager } = entityManagerApi;
+const { MikroOrmScalarPersistenceProvider } = scalarProviderApi;
+const {
+  createMappedTypedSheetsFlushCoordinator,
+  registeredTypedSheetsProjectionDefinitions,
+  registerTypedSheetsEntityMappings,
+} = mappedFlushApi;
 const { defineTypedSheetsEntityMapping } = mapping;
-const { registeredTypedSheetsProjectionDefinitions, registerTypedSheetsEntityMappings } = flush;
-const { createMappedTypedSheetsOrm, initializeMappedTypedSheetsOrm } = mappedRuntime;
+const { initializeMappedRuntime } = mappedRuntime;
 const { initializeMikroOrmSqliteAdapter } = sqliteAdapter;
 const { migrateMikroOrmSqliteStorageSchema } = sqliteSchema;
-const { pollSimpleSheetRowsWithAdapter } = polling;
 const { provisionRegisteredSyncSheets } = provisioning;
 const { SheetsEffectDispatcher } = sheetsDispatcher;
 const { runEffectWorkerWithAdapter } = outboxWorker;
 const { stableHash } = encoding;
 const [directSheets, mappedPolling] = await Promise.all([
-  import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", packageDist).href),
-  import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", packageDist).href),
+  import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", sourceRoot).href),
+  import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", sourceRoot).href),
 ]);
 const { GoogleSheetsApiSyncProvider, GoogleSheetsApiHttpTransport } = directSheets;
 const { pollMappedUserInputWithMikroOrm } = mappedPolling;
 
 await assertLegacyPackageSubpathsUnavailable();
 
+/**
+ * Asserts the repository's own exports boundary: `hikoutei/orm` and
+ * `hikoutei/mikro-orm` must not be importable through the package name (the
+ * package self-reference respects the `exports` map, so the guard works from
+ * the checkout exactly as it does from an installed consumer).
+ */
 async function assertLegacyPackageSubpathsUnavailable() {
   for (const subpath of ["orm", "mikro-orm"]) {
     await assert.rejects(
@@ -84,6 +96,7 @@ class FakeSyncSheetsProvider {
     this.sheets = new Map();
     this.effects = new Map();
     this.calls = [];
+    this.anchorSequence = 0;
   }
 
   async provisionRegistry(registrations) {
@@ -119,7 +132,9 @@ class FakeSyncSheetsProvider {
     // full-header row) so the effect worker can close the outbox entry.
     const results = request.rows.map((row) => {
       const fields = this.completeFields(sheet.headers, row.fields);
-      sheet.rows.push({ fields, revision: 1 });
+      // The built-in append path never materializes anchor metadata, so the
+      // row starts unanchored exactly like the real provider's fast append.
+      sheet.rows.push({ fields, revision: 1, anchor: null });
       return {
         effectId: row.effectId,
         status: "applied",
@@ -159,7 +174,24 @@ class FakeSyncSheetsProvider {
 
   async ensureRowAnchors(request) {
     const sheet = this.requireSheet(request.sheetName);
-    return { assigned: 0, existing: sheet.rows.length, duplicateAnchors: [] };
+    // Mirror the real provider's anchor pass: only user_input tabs carry the
+    // system row-id column, so only their unanchored rows are assigned fresh
+    // sync-anchor values; system_state rows are identity-located and never
+    // anchored (the real anchor pass returns zeros for them).
+    if (request.projection !== "user_input") {
+      return { assigned: 0, existing: 0, duplicateAnchors: [] };
+    }
+    let assigned = 0;
+    let existing = 0;
+    for (const row of sheet.rows) {
+      if (row.anchor === null) {
+        row.anchor = this.nextSyncAnchor();
+        assigned += 1;
+      } else {
+        existing += 1;
+      }
+    }
+    return { assigned, existing, duplicateAnchors: [] };
   }
 
   async readSnapshot(request) {
@@ -173,16 +205,37 @@ class FakeSyncSheetsProvider {
       headers: [...sheet.headers],
       rows: sheet.rows.map((row, index) => ({
         rowNumber: index + 2,
-        physicalAnchor: absent(),
+        physicalAnchor: row.anchor === null ? absent() : present(row.anchor),
         visibleRevision: present(row.revision),
-        visibleHash: absent(),
-        cells: Object.fromEntries(Object.entries(row.fields).map(([field, value]) => [
-          field,
-          { normalizedCell: value, stableHash: absent() },
-        ])),
+        visibleHash: present(visibleHash(row.fields, row.fields)),
+        cells: Object.fromEntries(sheet.headers.map((header) => {
+          const value = row.fields[header] ?? null;
+          return [
+            header,
+            value === null
+              ? {
+                  normalizedCell: null,
+                  cellKind: "blank",
+                  formulaHash: absent(),
+                  mergeRange: absent(),
+                  errorCode: absent(),
+                  stableHash: present(stableHash(null)),
+                }
+              : {
+                  normalizedCell: value,
+                  cellKind: "literal",
+                  formulaHash: absent(),
+                  mergeRange: absent(),
+                  errorCode: absent(),
+                  stableHash: present(stableHash(value)),
+                },
+          ];
+        })),
       })),
       snapshotHash: "fake-snapshot",
-      unanchoredRows: sheet.rows.map((_, index) => index + 2),
+      unanchoredRows: sheet.rows
+        .map((row, index) => (row.anchor === null ? index + 2 : null))
+        .filter((rowNumber) => rowNumber !== null),
       duplicateAnchors: [],
     };
   }
@@ -243,7 +296,13 @@ class FakeSyncSheetsProvider {
       if (effect.expectedVisibleRevision !== 0 || effect.expectedVisibleHash !== "") {
         return this.effectResult(effect, "guard_mismatch", 0, "", "insert requires an empty visible baseline");
       }
-      sheet.rows.push({ fields: this.completeFields(sheet.headers, effect.payload.fields), revision: effect.expectedVisibleRevision + 1 });
+      sheet.rows.push({
+        fields: this.completeFields(sheet.headers, effect.payload.fields),
+        revision: effect.expectedVisibleRevision + 1,
+        // The regular write path materializes the target anchor metadata in
+        // the same Sheets batch, so inserted rows are already anchored.
+        anchor: effect.payload.targetAnchor,
+      });
     } else {
       const currentHash = visibleHash(sheet.rows[rowIndex].fields, effect.payload.fields);
       if (currentHash === effect.payload.targetVisibleHash) {
@@ -289,6 +348,12 @@ class FakeSyncSheetsProvider {
 
   completeFields(headers, fields) {
     return Object.fromEntries(headers.map((header) => [header, fields[header] ?? null]));
+  }
+
+  /** Mirrors the real provider's observation-assigned anchor format. */
+  nextSyncAnchor() {
+    this.anchorSequence += 1;
+    return `sync-anchor:${this.anchorSequence}`;
   }
 
   requireSheet(sheetName) {
@@ -477,16 +542,17 @@ async function main() {
       sheetNames,
       recordTiming: (event) => timings.push({ phase: "internal", ...event }),
     }));
-    const { orm, storage, provider, definitions, entity, mapping, writer, provision } = runtime;
+    const { manager, storage, provider, definitions, entity, entityToken, mapping, writer, provision } = runtime;
     const systemDefinition = requireDefinition(definitions, "system_state");
     const userDefinition = requireDefinition(definitions, "user_input");
-    const em = orm.em.fork();
+    const em = manager;
     const entityId = `${prefix}-order-1`;
     const conflictEntityId = `${prefix}-order-conflict`;
     const systemGuardEntityId = `${prefix}-order-system-guard`;
 
-    await measure("initialize_mapped_orm", "setup", () => smokeInitializeMappedOrm({
+    await measure("initialize_mapped_runtime", "setup", () => smokeInitializeMappedRuntime({
       entity,
+      entityToken,
       mapping,
       prefix,
     }));
@@ -502,7 +568,7 @@ async function main() {
     }
 
     await measure("create_and_flush", "steady_state", async () => {
-      const order = em.create(entity, { id: entityId, status: "pending" });
+      const order = em.create(entityToken, { id: entityId, status: "pending" });
       em.persist(order);
       await em.flush();
       assertions += 1;
@@ -522,7 +588,7 @@ async function main() {
       });
     }
     await measure("read_after_create", "steady_state", async () => {
-      const loaded = await em.findOne(entity, { id: entityId });
+      const loaded = await em.findOne(entityToken, { id: entityId });
       assert.notEqual(loaded, null);
       assert.equal(loaded.status, "pending");
       const rows = await provider.readRows(backend.readRequest(systemDefinition));
@@ -530,7 +596,7 @@ async function main() {
       assert.equal(cellValue(rows.rows[0]?.fields.id), entityId);
       assertions += 3;
     });
-    const loaded = await em.findOne(entity, { id: entityId });
+    const loaded = await em.findOne(entityToken, { id: entityId });
     assert.notEqual(loaded, null);
 
     await measure("update_and_flush", "steady_state", async () => {
@@ -544,7 +610,7 @@ async function main() {
       assertions += 1;
     });
     await measure("read_after_update", "steady_state", async () => {
-      const readBack = await em.findOne(entity, { id: entityId });
+      const readBack = await em.findOne(entityToken, { id: entityId });
       assert.notEqual(readBack, null);
       assert.equal(readBack.status, "paid");
       assertions += 2;
@@ -556,8 +622,8 @@ async function main() {
       // simulated human edit flows through full observation into SQLite, and
       // verify both CAS guards (candidate on User_Input, visible on System).
       await measure("seed_conflict_entity", "steady_state", async () => {
-        const conflictEm = orm.em.fork();
-        conflictEm.persist(conflictEm.create(entity, { id: conflictEntityId, status: "pending" }));
+        const conflictEm = manager.fork();
+        conflictEm.persist(conflictEm.create(entityToken, { id: conflictEntityId, status: "pending" }));
         await conflictEm.flush();
         const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
         assert.equal(reports.at(-1)?.selected ?? 0, 0);
@@ -569,8 +635,8 @@ async function main() {
         // user_input projection is blocked (blocked_candidate) can no longer
         // enqueue further projection effects, so the system guard must target
         // a fresh entity with an unblocked input projection.
-        const guardEm = orm.em.fork();
-        guardEm.persist(guardEm.create(entity, { id: systemGuardEntityId, status: "pending" }));
+        const guardEm = manager.fork();
+        guardEm.persist(guardEm.create(entityToken, { id: systemGuardEntityId, status: "pending" }));
         await guardEm.flush();
         const reports = await runWorkerUntilIdle(storage, provider, `${prefix}-worker`);
         assert.equal(reports.at(-1)?.selected ?? 0, 0);
@@ -584,12 +650,11 @@ async function main() {
           field: "status",
           value: "edited-by-user",
         });
-        const mapped = await pollMappedUserInputWithMikroOrm({
+        const mapped = await pollMappedUserInput({
           storage,
           provider,
-          mappings: [mapping],
+          mapping,
           writer,
-          mode: "adaptive",
           forceFull: true,
         });
         assert.equal(mapped.appliedRows, 1);
@@ -597,7 +662,7 @@ async function main() {
         // The long-lived em fork's identity map predates the polling write;
         // read the persisted entity through a fresh fork so the assertion
         // observes the SQLite row, not the stale managed instance.
-        const reloaded = await orm.em.fork().findOne(entity, { id: entityId });
+        const reloaded = await manager.fork().findOne(entityToken, { id: entityId });
         assert.notEqual(reloaded, null);
         assert.equal(reloaded.status, "edited-by-user");
         assertions += 2;
@@ -613,8 +678,8 @@ async function main() {
           field: "status",
           value: "human-2",
         });
-        const em5 = orm.em.fork();
-        const target = await em5.findOne(entity, { id: conflictEntityId });
+        const em5 = manager.fork();
+        const target = await em5.findOne(entityToken, { id: conflictEntityId });
         assert.notEqual(target, null);
         if (target === null) throw new Error("conflict target entity missing");
         target.status = "paid-v2";
@@ -640,8 +705,8 @@ async function main() {
           field: "status",
           value: "human-sys",
         });
-        const em5b = orm.em.fork();
-        const target = await em5b.findOne(entity, { id: systemGuardEntityId });
+        const em5b = manager.fork();
+        const target = await em5b.findOne(entityToken, { id: systemGuardEntityId });
         assert.notEqual(target, null);
         if (target === null) throw new Error("system guard target entity missing");
         target.status = "paid-v4";
@@ -662,33 +727,47 @@ async function main() {
           field: "status",
           value: "edited-by-user",
         });
-        const result = await pollSimpleSheetRowsWithAdapter({
+        // The fake backend runs the adaptive values-only preflight first, so
+        // the mapped inspector sees full metadata observation after adaptive
+        // values detection. The poll accepts the human edit into canonical
+        // SQLite state and mirrors it to the System_State outbox.
+        const mapped = await pollMappedUserInput({
           storage,
           provider,
-          definitions: [userDefinition],
+          mapping,
+          writer,
         });
-        assert.equal(result.rowsScanned, 1);
-        assert.equal(result.changedRows.length, 1);
-        assert.deepEqual(result.changedRows[0]?.fields.status, {
-          kind: "string",
-          value: "edited-by-user",
-        });
-        assertions += 3;
+        assert.equal(mapped.appliedRows, 1);
+        assertions += 1;
+        // The long-lived em fork's identity map predates the polling write;
+        // read the persisted entity through a fresh fork so the assertion
+        // observes the SQLite row, not the stale managed instance.
+        const reloaded = await manager.fork().findOne(entityToken, { id: entityId });
+        assert.notEqual(reloaded, null);
+        assert.equal(reloaded.status, "edited-by-user");
+        assertions += 2;
       });
       await measure("polling_restored_row", "steady_state", async () => {
+        // The first mapped poll already applied "edited-by-user" to canonical
+        // SQLite state, so restoring the sheet value to "paid" is another
+        // changed/applied edit, not an unchanged row.
         await backend.mutateRow({
           sheetName: userDefinition.sheet.tabName,
           identity: entityId,
           field: "status",
           value: "paid",
         });
-        const result = await pollSimpleSheetRowsWithAdapter({
+        const mapped = await pollMappedUserInput({
           storage,
           provider,
-          definitions: [userDefinition],
+          mapping,
+          writer,
         });
-        assert.equal(result.rowsScanned, 1);
-        assert.equal(result.changedRows.length, 0);
+        assert.equal(mapped.appliedRows, 1);
+        assertions += 1;
+        const reloaded = await manager.fork().findOne(entityToken, { id: entityId });
+        assert.notEqual(reloaded, null);
+        assert.equal(reloaded.status, "paid");
         assertions += 2;
       });
     }
@@ -697,8 +776,8 @@ async function main() {
       // Read through a fresh fork: the long-lived em identity map predates the
       // polling-applied human edit, and the mapped delete fails closed when the
       // managed entity fields diverge from the User_Input row.
-      const deleteEm = orm.em.fork();
-      const fresh = await deleteEm.findOne(entity, { id: entityId });
+      const deleteEm = manager.fork();
+      const fresh = await deleteEm.findOne(entityToken, { id: entityId });
       assert.notEqual(fresh, null);
       if (fresh !== null) {
         deleteEm.remove(fresh);
@@ -714,7 +793,7 @@ async function main() {
     await measure("read_after_delete", "steady_state", async () => {
       // Fresh fork again: the long-lived em identity map still holds the
       // deleted instance and would return it instead of the SQLite row.
-      const readBack = await orm.em.fork().findOne(entity, { id: entityId });
+      const readBack = await manager.findOne(entityToken, { id: entityId });
       assert.equal(readBack, null);
       const userRows = await provider.readRows(backend.readRequest(userDefinition));
       const systemRows = await provider.readRows(backend.readRequest(systemDefinition));
@@ -773,7 +852,7 @@ async function main() {
   } finally {
     if (runtime !== undefined) {
       try {
-        await runtime.orm.close(true);
+        await runtime.storage.close(true);
       } catch (error) {
         cleanupError = error;
       }
@@ -824,6 +903,14 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
   class CiOrder extends OrderSchema.class {}
   OrderSchema.setClass(CiOrder);
 
+  const entityToken = defineTypedSheetsEntity({
+    name: "CiOrder",
+    tableName: "ci_orders",
+    properties: {
+      id: { type: "string", primary: true },
+      status: { type: "string" },
+    },
+  });
   const mapping = defineTypedSheetsEntityMapping({
     entity: CiOrder,
     entityName: "CiOrder",
@@ -858,7 +945,8 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
         physicalSheetId: `${prefix}-orders-input`,
         spreadsheetId,
         tabName: sheetNames[1],
-        registeredRange: "A:B",
+        // Last column is the internal __hikoutei_row_id system column.
+        registeredRange: "A:C",
         projection: "user_input",
       },
     ],
@@ -881,17 +969,24 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
     const definitions = registeredTypedSheetsProjectionDefinitions(registrations);
     const provider = backend.createProvider(definitions);
     const provision = await provisionRegisteredSyncSheets(provider, definitions);
-    const orm = createMappedTypedSheetsOrm(storage, {
-      mappings: [mapping],
-      writer,
-    });
+    const coordinator = createMappedTypedSheetsFlushCoordinator({ mappings: [mapping], writer });
+    const scalarProvider = new MikroOrmScalarPersistenceProvider(
+      storage,
+      [{ descriptor: getEntityDescriptor(entityToken), entity: CiOrder }],
+      coordinator,
+    );
+    const manager = createEntityManager(
+      scalarProvider,
+      new Map([[getEntityDescriptor(entityToken).name, getEntityDescriptor(entityToken)]]),
+    );
     return {
       tempRoot,
       storage,
-      orm,
+      manager,
       provider,
       definitions,
       entity: CiOrder,
+      entityToken,
       mapping,
       writer,
       provision,
@@ -903,10 +998,10 @@ async function createRuntime({ backend, prefix, sheetNames, recordTiming }) {
   }
 }
 
-async function smokeInitializeMappedOrm({ entity, mapping, prefix }) {
+async function smokeInitializeMappedRuntime({ entity, entityToken, mapping, prefix }) {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "hikoutei-ci-init-"));
   try {
-    const orm = await initializeMappedTypedSheetsOrm({
+    const runtime = await initializeMappedRuntime({
       dbName: path.join(tempRoot, "initializer.sqlite"),
       entities: [entity],
       mappings: [mapping],
@@ -914,10 +1009,30 @@ async function smokeInitializeMappedOrm({ entity, mapping, prefix }) {
         writerId: `${prefix}-initializer-smoke`,
       },
     });
-    await orm.close(true);
+    // The runtime facade owns the adapter; closing the ORM closes storage.
+    await runtime.storage.close(true);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+/**
+ * Runs one mapped User_Input polling pass against the repository's mapped
+ * polling production path (`pollMappedUserInputWithMikroOrm`), shared by the
+ * live and fake backends. The live backend keeps the forced full-metadata
+ * observation that matches its historical scenario shape; the fake backend
+ * runs the adaptive values-only preflight first so full metadata observation
+ * is exercised after adaptive values detection.
+ */
+async function pollMappedUserInput({ storage, provider, mapping, writer, forceFull }) {
+  return pollMappedUserInputWithMikroOrm({
+    storage,
+    provider,
+    mappings: [mapping],
+    writer,
+    mode: "adaptive",
+    ...(forceFull === true ? { forceFull: true } : {}),
+  });
 }
 
 async function runWorkerUntilIdle(storage, provider, workerId, allowConflicts = false) {

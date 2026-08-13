@@ -2,6 +2,7 @@
 
 import { EFFECT_KINDS } from "../constants.js";
 import type { ClaimedEffect } from "./contracts.js";
+import type { PendingEffect } from "../contracts.js";
 import type {
   ApplyEffectResult,
   Postcondition,
@@ -129,6 +130,14 @@ export async function completeProviderResult(
 }
 
 const DURABLE_PROBE_RETRY_DELAY_MS = 1_000;
+/**
+ * Maximum continuous delivery uncertainty before a response-loss probe is
+ * force-settled as failed. Bounds the recovery loop so a permanently
+ * unverifiable effect (for example a corrupted target sheet) cannot stay
+ * `delivery_uncertain` forever and keep the in-flight predecessor guard
+ * (`READ_PROCESSING_PREDECESSOR_SQL`) blocking later writes on its stream.
+ */
+const DURABLE_PROBE_MAX_UNCERTAIN_MS = 30_000;
 
 /**
  * Recovers response-loss effects by reading their remote postconditions.
@@ -314,6 +323,15 @@ export async function settleUnknownPostcondition(
     return;
   }
   if (postcondition.disposition === "unapplied") {
+    // The read-back proved the remote did not apply this effect, so it is
+    // returned to `pending` for a fresh dispatch (re-drive) rather than kept
+    // uncertain. This path is intentionally not bounded by
+    // `DURABLE_PROBE_MAX_UNCERTAIN_MS`: `retryClaimedEffect` resets
+    // `uncertain_since` to NULL, so the uncertainty clock does not persist
+    // across the re-queue, and `created_at` measures total enqueue age (not
+    // uncertainty) and would risk force-failing legitimate backlogged
+    // effects. The unbounded delivery_uncertain loop from #193 is closed by
+    // the bound in `deferDeliveryUncertain`, which every defer path reaches.
     const requeued = await storage.retryClaimedEffect({
       ...fence,
       effectId: item.pending.effect_id,
@@ -347,11 +365,30 @@ async function deferDeliveryUncertain(
   message: string,
   report: MutableReport,
 ): Promise<void> {
+  const uncertainSince = item.pending.uncertain_since ?? fence.now;
+  const uncertainForMs = fence.now - uncertainSince;
+  if (uncertainForMs >= DURABLE_PROBE_MAX_UNCERTAIN_MS) {
+    // The remote write stayed unverifiable past the durable probe bound:
+    // force-settle as failed so the in-flight predecessor guard stops
+    // blocking later writes on this target stream. The durable outbox keeps
+    // the failed effect together with its timeout evidence.
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.DELIVERY_UNCERTAIN_TIMEOUT,
+      presentValue(
+        "delivery_uncertain exceeded the durable probe bound; force-settled as failed.",
+      ),
+      report,
+    );
+    return;
+  }
   const marked = await storage.markDeliveryUncertain({
     ...fence,
     effectId: item.pending.effect_id,
     claimToken: item.claimToken,
-    uncertainSince: item.pending.uncertain_since ?? fence.now,
+    uncertainSince,
     nextProbeAt: fence.now + DURABLE_PROBE_RETRY_DELAY_MS,
     lastErrorCode: code,
     lastErrorMessage: message,
@@ -394,6 +431,13 @@ export async function completeApplied(
       visibleHash,
       entityRevision: applicabilityFromSqlNullable(item.pending.target_entity_revision),
       fieldHashes,
+      // A create-if-missing repair restarts the provider's revision counter
+      // at 1, so its confirmation may advance a higher durable confirmed
+      // revision instead of being rejected as a regression (which would
+      // wedge the applied effect in delivery_uncertain forever).
+      ...(isCreateIfMissingBaseline(item.pending)
+        ? { allowCreateRebaseline: true }
+        : {}),
     };
   const applied = await storage.applyEffectResult({
     ...fence,
@@ -533,6 +577,19 @@ function groupByRoute(
 
 function isAbsentInvalidPayload(item: ClaimedEffect): boolean {
   return isAbsent(item.invalidPayloadError);
+}
+
+/**
+ * True when the pending effect applied from an empty visible baseline.
+ *
+ * Only create-if-missing repairs carry revision 0 with an empty visible
+ * hash (the kernel forbids an empty hash at any other revision, and the
+ * provider only creates rows from that baseline), so only those effects may
+ * produce a receipt revision below a binding's confirmed revision without
+ * being stale evidence.
+ */
+function isCreateIfMissingBaseline(pending: PendingEffect): boolean {
+  return pending.expected_visible_revision === 0 && pending.expected_visible_hash === "";
 }
 
 function isPresentInvalidPayload(item: ClaimedEffect): boolean {

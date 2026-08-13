@@ -5,16 +5,18 @@ import {
   appendPendingEffectsWithAdapter,
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
-  ensureSpreadsheetAuthorityWithAdapter,
   listReadyEffectsWithAdapter,
   markDeliveryUncertainWithAdapter,
-  readSpreadsheetAuthorityWithAdapter,
   recoverExpiredLeasesWithAdapter,
-} from "../src/infrastructure/storage/index.js";
-import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+} from "@hikoutei/ikisaki";
+import {
+  ensureSpreadsheetAuthorityWithAdapter,
+  readSpreadsheetAuthorityWithAdapter,
+} from "../src/infrastructure/storage/sync/shared/spreadsheetAuthority.js";
+import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
-import type { NewEffect } from "../src/infrastructure/storage/index.js";
+import type { NewEffect } from "@hikoutei/ikisaki";
 
 describe("durable delivery and spreadsheet fencing", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
@@ -27,10 +29,10 @@ describe("durable delivery and spreadsheet fencing", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
 
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 5 });
+      .resolves.toEqual({ user_version: 6 });
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sheet_effect_outbox)",
     ));
@@ -50,7 +52,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const adapter = new MikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(adapter);
+    await migrateSqliteSchema(adapter);
 
     // Rewrite the outbox into its pre-v5 shape (no durable delivery columns)
     // with the v4 stream index, seed a row, then rewind the version marker so
@@ -113,10 +115,10 @@ describe("durable delivery and spreadsheet fencing", () => {
 
     // The v5 index must not be created against the v4 table (next_probe_at
     // does not exist yet); the rebuild must run and then recreate the index.
-    await expect(migrateMikroOrmSqliteSchema(adapter)).resolves.toEqual({
+    await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 4,
-      toVersion: 5,
-      appliedVersions: [5],
+      toVersion: 6,
+      appliedVersions: [5, 6],
     });
 
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
@@ -237,7 +239,7 @@ async function setupStorage(
   const orm = await createOrm();
   openOrms.push(orm);
   const adapter = new MikroOrmSqliteAdapter(orm);
-  await migrateMikroOrmSqliteSchema(adapter);
+  await migrateSqliteSchema(adapter);
   const lease = await claimWriterLeaseWithAdapter(adapter, {
     role: "sync-effect-worker",
     writerId,

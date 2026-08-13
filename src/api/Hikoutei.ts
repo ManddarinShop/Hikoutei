@@ -13,11 +13,14 @@ import type { EntityManager } from "./EntityManager.js";
 import { createEntityManager } from "./internalEntityManager.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 import {
-  getEntityDescriptor,
   getRegisteredEntityTokens,
   HikouteiEntity,
   type ResolvedHikouteiEntityDescriptor,
 } from "./entity.js";
+import {
+  resolveEntityDescriptors,
+  type EntityDescriptorResolutionFailure,
+} from "./internalEntityRegistry.js";
 
 /** Environment variable that supplies the default SQLite path. */
 const HIKOUTEI_DB_PATH_ENV = "HIKOUTEI_DB_PATH";
@@ -167,21 +170,20 @@ export async function createLocalTypedSheetsRuntime(
 ): Promise<Hikoutei> {
   const dbName = options.dbName ?? resolveDefaultDbPath();
   const entities = options.entities ?? getRegisteredEntityTokens();
-  const descriptors = resolveRuntimeDescriptors(entities);
+  const descriptors = resolveEntityDescriptors(entities, throwHikouteiResolutionError);
   // Load the current provider only when a runtime is opened. Importing the
   // root package alone must not require MikroORM or expose its module graph.
   const [engineModule, providerModule, runtimeModule] = await Promise.all([
-    import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmTypedSheetsEngine.js"),
+    import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarStorage.js"),
     import("../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js"),
     import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarEntityRuntime.js"),
   ]);
   const generated = runtimeModule.createMikroOrmScalarEntityRuntime(entities);
-  const orm = await engineModule.initializeTypedSheetsOrm({
+  const storage = await engineModule.initializeMikroOrmScalarStorage({
     dbName,
     entities: generated.entities,
-    flushCoordinator: { onFlush: async () => undefined },
   });
-  const provider = new providerModule.MikroOrmScalarPersistenceProvider(orm, generated.bindings);
+  const provider = new providerModule.MikroOrmScalarPersistenceProvider(storage, generated.bindings);
   return createInternalHikoutei(provider, descriptors);
 }
 
@@ -234,35 +236,28 @@ export async function createTypedSheets(
   return result.hikoutei;
 }
 
-/** Validates name/table uniqueness and indexes descriptors by entity name. */
-function resolveRuntimeDescriptors(
-  entities: readonly HikouteiEntity[],
-): ReadonlyMap<string, ResolvedHikouteiEntityDescriptor> {
-  const descriptors = new Map<string, ResolvedHikouteiEntityDescriptor>();
-  const tablesByName = new Map<string, string>();
-  for (const entity of entities) {
-    if (!(entity instanceof HikouteiEntity)) {
+/**
+ * Maps a structured descriptor-registry failure to the public
+ * `HikouteiError` contract with unchanged codes and messages.
+ */
+function throwHikouteiResolutionError(
+  failure: EntityDescriptorResolutionFailure,
+): never {
+  switch (failure.kind) {
+    case "invalid-token":
       throw new HikouteiError(
         HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
         "createTypedSheets() accepts only tokens produced by defineTypedSheetsEntity().",
       );
-    }
-    const descriptor = getEntityDescriptor(entity);
-    if (descriptors.has(descriptor.name)) {
+    case "duplicate-name":
       throw new HikouteiError(
         HIKOUTEI_ERROR_CODES.DUPLICATE_ENTITY,
-        `entity name "${descriptor.name}" is registered more than once.`,
+        `entity name "${failure.entityName}" is registered more than once.`,
       );
-    }
-    const existingTableEntity = tablesByName.get(descriptor.tableName);
-    if (existingTableEntity !== undefined) {
+    case "duplicate-table":
       throw new HikouteiError(
         HIKOUTEI_ERROR_CODES.DUPLICATE_ENTITY,
-        `table "${descriptor.tableName}" is shared by entities "${existingTableEntity}" and "${descriptor.name}".`,
+        `table "${failure.tableName}" is shared by entities "${failure.firstEntityName}" and "${failure.secondEntityName}".`,
       );
-    }
-    descriptors.set(descriptor.name, descriptor);
-    tablesByName.set(descriptor.tableName, descriptor.name);
   }
-  return descriptors;
 }

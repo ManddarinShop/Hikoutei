@@ -8,15 +8,16 @@
 import {
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-  stableHash,
-  type ObservedRowChange,
-  type Presence,
-  type RowEvaluationResult,
-  type RowOutcome,
-} from "../../../../domain/index.js";
+} from "../../../../shared/state/constants.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { ObservedRowChange } from "../../../../domain/model/types.js";
+import type { Presence } from "../../../../shared/state/types.js";
+import type { RowEvaluationResult } from "../../../../domain/evaluate/contracts.js";
+import type { RowOutcome } from "../../../../domain/evaluate/constants.js";
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import {
   CONFLICT_STATUSES,
+  CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
 } from "../../../../domain/model/constants.js";
@@ -39,9 +40,14 @@ import {
   readActiveCandidateWithSql,
 } from "./observationLedger.js";
 import {
+  advanceCandidateVisibleEvidence,
+  promoteCandidateVisibleEvidence,
+} from "../resolution/candidateEvidence.js";
+import {
   OBSERVED_PROJECTION_EVIDENCE_SOURCES,
   type AppliedCanonicalCommit,
   type CanonicalRowMutation,
+  type ObservedProjectionEvidence,
   type PersistObservedRowInput,
   type RowBindingRow,
 } from "./observationTypes.js";
@@ -55,8 +61,9 @@ const INSERT_SYNC_CONFLICT_SQL = `
     conflict_id, conflict_group_id, event_id, logical_sheet_id, entity_id, row_binding_id,
     field_name, user_value, user_base_revision, canonical_value_at_detection,
     canonical_revision_at_detection, current_canonical_value, current_canonical_revision,
-    candidate_epoch, status, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '${CONFLICT_STATUSES.OPEN}', ?, ?)
+    candidate_epoch, candidate_visible_revision, candidate_visible_hash,
+    status, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '${CONFLICT_STATUSES.OPEN}', ?, ?)
 `;
 
 const UPSERT_VISIBLE_FIELD_STATE_SQL = `
@@ -170,6 +177,19 @@ const REBASE_ACTIVE_CONFLICT_SQL = `
       status = '${CONFLICT_STATUSES.NEEDS_REBASE}', last_rebased_commit_id = ?, updated_at = ?
   WHERE conflict_id = ?
     AND status IN ('${CONFLICT_STATUSES.OPEN}', '${CONFLICT_STATUSES.NEEDS_REBASE}')
+`;
+
+const ADVANCE_CANDIDATE_VISIBLE_EVIDENCE_SQL = `
+  UPDATE sync_conflict
+  SET candidate_visible_revision = ?, candidate_visible_hash = ?, updated_at = ?
+  WHERE conflict_id = ?
+    AND status IN ('${CONFLICT_STATUSES.OPEN}', '${CONFLICT_STATUSES.NEEDS_REBASE}')
+`;
+
+const READ_CONFLICT_CANDIDATE_EVIDENCE_SQL = `
+  SELECT candidate_visible_revision, candidate_visible_hash
+  FROM sync_conflict
+  WHERE conflict_id = ?
 `;
 
 const READ_MAX_CANDIDATE_EPOCH_SQL = `
@@ -355,6 +375,7 @@ export async function persistConflictAttemptsWithSql(
   const conflictGroupId: Presence<string> = input.evaluation.conflicts.length > 1
     ? { kind: PRESENCE_KINDS.PRESENT, value: `conflict-group:${eventId}` }
     : { kind: PRESENCE_KINDS.ABSENT };
+  const observedEvidence = input.observedProjection;
   for (const conflict of input.evaluation.conflicts) {
     const active = await readActiveCandidateWithSql(
       sql,
@@ -370,6 +391,15 @@ export async function persistConflictAttemptsWithSql(
         active.value.status === CONFLICT_STATUSES.NEEDS_REBASE) &&
       active.value.active_candidate_hash === hash
     ) {
+      // The same active candidate remains. Another accepted field may have
+      // advanced the row's full visible revision, so refresh the stored CAS
+      // evidence to the newer observation when it is strictly newer.
+      await maybeAdvanceCandidateVisibleEvidenceWithSql(
+        sql,
+        active.value.active_candidate_conflict_id,
+        observedEvidence,
+        input.observation.receivedAt,
+      );
       continue;
     }
 
@@ -386,6 +416,7 @@ export async function persistConflictAttemptsWithSql(
       conflict.fieldName,
       candidateEpoch,
     );
+    const evidence = candidateVisibleEvidenceFromObservation(observedEvidence);
     await sql.run(INSERT_SYNC_CONFLICT_SQL, [
       conflictId,
       toSqlNullable(conflictGroupId),
@@ -401,6 +432,8 @@ export async function persistConflictAttemptsWithSql(
       auditJson(conflict.canonicalValue),
       conflict.canonicalRevision,
       candidateEpoch,
+      evidence.visibleRevision,
+      evidence.visibleHash,
       input.observation.receivedAt,
       input.observation.receivedAt,
     ]);
@@ -425,6 +458,69 @@ export async function persistConflictAttemptsWithSql(
     conflictIds.push(conflictId);
   }
   return conflictIds;
+}
+
+/**
+ * Derives the candidate-time full-row visible evidence columns from the
+ * observed projection. Returns nullable columns so legacy callers without
+ * observed projection evidence store unavailable (NULL) evidence.
+ */
+function candidateVisibleEvidenceFromObservation(
+  observed: ObservedProjectionEvidence | undefined,
+): { readonly visibleRevision: number | null; readonly visibleHash: string | null } {
+  if (observed === undefined) {
+    return { visibleRevision: null, visibleHash: null };
+  }
+  return { visibleRevision: observed.visibleRevision, visibleHash: observed.visibleHash };
+}
+
+/**
+ * Refreshes a same-candidate conflict's stored CAS evidence to a newer
+ * full-row observation. A missing observation, an unavailable stored baseline,
+ * or an identical observation leaves the row unchanged.
+ */
+async function maybeAdvanceCandidateVisibleEvidenceWithSql(
+  sql: SqlExecutor,
+  conflictId: string | null,
+  observed: ObservedProjectionEvidence | undefined,
+  receivedAt: number,
+): Promise<void> {
+  if (conflictId === null || observed === undefined) return;
+  const row = await sql.get<{
+    readonly candidate_visible_revision: number | null;
+    readonly candidate_visible_hash: string | null;
+  }>(READ_CONFLICT_CANDIDATE_EVIDENCE_SQL, [conflictId]);
+  if (row === undefined) return;
+  const current = promoteCandidateVisibleEvidence(
+    row.candidate_visible_revision,
+    row.candidate_visible_hash,
+    conflictId,
+  );
+  const advanced = advanceCandidateVisibleEvidence(
+    current,
+    observed.visibleRevision,
+    observed.visibleHash,
+    conflictId,
+  );
+  if (
+    current.status === CANDIDATE_VISIBLE_EVIDENCE_STATUSES.UNAVAILABLE ||
+    advanced.status === CANDIDATE_VISIBLE_EVIDENCE_STATUSES.UNAVAILABLE
+  ) {
+    // Legacy conflicts without candidate-time evidence stay UNAVAILABLE:
+    // later polling observations never upgrade them into a CAS baseline.
+    return;
+  }
+  if (
+    advanced.visibleRevision !== current.visibleRevision ||
+    advanced.visibleHash !== current.visibleHash
+  ) {
+    await sql.run(ADVANCE_CANDIDATE_VISIBLE_EVIDENCE_SQL, [
+      advanced.visibleRevision,
+      advanced.visibleHash,
+      receivedAt,
+      conflictId,
+    ]);
+  }
 }
 
 /** Rejects an impossible persistence result before it becomes public output. */

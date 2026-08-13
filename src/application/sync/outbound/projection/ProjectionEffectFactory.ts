@@ -12,12 +12,14 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-  stableHash,
-  type Applicability,
-  type EffectTargetKind,
-  type NormalizedCell,
-  type Presence,
-} from "../../../../domain/index.js";
+} from "../../../../shared/constants.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { EffectTargetKind } from "../../../../domain/model/constants.js";
+import type {
+  Applicability,
+  Presence,
+} from "../../../../shared/state/types.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
@@ -28,18 +30,18 @@ import {
 import {
   SYNC_DELETE_EFFECT_KINDS,
   SYNC_PROJECTIONS,
-} from "../../sheets/constants.js";
+} from "../../sheetsContract/constants.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncEffectKind,
   type SyncProjection,
-} from "../../sheets/syncSheets.js";
+} from "../../sheetsContract/syncSheets.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
 } from "../../../../infrastructure/storage/errors.js";
-import type { NewEffect } from "../../../../infrastructure/storage/index.js";
+import type { NewEffect } from "@hikoutei/ikisaki";
 
 const PROJECTION_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",
@@ -318,7 +320,11 @@ function validateInput(input: ProjectionEffectInput): void {
   }
   if (
     input.rowBindingId.kind === PRESENCE_KINDS.ABSENT &&
-    input.targetKind !== PROJECTION_TARGET_KINDS.CONFLICT
+    input.targetKind !== PROJECTION_TARGET_KINDS.CONFLICT &&
+    // Orphan/empty-ID User_Input deletes have no real binding to protect or
+    // confirm; the outbox row binding stays NULL and the worker writes no
+    // projection confirmation for a binding that does not exist.
+    input.effectKind !== PROJECTION_EFFECT_KINDS.USER_INPUT_DELETE
   ) {
     throwEffectError("non-conflict projection effect requires a row binding ID");
   }

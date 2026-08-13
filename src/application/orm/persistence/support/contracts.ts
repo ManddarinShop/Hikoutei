@@ -9,25 +9,28 @@
 import type {
   EffectStatus,
   EffectTargetKind,
-} from "../../../../domain/index.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheets/sheetsProvisioning.js";
+} from "../../../../domain/model/constants.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
 import type {
   SyncTimingSink,
 } from "../../../sync/telemetry/syncTiming.js";
 import type {
   CanonicalCommitInput,
   CanonicalFieldWrite,
+} from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+import type {
   FencingContext,
   NewEffect,
+} from "@hikoutei/ikisaki";
+import type {
   RegisteredSyncSheet,
-} from "../../../../infrastructure/storage/index.js";
+} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import {
-  TYPED_SHEETS_ENTITY_CHANGE_KINDS,
-  type TypedSheetsEntityChange,
-  type TypedSheetsFlushContext,
-  type TypedSheetsFlushCoordinator,
-} from "../../api/contracts.js";
+import type {
+  ScalarEntityFlushChange,
+  ScalarEntityFlushContext,
+  ScalarEntityFlushCoordinator,
+} from "../../../../adapter/persistence/contracts/scalar.js";
 import type {
   TypedSheetsEntityFieldMapping,
   TypedSheetsEntityMapping,
@@ -73,7 +76,41 @@ export interface TypedSheetsEntityWriterOptions {
 export interface CreateMappedTypedSheetsFlushCoordinatorOptions {
   readonly mappings: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[];
   readonly writer: TypedSheetsEntityWriterOptions;
+  /**
+   * Internal sync behavior injected after each mapped flush commit.
+   *
+   * The callback runs inside the same SQLite transaction as the entity,
+   * canonical, and outbox writes so NEEDS_REBASE auditing and implicit
+   * system-wins resolution stay atomic with the flush. It is service-side
+   * only and never part of the root application contract.
+   */
+  readonly syncFlushHook?: MappedFlushSyncHook;
 }
+
+/** One committed mapped flush result handed to the internal sync hook. */
+export interface MappedFlushSyncPlan {
+  readonly mapping: TypedSheetsEntityMapping;
+  readonly change: ScalarEntityFlushChange;
+  readonly changedFields: readonly TypedSheetsEntityFieldMapping[];
+  readonly entityId: string;
+  readonly rowBindingId: string;
+  readonly commitId: string;
+  /** True when an active row candidate suppressed the User_Input projection. */
+  readonly suppressedUserProjection: boolean;
+}
+
+/**
+ * Internal flush/runtime callback contract injected by the sync service.
+ *
+ * The hook may plan conflict audits and resolutions but never changes the
+ * public ORM surface; `src/index.ts` does not expose it.
+ */
+export type MappedFlushSyncHook = (input: {
+  readonly sql: SqlExecutor;
+  readonly fence: FencingContext;
+  readonly writer: ResolvedWriterOptions;
+  readonly plan: MappedFlushSyncPlan;
+}) => Promise<void>;
 
 /** A registered route with headers ready for provider-side provisioning. */
 export interface RegisteredTypedSheetsMappedProjection {
@@ -103,12 +140,15 @@ export interface ProjectionBaseline {
 /** One validated mapped entity lifecycle change and its selected fields. */
 export interface MappedChangePlan {
   readonly mapping: TypedSheetsEntityMapping;
-  readonly change: TypedSheetsEntityChange;
+  readonly change: ScalarEntityFlushChange;
   readonly changedFields: readonly TypedSheetsEntityFieldMapping[];
 }
 
-/** Public coordinator shape re-exported by the persistence barrel. */
-export type { TypedSheetsFlushCoordinator, TypedSheetsFlushContext };
+/** Provider-neutral coordinator shape used by the scalar persistence provider. */
+export type {
+  ScalarEntityFlushCoordinator as TypedSheetsFlushCoordinator,
+  ScalarEntityFlushContext as TypedSheetsFlushContext,
+};
 
 /** Keeps the API imports used by persistence modules explicit in one contract file. */
 export type {
@@ -122,4 +162,8 @@ export type {
   SqlStorageAdapter,
 };
 
-export { TYPED_SHEETS_ENTITY_CHANGE_KINDS };
+export type {
+  ScalarEntityFlushChange,
+  ScalarEntityFlushContext,
+  ScalarEntityFlushCoordinator,
+};

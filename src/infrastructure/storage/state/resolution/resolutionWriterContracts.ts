@@ -1,6 +1,6 @@
 /** Status, command, row, and SQL-result contracts for resolution persistence. */
 
-import type { ResolutionCommand } from "../../../../domain/index.js";
+import type { ResolutionCommand } from "../../../../domain/model/types.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 
 /** Runtime values for the durable resolution-command lifecycle. */
@@ -96,6 +96,8 @@ export interface ConflictRow {
   readonly current_canonical_value: string;
   readonly current_canonical_revision: number;
   readonly candidate_epoch: number;
+  readonly candidate_visible_revision: number | null;
+  readonly candidate_visible_hash: string | null;
   readonly status: string;
   readonly resolution_command_id: string | null;
 }

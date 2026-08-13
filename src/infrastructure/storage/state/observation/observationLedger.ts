@@ -6,16 +6,20 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-  stableHash,
-  type FieldConflict,
-  type ObservedEditBatch,
-  type ObservedRowChange,
-  type NormalizedRow,
-  type Presence,
-  type LookupResult,
-  LOOKUP_RESULT_KINDS,
-} from "../../../../domain/index.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type {
+  FieldConflict,
+} from "../../../../domain/evaluate/contracts.js";
+import type {
+  ObservedEditBatch,
+  ObservedRowChange,
+  NormalizedRow,
+} from "../../../../domain/model/types.js";
+import type {
+  Presence,
+  LookupResult,
+} from "../../../../shared/state/types.js";
+import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import { PRESENCE_KINDS } from "../../../../shared/state/constants.js";
 import {

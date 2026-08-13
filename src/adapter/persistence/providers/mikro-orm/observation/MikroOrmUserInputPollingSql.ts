@@ -2,10 +2,10 @@
 
 import {
   CONFLICT_STATUSES,
-} from "../../../../../domain/index.js";
+} from "../../../../../domain/model/constants.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   type TypedSheetsEntityMapping,
@@ -57,6 +57,8 @@ export interface ConflictSqlRow {
   readonly current_canonical_value: string;
   readonly current_canonical_revision: number;
   readonly candidate_epoch: number;
+  readonly candidate_visible_revision: number | null;
+  readonly candidate_visible_hash: string | null;
   readonly status: string;
   readonly resolution_command_id: string | null;
 }
@@ -127,6 +129,7 @@ export async function readMappedPollingRows(
               row_binding_id, field_name, user_value, user_base_revision,
               canonical_value_at_detection, canonical_revision_at_detection,
               current_canonical_value, current_canonical_revision, candidate_epoch,
+              candidate_visible_revision, candidate_visible_hash,
               status, resolution_command_id
        FROM sync_conflict
        WHERE row_binding_id IN (${placeholders(bindingIds)})

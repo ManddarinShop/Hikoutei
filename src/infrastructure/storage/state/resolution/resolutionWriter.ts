@@ -7,18 +7,23 @@
  * resolution projection effect in one SQLite transaction.
  */
 
-import { applyResolution } from "../../../../domain/index.js";
-import { CONFLICT_TRANSITION_KINDS } from "../../../../domain/conflict/transitions.js";
+import {
+  applyResolution,
+  CONFLICT_TRANSITION_KINDS,
+} from "../../../../domain/conflict/transitions.js";
+import { PROJECTION_KINDS } from "../../../../domain/model/constants.js";
 import {
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
 } from "../../../../shared/state/constants.js";
 import type {
   ConflictStatus,
-  LookupResult,
+} from "../../../../domain/model/constants.js";
+import type {
   ResolutionCommand,
   SyncConflict,
-} from "../../../../domain/index.js";
+} from "../../../../domain/model/types.js";
+import type { LookupResult } from "../../../../shared/state/types.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   appendPendingEffectsWithSql,
@@ -31,6 +36,10 @@ import {
 import { readMappedLatestProjectionEffectWithSql } from "../mapped/mappedPersistenceSql.js";
 import { fromSqlNullable } from "../../sqlite/sqlState.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
+import {
+  promoteCandidateVisibleEvidence,
+} from "../resolution/candidateEvidence.js";
+import { auditJson } from "../observation/observationAudit.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   PERSIST_RESOLUTION_RESULT_KINDS,
@@ -57,11 +66,17 @@ import {
   MARK_COMMAND_STALE_SQL,
   MARK_CONFLICT_RESOLVED_SQL,
   MARK_CONFLICT_STALE_SQL,
+  MARK_PENDING_COMMAND_STALE_SQL,
   READ_ACTIVE_CANDIDATE_POINTER_SQL,
   READ_CONFLICT_SQL,
   READ_EFFECT_DEDUPE_SQL,
-  READ_REGISTERED_PROJECTION_SQL,
+  READ_PENDING_COMMANDS_FOR_CONFLICT_SQL,
+  READ_PENDING_CONFLICT_IDS_SQL,
   READ_PROCESSING_PREDECESSOR_SQL,
+  READ_REGISTERED_PROJECTION_SQL,
+  REBASE_ACTIVE_CONFLICT_SQL,
+  SUPERSEDE_PENDING_USER_INPUT_REWRITES_SQL,
+  STALE_SUPERSEDED_PENDING_COMMANDS_SQL,
 } from "./resolutionWriterSql.js";
 import {
   assertCurrentFenceWithSql,
@@ -296,26 +311,96 @@ function sameCommandIdentity(existing: CommandRow, command: ResolutionCommand): 
     existing.payload_hash === command.payloadHash;
 }
 
-/** Reads all conflict IDs for one logical entity sheet. */
-export function readConflictIdsWithSql(
+/** Reads conflict ids that carry a durable pending resolution command for one logical entity sheet. */
+export function readPendingConflictIdsWithSql(
   sql: SqlExecutor,
   logicalSheetId: string,
 ): Promise<readonly string[]> {
-  return sql.all<{ readonly conflict_id: string }>(
-    "SELECT conflict_id FROM sync_conflict WHERE logical_sheet_id = ? ORDER BY created_at, conflict_id",
-    [logicalSheetId],
-  ).then((rows) => rows.map((row) => row.conflict_id));
+  return sql.all<{ readonly conflict_id: string }>(READ_PENDING_CONFLICT_IDS_SQL, [
+    logicalSheetId,
+  ]).then((rows) => rows.map((row) => row.conflict_id));
 }
 
-/** Reads unresolved conflict IDs for one logical entity sheet. */
-export function readOpenConflictIdsWithSql(
+/** Reads every durable pending command targeting one conflict. */
+export function readPendingCommandsForConflictWithSql(
   sql: SqlExecutor,
-  logicalSheetId: string,
-): Promise<readonly string[]> {
-  return sql.all<{ readonly conflict_id: string }>(
-    "SELECT conflict_id FROM sync_conflict WHERE logical_sheet_id = ? AND status IN ('OPEN', 'NEEDS_REBASE') ORDER BY created_at, conflict_id",
-    [logicalSheetId],
-  ).then((rows) => rows.map((row) => row.conflict_id));
+  conflictId: string,
+): Promise<readonly CommandRow[]> {
+  return sql.all<CommandRow>(READ_PENDING_COMMANDS_FOR_CONFLICT_SQL, [conflictId]);
+}
+
+/**
+ * Marks one durable pending command stale idempotently.
+ *
+ * Legacy automatic commands and obsolete revision generations are never
+ * applied; staling is a no-op when the command already left the pending set.
+ */
+export async function markPendingResolutionCommandStaleWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  commandId: string,
+): Promise<void> {
+  await sql.run(MARK_PENDING_COMMAND_STALE_SQL, [
+    commandId,
+    ...fenceParameters(fence),
+  ]);
+}
+
+/**
+ * Stales every pending automatic command superseded by a newer resolution
+ * identity.
+ *
+ * Only the newest planned automatic command for a conflict may remain pending;
+ * older automatic generations are obsolete the moment a newer canonical
+ * revision is planned. Manual or unknown pending commands are never consumed:
+ * the SQL restricts supersession to the retired legacy
+ * `sync:auto-system-wins` and current implicit `sync:system-wins` identities.
+ */
+export async function staleSupersededPendingCommandsWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  conflictId: string,
+  keepCommandId: string,
+): Promise<void> {
+  await sql.run(STALE_SUPERSEDED_PENDING_COMMANDS_SQL, [
+    conflictId,
+    keepCommandId,
+    ...fenceParameters(fence),
+  ]);
+}
+
+/**
+ * Rebases an unresolved conflict to the current canonical field state.
+ *
+ * The caller must have already verified the new revision strictly exceeds the
+ * conflict's current canonical revision; the guarded UPDATE never downgrades
+ * a resolved row.
+ */
+export async function rebaseActiveConflictWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: {
+    readonly conflictId: string;
+    readonly currentCanonicalValue: import("../../../../shared/encoding/types.js").NormalizedCell;
+    readonly currentCanonicalRevision: number;
+    readonly lastRebasedCommitId: string;
+    readonly updatedAt: number;
+  },
+): Promise<void> {
+  const result = await sql.run(REBASE_ACTIVE_CONFLICT_SQL, [
+    auditJson(input.currentCanonicalValue),
+    input.currentCanonicalRevision,
+    input.lastRebasedCommitId,
+    input.updatedAt,
+    input.conflictId,
+    ...fenceParameters(fence),
+  ]);
+  if (result.changes !== 1) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      `conflict ${input.conflictId} could not be rebased to the current canonical state`,
+    );
+  }
 }
 
 /** Reads and validates one conflict record through the active async SQL transaction. */
@@ -345,6 +430,11 @@ export async function readConflictWithSql(
       currentCanonicalValue: parseNormalizedCell(row.current_canonical_value, "current_canonical_value"),
       currentCanonicalRevision: row.current_canonical_revision,
       candidateEpoch: row.candidate_epoch,
+      candidateVisibleEvidence: promoteCandidateVisibleEvidence(
+        row.candidate_visible_revision,
+        row.candidate_visible_hash,
+        row.conflict_id,
+      ),
       status: requireConflictStatus(row.status),
       resolutionCommandId: fromSqlNullable(row.resolution_command_id),
     },
@@ -485,6 +575,25 @@ async function applyResolvedCommandWithSql(
   if (binding.changes !== 1) throw new FenceLostError();
 
   await appendResolutionEffectsWithSql(sql, fence, input.effects);
+  // A legacy anchor-keyed cleanup/repair rewrite enqueued before this
+  // resolution streams under the physical anchor, so the append above could
+  // not supersede it; new cleanup rewrites stream under the binding key and
+  // are already covered by the replan above. The resolution's own reconcile
+  // is authoritative for the row: supersede any such pending rewrite in the
+  // same transaction, attributed to the reconcile, so the stale snapshot can
+  // never deliver after the gate opens.
+  const reconcileEffect = input.effects.find(
+    (effect) => effect.projection === PROJECTION_KINDS.USER_INPUT,
+  );
+  if (reconcileEffect !== undefined) {
+    await sql.run(SUPERSEDE_PENDING_USER_INPUT_REWRITES_SQL, [
+      reconcileEffect.effectId,
+      input.logicalSheetId,
+      conflict.rowBindingId,
+      reconcileEffect.effectId,
+      ...fenceParameters(fence),
+    ]);
+  }
   const commandResult = await sql.run(MARK_COMMAND_APPLIED_SQL, [
     input.commitId,
     command.commandId,

@@ -7,8 +7,7 @@ description: How Hikoutei protects against concurrent writes, response loss, and
 
 Hikoutei's sync engine decides every conflict with **evidence comparison, not
 wall-clock time**: revisions, hashes, epochs, and tokens. This page summarizes
-the mechanisms; the full detail lives in the repository's
-[`docs/internal-consistency-model.md`](https://github.com/ManddarinShop/Hikoutei/blob/develop/docs/internal-consistency-model.md).
+the internal mechanisms behind that policy.
 
 ## Single writer: lease, epoch, fencing token
 
@@ -48,18 +47,33 @@ pending → processing → applied / failed / superseded / blocked_candidate / c
   as evidence.
 - Idempotency: same effect ID + same payload hash retries safely; same ID with
   a different payload fails closed.
+- A `failed` effect with a **recoverable** error code stays on the worker retry
+  path. A `failed` effect with a terminal code (for example
+  `delivery_uncertain_timeout`) can never be claimed again, so the periodic
+  reconciliation scan supersedes it (fence-checked, in the same SQLite
+  transaction as its replacement effect) and the stream keeps progressing.
+  Recoverable failed heads are never superseded by reconciliation.
 
 ## Human edits: candidates and epochs
 
 - `sheet_visible_field_state` tracks per-field confirmed hashes plus an active
   candidate (`active_candidate_hash`, `candidate_epoch`).
-- A human edit that does not match the confirmed field hash becomes a
-  candidate (conflict `OPEN`); system repairs on that field are blocked
-  (`blocked_candidate`) until resolution.
-- `Sync_Conflicts.resolve_requested` is a one-shot request. Resolution applies
-  `acknowledge_system` with CAS on revision, candidate hash, and
-  `candidate_epoch`, then increments the epoch — so an old request cannot
-  resolve an ABA retry that returned to the same candidate value.
+- Detecting a `User_Input` value A against canonical value B persists the active
+  candidate, candidate-time full-row visible revision/hash, and an `OPEN`
+  conflict. It queues only the `OPEN` audit projection; polling and restarts do
+  not create a resolution command or resolve the conflict.
+- Only a later local commit with a strictly higher canonical revision on the
+  same conflicted field triggers implicit system-wins. Unrelated fields and
+  same-value writes without a field-revision increase are not approval.
+- The `acknowledge_system` command compares canonical revision, candidate hash,
+  and `candidate_epoch`. Its asynchronous row reconcile compares the stored
+  candidate-time visible revision/hash, so a later human edit makes the
+  reconcile `blocked_candidate` rather than being overwritten. Resolution
+  clears the candidate and increments its epoch to prevent ABA reuse.
+- A legacy conflict without candidate visible evidence remains unresolved; the
+  resolver never substitutes confirmed state or guesses a CAS baseline.
+- In this policy scope, deleting a row with an unresolved conflict fails closed
+  before its local entity, canonical state, or outbox changes commit.
 
 ## Row identity and stable encoding
 
@@ -78,6 +92,6 @@ pending → processing → applied / failed / superseded / blocked_candidate / c
 | Spreadsheet authority | Remote write generation | `authority_epoch` + `authority_token` |
 | Visible-hash CAS | Conditional Sheet writes | expected revision/hash + receipt verification |
 | Outbox state machine | Ordering, retry, response-loss recovery | `stream_sequence`, `claim_token`, `next_probe_at` |
-| Candidate + epoch | Human-edit protection, ABA prevention | `active_candidate_hash` + `candidate_epoch` |
+| Candidate resolution CAS | System-advance and human-edit protection | canonical field revision + candidate-time visible revision/hash + candidate hash/epoch |
 | Anchor + rowBindingId | Stable row identity | physical anchor + stable hash |
 | Kohkai encoding | Consistent evidence hashes | canonical encoding + deterministic hash |

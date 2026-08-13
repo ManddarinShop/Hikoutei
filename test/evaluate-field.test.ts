@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CANONICAL_RESOLUTION_STATUSES,
+  CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   CONFLICT_STATUSES,
   DELETE_EVIDENCE,
   FIELD_OWNERSHIPS,
@@ -234,6 +235,7 @@ describe("field evaluation", () => {
                 currentCanonicalValue: { kind: NORMALIZED_CELL_KINDS.STRING, value: "Ada" },
                 currentCanonicalRevision: 2,
                 candidateEpoch: 1,
+                candidateVisibleEvidence: { status: CANDIDATE_VISIBLE_EVIDENCE_STATUSES.UNAVAILABLE },
                 status: CONFLICT_STATUSES.OPEN,
                 resolutionCommandId: { kind: PRESENCE_KINDS.ABSENT },
               },

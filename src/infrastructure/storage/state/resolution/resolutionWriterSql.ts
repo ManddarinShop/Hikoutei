@@ -16,9 +16,75 @@ export const READ_CONFLICT_SQL = `
   SELECT conflict_id, conflict_group_id, event_id, row_binding_id, entity_id, field_name,
          user_value, user_base_revision, canonical_value_at_detection,
          canonical_revision_at_detection, current_canonical_value,
-         current_canonical_revision, candidate_epoch, status, resolution_command_id
+         current_canonical_revision, candidate_epoch,
+         candidate_visible_revision, candidate_visible_hash,
+         status, resolution_command_id
   FROM sync_conflict
   WHERE logical_sheet_id = ? AND conflict_id = ?
+`;
+
+/**
+ * Reads conflict ids that carry a durable pending resolution command for one
+ * logical sheet. `resolution_command` has no logical-sheet column, so the
+ * conflict table supplies the scope through the command's target.
+ */
+export const READ_PENDING_CONFLICT_IDS_SQL = `
+  SELECT DISTINCT c.conflict_id AS conflict_id
+  FROM resolution_command rc
+  JOIN sync_conflict c ON c.conflict_id = rc.target_conflict_id
+  WHERE c.logical_sheet_id = ? AND rc.status = 'pending'
+  ORDER BY c.conflict_id
+`;
+
+/** Reads every durable pending command targeting one conflict. */
+export const READ_PENDING_COMMANDS_FOR_CONFLICT_SQL = `
+  SELECT command_id, request_key, action, actor_id, role, target_conflict_id,
+         expected_revision, active_candidate_hash, expected_candidate_epoch,
+         payload_hash, status
+  FROM resolution_command
+  WHERE target_conflict_id = ? AND status = 'pending'
+  ORDER BY command_id
+`;
+
+/** Marks one durable pending command stale idempotently (status guarded). */
+export const MARK_PENDING_COMMAND_STALE_SQL = `
+  UPDATE resolution_command
+  SET status = 'stale'
+  WHERE command_id = ? AND status = 'pending'
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+/**
+ * Stales every pending automatic command superseded by a newer resolution
+ * identity.
+ *
+ * Only the latest automatic generation for a conflict may stay pending; older
+ * generations are obsolete the moment a newer canonical revision is planned.
+ * Manual or unknown pending commands are never superseded by polling-owned
+ * planning: actor, action, and identity prefix must all match one of the two
+ * automatic identities (retired legacy `sync:auto-system-wins` and current
+ * implicit `sync:system-wins`).
+ */
+export const STALE_SUPERSEDED_PENDING_COMMANDS_SQL = `
+  UPDATE resolution_command
+  SET status = 'stale'
+  WHERE target_conflict_id = ? AND command_id != ? AND status = 'pending'
+    AND action = 'acknowledge_system'
+    AND (
+      (actor_id = 'sync:system-wins' AND command_id LIKE 'sync:system-wins:%')
+      OR (actor_id = 'sync:auto-system-wins' AND command_id LIKE 'auto-system-wins:%')
+    )
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+/** Rebases an unresolved conflict to the current canonical field state. */
+export const REBASE_ACTIVE_CONFLICT_SQL = `
+  UPDATE sync_conflict
+  SET current_canonical_value = ?, current_canonical_revision = ?,
+      status = 'NEEDS_REBASE', last_rebased_commit_id = ?, updated_at = ?
+  WHERE conflict_id = ?
+    AND status IN ('OPEN', 'NEEDS_REBASE')
+    AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 
 export const READ_ACTIVE_CANDIDATE_POINTER_SQL = `
@@ -87,6 +153,39 @@ export const ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL = `
     ELSE candidate_epoch
   END
   WHERE row_binding_id = ? AND logical_sheet_id = ?
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+/**
+ * Supersedes pending User_Input candidate_reconcile rewrites for one row
+ * binding the moment the conflict that owned the row resolves.
+ *
+ * Cleanup scans now stream bound-row rewrites under the binding key
+ * (`projection-row:<sheet>:<binding>`), so the resolution's own
+ * supersede-and-replan covers them. This statement is the safety net for
+ * LEGACY anchor-keyed rewrites (`target_id` = physical anchor) that were
+ * already durable before that change (or were enqueued by an older scan):
+ * the resolution's normal replan lookup never sees them, and the worker
+ * candidate gate blocks them only while the conflict stays OPEN or
+ * NEEDS_REBASE. Once a resolution command applies, the gate opens and a
+ * stale rewrite would otherwise deliver (it was enqueued before the
+ * resolution's own fresh reconcile, whose visible-hash CAS it then breaks)
+ * and overwrite the row with a stale value. The resolution's reconcile is
+ * now authoritative for the row, so any such pending rewrite is superseded
+ * in the same transaction. Only non-terminal `pending` rewrites are touched:
+ * in-flight (`processing`/`delivery_uncertain`) writes are left to settle
+ * and `blocked_candidate` heads are already terminal and converge through a
+ * later re-scan.
+ */
+export const SUPERSEDE_PENDING_USER_INPUT_REWRITES_SQL = `
+  UPDATE sheet_effect_outbox
+  SET status = 'superseded', supersedes_effect_id = ?
+  WHERE logical_sheet_id = ?
+    AND projection = 'user_input'
+    AND effect_kind = 'candidate_reconcile'
+    AND row_binding_id = ?
+    AND effect_id != ?
+    AND status = 'pending'
     AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 

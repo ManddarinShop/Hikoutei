@@ -8,18 +8,18 @@
  * fails, or keeps probing instead of closing the outbox on weak evidence.
  */
 
-import type { SyncEffectPostcondition, SyncProjectionEffect } from "../../../../../application/sync/sheets/syncSheets.js";
+import type { SyncEffectPostcondition, SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
-import type { PreflightContext, PreflightReceipt } from "./preflight.js";
+import type { PreflightContext, PreflightReceipt } from "./preflightContext.js";
 import {
   currentHash,
   findWorkingRow,
-  isDeletionEffect,
-  requireProviderEffect,
   toWorkingRow,
-  type WorkingRow,
-} from "./planner.js";
+} from "./plannerWorkingRow.js";
+import { isDeletionEffect } from "./plannerDeletion.js";
+import { requireProviderEffect } from "./planner.js";
+import type { WorkingRow } from "./plannerContracts.js";
 
 /**
  * Classifies one effect's delivery state. `context` must come from the same
@@ -102,7 +102,9 @@ function findProbeRow(
   const byIdentity = new Map<string, WorkingRow>();
   for (const row of context.rows) {
     const working = toWorkingRow(row);
-    if (working.anchor.kind === PRESENCE_KINDS.PRESENT) {
+    // Mirrors indexRows: only the FIRST row per anchor value enters the
+    // index (duplicated anchors are evidence, never rewritten).
+    if (working.anchor.kind === PRESENCE_KINDS.PRESENT && !byAnchor.has(working.anchor.value)) {
       byAnchor.set(working.anchor.value, working);
     }
     if (working.identity.kind === PRESENCE_KINDS.PRESENT) {

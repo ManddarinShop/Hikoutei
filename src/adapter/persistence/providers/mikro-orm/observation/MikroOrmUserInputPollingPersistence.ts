@@ -1,29 +1,37 @@
 /** Turns prepared User_Input changes into evaluator and storage mutations. */
 
 import {
-  APPLICABILITY_KINDS,
   CANONICAL_RESOLUTION_STATUSES,
   FIELD_OWNERSHIPS,
-  PRESENCE_KINDS,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
+} from "../../../../../domain/model/constants.js";
+import {
+  APPLICABILITY_KINDS,
+  PRESENCE_KINDS,
+} from "../../../../../shared/state/constants.js";
+import {
   computeEventKey,
   computeRowHash,
-  evaluateBatch,
-  stableHash,
-  type CanonicalEntityState,
-  type CanonicalResolution,
-  type CanonicalFieldState,
-  type NormalizedCell,
-  type ObservedEditBatch,
-  type Presence,
-  type RowBindingContext,
-  type RowEvaluationResult,
-} from "../../../../../domain/index.js";
+} from "../../../../../domain/evaluate/identity.js";
+import { evaluateBatch } from "../../../../../domain/evaluate/evaluateBatch.js";
+import { stableHash } from "../../../../../shared/encoding/stableEncode.js";
+import type {
+  CanonicalEntityState,
+  CanonicalResolution,
+  CanonicalFieldState,
+  ObservedEditBatch,
+  RowBindingContext,
+} from "../../../../../domain/model/types.js";
+import type {
+  NormalizedCell,
+} from "../../../../../shared/encoding/types.js";
+import type { Presence } from "../../../../../shared/state/types.js";
+import type { RowEvaluationResult } from "../../../../../domain/evaluate/contracts.js";
 import { QUARANTINE_REASONS } from "../../../../../domain/model/constants.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   createTypedSheetsEntityOwnershipManifest,
   requireTypedSheetsEntityProjection,
@@ -35,15 +43,21 @@ import type { ResolvedWriterOptions } from "../../../../../application/orm/persi
 import {
   persistPollingQuarantineWithSql,
   POLLING_QUARANTINE_WRITE_RESULT_KINDS,
+  type PollingQuarantineInput,
+} from "../../../../../infrastructure/storage/state/observation/observationQuarantine.js";
+import {
   OBSERVED_PROJECTION_EVIDENCE_SOURCES,
-  readMappedCanonicalFieldsWithSql,
+} from "../../../../../infrastructure/storage/state/observation/observationTypes.js";
+import {
   type BusinessKeyChange,
   type CanonicalRowMutation,
-  type FencingContext,
-  type PollingQuarantineInput,
   type PersistObservedRowInput,
   type PersistObservedRowResult,
-} from "../../../../../infrastructure/storage/index.js";
+} from "../../../../../infrastructure/storage/state/observation/observationWriter.js";
+import {
+  readMappedCanonicalFieldsWithSql,
+} from "../../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+import type { FencingContext } from "@hikoutei/ikisaki";
 import { OBSERVATION_WRITE_RESULT_KINDS } from "../../../../../infrastructure/storage/state/observation/observationConstants.js";
 import { auditJson } from "../../../../../infrastructure/storage/state/observation/observationAudit.js";
 import type { MikroOrmSqliteAdapter } from "../storage/MikroOrmSqliteAdapter.js";
@@ -273,7 +287,7 @@ function evaluationContext(
   binding: RowBindingStateRecord,
   canonical: EntityStateRecord,
   state: MappedPollingState,
-): import("../../../../../domain/index.js").EvaluationContext {
+): import("../../../../../domain/evaluate/contracts.js").EvaluationContext {
   const canonicalFields = new Map<string, CanonicalFieldState>();
   for (const field of mapping.fields) {
     const current = canonical.fields.get(field.fieldName);

@@ -10,10 +10,9 @@
  * result instead of a mutation.
  */
 
-import type { NormalizedCell } from "../../../../../domain/index.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import {
-  GOOGLE_SHEETS_API_ANCHOR_KEY,
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
   GOOGLE_SHEETS_API_RECEIPT_HEADERS,
 } from "../constants.js";
@@ -24,8 +23,8 @@ import type {
   GoogleSheetsApiWriteRequest,
 } from "../transport/googleSheetsApiTransport.js";
 import { serializeBatchUpdateRequests } from "../transport/googleSheetsApiTransport.js";
-import type { PreflightContext } from "./preflight.js";
-import type { EffectPlan, PlanMutation, PlannedReceipt, WorkingRow } from "./planner.js";
+import type { PreflightContext } from "./preflightContext.js";
+import type { EffectPlan, PlanMutation, PlannedReceipt, WorkingRow } from "./plannerContracts.js";
 import { toApiUserEnteredValue } from "./valueNormalization.js";
 import { allocateSheetId } from "./sheetIdAllocator.js";
 
@@ -324,18 +323,24 @@ function pushAppendWrites(
     fields: "userEnteredValue",
   });
 
-  // Developer-metadata anchors keep created rows findable by anchor on the
-  // next apply/probe, matching the Apps Script effect-operation create path.
-  for (const row of ordered) {
-    if (row.anchor.kind === PRESENCE_KINDS.PRESENT) {
-      requests.push({
-        kind: "createDeveloperMetadata",
-        sheetId,
-        rowIndex: row.rowNumber - 1,
-        key: GOOGLE_SHEETS_API_ANCHOR_KEY,
-        value: row.anchor.value,
-      });
-    }
+  // The system row-id column keeps created rows findable by anchor on the
+  // next apply/probe, matching the Apps Script effect-operation create path:
+  // one updateCells over the anchor column, writing each row's anchor value
+  // (null for rows without one, which are newly inserted and empty).
+  const anchorColumn = context.anchorColumn;
+  if (anchorColumn !== undefined) {
+    requests.push({
+      kind: "updateCells",
+      sheetId,
+      startRowIndex: first.rowNumber - 1,
+      startColumnIndex: anchorColumn - 1,
+      rows: ordered.map((row) => [
+        row.anchor.kind === PRESENCE_KINDS.PRESENT
+          ? { userEnteredValue: { stringValue: row.anchor.value } }
+          : null,
+      ]),
+      fields: "userEnteredValue",
+    });
   }
 
   // A column is formatted as dates only when every appended cell in it is a

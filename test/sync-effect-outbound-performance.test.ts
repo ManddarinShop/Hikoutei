@@ -9,27 +9,25 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
 import {
-  appendPendingEffectsWithAdapter,
-  claimWriterLeaseWithAdapter,
-  type NewEffect,
-  type PendingEffect,
-} from "../src/infrastructure/storage/index.js";
-import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncProjectionEffect,
-} from "../src/application/sync/sheets/syncSheets.js";
+} from "../src/application/sync/sheetsContract/syncSheets.js";
 import {
+  appendPendingEffectsWithAdapter,
   chunkEffectGroups,
+  claimWriterLeaseWithAdapter,
   EFFECT_BATCH_LIMIT,
   groupEffectsByRoute,
+  runEffectWorkerWithAdapter,
   type ClaimedEffect,
+  type NewEffect,
+  type PendingEffect,
 } from "@hikoutei/ikisaki";
-import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
 import { SheetsEffectDispatcher, sheetsRouteKeyFor } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 
 const PerfOrderSchema = defineEntity({
   name: "OutboundPerfOrder",
@@ -163,7 +161,7 @@ describe("outbound effect dispatch batching", () => {
       const orm = await createOrm();
       openOrms.push(orm);
       const adapter = new MikroOrmSqliteAdapter(orm);
-      await migrateMikroOrmSqliteSchema(adapter);
+      await migrateSqliteSchema(adapter);
       await registerProjection(adapter);
 
       await seedEffects(adapter, count);
@@ -217,7 +215,7 @@ describe("outbound effect dispatch batching", () => {
       const orm = await createOrm();
       openOrms.push(orm);
       const adapter = new MikroOrmSqliteAdapter(orm);
-      await migrateMikroOrmSqliteSchema(adapter);
+      await migrateSqliteSchema(adapter);
       await registerProjection(adapter);
 
       await seedEffects(adapter, 1);
@@ -262,7 +260,7 @@ describe("outbound effect dispatch batching", () => {
       const orm = await createOrm();
       openOrms.push(orm);
       const adapter = new MikroOrmSqliteAdapter(orm);
-      await migrateMikroOrmSqliteSchema(adapter);
+      await migrateSqliteSchema(adapter);
       await registerProjection(adapter);
 
       await seedEffects(adapter, count);

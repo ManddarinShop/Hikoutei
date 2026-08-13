@@ -28,17 +28,27 @@ interface ManagedEntity {
   readonly descriptor: ResolvedHikouteiEntityDescriptor;
   readonly entity: object;
   snapshot: Readonly<Record<string, ScalarEntityValue>>;
+  /** Initial key for a new entity; undefined means it was assigned later. */
+  initialPrimaryKey: ScalarEntityValue | undefined;
   state: ScalarManagedEntityState;
 }
 
 /** In-memory checkpoint used to restore the common UoW after transaction rollback. */
 export interface ScalarEntityUnitOfWorkCheckpoint {
-  readonly entries: readonly {
+  readonly entries: {
     readonly descriptor: ResolvedHikouteiEntityDescriptor;
     readonly entity: object;
     readonly snapshot: Readonly<Record<string, ScalarEntityValue>>;
+    readonly values: Readonly<Record<string, ScalarEntityValue | undefined>>;
+    readonly initialPrimaryKey: ScalarEntityValue | undefined;
     readonly state: ScalarManagedEntityState;
   }[];
+}
+
+/** Entity/descriptor pair used only for manager rollback identity recovery. */
+export interface ScalarManagedEntityReference {
+  readonly descriptor: ResolvedHikouteiEntityDescriptor;
+  readonly entity: object;
 }
 
 /** Discriminated change planned for one managed entity during a flush. */
@@ -60,21 +70,25 @@ export interface ScalarEntityFlushPlan {
  */
 export class ScalarEntityUnitOfWork {
   private readonly entries = new Map<object, ManagedEntity>();
+  private readonly recoveryCheckpoints: ScalarEntityUnitOfWorkCheckpoint[] = [];
 
   /** Tracks a newly created entity so its first flush emits an insert. */
   manageNew(
     descriptor: ResolvedHikouteiEntityDescriptor,
     entity: object,
   ): void {
-    this.entries.set(entity, {
+    const entry: ManagedEntity = {
       descriptor,
       entity,
       // New entities are validated when the insert plan is collected. Keeping
       // an empty snapshot here lets create() remain a construction operation
       // while flush() remains the durable validation boundary.
       snapshot: {},
+      initialPrimaryKey: readInitialPrimaryKey(descriptor, entity),
       state: "new",
-    });
+    };
+    this.entries.set(entity, entry);
+    this.captureRecoveryEntry(entry);
   }
 
   /** Tracks an entity loaded from storage so mutations diff against its snapshot. */
@@ -83,12 +97,32 @@ export class ScalarEntityUnitOfWork {
     entity: object,
     snapshot: Readonly<Record<string, ScalarEntityValue>>,
   ): void {
-    this.entries.set(entity, { descriptor, entity, snapshot, state: "clean" });
+    const entry: ManagedEntity = {
+      descriptor,
+      entity,
+      snapshot,
+      initialPrimaryKey: snapshot[descriptor.primaryKey],
+      state: "clean",
+    };
+    this.entries.set(entity, entry);
+    this.captureRecoveryEntry(entry);
   }
 
   /** Returns whether an entity instance is currently tracked by this Unit of Work. */
   has(entity: object): boolean {
     return this.entries.has(entity);
+  }
+
+  /** Returns whether the current primary key still matches the tracked identity. */
+  isPrimaryKeyStable(entity: object): boolean {
+    const entry = this.entries.get(entity);
+    if (entry === undefined) return false;
+    const expected = entry.state === "new"
+      ? entry.initialPrimaryKey
+      : entry.snapshot[entry.descriptor.primaryKey];
+    return typeof expected === "string" &&
+      expected.length > 0 &&
+      Reflect.get(entity, entry.descriptor.primaryKey) === expected;
   }
 
   /** Captures lifecycle state before an outer transaction can roll back. */
@@ -98,6 +132,8 @@ export class ScalarEntityUnitOfWork {
         descriptor: entry.descriptor,
         entity: entry.entity,
         snapshot: { ...entry.snapshot },
+        values: readRawEntityValues(entry.descriptor, entry.entity),
+        initialPrimaryKey: entry.initialPrimaryKey,
         state: entry.state,
       })),
     };
@@ -111,8 +147,17 @@ export class ScalarEntityUnitOfWork {
         descriptor: entry.descriptor,
         entity: entry.entity,
         snapshot: entry.snapshot,
+        initialPrimaryKey: entry.initialPrimaryKey,
         state: entry.state,
       });
+      for (const property of entry.descriptor.properties) {
+        const value = entry.values[property.name];
+        Reflect.set(
+          entry.entity,
+          property.name,
+          value === undefined ? undefined : cloneScalarValue(value),
+        );
+      }
     }
   }
 
@@ -129,7 +174,7 @@ export class ScalarEntityUnitOfWork {
   }
 
   /** Marks a tracked entity for removal; cancels an unflushed insert instead. */
-  remove(entity: object): void {
+  remove(entity: object): boolean {
     const existing = this.entries.get(entity);
     if (existing === undefined) {
       throw new HikouteiError(
@@ -139,9 +184,10 @@ export class ScalarEntityUnitOfWork {
     }
     if (existing.state === "new") {
       this.entries.delete(entity);
-      return;
+      return true;
     }
     existing.state = "removed";
+    return false;
   }
 
   /**
@@ -168,25 +214,97 @@ export class ScalarEntityUnitOfWork {
         continue;
       }
       entry.snapshot = readEntityValues(entry.descriptor, entry.entity);
+      entry.initialPrimaryKey = entry.snapshot[entry.descriptor.primaryKey];
       entry.state = "clean";
     }
+  }
+
+  /** Starts recording entities discovered inside a transaction. */
+  beginRecovery(checkpoint: ScalarEntityUnitOfWorkCheckpoint): void {
+    this.recoveryCheckpoints.push(checkpoint);
+  }
+
+  /** Stops recording entities for a completed transaction. */
+  endRecovery(checkpoint: ScalarEntityUnitOfWorkCheckpoint): void {
+    const index = this.recoveryCheckpoints.lastIndexOf(checkpoint);
+    if (index >= 0) this.recoveryCheckpoints.splice(index, 1);
+  }
+
+  /** Returns the entities currently represented by the Unit of Work. */
+  managedEntities(): readonly ScalarManagedEntityReference[] {
+    return [...this.entries.values()].map(({ descriptor, entity }) => ({ descriptor, entity }));
   }
 
   /** Drops every managed entity without writing anything. */
   clear(): void {
     this.entries.clear();
   }
+
+  private captureRecoveryEntry(entry: ManagedEntity): void {
+    // A row loaded inside a transaction must remain dirty-trackable after a
+    // rollback. New entities created inside the failed callback, however, are
+    // callback-local work and should not be reinserted automatically.
+    if (entry.state !== "clean") return;
+    for (const checkpoint of this.recoveryCheckpoints) {
+      if (checkpoint.entries.some((candidate) => candidate.entity === entry.entity)) continue;
+      checkpoint.entries.push({
+        descriptor: entry.descriptor,
+        entity: entry.entity,
+        snapshot: { ...entry.snapshot },
+        values: readRawEntityValues(entry.descriptor, entry.entity),
+        initialPrimaryKey: entry.initialPrimaryKey,
+        state: entry.state,
+      });
+    }
+  }
+}
+
+function readInitialPrimaryKey(
+  descriptor: ResolvedHikouteiEntityDescriptor,
+  entity: object,
+): ScalarEntityValue | undefined {
+  const value = Reflect.get(entity, descriptor.primaryKey);
+  return value === undefined ? undefined : value as ScalarEntityValue;
+}
+
+function cloneScalarValue(value: ScalarEntityValue): ScalarEntityValue {
+  return value instanceof Date ? new Date(value.getTime()) : value;
+}
+
+/** Captures values without applying flush-time required/type validation. */
+function readRawEntityValues(
+  descriptor: ResolvedHikouteiEntityDescriptor,
+  entity: object,
+): Readonly<Record<string, ScalarEntityValue | undefined>> {
+  const values: Record<string, ScalarEntityValue | undefined> = {};
+  for (const property of descriptor.properties) {
+    const value = Reflect.get(entity, property.name);
+    values[property.name] = value === undefined
+      ? undefined
+      : cloneScalarValue(value as ScalarEntityValue);
+  }
+  return values;
 }
 
 function planChange(entry: ManagedEntity): PlannedScalarChange | undefined {
   const { descriptor } = entry;
   if (entry.state === "new") {
     const values = readEntityValues(descriptor, entry.entity);
-    requirePrimaryKeyValue(descriptor, values[descriptor.primaryKey]);
+    const currentPrimaryKey = requirePrimaryKeyValue(descriptor, values[descriptor.primaryKey]);
+    if (
+      entry.initialPrimaryKey !== undefined &&
+      !sameScalarValue(entry.initialPrimaryKey, currentPrimaryKey)
+    ) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
+        `${descriptor.name}.${descriptor.primaryKey} cannot change before the entity is flushed.`,
+      );
+    }
     return {
       kind: "insert",
       entry,
       row: {
+        entityName: descriptor.name,
         tableName: descriptor.tableName,
         primaryKeyColumn: descriptor.primaryKey,
         values,
@@ -194,13 +312,24 @@ function planChange(entry: ManagedEntity): PlannedScalarChange | undefined {
     };
   }
   if (entry.state === "removed") {
+    const current = readEntityValues(descriptor, entry.entity);
+    const currentPrimaryKey = current[descriptor.primaryKey];
+    const snapshotPrimaryKeyValue = snapshotPrimaryKey(descriptor, entry);
+    if (!sameScalarValue(currentPrimaryKey, snapshotPrimaryKeyValue)) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
+        `${descriptor.name}.${descriptor.primaryKey} cannot change after the entity is created.`,
+      );
+    }
     return {
       kind: "delete",
       entry,
       row: {
+        entityName: descriptor.name,
         tableName: descriptor.tableName,
         primaryKeyColumn: descriptor.primaryKey,
-        primaryKeyValue: snapshotPrimaryKey(descriptor, entry),
+        primaryKeyValue: snapshotPrimaryKeyValue,
+        values: entry.snapshot,
       },
     };
   }
@@ -212,7 +341,7 @@ function planUpdateIfDirty(entry: ManagedEntity): PlannedScalarChange | undefine
   const current = readEntityValues(descriptor, entry.entity);
   const snapshotPrimaryKeyValue = requirePrimaryKeyValue(descriptor, snapshot[descriptor.primaryKey]);
   const currentPrimaryKeyValue = current[descriptor.primaryKey];
-  if (currentPrimaryKeyValue !== snapshotPrimaryKeyValue) {
+  if (!sameScalarValue(currentPrimaryKeyValue, snapshotPrimaryKeyValue)) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
       `${descriptor.name}.${descriptor.primaryKey} cannot change after the entity is created.`,
@@ -224,11 +353,13 @@ function planUpdateIfDirty(entry: ManagedEntity): PlannedScalarChange | undefine
     kind: "update",
     entry,
     row: {
+      entityName: descriptor.name,
       tableName: descriptor.tableName,
       primaryKeyColumn: descriptor.primaryKey,
       primaryKeyValue: snapshotPrimaryKeyValue,
+      values: current,
       changedValues,
-    },
+    }
   };
 }
 
@@ -250,7 +381,10 @@ function collectChangedValues(
   return hasChange ? changed : undefined;
 }
 
-function sameScalarValue(before: ScalarEntityValue, after: ScalarEntityValue): boolean {
+function sameScalarValue(
+  before: ScalarEntityValue | undefined,
+  after: ScalarEntityValue | undefined,
+): boolean {
   if (before instanceof Date && after instanceof Date) {
     return before.getTime() === after.getTime();
   }

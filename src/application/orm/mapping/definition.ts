@@ -6,15 +6,17 @@
  */
 
 import {
-  EMPTY_STRING_LENGTH_ZERO,
   FIELD_OWNERSHIPS,
-} from "../../../domain/index.js";
+} from "../../../domain/model/constants.js";
+import {
+  EMPTY_STRING_LENGTH_ZERO,
+} from "../../../shared/constants.js";
 import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
 } from "../../../shared/encoding/constants.js";
 import { isRecord } from "../../../shared/encoding/typeGuards.js";
-import { SYNC_PROJECTIONS } from "../../sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../../sync/sheetsContract/constants.js";
 import type {
   TypedSheetsEntityFieldCodec,
   TypedSheetsEntityFieldMapping,

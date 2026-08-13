@@ -2,14 +2,17 @@
 
 import {
   ROW_BINDING_STATES,
-  type NormalizedCell,
-  type RowBindingContext,
-  type SyncConflict,
-} from "../../../../../domain/index.js";
+} from "../../../../../domain/model/constants.js";
+import type {
+  RowBindingContext,
+  SyncConflict,
+} from "../../../../../domain/model/types.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import {
   parseNormalizedCell,
   requireConflictStatus,
 } from "../../../../../infrastructure/storage/state/resolution/resolutionWriterHelpers.js";
+import { promoteCandidateVisibleEvidence } from "../../../../../infrastructure/storage/state/resolution/candidateEvidence.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -182,6 +185,11 @@ function buildConflicts(
       ),
       currentCanonicalRevision: row.current_canonical_revision,
       candidateEpoch: row.candidate_epoch,
+      candidateVisibleEvidence: promoteCandidateVisibleEvidence(
+        row.candidate_visible_revision,
+        row.candidate_visible_hash,
+        row.conflict_id,
+      ),
       status: requireConflictStatus(row.status),
       resolutionCommandId: nullablePresence(row.resolution_command_id),
     });

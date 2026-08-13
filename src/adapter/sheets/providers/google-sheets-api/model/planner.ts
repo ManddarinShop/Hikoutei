@@ -8,94 +8,42 @@
  * create-if-missing, visible/candidate/repair guards, deletion shape) is
  * reproduced here against the typed preflight context. Outcomes are
  * discriminated unions, never nullable status markers.
+ *
+ * The module is split into focused files; this entry keeps the planner core
+ * (`planEffectBatch`, `requireProviderEffect`). The shared plan/outcome/row
+ * types live in `plannerContracts`, and the moved helpers live in:
+ *
+ * - `plannerWorkingRow` — working-row lifecycle, replay, hashing, lookup
+ * - `plannerDeletion` — full-row deletion guard and kind predicates
+ * - `plannerReceipt` — receipt construction and result encoding
  */
 
-import { computeSyncVisibleHash, type SyncProjectionEffect } from "../../../../../application/sync/sheets/syncSheets.js";
+import { computeSyncVisibleHash, type SyncProjectionEffect, type ApplySyncEffectsRequest } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
-import type { ApplySyncEffectsRequest, SyncEffectResult } from "../../../../../application/sync/sheets/syncSheets.js";
-import { SYNC_EFFECT_RESULT_STATUSES, SYNC_POSTCONDITION_STATUSES } from "../../../../../application/sync/sheets/constants.js";
-import { APPLICABILITY_KINDS, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { isNormalizedCell } from "../../../../../shared/encoding/index.js";
-import { GOOGLE_SHEETS_API_EFFECT_REASONS, fullRowDeletionReason } from "../constants.js";
+import { GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest } from "../errors.js";
-import type { PreflightContext, PreflightReceipt, PreflightRow } from "./preflight.js";
-
-/** Receipt evidence produced by the planner for one effect. */
-export interface PlannedReceipt {
-  readonly effectId: string;
-  readonly payloadHash: string;
-  readonly status: "applied";
-  readonly visibleHash: string;
-  readonly visibleRevision: number;
-}
-
-/** Terminal/non-terminal planner outcome for one effect. */
-export type PlannedOutcome =
-  | {
-    readonly kind: "applied";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly receipt: PlannedReceipt;
-    readonly created: boolean;
-    readonly deletion: boolean;
-  }
-  | {
-    readonly kind: "already_applied";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly receipt: PlannedReceipt;
-  }
-  | {
-    readonly kind: "guard_mismatch";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  }
-  | {
-    readonly kind: "repair_reobserve";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  }
-  | {
-    readonly kind: "schema_error";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  }
-  | {
-    readonly kind: "retryable_error";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  };
-
-/** Target mutation planned for one effect (only successful write outcomes). */
-export type PlanMutation =
-  | { readonly kind: "append"; readonly row: WorkingRow }
-  | { readonly kind: "update"; readonly row: WorkingRow }
-  | { readonly kind: "delete"; readonly row: WorkingRow };
-
-/** Mutable working copy of one preflight row during planning. */
-export interface WorkingRow {
-  readonly rowNumber: number;
-  readonly anchor: Presence<string>;
-  readonly cells: Record<string, import("../../../../../domain/index.js").NormalizedCell>;
-  readonly identity: Presence<string>;
-  readonly appended: boolean;
-  deleted: boolean;
-  readonly writeFields: Record<string, import("../../../../../domain/index.js").NormalizedCell>;
-}
-
-/** Per-effect plan: outcome plus any mutation and receipt the batch needs. */
-export interface EffectPlan {
-  readonly outcome: PlannedOutcome;
-  readonly mutation: PlanMutation | undefined;
-  readonly receipt: PlannedReceipt | undefined;
-  /** True when inline postcondition verification must re-read this write. */
-  readonly verify: boolean;
-}
+import type { PreflightContext } from "./preflightContext.js";
+import type {
+  EffectPlan,
+  PlannedReceipt,
+  WorkingRow,
+} from "./plannerContracts.js";
+import {
+  createWorkingRow,
+  currentHash,
+  findWorkingRow,
+  planReceiptReplay,
+  toWorkingRow,
+} from "./plannerWorkingRow.js";
+import {
+  isDeletionEffect,
+  isSyncEffectKind,
+  validateDeletion,
+} from "./plannerDeletion.js";
+import { makeReceipt } from "./plannerReceipt.js";
 
 /**
  * Plans one applyEffects request against a preflight context.
@@ -116,7 +64,11 @@ export function planEffectBatch(
   for (const row of context.rows) {
     const copy = toWorkingRow(row);
     working.set(copy.rowNumber, copy);
-    if (copy.anchor.kind === PRESENCE_KINDS.PRESENT) {
+    // Mirrors indexRows: only the FIRST row per anchor value enters the
+    // index (duplicated anchors are evidence, never rewritten), so a
+    // duplicated anchor resolves deterministically instead of drifting to
+    // the last row carrying it.
+    if (copy.anchor.kind === PRESENCE_KINDS.PRESENT && !byAnchor.has(copy.anchor.value)) {
       byAnchor.set(copy.anchor.value, copy);
     }
     if (copy.identity.kind === PRESENCE_KINDS.PRESENT) {
@@ -427,263 +379,4 @@ export function requireProviderEffect(
       effect.payload.expectedCandidateHash.kind !== APPLICABILITY_KINDS.NOT_APPLICABLE) {
     invalidProviderRequest("apply effects", "effect expectedCandidateHash is invalid");
   }
-}
-
-/** Receipt replay branch: a receipt already exists for this effect ID. */
-function planReceiptReplay(
-  effect: SyncProjectionEffect,
-  receipt: PlannedReceipt,
-  context: PreflightContext,
-  byAnchor: ReadonlyMap<string, WorkingRow>,
-  byIdentity: ReadonlyMap<string, WorkingRow>,
-): EffectPlan {
-  if (receipt.payloadHash !== effect.payloadHash) {
-    return rejectionPlan(effect, "schema_error",
-      GOOGLE_SHEETS_API_EFFECT_REASONS.EFFECT_ID_REUSED_WITH_DIFFERENT_PAYLOAD);
-  }
-  const receiptRow = findWorkingRow(byAnchor, byIdentity, effect.payload.targetAnchor, effect.targetId);
-  if (isDeletionEffect(effect.effectKind)) {
-    if (receiptRow === undefined) {
-      return {
-        outcome: {
-          kind: "already_applied",
-          effect,
-          rowNumber: absentValue(),
-          receipt,
-        },
-        mutation: undefined,
-        receipt,
-        verify: false,
-      };
-    }
-    return rejectionPlan(
-      effect,
-      "guard_mismatch",
-      GOOGLE_SHEETS_API_EFFECT_REASONS.RECEIPT_TARGET_REAPPEARED,
-      presentValue(receiptRow.rowNumber),
-    );
-  }
-  if (receiptRow === undefined) {
-    const repair = effect.effectKind === EFFECT_KINDS.SYSTEM_REPAIR;
-    return rejectionPlan(
-      effect,
-      repair ? "repair_reobserve" : "guard_mismatch",
-      GOOGLE_SHEETS_API_EFFECT_REASONS.RECEIPT_TARGET_MISSING,
-    );
-  }
-  const receiptCurrentHash = currentHash(receiptRow, effect.payload.fields);
-  if (receiptCurrentHash === effect.payload.targetVisibleHash) {
-    return {
-      outcome: {
-        kind: "already_applied",
-        effect,
-        rowNumber: presentValue(receiptRow.rowNumber),
-        receipt,
-      },
-      mutation: undefined,
-      receipt,
-      verify: false,
-    };
-  }
-  const repair = effect.effectKind === EFFECT_KINDS.SYSTEM_REPAIR;
-  return rejectionPlan(
-    effect,
-    repair ? "repair_reobserve" : "guard_mismatch",
-    GOOGLE_SHEETS_API_EFFECT_REASONS.RECEIPT_POSTCONDITION_CHANGED,
-    presentValue(receiptRow.rowNumber),
-  );
-}
-
-/** Validates the full-row deletion guard exactly like `validateDeletion_`. */
-export function validateDeletion(
-  context: PreflightContext,
-  effect: SyncProjectionEffect,
-): string | null {
-  if (
-    effect.payload.createIfMissing ||
-    effect.expectedVisibleRevision < 1 ||
-    effect.payload.targetVisibleHash !== effect.expectedVisibleHash
-  ) {
-    return GOOGLE_SHEETS_API_EFFECT_REASONS.INVALID_DELETION_GUARD;
-  }
-  const actual = Object.keys(effect.payload.fields).sort();
-  const expected = [...context.headers].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((fieldName, index) => fieldName !== expected[index])
-  ) {
-    return fullRowDeletionReason(effect.effectKind);
-  }
-  return null;
-}
-
-/** Computes the visible hash of a row restricted to the effect's fields. */
-export function currentHash(
-  row: WorkingRow | PreflightRow,
-  fields: Readonly<Record<string, import("../../../../../domain/index.js").NormalizedCell>>,
-): string {
-  const values: Record<string, import("../../../../../domain/index.js").NormalizedCell> = {};
-  for (const fieldName of Object.keys(fields)) {
-    values[fieldName] = row.cells[fieldName] ?? null;
-  }
-  return computeSyncVisibleHash(values);
-}
-
-/** Builds a receipt record exactly like `makeReceipt_`. */
-export function makeReceipt(
-  effect: SyncProjectionEffect,
-  visibleHash: string,
-  visibleRevision: number,
-): PlannedReceipt {
-  return {
-    effectId: effect.effectId,
-    payloadHash: effect.payloadHash,
-    status: "applied",
-    visibleHash,
-    visibleRevision,
-  };
-}
-
-/** Finds a row by anchor first, then visible identity, then the targetId tail. */
-export function findWorkingRow(
-  byAnchor: ReadonlyMap<string, WorkingRow>,
-  byIdentity: ReadonlyMap<string, WorkingRow>,
-  anchor: string,
-  targetId: string,
-): WorkingRow | undefined {
-  const anchored = byAnchor.get(anchor);
-  if (anchored !== undefined) return anchored;
-  const direct = byIdentity.get(targetId);
-  if (direct !== undefined) return direct;
-  const separator = targetId.lastIndexOf(":");
-  if (separator < 0) return undefined;
-  const visibleIdentity = targetId.slice(separator + 1);
-  if (visibleIdentity.length === 0) return undefined;
-  return byIdentity.get(visibleIdentity);
-}
-
-/** Builds a rejection plan (no mutation, no receipt). */
-function rejectionPlan(
-  effect: SyncProjectionEffect,
-  kind: "guard_mismatch" | "repair_reobserve" | "schema_error",
-  reason: string,
-  rowNumber: Presence<number> = absentValue(),
-): EffectPlan {
-  return {
-    outcome: { kind, effect, rowNumber, reason },
-    mutation: undefined,
-    receipt: undefined,
-    verify: false,
-  };
-}
-
-/** Converts one preflight row into a working row for planning/probing. */
-export function toWorkingRow(row: PreflightRow): WorkingRow {
-  return {
-    rowNumber: row.rowNumber,
-    anchor: row.physicalAnchor,
-    cells: { ...row.cells },
-    identity: row.identity,
-    appended: false,
-    deleted: false,
-    writeFields: {},
-  };
-}
-
-function createWorkingRow(effect: SyncProjectionEffect, rowNumber: number): WorkingRow {
-  const cells: Record<string, import("../../../../../domain/index.js").NormalizedCell> = {};
-  return {
-    rowNumber,
-    anchor: presentValue(effect.payload.targetAnchor),
-    cells,
-    // Key the created row by its full targetId (Apps Script `createRow_`
-    // registers byIdentity[targetId] when targetId is non-empty) so a later
-    // effect in the same request that targets the same entity finds this row
-    // through findWorkingRow's direct targetId lookup instead of creating a
-    // second physical row. The caller registers it in byIdentity under
-    // effect.targetId via the identity value below.
-    identity: effect.targetId.length > 0 ? presentValue(effect.targetId) : absentValue(),
-    appended: true,
-    deleted: false,
-    writeFields: {},
-  };
-}
-
-export function isDeletionEffect(effectKind: string): boolean {
-  return effectKind === EFFECT_KINDS.RESOLUTION_DELETE ||
-    effectKind === EFFECT_KINDS.USER_INPUT_DELETE;
-}
-
-function isSyncEffectKind(value: string): boolean {
-  return value === "system_projection" ||
-    value === "candidate_reconcile" ||
-    value === "system_repair" ||
-    value === "resolution_projection" ||
-    value === EFFECT_KINDS.RESOLUTION_DELETE ||
-    value === EFFECT_KINDS.USER_INPUT_DELETE;
-}
-
-/** Encodes a planned outcome as a provider result (Apps Script `result_`). */
-export function encodeOutcomeResult(outcome: PlannedOutcome): SyncEffectResult {
-  switch (outcome.kind) {
-    case "applied":
-    case "already_applied":
-      return {
-        effectId: outcome.effect.effectId,
-        payloadHash: outcome.effect.payloadHash,
-        status: outcome.kind === "applied"
-          ? SYNC_EFFECT_RESULT_STATUSES.APPLIED
-          : SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED,
-        visibleRevision: presentValue(outcome.receipt.visibleRevision),
-        visibleHash: presentValue(outcome.receipt.visibleHash),
-        snapshotHash: absentValue(),
-        reason: absentValue(),
-        postcondition: SYNC_POSTCONDITION_STATUSES.VERIFIED,
-      };
-    case "guard_mismatch":
-    case "repair_reobserve":
-    case "schema_error":
-    case "retryable_error":
-      return {
-        effectId: outcome.effect.effectId,
-        payloadHash: outcome.effect.payloadHash,
-        status: outcome.kind,
-        visibleRevision: absentValue(),
-        visibleHash: absentValue(),
-        snapshotHash: absentValue(),
-        reason: presentValue(outcome.reason),
-        postcondition: SYNC_POSTCONDITION_STATUSES.UNAVAILABLE,
-      };
-  }
-}
-
-/** Builds a schema_error result without any receipt-backed evidence. */
-export function encodeSchemaErrorResult(
-  effect: SyncProjectionEffect,
-  reason: string,
-): SyncEffectResult {
-  return {
-    effectId: effect.effectId,
-    payloadHash: effect.payloadHash,
-    status: SYNC_EFFECT_RESULT_STATUSES.SCHEMA_ERROR,
-    visibleRevision: absentValue(),
-    visibleHash: absentValue(),
-    snapshotHash: absentValue(),
-    reason: presentValue(reason),
-    postcondition: SYNC_POSTCONDITION_STATUSES.UNAVAILABLE,
-  };
-}
-
-/** Applies the deferred-mode postcondition relabeling for applied results. */
-export function withDeferredPostcondition(
-  result: SyncEffectResult,
-): SyncEffectResult {
-  if (
-    (result.status === SYNC_EFFECT_RESULT_STATUSES.APPLIED ||
-      result.status === SYNC_EFFECT_RESULT_STATUSES.ALREADY_APPLIED) &&
-    result.postcondition === SYNC_POSTCONDITION_STATUSES.VERIFIED
-  ) {
-    return { ...result, postcondition: SYNC_POSTCONDITION_STATUSES.ACKNOWLEDGED };
-  }
-  return result;
 }

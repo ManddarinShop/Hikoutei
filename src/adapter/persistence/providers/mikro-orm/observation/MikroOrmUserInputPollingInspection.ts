@@ -1,25 +1,28 @@
 /** Validates observed User_Input rows and prepares accepted entity changes. */
 
 import {
-  APPLICABILITY_KINDS,
-  CELL_OBSERVATION_KINDS,
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
-  stableHash,
-  type NormalizedRowField,
-  type ObservedExistingRowChange,
-} from "../../../../../domain/index.js";
+} from "../../../../../domain/model/constants.js";
+import type {
+  NormalizedRowField,
+  ObservedExistingRowChange,
+} from "../../../../../domain/model/types.js";
+import { stableHash } from "../../../../../shared/encoding/stableEncode.js";
+import {
+  APPLICABILITY_KINDS,
+} from "../../../../../shared/state/constants.js";
 import type {
   SyncSheetsSnapshot,
   SyncObservedSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_PROTOCOL_VERSIONS,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,
@@ -37,7 +40,10 @@ import {
   type RowBindingStateRecord,
   type VisibleProjectionState,
 } from "./MikroOrmUserInputPollingState.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../../shared/encoding/constants.js";
+import {
+  CELL_OBSERVATION_KINDS,
+  NORMALIZED_CELL_KINDS,
+} from "../../../../../shared/encoding/constants.js";
 
 /** Stable reasons for a User_Input row that cannot enter the evaluator. */
 export const MAPPED_USER_INPUT_INVALID_REASONS = {

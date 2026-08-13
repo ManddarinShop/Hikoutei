@@ -121,9 +121,90 @@ client directly.
 
 Google Sheets synchronization is a service-side concern. Applications do not
 import a provider client, pass Sheet routes to `createTypedSheets()`, or choose
-an operation for each write. The sync runtime uses one Google Sheets API
-provider (the internal `googleSheetsApi` bootstrap option) with a service
-account — no Apps Script deployment.
+an operation for each write — the root API accepts only `dbName` and
+`entities`. The sync runtime uses one internal Google Sheets API provider with
+a service account — no Apps Script deployment. Sync auto-start is selected by
+`HIKOUTEI_SYNC_SPREADSHEET_URL` plus `GOOGLE_APPLICATION_CREDENTIALS`; there is
+no public `googleSheetsApi` bootstrap option to configure.
+
+**Fastest path:** install the gcloud CLI, then run `npx hikoutei setup` from your
+project directory. On an interactive terminal it offers (press Enter) to
+start `gcloud auth login --enable-gdrive-access --force` for you when the
+active account is missing or lacks Drive access — you only complete the
+browser approval yourself. (In `--yes`, CI, or non-TTY sessions, run that
+login command yourself first.) Setup then creates the project, service
+account, and key, creates a spreadsheet owned by your account, shares it
+with the service account as an Editor, verifies service-account access, and
+writes `GOOGLE_APPLICATION_CREDENTIALS` plus `HIKOUTEI_SYNC_SPREADSHEET_URL`
+into your `.env`. The human access token is used in memory only and never
+stored. Automatic setup runs on macOS and Linux; on Windows a non-dry-run
+is refused before any mutation and manual setup is available. Interrupted runs resume from a local checkpoint
+(`.hikoutei-setup-state.json`); a spreadsheet create whose outcome is
+unknown is reconciled by its creation marker on the next run and setup
+never creates a second spreadsheet (inspect Drive and rerun if setup
+reports `sheet_create_uncertain`, and a create rejected up front with
+HTTP 400/403 plus a confirmed-zero marker lookup rolls back to `key_ready`
+so a corrected rerun starts a fresh marker). Sharing is write-ahead too:
+`spreadsheet_share_started` is persisted before the idempotent SA writer
+permission ensure and `spreadsheet_shared` after it, so a crash between
+the remote permission mutation and the checkpoint write resumes the
+ensure on the next run and never creates a second spreadsheet. The
+service-account key is
+created under a write-ahead contract too: the user-managed key list is
+recorded as a baseline before the single gcloud key create, and
+`key_create_started`/`key_ready` checkpoints let a crashed run recover a
+staged or installed key instead of creating a second one. Only the
+invocation that just persisted `key_create_started` may issue the one key
+create; resumed runs are reconcile-only and, when no credential and no
+post-baseline key are visible, poll the key list plus staged/final
+evidence for up to two minutes (2, 4, 8, 16, 30, 30, 30 s) before failing
+with `key_create_uncertain` — the create is never retried automatically.
+An unmatched user-managed key with no local credential is never deleted
+automatically — setup fails with `key_create_uncertain` and you inspect
+the key list in the Google Cloud console before rerunning (a
+verified-absent state requires removing the setup state file to reset the
+key checkpoint); reused keys are enforced to owner-only mode 600. An exclusive lock directory
+(`.hikoutei-setup-state.json.lock`) prevents concurrent runs and is never
+removed automatically: a crash leaves an empty lock directory behind, and
+removing it manually is required only when you are certain no setup is
+running. Starting fresh requires removing or moving both the checkpoint and
+the key file, or passing `--project` to recover an existing key —
+checkpointed or identity-matched cloud resources are reused, and setup
+never deletes cloud resources. The manual steps below remain available for
+advanced setups.
+
+**Setup progress.** `hikoutei setup` reports step-by-step progress to
+**stderr** across the ten setup phases (cloud auth, Drive access, project,
+APIs, service account, service-account key, spreadsheet, share,
+service-account access, output): an **overall bar** advances only when a
+phase actually completes — it is never an ETA and never guesses a
+percentage — and a **detail line** shows the bounded propagation checks
+(how many of the eight key/access checks have run) and the known 2, 4, 8,
+16, 30, 30, 30 s waits, with a fixed `working…` label for unknown-duration
+steps. On an interactive terminal the four-line block redraws in place;
+in CI, non-TTY, or `NO_COLOR` sessions one static line is printed per
+phase/retry event with no control sequences. Progress pauses and the
+block is cleared during the interactive `gcloud auth login` handoff and
+resumes with the retry. Progress never prints credentials, tokens, keys,
+project ids, emails, paths, or raw command output, and it can never
+change the setup result or exit code; `--dry-run` prints the command
+plan only.
+
+**Keep setup artifacts out of Git.** `hikoutei setup` writes its defaults
+into the current directory: the service-account key
+(`hikoutei-service-account.json`, owner-only mode 600 — a secret), the
+resume checkpoint (`.hikoutei-setup-state.json` and its `.tmp`/unique-temp
+and `.lock` siblings), private key staging/cleanup directories
+(`.hikoutei-key-stage-*`, `.hikoutei-key-cleanup-*`), and
+`.hikoutei-env-*` temporary env writes. The repository's `.gitignore`
+already ignores these defaults, so a plain `git add .` does not pick them
+up. A `.gitignore` is **not a security boundary**, though: it only keeps
+untracked files out of `git add`, and it does not protect files that are
+already tracked (remove a mistakenly tracked key from history and rotate
+it — delete the user-managed key in the Cloud console and rerun setup).
+When you use a custom `--output` or keep the key or checkpoint at custom
+paths, add those exact paths to your application's ignore rules and never
+commit them.
 
 ### Env-driven sync auto-start
 
@@ -145,7 +226,7 @@ local-only (SQLite). Startup failures are diagnosed with clear messages:
 invalid URL, missing/invalid credentials file, or a service account not
 shared on the spreadsheet (the error tells you which email to share).
 
-### Service-account provider (googleSheetsApi)
+### Manual service-account setup
 
 1. **Create a service account.** Enable the Google Sheets API in a Cloud
    project, create a service account with the
@@ -155,10 +236,22 @@ shared on the spreadsheet (the error tells you which email to share).
    access is not enough.
 2. **Keep the key server-side.** Put the service-account key path in
    `GOOGLE_APPLICATION_CREDENTIALS` on the server and the spreadsheet ID in an
-   untracked secret store. Never put the key in browser code or Git.
-3. **Start the internal sync bootstrap** with `googleSheetsApi` configured. It
-   creates and verifies headers on the registered tabs, then starts outbox
-   delivery and User_Input polling.
+   untracked secret store. Never put the key in browser code or Git: add the
+   key path (and any custom `.env`/checkpoint paths) to the application's
+   `.gitignore` — the defaults created by `hikoutei setup` are already
+   ignored, but a `.gitignore` is not a security boundary and does not
+   protect already-tracked files.
+3. **Run the application normally.** Start the app with
+   `GOOGLE_APPLICATION_CREDENTIALS` and `HIKOUTEI_SYNC_SPREADSHEET_URL` set;
+   `createTypedSheets()` detects them and starts the internal sync bootstrap —
+   it creates and verifies headers on the registered tabs, then starts outbox
+   delivery and User_Input polling. There is no provider option to pass and no
+   internal bootstrap to start by hand.
+
+> **Legacy spreadsheet note.** Spreadsheets provisioned by the old Apps Script
+> provider with developer-metadata row anchors are not migrated: `User_Input`
+> tabs now require the `__hikoutei_row_id` system column, so legacy tabs must
+> be re-provisioned.
 
 Hikoutei uses a durable local outbox, idempotent delivery, and conflict-aware
 updates so temporary API failures do not lose committed application writes. The
@@ -206,15 +299,48 @@ entity API.
 
 ## Project status
 
-Hikoutei is in active development. The entity API is usable, while Sheet edit
-ingestion and conflict presentation are still evolving. Review release notes
-before upgrading minor versions.
+Hikoutei is in active development. The current EntityManager supports scalar
+entity lifecycle operations, equality-filtered `find()` / `findOne()`,
+`limit` / `offset` pagination on `find()`, and callback-style
+`transactional()` work.
+Normal reads always come from SQLite, never Google Sheets. The `hikoutei
+setup` CLI provisions the spreadsheet and service account, and the direct
+Google Sheets API provider (env-driven auto-start) is the only sync path — no
+Apps Script gateway. Sheet edit ingestion and conflict presentation are still
+evolving. Review release notes before upgrading minor versions.
 
 ## Roadmap
 
+The EntityManager roadmap follows the implementation order below. The sequence
+is committed, but no milestone is tied to a date or release number.
+
+1. **Rich local reads**
+   - Add a Hikoutei-owned typed query contract for explicit `eq`, `ne`, `gt`,
+     `gte`, `lt`, `lte`, `in`, `nin`, and `like` conditions, plus `orderBy`,
+     `count()`, and `findAndCount()`.
+   - Compose these capabilities with the existing `limit` / `offset`
+     pagination without exposing MikroORM query types.
+2. **Lifecycle-safe writes**
+   - Add `upsert` and direct/bulk mutation capabilities only through a
+     Hikoutei-owned contract that preserves one SQLite transaction across the
+     entity table, canonical state, and durable Sheet effect outbox.
+   - Do not promise raw `nativeInsert`, `nativeUpdate`, `nativeDelete`, or SQL
+     pass-through APIs that could bypass that atomic lifecycle.
+3. **Relationships and loading**
+   - Add many-to-one, one-to-many, and `populate()` capabilities.
+   - Design SQLite relationship mapping, Sheets projection representation,
+     schema behavior, and conflict semantics together before public release.
+4. **Schema operations**
+   - Add migration and schema drift management.
+   - Integrate validation and operational workflows with the existing setup
+     tooling.
+
+### Synchronization and operations
+
+The following work continues in parallel with the EntityManager milestones:
+
 - Complete ingestion of intentional user edits from Google Sheets.
 - Improve update/delete conflict handling and presentation.
-- Add setup tooling for registry and direct provider deployment.
 
 See the [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
 for current work.

@@ -13,7 +13,7 @@ import type {
   SyncObservedSnapshot,
   SyncSheetsObservationProvider,
   SyncTableRowsResult,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   emptySyncTimingOperationCounts,
   SYNC_TIMING_SCOPES,
@@ -22,11 +22,11 @@ import {
 import {
   isSyncSheetsTableReader,
   observeSyncSnapshots,
-} from "../../../../../application/sync/sheets/syncSheets.js";
+} from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../../../../../application/sync/sheets/constants.js";
+} from "../../../../../application/sync/sheetsContract/constants.js";
 import type {
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingRegistry,
@@ -45,8 +45,8 @@ import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
-  type PersistObservedRowInput,
-} from "../../../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
+import type { PersistObservedRowInput } from "../../../../../infrastructure/storage/state/observation/observationWriter.js";
 import type {
   SqlStorageAdapter,
 } from "../../../../../adapter/persistence/contracts/sql.js";
@@ -308,7 +308,7 @@ export async function pollMappedUserInputWithMikroOrm(
       POLLING_TIMING_PHASES.PERSISTENCE,
       Date.now() - persistenceStartedAt,
     );
-    await retryDeferredConflicts(options, mappings, observedInputs);
+    await retryDeferredConflicts(options, mappings);
     const report = createPollingReport(startedAt, accumulators, {
       mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
       safetyFullScan: false,
@@ -346,7 +346,7 @@ export async function pollMappedUserInputWithMikroOrm(
     POLLING_TIMING_PHASES.PERSISTENCE,
     Date.now() - persistenceStartedAt,
   );
-  await retryDeferredConflicts(options, mappings, observedInputs);
+  await retryDeferredConflicts(options, mappings);
   const report = createPollingReport(startedAt, accumulators, {
     mode: MAPPED_USER_INPUT_POLL_MODES.FULL,
     safetyFullScan: options.forceFull === true,
@@ -462,13 +462,11 @@ async function persistPreparedRowsIfNeeded(
 async function retryDeferredConflicts(
   options: PollMappedUserInputWithMikroOrmOptions,
   mappings: readonly TypedSheetsEntityMapping[],
-  observedInputs: readonly PersistObservedRowInput[] = [],
 ): Promise<void> {
   await retryOpenMappedConflictsWithAdapter(
     options.storage,
     mappings,
     resolveTypedSheetsEntityWriterOptions(options.writer),
-    observedInputs,
   );
 }
 

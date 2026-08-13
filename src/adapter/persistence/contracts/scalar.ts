@@ -13,6 +13,8 @@
  * change. Those sync details remain provider-internal.
  */
 
+import type { SqlExecutor } from "./sql.js";
+
 /** Scalar value bound for one entity column. */
 export type ScalarEntityValue = string | number | boolean | Date | null;
 
@@ -36,6 +38,7 @@ export interface ScalarEntityTableDefinition {
 
 /** A row to insert into one scalar entity table. */
 export interface ScalarEntityInsert {
+  readonly entityName: string;
   readonly tableName: string;
   readonly primaryKeyColumn: string;
   /** Column-to-value map for every declared property of the entity. */
@@ -44,18 +47,48 @@ export interface ScalarEntityInsert {
 
 /** A changed row to update inside one scalar entity table. */
 export interface ScalarEntityUpdate {
+  readonly entityName: string;
   readonly tableName: string;
   readonly primaryKeyColumn: string;
   readonly primaryKeyValue: ScalarEntityValue;
+  /** Complete post-update row used by canonical and projection planning. */
+  readonly values: Readonly<Record<string, ScalarEntityValue>>;
   /** Only the columns whose values changed since the loaded snapshot. */
   readonly changedValues: Readonly<Record<string, ScalarEntityValue>>;
 }
 
 /** A row to delete from one scalar entity table by primary key. */
 export interface ScalarEntityDelete {
+  readonly entityName: string;
   readonly tableName: string;
   readonly primaryKeyColumn: string;
   readonly primaryKeyValue: ScalarEntityValue;
+  /** Complete persisted row snapshot used for delete canonical evidence. */
+  readonly values: Readonly<Record<string, ScalarEntityValue>>;
+}
+
+/** Runtime operation tags used by the provider-neutral flush plan. */
+export const SCALAR_ENTITY_CHANGE_KINDS = {
+  INSERT: "insert",
+  UPDATE: "update",
+  DELETE: "delete",
+} as const;
+
+/** One lifecycle row operation promoted from Hikoutei's Unit of Work. */
+export type ScalarEntityFlushChange =
+  | { readonly kind: typeof SCALAR_ENTITY_CHANGE_KINDS.INSERT; readonly row: ScalarEntityInsert }
+  | { readonly kind: typeof SCALAR_ENTITY_CHANGE_KINDS.UPDATE; readonly row: ScalarEntityUpdate }
+  | { readonly kind: typeof SCALAR_ENTITY_CHANGE_KINDS.DELETE; readonly row: ScalarEntityDelete };
+
+/** SQL context used by a provider to plan canonical and outbox work. */
+export interface ScalarEntityFlushContext {
+  readonly changes: readonly ScalarEntityFlushChange[];
+  readonly sql: SqlExecutor;
+}
+
+/** Callback for sync-aware providers to plan work before entity SQL is flushed. */
+export interface ScalarEntityFlushCoordinator {
+  onFlush(context: ScalarEntityFlushContext): Promise<void>;
 }
 
 /** Equality filter and paging for a scalar entity read. */

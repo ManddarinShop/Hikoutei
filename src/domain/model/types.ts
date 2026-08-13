@@ -6,11 +6,12 @@
  */
 
 import type { NormalizedCell } from "../../shared/encoding/types.js";
-import type { ConflictStatus } from "./constants.js";
+import type { ConflictStatus, CandidateVisibleEvidenceStatus } from "./constants.js";
 import type { NormalizedCellKind } from "../../shared/encoding/types.js";
 import type { Applicability, Presence } from "../../shared/state/types.js";
 import type {
   CANONICAL_RESOLUTION_STATUSES,
+  CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   DeleteEvidence,
   FieldOwnership,
   QuarantineReason,
@@ -26,6 +27,7 @@ import type {
 
 export type {
   CanonicalResolutionStatus,
+  CandidateVisibleEvidenceStatus,
   ConflictStatus,
   DeleteEvidence,
   FieldOwnership,
@@ -288,6 +290,17 @@ export type SheetChangeEvent =
 // Conflict model
 // ---------------------------------------------------------------------------
 
+/** Candidate-time full-row visible evidence stored for resolution CAS. */
+export type CandidateVisibleEvidence =
+  | {
+      readonly status: typeof CANDIDATE_VISIBLE_EVIDENCE_STATUSES.AVAILABLE;
+      /** Full-row visible revision observed when the candidate was detected. */
+      readonly visibleRevision: number;
+      /** Full-row visible hash observed when the candidate was detected. */
+      readonly visibleHash: string;
+    }
+  | { readonly status: typeof CANDIDATE_VISIBLE_EVIDENCE_STATUSES.UNAVAILABLE };
+
 /** Field-level conflict record preserving both candidate and canonical state. */
 export interface SyncConflict {
   readonly conflictId: string;
@@ -304,6 +317,8 @@ export interface SyncConflict {
   readonly currentCanonicalRevision: number;
   /** Monotonic attempt generation for this field's active candidate. */
   readonly candidateEpoch: number;
+  /** Full-row visible evidence captured at candidate detection; used as resolution CAS. */
+  readonly candidateVisibleEvidence: CandidateVisibleEvidence;
   readonly status: ConflictStatus;
   readonly resolutionCommandId: Presence<string>;
 }

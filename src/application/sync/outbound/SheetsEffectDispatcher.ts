@@ -11,7 +11,7 @@
 
 import {
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../domain/index.js";
+} from "../../../shared/constants.js";
 import type {
   FencingContext,
   PendingEffect,
@@ -56,7 +56,7 @@ import {
   type SyncEffectResult,
   type SyncProjectionEffect,
   type SyncEffectWorkerProvider,
-} from "../sheets/syncSheets.js";
+} from "../sheetsContract/syncSheets.js";
 import {
   SYNC_EFFECT_RESULT_STATUSES,
   SYNC_FAST_APPEND_STATUSES,
@@ -64,11 +64,11 @@ import {
   SYNC_POSTCONDITION_MODES,
   SYNC_POSTCONDITION_STATUSES,
   SYNC_PROJECTIONS,
-} from "../sheets/constants.js";
+} from "../sheetsContract/constants.js";
 import {
   classifyTransportOutcome,
   TRANSPORT_OUTCOME_KINDS,
-} from "../sheets/transportOutcome.js";
+} from "../sheetsContract/transportOutcome.js";
 import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
 import type { EffectTargetKind } from "../../../domain/model/constants.js";
 

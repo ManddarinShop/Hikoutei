@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { FIELD_OWNERSHIPS, stableHash, type NormalizedCell } from "../src/domain/index.js";
+import { FIELD_OWNERSHIPS } from "../src/domain/model/constants.js";
+import { stableHash } from "../src/shared/encoding/stableEncode.js";
+import type { NormalizedCell } from "../src/shared/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import { inspectFastPollingTable } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";
 import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import type { SyncTableRowsResult } from "../src/application/sync/sheets/syncSheets.js";
+import type { SyncTableRowsResult } from "../src/application/sync/sheetsContract/syncSheets.js";
 
 interface Probe {
   readonly id: string;
@@ -53,7 +55,7 @@ const mapping = defineTypedSheetsEntityMapping<Probe>({
       physicalSheetId: "fast-polling-probe-input",
       spreadsheetId: "spreadsheet",
       tabName: "Probe_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: "user_input",
     },
   ],
@@ -89,7 +91,7 @@ function state(): MappedPollingState {
 function result(rows: SyncTableRowsResult["rows"]): SyncTableRowsResult {
   return {
     sheetName: "Probe_Input",
-    registeredRange: "A:B",
+    registeredRange: "A:C",
     headers: ["id", "status"],
     rows,
   };
@@ -202,7 +204,7 @@ const richMapping = defineTypedSheetsEntityMapping<RichRow>({
       physicalSheetId: "fast-polling-rich-input",
       spreadsheetId: "spreadsheet",
       tabName: "Rich_Input",
-      registeredRange: "A:E",
+      registeredRange: "A:F",
       projection: "user_input",
     },
   ],
@@ -255,7 +257,7 @@ function richState(): MappedPollingState {
 function richResult(rows: SyncTableRowsResult["rows"]): SyncTableRowsResult {
   return {
     sheetName: "Rich_Input",
-    registeredRange: "A:E",
+    registeredRange: "A:F",
     headers: ["id", "score", "active", "createdAt", "note"],
     rows,
   };
@@ -312,7 +314,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
   it("throws on a header or registered-range mismatch instead of silently skipping", () => {
     const mismatchedHeaders = {
       sheetName: "Rich_Input",
-      registeredRange: "A:E",
+      registeredRange: "A:F",
       headers: ["id", "score", "active", "createdAt", "renamed"],
       rows: [{ rowNumber: 2, fields: richFields() }],
     } as unknown as SyncTableRowsResult;
@@ -320,7 +322,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
 
     const mismatchedRange = {
       sheetName: "Rich_Input",
-      registeredRange: "A:D",
+      registeredRange: "A:E",
       headers: ["id", "score", "active", "createdAt", "note"],
       rows: [],
     } as unknown as SyncTableRowsResult;

@@ -14,13 +14,14 @@ import {
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../src/infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import { presentValue } from "../src/shared/state/index.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { runReconciliationScan } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../src/application/sync/sheets/sheetsProvisioning.js";
+} from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncTimingEvent } from "../src/application/sync/telemetry/syncTiming.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
@@ -52,7 +53,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       SyncServiceUser: {
         systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
         syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
-        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:C" },
         userOwnedFields: ["id", "status"],
       },
     },
@@ -250,6 +251,64 @@ class RecordingProvisioner implements SyncSheetsProvisioner {
   }
 }
 
+describe("internal sync service descriptor registry validation", () => {
+  it("rejects a non-token entity value with INVALID_OPTIONS before any provider work", async () => {
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [{} as never],
+      projections: { spreadsheetId: "sync-service-spreadsheet", entities: {} },
+      provider: new FakeSyncSheetsProvider([]),
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service entities must be tokens produced by defineTypedSheetsEntity().",
+    });
+  });
+
+  it("rejects duplicate entity names with INVALID_OPTIONS and the sync message", async () => {
+    const Dup = defineTypedSheetsEntity({
+      name: "SyncRegistryDup",
+      tableName: "sync_registry_dup_a",
+      properties: { id: { type: "string", primary: true } },
+    });
+    const DupAgain = defineTypedSheetsEntity({
+      name: "SyncRegistryDup",
+      tableName: "sync_registry_dup_b",
+      properties: { id: { type: "string", primary: true } },
+    });
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [Dup, DupAgain],
+      projections: { spreadsheetId: "sync-service-spreadsheet", entities: {} },
+      provider: new FakeSyncSheetsProvider([]),
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: 'sync service entity "SyncRegistryDup" is registered more than once.',
+    });
+  });
+
+  it("rejects a shared table name with INVALID_OPTIONS and the sync message", async () => {
+    const SharedOne = defineTypedSheetsEntity({
+      name: "SyncRegistrySharedOne",
+      tableName: "sync_registry_shared_table",
+      properties: { id: { type: "string", primary: true } },
+    });
+    const SharedTwo = defineTypedSheetsEntity({
+      name: "SyncRegistrySharedTwo",
+      tableName: "sync_registry_shared_table",
+      properties: { id: { type: "string", primary: true } },
+    });
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [SharedOne, SharedTwo],
+      projections: { spreadsheetId: "sync-service-spreadsheet", entities: {} },
+      provider: new FakeSyncSheetsProvider([]),
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: 'sync service table "sync_registry_shared_table" is shared by "SyncRegistrySharedOne" and "SyncRegistrySharedTwo".',
+    });
+  });
+});
+
 describe("internal sync service injected-provider mode", () => {
   const services: InternalSyncService[] = [];
 
@@ -267,7 +326,7 @@ describe("internal sync service injected-provider mode", () => {
       SyncServiceUser: {
         systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
         syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
-        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:C" },
         userOwnedFields: ["id", "status"],
       },
     },
@@ -303,12 +362,126 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
       },
     ]);
+
+  // Shared provider fixture for the human-resolution-flow tests: the
+  // Sync_Conflicts tab starts with one OPEN row that has no corresponding
+  // pending resolution command, mirroring a conflict the automatic resolver
+  // must leave alone.
+  const buildPollingProviderWithOpenConflictRow = () =>
+    new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: SYSTEM_SHEET_ID,
+        sheetName: "SyncServiceUsers_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        sheetName: "SyncServiceUsers_Input",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+      {
+        physicalSheetId: CONFLICT_SHEET_ID,
+        sheetName: "SyncServiceUsers_Conflicts",
+        registeredRange: "A:O",
+        projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
+        schemaVersion: 1,
+        headers: [
+          "Conflict_ID",
+          "Conflict_Group_ID",
+          "Event_ID",
+          "Entity_ID",
+          "Field_Name",
+          "User_Value",
+          "User_Base_Revision",
+          "Canonical_Value_At_Detection",
+          "Canonical_Revision_At_Detection",
+          "Current_Canonical_Value",
+          "Current_Canonical_Revision",
+          "Candidate_Epoch",
+          "Status",
+          "Resolution",
+          "Resolution_Command_ID",
+        ],
+        rows: [{
+          targetId: "conflict-open-1",
+          physicalAnchor: "conflict-open-anchor",
+          fields: {
+            Conflict_ID: { kind: "string", value: "conflict-open-1" },
+            Entity_ID: { kind: "string", value: "open-user" },
+            Field_Name: { kind: "string", value: "status" },
+            User_Value: { kind: "string", value: "human-edit" },
+            Status: { kind: "string", value: "OPEN" },
+            Resolution: { kind: "string", value: "" },
+          },
+        }],
+      },
+    ]);
+
+  // Seeds one OPEN conflict row (with its event ledger) through direct SQL so
+  // a test can model a conflict that has no durable pending resolution
+  // command, exactly the state a human resolver must handle on the
+  // Sync_Conflicts tab.
+  const insertOpenConflictWithSql = async (
+    service: InternalSyncService,
+    conflictId: string,
+  ): Promise<void> => {
+    const binding = await service.storage.read(({ sql }) => sql.get<{
+      readonly row_binding_id: string;
+      readonly entity_id: string | null;
+    }>(
+      "SELECT row_binding_id, entity_id FROM row_binding WHERE logical_sheet_id = ? LIMIT 1",
+      ["entity:sync_service_users"],
+    ));
+    if (binding === undefined || binding.entity_id === null) {
+      throw new Error("expected a mapped row binding with an entity id");
+    }
+    const now = Date.now();
+    const batchId = `batch-${conflictId}`;
+    const eventId = `event-${conflictId}`;
+    await service.storage.transaction(async ({ sql }) => {
+      await sql.run(
+        "INSERT INTO event_batch (batch_id, logical_sheet_id, physical_sheet_id, source, projection, atomicity, base_snapshot_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [batchId, "entity:sync_service_users", USER_INPUT_SHEET_ID, "polling", "user_input", "row_independent", "snapshot"],
+      );
+      await sql.run(
+        "INSERT INTO event_log (event_id, logical_sheet_id, physical_sheet_id, event_key, payload_hash, event_sequence, batch_id, row_binding_id, operation, status, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [eventId, "entity:sync_service_users", USER_INPUT_SHEET_ID, `event-key-${conflictId}`, "payload", 1, batchId, binding.row_binding_id, "update", "conflict", now],
+      );
+      await sql.run(
+        "INSERT INTO sync_conflict (conflict_id, event_id, logical_sheet_id, entity_id, row_binding_id, field_name, user_value, user_base_revision, canonical_value_at_detection, canonical_revision_at_detection, current_canonical_value, current_canonical_revision, candidate_epoch, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          conflictId,
+          eventId,
+          "entity:sync_service_users",
+          binding.entity_id,
+          binding.row_binding_id,
+          "status",
+          JSON.stringify({ kind: "string", value: "human-edit" }),
+          1,
+          JSON.stringify({ kind: "string", value: "canonical" }),
+          2,
+          JSON.stringify({ kind: "string", value: "canonical" }),
+          2,
+          3,
+          "OPEN",
+          now,
+          now,
+        ],
+      );
+    });
+  };
 
   it("provisions projections and delivers ORM outbox effects through the injected provider", async () => {
     const provider = new FakeSyncSheetsProvider([
@@ -323,7 +496,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -393,7 +566,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -442,6 +615,139 @@ describe("internal sync service injected-provider mode", () => {
       { reason: "ambiguous_identity" },
       { reason: "ambiguous_identity" },
     ]);
+  });
+
+  it("wires periodic System_State reconciliation that re-detects a removed system_state row", async () => {
+    const provider = buildPollingProvider();
+    const reports: Array<{ readonly effectsEnqueued: number }> = [];
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      pollingIntervalMs: 60_000,
+      effectIdleIntervalMs: 5,
+      reconciliationIntervalMs: 5,
+      onReconciliationReport: (report) => reports.push({ effectsEnqueued: report.effectsEnqueued }),
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "u1", status: "pending" }));
+    await em.flush();
+    // Fast-append the System_State projection so the canonical row exists.
+    await service.effectSupervisor.runOnce();
+
+    // The supervisor loop (started by the bootstrap) runs the reconciliation
+    // task in its first idle iteration; wait for at least one report so the
+    // wiring is proven to execute against the real runtime.
+    await waitForCondition(() => reports.length > 0, 5_000);
+    expect(reports.length).toBeGreaterThan(0);
+
+    // Remove the projected row so the next scan observes it as missing and
+    // enqueues a system_projection correction through the durable outbox.
+    provider.removeRowByIdentity(SYSTEM_SHEET_ID, "u1");
+    await waitForCondition(
+      () => reports.some((report) => report.effectsEnqueued > 0),
+      5_000,
+    );
+    expect(reports.some((report) => report.effectsEnqueued > 0)).toBe(true);
+  });
+
+  it("recovers a terminal failed System_State head so later em.flush() writes converge", async () => {
+    const provider = buildPollingProvider();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      pollingIntervalMs: 60_000,
+      pollingFullScanIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+      reconciliationIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "u1", status: "pending" }));
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    // The auto-started effect loop runs its first reconciliation right after
+    // its first pass (one snapshot read per projection); settle it before
+    // staging the corruption so the manual scans below stay deterministic.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    const logicalSheetId = await service.storage.read(async ({ sql }) => {
+      const row = await sql.get<{ readonly sheet_id: string }>(
+        "SELECT sheet_id FROM sheet_registry LIMIT 1",
+      );
+      if (row === undefined) throw new Error("expected a registered logical sheet");
+      return row.sheet_id;
+    });
+    // The auto reconciliation never claims the reconciler lease while the
+    // sheet is clean; the manual scans below own that lease under a fixed
+    // test writer id (the first scan creates it, later scans renew it).
+
+    // A human edit removes the System_State row; the scanner enqueues a
+    // createIfMissing correction whose delivery is lost past the durable
+    // probe bound, so the effect force-settles as a terminal failed head and
+    // wedges the stream.
+    provider.removeRowByIdentity(SYSTEM_SHEET_ID, "u1");
+
+    const scan = (): Promise<{ readonly effectsEnqueued: number }> => runReconciliationScan({
+      storage: service.storage,
+      provider,
+      physicalSheetId: SYSTEM_SHEET_ID,
+      logicalSheetId,
+      systemFields: ["id", "status", "__typed_sheets_deleted"],
+      tombstoneField: "__typed_sheets_deleted",
+      schemaVersion: 1,
+      writerId: "manual-reconciler",
+    });
+    const firstScan = await scan();
+    expect(firstScan.effectsEnqueued).toBe(1);
+
+    await service.storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = 'failed', claim_token = NULL, lease_until = NULL, next_attempt_at = NULL, last_error_code = 'delivery_uncertain_timeout', last_error_message = 'seeded terminal failure' WHERE target_kind = 'entity' AND projection = 'system_state' AND status = 'pending'",
+    ));
+
+    // The next scan supersedes the terminal failed head and appends a fresh
+    // repair; the worker applies it and the Sheet converges again.
+    const recoveryScan = await scan();
+    expect(recoveryScan.effectsEnqueued).toBe(1);
+    await service.effectSupervisor.runOnce();
+    const converged = await provider.readSnapshot({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "SyncServiceUsers_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    const convergedRow = converged.rows[0];
+    if (convergedRow === undefined) throw new Error("expected the repaired System_State row");
+    expect(convergedRow.cells.status?.normalizedCell)
+      .toEqual({ kind: "string", value: "pending" });
+
+    // A subsequent canonical write flushes normally and the projection keeps
+    // converging past the recovered stream.
+    const user = await em.findOne(User, { id: "u1" });
+    if (user === null) throw new Error("expected the flushed user");
+    user.status = "completed";
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    const completed = await provider.readSnapshot({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "SyncServiceUsers_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    expect(completed.rows[0]?.cells.status?.normalizedCell)
+      .toEqual({ kind: "string", value: "completed" });
+    await expect(service.hikoutei.em.fork().findOne(User, { id: "u1" }))
+      .resolves.toMatchObject({ status: "completed" });
   });
 
   it("fails startup when provisioning fails", async () => {
@@ -503,7 +809,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -538,7 +844,7 @@ describe("internal sync service injected-provider mode", () => {
     const inputSnapshot = await provider.readSnapshot({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "SyncServiceUsers_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
     });
@@ -592,6 +898,12 @@ describe("internal sync service injected-provider mode", () => {
     em.persist(em.create(User, { id: "safe-1", status: "pending" }));
     await em.flush();
     await service.effectSupervisor.runOnce();
+    // The auto-started effect loop runs the scheduled reconciliation right
+    // after its first pass; that task reads one snapshot per projection
+    // (System_State repair scan plus User_Input cleanup scan). Settle it
+    // before capturing the polling read counters so the adaptive-pass
+    // assertions below measure polling behavior only.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
     // The auto-started loop's first pass is always a safety full scan.
     const firstReport = await firstSafetyScan;
@@ -624,7 +936,7 @@ describe("internal sync service injected-provider mode", () => {
     expect(provider.snapshotReadCount).toBe(beforeReScanSnapshots + 1);
   });
 
-  it("automatically resolves a User_Input conflict to canonical state and audits it", async () => {
+  it("defers implicit system-wins while a processing User_Input predecessor is in flight, then applies the exact pending command (issue #196)", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
         physicalSheetId: SYSTEM_SHEET_ID,
@@ -637,7 +949,7 @@ describe("internal sync service injected-provider mode", () => {
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -682,12 +994,11 @@ describe("internal sync service injected-provider mode", () => {
     em.persist(em.create(User, { id: "conflict-user", status: "canonical" }));
     await em.flush();
     await service.effectSupervisor.runOnce();
-    await service.pollingSupervisor.runOnce();
 
     const inputSnapshot = await provider.readSnapshot({
       physicalSheetId: USER_INPUT_SHEET_ID,
       sheetName: "SyncServiceUsers_Input",
-      registeredRange: "A:B",
+      registeredRange: "A:C",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
     });
@@ -697,15 +1008,16 @@ describe("internal sync service injected-provider mode", () => {
       id: { kind: "string", value: "conflict-user" },
       status: { kind: "string", value: "human-edit" },
     });
-    const updateManager = service.hikoutei.em.fork();
-    const updateUser = await updateManager.findOne(User, { id: "conflict-user" });
-    if (updateUser === null) throw new Error("expected conflict test entity");
-    updateUser.status = "server-update";
-    await updateManager.flush();
 
-    // Simulate a remote predecessor that is still in flight when the conflict
-    // is observed. Automatic system-wins must leave a durable pending command,
-    // not rely on the caller remembering to invoke the resolver again.
+    // A pre-detection app flush enqueues the normal full-row User_Input
+    // projection; it is still in flight when polling later detects the human
+    // edit, so the implicit system-wins command must wait for it.
+    const firstManager = service.hikoutei.em.fork();
+    const firstUser = await firstManager.findOne(User, { id: "conflict-user" });
+    if (firstUser === null) throw new Error("expected conflict test entity");
+    firstUser.status = "server-update";
+    await firstManager.flush();
+
     const predecessor = await service.storage.read(({ sql }) => sql.get<{ readonly effect_id: string }>(
       "SELECT effect_id FROM sheet_effect_outbox WHERE projection = ? ORDER BY stream_sequence DESC LIMIT 1",
       [SYNC_PROJECTIONS.USER_INPUT],
@@ -735,19 +1047,44 @@ describe("internal sync service injected-provider mode", () => {
     });
     expect(predecessorClaim.status).toBe("claimed");
 
+    // Polling detects the conflict: OPEN + active candidate + zero commands.
     const report = await service.pollingSupervisor.runOnce();
     expect(report.conflictRows).toBe(1);
-    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
-      "SELECT status FROM resolution_command WHERE target_conflict_id = (SELECT conflict_id FROM sync_conflict LIMIT 1)",
-    ))).resolves.toEqual({ status: "pending" });
+    await expect(service.storage.read(({ sql }) => sql.all<{ readonly command_id: string }>(
+      "SELECT command_id FROM resolution_command",
+    ))).resolves.toEqual([]);
 
-    // Once the predecessor is settled, the next polling pass must consume the
-    // durable OPEN conflict and apply the same system-wins CAS command.
-    // The predecessor has now recovered with a verified candidate guard
-    // mismatch. It is settled, but it must not be marked applied because the
-    // fake remote row still contains the human edit. This mirrors the real
-    // worker transition and lets the resolver supersede the stale predecessor
-    // with a fresh baseline from the observed Sheet value.
+    // A later real revision increase on the SAME conflicted field is the
+    // implicit system-wins trigger; the in-flight predecessor defers the
+    // exact revision-identified command as durable pending work.
+    const secondManager = service.hikoutei.em.fork();
+    const secondUser = await secondManager.findOne(User, { id: "conflict-user" });
+    if (secondUser === null) throw new Error("expected conflict test entity");
+    secondUser.status = "completed";
+    await secondManager.flush();
+
+    const pending = await service.storage.read(({ sql }) => sql.get<{
+      readonly status: string;
+      readonly command_id: string;
+    }>(
+      "SELECT status, command_id FROM resolution_command",
+    ));
+    expect(pending?.status).toBe("pending");
+    expect(pending?.command_id).toMatch(/^sync:system-wins:conflict:/);
+    const deferredCommandId = pending?.command_id;
+    if (deferredCommandId === undefined) throw new Error("expected a deferred command id");
+    await expect(service.storage.read(({ sql }) => sql.get<{
+      readonly status: string;
+      readonly current_canonical_revision: number;
+      readonly last_rebased_commit_id: string | null;
+    }>(
+      "SELECT status, current_canonical_revision, last_rebased_commit_id FROM sync_conflict",
+    ))).resolves.toMatchObject({ status: "NEEDS_REBASE" });
+
+    // Once the predecessor settles, the next polling pass must reconstruct
+    // the exact command from stored candidate evidence and apply it. The
+    // predecessor settles as blocked_candidate (its baseline predates the
+    // human edit), exactly like the real worker transition.
     await expect(applyEffectResultWithAdapter(service.storage, {
       ...recoveryFence,
       effectId: predecessor.effect_id,
@@ -765,9 +1102,17 @@ describe("internal sync service injected-provider mode", () => {
       "SELECT status FROM sync_conflict WHERE logical_sheet_id = ? LIMIT 1",
       ["entity:sync_service_users"],
     ))).resolves.toEqual({ status: "RESOLVED" });
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string; readonly command_id: string }>(
+      "SELECT status, command_id FROM resolution_command WHERE target_conflict_id = (SELECT conflict_id FROM sync_conflict LIMIT 1)",
+    ))).resolves.toEqual({
+      status: "applied",
+      // The retry reconstructed the exact same durable command identity, not
+      // a new generation.
+      command_id: deferredCommandId,
+    });
     expect(provider.readRow(USER_INPUT_SHEET_ID, anchor.value).fields.status).toEqual({
       kind: "string",
-      value: "server-update",
+      value: "completed",
     });
     const conflictRows = provider.readSnapshot({
       physicalSheetId: CONFLICT_SHEET_ID,
@@ -785,9 +1130,241 @@ describe("internal sync service injected-provider mode", () => {
           Status: expect.objectContaining({
             normalizedCell: { kind: "string", value: "RESOLVED" },
           }),
+          Resolution_Command_ID: expect.objectContaining({
+            normalizedCell: { kind: "string", value: expect.stringMatching(/^sync:system-wins:conflict:/) },
+          }),
         }),
       })],
     });
+  });
+
+  it("defers implicit system-wins while a delivery-uncertain predecessor awaits its probe, then applies the exact pending command (issue #196)", async () => {
+    const provider = new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: SYSTEM_SHEET_ID,
+        sheetName: "SyncServiceUsers_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        sheetName: "SyncServiceUsers_Input",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+      {
+        physicalSheetId: CONFLICT_SHEET_ID,
+        sheetName: "SyncServiceUsers_Conflicts",
+        registeredRange: "A:O",
+        projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
+        schemaVersion: 1,
+        headers: [
+          "Conflict_ID",
+          "Conflict_Group_ID",
+          "Event_ID",
+          "Entity_ID",
+          "Field_Name",
+          "User_Value",
+          "User_Base_Revision",
+          "Canonical_Value_At_Detection",
+          "Canonical_Revision_At_Detection",
+          "Current_Canonical_Value",
+          "Current_Canonical_Revision",
+          "Candidate_Epoch",
+          "Status",
+          "Resolution",
+          "Resolution_Command_ID",
+        ],
+      },
+    ]);
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "uncertain-user", status: "canonical" }));
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+
+    const inputSnapshot = await provider.readSnapshot({
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "SyncServiceUsers_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+    });
+    const anchor = inputSnapshot.rows[0]?.physicalAnchor;
+    if (anchor?.kind !== "present") throw new Error("expected a User_Input row anchor");
+    provider.mutateRow(USER_INPUT_SHEET_ID, anchor.value, {
+      id: { kind: "string", value: "uncertain-user" },
+      status: { kind: "string", value: "human-edit" },
+    });
+
+    const firstManager = service.hikoutei.em.fork();
+    const firstUser = await firstManager.findOne(User, { id: "uncertain-user" });
+    if (firstUser === null) throw new Error("expected conflict test entity");
+    firstUser.status = "server-update";
+    await firstManager.flush();
+
+    // The pre-detection User_Input effect lost its response and is waiting
+    // for a postcondition probe; its remote write may still commit, so the
+    // implicit system-wins command must wait for the probe to settle it.
+    const predecessor = await service.storage.read(({ sql }) => sql.get<{ readonly effect_id: string }>(
+      "SELECT effect_id FROM sheet_effect_outbox WHERE projection = ? ORDER BY stream_sequence DESC LIMIT 1",
+      [SYNC_PROJECTIONS.USER_INPUT],
+    ));
+    if (predecessor === undefined) throw new Error("expected a User_Input predecessor effect");
+    await service.storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = 'delivery_uncertain', claim_token = NULL, lease_until = NULL, uncertain_since = ?, next_probe_at = ? WHERE effect_id = ?",
+      [Date.now(), Date.now() + 60_000, predecessor.effect_id],
+    ));
+
+    await service.pollingSupervisor.runOnce();
+    const secondManager = service.hikoutei.em.fork();
+    const secondUser = await secondManager.findOne(User, { id: "uncertain-user" });
+    if (secondUser === null) throw new Error("expected conflict test entity");
+    secondUser.status = "completed";
+    await secondManager.flush();
+
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+      "SELECT status FROM resolution_command",
+    ))).resolves.toEqual({ status: "pending" });
+    const deferredCommandId = await service.storage.read(({ sql }) => sql.get<{ readonly command_id: string }>(
+      "SELECT command_id FROM resolution_command",
+    ));
+    if (deferredCommandId === undefined) {
+      throw new Error("expected a deferred command id");
+    }
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+      "SELECT status FROM sync_conflict",
+    ))).resolves.toEqual({ status: "NEEDS_REBASE" });
+
+    // The probe settles the predecessor as applied; the same exact CAS
+    // request then proceeds from stored candidate evidence.
+    await service.storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = 'applied' WHERE effect_id = ?",
+      [predecessor.effect_id],
+    ));
+    await service.pollingSupervisor.runOnce();
+    await service.effectSupervisor.runOnce();
+    await service.effectSupervisor.runOnce();
+    await service.effectSupervisor.runOnce();
+
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+      "SELECT status FROM sync_conflict",
+    ))).resolves.toEqual({ status: "RESOLVED" });
+    // The applied command is the exact deferred identity, never a new one.
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string; readonly command_id: string }>(
+      "SELECT status, command_id FROM resolution_command",
+    ))).resolves.toEqual({ status: "applied", command_id: deferredCommandId.command_id });
+    expect(provider.readRow(USER_INPUT_SHEET_ID, anchor.value).fields.status).toEqual({
+      kind: "string",
+      value: "completed",
+    });
+  });
+
+  it("leaves a new OPEN conflict without a pending command untouched by a polling pass", async () => {
+    const provider = buildPollingProviderWithOpenConflictRow();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider,
+      provisioner: new RecordingProvisioner(),
+      // Keep the auto-started loop asleep after its first pass so explicit
+      // passes stay deterministic.
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "open-user", status: "canonical" }));
+    await em.flush();
+    await service.effectSupervisor.runOnce();
+    await insertOpenConflictWithSql(service, "conflict-open-1");
+
+    await service.pollingSupervisor.runOnce();
+
+    // The polling pass must not resolve, audit, or even claim the conflict:
+    // without a durable pending resolution command the row is a human
+    // resolution target, not an automatic system-wins retry.
+    await expect(service.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+      "SELECT status FROM sync_conflict WHERE conflict_id = ?",
+      ["conflict-open-1"],
+    ))).resolves.toEqual({ status: "OPEN" });
+    await expect(service.storage.read(({ sql }) => sql.all<{ readonly command_id: string }>(
+      "SELECT command_id FROM resolution_command",
+    ))).resolves.toEqual([]);
+    expect(provider.readRow(CONFLICT_SHEET_ID, "conflict-open-anchor").fields.Status).toEqual({
+      kind: "string",
+      value: "OPEN",
+    });
+  });
+
+  it("does not auto-resolve an existing OPEN conflict at service boot", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-boot-open-conflict-"));
+    try {
+      const dbName = join(dir, "boot-open-conflict.sqlite");
+      const provider = buildPollingProviderWithOpenConflictRow();
+      const first = await createInternalSyncService({
+        dbName,
+        entities: [User],
+        projections,
+        provider,
+        provisioner: new RecordingProvisioner(),
+        pollingIntervalMs: 3_600_000,
+        effectIdleIntervalMs: 3_600_000,
+      });
+      services.push(first);
+      const em = first.hikoutei.em.fork();
+      em.persist(em.create(User, { id: "boot-user", status: "canonical" }));
+      await em.flush();
+      await first.effectSupervisor.runOnce();
+      await insertOpenConflictWithSql(first, "conflict-boot-1");
+      // Release the leases so the restarted runtime claims immediately; the
+      // OPEN conflict row survives in SQLite and must stay OPEN across boot.
+      await first.close();
+
+      const second = await createInternalSyncService({
+        dbName,
+        entities: [User],
+        projections,
+        provider,
+        provisioner: new RecordingProvisioner(),
+        pollingIntervalMs: 3_600_000,
+        effectIdleIntervalMs: 3_600_000,
+      });
+      services.push(second);
+      await second.pollingSupervisor.runOnce();
+
+      // Boot used to auto-resolve every OPEN conflict before the supervisors
+      // started; it must now leave the human resolution target untouched.
+      await expect(second.storage.read(({ sql }) => sql.get<{ readonly status: string }>(
+        "SELECT status FROM sync_conflict WHERE conflict_id = ?",
+        ["conflict-boot-1"],
+      ))).resolves.toEqual({ status: "OPEN" });
+      await expect(second.storage.read(({ sql }) => sql.all<{ readonly command_id: string }>(
+        "SELECT command_id FROM resolution_command",
+      ))).resolves.toEqual([]);
+      expect(provider.readRow(CONFLICT_SHEET_ID, "conflict-open-anchor").fields.Status).toEqual({
+        kind: "string",
+        value: "OPEN",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("reports inbound polling phases through the timing sink with empty operation counts", async () => {
@@ -1059,7 +1636,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
       SyncServiceUser: {
         systemState: { tabName: "SyncServiceUsers_System", registeredRange: "A:C" },
         syncConflicts: { tabName: "SyncServiceUsers_Conflicts", registeredRange: "A:O" },
-        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:B" },
+        userInput: { tabName: "SyncServiceUsers_Input", registeredRange: "A:C" },
         userOwnedFields: ["id", "status"],
       },
     },
@@ -1078,7 +1655,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
       {
         physicalSheetId: USER_INPUT_SHEET_ID,
         sheetName: "SyncServiceUsers_Input",
-        registeredRange: "A:B",
+        registeredRange: "A:C",
         projection: SYNC_PROJECTIONS.USER_INPUT,
         schemaVersion: 1,
         headers: ["id", "status"],
@@ -1284,3 +1861,15 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     await expect(service.close()).resolves.toBeUndefined();
   });
 });
+
+/** Polls `predicate` until it returns true or `timeoutMs` elapses. */
+async function waitForCondition(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  if (!predicate()) {
+    throw new Error(`waitForCondition timed out after ${timeoutMs}ms`);
+  }
+}
