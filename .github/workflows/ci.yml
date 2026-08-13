@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   test:
-    name: Unit, type, build, packed sync/provider E2E, and installed root API smoke
+    name: Unit, type, build, repository internal E2E, and installed root API smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -56,7 +56,20 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run installed-package internal sync/provider E2E and root API smoke (fake)
+      - name: Run repository internal sync/provider E2E (fake)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Internal sync/provider E2E: loads the repository's own built dist
+          # modules and exercises projection registration, provisioning, the
+          # worker, and polling. This is a repository-owned harness; it is NOT
+          # copied into an installed consumer.
+          node scripts/ci/run-api-scenario.mjs \
+            --backend=fake \
+            --output="$RUNNER_TEMP/hikoutei-fake-result.json" \
+            --manifest="$RUNNER_TEMP/hikoutei-fake-manifest.json"
+
+      - name: Run installed public API scenarios (packed consumer)
         shell: bash
         run: |
           set -euo pipefail
@@ -79,27 +92,24 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
-          # Internal sync/provider E2E: loads dist modules directly and exercises
-          # projection registration, provisioning, the worker, and polling.
-          cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
-          node "$consumer_dir/run-api-scenario.mjs" \
-            --backend=fake \
-            --output="$RUNNER_TEMP/hikoutei-fake-result.json" \
-            --manifest="$RUNNER_TEMP/hikoutei-fake-manifest.json"
-
-          # Installed root API smoke: imports ONLY the installed `hikoutei` root
-          # entrypoint and drives the public entity-lifecycle contract.
+          # Both installed scenarios import ONLY the installed `hikoutei` root.
+          # The smoke covers lifecycle sequencing; the 100-record surface
+          # scenario covers the complete supported public contract.
           cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
+          cp scripts/ci/run-public-api-surface.mjs "$consumer_dir/run-public-api-surface.mjs"
           cp scripts/ci/root-api-options.mjs "$consumer_dir/root-api-options.mjs"
           node "$consumer_dir/run-root-api-scenario.mjs" \
             --output="$RUNNER_TEMP/hikoutei-root-api-smoke-result.json"
+          node "$consumer_dir/run-public-api-surface.mjs" \
+            --output="$RUNNER_TEMP/hikoutei-public-api-surface-result.json"
 
-      - name: Upload installed-consumer reports (fake)
+      - name: Upload repository and installed-consumer reports (fake)
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: hikoutei-fake-installed-consumer
+          name: hikoutei-fake-reports
           path: |
             ${{ runner.temp }}/hikoutei-fake-result.json
             ${{ runner.temp }}/hikoutei-root-api-smoke-result.json
+            ${{ runner.temp }}/hikoutei-public-api-surface-result.json
           if-no-files-found: ignore
