@@ -9,16 +9,16 @@
  * snapshot that triggered the drift.
  */
 
-import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
+import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../shared/constants.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
 } from "../../../../shared/state/index.js";
 import { isRecord } from "../../../../shared/encoding/typeGuards.js";
-import type { NewEffect } from "../../../../infrastructure/storage/index.js";
+import type { NewEffect } from "@hikoutei/ikisaki";
 import {
   isRecoverableEffectErrorCode,
-} from "../../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import { computeSyncVisibleHash } from "../../sheetsContract/syncSheets.js";
 import { SYNC_PROJECTIONS } from "../../sheetsContract/constants.js";

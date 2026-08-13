@@ -8,13 +8,21 @@
 import type {
   EditorActorSource,
   ObservedEditBatch,
+} from "../../../../domain/model/types.js";
+import type {
+  RowBindingState,
+  ConflictStatus,
+} from "../../../../domain/model/constants.js";
+import type {
   Applicability,
   Presence,
-  RowBindingState,
+} from "../../../../shared/state/types.js";
+import type {
   RowEvaluationResult,
-  ConflictStatus,
+} from "../../../../domain/evaluate/contracts.js";
+import type {
   RowOutcome,
-} from "../../../../domain/index.js";
+} from "../../../../domain/evaluate/constants.js";
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import { CANONICAL_COMMIT_RESULT_KINDS } from "../canonical/canonicalCommit.js";
 import type { CanonicalCommitInput, CanonicalCommitResult } from "../canonical/canonicalCommit.js";

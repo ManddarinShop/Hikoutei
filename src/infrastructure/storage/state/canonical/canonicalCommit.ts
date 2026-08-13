@@ -8,13 +8,15 @@
 
 // Domain contract: canonical rows are the SQLite source of truth.
 import { ROW_OPERATIONS } from "../../../../domain/model/constants.js";
-import { stableHash } from "../../../../domain/index.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type {
+  FieldOwnership,
+} from "../../../../domain/model/constants.js";
 import type {
   Applicability,
-  FieldOwnership,
-  NormalizedCell,
   Presence,
-} from "../../../../domain/index.js";
+} from "../../../../shared/state/types.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 
 // Shared state tags: these make applicability and presence explicit.
 import {

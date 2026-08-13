@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  APPLICABILITY_KINDS,
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
-  stableHash,
-  type NormalizedCell,
-} from "../src/domain/index.js";
+} from "../src/domain/model/constants.js";
+import { stableHash } from "../src/shared/encoding/stableEncode.js";
+import type { NormalizedCell } from "../src/shared/encoding/types.js";
+import { APPLICABILITY_KINDS } from "../src/shared/state/constants.js";
 import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
 import { CELL_OBSERVATION_KINDS } from "../src/shared/encoding/constants.js";
 import { PRESENCE_KINDS } from "../src/shared/state/constants.js";

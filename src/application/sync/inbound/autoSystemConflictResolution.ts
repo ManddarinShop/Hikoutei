@@ -23,12 +23,14 @@ import {
 import {
   CONFLICT_STATUSES,
   FIELD_OWNERSHIPS,
-  LOOKUP_RESULT_KINDS,
-  stableHash,
-  type NormalizedCell,
-  type ResolutionCommand,
-  type SyncConflict,
-} from "../../../domain/index.js";
+} from "../../../domain/model/constants.js";
+import { LOOKUP_RESULT_KINDS } from "../../../shared/state/constants.js";
+import { stableHash } from "../../../shared/encoding/stableEncode.js";
+import type { NormalizedCell } from "../../../shared/encoding/types.js";
+import type {
+  ResolutionCommand,
+  SyncConflict,
+} from "../../../domain/model/types.js";
 import {
   applicableValue,
   absentValue,
@@ -101,7 +103,7 @@ import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
   type NewEffect,
-} from "../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
 import type { CommandRow } from "../../../infrastructure/storage/state/resolution/resolutionWriterContracts.js";
 

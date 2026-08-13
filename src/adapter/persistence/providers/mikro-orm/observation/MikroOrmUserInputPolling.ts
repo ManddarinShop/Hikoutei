@@ -45,8 +45,8 @@ import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
-  type PersistObservedRowInput,
-} from "../../../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
+import type { PersistObservedRowInput } from "../../../../../infrastructure/storage/state/observation/observationWriter.js";
 import type {
   SqlStorageAdapter,
 } from "../../../../../adapter/persistence/contracts/sql.js";

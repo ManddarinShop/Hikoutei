@@ -24,8 +24,8 @@ import { isNormalizedCell } from "../../../../../shared/encoding/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import { identityFromNormalizedCell } from "../model/valueNormalization.js";
-import type { PreflightContext, PreflightRow } from "../model/preflight.js";
-import type { PlannedReceipt, WorkingRow } from "../model/planner.js";
+import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
+import type { PlannedReceipt, WorkingRow } from "../model/plannerContracts.js";
 import {
   buildAppendBatchRequests,
   resolveAppendBudget,

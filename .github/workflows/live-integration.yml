@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   live:
-    name: Installed-package Google Sheets service-account sync/provider E2E
+    name: Repository Google Sheets service-account sync/provider E2E
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -43,9 +43,11 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Run installed-package internal sync/provider E2E (live, service account)
-        # The service-account key is materialized in the runner temp dir and
-        # the credential/spreadsheet env vars are scoped to this step and the
+      - name: Run repository internal sync/provider E2E (live, service account)
+        # The internal harness runs from the checked-out repository against its
+        # own built dist/ tree; no consumer install is involved. The
+        # service-account key is materialized in the runner temp dir and the
+        # credential/spreadsheet env vars are scoped to this step and the
         # cleanup step only, not the whole job, so checkout/setup/install/build
         # never see them.
         env:
@@ -56,27 +58,7 @@ jobs:
           set -euo pipefail
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON" > "$RUNNER_TEMP/gcp-sa-key.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
-          consumer_dir="$RUNNER_TEMP/hikoutei-live-consumer"
-          mkdir -p "$consumer_dir"
-          pack_file="$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
-          pack_path="$RUNNER_TEMP/$pack_file"
-          # The root package depends on the @hikoutei/ikisaki workspace
-          # package; pack it too so the consumer install resolves locally.
-          ikisaki_pack_file="$(cd packages/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
-          ikisaki_pack_path="$RUNNER_TEMP/$ikisaki_pack_file"
-
-          (
-            cd "$consumer_dir"
-            npm init -y >/dev/null
-            npm install --no-audit --no-fund --ignore-scripts \
-              "$ikisaki_pack_path" \
-              "$pack_path" \
-              "@mikro-orm/core@7.1.7" \
-              "@mikro-orm/sql@7.1.7"
-          )
-
-          cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
-          node "$consumer_dir/run-api-scenario.mjs" \
+          node scripts/ci/run-api-scenario.mjs \
             --backend=live \
             --outbound=direct \
             --output="$RUNNER_TEMP/hikoutei-live-result.json" \
@@ -86,7 +68,8 @@ jobs:
       - name: Clean up live fixture
         # Cleanup also talks to the live spreadsheet with the service account,
         # so it needs the same credential env; the key file is still present
-        # because this step runs in the same job.
+        # because this step runs in the same job. The repository-owned harness
+        # handles a missing manifest gracefully (nothing to clean).
         if: always()
         env:
           GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON }}
@@ -94,18 +77,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON" > "$RUNNER_TEMP/gcp-sa-key.json"
-          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
-          runner="$RUNNER_TEMP/hikoutei-live-consumer/run-api-scenario.mjs"
-          if [ ! -f "$runner" ]; then
-            echo "Live runner was not installed; there is no fixture to clean."
+          manifest="$RUNNER_TEMP/hikoutei-live-manifest.json"
+          if [ ! -f "$manifest" ]; then
+            echo "Live scenario did not create a manifest; there is no fixture to clean."
             exit 0
           fi
-          node "$runner" \
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_JSON" > "$RUNNER_TEMP/gcp-sa-key.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
+          node scripts/ci/run-api-scenario.mjs \
             --backend=live \
             --outbound=direct \
             --cleanup-only \
-            --manifest="$RUNNER_TEMP/hikoutei-live-manifest.json"
+            --manifest="$manifest"
           rm -f "$RUNNER_TEMP/gcp-sa-key.json"
 
       - name: Upload internal sync/provider E2E report (live, service account)

@@ -38,7 +38,7 @@ import {
 } from "../../src/adapter/sheets/providers/google-sheets-api/errors.js";
 import { presentValue, absentValue } from "../../src/shared/state/index.js";
 import { computeSyncVisibleHash } from "../../src/application/sync/sheetsContract/syncSheets.js";
-import type { NormalizedCell } from "../../src/domain/index.js";
+import type { NormalizedCell } from "../../src/shared/encoding/types.js";
 import { dateSerialFromIso, isCanonicalDateNumberFormat } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
 /** One stored cell in the in-memory grid (real REST wire shapes). */

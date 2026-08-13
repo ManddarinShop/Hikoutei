@@ -27,13 +27,13 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { APPLICABILITY_KINDS } from "../src/shared/state/constants.js";
-import type { NormalizedCell } from "../src/domain/index.js";
+import type { NormalizedCell } from "../src/shared/encoding/types.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
 import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import type { SqlExecutor } from "../src/adapter/persistence/contracts/sql.js";
-import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import {
   runUserInputCleanupScan,
   type CleanupScanReport,
@@ -41,7 +41,7 @@ import {
 import {
   listReadyEffectsWithAdapter,
   runEffectWorkerWithAdapter,
-} from "../src/infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 
 const EntitySchema = defineEntity({
@@ -696,7 +696,7 @@ function binding(
 async function bootstrap(args: BootstrapInput): Promise<BootstrapResult> {
   const orm = await createOrm();
   const adapter = new MikroOrmSqliteAdapter(orm);
-  await migrateMikroOrmSqliteSchema(adapter);
+  await migrateSqliteSchema(adapter);
   await seedRegistry(adapter, args);
 
   const provider = new FakeSyncSheetsProvider([{

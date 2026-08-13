@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { FIELD_OWNERSHIPS, stableHash, type NormalizedCell } from "../src/domain/index.js";
+import { FIELD_OWNERSHIPS } from "../src/domain/model/constants.js";
+import { stableHash } from "../src/shared/encoding/stableEncode.js";
+import type { NormalizedCell } from "../src/shared/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import { inspectFastPollingTable } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";

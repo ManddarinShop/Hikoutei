@@ -10,9 +10,8 @@
  * discriminated unions, never nullable status markers.
  *
  * The module is split into focused files; this entry keeps the planner core
- * (types, `planEffectBatch`, `requireProviderEffect`) and re-exports the
- * moved helpers so the historical import surface (`./planner.js`) stays
- * intact:
+ * (`planEffectBatch`, `requireProviderEffect`). The shared plan/outcome/row
+ * types live in `plannerContracts`, and the moved helpers live in:
  *
  * - `plannerWorkingRow` — working-row lifecycle, replay, hashing, lookup
  * - `plannerDeletion` — full-row deletion guard and kind predicates
@@ -21,12 +20,17 @@
 
 import { computeSyncVisibleHash, type SyncProjectionEffect, type ApplySyncEffectsRequest } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
-import { APPLICABILITY_KINDS, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { isNormalizedCell } from "../../../../../shared/encoding/index.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest } from "../errors.js";
-import type { PreflightContext } from "./preflight.js";
+import type { PreflightContext } from "./preflightContext.js";
+import type {
+  EffectPlan,
+  PlannedReceipt,
+  WorkingRow,
+} from "./plannerContracts.js";
 import {
   createWorkingRow,
   currentHash,
@@ -40,82 +44,6 @@ import {
   validateDeletion,
 } from "./plannerDeletion.js";
 import { makeReceipt } from "./plannerReceipt.js";
-
-/** Receipt evidence produced by the planner for one effect. */
-export interface PlannedReceipt {
-  readonly effectId: string;
-  readonly payloadHash: string;
-  readonly status: "applied";
-  readonly visibleHash: string;
-  readonly visibleRevision: number;
-}
-
-/** Terminal/non-terminal planner outcome for one effect. */
-export type PlannedOutcome =
-  | {
-    readonly kind: "applied";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly receipt: PlannedReceipt;
-    readonly created: boolean;
-    readonly deletion: boolean;
-  }
-  | {
-    readonly kind: "already_applied";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly receipt: PlannedReceipt;
-  }
-  | {
-    readonly kind: "guard_mismatch";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  }
-  | {
-    readonly kind: "repair_reobserve";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  }
-  | {
-    readonly kind: "schema_error";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  }
-  | {
-    readonly kind: "retryable_error";
-    readonly effect: SyncProjectionEffect;
-    readonly rowNumber: Presence<number>;
-    readonly reason: string;
-  };
-
-/** Target mutation planned for one effect (only successful write outcomes). */
-export type PlanMutation =
-  | { readonly kind: "append"; readonly row: WorkingRow }
-  | { readonly kind: "update"; readonly row: WorkingRow }
-  | { readonly kind: "delete"; readonly row: WorkingRow };
-
-/** Mutable working copy of one preflight row during planning. */
-export interface WorkingRow {
-  readonly rowNumber: number;
-  readonly anchor: Presence<string>;
-  readonly cells: Record<string, import("../../../../../domain/index.js").NormalizedCell>;
-  readonly identity: Presence<string>;
-  readonly appended: boolean;
-  deleted: boolean;
-  readonly writeFields: Record<string, import("../../../../../domain/index.js").NormalizedCell>;
-}
-
-/** Per-effect plan: outcome plus any mutation and receipt the batch needs. */
-export interface EffectPlan {
-  readonly outcome: PlannedOutcome;
-  readonly mutation: PlanMutation | undefined;
-  readonly receipt: PlannedReceipt | undefined;
-  /** True when inline postcondition verification must re-read this write. */
-  readonly verify: boolean;
-}
 
 /**
  * Plans one applyEffects request against a preflight context.
@@ -452,19 +380,3 @@ export function requireProviderEffect(
     invalidProviderRequest("apply effects", "effect expectedCandidateHash is invalid");
   }
 }
-
-export {
-  validateDeletion,
-  isDeletionEffect,
-} from "./plannerDeletion.js";
-export {
-  currentHash,
-  findWorkingRow,
-  toWorkingRow,
-} from "./plannerWorkingRow.js";
-export {
-  makeReceipt,
-  encodeOutcomeResult,
-  encodeSchemaErrorResult,
-  withDeferredPostcondition,
-} from "./plannerReceipt.js";

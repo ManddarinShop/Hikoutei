@@ -8,9 +8,11 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
+} from "../../../../shared/constants.js";
+import {
   PRESENCE_KINDS,
-  type NormalizedCell,
-} from "../../../../domain/index.js";
+} from "../../../../shared/state/constants.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import {
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,

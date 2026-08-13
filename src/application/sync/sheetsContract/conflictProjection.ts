@@ -1,6 +1,7 @@
 /** Stable Sync_Conflicts audit projection schema and row materialization helpers. */
 
-import type { SyncConflict, NormalizedCell } from "../../../domain/index.js";
+import type { SyncConflict } from "../../../domain/model/types.js";
+import type { NormalizedCell } from "../../../shared/encoding/types.js";
 import { CONFLICT_STATUSES } from "../../../domain/model/constants.js";
 import { NORMALIZED_CELL_KINDS } from "../../../shared/encoding/constants.js";
 import { PRESENCE_KINDS } from "../../../shared/state/constants.js";

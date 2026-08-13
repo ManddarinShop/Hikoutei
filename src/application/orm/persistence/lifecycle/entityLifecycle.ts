@@ -6,13 +6,17 @@
  */
 
 import {
-  APPLICABILITY_KINDS,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
   ROW_OPERATIONS,
-  stableHash,
-  type NormalizedCell,
-  type Presence,
-} from "../../../../domain/index.js";
+} from "../../../../domain/model/constants.js";
+import {
+  APPLICABILITY_KINDS,
+} from "../../../../shared/state/constants.js";
+import {
+  POSITIVE_SAFE_INTEGER_MINIMUM,
+} from "../../../../shared/constants.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+import type { Presence } from "../../../../shared/state/types.js";
 import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
   TYPED_SHEETS_ENTITY_CHANGE_KINDS,
