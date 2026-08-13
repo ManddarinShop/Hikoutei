@@ -116,7 +116,19 @@ jobs:
           (cd "$package_dir" && sha256sum "$package_file" > hikoutei-stable-package.sha256)
           echo "Packed $package_path"
 
-      - name: Run installed-package internal sync/provider E2E and root API smoke (fake)
+      - name: Run repository internal sync/provider E2E (fake)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Internal sync/provider E2E: loads repository source modules through
+          # the checked-in TypeScript loader; it is not a package compatibility
+          # test.
+          node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs \
+            --backend=fake \
+            --output="$RUNNER_TEMP/hikoutei-stable-fake-result.json" \
+            --manifest="$RUNNER_TEMP/hikoutei-stable-fake-manifest.json"
+
+      - name: Run installed public API scenarios (packed consumer)
         shell: bash
         run: |
           set -euo pipefail
@@ -139,29 +151,24 @@ jobs:
               "@mikro-orm/sql@7.1.7"
           )
 
-          # Internal sync/provider E2E: loads dist modules directly and exercises
-          # projection registration, provisioning, the worker, and polling.
-          cp scripts/ci/run-api-scenario.mjs "$consumer_dir/run-api-scenario.mjs"
-          node "$consumer_dir/run-api-scenario.mjs" \
-            --backend=fake \
-            --output="$RUNNER_TEMP/hikoutei-stable-fake-result.json" \
-            --manifest="$RUNNER_TEMP/hikoutei-stable-fake-manifest.json"
-
-          # Installed root API smoke: imports ONLY the installed `hikoutei` root
-          # entrypoint and drives the public entity-lifecycle contract.
+          # Both installed scenarios import ONLY the installed `hikoutei` root.
           cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
+          cp scripts/ci/run-public-api-surface.mjs "$consumer_dir/run-public-api-surface.mjs"
           cp scripts/ci/root-api-options.mjs "$consumer_dir/root-api-options.mjs"
           node "$consumer_dir/run-root-api-scenario.mjs" \
             --output="$RUNNER_TEMP/hikoutei-stable-root-api-smoke-result.json"
+          node "$consumer_dir/run-public-api-surface.mjs" \
+            --output="$RUNNER_TEMP/hikoutei-stable-public-api-surface-result.json"
 
-      - name: Upload stable installed-consumer reports
+      - name: Upload repository and installed-consumer reports
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: hikoutei-stable-fake-installed-consumer
+          name: hikoutei-stable-fake-reports
           path: |
             ${{ runner.temp }}/hikoutei-stable-fake-result.json
             ${{ runner.temp }}/hikoutei-stable-root-api-smoke-result.json
+            ${{ runner.temp }}/hikoutei-stable-public-api-surface-result.json
           if-no-files-found: ignore
 
       - name: Upload stable package
