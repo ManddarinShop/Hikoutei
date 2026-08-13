@@ -24,8 +24,8 @@ import {
   resolveEntityDescriptors,
 } from "../../../api/internalEntityRegistry.js";
 import {
-  initializeMappedTypedSheetsRuntime,
-} from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedTypedSheets.js";
+  initializeMappedRuntime,
+} from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js";
 import {
   createMikroOrmScalarRuntime,
 } from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarRuntime.js";
@@ -100,7 +100,7 @@ export async function createInternalSyncService(
         suppressedUserProjection: input.plan.suppressedUserProjection,
       },
     );
-  const runtime = await initializeMappedTypedSheetsRuntime({
+  const runtime = await initializeMappedRuntime({
     dbName: options.dbName,
     entities: generated.entities,
     mappings: generated.mappings,
@@ -149,7 +149,11 @@ export async function createInternalSyncService(
       effectSupervisor,
     });
 
-    const provider = new MikroOrmScalarPersistenceProvider(runtime.orm, generated.bindings);
+    const provider = new MikroOrmScalarPersistenceProvider(
+      runtime.storage,
+      generated.bindings,
+      runtime.flushCoordinator,
+    );
     const hikoutei = createInternalHikoutei(provider, descriptors, stop);
     effectSupervisor.start();
     pollingSupervisor.start();

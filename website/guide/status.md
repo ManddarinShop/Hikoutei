@@ -19,6 +19,13 @@ See the
 [open issues](https://github.com/ManddarinShop/Hikoutei/issues) for current
 work.
 
+## Persistence and synchronization
+
+The public EntityManager delegates to Hikoutei's scalar Unit of Work and
+provider SPI. The MikroORM adapter executes the provider-neutral insert,
+update, and delete plan together with mapped canonical state and the durable
+Sheet outbox in one SQLite transaction. Sheets delivery remains asynchronous.
+
 ## Contributing
 
 Hikoutei is a solo-maintained, open-source project with a documented
