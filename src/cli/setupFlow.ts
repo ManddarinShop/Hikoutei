@@ -114,6 +114,13 @@ import { SETUP_ERROR_CODES, type SetupErrorCode } from "./errors.js";
 import { describeGcloudFailure, errorResult, outcomeOf, type PlannedCommand, type SetupErrorResult } from "./flowResult.js";
 import { createSafeRunner, type GcloudRunner, type GcloudRunResult } from "./gcloudRunner.js";
 import {
+  boundedCheckReporter,
+  safeProgressSink,
+  SETUP_PROGRESS_OPERATIONS,
+  type SetupProgressPhase,
+  type SetupProgressSink,
+} from "./setupProgress.js";
+import {
   checkHumanDriveAccess,
   DRIVE_ACCESS_COMMAND,
   type HumanAuthResult,
@@ -167,6 +174,13 @@ export interface RunSetupOptions {
   /** Absolute setup checkpoint path (`.hikoutei-setup-state.json`). */
   readonly statePath: string;
   readonly dryRun: boolean;
+  /**
+   * Optional progress sink for the CLI renderer. When omitted the run is
+   * unaffected; when present a throwing callback is swallowed so progress
+   * can never change the setup result, the mutation order, or the exit
+   * code. Internal CLI machinery only — never part of the public API.
+   */
+  readonly progress?: SetupProgressSink;
   /** Filesystem operations for the exclusive setup lock; injectable for tests. */
   readonly lockFs?: LockFs;
   /** Platform of the run; defaults to `process.platform`. A non-dry-run on
@@ -237,6 +251,45 @@ const PROJECT_NOT_FOUND_MARKER = "not found";
 /** Default spreadsheet title for a project. */
 export function defaultSpreadsheetTitle(projectId: string): string {
   return `${DEFAULT_SPREADSHEET_TITLE_PREFIX}-${projectId}`;
+}
+
+/**
+ * Setup phases a checkpoint status guarantees as already complete.
+ *
+ * Resume semantics: `project_selected` guarantees nothing (the project is
+ * only decided, not yet verified), and the in-progress write-ahead states
+ * (`key_create_started`, `spreadsheet_create_started`,
+ * `spreadsheet_share_started`) guarantee everything BEFORE the phase they
+ * started but not the phase itself. The cloud-auth and Drive-access phases
+ * are NEVER checkpoint-complete — every run re-runs them fresh — and the
+ * output phase is never checkpoint-complete because the `.env` write runs
+ * on every successful run (even a `complete` resume rewrites `.env`).
+ */
+function checkpointCompletedPhases(status: SetupState["status"]): readonly SetupProgressPhase[] {
+  switch (status) {
+    case "project_selected":
+      return [];
+    case "key_create_started":
+      return ["project", "apis", "service_account"];
+    case "key_ready":
+    case "spreadsheet_create_started":
+      return ["project", "apis", "service_account", "service_account_key"];
+    case "spreadsheet_created":
+    case "spreadsheet_share_started":
+      return ["project", "apis", "service_account", "service_account_key", "spreadsheet"];
+    case "spreadsheet_shared":
+      return ["project", "apis", "service_account", "service_account_key", "spreadsheet", "share"];
+    case "complete":
+      return [
+        "project",
+        "apis",
+        "service_account",
+        "service_account_key",
+        "spreadsheet",
+        "share",
+        "sa_access",
+      ];
+  }
 }
 
 /**
@@ -707,9 +760,15 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
   // secrets) never reaches a message or the CLI `unexpected` handler.
   const runner = createSafeRunner(options.runner);
   const keySleeper = options.sleeper ?? realSleeper;
+  // The progress sink is swallowed-safe: an absent sink or a throwing
+  // renderer callback never affects the setup result or mutation order.
+  const progress = safeProgressSink(options.progress);
 
   // Preflight: gcloud must exist and an active account must be logged in.
+  progress.report({ type: "phase_started", phase: "cloud_auth" });
+  progress.report({ type: "operation_started", phase: "cloud_auth", operation: SETUP_PROGRESS_OPERATIONS.GCLOUD_PRESENCE });
   const version = await runner.run(["--version"]);
+  progress.report({ type: "operation_completed", phase: "cloud_auth", operation: SETUP_PROGRESS_OPERATIONS.GCLOUD_PRESENCE });
   executed.push({ kind: "gcloud", command: ["--version"], outcome: outcomeOf(version, "gcloud is installed") });
   if (version.status === "not_found") {
     return errorResult(
@@ -721,7 +780,9 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
     return errorResult(SETUP_ERROR_CODES.GCLOUD_MISSING, `gcloud --version failed: ${describeGcloudFailure(version)}`);
   }
 
+  progress.report({ type: "operation_started", phase: "cloud_auth", operation: SETUP_PROGRESS_OPERATIONS.ACTIVE_ACCOUNT });
   const auth = await runner.run([...AUTH_LIST_ARGS]);
+  progress.report({ type: "operation_completed", phase: "cloud_auth", operation: SETUP_PROGRESS_OPERATIONS.ACTIVE_ACCOUNT });
   executed.push({ kind: "gcloud", command: [...AUTH_LIST_ARGS], outcome: outcomeOf(auth, "active account found") });
   if (auth.status !== "ok") {
     // Both auth-list failure branches (invocation failure here, empty list
@@ -750,10 +811,14 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
       `no active gcloud account; run \`gcloud ${DRIVE_ACCESS_COMMAND.join(" ")}\` and try again`,
     );
   }
+  progress.report({ type: "phase_completed", phase: "cloud_auth", source: "run" });
 
   // Human auth: retrieve the user token and require Drive scope BEFORE any
   // cloud or file mutation. The token stays in memory for this run only.
+  progress.report({ type: "phase_started", phase: "drive_access" });
+  progress.report({ type: "operation_started", phase: "drive_access", operation: SETUP_PROGRESS_OPERATIONS.DRIVE_SCOPE });
   const human = await checkHumanDriveAccess(runner, options.validateToken);
+  progress.report({ type: "operation_completed", phase: "drive_access", operation: SETUP_PROGRESS_OPERATIONS.DRIVE_SCOPE });
   executed.push({
     kind: "gcloud",
     command: ["auth", "print-access-token"],
@@ -767,6 +832,7 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
     label: "POST oauth2.googleapis.com/tokeninfo",
     outcome: `access token valid for ${human.ownerEmail} (memory only)`,
   });
+  progress.report({ type: "phase_completed", phase: "drive_access", source: "run" });
 
   // Exclusive setup lock: acquired after the human preflight, before any
   // checkpoint/cloud/file mutation, and released on every exit (success,
@@ -784,7 +850,7 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
     return errorResult(SETUP_ERROR_CODES.SETUP_LOCK_FAILED, lock.message);
   }
   try {
-    return await runSetupLocked(options, executed, human, runner, keySleeper);
+    return await runSetupLocked(options, executed, human, runner, keySleeper, progress);
   } finally {
     releaseSetupLock(lockPath, lock.identity, options.lockFs);
   }
@@ -804,6 +870,7 @@ async function runSetupLocked(
   human: HumanAuthResult & { readonly status: "ok" },
   runner: GcloudRunner,
   keySleeper: Sleeper,
+  progress: SetupProgressSink,
 ): Promise<SetupResult> {
   const accessToken = human.accessToken;
   const ownerEmail = human.ownerEmail;
@@ -815,6 +882,17 @@ async function runSetupLocked(
     return errorResult(SETUP_ERROR_CODES.SETUP_STATE_INVALID, checkpointResult.message);
   }
   const checkpoint = checkpointResult.status === "loaded" ? checkpointResult.state : undefined;
+
+  // Report the resume context once: the phases a checkpoint guarantees as
+  // already complete. cloud_auth and drive_access are never
+  // checkpoint-complete (every run re-runs them fresh), and the output phase
+  // is never checkpoint-complete (the .env write runs on every success).
+  if (checkpoint !== undefined) {
+    progress.report({
+      type: "resumed",
+      completedFromCheckpoint: checkpointCompletedPhases(checkpoint.status),
+    });
+  }
 
   // Key file: on resume it must exist and match the checkpoint once the
   // key phase was reached (key_ready and later); a `key_create_started`
@@ -911,6 +989,9 @@ async function runSetupLocked(
   const needsProjectPhase = checkpoint === undefined || checkpoint.status === "project_selected";
   let projectId: string;
   let projectReused = false;
+  if (needsProjectPhase) {
+    progress.report({ type: "phase_started", phase: "project" });
+  }
   if (!needsProjectPhase) {
     projectId = checkpoint.projectId;
     // Resuming past project selection: the project was decided (and created
@@ -924,7 +1005,9 @@ async function runSetupLocked(
         "no project id is available for this setup run; pass --project <id>",
       );
     }
+    progress.report({ type: "operation_started", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_VERIFY });
     const describe = await runner.run(["projects", "describe", requested]);
+    progress.report({ type: "operation_completed", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_VERIFY });
     executed.push({
       kind: "gcloud",
       command: ["projects", "describe", requested],
@@ -966,7 +1049,9 @@ async function runSetupLocked(
       if (saveError !== null) {
         return saveError;
       }
+      progress.report({ type: "operation_started", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_CREATE });
       const createOutcome = await createProjectOnce(runner, executed, projectId);
+      progress.report({ type: "operation_completed", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_CREATE });
       if (createOutcome.status === "error") {
         return createOutcome.error;
       }
@@ -977,7 +1062,9 @@ async function runSetupLocked(
       // create only when the describe confirms the project is absent. With a
       // matching --project the effective mode is explicit, so this branch
       // never runs for it and projects create is never called.
+      progress.report({ type: "operation_started", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_VERIFY });
       const describe = await runner.run(["projects", "describe", projectId]);
+      progress.report({ type: "operation_completed", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_VERIFY });
       executed.push({
         kind: "gcloud",
         command: ["projects", "describe", projectId],
@@ -986,7 +1073,9 @@ async function runSetupLocked(
       if (describe.status === "ok") {
         projectReused = true;
       } else if (describe.status === "failed" && describe.stderr.includes(PROJECT_NOT_FOUND_MARKER)) {
+        progress.report({ type: "operation_started", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_CREATE });
         const createOutcome = await createProjectOnce(runner, executed, projectId);
+        progress.report({ type: "operation_completed", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_CREATE });
         if (createOutcome.status === "error") {
           return createOutcome.error;
         }
@@ -1008,7 +1097,9 @@ async function runSetupLocked(
   let serviceAccountReused = false;
 
   if (needsProjectPhase) {
+    progress.report({ type: "operation_started", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_SELECT });
     const configSet = await runner.run(["config", "set", "project", projectId]);
+    progress.report({ type: "operation_completed", phase: "project", operation: SETUP_PROGRESS_OPERATIONS.PROJECT_SELECT });
     executed.push({
       kind: "gcloud",
       command: ["config", "set", "project", projectId],
@@ -1020,7 +1111,10 @@ async function runSetupLocked(
         `could not select project "${projectId}": ${describeGcloudFailure(configSet)}`,
       );
     }
+    progress.report({ type: "phase_completed", phase: "project", source: "run" });
+    progress.report({ type: "phase_started", phase: "apis" });
 
+    progress.report({ type: "operation_started", phase: "apis", operation: SETUP_PROGRESS_OPERATIONS.API_ENABLE });
     const enable = await runner.run([
       "services",
       "enable",
@@ -1029,6 +1123,7 @@ async function runSetupLocked(
       "--project",
       projectId,
     ]);
+    progress.report({ type: "operation_completed", phase: "apis", operation: SETUP_PROGRESS_OPERATIONS.API_ENABLE });
     executed.push({
       kind: "gcloud",
       command: ["services", "enable", "sheets.googleapis.com", "drive.googleapis.com", "--project", projectId],
@@ -1040,9 +1135,13 @@ async function runSetupLocked(
         `could not enable sheets.googleapis.com and drive.googleapis.com: ${describeGcloudFailure(enable)}`,
       );
     }
+    progress.report({ type: "phase_completed", phase: "apis", source: "run" });
+    progress.report({ type: "phase_started", phase: "service_account" });
 
     // Service account: reuse by email when it already exists.
+    progress.report({ type: "operation_started", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_LIST });
     const saList = await runner.run(["iam", "service-accounts", "list", "--project", projectId, "--format=value(email)"]);
+    progress.report({ type: "operation_completed", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_LIST });
     executed.push({
       kind: "gcloud",
       command: ["iam", "service-accounts", "list", "--project", projectId, "--format=value(email)"],
@@ -1055,6 +1154,7 @@ async function runSetupLocked(
     if (existingEmails.includes(email)) {
       serviceAccountReused = true;
     } else {
+      progress.report({ type: "operation_started", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_CREATE });
       const saCreate = await runner.run([
         "iam",
         "service-accounts",
@@ -1065,6 +1165,7 @@ async function runSetupLocked(
         "--display-name",
         "hikoutei setup",
       ]);
+      progress.report({ type: "operation_completed", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_CREATE });
       executed.push({
         kind: "gcloud",
         command: [
@@ -1086,6 +1187,7 @@ async function runSetupLocked(
         );
       }
     }
+    progress.report({ type: "phase_completed", phase: "service_account", source: "run" });
   }
 
   // Key: reuse an existing validated key file, or run the write-ahead
@@ -1099,58 +1201,87 @@ async function runSetupLocked(
   // `key_create_started`, then creates only at the deterministic staging
   // path. Every path persists `key_ready` immediately after the key is
   // secured, before the spreadsheet phase; spreadsheet statuses imply key
-  // readiness.
-  if (checkpoint?.status === "key_create_started") {
-    // A resumed checkpoint is RECONCILE-ONLY: the create was already issued
-    // (or not) by the run that persisted it, so this invocation must never
-    // create, even when no stage/final/delta is visible; it polls through
-    // the bounded propagation window instead (see keyProvision.ts).
-    const settled = await settleServiceAccountKey(runner, executed, {
-      keyPath: options.keyPath,
-      projectId,
-      saEmail: email,
-      keyMarker: checkpoint.keyMarker,
-      baseline: checkpoint.keyBaseline,
-      createPermission: "reconcile",
-      sleeper: keySleeper,
-    });
-    if (settled.status === "error") {
-      return settled.error;
+  // readiness. The key phase only EXECUTES WORK when a key must be
+  // created or reconciled this run; a resume past `key_ready` already
+  // validated and reused the key (marked complete by the resume event).
+  // Progress-wise the phase REPORTS on every run the checkpoint does not
+  // already guarantee as complete (a key_ready-or-later status does): a
+  // fresh run or a `project_selected` resume that reuses an existing key
+  // performs no settle/create work, but the phase still starts and
+  // completes so the validating tracker keeps phase order and the later
+  // phases stay visible. Emitting these events for a checkpoint-guaranteed
+  // key phase would be rejected by the tracker and must never double-count
+  // it, so the two flags are deliberately separate.
+  const keyPhaseGuaranteedByCheckpoint =
+    checkpoint !== undefined &&
+    checkpoint.status !== "project_selected" &&
+    checkpoint.status !== "key_create_started";
+  const keyPhaseReports = !keyPhaseGuaranteedByCheckpoint;
+  const keyWorkRuns = checkpoint?.status === "key_create_started" || !keyReused;
+  const keySettleReporter = boundedCheckReporter(progress, "service_account_key", "key_settlement");
+  if (keyPhaseReports) {
+    progress.report({ type: "phase_started", phase: "service_account_key" });
+  }
+  if (keyWorkRuns) {
+    if (checkpoint?.status === "key_create_started") {
+      // A resumed checkpoint is RECONCILE-ONLY: the create was already issued
+      // (or not) by the run that persisted it, so this invocation must never
+      // create, even when no stage/final/delta is visible; it polls through
+      // the bounded propagation window instead (see keyProvision.ts).
+      const settled = await settleServiceAccountKey(runner, executed, {
+        keyPath: options.keyPath,
+        projectId,
+        saEmail: email,
+        keyMarker: checkpoint.keyMarker,
+        baseline: checkpoint.keyBaseline,
+        createPermission: "reconcile",
+        sleeper: keySleeper,
+        onSettleProgress: keySettleReporter,
+      });
+      if (settled.status === "error") {
+        return settled.error;
+      }
+      keyReused = settled.keyReused;
+    } else {
+      // Fresh (or project_selected resume without a key): this branch only
+      // runs when the key was NOT reused (keyWorkRuns is true and the
+      // checkpoint is not key_create_started).
+      progress.report({ type: "operation_started", phase: "service_account_key", operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
+      const keyList = await listUserManagedServiceAccountKeys(runner, executed, {
+        projectId,
+        saEmail: email,
+        purpose: "baseline",
+      });
+      progress.report({ type: "operation_completed", phase: "service_account_key", operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
+      if (keyList.status === "error") {
+        return keyList.error;
+      }
+      const keyMarker = generateCreationMarker();
+      const saveError = persistState(
+        options,
+        executed,
+        keyStartedState(options, projectId, ownerEmail, title, email, persistProjectMode, keyMarker, keyList.names),
+      );
+      if (saveError !== null) {
+        return saveError;
+      }
+      // This invocation JUST persisted the fresh checkpoint, so it is the
+      // only one allowed to issue the single key create (fresh permission).
+      const settled = await settleServiceAccountKey(runner, executed, {
+        keyPath: options.keyPath,
+        projectId,
+        saEmail: email,
+        keyMarker,
+        baseline: keyList.names,
+        createPermission: "fresh",
+        sleeper: keySleeper,
+        onSettleProgress: keySettleReporter,
+      });
+      if (settled.status === "error") {
+        return settled.error;
+      }
+      keyReused = settled.keyReused;
     }
-    keyReused = settled.keyReused;
-  } else if (!keyReused) {
-    const keyList = await listUserManagedServiceAccountKeys(runner, executed, {
-      projectId,
-      saEmail: email,
-      purpose: "baseline",
-    });
-    if (keyList.status === "error") {
-      return keyList.error;
-    }
-    const keyMarker = generateCreationMarker();
-    const saveError = persistState(
-      options,
-      executed,
-      keyStartedState(options, projectId, ownerEmail, title, email, persistProjectMode, keyMarker, keyList.names),
-    );
-    if (saveError !== null) {
-      return saveError;
-    }
-    // This invocation JUST persisted the fresh checkpoint, so it is the
-    // only one allowed to issue the single key create (fresh permission).
-    const settled = await settleServiceAccountKey(runner, executed, {
-      keyPath: options.keyPath,
-      projectId,
-      saEmail: email,
-      keyMarker,
-      baseline: keyList.names,
-      createPermission: "fresh",
-      sleeper: keySleeper,
-    });
-    if (settled.status === "error") {
-      return settled.error;
-    }
-    keyReused = settled.keyReused;
   }
   // Key provenance for the verify phase: whether the key was CREATED by
   // the setup (vs reused from a pre-existing credential). The checkpoint
@@ -1186,6 +1317,9 @@ async function runSetupLocked(
       return saveError;
     }
   }
+  if (keyPhaseReports) {
+    progress.report({ type: "phase_completed", phase: "service_account_key", source: "run" });
+  }
 
   // Spreadsheet: generate a local opaque creation marker and persist it as
   // `spreadsheet_create_started` BEFORE the one and only remote create
@@ -1195,6 +1329,22 @@ async function runSetupLocked(
   // state. Resuming a started state reconciles by marker only.
   const api = options.createHumanApi(accessToken);
   let spreadsheet: SpreadsheetCreateResult;
+  // Spreadsheet phase reporting: a status from `spreadsheet_created`
+  // onward is checkpoint-guaranteed complete (the `resumed` event already
+  // marked it), so this run must NOT re-emit its start/completion — the
+  // validating tracker would reject the duplicates and the count must
+  // never double-count. `spreadsheet_create_started` (and every earlier
+  // status) leaves the phase current: the create/reconcile work actually
+  // runs there, so the phase still reports start/completion as a run
+  // phase. Derived from the same checkpoint-phase list the `resumed`
+  // event uses, so the reporting decision and the resume list can never
+  // drift apart.
+  const spreadsheetPhaseGuaranteedByCheckpoint =
+    checkpoint !== undefined && checkpointCompletedPhases(checkpoint.status).includes("spreadsheet");
+  const spreadsheetPhaseReports = !spreadsheetPhaseGuaranteedByCheckpoint;
+  if (spreadsheetPhaseReports) {
+    progress.report({ type: "phase_started", phase: "spreadsheet" });
+  }
   // Spreadsheet statuses imply key readiness; `key_create_started` and
   // `key_ready` both start (or continue) spreadsheet creation from a fresh
   // marker. Only a spreadsheet status resumes by marker or by stored id.
@@ -1207,6 +1357,7 @@ async function runSetupLocked(
       checkpoint.status === "complete");
   if (resumeSpreadsheet) {
     if (checkpoint.status === "spreadsheet_create_started") {
+      progress.report({ type: "operation_started", phase: "spreadsheet", operation: SETUP_PROGRESS_OPERATIONS.SHEET_RECONCILE });
       const reconciled = await reconcileSpreadsheetByMarker(api, options, executed, {
         projectId,
         ownerEmail,
@@ -1216,6 +1367,7 @@ async function runSetupLocked(
         projectMode: persistProjectMode,
         keyOrigin,
       });
+      progress.report({ type: "operation_completed", phase: "spreadsheet", operation: SETUP_PROGRESS_OPERATIONS.SHEET_RECONCILE });
       if (reconciled.status === "error") {
         return reconciled.error;
       }
@@ -1233,6 +1385,7 @@ async function runSetupLocked(
     if (saveError !== null) {
       return saveError;
     }
+    progress.report({ type: "operation_started", phase: "spreadsheet", operation: SETUP_PROGRESS_OPERATIONS.SHEET_CREATE });
     const ensured = await createSpreadsheetWithMarker(api, options, executed, {
       projectId,
       ownerEmail,
@@ -1242,10 +1395,14 @@ async function runSetupLocked(
       projectMode: persistProjectMode,
       keyOrigin,
     });
+    progress.report({ type: "operation_completed", phase: "spreadsheet", operation: SETUP_PROGRESS_OPERATIONS.SHEET_CREATE });
     if (ensured.status === "error") {
       return ensured.error;
     }
     spreadsheet = ensured.spreadsheet;
+  }
+  if (spreadsheetPhaseReports) {
+    progress.report({ type: "phase_completed", phase: "spreadsheet", source: "run" });
   }
 
   // Share: ensure the service account is a writer and verify Drive metadata.
@@ -1264,6 +1421,9 @@ async function runSetupLocked(
   const alreadyShared =
     checkpoint !== undefined &&
     (checkpoint.status === "spreadsheet_shared" || checkpoint.status === "complete");
+  if (!alreadyShared) {
+    progress.report({ type: "phase_started", phase: "share" });
+  }
   // Share provenance for the verify phase: whether the SA writer permission
   // was created/upgraded by the setup (fresh) or reused. Persisted from
   // `spreadsheet_shared` onward so a resumed shared-but-unverified state
@@ -1300,6 +1460,7 @@ async function runSetupLocked(
       }
     }
     let outcome: ShareOutcome;
+    progress.report({ type: "operation_started", phase: "share", operation: SETUP_PROGRESS_OPERATIONS.SHARE });
     try {
       outcome = await api.ensureSaWriter({
         spreadsheetId: spreadsheet.spreadsheetId,
@@ -1312,6 +1473,7 @@ async function runSetupLocked(
         `could not share spreadsheet ${spreadsheet.spreadsheetId} with ${email}: ${safeReasonOf(error)}`,
       );
     }
+    progress.report({ type: "operation_completed", phase: "share", operation: SETUP_PROGRESS_OPERATIONS.SHARE });
     saWriterRole = outcome.writerRole;
     shareOrigin =
       outcome.writerRole === "created" || outcome.writerRole === "upgraded" || shareStartedLoaded
@@ -1342,6 +1504,9 @@ async function runSetupLocked(
       return saveError;
     }
   }
+  if (!alreadyShared) {
+    progress.report({ type: "phase_completed", phase: "share", source: "run" });
+  }
 
   // SA verify: the key must read the spreadsheet (retried only for
   // propagation-class failures of resources created THIS run) before .env
@@ -1349,7 +1514,9 @@ async function runSetupLocked(
   // secure descriptor boundary and handed to the verifier IN MEMORY: the
   // verifier never reopens the key pathname, so a mid-run replacement of
   // the key file cannot redirect verification to a different credential.
+  const saVerifyReporter = boundedCheckReporter(progress, "sa_access", "sa_access");
   if (checkpoint?.status !== "complete") {
+    progress.report({ type: "phase_started", phase: "sa_access" });
     const keyCredential = readServiceAccountKeyCredentialSecurely(options.keyPath);
     if (keyCredential.status === "absent") {
       return errorResult(
@@ -1387,6 +1554,7 @@ async function runSetupLocked(
         // for a fresh key, 403/404 for a fresh share).
         keyFresh: keyOrigin === "created",
         shareFresh: shareOrigin === "fresh",
+        onVerifyProgress: saVerifyReporter,
         // In-memory validated credentials for the run: the private key
         // exists only in process memory and is never stored or logged.
         credentials: {
@@ -1405,6 +1573,7 @@ async function runSetupLocked(
       label: `spreadsheets.get with the ${email} key`,
       outcome: "service-account access verified",
     });
+    progress.report({ type: "phase_completed", phase: "sa_access", source: "run" });
   }
 
   // .env: update only the two managed keys, preserving unrelated lines. The
@@ -1416,6 +1585,8 @@ async function runSetupLocked(
   if (envPreflight !== null) {
     return envPreflight;
   }
+  progress.report({ type: "phase_started", phase: "output" });
+  progress.report({ type: "operation_started", phase: "output", operation: SETUP_PROGRESS_OPERATIONS.ENV_WRITE });
   let envResult: EnvFileWriteResult;
   try {
     envResult = writeSetupEnvFile(
@@ -1430,11 +1601,13 @@ async function runSetupLocked(
       `could not write ${options.outputPath}: ${messageOf(error)}`,
     );
   }
+  progress.report({ type: "operation_completed", phase: "output", operation: SETUP_PROGRESS_OPERATIONS.ENV_WRITE });
 
   // Complete checkpoint: retained so reruns stay no-ops. Starting fresh
   // requires removing BOTH the checkpoint and the key file (or passing the
   // matching --project to recover); cloud resources are never deleted.
   if (checkpoint?.status !== "complete") {
+    progress.report({ type: "operation_started", phase: "output", operation: SETUP_PROGRESS_OPERATIONS.CHECKPOINT_PERSIST });
     const saveError = persistState(
       options,
       executed,
@@ -1451,10 +1624,12 @@ async function runSetupLocked(
         shareOrigin,
       ),
     );
+    progress.report({ type: "operation_completed", phase: "output", operation: SETUP_PROGRESS_OPERATIONS.CHECKPOINT_PERSIST });
     if (saveError !== null) {
       return saveError;
     }
   }
+  progress.report({ type: "phase_completed", phase: "output", source: "run" });
 
   return {
     status: "ok",
