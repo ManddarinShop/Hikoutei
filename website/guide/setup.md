@@ -116,6 +116,30 @@ resolution) and performs no subprocess, network, cloud, or file mutations —
 no lock, checkpoint, key, or `.env` writes, and never the interactive gcloud
 login handoff. Key material and the access token are never printed.
 
+### Progress output
+
+`hikoutei setup` reports step-by-step progress to **stderr** across the ten
+setup phases (cloud auth, Drive access, project, APIs, service account,
+service-account key, spreadsheet, share, service-account access, output):
+
+- an **overall bar** advances one segment per completed phase — it is
+  never an ETA and never guesses a percentage, only finished work moves
+  it, and a resumed run never counts a phase twice; and
+- a **detail line** shows the bounded propagation checks — how many of the
+  eight key-settlement / access-verification checks have run (`1/8`…
+  `8/8`) — and, during a known wait, how far through the next 2, 4, 8,
+  16, 30, 30, 30 s sleep the clock is, plus a fixed `working…` label for
+  unknown-duration steps (no fake percentages).
+
+On an interactive terminal the four-line block redraws in place with ANSI;
+in CI, non-TTY, or `NO_COLOR` sessions one static line is printed per
+phase/retry event with no control sequences and no clock ticking. The
+block pauses and is cleared during the interactive `gcloud auth login`
+handoff and resumes with the retry. Progress never prints credentials,
+tokens, keys, project ids, emails, paths, or raw command output, and it
+can never change the setup result or the exit code; `--dry-run` prints
+only the command plan, with no progress lines.
+
 Automatic setup runs on macOS and Linux. On Windows, a non-dry-run is
 refused with `unsupported_platform` **before** any subprocess, network,
 cloud, lock, checkpoint, key, or env mutation (Windows cannot guarantee

@@ -347,6 +347,56 @@ export interface Sleeper {
   sleep(ms: number): Promise<void>;
 }
 
+/**
+ * Events reported by the bounded key-settlement evidence checks.
+ *
+ * `check_started` / `check_completed` bracket one of the eight propagation
+ * evidence checks (1-based attempt; the immediate post-create check of a
+ * fresh create and the first reconcile check are both 1/8). `wait_started`
+ * precedes a scheduled sleep with the delay before the NEXT check and
+ * carries the 1-based index of the check that just ran. Only numbers are
+ * reported — never key material, paths, ids, or raw gcloud output. The
+ * reporter is decoupled from the progress UI so this module never imports
+ * the CLI renderer; `setupFlow` wires it to the progress sink.
+ */
+export type KeySettleProgressEvent =
+  | { readonly type: "check_started"; readonly attempt: number; readonly maxAttempts: number }
+  | { readonly type: "check_completed"; readonly attempt: number; readonly maxAttempts: number }
+  | { readonly type: "wait_started"; readonly attempt: number; readonly maxAttempts: number; readonly delayMs: number };
+
+/**
+ * Optional reporter for the bounded key-settlement evidence checks and
+ * waits. A throwing callback is swallowed so it can never affect the
+ * settlement result, the mutation order, or the run.
+ */
+export interface KeySettleProgressReporter {
+  (event: KeySettleProgressEvent): void;
+}
+
+/** Total propagation evidence checks the key settlement performs (immediate + the scheduled delays). */
+export const KEY_SETTLE_MAX_ATTEMPTS = KEY_SETTLE_POLL_DELAYS_MS.length + 1;
+
+/**
+ * Reports one settlement progress event, swallowing any callback throw.
+ *
+ * Progress is purely observational: a throwing reporter (or a reporter
+ * that was wired to a broken sink) must never change the settlement
+ * result, the mutation order, or the process exit code.
+ */
+function reportSafely(
+  reporter: KeySettleProgressReporter | undefined,
+  event: KeySettleProgressEvent,
+): void {
+  if (reporter === undefined) {
+    return;
+  }
+  try {
+    reporter(event);
+  } catch {
+    // Progress reporting must never affect the settlement result.
+  }
+}
+
 /** Production sleeper: waits with `setTimeout` so the bounded poll actually waits. */
 export const realSleeper: Sleeper = {
   sleep(ms: number): Promise<void> {
@@ -374,6 +424,8 @@ interface KeySettleInput {
   readonly createPermission: KeyCreatePermission;
   /** Timer for the bounded propagation poll; injectable so tests are instant. */
   readonly sleeper: Sleeper;
+  /** Optional reporter for the bounded evidence checks and waits; never affects the result. */
+  readonly onSettleProgress?: KeySettleProgressReporter;
 }
 
 /**
@@ -421,24 +473,56 @@ export async function settleServiceAccountKey(
 ): Promise<KeySettleOutcome> {
   const freshCreateJustIssued = input.createPermission === "fresh";
   // First pass: the pre-create evidence check, and for `fresh` permission
-  // the ONE and only key create. A reconcile-only resume uses it as the
-  // immediate evidence check.
-  const first = await settleKeyPass(runner, executed, input, !freshCreateJustIssued);
+  // the ONE and only key create. A reconcile-only resume uses this pass as
+  // its immediate evidence check — numbered 1/8 — so it is reported as
+  // such (the pre-create pass of a fresh create is NOT one of the eight
+  // post-create evidence checks).
+  let first: SettlePassResult;
+  if (freshCreateJustIssued) {
+    first = await settleKeyPass(runner, executed, input, false);
+  } else {
+    reportSafely(input.onSettleProgress, {
+      type: "check_started",
+      attempt: 1,
+      maxAttempts: KEY_SETTLE_MAX_ATTEMPTS,
+    });
+    first = await settleKeyPass(runner, executed, input, true);
+    reportSafely(input.onSettleProgress, {
+      type: "check_completed",
+      attempt: 1,
+      maxAttempts: KEY_SETTLE_MAX_ATTEMPTS,
+    });
+  }
   if (first.status !== "retry") {
     return first;
   }
   // Post-create settlement, bounded by `KEY_SETTLE_POLL_DELAYS_MS`:
   // - fresh: the create was JUST issued, so an IMMEDIATE post-create
-  //   staged/final + keys-list settlement check runs first, then one check
-  //   after each of the seven scheduled delays — exactly eight post-create
-  //   evidence checks;
-  // - reconcile: the first pass above already was the immediate check, so
-  //   only the seven delayed checks remain (still an immediate check plus
-  //   seven delayed checks on the resume).
-  // The create is NEVER retried automatically.
+  //   staged/final + keys-list settlement check (evidence 1/8) runs first,
+  //   then one check after each of the seven scheduled delays — exactly
+  //   eight post-create evidence checks;
+  // - reconcile: the first pass above already was the immediate check
+  //   (1/8), so only the seven delayed checks remain (still an immediate
+  //   check plus seven delayed checks on the resume).
+  // The create is NEVER retried automatically. Each evidence check is
+  // reported as check_started/check_completed with its 1-based attempt
+  // (1/8..8/8), and each scheduled sleep as wait_started carrying the
+  // index of the check that just ran and the exact delay (2, 4, 8, 16,
+  // 30, 30, 30 s) before the next one. The final 8/8 check is always
+  // reported: it resolves the settlement on success or exhaustion.
   let lastExhausted = first.exhausted;
   if (freshCreateJustIssued) {
+    reportSafely(input.onSettleProgress, {
+      type: "check_started",
+      attempt: 1,
+      maxAttempts: KEY_SETTLE_MAX_ATTEMPTS,
+    });
     const immediate = await settleKeyPass(runner, executed, input, true);
+    reportSafely(input.onSettleProgress, {
+      type: "check_completed",
+      attempt: 1,
+      maxAttempts: KEY_SETTLE_MAX_ATTEMPTS,
+    });
     if (immediate.status !== "retry") {
       return immediate;
     }
@@ -447,13 +531,33 @@ export async function settleServiceAccountKey(
   for (let check = 0; ; check += 1) {
     const delay = KEY_SETTLE_POLL_DELAYS_MS[check];
     if (delay === undefined) {
-      // No recoverable credential and no post-baseline key on any check: a
-      // created key may still be propagating, but the bounded window is
-      // exhausted — the outcome is uncertain. The create is never retried.
+      // Evidence check 8/8 ran and found nothing: no recoverable
+      // credential and no post-baseline key on any check — a created key
+      // may still be propagating, but the bounded window is exhausted.
+      // The outcome is uncertain and the create is never retried.
       return { status: "error", error: lastExhausted };
     }
+    // The evidence check that just ran is `check + 1`; the delay is
+    // before the NEXT check (`check + 2`).
+    reportSafely(input.onSettleProgress, {
+      type: "wait_started",
+      attempt: check + 1,
+      maxAttempts: KEY_SETTLE_MAX_ATTEMPTS,
+      delayMs: delay,
+    });
     await input.sleeper.sleep(delay);
+    const attempt = check + 2;
+    reportSafely(input.onSettleProgress, {
+      type: "check_started",
+      attempt,
+      maxAttempts: KEY_SETTLE_MAX_ATTEMPTS,
+    });
     const pass = await settleKeyPass(runner, executed, input, true);
+    reportSafely(input.onSettleProgress, {
+      type: "check_completed",
+      attempt,
+      maxAttempts: KEY_SETTLE_MAX_ATTEMPTS,
+    });
     if (pass.status !== "retry") {
       return pass;
     }
