@@ -11,15 +11,15 @@
 import type { SyncEffectPostcondition, SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
-import type { PreflightContext, PreflightReceipt } from "./preflight.js";
+import type { PreflightContext, PreflightReceipt } from "./preflightContext.js";
 import {
   currentHash,
   findWorkingRow,
-  isDeletionEffect,
-  requireProviderEffect,
   toWorkingRow,
-  type WorkingRow,
-} from "./planner.js";
+} from "./plannerWorkingRow.js";
+import { isDeletionEffect } from "./plannerDeletion.js";
+import { requireProviderEffect } from "./planner.js";
+import type { WorkingRow } from "./plannerContracts.js";
 
 /**
  * Classifies one effect's delivery state. `context` must come from the same

@@ -11,7 +11,7 @@
 
 import {
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../domain/index.js";
+} from "../../../shared/constants.js";
 import type {
   FencingContext,
   PendingEffect,

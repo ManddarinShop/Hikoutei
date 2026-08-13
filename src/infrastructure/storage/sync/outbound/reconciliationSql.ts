@@ -3,7 +3,7 @@
 import {
   EFFECT_STATUSES,
   type EffectStatus,
-} from "../../../../domain/index.js";
+} from "../../../../domain/model/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import type {
   SqlExecutor,

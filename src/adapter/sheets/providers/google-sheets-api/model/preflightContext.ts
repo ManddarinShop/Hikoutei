@@ -2,13 +2,14 @@
  * Preflight context types and context assembly for the bulk preflight.
  *
  * A preflight is a sheet enumeration call plus one bounded data read of the
- * target tab and receipt tab; the composite functions here keep that
- * two-call sequence for non-pacing callers. Every untrusted SDK payload is
- * validated with runtime guards (in `preflightParsing`) and promoted into
+ * target tab and receipt tab; `readPreflightData` keeps that two-call
+ * sequence for callers that already enumerated the tabs (the pacing callers
+ * dispatch each transport request individually). Every untrusted SDK payload
+ * is validated with runtime guards (in `preflightParsing`) and promoted into
  * the typed context the planner can mutate.
  */
 
-import type { NormalizedCell } from "../../../../../domain/index.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import type { Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import {
@@ -173,21 +174,6 @@ export async function enumerateSheetProperties(
 }
 
 /** Reads and validates the target and receipt tabs for one route. */
-export async function readPreflightContext(
-  transport: GoogleSheetsApiTransport,
-  route: PreflightRouteOptions,
-  timeoutMs?: number,
-): Promise<PreflightContext> {
-  const sheets = await enumerateSheetProperties(transport, route.spreadsheetId, timeoutMs);
-  return readPreflightData(transport, route, sheets, timeoutMs);
-}
-
-/**
- * Reads the bounded target/receipt grid data for one route, given the sheet
- * enumeration. The target range starts at A1 and extends to the registered
- * range's end column (whole-column ranges can legitimately exceed ZZ),
- * keeping the 1,048,576-row limit of the grid.
- */
 export async function readPreflightData(
   transport: GoogleSheetsApiTransport,
   route: PreflightRouteOptions,

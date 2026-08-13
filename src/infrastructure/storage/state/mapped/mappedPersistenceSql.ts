@@ -7,7 +7,8 @@
  * changing the public entity lifecycle API.
  */
 
-import type { EffectStatus, NormalizedCell } from "../../../../domain/index.js";
+import type { EffectStatus } from "../../../../domain/model/constants.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import {
   ROW_BINDING_STATES,
 } from "../../../../domain/model/constants.js";

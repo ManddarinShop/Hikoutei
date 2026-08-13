@@ -7,13 +7,15 @@
  * exercise the same compare-and-set semantics as a deployed provider.
  */
 
-import {
-  stableHash,
-  type CellObservation,
-  type EffectKind,
-  type EffectTargetKind,
-  type NormalizedCell,
-} from "../../../domain/index.js";
+import { stableHash } from "../../../shared/encoding/stableEncode.js";
+import type {
+  CellObservation,
+  NormalizedCell,
+} from "../../../shared/encoding/types.js";
+import type {
+  EffectKind,
+  EffectTargetKind,
+} from "../../../domain/model/constants.js";
 import { JAVASCRIPT_TYPE_NAMES } from "../../../shared/encoding/constants.js";
 import {
   isJavaScriptType,

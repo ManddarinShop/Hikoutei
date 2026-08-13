@@ -2,11 +2,13 @@
 
 import {
   claimWriterLeaseWithSql,
-  registerSyncSheetWithSql,
-  type RegisteredSyncSheet,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
-} from "../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
+import {
+  registerSyncSheetWithSql,
+  type RegisteredSyncSheet,
+} from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import type { SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

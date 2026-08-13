@@ -9,7 +9,7 @@
 import type {
   EffectStatus,
   EffectTargetKind,
-} from "../../../../domain/index.js";
+} from "../../../../domain/model/constants.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
 import type {
   SyncTimingSink,
@@ -17,10 +17,14 @@ import type {
 import type {
   CanonicalCommitInput,
   CanonicalFieldWrite,
+} from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+import type {
   FencingContext,
   NewEffect,
+} from "@hikoutei/ikisaki";
+import type {
   RegisteredSyncSheet,
-} from "../../../../infrastructure/storage/index.js";
+} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import type {
   ScalarEntityFlushChange,

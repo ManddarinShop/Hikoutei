@@ -15,11 +15,13 @@ import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract
 import {
   GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_FIELDS,
+} from "../model/preflightFields.js";
+import {
+  SYSTEM_COLUMN_REPROVISION_MESSAGE,
   gridHeaderCells,
-  parseSpreadsheetDocument,
-  type ParsedGridData,
-} from "../model/preflight.js";
-import { SYSTEM_COLUMN_REPROVISION_MESSAGE } from "../model/preflightHeaders.js";
+} from "../model/preflightHeaders.js";
+import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
+import type { ParsedGridData } from "../model/preflightContext.js";
 import { GOOGLE_SHEETS_API_ROW_ID_HEADER } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";

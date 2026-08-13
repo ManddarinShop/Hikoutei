@@ -7,12 +7,14 @@
  */
 
 import {
-  EMPTY_STRING_LENGTH_ZERO,
   FIELD_OWNERSHIPS,
-  POSITIVE_SAFE_INTEGER_MINIMUM,
   type EffectTargetKind,
-  type NormalizedCell,
-} from "../../../../domain/index.js";
+} from "../../../../domain/model/constants.js";
+import {
+  EMPTY_STRING_LENGTH_ZERO,
+  POSITIVE_SAFE_INTEGER_MINIMUM,
+} from "../../../../shared/constants.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
 import { SYNC_PROJECTIONS } from "../../../sync/sheetsContract/constants.js";
 import {
@@ -27,8 +29,10 @@ import {
 import {
   readMappedLatestProjectionEffectWithSql,
   readMappedVisibleProjectionStateWithSql,
+} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+import {
   requireRegisteredSyncSheetWithSql,
-} from "../../../../infrastructure/storage/index.js";
+} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import type {
   NewEffect,
   RegisteredSyncSheet,

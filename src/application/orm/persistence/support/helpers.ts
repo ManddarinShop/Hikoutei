@@ -8,8 +8,8 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
-  type NormalizedCell,
-} from "../../../../domain/index.js";
+} from "../../../../shared/constants.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushChange,

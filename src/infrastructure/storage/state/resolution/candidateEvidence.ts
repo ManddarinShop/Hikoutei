@@ -13,8 +13,8 @@
 
 import {
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
-  type CandidateVisibleEvidence,
-} from "../../../../domain/index.js";
+} from "../../../../domain/model/constants.js";
+import type { CandidateVisibleEvidence } from "../../../../domain/model/types.js";
 import { PRESENCE_KINDS } from "../../../../shared/state/constants.js";
 import type { Presence } from "../../../../shared/state/types.js";
 import { isNonNegativeSafeInteger } from "../../../../shared/validation.js";

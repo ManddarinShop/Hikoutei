@@ -2,7 +2,7 @@
 
 import {
   CONFLICT_STATUSES,
-} from "../../../../../domain/index.js";
+} from "../../../../../domain/model/constants.js";
 import {
   SYNC_PROJECTIONS,
 } from "../../../../../application/sync/sheetsContract/constants.js";
