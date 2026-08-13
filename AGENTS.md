@@ -18,9 +18,11 @@ input surface, not the source of truth.
 
 The authoritative design lives in [`docs/architecture.md`](docs/architecture.md),
 [`docs/write-and-synchronization-flow.md`](docs/write-and-synchronization-flow.md),
-[`docs/current-state-review.md`](docs/current-state-review.md), and
-[`docs/code-guidelines.md`](docs/code-guidelines.md). Keep source and docs
-consistent with those before inventing new structure.
+[`docs/internal-consistency-model.md`](docs/internal-consistency-model.md), and
+[`docs/code-guidelines.md`](docs/code-guidelines.md). Note that `docs/` (like
+`design/`) is gitignored and local-only — it is not tracked or shipped — so
+those links resolve only in local checkouts; keep source consistent with the
+documents when present.
 
 ## Public API direction
 
@@ -56,15 +58,18 @@ Sheets; they read SQLite.
 
 Keep the public API and the internal sync/provider engine separate.
 
-The public surface exposes only Google Sheet setup/registration plus the
+The public surface (`src/api`, re-exported by `src/index.ts`) exposes only the
 entity-lifecycle EntityManager: defining entities, opening the runtime, and
 `fork()`, `create()`, `find()`, `persist()`, `remove()`, `flush()`, and
-`transactional()`. Everything else is internal implementation and must not be
-part of the application-facing contract: MikroORM types and provider internals,
-the Google Sheets API provider, the outbound sync
-worker, polling, and effect supervisor, storage schemas
-(canonical/observation/resolution state), hash/compare-and-set evidence, and
-low-level provider or protocol APIs.
+`transactional()`. It does not expose Sheet setup or registration. Everything
+else is internal implementation and must not be part of the application-facing
+contract: MikroORM types and provider internals, the Google Sheets API
+provider, the outbound sync worker, polling, and effect supervisor, storage
+schemas (canonical/observation/resolution state), hash/compare-and-set
+evidence, and low-level provider or protocol APIs. The `hikoutei setup` CLI
+(`src/cli`) is a separate service-side tool, not part of the library API: sync
+auto-start is environment-driven (`HIKOUTEI_SYNC_SPREADSHEET_URL` plus
+`GOOGLE_APPLICATION_CREDENTIALS`).
 
 The internal write engine may still classify work as insert-like, update-like,
 or delete-like tasks for batching, outbox effects, and Sheets projection
@@ -82,12 +87,17 @@ The source is organized by responsibility, not by a legacy layer. `domain/` and
 cases and synchronization; `adapter/` isolates persistence and Sheets providers
 behind contracts; `infrastructure/` owns SQLite storage technology.
 
+- `src/api/`: the application-facing facade (entity definitions, runtime
+  creation, EntityManager), re-exported by `src/index.ts`.
+- `src/cli/`: the `hikoutei setup` command-line tool (service-side
+  provisioning; not part of the library API).
 - `src/domain/`: normalization values, field evaluation, conflict transitions,
   and domain errors (`conflict/`, `errors/`, `evaluate/`, `model/`).
 - `src/shared/`: cross-domain constants, stable encoding, and shared state
   contracts (`encoding/`, `state/`).
-- `src/application/orm/`: public ORM facade, entity definitions, entity mapping,
-  and flush planning (`api/`, `mapping/`, `persistence/`).
+- `src/application/orm/`: ORM facade, entity definitions, entity mapping, and
+  flush planning behind the public `src/api` layer (`api/`, `mapping/`,
+  `persistence/`).
 - `src/application/sync/`: outbound sync worker, effect supervisor, projection,
   reconciliation, provider orchestration, and telemetry (`sheets/`,
   `outbound/`, `telemetry/`).
@@ -103,15 +113,17 @@ behind contracts; `infrastructure/` owns SQLite storage technology.
   observation/conflict/resolution state, and the durable outbox (`sqlite/`,
   `state/` for canonical/mapped/observation/resolution, `sync/` for the outbound
   outbox and worker SQL).
-- `src/index.ts`: the application-facing public entrypoint only.
+- `src/index.ts`: the application-facing public entrypoint only (re-exports
+  `src/api`).
 - `test/`: Vitest unit and provider/contract tests, plus `test/support/`
   fixtures.
-- `docs/`: architecture, sync flow, code guidelines, and current-state notes.
+- `docs/`: local-only (gitignored) architecture, sync flow, code guidelines,
+  and current-state notes; not tracked or shipped.
 - `scripts/`: build and CI helper scripts (`clean-dist.mjs`,
   `ci/run-api-scenario.mjs`).
 
-There is no `src/core/`, `src/setup/`, `src/runtime/`, `src/cli/`, or `spikes/`
-directory anymore; treat those names as retired.
+There is no `src/core/`, `src/setup/`, `src/runtime/`, or `spikes/` directory;
+treat those names as retired. `src/cli/` is active and owns the setup tool.
 
 ## Development Commands
 
@@ -311,8 +323,9 @@ and `git diff` is allowed, but ask before any state-changing Git command.
 
 Follow the documentation standard in `docs/code-guidelines.md`. Keep
 `docs/architecture.md`, `docs/write-and-synchronization-flow.md`, and
-`docs/current-state-review.md` consistent with the code when you change the
-synchronization model. README updates should cover the intended use case, when
+`docs/internal-consistency-model.md` consistent with the code when you change
+the synchronization model (the `docs/` tree is gitignored and local-only).
+README updates should cover the intended use case, when
 not to use the library, the SQLite-authoritative model and async Sheets
 projection, outbox/worker delivery, Google Sheets quota constraints, schema
 drift, stale writes and conflict resolution, quick start, API reference,

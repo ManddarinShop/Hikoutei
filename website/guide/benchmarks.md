@@ -10,6 +10,20 @@ repository's
 [`docs/sync-bulk-write-benchmark.md`](https://github.com/ManddarinShop/Hikoutei/blob/develop/docs/sync-bulk-write-benchmark.md).
 They are not guarantees for other environments.
 
+The table below is **historical evidence from the retired Apps Script/Gateway
+era**: those runs measured the signed Apps Script gateway and its
+observation lock, which no longer exist. They are not comparable to the
+current direct Google Sheets API provider and must not be presented as its
+performance.
+
+Live verification of the current direct provider is opt-in: it requires a
+service account (`GOOGLE_APPLICATION_CREDENTIALS`), a spreadsheet shared with
+it, and external quota, and it is never part of the normal test suite.
+Current direct-provider benchmark evidence is limited: there is no
+maintained, dated steady-state measurement of the direct provider as of this
+writing, so any throughput/latency claim beyond these historical notes would
+be unsupported.
+
 ## Key findings (historical)
 
 | Observation | Result | Caveat |

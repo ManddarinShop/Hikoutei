@@ -257,10 +257,11 @@ shared on the spreadsheet (the error tells you which email to share).
 Skip the CLI and wire everything by hand when you need an existing project or
 spreadsheet, or when you prefer to manage Google Cloud resources yourself.
 
-### Service-account provider (googleSheetsApi)
+### Manual service-account setup
 
-The sync runtime uses one Google Sheets API provider with a service account —
-no Apps Script deployment. The provider, sync worker, and storage are
+The sync runtime uses one internal Google Sheets API provider (the direct
+provider) with a service account — no Apps Script deployment and no public
+`googleSheetsApi` option. The provider, sync worker, and storage are
 internal: applications configure nothing beyond the two environment variables
 above and call `createTypedSheets()` normally.
 
@@ -279,6 +280,11 @@ above and call `createTypedSheets()` normally.
    creates and validates the headers on the registered tabs, then starts
    outbox delivery and User_Input polling. There is no provider option to
    pass and no internal bootstrap to start.
+
+> **Legacy spreadsheet note.** Spreadsheets provisioned by the old Apps Script
+> provider with developer-metadata row anchors are not migrated: `User_Input`
+> tabs now require the `__hikoutei_row_id` system column, so legacy tabs must
+> be re-provisioned before sync can start.
 
 Hikoutei uses a durable local outbox, idempotent delivery, and conflict-aware
 updates so temporary API failures do not lose committed application writes.

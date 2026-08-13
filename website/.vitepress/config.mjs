@@ -143,7 +143,7 @@ export default defineConfig({
         items: [{ text: "What is Hikoutei", link: "/guide/what-is-hikoutei" }],
       },
       {
-        text: "Guide 0.5.13",
+        text: "Guide",
         items: [
           { text: "Quick start", link: "/guide/quick-start" },
           { text: "Google Sheets setup", link: "/guide/setup" },
