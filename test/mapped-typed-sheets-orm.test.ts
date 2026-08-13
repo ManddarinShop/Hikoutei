@@ -9,13 +9,13 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
 import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "../src/domain/model/constants.js";
-import { claimWriterLeaseWithAdapter } from "../src/infrastructure/storage/index.js";
+import { claimWriterLeaseWithAdapter } from "@hikoutei/ikisaki";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../src/shared/encoding/constants.js";
 import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
 import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
-import { runEffectWorkerWithAdapter } from "../src/infrastructure/storage/index.js";
+import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
@@ -27,10 +27,10 @@ import {
   createMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
 } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import { persistMappedObservedRowWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
 import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { PersistObservedRowInput } from "../src/infrastructure/storage/index.js";
+import type { PersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationWriter.js";
 
 const OrderSchema = defineEntity({
   name: "MappedTypedSheetsOrder",
@@ -292,7 +292,7 @@ describe("mapped typed-sheets ORM", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const storage = createMikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(storage);
+    await migrateSqliteSchema(storage);
     const timingEvents: Array<{ readonly phase: string; readonly operationKinds: readonly string[] }> = [];
     const writer = {
       ...deterministicWriter("mapped-order-writer"),
@@ -410,7 +410,7 @@ describe("mapped typed-sheets ORM", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const storage = createMikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(storage);
+    await migrateSqliteSchema(storage);
     const writer = deterministicWriter("mapped-chain-writer");
     await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
     const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
@@ -519,7 +519,7 @@ describe("mapped typed-sheets ORM", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const storage = createMikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(storage);
+    await migrateSqliteSchema(storage);
     const writer = deterministicWriter("mapped-delete-writer");
     await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
     const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
@@ -600,7 +600,7 @@ describe("mapped typed-sheets ORM", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const storage = createMikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(storage);
+    await migrateSqliteSchema(storage);
     const writer = deterministicWriter("mapped-candidate-delete-writer");
     await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
     const typedSheetsOrm = createMappedTypedSheetsOrm(storage, {
@@ -674,7 +674,7 @@ describe("mapped typed-sheets ORM", () => {
     const orm = await createOrm();
     openOrms.push(orm);
     const storage = createMikroOrmSqliteAdapter(orm);
-    await migrateMikroOrmSqliteSchema(storage);
+    await migrateSqliteSchema(storage);
     await registerTypedSheetsEntityMappings(storage, [orderMapping], deterministicWriter("mapping-setup"));
     await storage.transaction(({ sql }) => sql.run(
       "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, state) VALUES (?, ?, ?, ?)",

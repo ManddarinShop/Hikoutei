@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
-import type { NormalizedCell } from "../src/domain/index.js";
+import type { NormalizedCell } from "../src/shared/encoding/types.js";
 import { stableHash } from "../src/shared/encoding/index.js";
 import type { StableValue } from "../src/shared/encoding/types.js";
 import { presentValue, absentValue } from "../src/shared/state/index.js";
@@ -43,7 +43,7 @@ import {
   GOOGLE_SHEETS_API_VALUES_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
-} from "../src/adapter/sheets/providers/google-sheets-api/model/preflight.js";
+} from "../src/adapter/sheets/providers/google-sheets-api/model/preflightFields.js";
 import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
