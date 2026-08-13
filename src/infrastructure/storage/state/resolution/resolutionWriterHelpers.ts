@@ -4,8 +4,8 @@ import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js"
 import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
 import type {
   ConflictStatus,
-  NormalizedCell,
-} from "../../../../domain/index.js";
+} from "../../../../domain/model/constants.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   isFencingValidWithSql,

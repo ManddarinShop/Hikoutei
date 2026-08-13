@@ -8,12 +8,12 @@
 import {
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-  stableHash,
-  type ObservedRowChange,
-  type Presence,
-  type RowEvaluationResult,
-  type RowOutcome,
-} from "../../../../domain/index.js";
+} from "../../../../shared/state/constants.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { ObservedRowChange } from "../../../../domain/model/types.js";
+import type { Presence } from "../../../../shared/state/types.js";
+import type { RowEvaluationResult } from "../../../../domain/evaluate/contracts.js";
+import type { RowOutcome } from "../../../../domain/evaluate/constants.js";
 import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
 import {
   CONFLICT_STATUSES,

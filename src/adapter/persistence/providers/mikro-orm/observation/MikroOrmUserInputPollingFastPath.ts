@@ -9,8 +9,8 @@
 
 import {
   FIELD_OWNERSHIPS,
-  type NormalizedCell,
-} from "../../../../../domain/index.js";
+} from "../../../../../domain/model/constants.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import { stableHash } from "../../../../../shared/encoding/stableEncode.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../../shared/encoding/constants.js";
 import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";

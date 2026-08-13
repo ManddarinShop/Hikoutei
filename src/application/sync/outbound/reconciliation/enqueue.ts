@@ -16,7 +16,7 @@ import {
   supersedeEffectWithSql,
   type FencingContext,
   type NewEffect,
-} from "../../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 
 /** One effect to append plus the terminal head it must supersede, if any. */

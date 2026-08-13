@@ -10,7 +10,7 @@
  * Script source throws.
  */
 
-import type { NormalizedCell } from "../../../../../domain/index.js";
+import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import type { SyncTableRow } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
   GOOGLE_SHEETS_API_ROW_ID_HEADER,
@@ -19,9 +19,9 @@ import { invalidProviderState } from "../errors.js";
 import {
   apiCellNumberFormat,
   gridRowCells,
-  readRegisteredHeaders,
-  type ParsedGridData,
-} from "./preflight.js";
+} from "./preflightRows.js";
+import { readRegisteredHeaders } from "./preflightHeaders.js";
+import type { ParsedGridData } from "./preflightContext.js";
 import {
   computedValueFromApiCell,
   isComputedBlankCell,

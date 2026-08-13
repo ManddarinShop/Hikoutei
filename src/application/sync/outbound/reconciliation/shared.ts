@@ -9,7 +9,8 @@
  * modules can import from one place without importing each other.
  */
 
-import { stableHash, type NormalizedCell } from "../../../../domain/index.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
 import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";

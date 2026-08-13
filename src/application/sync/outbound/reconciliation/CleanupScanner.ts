@@ -28,13 +28,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../domain/index.js";
+import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../shared/constants.js";
 import {
   claimWriterLeaseWithAdapter,
-  requireRegisteredSyncSheetWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   type FencingContext,
-} from "../../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
+import {
+  requireRegisteredSyncSheetWithAdapter,
+} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {

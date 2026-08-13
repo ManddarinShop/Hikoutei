@@ -10,14 +10,16 @@ import { randomUUID } from "node:crypto";
 import {
   EMPTY_STRING_LENGTH_ZERO,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../../domain/index.js";
+} from "../../../../shared/constants.js";
 import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   claimWriterLeaseWithSql,
-  registerSyncSheetWithSql,
   type FencingContext,
-} from "../../../../infrastructure/storage/index.js";
+} from "@hikoutei/ikisaki";
+import {
+  registerSyncSheetWithSql,
+} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {

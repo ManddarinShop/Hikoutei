@@ -1,12 +1,12 @@
 /** Quarantine persistence for invalid or unresolvable observed rows. */
 
-import {
-  stableHash,
-  type ObservedRowChange,
-  type Presence,
-  type QuarantinePlan,
-  type QuarantineReason,
-} from "../../../../domain/index.js";
+import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import type {
+  ObservedRowChange,
+  QuarantinePlan,
+} from "../../../../domain/model/types.js";
+import type { Presence } from "../../../../shared/state/types.js";
+import type { QuarantineReason } from "../../../../domain/model/constants.js";
 import {
   QUARANTINE_ID_PREFIX,
   QUARANTINE_REPAIR_STATUSES,
