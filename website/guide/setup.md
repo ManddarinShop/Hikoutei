@@ -18,17 +18,19 @@ account**, shares it with the service account as a writer, verifies
 service-account access, and writes a ready-to-use `.env` — no console
 clicking.
 
-**Prerequisites:** the `gcloud` CLI is installed and you have logged in once
-with Drive access (the spreadsheet is created as your user, so the Drive
-scope is required):
+**Prerequisites:** the `gcloud` CLI is installed. On an interactive terminal,
+`npx hikoutei setup` offers to start `gcloud auth login
+--enable-gdrive-access --force` for you (press Enter) when the active
+account is missing or lacks Drive access — you only complete the browser
+approval yourself. The spreadsheet is created as your user, so the Drive
+scope is required.
 
-```sh
-gcloud auth login --enable-gdrive-access
-```
-
-If the active account lacks Drive access, setup stops before creating
-anything and prints the exact command to re-login
-(`gcloud auth login --enable-gdrive-access --force`).
+If the active account is missing or lacks Drive access, setup stops before
+creating anything. On an interactive terminal it prompts: press Enter to
+start `gcloud auth login --enable-gdrive-access --force` in the same
+terminal (a browser window opens for you to approve), then setup retries
+automatically. With `--yes`, in CI, or on a non-TTY session, run that login
+command yourself first and rerun setup.
 
 Then run the setup from your project directory:
 
@@ -106,11 +108,13 @@ What happens:
    lines already in the file.
 
 The command asks for a y/N confirmation before creating cloud resources; pass
-`--yes` for non-interactive runs. Preview the exact command sequence with
-`--dry-run`: it runs only read-only local path-safety checks (reserved-path
-collision resolution) and performs no subprocess, network, cloud, or file
-mutations — no lock, checkpoint, key, or `.env` writes. Key material and the
-access token are never printed.
+`--yes` for non-interactive runs (this also disables the Enter-to-login
+handoff, so log in with `gcloud auth login --enable-gdrive-access --force`
+first in CI). Preview the exact command sequence with `--dry-run`: it runs
+only read-only local path-safety checks (reserved-path collision
+resolution) and performs no subprocess, network, cloud, or file mutations —
+no lock, checkpoint, key, or `.env` writes, and never the interactive gcloud
+login handoff. Key material and the access token are never printed.
 
 Automatic setup runs on macOS and Linux. On Windows, a non-dry-run is
 refused with `unsupported_platform` **before** any subprocess, network,

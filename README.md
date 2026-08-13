@@ -125,15 +125,18 @@ an operation for each write. The sync runtime uses one Google Sheets API
 provider (the internal `googleSheetsApi` bootstrap option) with a service
 account — no Apps Script deployment.
 
-**Fastest path:** install the gcloud CLI and log in once with Drive access
-(`gcloud auth login --enable-gdrive-access`), then `npx hikoutei setup` — it
-creates the project, service account, and key, creates a spreadsheet owned
-by your account, shares it with the service account as an Editor, verifies
-service-account access, and writes `GOOGLE_APPLICATION_CREDENTIALS` plus
-`HIKOUTEI_SYNC_SPREADSHEET_URL` into your `.env`. The human access token is
-used in memory only and never stored. Automatic setup runs on macOS and
-Linux; on Windows a non-dry-run is refused before any mutation and manual
-setup is available. Interrupted runs resume from a local checkpoint
+**Fastest path:** install the gcloud CLI, then run `npx hikoutei setup` from your
+project directory. On an interactive terminal it offers (press Enter) to
+start `gcloud auth login --enable-gdrive-access --force` for you when the
+active account is missing or lacks Drive access — you only complete the
+browser approval yourself. (In `--yes`, CI, or non-TTY sessions, run that
+login command yourself first.) Setup then creates the project, service
+account, and key, creates a spreadsheet owned by your account, shares it
+with the service account as an Editor, verifies service-account access, and
+writes `GOOGLE_APPLICATION_CREDENTIALS` plus `HIKOUTEI_SYNC_SPREADSHEET_URL`
+into your `.env`. The human access token is used in memory only and never
+stored. Automatic setup runs on macOS and Linux; on Windows a non-dry-run
+is refused before any mutation and manual setup is available. Interrupted runs resume from a local checkpoint
 (`.hikoutei-setup-state.json`); a spreadsheet create whose outcome is
 unknown is reconciled by its creation marker on the next run and setup
 never creates a second spreadsheet (inspect Drive and rerun if setup
