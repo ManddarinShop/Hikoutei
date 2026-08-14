@@ -62,6 +62,7 @@ class HikouteiImpl implements Hikoutei {
   /** Root entity manager; call `fork()` before request or job-local work. */
   readonly em: EntityManager;
   private closed = false;
+  private closePromise: Promise<void> | undefined;
 
   constructor(
     private readonly provider: ScalarEntityPersistenceProvider,
@@ -71,31 +72,33 @@ class HikouteiImpl implements Hikoutei {
     this.em = createEntityManager(provider, descriptors);
   }
 
-  /** Stops internal service work, then releases the local SQLite connection. */
-  async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
+  /**
+   * Stops internal service work, then releases the local SQLite connection.
+   * A failed stop leaves the provider open and the attempt retryable; concurrent
+   * callers share one close attempt instead of racing the worker shutdown.
+   */
+  close(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.closePromise !== undefined) return this.closePromise;
 
-    let beforeCloseError: unknown;
-    try {
+    const attempt = (async () => {
+      // Do not close SQLite when worker shutdown fails: a failed supervisor may
+      // still have an in-flight task that needs the shared adapter. The next
+      // call retries the shutdown against the still-open runtime.
       await this.beforeClose?.();
-    } catch (error: unknown) {
-      beforeCloseError = error;
-    }
-
-    try {
       await this.provider.close();
-    } catch (providerError: unknown) {
-      if (beforeCloseError !== undefined) {
-        throw new AggregateError(
-          [beforeCloseError, providerError],
-          "Hikoutei failed to stop internal work and close SQLite.",
-        );
-      }
-      throw providerError;
-    }
+      this.closed = true;
+    })();
+    this.closePromise = attempt;
+    void attempt.then(
+      () => this.clearClosePromise(attempt),
+      () => this.clearClosePromise(attempt),
+    );
+    return attempt;
+  }
 
-    if (beforeCloseError !== undefined) throw beforeCloseError;
+  private clearClosePromise(attempt: Promise<void>): void {
+    if (this.closePromise === attempt) this.closePromise = undefined;
   }
 }
 
