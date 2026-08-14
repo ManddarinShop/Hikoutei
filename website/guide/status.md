@@ -11,10 +11,12 @@ before upgrading minor versions.
 
 ## Current scope
 
-- **Scalar EntityManager only** — entity lifecycle operations,
-  equality-filtered `find()` / `findOne()`, `limit` / `offset` pagination,
-  and callback-style `transactional()`. Relationships, rich typed queries,
-  and schema migrations are not available yet.
+- **Scalar EntityManager only** — entity lifecycle operations, typed scalar
+  local queries (`eq` / `ne` / `gt` / `gte` / `lt` / `lte` / `in` / `nin` and
+  string-only `like`), `count()`, snapshot-consistent `findAndCount()`,
+  ordering, `limit` / `offset` pagination, and callback-style
+  `transactional()`. Relationships, joins, and full ORM features — along
+  with schema migrations — are not available yet.
 - **Async Sheets projection** — `flush()` commits SQLite locally; the Sheet
   write is delivered asynchronously by the outbox worker and is at-least-once,
   not immediate. Reads always come from SQLite, never Sheets.

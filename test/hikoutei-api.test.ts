@@ -49,6 +49,19 @@ const Event = defineTypedSheetsEntity({
   },
 });
 
+const RichQueryRow = defineTypedSheetsEntity({
+  name: "RichQueryRow",
+  tableName: "rich_query_rows",
+  properties: {
+    id: { type: "string", primary: true },
+    name: { type: "string" },
+    score: { type: "number" },
+    active: { type: "boolean" },
+    note: { type: "string", nullable: true },
+    createdAt: { type: "date" },
+  },
+});
+
 const ColonEntityA = defineTypedSheetsEntity({
   name: "A",
   tableName: "colon_entity_a",
@@ -296,6 +309,198 @@ describe("createTypedSheets public lifecycle", () => {
 
     const limited = await hikoutei.em.fork().find(User, { active: true }, { limit: 2 });
     expect(limited).toHaveLength(2);
+  });
+
+  it("supports typed operators across string, number, boolean, and Date fields", async () => {
+    const hikoutei = await createTypedSheets({
+      dbName: ":memory:",
+      entities: [RichQueryRow],
+    });
+    runtimes.push(hikoutei);
+    const em = hikoutei.em.fork();
+    const rows = [
+      { id: "a", name: "Ada", score: 10, active: true, note: null, createdAt: new Date("2026-01-01T00:00:00.000Z") },
+      { id: "b", name: "Alan", score: 20, active: false, note: "beta", createdAt: new Date("2026-02-01T00:00:00.000Z") },
+      { id: "c", name: "Bob", score: 30, active: true, note: "Ada", createdAt: new Date("2026-03-01T00:00:00.000Z") },
+      { id: "d", name: "Ava", score: 20, active: true, note: "delta", createdAt: new Date("2026-04-01T00:00:00.000Z") },
+    ];
+    for (const row of rows) em.persist(em.create(RichQueryRow, row));
+    await em.flush();
+
+    const ranged = await em.find(RichQueryRow, {
+      name: { gte: "A", lt: "B", like: "A%" },
+      score: { gte: 15, lte: 20 },
+      active: { in: [true, false], ne: false },
+      createdAt: {
+        gt: new Date("2026-01-15T00:00:00.000Z"),
+        lte: new Date("2026-04-01T00:00:00.000Z"),
+      },
+    }, { orderBy: { score: "desc", name: "asc" } });
+    expect(ranged.map((row) => row.id)).toEqual(["b", "d"].filter((id) => id !== "b"));
+
+    expect((await em.find(RichQueryRow, { score: { ne: 20 } }, { orderBy: { id: "asc" } }))
+      .map((row) => row.id)).toEqual(["a", "c"]);
+    expect((await em.find(RichQueryRow, { score: { gt: 10, lt: 30 } }, { orderBy: { id: "asc" } }))
+      .map((row) => row.id)).toEqual(["b", "d"]);
+    expect((await em.find(RichQueryRow, { id: { nin: ["a", "d"] } }, { orderBy: { id: "asc" } }))
+      .map((row) => row.id)).toEqual(["b", "c"]);
+    expect((await em.find(RichQueryRow, { name: { like: "A_a" } }, { orderBy: { id: "asc" } }))
+      .map((row) => row.id)).toEqual(["a", "d"]);
+  });
+
+  it("uses explicit set semantics for nullable values and empty membership sets", async () => {
+    const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
+    runtimes.push(hikoutei);
+    const em = hikoutei.em.fork();
+    for (const row of [
+      { id: "a", name: "A", score: 1, active: true, note: null, createdAt: new Date("2026-01-01T00:00:00.000Z") },
+      { id: "b", name: "B", score: 2, active: true, note: "Ada", createdAt: new Date("2026-01-02T00:00:00.000Z") },
+      { id: "c", name: "C", score: 3, active: true, note: "Bob", createdAt: new Date("2026-01-03T00:00:00.000Z") },
+    ]) em.persist(em.create(RichQueryRow, row));
+    await em.flush();
+
+    const ids = async (
+      where: Parameters<typeof em.find<{
+        id: string;
+        name: string;
+        score: number;
+        active: boolean;
+        note: string | null;
+        createdAt: Date;
+      }>>[1],
+    ) => (await em.find(RichQueryRow, where, { orderBy: { id: "asc" } }))
+      .map((row) => row.id);
+    expect(await ids({ note: null })).toEqual(["a"]);
+    expect(await ids({ note: { eq: null } })).toEqual(["a"]);
+    expect(await ids({ note: { ne: null } })).toEqual(["b", "c"]);
+    expect(await ids({ note: { ne: "Ada" } })).toEqual(["a", "c"]);
+    expect(await ids({ note: { in: [] } })).toEqual([]);
+    expect(await ids({ note: { nin: [] } })).toEqual(["a", "b", "c"]);
+    expect(await ids({ note: { in: [null, "Ada"] } })).toEqual(["a", "b"]);
+    expect(await ids({ note: { nin: ["Ada"] } })).toEqual(["a", "c"]);
+    expect(await ids({ note: { nin: [null, "Ada"] } })).toEqual(["c"]);
+  });
+
+  it("orders deterministically for explicit ordering and pagination", async () => {
+    const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
+    runtimes.push(hikoutei);
+    const em = hikoutei.em.fork();
+    for (const id of ["d", "b", "c", "a"]) {
+      em.persist(em.create(RichQueryRow, {
+        id,
+        name: id === "d" ? "second" : "same",
+        score: id === "d" ? 2 : 1,
+        active: true,
+        note: null,
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      }));
+    }
+    await em.flush();
+
+    const ordered = await em.find(RichQueryRow, {}, { orderBy: { score: "desc", name: "asc" } });
+    expect(ordered.map((row) => row.id)).toEqual(["d", "a", "b", "c"]);
+    const paged = await em.find(RichQueryRow, {}, { limit: 2, offset: 1 });
+    expect(paged.map((row) => row.id)).toEqual(["b", "c"]);
+    expect((await em.findOne(RichQueryRow, { score: 1 }, { orderBy: { id: "desc" } }))?.id)
+      .toBe("c");
+  });
+
+  it("counts filters and returns an unpaged total from findAndCount", async () => {
+    const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
+    runtimes.push(hikoutei);
+    const em = hikoutei.em.fork();
+    for (let index = 0; index < 5; index += 1) {
+      em.persist(em.create(RichQueryRow, {
+        id: String(index),
+        name: `User ${index}`,
+        score: index,
+        active: index < 4,
+        note: null,
+        createdAt: new Date(`2026-01-0${index + 1}T00:00:00.000Z`),
+      }));
+    }
+    await em.flush();
+
+    expect(await em.count(RichQueryRow)).toBe(5);
+    expect(await em.count(RichQueryRow, { active: true })).toBe(4);
+    const [page, total] = await em.findAndCount(
+      RichQueryRow,
+      { active: true },
+      { orderBy: { score: "desc" }, limit: 2, offset: 1 },
+    );
+    expect(page.map((row) => row.id)).toEqual(["2", "1"]);
+    expect(total).toBe(4);
+    const [emptyPage, sameTotal] = await em.findAndCount(
+      RichQueryRow,
+      { active: true },
+      { limit: 0 },
+    );
+    expect(emptyPage).toEqual([]);
+    expect(sameTotal).toBe(4);
+
+    await em.transactional(async (transactionalEm) => {
+      transactionalEm.persist(transactionalEm.create(RichQueryRow, {
+        id: "tx-visible",
+        name: "Visible",
+        score: 10,
+        active: true,
+        note: null,
+        createdAt: new Date("2026-02-01T00:00:00.000Z"),
+      }));
+      expect((await transactionalEm.findAndCount(RichQueryRow))[1]).toBe(5);
+      await transactionalEm.flush();
+      expect((await transactionalEm.findAndCount(RichQueryRow))[1]).toBe(6);
+    });
+  });
+
+  it("preserves identity-map and pending Unit-of-Work semantics for rich reads", async () => {
+    const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
+    runtimes.push(hikoutei);
+    const em = hikoutei.em.fork();
+    em.persist(em.create(RichQueryRow, {
+      id: "persisted", name: "Old", score: 1, active: true, note: null,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    }));
+    await em.flush();
+    const loaded = await em.findOne(RichQueryRow, { id: "persisted" });
+    if (loaded === null) throw new Error("expected row");
+    loaded.name = "Local mutation";
+    const [again] = await em.findAndCount(RichQueryRow, { id: { eq: "persisted" } });
+    expect(again[0]).toBe(loaded);
+    expect(again[0]?.name).toBe("Local mutation");
+
+    em.persist(em.create(RichQueryRow, {
+      id: "pending", name: "Pending", score: 2, active: true, note: null,
+      createdAt: new Date("2026-01-02T00:00:00.000Z"),
+    }));
+    expect(await em.count(RichQueryRow)).toBe(1);
+    expect((await em.findAndCount(RichQueryRow))[1]).toBe(1);
+    await em.flush();
+    expect(await em.count(RichQueryRow)).toBe(2);
+  });
+
+  it("rejects malformed query objects before they reach the provider", async () => {
+    const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
+    runtimes.push(hikoutei);
+    const em = hikoutei.em.fork();
+    const invalidQueries: Array<() => Promise<unknown>> = [
+      () => em.find(RichQueryRow, { score: {} } as never),
+      () => em.find(RichQueryRow, { score: { wat: 1 } } as never),
+      () => em.find(RichQueryRow, { active: { gt: true } } as never),
+      () => em.find(RichQueryRow, { score: { like: "1%" } } as never),
+      () => em.find(RichQueryRow, { score: { in: 1 } } as never),
+      () => em.find(RichQueryRow, {}, { orderBy: {} }),
+      () => em.find(RichQueryRow, {}, { orderBy: { score: "sideways" } } as never),
+    ];
+    for (const query of invalidQueries) {
+      await expect(query()).rejects.toMatchObject({ code: HIKOUTEI_ERROR_CODES.INVALID_QUERY });
+    }
+    await expect(em.find(RichQueryRow, { missing: 1 } as never)).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+    });
+    await expect(em.find(RichQueryRow, { score: { in: [Number.NaN] } })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+    });
   });
 
   it("rejects a primary-key mutation on a managed entity at flush", async () => {

@@ -122,9 +122,11 @@ async function main() {
       assert.equal(typeof manager.findOne, "function");
       assert.equal(typeof manager.remove, "function");
       assert.equal(typeof manager.flush, "function");
+      assert.equal(typeof manager.count, "function");
+      assert.equal(typeof manager.findAndCount, "function");
       return manager;
     });
-    assertions += 5;
+    assertions += 7;
 
     const entityId = "u1";
 
@@ -142,6 +144,21 @@ async function main() {
       assert.equal(loaded.name, "Ada");
       assert.equal(loaded.count, 1);
       assert.equal(loaded.active, true);
+    });
+    assertions += 5;
+
+    await measure("rich_query_and_count", async () => {
+      const matching = await em.find(User, {
+        name: { like: "Ad%" },
+        count: { gte: 1, lt: 2 },
+        active: { in: [true] },
+      }, { orderBy: { name: "asc" } });
+      assert.equal(matching.length, 1);
+      assert.equal(matching[0].id, entityId);
+      assert.equal(await em.count(User, { name: { ne: "Grace" } }), 1);
+      const [page, total] = await em.findAndCount(User, {}, { limit: 1 });
+      assert.equal(page.length, 1);
+      assert.equal(total, 1);
     });
     assertions += 5;
 
