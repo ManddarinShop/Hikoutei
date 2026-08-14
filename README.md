@@ -12,7 +12,7 @@ changes are asynchronously projected to Google Sheets for human review and
 lightweight collaboration.
 
 <a href="https://www.npmjs.com/package/hikoutei">npm</a> ·
-<a href="docs/quick-start.md">Quick start</a> ·
+<a href="website/guide/quick-start.md">Quick start</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
@@ -48,6 +48,8 @@ const User = defineTypedSheetsEntity({
   properties: {
     id: { type: "string", primary: true },
     name: { type: "string" },
+    age: { type: "number" },
+    active: { type: "boolean" },
   },
 });
 
@@ -57,7 +59,7 @@ const hikoutei = await createTypedSheets({
 });
 
 const em = hikoutei.em.fork();
-const user = em.create(User, { id: "u1", name: "Ada" });
+const user = em.create(User, { id: "u1", name: "Ada", age: 36, active: true });
 em.persist(user);
 await em.flush();
 
@@ -247,12 +249,12 @@ Hikoutei uses a durable local outbox, idempotent delivery, and conflict-aware
 updates so temporary API failures do not lose committed application writes. The
 provider never logs credentials, spreadsheet IDs, URLs, or payloads, and it
 spaces request starts to stay inside Google's quota windows. See the
-[internal consistency model](docs/internal-consistency-model.md) for the
+[internal consistency model](website/guide/internal-consistency.md) for the
 detailed state machine and recovery rules.
 
 Live Google calls are opt-in; fake providers and SQLite fixtures are the normal
 verification path. The detailed setup and troubleshooting steps are in the
-[Quick start](docs/quick-start.md).
+[Quick start](website/guide/quick-start.md).
 
 ## Installation
 
@@ -268,16 +270,18 @@ entity API.
 
 ## Documentation
 
-- [Quick start](docs/quick-start.md) — installation, ORM lifecycle, and service-side sync setup.
-- [Architecture](docs/architecture.md) — how the local store and Sheet views
-  fit together.
-- [Write and synchronization flow](docs/write-and-synchronization-flow.md) —
+- [Quick start](website/guide/quick-start.md) — installation, ORM lifecycle,
+  and service-side sync setup.
+- [Architecture](website/guide/architecture.md) — how the local store and
+  Sheet views fit together.
+- [Write and synchronization flow](website/guide/sync-flow.md) —
   asynchronous delivery and recovery behavior.
-- [Internal consistency model](docs/internal-consistency-model.md) — durable
-  outbox, idempotent delivery, and conflict-aware updates.
-- [Development](docs/development.md) — local development and test commands.
-- [Benchmark notes](docs/sync-bulk-write-benchmark.md) — dated measurements
-  and their limitations.
+- [Internal consistency model](website/guide/internal-consistency.md) —
+  durable outbox, idempotent delivery, and conflict-aware updates.
+- [Contributing](website/guide/contributing.md) — local development and test
+  commands.
+- [Benchmark notes](website/guide/benchmarks.md) — dated measurements and
+  their limitations.
 
 ## Limitations
 
@@ -286,6 +290,12 @@ entity API.
 - SQLite is local to the service and is not a distributed coordination layer.
 - Schema changes, manual edits, and conflicting updates still need an
   operational policy from the application.
+- The EntityManager is an ORM-style facade over scalar entities, not a full
+  ORM: entity definitions are scalar-only (`string`, `number`, `boolean`,
+  `date`), and v1 permits uniqueness only on the primary/business key.
+- Relations, joins, `populate()`, migrations, cascades, bulk/ORM query
+  builders, and raw SQL are unsupported in this milestone. Sheets is an async
+  projection and human input surface, never a live query database.
 
 ## Local queries
 
@@ -310,9 +320,22 @@ const [users, total] = await em.findAndCount(
 `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, and `nin` are available where
 valid for the declared scalar type; `like` is string-only. Equality shorthand
 such as `{ active: true }` remains supported. `count()` returns the unpaged
-filter total, and `findAndCount()` reads its page and total from one SQLite
-snapshot. Explicit ordering gets the primary key as a final tie-breaker;
-pagination without `orderBy` uses primary-key ascending order.
+filter total, and `findAndCount()` returns the filtered page plus a total
+that ignores `limit`/`offset` — both read from one SQLite snapshot. When an
+explicit `orderBy` omits the primary key, Hikoutei appends it in ascending
+order as the final tie-breaker; when the primary key is explicitly ordered,
+its supplied position and direction are preserved. Pagination without
+`orderBy` uses primary-key ascending order.
+
+An `offset` alone (no `limit`) is a valid offset-only read, and an explicit
+`limit: 0` returns an empty page rather than being treated as "no limit".
+`findOne()` returns one entity or `null` and accepts ordering but no paging
+options. Malformed filters, operators, ordering, and paging options fail with
+a stable `HikouteiError`; branch on `error.code` through the exported
+`HIKOUTEI_ERROR_CODES` constants (`HIKOUTEI_ERROR_CODES.INVALID_QUERY` and
+`HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE`, which resolve to the lowercase
+runtime codes `invalid_query` and `invalid_scalar_value`) instead of guessing
+strings or parsing messages.
 
 ## Project status
 
