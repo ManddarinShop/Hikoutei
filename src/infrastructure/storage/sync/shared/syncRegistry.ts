@@ -32,7 +32,7 @@ const INSERT_LOGICAL_SHEET_REGISTRATION_SQL = `
 
 const READ_PHYSICAL_SHEET_REGISTRATION_SQL = `
   SELECT logical_sheet_id, spreadsheet_id, tab_name, registered_range, projection,
-         schema_version, anchor_mode, enabled
+         schema_version, projection_headers_json, anchor_mode, enabled
   FROM physical_sheet_registry
   WHERE physical_sheet_id = ?
 `;
@@ -40,18 +40,28 @@ const READ_PHYSICAL_SHEET_REGISTRATION_SQL = `
 const INSERT_PHYSICAL_SHEET_REGISTRATION_SQL = `
   INSERT INTO physical_sheet_registry (
     physical_sheet_id, logical_sheet_id, spreadsheet_id, tab_name,
-    registered_range, projection, schema_version, anchor_mode, enabled
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+    registered_range, projection, schema_version, projection_headers_json,
+    anchor_mode, enabled
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 `;
 
-const READ_REGISTERED_SYNC_SHEET_SQL = `
+const REGISTERED_SYNC_SHEET_SELECT = `
   SELECT physical.logical_sheet_id, physical.physical_sheet_id, physical.spreadsheet_id,
          physical.tab_name, physical.registered_range, physical.projection,
-         physical.schema_version, physical.anchor_mode, physical.enabled AS physical_enabled,
-         logical.ownership_manifest_json, logical.business_key_field, logical.enabled AS logical_enabled
+         physical.schema_version, physical.projection_headers_json, physical.anchor_mode,
+         physical.enabled AS physical_enabled, logical.ownership_manifest_json,
+         logical.business_key_field, logical.enabled AS logical_enabled
   FROM physical_sheet_registry AS physical
   JOIN sheet_registry AS logical ON logical.sheet_id = physical.logical_sheet_id
+`;
+
+const READ_REGISTERED_SYNC_SHEET_SQL = `${REGISTERED_SYNC_SHEET_SELECT}
   WHERE physical.physical_sheet_id = ?
+`;
+
+const READ_REGISTERED_SYNC_SHEETS_SQL = `${REGISTERED_SYNC_SHEET_SELECT}
+  WHERE physical.enabled = 1 AND logical.enabled = 1
+  ORDER BY physical.physical_sheet_id
 `;
 
 /** The only projection labels accepted by the v1 runtime registry. */
@@ -66,6 +76,8 @@ export interface RegisterSyncSheetInput {
   readonly registeredRange: string;
   readonly projection: RegisteredProjection;
   readonly schemaVersion: number;
+  /** Exact ordered headers materialized for this projection. */
+  readonly projectionHeaders: readonly string[];
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
   /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
@@ -82,6 +94,8 @@ export interface RegisteredSyncSheet {
   readonly registeredRange: string;
   readonly projection: RegisteredProjection;
   readonly schemaVersion: number;
+  /** Exact ordered headers persisted with the physical route. */
+  readonly projectionHeaders: readonly string[];
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
   /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
@@ -146,6 +160,7 @@ export async function registerSyncSheetWithSql(
         normalizedInput.registeredRange,
         normalizedInput.projection,
         normalizedInput.schemaVersion,
+        JSON.stringify(normalizedInput.projectionHeaders),
         normalizedInput.anchorMode ?? "business_key",
       ]);
       if (inserted.changes !== 1) {
@@ -200,6 +215,21 @@ export async function requireRegisteredSyncSheetWithAdapter(
   return storage.read(({ sql }) => requireRegisteredSyncSheetWithSql(sql, physicalSheetId));
 }
 
+/** Reads every enabled physical route for a worker manifest snapshot. */
+export async function readRegisteredSyncSheetsWithSql(
+  sql: SqlExecutor,
+): Promise<readonly RegisteredSyncSheet[]> {
+  const rows = await sql.all<RegisteredRow>(READ_REGISTERED_SYNC_SHEETS_SQL);
+  return rows.map(registeredSyncSheetFromRow);
+}
+
+/** Reads every enabled physical route through a fresh adapter context. */
+export async function readRegisteredSyncSheetsWithAdapter(
+  storage: SqlStorageAdapter,
+): Promise<readonly RegisteredSyncSheet[]> {
+  return storage.read(({ sql }) => readRegisteredSyncSheetsWithSql(sql));
+}
+
 interface LogicalRow {
   readonly schema_version: number;
   readonly ownership_manifest_json: string;
@@ -215,6 +245,7 @@ interface PhysicalRow {
   readonly registered_range: string;
   readonly projection: string;
   readonly schema_version: number;
+  readonly projection_headers_json: string;
   readonly anchor_mode: string;
   readonly enabled: number;
 }
@@ -227,6 +258,7 @@ interface RegisteredRow {
   readonly registered_range: string;
   readonly projection: string;
   readonly schema_version: number;
+  readonly projection_headers_json: string;
   readonly anchor_mode: string;
   readonly physical_enabled: number;
   readonly ownership_manifest_json: string;
@@ -263,6 +295,7 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
       "unsupported sync projection",
     );
   }
+  validateProjectionHeaders(input.projectionHeaders);
   if (input.anchorMode !== undefined && input.anchorMode !== "business_key") {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
@@ -289,6 +322,31 @@ function normalizeRegistrationInput(input: RegisterSyncSheetInput): RegisterSync
   };
 }
 
+function validateProjectionHeaders(headers: readonly string[], requireAtLeastOne = true): void {
+  if (!Array.isArray(headers) || (requireAtLeastOne && headers.length === 0)) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
+      "projection headers must contain at least one header",
+    );
+  }
+  const seen = new Set<string>();
+  for (const header of headers) {
+    if (typeof header !== "string" || header.trim() === "") {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
+        "projection headers must contain non-empty strings",
+      );
+    }
+    if (seen.has(header)) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
+        "projection headers must not contain duplicates",
+      );
+    }
+    seen.add(header);
+  }
+}
+
 function sameLogicalRegistration(existing: LogicalRow, input: RegisterSyncSheetInput): boolean {
   return existing.schema_version === input.schemaVersion &&
     existing.ownership_manifest_json === input.ownershipManifestJson &&
@@ -304,6 +362,7 @@ function samePhysicalRegistration(existing: PhysicalRow, input: RegisterSyncShee
     existing.registered_range === input.registeredRange &&
     existing.projection === input.projection &&
     existing.schema_version === input.schemaVersion &&
+    existing.projection_headers_json === JSON.stringify(input.projectionHeaders) &&
     existing.anchor_mode === (input.anchorMode ?? "business_key") &&
     existing.enabled === 1;
 }
@@ -325,6 +384,7 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
     row.registered_range,
     STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
   );
+  const projectionHeaders = parseProjectionHeaders(row.projection_headers_json);
   if (registeredRange !== row.registered_range) {
     throw new StorageError(
       STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
@@ -339,6 +399,7 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
     registeredRange,
     projection: row.projection,
     schemaVersion: row.schema_version,
+    projectionHeaders,
     ownershipManifestJson: row.ownership_manifest_json,
     businessKeyField: row.business_key_field,
     anchorMode: "business_key",
@@ -349,6 +410,33 @@ function isRegisteredProjection(value: string): value is RegisteredProjection {
   return value === REGISTERED_PROJECTION_KINDS.USER_INPUT ||
     value === REGISTERED_PROJECTION_KINDS.SYSTEM_STATE ||
     value === REGISTERED_PROJECTION_KINDS.SYNC_CONFLICTS;
+}
+
+function parseProjectionHeaders(value: string): readonly string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "physical sheet registry has malformed projection headers",
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "physical sheet registry projection headers must be an array",
+    );
+  }
+  try {
+    validateProjectionHeaders(parsed, false);
+  } catch {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
+      "physical sheet registry has invalid projection headers",
+    );
+  }
+  return parsed;
 }
 
 /** Normalizes the v1 whole-column provider boundary to the form accepted by the Sheets provider. */
