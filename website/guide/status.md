@@ -33,6 +33,13 @@ Sheet outbox in one SQLite transaction. Sheets delivery remains asynchronous.
 
 ## Synchronization and operations
 
+The first in-process worker-boundary split is complete: outbound effect
+delivery, inbound `User_Input` observation, and reconciliation/cleanup now
+have independent lifecycle supervisors while sharing the durable SQLite
+outbox. They still share one coordinated Sheets provider instance; extracting
+them into separate processes requires durable cross-process Sheets coordination
+or a single Sheets gateway.
+
 - Complete ingestion of intentional user edits from Google Sheets.
 - Improve update/delete conflict handling and presentation.
 - Improve setup tooling for registry and direct-provider deployment.

@@ -41,14 +41,14 @@ SQLite transaction
   └─ durable Sheet effect outbox
           │
           ▼
-internal effect supervisor
+OutboundEffectWorker
   ├─ claim with a lease
   ├─ send a signed operation batch
   ├─ persist uncertain delivery and schedule a durable postcondition probe
   └─ mark the effect applied, terminally failed, or recoverably pending
           │
           ▼
-Google Sheets API provider ──▶ Google Sheets
+coordinated Sheets effects port ──▶ Google Sheets
 ```
 
 A successful `flush()` means that SQLite accepted the local change and queued
@@ -65,11 +65,13 @@ not methods on the public EntityManager.
 
 ## Inbound User_Input flow
 
-The internal service polls registered `User_Input` projections on a bounded
-interval. By default each pass runs an adaptive values-only preflight: it
-reads the cheap value surface, compares it with canonical SQLite state, and
-only escalates a table to the metadata-preserving snapshot read when the
-preflight cannot certify it as unchanged.
+The `InboundObservationWorker` polls registered `User_Input` projections on
+a bounded interval. By default each pass runs an adaptive values-only
+preflight: it reads the cheap value surface, compares it with canonical SQLite
+state, and only escalates a table to the metadata-preserving snapshot read when
+the preflight cannot certify it as unchanged. Reconciliation cleanup waits for
+the first successful inbound observation after startup, so a pre-existing human
+edit cannot be treated as stale projection data.
 
 Accepted observation writes update canonical state and the application entity
 in the same SQLite transaction. Conflicts, stale writes, duplicate keys, and
@@ -106,10 +108,14 @@ delivery is at-least-once and asynchronous.
 
 ## Reconciliation and cleanup
 
-The periodic reconciliation scanner runs on its own schedule, independently
-of whether the effect worker is busy: corruption that keeps the outbox busy
-(a terminal failed head) is exactly what reconciliation must repair. When a
-target stream is wedged behind a terminal `failed` head (a non-recoverable
+`ReconciliationWorker` runs the periodic scanner on its own schedule,
+independently of whether the outbound worker is busy: corruption that keeps the
+outbox busy (a terminal failed head) is exactly what reconciliation must repair.
+It writes only durable SQLite correction effects to the outbox. A successful
+scan may wake the outbound worker as an optimization, but delivery remains
+correct after a restart even without that wake-up.
+
+When a target stream is wedged behind a terminal `failed` head (a non-recoverable
 error such as `delivery_uncertain_timeout`), the scanner supersedes that head
 with its correction inside the same fenced SQLite transaction, so the repair
 becomes the claimable stream head. Recoverable failed heads stay on the

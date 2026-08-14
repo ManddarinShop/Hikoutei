@@ -19,9 +19,10 @@ Application code
                  └─ [internal sync service in the same process]
                       ├─ canonical sync state
                       ├─ durable Sheet effect outbox
-                      ├─ outbound effect worker
-                      ├─ User_Input polling
-                      └─ sync provider (googleSheetsApi)
+                      ├─ OutboundEffectWorker
+                      ├─ ReconciliationWorker
+                      ├─ InboundObservationWorker
+                      └─ coordinated Sheets capabilities
                            └─ Google Sheets projections
 ```
 
@@ -30,11 +31,17 @@ boundary as the entity manager. Hikoutei's scalar Unit of Work owns lifecycle,
 snapshots, identity maps, and the provider-neutral flush plan. The concrete
 provider schedules that plan on a transaction-bound MikroORM manager, invokes
 mapped canonical/outbox planning before entity SQL, and flushes both in one
-SQLite transaction. Its composition root is intentionally small: validation,
-remote-provider construction, effect/reconciliation supervision, polling, and
-shutdown each have one directly named service module.
-A future deployment can extract the worker process without changing the root
-entity lifecycle contract.
+SQLite transaction.
+
+The sync runtime has three in-process worker boundaries. `OutboundEffectWorker`
+claims and delivers durable outbox effects; `InboundObservationWorker` reads
+and evaluates `User_Input`; and `ReconciliationWorker` checks projection drift
+and enqueues repair effects. The SQLite outbox is the durable contract between
+them: reconciliation never writes a Sheet directly. They share one coordinated
+Sheets provider instance, exposed through capability-specific ports, so the
+current process-local mutation and anchor lanes remain intact. A future
+multi-process deployment can preserve the root entity lifecycle contract, but
+requires durable cross-process Sheets coordination or a single Sheets gateway.
 
 ## Root public API
 
@@ -112,6 +119,8 @@ src/domain/                         pure normalization/evaluation/conflict rules
 src/shared/                         shared encoding, constants, and state contracts
 src/application/orm/                internal entity mapping and mapped flush planning
 src/application/sync/               internal sync use cases and concrete composition
+  ├─ outbound/                       effect dispatch and reconciliation algorithms
+  └─ service/                        worker lifecycle and composition boundaries
 src/adapter/persistence/            persistence SPI and SQLite/MikroORM implementation
 src/adapter/sheets/                 Google Sheets API provider
 src/infrastructure/storage/         focused canonical/observation/resolution SQL modules
