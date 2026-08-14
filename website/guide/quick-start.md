@@ -69,9 +69,12 @@ const [users, total] = await em.findAndCount(
 
 Supported operators are `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`,
 and string-only `like`, subject to the declared scalar type. `count()` returns
-the unpaged total for a filter. `findAndCount()` reads its rows and total from
-one SQLite snapshot. Explicit ordering gets the primary key as its last
-tie-breaker; pagination without `orderBy` uses primary-key ascending order.
+the unpaged total for a filter. `findAndCount()` reads its page and unpaged
+total (which ignores `limit`/`offset`) from one SQLite snapshot. When an
+explicit `orderBy` omits the primary key, Hikoutei appends it in ascending
+order as the final tie-breaker; when the primary key is explicitly ordered,
+its supplied position and direction are preserved. Pagination without
+`orderBy` uses primary-key ascending order.
 
 ## What happens to the Sheet?
 
