@@ -37,11 +37,12 @@ process without changing the root entity lifecycle contract.
 
 The public surface contains entity definition, runtime creation, and the
 request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
-`findOne()`, `persist()`, `remove()`, `flush()`, and `transactional()`.
-MikroORM, raw SQL, provider clients, Sheet routes, provisioning, polling, and
-outbox controls are internal. Sync auto-start is environment-driven
-(`HIKOUTEI_SYNC_SPREADSHEET_URL` plus `GOOGLE_APPLICATION_CREDENTIALS`);
-there is no public bootstrap option for the direct provider.
+`findOne()`, `count()`, `findAndCount()`, `persist()`, `remove()`, `flush()`,
+and `transactional()`. MikroORM, raw SQL, provider clients, Sheet routes,
+provisioning, polling, and outbox controls are internal. Sync auto-start is
+environment-driven (`HIKOUTEI_SYNC_SPREADSHEET_URL` plus
+`GOOGLE_APPLICATION_CREDENTIALS`); there is no public bootstrap option for
+the direct provider.
 
 ## SQLite authority
 
