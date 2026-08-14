@@ -96,6 +96,7 @@ function definition(overrides: {
       registeredRange: overrides.registeredRange,
       projection: overrides.projection as RegisteredSyncProjectionDefinition["sheet"]["projection"],
       schemaVersion: 1,
+      projectionHeaders: overrides.headers,
       ownershipManifestJson: "{}",
       businessKeyField: "id",
       anchorMode: "business_key",

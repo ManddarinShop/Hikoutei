@@ -2094,12 +2094,13 @@ describe("issue #196 audit projection state union", () => {
       );
     });
 
-    // The v5->v6 migration is additive: legacy conflict/command rows survive
-    // and the new evidence columns start NULL (never guessed).
+    // The v5->v7 migration is additive: legacy conflict/command rows survive,
+    // the new evidence columns start NULL (never guessed), and the registry
+    // receives its worker-manifest header column.
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 5,
-      toVersion: 6,
-      appliedVersions: [6],
+      toVersion: 7,
+      appliedVersions: [6, 7],
     });
     await expect(adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sync_conflict)",
@@ -2130,8 +2131,8 @@ describe("issue #196 audit projection state union", () => {
 
     // Idempotent: a second migration applies nothing.
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-      fromVersion: 6,
-      toVersion: 6,
+      fromVersion: 7,
+      toVersion: 7,
       appliedVersions: [],
     });
 
