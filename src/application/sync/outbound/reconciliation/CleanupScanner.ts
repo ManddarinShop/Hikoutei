@@ -41,7 +41,7 @@ import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/st
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   observeSyncSnapshot,
-  type SyncSheetsProvider,
+  type SyncSheetsObservationProvider,
 } from "../../sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
@@ -63,7 +63,7 @@ import {
 /** Construction options for a single User_Input cleanup scan. */
 export interface RunCleanupScanOptions {
   readonly storage: SqlStorageAdapter;
-  readonly provider: SyncSheetsProvider;
+  readonly provider: SyncSheetsObservationProvider;
   /** Physical sheet id of the User_Input projection to clean. */
   readonly physicalSheetId: string;
   /** Logical sheet id owning the row bindings and evidence. */
@@ -140,7 +140,7 @@ export async function runUserInputCleanupScan(
 
 interface CleanupScanContext {
   readonly storage: SqlStorageAdapter;
-  readonly provider: SyncSheetsProvider;
+  readonly provider: SyncSheetsObservationProvider;
   readonly physicalSheetId: string;
   readonly logicalSheetId: string;
   readonly identityField: string;

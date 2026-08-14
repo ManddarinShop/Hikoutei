@@ -36,7 +36,7 @@ import type { SqlStorageAdapter } from "../../../../adapter/persistence/contract
 import {
   observeSyncSnapshot,
   type SyncSheetsSnapshot,
-  type SyncSheetsProvider,
+  type SyncSheetsObservationProvider,
 } from "../../sheetsContract/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
@@ -69,7 +69,7 @@ export type { ReconciliationIdFactory } from "./shared.js";
 /** Construction options for a single reconciliation scan. */
 export interface RunReconciliationScanOptions {
   readonly storage: SqlStorageAdapter;
-  readonly provider: SyncSheetsProvider;
+  readonly provider: SyncSheetsObservationProvider;
   /** Physical sheet id of the System_State projection to reconcile. */
   readonly physicalSheetId: string;
   /** Logical sheet id owning the entity row bindings. */

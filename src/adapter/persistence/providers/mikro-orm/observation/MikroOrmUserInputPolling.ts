@@ -12,6 +12,7 @@ import type {
   ReadSyncTableRowsRequest,
   SyncObservedSnapshot,
   SyncSheetsObservationProvider,
+  SyncSheetsTableReader,
   SyncTableRowsResult,
 } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
@@ -135,6 +136,8 @@ export interface MappedUserInputPollingReport {
 export interface PollMappedUserInputWithMikroOrmOptions {
   readonly storage: MikroOrmSqliteAdapter;
   readonly provider: SyncSheetsObservationProvider;
+  /** Optional values-only facet; direct composite providers remain supported. */
+  readonly tableReader?: SyncSheetsTableReader;
   readonly mappings: TypedSheetsEntityMappingRegistry | readonly TypedSheetsEntityMapping[];
   readonly writer: TypedSheetsEntityWriterOptions;
   readonly physicalSheetIds?: readonly string[];
@@ -224,13 +227,16 @@ export async function pollMappedUserInputWithMikroOrm(
     Date.now() - stateReadStartedAt,
   );
   const accumulators = mappings.map((mapping) => createAccumulator(mapping));
-  const canUseAdaptivePath = requestedMode === MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE &&
+  const tableReader = options.tableReader ?? (
+    isSyncSheetsTableReader(options.provider) ? options.provider : undefined
+  );
+  if (
+    requestedMode === MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE &&
     options.forceFull !== true &&
-    isSyncSheetsTableReader(options.provider);
-
-  if (canUseAdaptivePath) {
+    tableReader !== undefined
+  ) {
     const valuesReadStartedAt = Date.now();
-    const fastResults = await options.provider.readRowsBatch(mappings.map(toTableRowsRequest));
+    const fastResults = await tableReader.readRowsBatch(mappings.map(toTableRowsRequest));
     emitPollingTiming(
       timingSink,
       POLLING_TIMING_PHASES.VALUES_ONLY_READ,
