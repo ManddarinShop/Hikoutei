@@ -73,28 +73,28 @@ export class SyncSheetsGatewayClient
     this.lease = { ...lease };
   }
 
-  public fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
+  public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
     return this.service.fastAppendRows(this.envelope(
       SYNC_SHEETS_GATEWAY_OPERATION_KINDS.FAST_APPEND_ROWS,
       request,
     ));
   }
 
-  public applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
+  public async applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
     return this.service.applyEffects(this.envelope(
       SYNC_SHEETS_GATEWAY_OPERATION_KINDS.APPLY_EFFECTS,
       request,
     ));
   }
 
-  public readEffectPostcondition(effect: SyncProjectionEffect): Promise<SyncEffectPostcondition> {
+  public async readEffectPostcondition(effect: SyncProjectionEffect): Promise<SyncEffectPostcondition> {
     return this.service.readEffectPostcondition(this.envelope(
       SYNC_SHEETS_GATEWAY_OPERATION_KINDS.READ_EFFECT_POSTCONDITION,
       effect,
     ));
   }
 
-  public readEffectPostconditions(
+  public async readEffectPostconditions(
     request: ReadSyncEffectPostconditionsRequest,
   ): Promise<readonly SyncEffectPostconditionResult[]> {
     return this.service.readEffectPostconditions(this.envelope(
@@ -103,7 +103,7 @@ export class SyncSheetsGatewayClient
     ));
   }
 
-  public ensureRowAnchors(
+  public async ensureRowAnchors(
     request: EnsureSyncRowAnchorsRequest,
   ): Promise<EnsureSyncRowAnchorsResult> {
     return this.service.ensureRowAnchors(this.envelope(
@@ -112,21 +112,21 @@ export class SyncSheetsGatewayClient
     ));
   }
 
-  public readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncSheetsSnapshot> {
+  public async readSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncSheetsSnapshot> {
     return this.service.readSnapshot(this.envelope(
       SYNC_SHEETS_GATEWAY_OPERATION_KINDS.READ_SNAPSHOT,
       request,
     ));
   }
 
-  public observeSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot> {
+  public async observeSnapshot(request: ReadSyncSnapshotRequest): Promise<SyncObservedSnapshot> {
     return this.service.observeSnapshot(this.envelope(
       SYNC_SHEETS_GATEWAY_OPERATION_KINDS.OBSERVE_SNAPSHOT,
       request,
     ));
   }
 
-  public observeSnapshots(
+  public async observeSnapshots(
     requests: readonly ReadSyncSnapshotRequest[],
   ): Promise<readonly SyncObservedSnapshot[]> {
     return this.service.observeSnapshots(this.envelope(
@@ -135,14 +135,14 @@ export class SyncSheetsGatewayClient
     ));
   }
 
-  public readRows(request: ReadSyncTableRowsRequest): Promise<SyncTableRowsResult> {
+  public async readRows(request: ReadSyncTableRowsRequest): Promise<SyncTableRowsResult> {
     return this.service.readRows(this.envelope(
       SYNC_SHEETS_GATEWAY_OPERATION_KINDS.READ_ROWS,
       request,
     ));
   }
 
-  public readRowsBatch(
+  public async readRowsBatch(
     requests: readonly ReadSyncTableRowsRequest[],
   ): Promise<readonly SyncTableRowsResult[]> {
     return this.service.readRowsBatch(this.envelope(
@@ -151,7 +151,7 @@ export class SyncSheetsGatewayClient
     ));
   }
 
-  public provisionRegistry(
+  public async provisionRegistry(
     registrations: readonly SyncSheetsProvisionRoute[],
   ): ReturnType<SyncSheetsProvisioner["provisionRegistry"]> {
     return this.service.provisionRegistry(this.envelope(
