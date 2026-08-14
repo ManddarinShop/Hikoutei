@@ -195,6 +195,8 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
     services.push(service);
     expect(service.effectSupervisor).toBeDefined();
+    expect(service.pollingSupervisor).toBeDefined();
+    expect(service.reconciliationSupervisor).toBeDefined();
   });
 
   it("rejects a lease that only covers the write timeout, not the two preflight reads", async () => {
@@ -346,6 +348,25 @@ describe("internal sync service injected-provider mode", () => {
       };
     }
   }
+
+  it("rejects an injected provider missing a worker capability before startup", async () => {
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider: {} as never,
+      provisioner: new RecordingProvisioner(),
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.PROVIDER_UNAVAILABLE,
+    });
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections,
+      provider: {} as never,
+      provisioner: new RecordingProvisioner(),
+    })).rejects.toThrow("sync provider");
+  });
 
   // Shared provider fixtures for the polling/safety-scan tests. Each test
   // builds its own provider because the fake carries mutable state.
@@ -669,15 +690,21 @@ describe("internal sync service injected-provider mode", () => {
       reconciliationIntervalMs: 3_600_000,
     });
     services.push(service);
+    // Settle and pause the independent repair worker before creating the test
+    // row; otherwise its immediate first scan can enqueue the same missing-row
+    // correction that this test is intentionally staging.
+    await service.effectSupervisor.runOnce();
+    await service.pollingSupervisor.runOnce();
+    await service.reconciliationSupervisor.stop();
+    await service.storage.transaction(({ sql }) => sql.run(
+      "UPDATE writer_lease SET lease_until = 0 WHERE role = 'typed-sheets-reconciler'",
+      [],
+    ));
 
     const em = service.hikoutei.em.fork();
     em.persist(em.create(User, { id: "u1", status: "pending" }));
     await em.flush();
     await service.effectSupervisor.runOnce();
-    // The auto-started effect loop runs its first reconciliation right after
-    // its first pass (one snapshot read per projection); settle it before
-    // staging the corruption so the manual scans below stay deterministic.
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
     const logicalSheetId = await service.storage.read(async ({ sql }) => {
       const row = await sql.get<{ readonly sheet_id: string }>(
@@ -686,9 +713,8 @@ describe("internal sync service injected-provider mode", () => {
       if (row === undefined) throw new Error("expected a registered logical sheet");
       return row.sheet_id;
     });
-    // The auto reconciliation never claims the reconciler lease while the
-    // sheet is clean; the manual scans below own that lease under a fixed
-    // test writer id (the first scan creates it, later scans renew it).
+    // The manual scans below own the reconciler lease under a fixed test
+    // writer id (the first scan creates it, later scans renew it).
 
     // A human edit removes the System_State row; the scanner enqueues a
     // createIfMissing correction whose delivery is lost past the durable
@@ -1669,8 +1695,9 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
       projections,
       provider,
       provisioner: new RecordingProvisioner(),
-      // Keep both auto-started loops asleep between explicit passes so the
-      // lease handoff assertions stay deterministic.
+      // Keep the long-running effect and polling loops asleep between
+      // explicit passes; reconciliation is paused by tests that need direct
+      // scanner lease ownership.
       pollingIntervalMs: 3_600_000,
       effectIdleIntervalMs: 3_600_000,
     });
@@ -1683,6 +1710,47 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     tempDirs.push(dir);
     return join(dir, "lease-handoff.sqlite");
   };
+
+  it("does not let startup repair overwrite a pre-existing User_Input edit before inbound observation", async () => {
+    const dbName = newDbFile();
+    const provider = buildProvider();
+    const first = await openService(dbName, provider);
+    await first.effectSupervisor.runOnce();
+    await first.pollingSupervisor.runOnce();
+    await first.reconciliationSupervisor.stop();
+    await first.storage.transaction(({ sql }) => sql.run(
+      "UPDATE writer_lease SET lease_until = 0 WHERE role = 'typed-sheets-reconciler'",
+      [],
+    ));
+
+    const em = first.hikoutei.em.fork();
+    em.persist(em.create(User, { id: "startup-edit", status: "canonical" }));
+    await em.flush();
+    await first.effectSupervisor.runOnce();
+    const initial = await provider.readSnapshot({
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "SyncServiceUsers_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+    });
+    const anchor = initial.rows[0]?.physicalAnchor;
+    if (anchor?.kind !== "present") throw new Error("expected a startup test row anchor");
+    provider.mutateRow(USER_INPUT_SHEET_ID, anchor.value, {
+      id: { kind: "string", value: "startup-edit" },
+      status: { kind: "string", value: "human-edit" },
+    });
+    await first.close();
+
+    const second = await openService(dbName, provider);
+    await second.pollingSupervisor.runOnce();
+    expect(provider.readRow(USER_INPUT_SHEET_ID, anchor.value).fields.status).toEqual({
+      kind: "string",
+      value: "human-edit",
+    });
+    await expect(second.hikoutei.em.fork().findOne(User, { id: "startup-edit" }))
+      .resolves.toMatchObject({ status: "human-edit" });
+  });
 
   it("releases the writer lease on close so a restarted runtime flushes immediately (issue #170)", async () => {
     const dbName = newDbFile();
@@ -1731,10 +1799,10 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
       return realEffectStop();
     };
 
-    // Before the fix the supervisor error skipped the lease expiry entirely:
-    // stopped stayed false AND both leases stayed valid for the full window,
-    // so the immediate restart failed with WRITER_LEASE_UNAVAILABLE.
-    await expect(first.stop()).rejects.toThrow("simulated effect supervisor stop failure");
+    // Before the fix Hikoutei.close() marked the runtime closed and closed
+    // SQLite even when beforeClose failed, making the retry impossible and
+    // leaving a failed supervisor with a closed adapter.
+    await expect(first.hikoutei.close()).rejects.toThrow("simulated effect supervisor stop failure");
 
     // The finally block must still have expired this runtime's own leases even
     // though the supervisor error escaped: both rows survive (never deleted)
@@ -1749,9 +1817,9 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
       expect(lease!.lease_until).toBeLessThanOrEqual(releasedAt);
     }
 
-    // stopped stayed false after the failed attempt, so a second close()
+    // The failed close left the runtime open and retryable, so a second close()
     // re-runs the stop path (real supervisor stop now) and completes cleanly.
-    await expect(first.close()).resolves.toBeUndefined();
+    await expect(first.hikoutei.close()).resolves.toBeUndefined();
     expect(effectStopCalls).toBe(2);
 
     // The release ran before the error escaped, so a restart inside the lease

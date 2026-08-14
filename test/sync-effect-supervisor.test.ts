@@ -5,7 +5,6 @@ import {
   EffectWorkerSupervisor,
   type WorkerReport,
 } from "@hikoutei/ikisaki";
-import type { ReconciliationScanReport } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
 
 describe("EffectWorkerSupervisor", () => {
   it("coalesces concurrent manual and background passes", async () => {
@@ -109,76 +108,40 @@ describe("EffectWorkerSupervisor", () => {
     expect(errors).toHaveLength(1);
   });
 
-  it("runs reconciliation after the worker pass and drains discovered corrections", async () => {
-    let workerCalls = 0;
-    let reconciliationCalls = 0;
-    let stopPromise: Promise<void> | undefined;
-    let supervisor!: EffectWorkerSupervisor;
-    supervisor = new EffectWorkerSupervisor({
-      runPass: async () => {
-        workerCalls += 1;
-        return createReport({
-          selected: workerCalls === 1 ? 0 : 1,
-          claimed: workerCalls === 1 ? 0 : 1,
-          applied: workerCalls === 1 ? 0 : 1,
-        });
-      },
-      wait: async () => {},
-      reconciliation: {
-        intervalMs: 60_000,
-        run: async () => {
-          reconciliationCalls += 1;
-          return createReconciliationReport({ effectsEnqueued: 1 });
-        },
-      },
-      onReport: () => {
-        if (workerCalls === 2) stopPromise = supervisor.stop();
-      },
+  it("honors a drain request raised while the current pass is active", async () => {
+    let calls = 0;
+    let resolveFirst!: () => void;
+    const firstPass = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
     });
-
-    supervisor.start();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await stopPromise;
-
-    expect(workerCalls).toBe(2);
-    expect(reconciliationCalls).toBe(1);
-    expect(supervisor.isRunning()).toBe(false);
-  });
-
-  it("isolates reconciliation errors and keeps the worker loop alive", async () => {
-    let workerCalls = 0;
-    let reconciliationCalls = 0;
-    const reconciliationErrors: unknown[] = [];
+    let resolveSecond!: () => void;
+    const secondReport = new Promise<void>((resolve) => {
+      resolveSecond = resolve;
+    });
     let stopPromise: Promise<void> | undefined;
     let supervisor!: EffectWorkerSupervisor;
     supervisor = new EffectWorkerSupervisor({
       runPass: async () => {
-        workerCalls += 1;
+        calls += 1;
+        if (calls === 1) await firstPass;
         return createReport();
       },
       wait: async () => {},
-      now: () => 10_000,
-      reconciliation: {
-        intervalMs: 60_000,
-        run: async () => {
-          reconciliationCalls += 1;
-          throw new Error("reconciliation provider unavailable");
-        },
-        onError: (error) => reconciliationErrors.push(error),
-      },
       onReport: () => {
-        if (workerCalls === 2) stopPromise = supervisor.stop();
+        if (calls === 2) {
+          resolveSecond();
+          stopPromise = supervisor.stop();
+        }
       },
     });
 
     supervisor.start();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+    supervisor.requestDrain();
+    resolveFirst();
+    await secondReport;
     await stopPromise;
-
-    expect(workerCalls).toBe(2);
-    expect(reconciliationCalls).toBe(1);
-    expect(reconciliationErrors).toHaveLength(1);
-    expect(reconciliationErrors[0]).toBeInstanceOf(Error);
+    expect(calls).toBe(2);
   });
 
   it("backs off when a pass only requeues work without forward progress", async () => {
@@ -250,88 +213,6 @@ describe("EffectWorkerSupervisor", () => {
     expect(waits).toEqual([]);
   });
 
-  it("runs reconciliation on schedule while the worker stays busy", async () => {
-    // The old pass-idle gate starved reconciliation while a wedged stream
-    // kept the worker busy. Reconciliation is a lazy repair net that must run
-    // on its own interval; the scanner's own in-flight deferral and fenced
-    // writer lease prevent races with the busy worker.
-    let workerCalls = 0;
-    let reconciliationCalls = 0;
-    let stopPromise: Promise<void> | undefined;
-    let supervisor!: EffectWorkerSupervisor;
-    supervisor = new EffectWorkerSupervisor({
-      runPass: async () => {
-        workerCalls += 1;
-        return createReport({ selected: 1, claimed: 1, applied: 1 });
-      },
-      wait: async () => {},
-      reconciliation: {
-        intervalMs: 1,
-        run: async () => {
-          reconciliationCalls += 1;
-          return createReconciliationReport();
-        },
-        onReport: () => {
-          stopPromise = supervisor.stop();
-        },
-      },
-    });
-
-    supervisor.start();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await stopPromise;
-
-    expect(reconciliationCalls).toBe(1);
-    // The worker pass reported busy work and reconciliation still ran on its
-    // schedule inside that same pass; the old pass-idle gate would have
-    // deferred it until the outbox drained.
-    expect(workerCalls).toBe(1);
-    expect(supervisor.isRunning()).toBe(false);
-  });
-
-  it("waits for the outbox to become idle before reconciliation", async () => {
-    let workerCalls = 0;
-    let reconciliationCalls = 0;
-    let idleChecks = 0;
-    let currentTime = 10_000;
-    let stopPromise: Promise<void> | undefined;
-    let supervisor!: EffectWorkerSupervisor;
-    supervisor = new EffectWorkerSupervisor({
-      runPass: async () => {
-        workerCalls += 1;
-        return createReport({
-          selected: workerCalls === 1 ? 1 : 0,
-          claimed: workerCalls === 1 ? 1 : 0,
-        });
-      },
-      wait: async () => {
-        currentTime += 1;
-      },
-      now: () => currentTime,
-      reconciliation: {
-        intervalMs: 1,
-        isOutboxIdle: async () => {
-          idleChecks += 1;
-          return idleChecks > 1;
-        },
-        run: async () => {
-          reconciliationCalls += 1;
-          return createReconciliationReport();
-        },
-        onReport: () => {
-          stopPromise = supervisor.stop();
-        },
-      },
-    });
-
-    supervisor.start();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    await stopPromise;
-
-    expect(workerCalls).toBe(3);
-    expect(idleChecks).toBe(2);
-    expect(reconciliationCalls).toBe(1);
-  });
 });
 
 function createReport(overrides: Partial<WorkerReport> = {}): WorkerReport {
@@ -349,23 +230,6 @@ function createReport(overrides: Partial<WorkerReport> = {}): WorkerReport {
     requeued: 0,
     replanned: 0,
     responseLossRecovered: 0,
-    ...overrides,
-  };
-}
-
-function createReconciliationReport(
-  overrides: Partial<ReconciliationScanReport> = {},
-): ReconciliationScanReport {
-  return {
-    physicalSheetId: "physical-sheet",
-    snapshotRowsScanned: 0,
-    desiredRowsScanned: 0,
-    matchedRows: 0,
-    driftedRows: 0,
-    missingRows: 0,
-    extraRows: 0,
-    effectsEnqueued: 0,
-    fenceClaimed: false,
     ...overrides,
   };
 }

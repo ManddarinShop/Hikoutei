@@ -216,6 +216,19 @@ describe("issue #196 system-advance conflict resolution", () => {
       effectIdleIntervalMs: 3_600_000,
     });
     services.push(service);
+    // Settle the immediate startup passes before pausing repair scheduling;
+    // otherwise an initial empty outbound pass can race the first explicit
+    // entity flush and its User_Input anchor observation.
+    await service.effectSupervisor.runOnce();
+    await service.pollingSupervisor.runOnce();
+    // The repair worker is independently scheduled; these conflict tests use
+    // explicit scanner passes and pause it to keep lease ownership
+    // deterministic.
+    await service.reconciliationSupervisor.stop();
+    await service.storage.transaction(({ sql }) => sql.run(
+      "UPDATE writer_lease SET lease_until = 0 WHERE role = 'typed-sheets-reconciler'",
+      [],
+    ));
     return service;
   };
 
