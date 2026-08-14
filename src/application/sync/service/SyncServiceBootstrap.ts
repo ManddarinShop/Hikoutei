@@ -116,6 +116,7 @@ export async function createInternalSyncService(
     syncFlushHook,
   });
 
+  let releaseGateway: (() => Promise<void>) | undefined;
   try {
     const projectionDefinitions = [
       ...registeredTypedSheetsProjectionDefinitions(runtime.registrations),
@@ -130,6 +131,7 @@ export async function createInternalSyncService(
     // complete worker manifest for every enabled registered route.
     await readDurableSyncManifestsWithAdapter(runtime.storage);
     const remote = createRemoteProvider(options, projectionDefinitions);
+    releaseGateway = remote.releaseGateway;
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
 
     const effectSupervisor = createEffectSupervisor({
@@ -176,6 +178,7 @@ export async function createInternalSyncService(
       pollingSupervisor,
       reconciliationSupervisor,
       effectSupervisor,
+      releaseGateway,
     });
 
     const provider = new MikroOrmScalarPersistenceProvider(
@@ -209,6 +212,7 @@ export async function createInternalSyncService(
     // ensures this can never mask the original startup error.
     await expireRuntimeWriterLeases(runtime.storage, writer, effectWorkerId)
       .catch(() => undefined);
+    await releaseGateway?.().catch(() => undefined);
     await runtime.storage.close(true).catch(() => undefined);
     throw error;
   }

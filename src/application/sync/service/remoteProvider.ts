@@ -26,6 +26,9 @@ import {
   CoordinatedSheetsProvider,
 } from "../sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
 import {
+  createInProcessSyncSheetsGateway,
+} from "../sheetsContract/gateway/index.js";
+import {
   GoogleSheetsApiSyncProvider,
 } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
 import {
@@ -43,6 +46,8 @@ export interface SyncRemotePorts {
   readonly tableReader: SyncSheetsTableReader;
   /** Startup-only projection provisioning operations. */
   readonly provisioner: SyncSheetsProvisioner;
+  /** Releases the process-local singleton gateway after worker shutdown. */
+  readonly releaseGateway: () => Promise<void>;
 }
 
 export function createRemoteProvider(
@@ -73,11 +78,21 @@ export function createRemoteProvider(
         ? {}
         : { onLaneEvent: options.onCoordinatorLaneEvent }),
     });
+    const gateway = createInProcessSyncSheetsGateway({
+      spreadsheetId: options.projections.spreadsheetId,
+      ports: {
+        effects: coordinated,
+        observation: coordinated,
+        tableReader: coordinated,
+        provisioner,
+      },
+    });
     return {
-      effects: coordinated,
-      observation: coordinated,
-      tableReader: coordinated,
-      provisioner,
+      effects: gateway.client,
+      observation: gateway.client,
+      tableReader: gateway.client,
+      provisioner: gateway.client,
+      releaseGateway: gateway.release,
     };
   }
   // Preferred full-direct mode: ONE provider owns outbound effects,
@@ -99,11 +114,21 @@ export function createRemoteProvider(
       ? {}
       : { onLaneEvent: options.onCoordinatorLaneEvent }),
   });
+  const gateway = createInProcessSyncSheetsGateway({
+    spreadsheetId: options.projections.spreadsheetId,
+    ports: {
+      effects: coordinated,
+      observation: coordinated,
+      tableReader: coordinated,
+      provisioner: provider,
+    },
+  });
   return {
-    effects: coordinated,
-    observation: coordinated,
-    tableReader: coordinated,
-    provisioner: provider,
+    effects: gateway.client,
+    observation: gateway.client,
+    tableReader: gateway.client,
+    provisioner: gateway.client,
+    releaseGateway: gateway.release,
   };
 }
 

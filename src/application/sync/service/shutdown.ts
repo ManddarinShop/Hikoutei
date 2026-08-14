@@ -95,6 +95,8 @@ export interface CreateStopHandlerInput {
   readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
   readonly reconciliationSupervisor: SyncTaskSupervisor<ReconciliationWorkerReport>;
   readonly effectSupervisor: EffectWorkerSupervisor;
+  /** Releases the single process-local Sheets gateway after workers stop cleanly. */
+  readonly releaseGateway?: () => Promise<void>;
 }
 
 /**
@@ -115,6 +117,7 @@ export function createStopHandler(input: CreateStopHandlerInput): () => Promise<
     pollingSupervisor,
     reconciliationSupervisor,
     effectSupervisor,
+    releaseGateway,
   } = input;
 
   let stopped = false;
@@ -144,6 +147,9 @@ export function createStopHandler(input: CreateStopHandlerInput): () => Promise<
       await expireRuntimeWriterLeases(storage, writer, effectWorkerId)
         .catch(() => undefined);
       if (firstError !== undefined) throw firstError;
+      await releaseGateway?.().catch((error: unknown) => {
+        console.warn(`[sync-service] Sheets gateway release failed: ${safeErrorMessage(error)}`);
+      });
       stopped = true;
       stopPromise = undefined;
     })().catch((error: unknown) => {
