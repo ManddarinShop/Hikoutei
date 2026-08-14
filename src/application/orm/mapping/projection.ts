@@ -99,6 +99,7 @@ export function createTypedSheetsEntityProjectionRegistration(
     registeredRange: projection.registeredRange,
     projection: toRegisteredProjection(projection.projection),
     schemaVersion: mapping.schemaVersion,
+    projectionHeaders: typedSheetsEntityProjectionHeaders(mapping, projection.projection),
     ownershipManifestJson: serializeTypedSheetsEntityOwnershipManifest(mapping),
     businessKeyField: mapping.businessKey.fieldName,
   };

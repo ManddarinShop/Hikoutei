@@ -85,6 +85,7 @@ export async function registerSyncConflictProjectionRoutes(
         registeredRange: config.syncConflicts.registeredRange,
         projection: SYNC_PROJECTIONS.SYNC_CONFLICTS,
         schemaVersion: registration.mapping.schemaVersion,
+        projectionHeaders: SYNC_CONFLICT_PROJECTION_HEADERS,
         ownershipManifestJson: serializeTypedSheetsEntityOwnershipManifest(registration.mapping),
         businessKeyField: registration.mapping.businessKey.fieldName,
       } as const;

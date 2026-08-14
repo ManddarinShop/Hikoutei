@@ -48,6 +48,9 @@ import {
   registerSyncConflictProjectionRoutes,
 } from "../sheetsContract/conflictProjectionRegistration.js";
 import {
+  readDurableSyncManifestsWithAdapter,
+} from "../../../infrastructure/storage/sync/shared/syncManifest.js";
+import {
   retryOpenMappedConflictsWithAdapter,
   planMappedFlushConflictSyncWithSql,
 } from "../inbound/autoSystemConflictResolution.js";
@@ -123,6 +126,9 @@ export async function createInternalSyncService(
         writer,
       ),
     ];
+    // Fail closed before remote contact if the SQLite file cannot provide a
+    // complete worker manifest for every enabled registered route.
+    await readDurableSyncManifestsWithAdapter(runtime.storage);
     const remote = createRemoteProvider(options, projectionDefinitions);
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
 
