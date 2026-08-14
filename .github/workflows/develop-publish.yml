@@ -142,6 +142,14 @@ jobs:
           mkdir -p "$consumer_dir"
           package_file="$(find "$RUNNER_TEMP/hikoutei-develop-package" -maxdepth 1 -name 'hikoutei-*.tgz' -type f -print -quit)"
           test -n "$package_file"
+
+          # --- Packed tarball allowlist (Task 3 review correction) ---
+          # Publication is blocked unless the ACTUAL packed tarball contains
+          # only dist/** plus npm-mandatory metadata. The reusable checker
+          # reads the tarball with tar, so it cannot be fooled by npm pack
+          # --dry-run output or a stale source tree.
+          node scripts/ci/assert-packed-tarball.mjs "$package_file"
+
           # The root package depends on the @hikoutei/ikisaki workspace
           # package; pack it too so the consumer install resolves locally.
           ikisaki_package_file="$(cd packages/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
@@ -153,9 +161,22 @@ jobs:
             npm install --no-audit --no-fund --ignore-scripts \
               "$ikisaki_package_path" \
               "$package_file" \
+              "typescript@5.9.3" \
               "@mikro-orm/core@7.1.7" \
               "@mikro-orm/sql@7.1.7"
           )
+
+          # --- Installed-consumer TypeScript typecheck (Task 3 review correction) ---
+          # The JS runtime smoke never compiles an external consumer against
+          # the packed dist/index.d.ts. The reusable checker copies the
+          # dedicated consumer .ts into the throwaway consumer dir and runs the
+          # INSTALLED TypeScript compiler against the INSTALLED tarball (never
+          # repository source). It imports only the root `hikoutei` entrypoint,
+          # defines a scalar entity, typechecks a createTypedSheets()/
+          # EntityManager find() usage, and pins compile-time rejection guards
+          # on internal symbols. It is typechecked only; nothing executes and
+          # no Google credentials are required.
+          node scripts/ci/run-consumer-typecheck.mjs --consumer-dir "$consumer_dir"
 
           # Both installed scenarios import ONLY the installed `hikoutei` root.
           cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"

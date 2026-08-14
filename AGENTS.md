@@ -29,8 +29,8 @@ documents when present.
 The public API is an entity-lifecycle EntityManager modeled on the MikroORM/JPA
 workflow. Applications define entities with `defineTypedSheetsEntity()` and open
 the runtime with `createTypedSheets()`, then use a request-local manager for
-`fork()`, `create()`, `find()`, `persist()`, `remove()`, `flush()`, and
-`transactional()`:
+`fork()`, `create()`, `find()`, `findOne()`, `count()`, `findAndCount()`,
+`persist()`, `remove()`, `flush()`, and `transactional()`:
 
 ```ts
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
@@ -51,25 +51,30 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
-A successful `flush()` commits the entity table, canonical sync state, and the
-durable Sheet effect outbox in one SQLite transaction. It does not mean a remote
-Sheet write has completed. Applications must never read normal entity data from
-Sheets; they read SQLite.
+In a sync-enabled runtime, a successful `flush()` commits the entity table,
+canonical sync state, and the durable Sheet effect outbox in one SQLite
+transaction. A local-only runtime (no sync environment configured) opens
+entity tables only and does not create or commit remote sync state or an
+outbox. Either way, `flush()` does not mean a remote Sheet write has
+completed. Applications must never read normal entity data from Sheets; they
+read SQLite.
 
 Keep the public API and the internal sync/provider engine separate.
 
-The public surface (`src/api`, re-exported by `src/index.ts`) exposes only the
-entity-lifecycle EntityManager: defining entities, opening the runtime, and
-`fork()`, `create()`, `find()`, `persist()`, `remove()`, `flush()`, and
-`transactional()`. It does not expose Sheet setup or registration. Everything
-else is internal implementation and must not be part of the application-facing
-contract: MikroORM types and provider internals, the Google Sheets API
-provider, the outbound sync worker, polling, and effect supervisor, storage
-schemas (canonical/observation/resolution state), hash/compare-and-set
-evidence, and low-level provider or protocol APIs. The `hikoutei setup` CLI
-(`src/cli`) is a separate service-side tool, not part of the library API: sync
-auto-start is environment-driven (`HIKOUTEI_SYNC_SPREADSHEET_URL` plus
-`GOOGLE_APPLICATION_CREDENTIALS`).
+The public surface exposes entity/runtime registration plus the
+entity-lifecycle EntityManager: defining entities with
+`defineTypedSheetsEntity()`, opening the runtime with `createTypedSheets()`,
+and `fork()`, `create()`, `find()`, `findOne()`, `count()`, `findAndCount()`,
+`persist()`, `remove()`, `flush()`, and `transactional()`. Google Sheet
+provider setup and the sync bootstrap are internal and environment-driven
+(the `googleSheetsApi` bootstrap option, `HIKOUTEI_SYNC_SPREADSHEET_URL`,
+`GOOGLE_APPLICATION_CREDENTIALS`), not application-facing registration APIs.
+Everything else is internal implementation and must not be part of the
+application-facing contract: MikroORM types and provider internals,
+the Google Sheets API provider, the outbound sync
+worker, polling, and effect supervisor, storage schemas
+(canonical/observation/resolution state), hash/compare-and-set evidence, and
+low-level provider or protocol APIs.
 
 The internal write engine may still classify work as insert-like, update-like,
 or delete-like tasks for batching, outbox effects, and Sheets projection
@@ -167,9 +172,10 @@ ask before editing `src/**`.
   MikroORM details; depend on adapter contracts instead.
 - Use adapter interfaces for sheet-level operations; never leak Google SDK
   response objects into repository logic.
-- SQLite is the application authority. `flush()` commits the entity table,
-  canonical sync state, and the durable Sheet effect outbox in one SQLite
-  transaction; remote Sheet delivery is asynchronous and separate.
+- SQLite is the application authority. In a sync-enabled runtime, `flush()`
+  commits the entity table, canonical sync state, and the durable Sheet effect
+  outbox in one SQLite transaction; a local-only runtime commits entity tables
+  only. Remote Sheet delivery is asynchronous and separate.
 - Google Sheets is an async projection and human input surface, not the source
   of truth. The application reads SQLite; the worker observes `User_Input` only
   to evaluate intentional human changes and records conflicts in SQLite.

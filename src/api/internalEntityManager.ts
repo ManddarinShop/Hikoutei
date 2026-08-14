@@ -82,7 +82,7 @@ class EntityManagerImpl implements EntityManager {
     options?: HikouteiFindOptions<Entity>,
   ): Promise<readonly Entity[]> {
     const descriptor = this.requireDescriptor(entity);
-    const query = normalizeEntityQuery(descriptor, where ?? {}, options);
+    const query = normalizeEntityQuery(descriptor, effectiveFilter(where), options);
     const reader = this.activeTransaction ?? this.provider;
     const rows = await reader.read(query);
     return this.materializeRows<Entity>(descriptor, rows);
@@ -110,7 +110,7 @@ class EntityManagerImpl implements EntityManager {
     where?: HikouteiFilter<Entity>,
   ): Promise<number> {
     const descriptor = this.requireDescriptor(entity);
-    const query = countQuery(normalizeEntityQuery(descriptor, where ?? {}, undefined));
+    const query = countQuery(normalizeEntityQuery(descriptor, effectiveFilter(where), undefined));
     const reader = this.activeTransaction ?? this.provider;
     return reader.count(query);
   }
@@ -122,7 +122,7 @@ class EntityManagerImpl implements EntityManager {
     options?: HikouteiFindOptions<Entity>,
   ): Promise<readonly [readonly Entity[], number]> {
     const descriptor = this.requireDescriptor(entity);
-    const query = normalizeEntityQuery(descriptor, where ?? {}, options);
+    const query = normalizeEntityQuery(descriptor, effectiveFilter(where), options);
     const operation = async (
       reader: ScalarEntityReader,
     ): Promise<readonly [readonly ScalarEntityRow[], number]> => {
@@ -352,6 +352,19 @@ function buildEntityInstance(
     }
   }
   return instance;
+}
+
+/**
+ * Returns the empty filter only when `where` is omitted so `find(Entity)` keeps
+ * its match-all behavior; an explicit `null` is passed through untouched so
+ * `normalizeFilter` rejects it with `INVALID_QUERY` instead of being coerced
+ * into a broad read. The value is handed to the normalizer's `unknown`
+ * boundary, which owns validation.
+ */
+function effectiveFilter<Entity extends object>(
+  where: HikouteiFilter<Entity> | undefined,
+): unknown {
+  return where === undefined ? {} : where;
 }
 
 function countQuery(query: ScalarEntityQuery): ScalarEntityCountQuery {

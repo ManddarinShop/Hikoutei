@@ -313,9 +313,17 @@ async function countRows(
 
 function toMikroOrmQueryOptions(query: ScalarEntityQuery): Record<string, unknown> {
   const orderBy = query.orderBy.map((order) => ({ [order.field]: order.direction }));
+  // SQLite rejects a bare `OFFSET` (it requires a preceding `LIMIT`), so an
+  // offset-only public query must use the SQLite idiom for "all rows after a
+  // skip": a negative `LIMIT`, which SQLite treats as no upper bound. The
+  // public option contract still allows `{ offset }` independently of
+  // `{ limit }`; this `LIMIT -1` stays inside the MikroORM adapter boundary and
+  // is never exposed as raw SQL to application code. `limit` is `0`-safe via
+  // nullish coalescing: an explicit `limit: 0` is preserved unchanged.
+  const limit = query.limit ?? (query.offset === undefined ? undefined : -1);
   return {
     ...(orderBy.length === 0 ? {} : { orderBy }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
+    ...(limit === undefined ? {} : { limit }),
     ...(query.offset === undefined ? {} : { offset: query.offset }),
   };
 }

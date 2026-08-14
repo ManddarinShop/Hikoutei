@@ -81,17 +81,42 @@ jobs:
           ikisaki_pack_file="$(cd packages/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
           ikisaki_pack_path="$RUNNER_TEMP/$ikisaki_pack_file"
 
+          # --- Packed tarball allowlist (Task 3 review correction) ---
+          # The source-side audit pins the package.json packaging fields; this
+          # reusable checker enumerates the ACTUAL packed tarball contents. It
+          # fails when npm-mandatory metadata or dist/ is missing, when any
+          # repository or dev artifact (src/, test/, scripts/, docs/, design/,
+          # tsconfig*, configs, VCS files) leaked into the published artifact,
+          # and when an entry outside dist/** plus npm-mandatory metadata is
+          # present. The catch-all unexpected-entry check is the single source
+          # of truth, so a future leak is rejected even if its name is not
+          # enumerated in the forbidden list.
+          node scripts/ci/assert-packed-tarball.mjs "$pack_path"
+
           (
             cd "$consumer_dir"
             npm init -y >/dev/null
             npm install --no-audit --no-fund --ignore-scripts \
               "$ikisaki_pack_path" \
               "$pack_path" \
+              "typescript@5.9.3" \
               "@mikro-orm/core@7.1.7" \
               "@mikro-orm/sql@7.1.7"
           )
 
-          # Both installed scenarios import ONLY the installed `hikoutei` root.
+          # --- Installed-consumer TypeScript typecheck (Task 3 review correction) ---
+          # The JS runtime smoke never compiles an external consumer against
+          # the packed dist/index.d.ts. The reusable checker copies the
+          # dedicated consumer .ts into the throwaway consumer dir and runs the
+          # INSTALLED TypeScript compiler against the INSTALLED tarball (never
+          # repository source). It imports only the root `hikoutei` entrypoint,
+          # defines a scalar entity, typechecks a createTypedSheets()/
+          # EntityManager find() usage, and pins compile-time rejection guards
+          # on internal symbols. It is typechecked only; nothing executes and
+          # no Google credentials are required.
+          node scripts/ci/run-consumer-typecheck.mjs --consumer-dir "$consumer_dir"
+
+          # Both installed runtime scenarios import ONLY the installed `hikoutei` root.
           # The smoke covers lifecycle sequencing; the 100-record surface
           # scenario covers the complete supported public contract.
           cp scripts/ci/run-root-api-scenario.mjs "$consumer_dir/run-root-api-scenario.mjs"
