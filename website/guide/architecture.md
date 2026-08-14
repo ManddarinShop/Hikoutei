@@ -76,7 +76,11 @@ failure rolls the complete transaction back.
 The service-side configuration supplies the required `System_State`,
 `User_Input`, and `Sync_Conflicts` routes, spreadsheet identity, and
 user-owned fields. Every internal sync runtime fails closed if any of the
-three physical routes or its fixed headers are missing or drifted.
+three physical routes or its fixed headers are missing or drifted. The
+SQLite registry persists each route's exact ordered projection headers and
+ownership metadata as the worker manifest; a worker that reopens the database
+without the host mapping must reject a missing or malformed manifest rather
+than inventing defaults.
 
 ## Google Sheets projection
 

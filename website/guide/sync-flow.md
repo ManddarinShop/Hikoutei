@@ -55,6 +55,11 @@ A successful `flush()` means that SQLite accepted the local change and queued
 its projection effect. It does not mean that the remote Sheet write has
 completed.
 
+The registry also persists a durable worker manifest for each projection:
+route identity, schema version, ownership metadata, and exact ordered headers.
+Future external workers must validate this manifest before remote contact and
+fail closed when it is missing or malformed.
+
 ## Fast append, update, and delete
 
 New `System_State` rows use the bounded fast append operation where possible.
