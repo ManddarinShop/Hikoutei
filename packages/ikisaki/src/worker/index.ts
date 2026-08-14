@@ -141,7 +141,5 @@ export {
   EffectWorkerSupervisor,
   type CreateEffectWorkerSupervisorOptions,
   type EffectWorkerSupervisorLoopOptions,
-  type EffectWorkerSupervisorReconciliationOptions,
   type EffectWorkerSupervisorWait,
-  type WorkerReconciliationReport,
 } from "./supervisor.js";
