@@ -15,6 +15,7 @@ import {
   REQUIRED_V3_COLUMNS,
   REQUIRED_V5_COLUMNS,
   REQUIRED_V6_COLUMNS,
+  REQUIRED_V7_COLUMNS,
   SQLITE_CONNECTION_PRAGMAS,
   syncSchemaIndexesDdl,
   syncSchemaTablesDdl,
@@ -106,6 +107,13 @@ export async function migrateSqliteSchema(
       await writeSchemaVersion(sql, 6);
       appliedVersions.push(6);
     }
+    if (fromVersion < 7) {
+      // Persist the exact ordered projection headers needed by workers that
+      // reopen the SQLite file without the host's in-memory mappings.
+      await applyVersion7ProjectionHeadersMigration(sql);
+      await writeSchemaVersion(sql, 7);
+      appliedVersions.push(7);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
     // v5-only indexes are created after every migration so an upgraded v4
@@ -177,6 +185,15 @@ async function applyVersion6CandidateEvidenceMigration(sql: SqlExecutor): Promis
   await addColumnIfMissing(sql, "sync_conflict", "candidate_visible_hash", "TEXT");
 }
 
+async function applyVersion7ProjectionHeadersMigration(sql: SqlExecutor): Promise<void> {
+  await addColumnIfMissing(
+    sql,
+    "physical_sheet_registry",
+    "projection_headers_json",
+    "TEXT NOT NULL DEFAULT '[]'",
+  );
+}
+
 async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
   await verifyRequiredColumns(sql);
   if (!(await indexExists(sql, "sync_conflict_candidate_attempt_uq"))) {
@@ -215,6 +232,9 @@ async function verifyRequiredColumns(sql: SqlExecutor): Promise<void> {
   }
   for (const tableName of ["sync_conflict"] as const) {
     await verifyTableColumns(sql, tableName, REQUIRED_V6_COLUMNS[tableName]);
+  }
+  for (const tableName of ["physical_sheet_registry"] as const) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V7_COLUMNS[tableName]);
   }
 }
 

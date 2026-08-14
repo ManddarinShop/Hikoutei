@@ -23,7 +23,7 @@ export { REQUIRED_V3_COLUMNS } from "@hikoutei/ikisaki";
 export { syncSchemaV5IndexesDdl } from "@hikoutei/ikisaki";
 
 /** Current durable schema version managed by the provider migration. */
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
@@ -113,6 +113,13 @@ export const REQUIRED_V6_COLUMNS: Readonly<
   sync_conflict: ["candidate_visible_revision", "candidate_visible_hash"],
 };
 
+/** Ordered projection headers added to physical registry rows by v7. */
+export const REQUIRED_V7_COLUMNS: Readonly<
+  Record<"physical_sheet_registry", readonly string[]>
+> = {
+  physical_sheet_registry: ["projection_headers_json"],
+};
+
 /** Returns table DDL only, so migration transactions never change connection pragmas. */
 export function syncSchemaTablesDdl(): string {
   return [
@@ -160,6 +167,7 @@ const REGISTRY_TABLES_DDL = `
     registered_range TEXT NOT NULL,
     projection TEXT NOT NULL,
     schema_version INTEGER NOT NULL,
+    projection_headers_json TEXT NOT NULL DEFAULT '[]',
     anchor_mode TEXT NOT NULL DEFAULT 'business_key',
     enabled INTEGER NOT NULL DEFAULT 1,
     UNIQUE(spreadsheet_id, tab_name, registered_range, projection)
