@@ -41,6 +41,8 @@ import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/provide
 import type { MappedUserInputPollingReport } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncTimingSink } from "../telemetry/syncTiming.js";
 import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
+import type { SyncTaskSupervisor } from "./SyncTaskSupervisor.js";
+import type { ReconciliationWorkerReport } from "./reconciliationSupervisor.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
@@ -105,8 +107,12 @@ export interface InternalSyncService {
   readonly projectionDefinitions: readonly RegisteredSyncProjectionDefinition[];
   /** Retries durable OPEN system-wins commands after predecessors settle. */
   readonly retryDeferredConflicts: () => Promise<number>;
+  /** Outbound-only durable effect delivery worker. */
   readonly effectSupervisor: EffectWorkerSupervisor;
+  /** Inbound User_Input observation worker. */
   readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
+  /** System_State repair and User_Input cleanup worker. */
+  readonly reconciliationSupervisor: SyncTaskSupervisor<ReconciliationWorkerReport>;
   stop(): Promise<void>;
   close(): Promise<void>;
 }

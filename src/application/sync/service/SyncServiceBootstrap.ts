@@ -3,8 +3,9 @@
  *
  * The root package deliberately does not export this module. It assembles the
  * mapped SQLite runtime, provisions the registered projections, starts the
- * outbound effect supervisor, and owns graceful shutdown around one SQLite
- * connection shared by ORM and sync storage.
+ * independent outbound, reconciliation, and inbound workers, and owns
+ * graceful shutdown around one SQLite connection shared by ORM and sync
+ * storage.
  *
  * The full service-account Google Sheets API provider owns provisioning,
  * outbound effects, table reads, anchors, and snapshots; no Apps Script or
@@ -12,9 +13,9 @@
  * provider double through the internal `provider`/`provisioner` options.
  *
  * This module is the thin ordered composition root: cohesive responsibilities
- * (option/lease/projection validation, remote provider assembly, effect and
- * polling supervisor construction, shutdown and lease release) live in the
- * sibling modules in this directory, and startup failure cleanup stays here.
+ * (option/lease/projection validation, remote capability assembly, worker
+ * construction, shutdown and lease release) live in the sibling modules in
+ * this directory, and startup failure cleanup stays here.
  */
 
 import {
@@ -26,6 +27,9 @@ import {
 import {
   initializeMappedRuntime,
 } from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js";
+import {
+  pollMappedUserInputWithMikroOrm,
+} from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import {
   createMikroOrmScalarRuntime,
 } from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarRuntime.js";
@@ -50,6 +54,7 @@ import {
 import { createRemoteProvider } from "./remoteProvider.js";
 import { createEffectSupervisor } from "./effectSupervisor.js";
 import { createPollingSupervisor } from "./pollingSupervisor.js";
+import { createReconciliationSupervisor } from "./reconciliationSupervisor.js";
 import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
 import {
   createWriterOptions,
@@ -123,18 +128,35 @@ export async function createInternalSyncService(
 
     const effectSupervisor = createEffectSupervisor({
       storage: runtime.storage,
-      mappings: runtime.mappings.mappings,
-      provider: remote.provider,
-      writer,
+      provider: remote.effects,
       effectWorkerId,
       options,
     });
+    let inboundReady = false;
+    const reconciliationSupervisor = createReconciliationSupervisor({
+      storage: runtime.storage,
+      mappings: runtime.mappings.mappings,
+      provider: remote.observation,
+      writer,
+      options,
+      isInboundReady: () => inboundReady,
+      requestDrain: () => effectSupervisor.requestDrain(),
+    });
     const pollingSupervisor = createPollingSupervisor({
       storage: runtime.storage,
-      provider: remote.provider,
+      provider: remote.observation,
+      tableReader: remote.tableReader,
       mappings: runtime.mappings,
       writer,
       options,
+      runObservation: pollMappedUserInputWithMikroOrm,
+      onReady: () => {
+        inboundReady = true;
+        // A first successful inbound pass unlocks User_Input cleanup. Request
+        // a repair pass immediately; the durable outbox remains authoritative
+        // if this in-process wake-up is lost.
+        reconciliationSupervisor.requestRun();
+      },
     });
     const retryDeferredConflicts = (): Promise<number> => retryOpenMappedConflictsWithAdapter(
       runtime.storage,
@@ -146,6 +168,7 @@ export async function createInternalSyncService(
       writer,
       effectWorkerId,
       pollingSupervisor,
+      reconciliationSupervisor,
       effectSupervisor,
     });
 
@@ -156,6 +179,7 @@ export async function createInternalSyncService(
     );
     const hikoutei = createInternalHikoutei(provider, descriptors, stop);
     effectSupervisor.start();
+    reconciliationSupervisor.start();
     pollingSupervisor.start();
 
     return {
@@ -165,6 +189,7 @@ export async function createInternalSyncService(
       retryDeferredConflicts,
       effectSupervisor,
       pollingSupervisor,
+      reconciliationSupervisor,
       stop,
       close: () => hikoutei.close(),
     };

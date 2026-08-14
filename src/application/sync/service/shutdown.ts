@@ -23,6 +23,8 @@ import {
 import { RECONCILIATION_DEFAULTS } from "../outbound/reconciliation/ReconciliationScanner.js";
 import type { MappedUserInputPollingReport } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
+import type { SyncTaskSupervisor } from "./SyncTaskSupervisor.js";
+import type { ReconciliationWorkerReport } from "./reconciliationSupervisor.js";
 
 /**
  * Expires this runtime's own writer leases on graceful shutdown.
@@ -91,6 +93,7 @@ export interface CreateStopHandlerInput {
   readonly writer: TypedSheetsEntityWriterOptions;
   readonly effectWorkerId: string;
   readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
+  readonly reconciliationSupervisor: SyncTaskSupervisor<ReconciliationWorkerReport>;
   readonly effectSupervisor: EffectWorkerSupervisor;
 }
 
@@ -105,33 +108,42 @@ export interface CreateStopHandlerInput {
  * leaves a retryable close() that re-runs the stops and the release.
  */
 export function createStopHandler(input: CreateStopHandlerInput): () => Promise<void> {
-  const { storage, writer, effectWorkerId, pollingSupervisor, effectSupervisor } = input;
+  const {
+    storage,
+    writer,
+    effectWorkerId,
+    pollingSupervisor,
+    reconciliationSupervisor,
+    effectSupervisor,
+  } = input;
 
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
   const stop = (): Promise<void> => {
     if (stopped) return Promise.resolve();
     if (stopPromise !== undefined) return stopPromise;
-    // Stop inbound reads first, then the outbound worker. Both supervisors
-    // drain manual and background passes before SQLite is closed.
+    // Stop inbound reads first, then repair scheduling, then outbound
+    // delivery. Every worker gets a chance to drain even when a sibling stop
+    // fails; the first failure is returned after all cleanup has been tried.
     stopPromise = (async () => {
-      try {
-        await pollingSupervisor.stop();
-        await effectSupervisor.stop();
-      } finally {
-        // Graceful-shutdown handoff: expire this runtime's own leases so the
-        // next runtime on the same SQLite file claims immediately through the
-        // TAKEOVER path. Abnormal exits keep the full lease window, and the
-        // row is never deleted so authority epoch ordering stays monotonic.
-        // The release ALWAYS runs, even when a supervisor stop fails, so a
-        // restart inside the lease window never fails with
-        // WRITER_LEASE_UNAVAILABLE; a failing release only logs and never
-        // masks the supervisor error. `stopped` still flips only when both
-        // supervisor stops complete, so a rejected stop leaves a retryable
-        // close() that re-runs the stops and the release.
-        await expireRuntimeWriterLeases(storage, writer, effectWorkerId)
-          .catch(() => undefined);
+      let firstError: unknown;
+      for (const stopWorker of [
+        () => pollingSupervisor.stop(),
+        () => reconciliationSupervisor.stop(),
+        () => effectSupervisor.stop(),
+      ]) {
+        try {
+          await stopWorker();
+        } catch (error: unknown) {
+          firstError ??= error;
+        }
       }
+      // Graceful-shutdown handoff: expire this runtime's own leases so the
+      // next runtime on the same SQLite file claims immediately through the
+      // TAKEOVER path. The release always runs, even when a worker stop fails.
+      await expireRuntimeWriterLeases(storage, writer, effectWorkerId)
+        .catch(() => undefined);
+      if (firstError !== undefined) throw firstError;
       stopped = true;
       stopPromise = undefined;
     })().catch((error: unknown) => {
