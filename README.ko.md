@@ -118,9 +118,11 @@ Hikoutei는 `google-spreadsheet`나 `@googleapis/sheets`를 대체하지 않습�
 
 Google Sheets 동기화는 서비스 측 관심사입니다. 애플리케이션은 provider
 클라이언트를 import하거나, Sheet 라우트를 `createTypedSheets()`에 넘기거나,
-쓰기마다 연산을 선택하지 않습니다. 동기화 런타임은 서비스 계정을 사용하는
-하나의 Google Sheets API provider(내부 `googleSheetsApi` bootstrap 옵션)를
-사용합니다 — Apps Script 배포가 없습니다.
+쓰기마다 연산을 선택하지 않습니다 — 루트 API는 `dbName`과 `entities`만
+받습니다. 동기화 런타임은 서비스 계정을 사용하는 하나의 내부 Google Sheets
+API provider를 사용합니다 — Apps Script 배포가 없습니다. 동기화 자동 시작은
+`HIKOUTEI_SYNC_SPREADSHEET_URL`과 `GOOGLE_APPLICATION_CREDENTIALS`로
+선택되며, 설정할 공개 `googleSheetsApi` bootstrap 옵션은 없습니다.
 
 ### 환경 변수 기반 동기화 자동 시작
 
@@ -142,7 +144,7 @@ const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities
 없거나 잘못된 자격 증명 파일, 스프레드시트에 공유되지 않은 서비스 계정
 (어떤 이메일을 공유해야 하는지 에러가 알려줍니다).
 
-### Service-account provider (googleSheetsApi)
+### 수동 서비스 계정 설정
 
 1. **서비스 계정을 만듭니다.** Cloud 프로젝트에서 Google Sheets API를
    활성화하고, `https://www.googleapis.com/auth/spreadsheets` 스코프의
@@ -152,9 +154,16 @@ const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities
 2. **키를 서버 측에 둡니다.** 서비스 계정 키 경로를 서버의
    `GOOGLE_APPLICATION_CREDENTIALS`에, 스프레드시트 ID는 추적되지 않는
    비밀 저장소에 둡니다. 키를 브라우저 코드나 Git에 넣지 마세요.
-3. **내부 sync bootstrap을 기동합니다.** `googleSheetsApi`를 설정하면
+3. **애플리케이션을 정상적으로 실행합니다.** `GOOGLE_APPLICATION_CREDENTIALS`와
+   `HIKOUTEI_SYNC_SPREADSHEET_URL`을 설정한 상태로 앱을 시작하면
+   `createTypedSheets()`가 이를 감지해 내부 sync bootstrap을 시작합니다 —
    등록된 탭의 헤더를 만들고 검증한 뒤 outbox 전달과 User_Input 폴링을
-   시작합니다.
+   시작합니다. 넘길 provider 옵션이나 직접 시작할 내부 bootstrap은 없습니다.
+
+> **레거시 스프레드시트 참고.** 이전 Apps Script provider가 developer
+> metadata 행 anchor로 프로비저닝한 스프레드시트는 마이그레이션되지
+> 않습니다. `User_Input` 탭은 이제 `__hikoutei_row_id` 시스템 컬럼이
+> 필요하므로 레거시 탭을 다시 프로비저닝해야 합니다.
 
 Hikoutei는 내구성 있는 로컬 outbox, 멱등 전달, 충돌을 인지하는 업데이트를
 사용하므로 일시적인 API 실패가 커밋된 애플리케이션 쓰기를 잃게 하지 않습니다.
@@ -259,7 +268,6 @@ Google Sheets가 아니라 항상 SQLite에서 수행됩니다. 시트 편집 �
 
 - Google Sheets에서 의도적인 사용자 편집 수집 완성
 - 업데이트·삭제 충돌 처리와 표시 개선
-- 레지스트리 및 direct-provider 배포를 위한 설정 도구 개선
 
 현재 작업은 [오픈 이슈](https://github.com/ManddarinShop/Hikoutei/issues)를
 참고하세요.

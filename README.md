@@ -121,9 +121,11 @@ client directly.
 
 Google Sheets synchronization is a service-side concern. Applications do not
 import a provider client, pass Sheet routes to `createTypedSheets()`, or choose
-an operation for each write. The sync runtime uses one Google Sheets API
-provider (the internal `googleSheetsApi` bootstrap option) with a service
-account — no Apps Script deployment.
+an operation for each write — the root API accepts only `dbName` and
+`entities`. The sync runtime uses one internal Google Sheets API provider with
+a service account — no Apps Script deployment. Sync auto-start is selected by
+`HIKOUTEI_SYNC_SPREADSHEET_URL` plus `GOOGLE_APPLICATION_CREDENTIALS`; there is
+no public `googleSheetsApi` bootstrap option to configure.
 
 **Fastest path:** install the gcloud CLI, then run `npx hikoutei setup` from your
 project directory. On an interactive terminal it offers (press Enter) to
@@ -224,7 +226,7 @@ local-only (SQLite). Startup failures are diagnosed with clear messages:
 invalid URL, missing/invalid credentials file, or a service account not
 shared on the spreadsheet (the error tells you which email to share).
 
-### Service-account provider (googleSheetsApi)
+### Manual service-account setup
 
 1. **Create a service account.** Enable the Google Sheets API in a Cloud
    project, create a service account with the
@@ -239,9 +241,17 @@ shared on the spreadsheet (the error tells you which email to share).
    `.gitignore` — the defaults created by `hikoutei setup` are already
    ignored, but a `.gitignore` is not a security boundary and does not
    protect already-tracked files.
-3. **Start the internal sync bootstrap** with `googleSheetsApi` configured. It
-   creates and verifies headers on the registered tabs, then starts outbox
-   delivery and User_Input polling.
+3. **Run the application normally.** Start the app with
+   `GOOGLE_APPLICATION_CREDENTIALS` and `HIKOUTEI_SYNC_SPREADSHEET_URL` set;
+   `createTypedSheets()` detects them and starts the internal sync bootstrap —
+   it creates and verifies headers on the registered tabs, then starts outbox
+   delivery and User_Input polling. There is no provider option to pass and no
+   internal bootstrap to start by hand.
+
+> **Legacy spreadsheet note.** Spreadsheets provisioned by the old Apps Script
+> provider with developer-metadata row anchors are not migrated: `User_Input`
+> tabs now require the `__hikoutei_row_id` system column, so legacy tabs must
+> be re-provisioned.
 
 Hikoutei uses a durable local outbox, idempotent delivery, and conflict-aware
 updates so temporary API failures do not lose committed application writes. The
@@ -350,7 +360,6 @@ The following work continues in parallel with the EntityManager milestones:
 
 - Complete ingestion of intentional user edits from Google Sheets.
 - Improve update/delete conflict handling and presentation.
-- Improve setup tooling for registry and direct-provider deployment.
 
 See the [open issues](https://github.com/ManddarinShop/Hikoutei/issues)
 for current work.

@@ -7,7 +7,6 @@
   "scripts": {
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
-    "docs:check": "node ../scripts/ci/check-docs-metadata.mjs",
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {

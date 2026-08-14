@@ -10,14 +10,14 @@ every change must respect.
 ## Development setup
 
 The repository is an npm workspace: the root package (`hikoutei`) plus
-`packages/outbox` (`@hikoutei/outbox`).
+`packages/ikisaki` (`@hikoutei/ikisaki`, the durable consistency queue).
 
 ```sh
 npm install        # installs root and workspace dependencies
 npm test           # unit and provider/contract tests (no live Google calls)
 npm run typecheck  # production typecheck
 npm run typecheck:test
-npm run build      # clean + tsc (builds root and the outbox workspace)
+npm run build      # builds the ikisaki workspace first, then clean + tsc for root
 npm pack --dry-run # preview package contents
 ```
 
@@ -29,13 +29,14 @@ fixtures.
 
 ```text
 src/api/                    public entity lifecycle API (the only public surface)
+src/cli/                    `hikoutei setup` CLI (service-side provisioning)
 src/domain/                 pure normalization, evaluation, conflict rules
 src/application/            ORM facade, sync engine, service bootstrap
 src/adapter/                persistence (MikroORM/SQLite) and Sheets providers
 src/infrastructure/         SQLite storage: canonical, observation, resolution, outbox
-packages/outbox/            durable outbox package (workspace)
-docs/                       architecture, flows, benchmarks, guidelines
-design/                     normative v1 design and execution checklist
+packages/ikisaki/           durable consistency-queue package (workspace)
+docs/                       local-only architecture, flows, benchmarks, guidelines
+design/                     local-only normative v1 design and execution checklist
 ```
 
 `src` does not mean public: `src/index.ts` is the only application-facing
@@ -68,7 +69,7 @@ Types used in this repository: `feat`, `fix`, `docs`, `chore`, `test`,
 
 ```text
 feat(sync): auto-start the Sheets sync from environment configuration
-fix(outbox): add CAS writer-lease release for graceful close handoff
+fix(ikisaki): expose terminal failed-head supersede and recoverable error codes
 docs(readme): rewrite README for onboarding and add internal consistency model
 ```
 
@@ -91,8 +92,10 @@ must be filled in.
 - Keep `docs/architecture.md`, `docs/write-and-synchronization-flow.md`, and
   `docs/internal-consistency-model.md` consistent with the code when the sync
   model changes.
-- `docs/` is listed in `.gitignore`; new files under `docs/` are added with
-  `git add -f` (existing tracked docs follow the same pattern).
+- `docs/` and `design/` are listed in `.gitignore` and are local-only working
+  directories: they are not tracked and not shipped with the package (commit
+  `634197e` stopped tracking them). Do not force-add or wholesale add those
+  ignored trees; keep substantive guidance in tracked files such as this one.
 - README updates cover intended use case, when not to use, the
   SQLite-authoritative model, quota constraints, quick start, limitations, and
   roadmap as applicable.
