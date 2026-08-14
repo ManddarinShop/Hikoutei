@@ -48,12 +48,16 @@ OutboundEffectWorker
   └─ mark the effect applied, terminally failed, or recoverably pending
           │
           ▼
-coordinated Sheets effects port ──▶ Google Sheets
+versioned gateway client ──▶ singleton gateway server
+                                  └─ coordinated Sheets effects ──▶ Google Sheets
 ```
 
 A successful `flush()` means that SQLite accepted the local change and queued
 its projection effect. It does not mean that the remote Sheet write has
-completed.
+completed. The gateway boundary is currently in-process: one server owns the
+coordinator and multiple worker clients use versioned capability requests.
+The singleton check is not a cross-process lock; an external deployment still
+needs one hosted gateway or durable fencing.
 
 The registry also persists a durable worker manifest for each projection:
 route identity, schema version, ownership metadata, and exact ordered headers.

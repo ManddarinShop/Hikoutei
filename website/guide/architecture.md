@@ -39,9 +39,12 @@ and evaluates `User_Input`; and `ReconciliationWorker` checks projection drift
 and enqueues repair effects. The SQLite outbox is the durable contract between
 them: reconciliation never writes a Sheet directly. They share one coordinated
 Sheets provider instance, exposed through capability-specific ports, so the
-current process-local mutation and anchor lanes remain intact. A future
-multi-process deployment can preserve the root entity lifecycle contract, but
-requires durable cross-process Sheets coordination or a single Sheets gateway.
+current process-local mutation and anchor lanes remain intact. The internal
+runtime now routes those ports through a versioned in-process gateway client;
+the gateway server owns the coordinator and its singleton lease, while workers
+never receive the provider object directly. A future multi-process deployment
+can reuse this request boundary, but still requires durable cross-process
+Sheets coordination or a single externally hosted Sheets gateway.
 
 ## Root public API
 
