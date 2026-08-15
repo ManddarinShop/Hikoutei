@@ -7,16 +7,22 @@
  */
 
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../../errors.js";
-import {
-  REGISTERED_PROJECTION_KINDS,
-  type RegisteredProjectionKind,
-} from "../../../../domain/model/constants.js";
+import type { RegisteredProjectionKind } from "../../../../domain/model/constants.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   isFencingValidWithSql,
   type FencingContext,
 } from "@hikoutei/ikisaki";
+import {
+  nonEmptySyncProjectionHeadersSchema,
+  nonEmptySyncTextSchema,
+  positiveSyncSafeIntegerSchema,
+  registeredProjectionSchema,
+  syncAnchorModeSchema,
+  syncOwnershipManifestSchema,
+  syncProjectionHeadersSchema,
+} from "./manifestSchemas.js";
 
 const READ_LOGICAL_SHEET_REGISTRATION_SQL = `
   SELECT schema_version, ownership_manifest_json, business_key_field, anchor_mode, enabled
@@ -276,14 +282,14 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
     ["ownership manifest", input.ownershipManifestJson],
     ["business key field", input.businessKeyField],
   ] as const) {
-    if (value.length === 0) {
+    if (!nonEmptySyncTextSchema.safeParse(value).success) {
       throw new StorageError(
         STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
         label + " is required",
       );
     }
   }
-  if (!Number.isSafeInteger(input.schemaVersion) || input.schemaVersion < 1) {
+  if (!positiveSyncSafeIntegerSchema.safeParse(input.schemaVersion).success) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
       "schema version must be a positive safe integer",
@@ -296,15 +302,25 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
     );
   }
   validateProjectionHeaders(input.projectionHeaders);
-  if (input.anchorMode !== undefined && input.anchorMode !== "business_key") {
+  if (
+    input.anchorMode !== undefined &&
+    (!syncAnchorModeSchema.safeParse(input.anchorMode).success || input.anchorMode !== "business_key")
+  ) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
       "sync registry requires business-key row identity",
     );
   }
+  let parsedManifest: unknown;
   try {
-    JSON.parse(input.ownershipManifestJson);
+    parsedManifest = JSON.parse(input.ownershipManifestJson);
   } catch {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
+      "ownership manifest must be valid JSON",
+    );
+  }
+  if (!syncOwnershipManifestSchema.safeParse(parsedManifest).success) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
       "ownership manifest must be valid JSON",
@@ -322,21 +338,25 @@ function normalizeRegistrationInput(input: RegisterSyncSheetInput): RegisterSync
   };
 }
 
-function validateProjectionHeaders(headers: readonly string[], requireAtLeastOne = true): void {
+function validateProjectionHeaders(headers: unknown, requireAtLeastOne = true): void {
   if (!Array.isArray(headers) || (requireAtLeastOne && headers.length === 0)) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
       "projection headers must contain at least one header",
     );
   }
+  const schema = requireAtLeastOne
+    ? nonEmptySyncProjectionHeadersSchema
+    : syncProjectionHeadersSchema;
+  const parsed = schema.safeParse(headers);
+  if (!parsed.success) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
+      "projection headers must contain non-empty strings",
+    );
+  }
   const seen = new Set<string>();
-  for (const header of headers) {
-    if (typeof header !== "string" || header.trim() === "") {
-      throw new StorageError(
-        STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
-        "projection headers must contain non-empty strings",
-      );
-    }
+  for (const header of parsed.data) {
     if (seen.has(header)) {
       throw new StorageError(
         STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
@@ -407,9 +427,7 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
 }
 
 function isRegisteredProjection(value: string): value is RegisteredProjection {
-  return value === REGISTERED_PROJECTION_KINDS.USER_INPUT ||
-    value === REGISTERED_PROJECTION_KINDS.SYSTEM_STATE ||
-    value === REGISTERED_PROJECTION_KINDS.SYNC_CONFLICTS;
+  return registeredProjectionSchema.safeParse(value).success;
 }
 
 function parseProjectionHeaders(value: string): readonly string[] {
@@ -422,21 +440,24 @@ function parseProjectionHeaders(value: string): readonly string[] {
       "physical sheet registry has malformed projection headers",
     );
   }
-  if (!Array.isArray(parsed)) {
+  const headers = syncProjectionHeadersSchema.safeParse(parsed);
+  if (!headers.success) {
     throw new StorageError(
       STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
-      "physical sheet registry projection headers must be an array",
+      Array.isArray(parsed)
+        ? "physical sheet registry has invalid projection headers"
+        : "physical sheet registry projection headers must be an array",
     );
   }
   try {
-    validateProjectionHeaders(parsed, false);
+    validateProjectionHeaders(headers.data, false);
   } catch {
     throw new StorageError(
       STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
       "physical sheet registry has invalid projection headers",
     );
   }
-  return parsed;
+  return headers.data;
 }
 
 /** Normalizes the v1 whole-column provider boundary to the form accepted by the Sheets provider. */

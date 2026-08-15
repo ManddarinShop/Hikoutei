@@ -15,6 +15,7 @@ import {
   requireRegisteredSyncSheetWithSql,
   type RegisteredSyncSheet,
 } from "./syncRegistry.js";
+import { syncOwnershipManifestSchema } from "./manifestSchemas.js";
 
 /** A validated route plus its parsed ownership manifest. */
 export interface DurableSyncManifest {
@@ -41,7 +42,8 @@ export function requireDurableSyncManifest(
       `sync manifest ${route.physicalSheetId} has malformed ownership metadata`,
     );
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const ownershipManifest = syncOwnershipManifestSchema.safeParse(parsed);
+  if (!ownershipManifest.success) {
     throw new StorageError(
       STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
       `sync manifest ${route.physicalSheetId} ownership metadata must be an object`,
@@ -49,7 +51,7 @@ export function requireDurableSyncManifest(
   }
   return {
     route,
-    ownershipManifest: parsed as Readonly<Record<string, unknown>>,
+    ownershipManifest: ownershipManifest.data,
   };
 }
 
