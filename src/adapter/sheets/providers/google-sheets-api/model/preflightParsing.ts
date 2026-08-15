@@ -10,6 +10,12 @@
  */
 
 import { invalidProviderState } from "../errors.js";
+import {
+  parseProviderResponseShape,
+  sheetEntryShapeSchema,
+  spreadsheetDocumentShapeSchema,
+  unknownArraySchema,
+} from "./rawResponseSchemas.js";
 import type {
   ParsedGridData,
   ParsedMergedCell,
@@ -23,13 +29,11 @@ export function parseSpreadsheetDocument(
   value: unknown,
   label: string,
 ): ParsedSpreadsheetDocument {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    invalidProviderState(`${label} response must be an object`);
-  }
-  const record = value as Record<string, unknown>;
-  if (!Array.isArray(record.sheets)) {
-    invalidProviderState(`${label} response must contain a sheets array`);
-  }
+  const record = parseProviderResponseShape(
+    spreadsheetDocumentShapeSchema,
+    value,
+    `${label} response must contain a sheets array`,
+  );
   const grids = new Map<number, ParsedGridData>();
   const sheets = record.sheets.map((entry, index) => {
     const sheet = parseSheetEntry(entry, `${label} sheets[${index}]`);
@@ -58,13 +62,11 @@ export function parseSheetPropertiesDocument(
   value: unknown,
   label: string,
 ): readonly ParsedSheet[] {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    invalidProviderState(`${label} response must be an object`);
-  }
-  const record = value as Record<string, unknown>;
-  if (!Array.isArray(record.sheets)) {
-    invalidProviderState(`${label} response must contain a sheets array`);
-  }
+  const record = parseProviderResponseShape(
+    spreadsheetDocumentShapeSchema,
+    value,
+    `${label} response must contain a sheets array`,
+  );
   return record.sheets.map((entry, index) =>
     parseSheetEntry(entry, `${label} sheets[${index}]`),
   );
@@ -72,12 +74,13 @@ export function parseSheetPropertiesDocument(
 
 /** Validates one REST sheet entry's properties (sheetId, title, hidden). */
 function parseSheetEntry(value: unknown, label: string): ParsedSheet {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    invalidProviderState(`${label} must be an object`);
-  }
-  const sheet = value as Record<string, unknown>;
+  const sheet = parseProviderResponseShape(
+    sheetEntryShapeSchema,
+    value,
+    `${label} must be an object`,
+  );
   const properties = sheet.properties;
-  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+  if (properties === undefined || properties === null || typeof properties !== "object" || Array.isArray(properties)) {
     invalidProviderState(`${label}.properties must be an object`);
   }
   const propertyRecord = properties as Record<string, unknown>;
@@ -132,13 +135,15 @@ function parseGridDataArray(
   label: string,
   grids: Map<number, ParsedGridData>,
 ): void {
-  if (!Array.isArray(value)) {
-    invalidProviderState(`${label} must be an array`);
-  }
+  const entries = parseProviderResponseShape(
+    unknownArraySchema,
+    value,
+    `${label} must be an array`,
+  );
   if (grids.has(sheetId)) {
     invalidProviderState(`${label} contains a duplicate grid for one sheet`);
   }
-  value.forEach((entry, index) => {
+  entries.forEach((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       invalidProviderState(`${label}[${index}] must be an object`);
     }
@@ -159,8 +164,12 @@ function parseMergedCells(
   label: string,
 ): readonly ParsedMergedCell[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) invalidProviderState(`${label} must be an array`);
-  return value.map((entry, index) => {
+  const entries = parseProviderResponseShape(
+    unknownArraySchema,
+    value,
+    `${label} must be an array`,
+  );
+  return entries.map((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       invalidProviderState(`${label}[${index}] must be an object`);
     }
@@ -201,8 +210,12 @@ function parseMergedCells(
 
 function parseRowData(value: unknown, label: string): readonly ParsedRowData[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value)) invalidProviderState(`${label} must be an array`);
-  return value.map((entry, index) => {
+  const entries = parseProviderResponseShape(
+    unknownArraySchema,
+    value,
+    `${label} must be an array`,
+  );
+  return entries.map((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       invalidProviderState(`${label}[${index}] must be an object`);
     }
