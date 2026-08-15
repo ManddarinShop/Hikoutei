@@ -20,6 +20,7 @@ import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import { RequestStartLimiter } from "../transport/rateLimiter.js";
 import { invalidProviderState } from "../errors.js";
+import { batchUpdateResponseShapeSchema } from "../model/rawResponseSchemas.js";
 
 /** Immutable wiring every operation function receives from the provider. */
 export interface GoogleSheetsApiProviderDeps {
@@ -165,11 +166,17 @@ export function effectRouteOptions(
  * not close effects, so this throws a delivery-uncertain state error.
  */
 export function requireValidBatchUpdateReply(value: unknown, requestCount: number): void {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    invalidProviderState("batchUpdate response must be an object");
+  const parsed = batchUpdateResponseShapeSchema.safeParse(value);
+  if (!parsed.success) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      invalidProviderState("batchUpdate response must be an object");
+    }
+    invalidProviderState(
+      `batchUpdate reply count does not match ${requestCount} requests`,
+    );
   }
-  const record = value as Record<string, unknown>;
-  if (!Array.isArray(record.replies) || record.replies.length !== requestCount) {
+  const record = parsed.data;
+  if (record.replies.length !== requestCount) {
     invalidProviderState(
       `batchUpdate reply count does not match ${requestCount} requests`,
     );
