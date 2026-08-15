@@ -44,6 +44,11 @@ import {
   SYNC_SHEETS_GATEWAY_ERROR_CODES,
   SyncSheetsGatewayError,
 } from "./errors.js";
+import {
+  parseGatewayRequestShape,
+  requireGatewayPositiveSafeInteger,
+  requireGatewayText,
+} from "./schemas.js";
 import { SyncSheetsGatewayClient } from "./client.js";
 
 const DEFAULT_GATEWAY_LEASE_MS = 60_000;
@@ -83,10 +88,10 @@ export class InProcessSyncSheetsGatewayServer implements SyncSheetsGatewayServic
   private closed = false;
 
   public constructor(options: InProcessSyncSheetsGatewayServerOptions) {
-    this.gatewayId = requireText(options.gatewayId, "gatewayId");
-    this.spreadsheetId = requireText(options.spreadsheetId, "spreadsheetId");
+    this.gatewayId = requireGatewayText(options.gatewayId, "gatewayId");
+    this.spreadsheetId = requireGatewayText(options.spreadsheetId, "spreadsheetId");
     this.ports = options.ports;
-    this.leaseDurationMs = requirePositiveSafeInteger(
+    this.leaseDurationMs = requireGatewayPositiveSafeInteger(
       options.leaseDurationMs ?? DEFAULT_GATEWAY_LEASE_MS,
       "gateway lease duration",
     );
@@ -286,7 +291,7 @@ export class InProcessSyncSheetsGatewayServer implements SyncSheetsGatewayServic
   }
 
   private createLease(): SyncSheetsGatewayLease {
-    const leaseToken = requireText(this.createLeaseToken(), "gateway lease token");
+    const leaseToken = requireGatewayText(this.createLeaseToken(), "gateway lease token");
     return {
       gatewayId: this.gatewayId,
       spreadsheetId: this.spreadsheetId,
@@ -318,17 +323,12 @@ export class InProcessSyncSheetsGatewayServer implements SyncSheetsGatewayServic
   }
 
   private authorize<Operation extends SyncSheetsGatewayOperation, Payload>(
-    value: unknown,
+    request: unknown,
     operation: Operation,
     payloadShape: PayloadShape,
   ): SyncSheetsGatewayRequest<Operation, Payload> {
     this.assertUsable();
-    if (!isRecord(value)) {
-      throw new SyncSheetsGatewayError(
-        SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
-        "gateway request must be an object",
-      );
-    }
+    const value = parseGatewayRequestShape(request, payloadShape);
     if (value.protocolVersion !== SYNC_SHEETS_GATEWAY_PROTOCOL_VERSION) {
       throw new SyncSheetsGatewayError(
         SYNC_SHEETS_GATEWAY_ERROR_CODES.PROTOCOL_MISMATCH,
@@ -347,9 +347,7 @@ export class InProcessSyncSheetsGatewayServer implements SyncSheetsGatewayServic
         `gateway request operation does not match ${operation}`,
       );
     }
-    requireText(value.clientId, "clientId");
-    requireText(value.requestId, "requestId");
-    if (!Number.isSafeInteger(value.leaseEpoch) || value.leaseEpoch !== this.lease.leaseEpoch) {
+    if (value.leaseEpoch !== this.lease.leaseEpoch) {
       throw new SyncSheetsGatewayError(
         SYNC_SHEETS_GATEWAY_ERROR_CODES.LEASE_EXPIRED,
         "gateway request carries a stale lease epoch",
@@ -359,14 +357,6 @@ export class InProcessSyncSheetsGatewayServer implements SyncSheetsGatewayServic
       throw new SyncSheetsGatewayError(
         SYNC_SHEETS_GATEWAY_ERROR_CODES.LEASE_EXPIRED,
         "Sheets gateway lease has expired or carries a stale token",
-      );
-    }
-    const payloadIsArray = Array.isArray(value.payload);
-    if ((payloadShape === "array" && !payloadIsArray) ||
-      (payloadShape === "object" && !isRecord(value.payload))) {
-      throw new SyncSheetsGatewayError(
-        SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
-        `gateway ${operation} payload has the wrong shape`,
       );
     }
     return value as unknown as SyncSheetsGatewayRequest<Operation, Payload>;
@@ -380,28 +370,4 @@ export class InProcessSyncSheetsGatewayServer implements SyncSheetsGatewayServic
       );
     }
   }
-}
-
-function requireText(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new SyncSheetsGatewayError(
-      SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
-      `${label} must be a non-empty string`,
-    );
-  }
-  return value;
-}
-
-function requirePositiveSafeInteger(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new SyncSheetsGatewayError(
-      SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
-      `${label} must be a positive safe integer`,
-    );
-  }
-  return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

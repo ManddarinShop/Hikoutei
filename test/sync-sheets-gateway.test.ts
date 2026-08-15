@@ -209,6 +209,48 @@ describe("in-process Sheets gateway", () => {
     await replacement.gateway.release();
   });
 
+  it("rejects malformed gateway envelopes before capability dispatch", async () => {
+    const { gateway } = createGateway();
+    try {
+      const lease = gateway.server.getLease();
+      await expect(gateway.server.ensureRowAnchors(null as never)).rejects.toMatchObject({
+        code: SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
+      });
+      await expect(gateway.server.ensureRowAnchors({
+        ...lease,
+        protocolVersion: SYNC_SHEETS_GATEWAY_PROTOCOL_VERSION,
+        clientId: "",
+        requestId: "missing-client",
+        operation: "observation.ensure_row_anchors",
+        payload: ensureRequest(),
+      } as never)).rejects.toMatchObject({
+        code: SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
+      });
+      await expect(gateway.server.ensureRowAnchors({
+        ...lease,
+        protocolVersion: SYNC_SHEETS_GATEWAY_PROTOCOL_VERSION,
+        clientId: "client-a",
+        requestId: "wrong-payload-shape",
+        operation: "observation.ensure_row_anchors",
+        payload: [],
+      } as never)).rejects.toMatchObject({
+        code: SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
+      });
+      await expect(gateway.server.ensureRowAnchors({
+        ...lease,
+        protocolVersion: SYNC_SHEETS_GATEWAY_PROTOCOL_VERSION,
+        clientId: "client-a",
+        requestId: "unknown-operation",
+        operation: "unknown.operation",
+        payload: ensureRequest(),
+      } as never)).rejects.toMatchObject({
+        code: SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
+      });
+    } finally {
+      await gateway.release();
+    }
+  });
+
   it("rejects requests after the singleton server is released", async () => {
     const { gateway } = createGateway();
     const client = gateway.server.createClient("client-a");

@@ -35,6 +35,7 @@ import {
   SYNC_SHEETS_GATEWAY_ERROR_CODES,
   SyncSheetsGatewayError,
 } from "./errors.js";
+import { requireGatewayText } from "./schemas.js";
 
 /**
  * Client-side capability facade for the versioned Sheets gateway service.
@@ -58,7 +59,7 @@ export class SyncSheetsGatewayClient
   ) {
     this.service = service;
     this.lease = { ...lease };
-    this.clientId = requireClientId(clientId);
+    this.clientId = requireGatewayText(clientId, "Sheets gateway clientId");
     this.renewLeaseFn = renewLeaseFn;
   }
 
@@ -182,14 +183,4 @@ export class SyncSheetsGatewayClient
       payload,
     } as GatewayRequest<Operation, Payload>;
   }
-}
-
-function requireClientId(value: string): string {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new SyncSheetsGatewayError(
-      SYNC_SHEETS_GATEWAY_ERROR_CODES.INVALID_REQUEST,
-      "Sheets gateway clientId must be a non-empty string",
-    );
-  }
-  return value;
 }
