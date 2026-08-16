@@ -215,41 +215,60 @@ MikroORM は実装の詳細であり、Hikoutei の公開エンティティ API 
 - スキーマ変更・手動編集・競合更新には、依然としてアプリケーションの運用
   ポリシーが必要です。
 
+## ローカルクエリ
+
+読み取りは Hikoutei 独自の型付き演算子を使い、常に SQLite で実行されます。
+
+```ts
+const [users, total] = await em.findAndCount(
+  User,
+  {
+    name: { like: "Ada%" },
+    age: { gte: 18, lt: 65 },
+    active: { in: [true] },
+  },
+  {
+    orderBy: { age: "desc", name: "asc" },
+    limit: 20,
+    offset: 0,
+  },
+);
+```
+
+`eq`、`ne`、`gt`、`gte`、`lt`、`lte`、`in`、`nin` は、宣言された
+スカラー型で有効な範囲で利用でき、`like` は文字列専用です。
+`{ active: true }` のような等価条件の省略記法も引き続き利用できます。
+`count()` はページネーション前のフィルター総数を返し、`findAndCount()` は
+1 つの SQLite スナップショットからページと総数を読み取ります。明示的な
+並び順には最後のタイブレーカーとして主キーが追加され、`orderBy` のない
+ページネーションは主キーの昇順を使用します。
+
 ## プロジェクトステータス
 
 Hikoutei は活発に開発中です。現在の EntityManager は、スカラーエンティティの
-ライフサイクル操作、等価条件を使う `find()` / `findOne()`、`find()` の
-`limit` / `offset` ページネーション、コールバック形式の `transactional()` を
-サポートします。通常の読み取り元は常に SQLite であり、Google Sheets では
-ありません。
-`hikoutei setup` CLI がスプレッドシートとサービスアカウントをプロビジョニ
-ングし、direct Google Sheets API provider(環境変数による自動開始)が唯一の
-同期経路です — Apps Script ゲートウェイはありません。シート編集の取り込みと
+ライフサイクル操作、型付きローカルフィルターと並び順、`limit` / `offset`
+ページネーション、`count()`、スナップショット整合性のある `findAndCount()`、
+コールバック形式の `transactional()` をサポートします。通常の読み取り元は
+常に SQLite であり、Google Sheets ではありません。シート編集の取り込みと
 競合表示はまだ発展途上です。マイナーバージョンのアップグレード前にリリース
 ノートを確認してください。
 
 ## ロードマップ
 
-EntityManager のロードマップは、以下の実装順序に従います。段階の順序は確定
-していますが、日付やリリース番号は約束しません。
+最初の EntityManager 段階である豊富なローカル読み取りは完了しました。残る段階は
+以下の実装順序に従い、日付やリリース番号は約束しません。
 
-1. **豊富なローカル読み取り**
-   - Hikoutei 独自の型付きクエリ契約に、明示的な `eq`、`ne`、`gt`、
-     `gte`、`lt`、`lte`、`in`、`nin`、`like` 条件と `orderBy`、
-     `count()`、`findAndCount()` を追加します。
-   - MikroORM のクエリ型を公開せず、これらを既存の `limit` / `offset`
-     ページネーションと組み合わせます。
-2. **ライフサイクル安全な書き込み**
+1. **ライフサイクル安全な書き込み**
    - `upsert` と direct/bulk mutation 機能は、エンティティテーブル、
      canonical state、永続的な Sheet effect outbox を 1 つの SQLite
      トランザクションで処理する Hikoutei 独自の契約を通じてのみ追加します。
    - この原子的なライフサイクルを迂回し得る、生の `nativeInsert`、
      `nativeUpdate`、`nativeDelete`、または SQL パススルー API は約束しません。
-3. **リレーションとロード**
+2. **リレーションとロード**
    - many-to-one、one-to-many、`populate()` 機能を追加します。
    - 公開前に、リレーションの SQLite マッピング、Sheets プロジェクション
      表現、スキーマ動作、競合セマンティクスを一体として設計します。
-4. **スキーマ運用**
+3. **スキーマ運用**
    - マイグレーションとスキーマドリフト管理を追加します。
    - 検証と運用フローを既存のセットアップツールと統合します。
 

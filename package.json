@@ -23,6 +23,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./internal/sync-status": {
+      "types": "./dist/internal/syncStatus.d.ts",
+      "import": "./dist/internal/syncStatus.js"
     }
   },
   "files": [

@@ -21,3 +21,9 @@ description: Google Sheets quota, async delivery, local-only SQLite, and operati
   application success boundary; remote delivery is at-least-once and
   asynchronous, and compare-and-set evidence is not a true distributed
   transaction.
+- Not a full ORM: the EntityManager is an ORM-style facade over scalar
+  entities. Entity definitions are scalar-only (`string` / `number` /
+  `boolean` / `date`); v1 permits uniqueness only on the primary/business key.
+- Not a relational engine: relations, joins, `populate()`, migrations,
+  cascades, bulk/ORM query builders, and raw SQL are unsupported in this
+  milestone. Sheets is never a live query database.

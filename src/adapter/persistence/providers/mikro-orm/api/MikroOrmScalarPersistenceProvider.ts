@@ -10,12 +10,15 @@
 import type { ResolvedHikouteiEntityDescriptor } from "../../../../../api/entity.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "../../../../../api/errors.js";
 import type {
+  ScalarEntityCountQuery,
   ScalarEntityDelete,
   ScalarEntityFlushChange,
   ScalarEntityFlushCoordinator,
   ScalarEntityInsert,
   ScalarEntityPersistenceProvider,
+  ScalarEntityPredicate,
   ScalarEntityQuery,
+  ScalarEntityReader,
   ScalarEntityRow,
   ScalarEntityTransaction,
   ScalarEntityUpdate,
@@ -60,6 +63,25 @@ export class MikroOrmScalarPersistenceProvider implements ScalarEntityPersistenc
     return readRows(manager, this.requireBindingByTable(query.tableName), query);
   }
 
+  /** Counts rows through a clean manager without materializing entities. */
+  async count(query: ScalarEntityCountQuery): Promise<number> {
+    const manager = this.storage.forkEntityManager();
+    return countRows(manager, this.requireBindingByTable(query.tableName), query);
+  }
+
+  /** Runs sequential reads through one consistent SQLite read transaction. */
+  async readSnapshot<Result>(
+    work: (reader: ScalarEntityReader) => Promise<Result>,
+  ): Promise<Result> {
+    return this.storage.transactional(async ({ entityManager }) => {
+      return work(new MikroOrmScalarReader(
+        entityManager,
+        this.bindings,
+        this.bindingsByTable,
+      ));
+    });
+  }
+
   /** Runs the common UoW plan and mapped work in one SQLite transaction. */
   async beginTransaction<Result>(
     work: (transaction: ScalarEntityTransaction) => Promise<Result>,
@@ -89,7 +111,7 @@ export class MikroOrmScalarPersistenceProvider implements ScalarEntityPersistenc
 }
 
 /** Transaction-bound reader shared by provider reads and flush-time lookups. */
-class MikroOrmScalarReader {
+class MikroOrmScalarReader implements ScalarEntityReader {
   constructor(
     protected readonly entityManager: MikroOrmSqliteEntityManager,
     protected readonly bindings: ReadonlyMap<string, MikroOrmScalarEntityBinding>,
@@ -98,6 +120,10 @@ class MikroOrmScalarReader {
 
   async read(query: ScalarEntityQuery): Promise<readonly ScalarEntityRow[]> {
     return readRows(this.entityManager, this.requireBindingByTable(query.tableName), query);
+  }
+
+  async count(query: ScalarEntityCountQuery): Promise<number> {
+    return countRows(this.entityManager, this.requireBindingByTable(query.tableName), query);
   }
 
   protected requireBindingByTable(tableName: string): MikroOrmScalarEntityBinding {
@@ -244,7 +270,10 @@ async function readRows(
     entityManager,
     [
       binding.entity,
-      toMikroOrmFilter(binding.descriptor, query.where),
+      toMikroOrmFilter(
+        toInternalPredicate(binding.descriptor, query.predicate),
+        query.primaryKeyColumn,
+      ),
       toMikroOrmQueryOptions(query),
     ],
   );
@@ -257,23 +286,110 @@ async function readRows(
   return result.map((entity) => fromInternalEntity(binding.descriptor, entity));
 }
 
+async function countRows(
+  entityManager: MikroOrmSqliteEntityManager,
+  binding: MikroOrmScalarEntityBinding,
+  query: ScalarEntityCountQuery,
+): Promise<number> {
+  const result: unknown = await Reflect.apply(
+    entityManager.count,
+    entityManager,
+    [
+      binding.entity,
+      toMikroOrmFilter(
+        toInternalPredicate(binding.descriptor, query.predicate),
+        query.primaryKeyColumn,
+      ),
+    ],
+  );
+  if (typeof result !== "number" || !Number.isSafeInteger(result) || result < 0) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
+      "MikroORM count result must be a non-negative safe integer.",
+    );
+  }
+  return result;
+}
+
 function toMikroOrmQueryOptions(query: ScalarEntityQuery): Record<string, unknown> {
+  const orderBy = query.orderBy.map((order) => ({ [order.field]: order.direction }));
+  // SQLite rejects a bare `OFFSET` (it requires a preceding `LIMIT`), so an
+  // offset-only public query must use the SQLite idiom for "all rows after a
+  // skip": a negative `LIMIT`, which SQLite treats as no upper bound. The
+  // public option contract still allows `{ offset }` independently of
+  // `{ limit }`; this `LIMIT -1` stays inside the MikroORM adapter boundary and
+  // is never exposed as raw SQL to application code. `limit` is `0`-safe via
+  // nullish coalescing: an explicit `limit: 0` is preserved unchanged.
+  const limit = query.limit ?? (query.offset === undefined ? undefined : -1);
   return {
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
+    ...(orderBy.length === 0 ? {} : { orderBy }),
+    ...(limit === undefined ? {} : { limit }),
     ...(query.offset === undefined ? {} : { offset: query.offset }),
   };
 }
 
-function toMikroOrmFilter(
+function toInternalPredicate(
   descriptor: ResolvedHikouteiEntityDescriptor,
-  where: Readonly<Record<string, ScalarEntityValue>>,
+  predicate: ScalarEntityPredicate,
+): ScalarEntityPredicate {
+  switch (predicate.kind) {
+    case "comparison":
+      return {
+        ...predicate,
+        value: toInternalValue(descriptor, predicate.field, predicate.value),
+      };
+    case "set":
+      return {
+        ...predicate,
+        values: predicate.values.map((value) =>
+          toInternalValue(descriptor, predicate.field, value)
+        ),
+      };
+    case "all":
+    case "any":
+      return {
+        ...predicate,
+        predicates: predicate.predicates.map((child) =>
+          toInternalPredicate(descriptor, child)
+        ),
+      };
+    case "like":
+    case "null":
+    case "constant":
+      return predicate;
+  }
+}
+
+function toMikroOrmFilter(
+  predicate: ScalarEntityPredicate,
+  primaryKeyColumn: string,
 ): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(where).map(([property, value]) => [
-      property,
-      toInternalValue(descriptor, property, value),
-    ]),
-  );
+  switch (predicate.kind) {
+    case "comparison":
+      return { [predicate.field]: { [`$${predicate.operator}`]: predicate.value } };
+    case "set":
+      return { [predicate.field]: { [`$${predicate.operator}`]: [...predicate.values] } };
+    case "like":
+      return { [predicate.field]: { $like: predicate.pattern } };
+    case "null":
+      return predicate.operator === "is_null"
+        ? { [predicate.field]: null }
+        : { [predicate.field]: { $ne: null } };
+    case "constant":
+      return predicate.value ? {} : { [primaryKeyColumn]: { $in: [] } };
+    case "all":
+      return {
+        $and: predicate.predicates.map((child) =>
+          toMikroOrmFilter(child, primaryKeyColumn)
+        ),
+      };
+    case "any":
+      return {
+        $or: predicate.predicates.map((child) =>
+          toMikroOrmFilter(child, primaryKeyColumn)
+        ),
+      };
+  }
 }
 
 function toInternalData(
@@ -288,6 +404,16 @@ function toInternalData(
   );
 }
 
+function toInternalValue(
+  descriptor: ResolvedHikouteiEntityDescriptor,
+  propertyName: string,
+  value: Exclude<ScalarEntityValue, null>,
+): Exclude<ScalarEntityValue, null> | string;
+function toInternalValue(
+  descriptor: ResolvedHikouteiEntityDescriptor,
+  propertyName: string,
+  value: ScalarEntityValue,
+): ScalarEntityValue | string;
 function toInternalValue(
   descriptor: ResolvedHikouteiEntityDescriptor,
   propertyName: string,

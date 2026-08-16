@@ -48,6 +48,34 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
+## Query the local authority
+
+Equality shorthand composes with Hikoutei-owned typed operators, ordering,
+and pagination:
+
+```ts
+const [users, total] = await em.findAndCount(
+  User,
+  {
+    name: { like: "Ada%" },
+  },
+  {
+    orderBy: { name: "asc" },
+    limit: 20,
+    offset: 0,
+  },
+);
+```
+
+Supported operators are `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`,
+and string-only `like`, subject to the declared scalar type. `count()` returns
+the unpaged total for a filter. `findAndCount()` reads its page and unpaged
+total (which ignores `limit`/`offset`) from one SQLite snapshot. When an
+explicit `orderBy` omits the primary key, Hikoutei appends it in ascending
+order as the final tie-breaker; when the primary key is explicitly ordered,
+its supplied position and direction are preserved. Pagination without
+`orderBy` uses primary-key ascending order.
+
 ## What happens to the Sheet?
 
 The write commits to local SQLite immediately — the application request never
@@ -59,7 +87,7 @@ recorded as conflicts, never silently overwritten.
 The public API surface is:
 
 ```text
-fork() · create() · find() · findOne() · persist() · remove() · flush() · transactional()
+fork() · create() · find() · findOne() · count() · findAndCount() · persist() · remove() · flush() · transactional()
 ```
 
 Sheet routes, provider credentials, provisioning, and polling belong to the
