@@ -121,8 +121,13 @@ jobs:
           # and the built dist payload (a tag whose root build script lost
           # the mcp workspace step would otherwise pack an empty shell).
           tar -xOf "$package_path" package/package.json > "$RUNNER_TEMP/mcp-packed-package.json"
+          # List the tarball once into a file and grep the file: piping tar
+          # into `grep -q` makes grep exit at the first match, SIGPIPEs GNU
+          # tar mid-write, and pipefail then reports a bogus "missing" error
+          # even though the file is present.
+          tar -tzf "$package_path" > "$RUNNER_TEMP/mcp-tar-list.txt"
           for required_file in dist/index.js dist/tools.js dist/config.js dist/env.js dist/values.js; do
-            if ! tar -tzf "$package_path" | grep -qx "package/$required_file"; then
+            if ! grep -qx "package/$required_file" "$RUNNER_TEMP/mcp-tar-list.txt"; then
               echo "packed tarball is missing $required_file — was packages/mcp/dist built?" >&2
               exit 1
             fi
