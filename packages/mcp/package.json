@@ -46,6 +46,8 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@mikro-orm/core": "7.1.7",
+    "@mikro-orm/sql": "7.1.7",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "hikoutei": "file:../.."
   }

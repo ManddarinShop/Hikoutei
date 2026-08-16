@@ -1,0 +1,158 @@
+name: Publish hikoutei-mcp package
+
+# Triggered by an mcp release tag such as mcp-v0.1.0. The tag must point at
+# a commit on main that is at or past the hikoutei core release the package
+# depends on (the workspace hikoutei version must satisfy the patched
+# dependency spec and that version must already exist on npmjs).
+#
+# Unlike the core package, hikoutei-mcp keeps `"private": true` and a
+# workspace `file:../..` dependency in the repository so branch CI never
+# needs an unpublished registry version. This workflow patches both at
+# publish time only: the dependency becomes `^<core version>` and the
+# private flag is stripped, the resulting tarball is asserted clean, and a
+# bare consumer install smoke runs against the packed artifact before the
+# idempotent publish step (mirroring the ikisaki publish step).
+on:
+  push:
+    tags:
+      - 'mcp-v[0-9]*'
+
+concurrency:
+  # Serialize every mcp publish so the channel cannot move backward.
+  group: mcp-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-publish:
+    name: Verify and publish hikoutei-mcp
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate release tag matches the mcp package version
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG_NAME" =~ ^mcp-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            expected_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          else
+            echo "MCP release tag must be mcp-vX.Y.Z: $TAG_NAME" >&2
+            exit 1
+          fi
+          mcp_version="$(node -p "require('./packages/mcp/package.json').version")"
+          if [[ "$mcp_version" != "$expected_version" ]]; then
+            echo "packages/mcp version ($mcp_version) does not match tag ($TAG_NAME)" >&2
+            exit 1
+          fi
+          test "$(node -p "require('./packages/mcp/package.json').name")" = "hikoutei-mcp"
+
+      - name: Read core version and verify it is published
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_version="$(node -p "require('./package.json').version")"
+          echo "core_version=$core_version" >> "$GITHUB_ENV"
+          published="$(npm view "hikoutei@${core_version}" version --registry=https://registry.npmjs.org)"
+          test "$published" = "$core_version"
+
+      - name: Patch mcp manifest for publish (dependency + private flag)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from "node:fs/promises";
+          const pkg = JSON.parse(await readFile("./packages/mcp/package.json", "utf8"));
+          const coreVersion = process.env.core_version;
+          if (pkg.private !== true) throw new Error("expected private:true in the repo manifest");
+          if (pkg.dependencies.hikoutei !== "file:../..") {
+            throw new Error("expected the workspace file:../.. hikoutei dependency in the repo manifest");
+          }
+          delete pkg.private;
+          pkg.dependencies.hikoutei = `^${coreVersion}`;
+          await writeFile("./packages/mcp/package.json", JSON.stringify(pkg, null, 2) + "\n");
+          NODE
+          # The workspace root version satisfies the patched range, so this
+          # still links hikoutei locally for typecheck/test/build.
+          npm install
+
+      - name: Typecheck production code
+        run: npm run typecheck
+
+      - name: Typecheck tests
+        run: npm run typecheck:test
+
+      - name: Run unit and contract tests
+        run: npm test
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Pack and assert the publishable tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/hikoutei-mcp-package"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir"
+          package_file="$(cd packages/mcp && npm pack --silent --pack-destination "$package_dir")"
+          package_path="$package_dir/$package_file"
+          test -f "$package_path"
+          echo "package_path=$package_path" >> "$GITHUB_ENV"
+
+          # Assert the patched manifest inside the actual tarball: no
+          # private flag, no file: spec, real version range, engine deps.
+          tar -xOf "$package_path" package/package.json > "$RUNNER_TEMP/mcp-packed-package.json"
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const pkg = JSON.parse(await readFile(process.env.RUNNER_TEMP + "/mcp-packed-package.json", "utf8"));
+          const coreVersion = process.env.core_version;
+          const problems = [];
+          if (pkg.private !== undefined) problems.push("packed manifest still has private:true");
+          if (pkg.dependencies.hikoutei !== `^${coreVersion}`) {
+            problems.push(`packed hikoutei dependency is ${pkg.dependencies.hikoutei}, expected ^${coreVersion}`);
+          }
+          if (pkg.dependencies["@mikro-orm/core"] !== "7.1.7") problems.push("packed @mikro-orm/core dependency missing");
+          if (pkg.dependencies["@mikro-orm/sql"] !== "7.1.7") problems.push("packed @mikro-orm/sql dependency missing");
+          if (!pkg.bin || pkg.bin["hikoutei-mcp"] !== "./dist/index.js") problems.push("packed bin entry missing");
+          if (problems.length > 0) {
+            console.error(problems.join("; "));
+            process.exit(1);
+          }
+          NODE
+
+      - name: Run consumer smoke against the packed tarball
+        run: node scripts/ci/run-mcp-consumer-smoke.mjs --package "${{ env.package_path }}"
+
+      - name: Publish hikoutei-mcp (idempotent)
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NPM_TOKEN secret is required to publish hikoutei-mcp." >&2
+            exit 1
+          fi
+          mcp_version="$(node -p "require('./packages/mcp/package.json').version")"
+          if npm view "hikoutei-mcp@${mcp_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "hikoutei-mcp@${mcp_version} already published; skipping."
+          else
+            npm publish "${{ env.package_path }}" --tag latest --access public --provenance
+          fi
