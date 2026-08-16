@@ -516,15 +516,22 @@ describe("package.json packaging contract pins the import boundary", () => {
     readonly files?: unknown;
   };
 
-  it("exposes exactly the root subpath from the exports map", () => {
-    // A single `.` entry with `types`/`import` conditions is what makes every
-    // other specifier (including `./dist/api/internalEntityManager.js`) resolve
-    // to ERR_PACKAGE_PATH_NOT_EXPORTED for a consumer. Adding any internal
-    // subpath here would punch a hole through the import boundary.
+  it("exposes exactly the root and the unstable sync-status subpath from the exports map", () => {
+    // `.` with `types`/`import` conditions keeps every other specifier
+    // (including `./dist/api/internalEntityManager.js`) resolving to
+    // ERR_PACKAGE_PATH_NOT_EXPORTED for a consumer. The single intentional
+    // exception is `./internal/sync-status`, the documented unstable
+    // observability subpath reserved for first-party tooling (hikoutei-mcp);
+    // adding any other subpath here would punch a hole through the import
+    // boundary and must update this allowlist consciously.
     expect(pkg.exports).toEqual({
       ".": {
         types: "./dist/index.d.ts",
         import: "./dist/index.js",
+      },
+      "./internal/sync-status": {
+        types: "./dist/internal/syncStatus.d.ts",
+        import: "./dist/internal/syncStatus.js",
       },
     });
   });
