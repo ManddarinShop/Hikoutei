@@ -15,6 +15,7 @@
  * remain durable in the outbox and resume on the next session.
  */
 
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -189,7 +190,10 @@ function isMainModule(): boolean {
   const entry = process.argv[1];
   if (entry === undefined) return false;
   try {
-    return import.meta.url === pathToFileURL(entry).href;
+    // realpathSync matters on macOS (/tmp -> /private/tmp) and npx caches:
+    // ESM resolves symlinks in import.meta.url, so the entry must too, or a
+    // symlinked bin path silently skips main() and exits 0.
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
   } catch {
     return false;
   }
