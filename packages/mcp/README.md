@@ -10,9 +10,9 @@ Sheet delivery happens in the background via Hikoutei's durable outbox, so an ag
 fights the Sheets API quota, and a human editing the Sheet never gets silently overwritten:
 their edits surface as conflicts that need a human decision.
 
-> Status: **v0.1.0 — local-preview, not yet published to npm.** This workspace builds the
-> server and verifies it locally (MCP Inspector). Publishing and directory registration are
-> tracked separately.
+> Status: **v0.1.0 — published to npm as [`hikoutei-mcp`](https://www.npmjs.com/package/hikoutei-mcp).**
+> Releases are tagged `mcp-vX.Y.Z`; the `mcp-publish` workflow patches the manifest, verifies a
+> bare consumer install, and publishes with provenance.
 
 ## Why this exists
 

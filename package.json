@@ -34,9 +34,9 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json",
+    "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json && npm run build -w hikoutei-mcp",
     "typecheck": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json",
+    "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
     "test": "npm run build -w @hikoutei/ikisaki && vitest run"
   },
   "keywords": [
