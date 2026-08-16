@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.5.23",
+  "version": "0.6.0",
   "description": "Typed repository and safe write layer for Google Sheets-backed MVPs. SQLite-authoritative entity lifecycle with asynchronous Google Sheets projection.",
   "repository": {
     "type": "git",
@@ -23,10 +23,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./internal/sync-status": {
-      "types": "./dist/internal/syncStatus.d.ts",
-      "import": "./dist/internal/syncStatus.js"
     }
   },
   "files": [
@@ -34,9 +30,9 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json && npm run build -w hikoutei-mcp",
+    "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json",
     "typecheck": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
+    "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json",
     "test": "npm run build -w @hikoutei/ikisaki && vitest run"
   },
   "keywords": [
