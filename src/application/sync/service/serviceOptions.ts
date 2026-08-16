@@ -45,6 +45,11 @@ import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
 } from "./errors.js";
+import {
+  internalPositiveSafeIntegerSchema,
+  internalSyncRouteSchema,
+  internalSyncTextSchema,
+} from "./serviceOptionSchemas.js";
 
 /** Provider capability required by internal service startup (incl. table reads). */
 export type InternalSyncProvider = SyncSheetsProvider & SyncSheetsTableReader;
@@ -141,13 +146,13 @@ export function validateServiceOptions(
   options: InternalSyncServiceOptions,
   descriptors: ReadonlyMap<string, ResolvedHikouteiEntityDescriptor>,
 ): void {
-  if (options.dbName.trim() === "") {
+  if (!internalSyncTextSchema.safeParse(options.dbName).success) {
     throw new SyncServiceError(SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS, "sync service dbName is required.");
   }
   validateEffectLeaseHeadroom(options);
   if (
     options.pollingFullScanIntervalMs !== undefined &&
-    (!Number.isSafeInteger(options.pollingFullScanIntervalMs) || options.pollingFullScanIntervalMs < 1)
+    !internalPositiveSafeIntegerSchema.safeParse(options.pollingFullScanIntervalMs).success
   ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
@@ -156,7 +161,7 @@ export function validateServiceOptions(
   }
   if (
     options.reconciliationIntervalMs !== undefined &&
-    (!Number.isSafeInteger(options.reconciliationIntervalMs) || options.reconciliationIntervalMs < 1)
+    !internalPositiveSafeIntegerSchema.safeParse(options.reconciliationIntervalMs).success
   ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
@@ -206,10 +211,7 @@ export function validateServiceOptions(
 
 function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void {
   const effectLeaseDurationMs = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
-  if (
-    !Number.isSafeInteger(effectLeaseDurationMs) ||
-    effectLeaseDurationMs < 1
-  ) {
+  if (!internalPositiveSafeIntegerSchema.safeParse(effectLeaseDurationMs).success) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
       "sync service effectLeaseDurationMs must be a positive safe integer.",
@@ -298,8 +300,12 @@ function validateRoute(entityName: string, projection: string, route: { readonly
   if (route === null || typeof route !== "object") {
     throwInvalidProjection(`sync route ${entityName}.${projection} must be an object.`);
   }
-  requireText(route.tabName, `sync route ${entityName}.${projection}.tabName`);
-  requireText(route.registeredRange, `sync route ${entityName}.${projection}.registeredRange`);
+  const parsed = internalSyncRouteSchema.safeParse(route);
+  if (!parsed.success) {
+    const candidate = route as unknown as Record<string, unknown>;
+    requireText(candidate.tabName, `sync route ${entityName}.${projection}.tabName`);
+    requireText(candidate.registeredRange, `sync route ${entityName}.${projection}.registeredRange`);
+  }
 }
 
 function addRoute(
@@ -323,8 +329,8 @@ export function createWriterOptions(options: InternalSyncServiceOptions): TypedS
   };
 }
 
-function requireText(value: string, label: string): void {
-  if (typeof value !== "string" || value.trim() === "") {
+function requireText(value: unknown, label: string): void {
+  if (!internalSyncTextSchema.safeParse(value).success) {
     throwInvalidProjection(`${label} must be a non-empty string.`);
   }
 }

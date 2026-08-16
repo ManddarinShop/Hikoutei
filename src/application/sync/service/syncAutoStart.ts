@@ -21,6 +21,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { z } from "zod";
 
 import {
   getEntityDescriptor,
@@ -53,6 +54,10 @@ import {
   createInternalSyncService,
   type InternalSyncService,
 } from "./SyncServiceBootstrap.js";
+import {
+  positiveDecimalMillisecondsSchema,
+  syncCredentialsSchema,
+} from "./configSchemas.js";
 
 /** Env keys consumed by the sync auto-start bridge. */
 export const SYNC_ENV_KEYS = {
@@ -257,22 +262,24 @@ export async function validateSyncCredentialsFile(
       `Credentials file is not valid JSON: ${path}`,
     );
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const parsedRecord = z.record(z.string(), z.unknown()).safeParse(parsed);
+  if (!parsedRecord.success) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_INVALID_JSON,
       `Credentials file is not valid JSON: ${path}`,
     );
   }
-  const record = parsed as Record<string, unknown>;
-  const missing = REQUIRED_CREDENTIAL_FIELDS.filter((field) =>
-    typeof record[field] !== "string" || (record[field] as string).trim() === "");
-  if (missing.length > 0) {
+  const credentials = syncCredentialsSchema.safeParse(parsedRecord.data);
+  if (!credentials.success) {
+    const missing = REQUIRED_CREDENTIAL_FIELDS.filter((field) =>
+      credentials.error.issues.some((issue) => issue.path[0] === field),
+    );
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FIELD_MISSING,
       `Credentials file is missing required fields: ${missing.join(", ")}`,
     );
   }
-  return { clientEmail: record.client_email as string };
+  return { clientEmail: credentials.data.client_email };
 }
 
 /**
@@ -382,24 +389,14 @@ function parseIntervalEnv(
 ): number {
   const raw = env[key];
   if (raw === undefined || raw.trim() === "") return fallback;
-  // Decimal-only shape: Number() would also accept hex ("0x10"), exponent
-  // ("1e3"), signed ("-1"), and whitespace-padded (" 60000") forms that
-  // violate the positive-integer-ms contract, so the raw string must match
-  // before conversion.
-  if (!/^\d+$/.test(raw)) {
+  const value = positiveDecimalMillisecondsSchema.safeParse(raw);
+  if (!value.success) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
       `Sync start failed: ${key} must be a positive integer (ms) — current value: ${raw}`,
     );
   }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
-      `Sync start failed: ${key} must be a positive integer (ms) — current value: ${raw}`,
-    );
-  }
-  return value;
+  return value.data;
 }
 
 function raiseDiagnosed(diagnostic: SyncDiagnostic, failure: HikouteiError): never {

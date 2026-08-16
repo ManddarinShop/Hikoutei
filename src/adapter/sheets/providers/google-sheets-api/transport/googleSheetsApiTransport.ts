@@ -17,6 +17,11 @@ import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
 } from "../errors.js";
+import {
+  parseRawErrorRecord,
+  parseRawErrorText,
+  parseRawHttpStatus,
+} from "./rawErrorSchemas.js";
 
 /** REST `CellFormat.numberFormat` object written by the provider. */
 export interface GoogleSheetsApiNumberFormat {
@@ -255,34 +260,16 @@ interface GaxiosErrorShape {
 }
 
 function extractGaxiosErrorShape(error: unknown): GaxiosErrorShape {
-  if (error === null || typeof error !== "object") {
+  const record = parseRawErrorRecord(error);
+  if (record === undefined) {
     return { code: undefined, status: undefined, apiErrorStatus: undefined };
   }
-  const record = error as Record<string, unknown>;
-  const code = typeof record.code === "string" ? record.code : undefined;
-  const response = record.response;
-  const responseRecord = response !== null && typeof response === "object"
-    ? response as Record<string, unknown>
-    : undefined;
-  const rawStatus = responseRecord?.status;
-  const status = typeof rawStatus === "number" && Number.isInteger(rawStatus)
-    ? rawStatus
-    : typeof rawStatus === "string" && /^\d{3}$/.test(rawStatus)
-      ? Number(rawStatus)
-      : undefined;
-  let apiErrorStatus: string | undefined;
-  const data = responseRecord?.data;
-  const dataRecord = data !== null && typeof data === "object"
-    ? data as Record<string, unknown>
-    : undefined;
-  const errorBody = dataRecord?.error;
-  const errorRecord = errorBody !== null && typeof errorBody === "object"
-    ? errorBody as Record<string, unknown>
-    : undefined;
-  const rawApiStatus = errorRecord?.status;
-  if (typeof rawApiStatus === "string" && rawApiStatus.length > 0) {
-    apiErrorStatus = rawApiStatus;
-  }
+  const code = parseRawErrorText(record.code);
+  const responseRecord = parseRawErrorRecord(record.response);
+  const status = parseRawHttpStatus(responseRecord?.status);
+  const dataRecord = parseRawErrorRecord(responseRecord?.data);
+  const errorRecord = parseRawErrorRecord(dataRecord?.error);
+  const apiErrorStatus = parseRawErrorText(errorRecord?.status);
   return { code, status, apiErrorStatus };
 }
 
