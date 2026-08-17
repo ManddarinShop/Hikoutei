@@ -1,6 +1,7 @@
 {
   "name": "spreadsheet-db-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "mcpName": "io.github.ManddarinShop/spreadsheet-db-mcp",
   "description": "stdio MCP server exposing a SQLite-authoritative entity database with an async Google Sheets projection to AI agents.",
   "repository": {
     "type": "git",
