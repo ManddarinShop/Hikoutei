@@ -657,4 +657,3 @@ describe("soak executor against a real runtime", () => {
     });
   });
 });
-
