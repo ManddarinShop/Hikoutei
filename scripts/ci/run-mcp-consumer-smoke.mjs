@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * CI consumer smoke for the packed hikoutei-mcp tarball.
+ * CI consumer smoke for the packed spreadsheet-db-mcp tarball.
  *
  * Installs the tarball into a throwaway directory together with the pinned
  * MikroORM peer engines (hikoutei and its internal deps resolve from the
  * real npm registry), then drives the installed binary over stdio:
  * initialize handshake, tools/list, create_record, get_record, and
  * get_sync_status in local-only mode. This reproduces what a bare
- * `npx -y hikoutei-mcp` run does and would catch a broken dependency
+ * `npx -y spreadsheet-db-mcp` run does and would catch a broken dependency
  * spec, a missing engine dep, or a dead bin entry before publish.
  *
  * Usage: node run-mcp-consumer-smoke.mjs --package <mcp-tarball-path>
@@ -44,7 +44,7 @@ function run(cmd, cmdArgs, cwd) {
 
 async function main() {
   const { package: packagePath } = parseArgs(process.argv);
-  const consumerDir = join(process.env.RUNNER_TEMP ?? ".", "hikoutei-mcp-consumer-smoke");
+  const consumerDir = join(process.env.RUNNER_TEMP ?? ".", "spreadsheet-db-mcp-consumer-smoke");
   rmSync(consumerDir, { recursive: true, force: true });
   mkdirSync(consumerDir, { recursive: true });
 
@@ -79,7 +79,7 @@ async function main() {
 
   const child = spawn(
     process.execPath,
-    [join(consumerDir, "node_modules", "hikoutei-mcp", "dist", "index.js")],
+    [join(consumerDir, "node_modules", "spreadsheet-db-mcp", "dist", "index.js")],
     { cwd: consumerDir, stdio: ["pipe", "pipe", "pipe"] },
   );
   child.on("error", (error) => { console.error("spawn failed:", error); process.exit(1); });
@@ -116,7 +116,7 @@ async function main() {
       capabilities: {},
       clientInfo: { name: "ci-consumer-smoke", version: "0.0.0" },
     });
-    if (init.result?.serverInfo?.name !== "hikoutei-mcp") {
+    if (init.result?.serverInfo?.name !== "spreadsheet-db-mcp") {
       throw new Error(`initialize handshake failed: ${JSON.stringify(init)}`);
     }
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);

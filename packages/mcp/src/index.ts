@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `hikoutei-mcp` stdio server entrypoint.
+ * `spreadsheet-db-mcp` stdio server entrypoint.
  *
  * Boot sequence: resolve the config path (`--config`, `HIKOUTEI_MCP_CONFIG`,
  * or `./hikoutei.config.json`), gap-fill the environment from `.env`
@@ -40,7 +40,7 @@ import {
 } from "./tools.js";
 
 /** Server identity reported during MCP initialization. */
-const SERVER_NAME = "hikoutei-mcp";
+const SERVER_NAME = "spreadsheet-db-mcp";
 /** Server version reported during MCP initialization. */
 const SERVER_VERSION = "0.1.0";
 /** CLI flag for an explicit .env path. */
@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   try {
     const envResult = await loadEnvFile(envPath, process.env);
     if (envResult.applied > 0) {
-      console.error(`[hikoutei-mcp] loaded ${envResult.applied} variable(s) from ${envPath}`);
+      console.error(`[spreadsheet-db-mcp] loaded ${envResult.applied} variable(s) from ${envPath}`);
     }
   } catch (error: unknown) {
     failStartup(`could not load env file ${envPath}: ${messageOf(error)}`);
@@ -136,18 +136,18 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(
-    `[hikoutei-mcp] serving ${context.entityInfos.size} entity(ies) from ${dbName} (config: ${configResult.sourcePath})`,
+    `[spreadsheet-db-mcp] serving ${context.entityInfos.size} entity(ies) from ${dbName} (config: ${configResult.sourcePath})`,
   );
 
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.error(`[hikoutei-mcp] ${signal} received; closing runtime`);
+    console.error(`[spreadsheet-db-mcp] ${signal} received; closing runtime`);
     try {
       await hikoutei.close();
     } catch (error: unknown) {
-      console.error(`[hikoutei-mcp] close failed: ${messageOf(error)}`);
+      console.error(`[spreadsheet-db-mcp] close failed: ${messageOf(error)}`);
     }
     process.exit(0);
   };
@@ -176,7 +176,7 @@ function readFlagValue(argv: readonly string[], flag: string): string | null {
 
 /** Prints one diagnostic to stderr and exits 1 (fail closed). */
 function failStartup(message: string): never {
-  console.error(`[hikoutei-mcp] ${message}`);
+  console.error(`[spreadsheet-db-mcp] ${message}`);
   process.exit(1);
 }
 

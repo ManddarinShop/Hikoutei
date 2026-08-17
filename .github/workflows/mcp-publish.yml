@@ -1,11 +1,11 @@
-name: Publish hikoutei-mcp package
+name: Publish spreadsheet-db-mcp package
 
 # Triggered by an mcp release tag such as mcp-v0.1.0. The tag must point at
 # a commit on main that is at or past the hikoutei core release the package
 # depends on (the workspace hikoutei version must satisfy the patched
 # dependency spec and that version must already exist on npmjs).
 #
-# Unlike the core package, hikoutei-mcp keeps `"private": true` and a
+# Unlike the core package, spreadsheet-db-mcp keeps `"private": true` and a
 # workspace `file:../..` dependency in the repository so branch CI never
 # needs an unpublished registry version. This workflow patches both at
 # publish time only: the dependency becomes `^<core version>` and the
@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   verify-and-publish:
-    name: Verify and publish hikoutei-mcp
+    name: Verify and publish spreadsheet-db-mcp
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -61,7 +61,7 @@ jobs:
             echo "packages/mcp version ($mcp_version) does not match tag ($TAG_NAME)" >&2
             exit 1
           fi
-          test "$(node -p "require('./packages/mcp/package.json').name")" = "hikoutei-mcp"
+          test "$(node -p "require('./packages/mcp/package.json').name")" = "spreadsheet-db-mcp"
 
       - name: Read core version and verify it is published
         shell: bash
@@ -108,7 +108,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_dir="$RUNNER_TEMP/hikoutei-mcp-package"
+          package_dir="$RUNNER_TEMP/spreadsheet-db-mcp-package"
           rm -rf "$package_dir"
           mkdir -p "$package_dir"
           package_file="$(cd packages/mcp && npm pack --silent --pack-destination "$package_dir")"
@@ -117,8 +117,21 @@ jobs:
           echo "package_path=$package_path" >> "$GITHUB_ENV"
 
           # Assert the patched manifest inside the actual tarball: no
-          # private flag, no file: spec, real version range, engine deps.
+          # private flag, no file: spec, real version range, engine deps,
+          # and the built dist payload (a tag whose root build script lost
+          # the mcp workspace step would otherwise pack an empty shell).
           tar -xOf "$package_path" package/package.json > "$RUNNER_TEMP/mcp-packed-package.json"
+          # List the tarball once into a file and grep the file: piping tar
+          # into `grep -q` makes grep exit at the first match, SIGPIPEs GNU
+          # tar mid-write, and pipefail then reports a bogus "missing" error
+          # even though the file is present.
+          tar -tzf "$package_path" > "$RUNNER_TEMP/mcp-tar-list.txt"
+          for required_file in dist/index.js dist/tools.js dist/config.js dist/env.js dist/values.js; do
+            if ! grep -qx "package/$required_file" "$RUNNER_TEMP/mcp-tar-list.txt"; then
+              echo "packed tarball is missing $required_file — was packages/mcp/dist built?" >&2
+              exit 1
+            fi
+          done
           node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
           const pkg = JSON.parse(await readFile(process.env.RUNNER_TEMP + "/mcp-packed-package.json", "utf8"));
@@ -130,7 +143,7 @@ jobs:
           }
           if (pkg.dependencies["@mikro-orm/core"] !== "7.1.7") problems.push("packed @mikro-orm/core dependency missing");
           if (pkg.dependencies["@mikro-orm/sql"] !== "7.1.7") problems.push("packed @mikro-orm/sql dependency missing");
-          if (!pkg.bin || pkg.bin["hikoutei-mcp"] !== "./dist/index.js") problems.push("packed bin entry missing");
+          if (!pkg.bin || pkg.bin["spreadsheet-db-mcp"] !== "./dist/index.js") problems.push("packed bin entry missing");
           if (problems.length > 0) {
             console.error(problems.join("; "));
             process.exit(1);
@@ -140,19 +153,35 @@ jobs:
       - name: Run consumer smoke against the packed tarball
         run: node scripts/ci/run-mcp-consumer-smoke.mjs --package "${{ env.package_path }}"
 
-      - name: Publish hikoutei-mcp (idempotent)
+      - name: Publish spreadsheet-db-mcp (idempotent)
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
-            echo "NPM_TOKEN secret is required to publish hikoutei-mcp." >&2
+            echo "NPM_TOKEN secret is required to publish spreadsheet-db-mcp." >&2
             exit 1
           fi
           mcp_version="$(node -p "require('./packages/mcp/package.json').version")"
-          if npm view "hikoutei-mcp@${mcp_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "hikoutei-mcp@${mcp_version} already published; skipping."
+          if npm view "spreadsheet-db-mcp@${mcp_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "spreadsheet-db-mcp@${mcp_version} already published; skipping."
           else
             npm publish "${{ env.package_path }}" --tag latest --access public --provenance
+          fi
+
+      - name: Deprecate the previous package name (idempotent)
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          # hikoutei-mcp@0.1.0 was the first published name; it is deprecated
+          # in favor of the discoverable spreadsheet-db-mcp name. Safe to run
+          # repeatedly: deprecation is idempotent and skipped when the version
+          # was never published (e.g. first release before the rename).
+          if npm view "hikoutei-mcp@0.1.0" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            npm deprecate "hikoutei-mcp@0.1.0" "Renamed to spreadsheet-db-mcp — use npx -y spreadsheet-db-mcp"
+          else
+            echo "hikoutei-mcp@0.1.0 not published; nothing to deprecate."
           fi
