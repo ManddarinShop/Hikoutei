@@ -1,7 +1,7 @@
 {
-  "name": "hikoutei-mcp",
+  "name": "spreadsheet-db-mcp",
   "version": "0.1.0",
-  "description": "stdio MCP server exposing the Hikoutei engine (SQLite-authoritative entities with an async Google Sheets projection) to AI agents.",
+  "description": "stdio MCP server exposing a SQLite-authoritative entity database with an async Google Sheets projection to AI agents.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
@@ -17,7 +17,7 @@
     "node": ">=22.3"
   },
   "bin": {
-    "hikoutei-mcp": "./dist/index.js"
+    "spreadsheet-db-mcp": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

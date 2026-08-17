@@ -1,4 +1,4 @@
-# hikoutei-mcp
+# spreadsheet-db-mcp
 
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents
 (Claude Desktop, Cursor, Windsurf, …) work with entities managed by
@@ -10,7 +10,7 @@ Sheet delivery happens in the background via Hikoutei's durable outbox, so an ag
 fights the Sheets API quota, and a human editing the Sheet never gets silently overwritten:
 their edits surface as conflicts that need a human decision.
 
-> Status: **v0.1.0 — published to npm as [`hikoutei-mcp`](https://www.npmjs.com/package/hikoutei-mcp).**
+> Status: **v0.1.0 — published to npm as [`spreadsheet-db-mcp`](https://www.npmjs.com/package/spreadsheet-db-mcp).**
 > Releases are tagged `mcp-vX.Y.Z`; the `mcp-publish` workflow patches the manifest, verifies a
 > bare consumer install, and publishes with provenance.
 
@@ -29,7 +29,7 @@ avoids all three by design:
 ## Install (once published)
 
 ```sh
-npx -y hikoutei-mcp
+npx -y spreadsheet-db-mcp
 ```
 
 ## Configuration
@@ -82,7 +82,7 @@ always win.
   "mcpServers": {
     "hikoutei": {
       "command": "npx",
-      "args": ["-y", "hikoutei-mcp"],
+      "args": ["-y", "spreadsheet-db-mcp"],
       "env": {
         "HIKOUTEI_SYNC_SPREADSHEET_URL": "https://docs.google.com/spreadsheets/d/<ID>/edit",
         "GOOGLE_APPLICATION_CREDENTIALS": "~/.gcp/hikoutei-service-account.json"
@@ -116,7 +116,7 @@ For a local (unpublished) build, point `command` at `node` with
 
 ```sh
 npm run build          # root build builds ikisaki → root dist → this package
-mkdir -p /tmp/hikoutei-mcp-demo && cd /tmp/hikoutei-mcp-demo
+mkdir -p /tmp/spreadsheet-db-mcp-demo && cd /tmp/hikoutei-mcp-demo
 # write hikoutei.config.json (see above; no env needed for local-only mode)
 npx @modelcontextprotocol/inspector /path/to/Hikoutei/packages/mcp/dist/index.js
 ```
@@ -129,7 +129,7 @@ In the Inspector: connect → list tools → call `list_entities`, `create_recor
 - **No `resolve_conflict` yet.** Conflicts are listed read-only; resolution tooling is planned.
 - **Entities are fixed per session.** They come from `hikoutei.config.json`; defining entities
   at call time is not supported.
-- **Single server process per database.** Running two `hikoutei-mcp` processes against the
+- **Single server process per database.** Running two `spreadsheet-db-mcp` processes against the
   same SQLite file concurrently is not supported.
 - **stdio transport only.** No remote/OAuth server mode.
 - `get_sync_status` / `list_conflicts` read the internal sync tables through the unstable
@@ -138,7 +138,7 @@ In the Inspector: connect → list tools → call `list_entities`, `create_recor
 ## Development
 
 ```sh
-npm run build -w hikoutei-mcp        # after the root build
+npm run build -w spreadsheet-db-mcp        # after the root build
 npm run typecheck:test               # includes packages/mcp
 npm test                             # vitest includes packages/mcp/test
 ```

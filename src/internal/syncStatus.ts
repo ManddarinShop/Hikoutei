@@ -1,6 +1,6 @@
 /**
  * Read-only observability over the local SQLite authority for first-party
- * tooling (the `hikoutei-mcp` server).
+ * * tooling (the `spreadsheet-db-mcp` server)..
  *
  * This module is deliberately NOT part of the public application contract:
  * it is exposed only through the unstable `hikoutei/internal/sync-status`

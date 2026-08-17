@@ -1,5 +1,5 @@
 /**
- * The hikoutei-mcp tool surface: eight read/write tools over the public
+ * The spreadsheet-db-mcp tool surface: eight read/write tools over the public
  * Hikoutei EntityManager plus the read-only sync observability subpath.
  *
  * Every tool call forks a request-local manager (`em.fork()`), mirroring the
