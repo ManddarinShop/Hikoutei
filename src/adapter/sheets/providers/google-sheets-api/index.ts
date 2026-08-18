@@ -15,6 +15,7 @@ export type {
 export {
   GoogleSheetsApiHttpTransport,
   classifyGoogleSheetsApiError,
+  isRetryableTransportStatus,
 } from "./transport/googleSheetsApiTransport.js";
 export type {
   GoogleSheetsApiTransport,
