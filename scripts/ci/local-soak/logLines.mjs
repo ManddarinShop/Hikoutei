@@ -114,10 +114,6 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "sync_provider_unavailable",
   "sync_service_startup_failed",
   "sync_service_closed",
-  // Canonical/observation/resolution evaluation codes.
-  "canonical_state_required",
-  "canonical_field_required",
-  "base_field_revision_required",
   // Storage/schema/effect codes.
   "invalid_writer_lease_options",
   "invalid_sync_registration",
@@ -148,6 +144,12 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "schema_column_missing",
   "schema_version_invalid",
   "invalid_sql_script",
+  // Canonical/observation/resolution evaluation codes.
+  "canonical_state_required",
+  "canonical_field_required",
+  "base_field_revision_required",
+  // Domain event-identity code.
+  "duplicate_changed_field",
   // Mapped ORM facade codes.
   "invalid_entity_mapping",
   "duplicate_entity_mapping",
@@ -159,44 +161,22 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "canonical_commit_rejected",
   "projection_outbox_blocked",
   "observation_entity_mutation_failed",
-  // SQLite driver family.
-  "SQLITE_ERROR",
-  "SQLITE_INTERNAL",
-  "SQLITE_PERM",
-  "SQLITE_ABORT",
-  "SQLITE_BUSY",
-  "SQLITE_LOCKED",
-  "SQLITE_NOMEM",
-  "SQLITE_READONLY",
-  "SQLITE_INTERRUPT",
-  "SQLITE_IOERR",
-  "SQLITE_CORRUPT",
-  "SQLITE_NOTFOUND",
-  "SQLITE_FULL",
-  "SQLITE_CANTOPEN",
-  "SQLITE_PROTOCOL",
-  "SQLITE_EMPTY",
-  "SQLITE_SCHEMA",
-  "SQLITE_TOOBIG",
-  "SQLITE_CONSTRAINT",
-  "SQLITE_MISMATCH",
-  "SQLITE_MISUSE",
-  "SQLITE_NOLFS",
-  "SQLITE_AUTH",
-  "SQLITE_FORMAT",
-  "SQLITE_RANGE",
-  "SQLITE_NOTADB",
-  "SQLITE_NOTICE",
-  "SQLITE_WARNING",
-  "SQLITE_ROW",
-  "SQLITE_DONE",
-  "SQLITE_CONSTRAINT_UNIQUE",
-  "SQLITE_CONSTRAINT_PRIMARYKEY",
-  "SQLITE_CONSTRAINT_NOTNULL",
-  "SQLITE_CONSTRAINT_CHECK",
-  "SQLITE_CONSTRAINT_FOREIGNKEY",
-  "SQLITE_CONSTRAINT_TRIGGER",
-  "SQLITE_CONSTRAINT_DATATYPE",
+  // Stable-encoding codes (src/shared/encoding/constants.ts, re-exported
+  // from @hikoutei/kohkai). Raised by StableEncodingError during
+  // flush/evidence paths.
+  "unsupported_value_type",
+  "non_finite_number",
+  "invalid_date_format",
+  "invalid_date_byte_length",
+  "duplicate_object_key",
+  "unpaired_high_surrogate",
+  "unpaired_low_surrogate",
+  "cyclic_value",
+  // SQLite driver family (node:sqlite). Every SQLite-level failure in the
+  // engine's driver throws with the single stable code ERR_SQLITE_ERROR;
+  // the numeric SQLite result rides on errcode/errstr detail properties,
+  // which are never logged.
+  "ERR_SQLITE_ERROR",
 ]);
 
 /**
@@ -213,7 +193,13 @@ export const LOGGED_STABLE_CLASSES = Object.freeze([
   "URIError",
   "AggregateError",
   "HikouteiError",
+  "TypedSheetsOrmError",
   "SyncSheetsContractError",
+  "SyncServiceError",
+  "StorageError",
+  "EvaluationContractError",
+  "StableEncodingError",
+  "DuplicateChangedFieldError",
   "GoogleSheetsApiTransportError",
   "ValidationError",
   "CursorError",

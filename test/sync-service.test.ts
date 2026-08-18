@@ -70,9 +70,9 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       projections: fullProjections,
       googleSheetsApi: {
         transport,
-        // Per-request pacing paces every getSpreadsheet; fast pacing keeps
-        // this wall-clock test quick.
-        rateLimitIntervalMs: 1,
+        // Zero pacing: this wall-clock test must never wait on or be
+        // refused by the request-start limiter.
+        rateLimitIntervalMs: 0,
       },
       pollingIntervalMs: 3_600_000,
       effectIdleIntervalMs: 3_600_000,
@@ -144,6 +144,8 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
   });
 
   it("uses the googleSheetsApi timeout for lease-headroom validation", async () => {
+    // 100 s write + 2.5 s first-slot wait + 2 x 10 s read slots + 30 s
+    // headroom = 152.5 s, far past the 120 s lease under test.
     const spreadsheet = new StubSpreadsheet();
     await expect(createInternalSyncService({
       dbName: ":memory:",
@@ -156,11 +158,13 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       effectLeaseDurationMs: 120_000,
     })).rejects.toMatchObject({
       code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
     });
   });
 
   it("uses the googleSheetsApi default timeout when the option omits requestTimeoutMs", async () => {
+    // 60 s write + 2.5 s first-slot wait + 2 x 10 s read slots + 30 s
+    // headroom = 112.5 s, still past the 85 s lease under test.
     const spreadsheet = new StubSpreadsheet();
     await expect(createInternalSyncService({
       dbName: ":memory:",
@@ -172,14 +176,15 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       effectLeaseDurationMs: 85_000,
     })).rejects.toMatchObject({
       code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
     });
   });
 
   it("passes lease-headroom validation with default timeouts and the default 120-second lease", async () => {
     // The default worst-case dispatch is 60 s write + 2 x 10 s reads + 30 s
-    // headroom = 110 s, which fits inside the 120 s default effect lease, so
-    // startup must succeed without any lease override.
+    // headroom = 110 s (zero test pacing), which fits inside the 120 s
+    // default effect lease, so startup must succeed without any lease
+    // override.
     const spreadsheet = new StubSpreadsheet();
     const service = await createInternalSyncService({
       dbName: ":memory:",
@@ -187,7 +192,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       projections: fullProjections,
       googleSheetsApi: {
         transport: new StubSheetsTransport(spreadsheet),
-        rateLimitIntervalMs: 1,
+        rateLimitIntervalMs: 0,
       },
       effectLeaseDurationMs: 120_000,
       pollingIntervalMs: 3_600_000,
@@ -197,9 +202,201 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(service.effectSupervisor).toBeDefined();
   });
 
+  it("rejects a default-pacing lease that lacks the first-slot wait", async () => {
+    // Under the DEFAULT 2,500 ms interval the paced worst case is 60 s
+    // write + 2.5 s first-slot wait + 2 x 10 s read slots + 30 s headroom =
+    // 112.5 s. A 111 s lease covers the two read slots and headroom (the
+    // old 110 s bound) but not the up-to-one-interval wait for the FIRST
+    // preflight read, so the corrected check must reject it.
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+      },
+      effectLeaseDurationMs: 111_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("rejects a default-pacing lease exactly at the paced worst case", async () => {
+    // The default interval (2,500 ms) participates in the bound: 60,000 +
+    // 2,500 + 2 x 10,000 + 30,000 = 112,500 ms is exactly the worst case,
+    // and the strict check rejects a lease that only equals it.
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+      },
+      effectLeaseDurationMs: 112_500,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("accepts a default-pacing lease one millisecond above the paced worst case", async () => {
+    // 112,501 ms beats the strict 112.5 s worst case by 1 ms, so the
+    // DEFAULT 2,500 ms interval stays valid with the default 120 s lease.
+    // A no-op sleep keeps the stub-based provisioning instant while the
+    // interval bound is still validated.
+    const spreadsheet = new StubSpreadsheet();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        sleep: async () => undefined,
+      },
+      effectLeaseDurationMs: 112_501,
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+    expect(service.effectSupervisor).toBeDefined();
+  });
+
+  it("rejects a request-start interval whose paced dispatch would outlive the effect lease", async () => {
+    // A 15,000 ms interval sits far above the 9,999 ms default-safe ceiling:
+    // the worst-case dispatch is 60 s write + 15 s first-slot wait + 2 x 15 s
+    // paced slots + 30 s headroom = 135 s, well past the 120 s default lease.
+    // The strict check rejects it so pacing can never expire the lease and
+    // cause duplicate remote delivery.
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        rateLimitIntervalMs: 15_000,
+      },
+      effectLeaseDurationMs: 120_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("accepts a request-start interval at the lease-safe ceiling", async () => {
+    // 9,999 ms is the largest default-safe interval: 120 s lease vs 60 s
+    // write + 9,999 ms first-slot wait + 2 x 10 s read slots + 30 s headroom
+    // = 119,999 ms; the service must start. A no-op sleep keeps the
+    // stub-based provisioning instant while the interval bound is still
+    // validated.
+    const spreadsheet = new StubSpreadsheet();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        rateLimitIntervalMs: 9_999,
+        sleep: async () => undefined,
+      },
+      effectLeaseDurationMs: 120_000,
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+    expect(service.effectSupervisor).toBeDefined();
+  });
+
+  it("rejects a request-start interval one millisecond above the lease-safe ceiling", async () => {
+    // 10,000 ms makes the worst-case dispatch 60 s write + 10 s first-slot
+    // wait + 2 x 10 s paced slots + 30 s headroom = 120 s, exactly the
+    // default lease: the strict check rejects it so pacing can never expire
+    // the lease and cause duplicate remote delivery.
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        rateLimitIntervalMs: 10_000,
+      },
+      effectLeaseDurationMs: 120_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("accepts a longer interval when the ACTIVE lease provides the headroom", async () => {
+    // The check uses the active lease, not the default: a 20 s interval
+    // (60 s write + 20 s first-slot wait + 2 x 20 s paced slots + 30 s
+    // headroom = 150 s) is safe under a 160 s lease even though it would
+    // fail the 120 s default.
+    const spreadsheet = new StubSpreadsheet();
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        rateLimitIntervalMs: 20_000,
+        sleep: async () => undefined,
+      },
+      effectLeaseDurationMs: 160_000,
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+    expect(service.effectSupervisor).toBeDefined();
+  });
+
+  it("rejects a longer interval when the ACTIVE lease only equals the paced worst case", async () => {
+    // A 20 s interval with a 150 s lease lands exactly on the strict bound
+    // (60 s write + 20 s first-slot wait + 2 x 20 s paced slots + 30 s
+    // headroom = 150 s), so the custom active lease must be rejected too.
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport: new StubSheetsTransport(spreadsheet),
+        rateLimitIntervalMs: 20_000,
+      },
+      effectLeaseDurationMs: 150_000,
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
+    });
+  });
+
+  it("rejects a malformed rateLimitIntervalMs before any transport call", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [User],
+      projections: fullProjections,
+      googleSheetsApi: {
+        transport,
+        rateLimitIntervalMs: -5,
+      },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: "sync service googleSheetsApi rateLimitIntervalMs must be a non-negative safe integer.",
+    });
+    expect(transport.getSpreadsheetCalls).toBe(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
   it("rejects a lease that only covers the write timeout, not the two preflight reads", async () => {
     // 120 s covers 60 s write + 30 s headroom but not 2 x 10 s of preflight
-    // reads; a too-large read timeout must fail the headroom validation.
+    // reads (plus the first-slot wait); a too-large read timeout must fail
+    // the headroom validation.
     const spreadsheet = new StubSpreadsheet();
     await expect(createInternalSyncService({
       dbName: ":memory:",
@@ -212,7 +409,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       effectLeaseDurationMs: 120_000,
     })).rejects.toMatchObject({
       code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+      message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
     });
   });
 

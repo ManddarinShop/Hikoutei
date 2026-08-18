@@ -51,6 +51,7 @@ export type {
   CandidateGateResult,
   Dispatcher,
   DispatchRequest,
+  EffectLeaseRenewal,
   FastAppendEffectResult,
   FastAppendOutcome,
   Postcondition,

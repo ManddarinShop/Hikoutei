@@ -21,13 +21,13 @@ import type {
   SyncProjectionEffect,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
 import { SYNC_POSTCONDITION_MODES } from "../src/application/sync/sheetsContract/constants.js";
-import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
-import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "../src/application/sync/sheetsContract/transportOutcome.js";
+import { GoogleSheetsApiSyncProvider, classifyGoogleSheetsApiError, isRetryableTransportStatus } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import { serializeBatchUpdateRequests } from "../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "../src/adapter/sheets/providers/google-sheets-api/model/preflightFields.js";
 import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
+import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { classifyGoogleSheetsApiError } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
 import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import {
@@ -132,8 +132,11 @@ function buildProvider(
     definitions: [SYSTEM_DEFINITION, USER_INPUT_DEFINITION, CONFLICT_DEFINITION],
     transport,
     requestTimeoutMs: 60_000,
+    // Zero interval unless a test pins the interval: pacing itself is covered
+    // by the dedicated pacing tests, so the default here must never make
+    // unrelated tests wait on — or be refused by — the request-start limiter.
+    rateLimitIntervalMs: options.rateLimitIntervalMs ?? 0,
     ...(options.maxBatchBytes === undefined ? {} : { maxBatchBytes: options.maxBatchBytes }),
-    ...(options.rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs: options.rateLimitIntervalMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     ...(options.onRequest === undefined ? {} : { onRequest: options.onRequest as never }),
@@ -809,6 +812,60 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     const systemTab = spreadsheet.findTab("Users_System");
     if (systemTab === undefined) throw new Error("system tab missing");
     expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).status).toEqual(cell.string("pending"));
+  });
+
+  it("applies an update whose guard hash contains a drifted date serial", async () => {
+    // Regression for the direct-live soak `visible_guard_mismatch`: the sheet
+    // row was written with `dateSerialFromIso(iso)`, and the unrounded
+    // read-back conversion truncated the serial a hair below the exact
+    // millisecond, so the re-hashed row differed from the canonical
+    // expectedVisibleHash by one millisecond. Rounding the read-back to the
+    // nearest millisecond makes the guard match the canonical fields again.
+    const driftedIso = "2024-03-15T00:00:00.002Z";
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, [
+      {
+        anchor: "anchor-1",
+        fields: {
+          id: cell.string("u1"),
+          status: cell.date(driftedIso),
+          __typed_sheets_deleted: cell.bool(false),
+        },
+      },
+    ]);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const updated = effect({
+      effectId: "update-drift",
+      targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
+      expectedVisibleRevision: 1,
+      // The guard hash comes from the canonical fields (the SQLite
+      // authority), exactly as the sync worker computes it for a conflict
+      // effect on the pre-delete row.
+      expectedVisibleHash: computeSyncVisibleHash({
+        id: cell.string("u1"),
+        status: cell.date(driftedIso),
+        __typed_sheets_deleted: cell.bool(false),
+      }),
+      fields: {
+        id: cell.string("u1"),
+        status: cell.date(driftedIso),
+        __typed_sheets_deleted: cell.bool(true),
+      },
+    });
+    const result = await applyRequest(provider, [updated]);
+    expect(result.results[0]?.status).toBe("applied");
+    const systemTab = spreadsheet.findTab("Users_System");
+    if (systemTab === undefined) throw new Error("system tab missing");
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("u1"),
+      status: cell.date(driftedIso),
+      __typed_sheets_deleted: cell.bool(true),
+    });
+    // The stored serial is still the exact wire value from the canonical ISO.
+    const statusCell = systemTab.cell(1, 1);
+    expect(statusCell?.userEnteredValue?.numberValue).toBe(dateSerialFromIso(driftedIso));
   });
 
   it("rejects a candidate reconcile whose expected candidate hash does not match", async () => {
@@ -1902,7 +1959,35 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(timeout.code).toBe(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT);
   });
 
-  it("enforces request-start intervals separately for reads and writes", async () => {
+  it("classifies HTTP 408 as retryable exactly like the shared transport boundary", () => {
+    // The shared classifier treats 408 as delivery-uncertain (the request
+    // may have committed before the timeout); the transport's own telemetry
+    // bucket must agree so log consumers never see a proven retryable
+    // timeout as a non-retryable rejection.
+    expect(isRetryableTransportStatus(408)).toBe(true);
+    expect(isRetryableTransportStatus(429)).toBe(true);
+    expect(isRetryableTransportStatus(500)).toBe(true);
+    expect(isRetryableTransportStatus(503)).toBe(true);
+    expect(isRetryableTransportStatus(undefined)).toBe(true);
+    // Proven pre-mutation rejections are never retryable.
+    expect(isRetryableTransportStatus(400)).toBe(false);
+    expect(isRetryableTransportStatus(401)).toBe(false);
+    expect(isRetryableTransportStatus(403)).toBe(false);
+    expect(isRetryableTransportStatus(404)).toBe(false);
+    // A 408 HTTP error still maps through the shared boundary as
+    // delivery-uncertain, and the transport never re-drives the mutating
+    // call itself (gaxios retry stays disabled; the durable worker owns
+    // retries).
+    const error = new GoogleSheetsApiTransportError(
+      GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+      "stub 408",
+      presentValue(408),
+      presentValue("DEADLINE"),
+    );
+    expect(classifyTransportOutcome(error).kind).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
+  });
+
+  it("paces every request start — reads and writes — through ONE shared limiter", async () => {
     let now = 1_000_000;
     const started: number[] = [];
     const spreadsheet = new StubSpreadsheet();
@@ -1934,14 +2019,15 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
       }),
     ]);
     expect(second.results[0]?.status).toBe("applied");
-    // Each applyEffects run performs one write; the second write must start at
-    // least 1,100 ms after the first write's start.
-    const writeStarts = transport.requestStarts
-      .filter((entry) => entry.kind === "write")
-      .map((entry) => entry.at);
-    expect(writeStarts).toHaveLength(2);
-    const gap = (writeStarts[1] ?? 0) - (writeStarts[0] ?? 0);
-    expect(gap).toBeGreaterThanOrEqual(1_100);
+    // Reads AND writes share ONE limiter: every consecutive request start of
+    // either class must be at least 1,100 ms after the previous start, so a
+    // combined read+write burst can never outpace the interval.
+    const starts = transport.requestStarts.map((entry) => entry.at);
+    expect(starts.length).toBeGreaterThanOrEqual(4);
+    for (let index = 1; index < starts.length; index += 1) {
+      const gap = (starts[index] ?? 0) - (starts[index - 1] ?? 0);
+      expect(gap).toBeGreaterThanOrEqual(1_100);
+    }
     void started;
   });
 
@@ -1977,6 +2063,45 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     const writeEvent = events.find((event) =>
       (event as Record<string, unknown>).operation === "batchUpdate");
     expect(writeEvent).toBeDefined();
+  });
+
+  it("never forwards an arbitrary remote code into onRequest telemetry", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const events: unknown[] = [];
+    const provider = buildProvider(transport, {
+      onRequest: (event) => events.push(event),
+    });
+    // A hostile API error body echoes a secret-like string instead of a
+    // canonical Google status name; it must collapse to the fixed safe
+    // category before it can reach the telemetry sink.
+    transport.fault = {
+      kind: "http",
+      status: 400,
+      apiErrorStatus: "ya29.jwt-abcdefghijklmnop",
+    };
+    await applyRequest(provider, [
+      effect({
+        effectId: "hostile-telemetry-1",
+        targetAnchor: "anchor-1",
+        createIfMissing: true,
+        fields: { id: cell.string("u1"), status: cell.string("x") },
+      }),
+    ]).then(
+      () => { throw new Error("expected the hostile rejection to fail the apply"); },
+      () => undefined,
+    );
+    const failureEvents = events.filter((event) =>
+      (event as Record<string, unknown>).ok === false);
+    expect(failureEvents.length).toBeGreaterThan(0);
+    for (const event of failureEvents) {
+      const record = event as Record<string, unknown>;
+      // The raw hostile string never reaches the sink; the code is either
+      // the fixed safe category or absent.
+      expect(JSON.stringify(event)).not.toContain("ya29");
+      expect(record.code).toEqual({ kind: "present", value: TRANSPORT_OUTCOME_UNKNOWN_CODE });
+    }
   });
 });
 

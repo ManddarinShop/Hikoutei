@@ -47,6 +47,7 @@ import {
   DEFAULT_RECONCILIATION_ROLE,
   DEFAULT_SYSTEM_TOMBSTONE_FIELD,
   readDesiredSystemState,
+  readTerminalFailedHeads,
   type DesiredRow,
   type ReconciliationIdFactory,
   type ScanContext,
@@ -55,13 +56,17 @@ import {
   computeDrifts,
   countExtraRows,
   countMatchedRows,
+  findObservedRows,
+  type DriftTarget,
 } from "./diff.js";
 import {
   appendEffectsWithSupersedes,
 } from "./enqueue.js";
 import {
   buildCorrectionEffects,
+  buildFailedHeadRepairPlan,
   type CorrectionPlan,
+  type FailedHeadRepairTarget,
 } from "./repair.js";
 
 export type { ReconciliationIdFactory } from "./shared.js";
@@ -190,7 +195,19 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     sheet,
   });
 
-  if (drifts.length === 0) {
+  // A terminal failed head on a stream whose Sheet row already matches
+  // canonical is invisible to the drift detector, yet it still blocks every
+  // follower through the durable predecessor guard. Detect those heads
+  // BEFORE the no-drift return so a matching Sheet recovers its stream.
+  const wedgedTargets = await findWedgedStreamTargets(
+    context,
+    sheet,
+    snapshot,
+    desired,
+    drifts,
+  );
+
+  if (drifts.length === 0 && wedgedTargets.length === 0) {
     return freezeReport(context.physicalSheetId, snapshot, desired, {
       matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
       drifted: 0,
@@ -213,7 +230,14 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     });
   }
 
-  const plans = await buildCorrectionEffects(context, sheet, drifts);
+  const driftPlans = await buildCorrectionEffects(context, sheet, drifts);
+  const commitId = "reconciliation:" + context.createId();
+  const wedgeRepairPlans: CorrectionPlan[] = [];
+  for (const target of wedgedTargets) {
+    const plan = await buildFailedHeadRepairPlan(context, sheet, target, commitId);
+    if (plan !== null) wedgeRepairPlans.push(plan);
+  }
+  const plans: readonly CorrectionPlan[] = [...driftPlans, ...wedgeRepairPlans];
   if (plans.length === 0) {
     return freezeReport(context.physicalSheetId, snapshot, desired, {
       matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
@@ -245,6 +269,34 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
     effects: enqueued,
     fenceClaimed: true,
   });
+}
+
+/**
+ * Desired rows whose stream is wedged behind a terminal failed head and
+ * whose Sheet state already matches canonical (no drift) plus each row's
+ * observed snapshot evidence.
+ *
+ * Drift plans already supersede the failed head of their own stream, so
+ * only drift-free rows need a dedicated repair here. The observed row is
+ * attached so the repair baseline can guard on the row's current visible
+ * hash even when no confirmed visible state exists. Returns an empty list
+ * when there is nothing to scan or every desired row already drifted.
+ */
+async function findWedgedStreamTargets(
+  context: ScanContext,
+  sheet: { readonly businessKeyField: string },
+  snapshot: SyncSheetsSnapshot,
+  desired: readonly DesiredRow[],
+  drifts: readonly DriftTarget[],
+): Promise<readonly FailedHeadRepairTarget[]> {
+  if (desired.length === 0) return [];
+  const driftedEntityIds = new Set(drifts.map((drift) => drift.desired.entityId));
+  const terminalFailedHeads = await readTerminalFailedHeads(context);
+  const observedRows = findObservedRows(snapshot, desired, sheet.businessKeyField);
+  return desired
+    .filter((row) =>
+      !driftedEntityIds.has(row.entityId) && terminalFailedHeads.has(row.entityId))
+    .map((row) => ({ desired: row, observed: observedRows.get(row.entityId) }));
 }
 
 /**

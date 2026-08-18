@@ -5,6 +5,7 @@ import type { ClaimedEffect } from "./contracts.js";
 import type { PendingEffect } from "../contracts.js";
 import type {
   ApplyEffectResult,
+  EffectLeaseRenewal,
   Postcondition,
   PostconditionResult,
   RepairReplanRequest,
@@ -143,7 +144,10 @@ const DURABLE_PROBE_MAX_UNCERTAIN_MS = 30_000;
  * Recovers response-loss effects by reading their remote postconditions.
  *
  * The dispatcher classifies each read-back result; every effect is settled
- * from durable evidence only, never from the lost response.
+ * from durable evidence only, never from the lost response. When supplied,
+ * `renewEffectLeases` is attached to the probe request so the host renews
+ * the effect leases inside its acquired-lane `beforeRemoteDispatch` hook
+ * immediately before the probe's remote read.
  */
 export async function recoverUnknownResults(
   options: EffectWorkerBaseOptions,
@@ -151,6 +155,7 @@ export async function recoverUnknownResults(
   fence: FencingContext,
   items: readonly ClaimedEffect[],
   report: MutableReport,
+  renewEffectLeases?: EffectLeaseRenewal,
 ): Promise<void> {
   const liveFence = (): FencingContext => ({
     ...fence,
@@ -190,9 +195,13 @@ export async function recoverUnknownResults(
   for (const group of groups) {
     let results: readonly PostconditionResult[];
     try {
+      const renewGroupLeases = renewEffectLeases;
       const outcome = await options.dispatcher.readPostconditions({
         routeKey: group.routeKey,
         effects: group.items.map((item) => item.pending),
+        ...(renewGroupLeases === undefined ? {} : {
+          beforeRemoteDispatch: () => renewGroupLeases(group.items),
+        }),
       });
       results = outcome.results;
     } catch (error: unknown) {

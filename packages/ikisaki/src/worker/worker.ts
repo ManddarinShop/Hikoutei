@@ -93,6 +93,7 @@ import {
   fenceFromLease,
   groupEffectsByRoute,
   isFastAppendPendingEffect,
+  orderDispatchUnits,
   type EffectRouteGroup,
 } from "./routing.js";
 import {
@@ -173,7 +174,17 @@ async function runEffectWorker(
     // reuse a pass-start timestamp after the writer lease has expired.
     now: leaseNow(),
   });
-  const refreshDispatchLeases = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
+  /**
+   * Refreshes the writer fence and dispatch authority BEFORE the mutation
+   * lane is entered.
+   *
+   * Effect leases are deliberately NOT renewed here: queue time on the
+   * physical-sheet mutation lane plus shared limiter waits can outlive a
+   * lease refreshed this early. Renewal happens inside
+   * `renewDispatchEffectLeases`, which the host runs from its
+   * `beforeRemoteDispatch` hook immediately before the remote call.
+   */
+  const prepareDispatchFences = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
     const now = leaseNow();
     const writerRefresh = await storage.claimWriterLease({
       role,
@@ -204,6 +215,20 @@ async function runEffectWorker(
         return false;
       }
     }
+    return true;
+  };
+  /**
+   * Renews only the effect leases of one claimed batch.
+   *
+   * Runs inside the host's acquired-lane `beforeRemoteDispatch` hook so the
+   * lease covers lane queue time, limiter waits, and the remote call itself.
+   * On any failed renewal the expired/overridden claim is recovered through
+   * the durable outbox (expired rows become delivery_uncertain pending a
+   * probe; stale rows are requeued) and this returns false; the caller must
+   * abort before any remote request, never sending a write with an
+   * expired or unknown lease.
+   */
+  const renewDispatchEffectLeases = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
     const renewed: ClaimedEffect[] = [];
     const notRenewed: ClaimedEffect[] = [];
     for (const item of items) {
@@ -346,13 +371,14 @@ async function runEffectWorker(
     operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
   });
 
-  if (await refreshDispatchLeases(recoveryCandidates)) {
+  if (await prepareDispatchFences(recoveryCandidates)) {
     await recoverUnknownResults(
       options,
       storage,
       currentFence(),
       recoveryCandidates,
       report,
+      renewDispatchEffectLeases,
     );
   }
 
@@ -456,17 +482,14 @@ async function runEffectWorker(
       ?? options.batchController?.limitFor(group.routeKey)
       ?? EFFECT_BATCH_LIMIT,
   );
-  for (const group of fastAppendGroups) {
-    if (!(await refreshDispatchLeases(group.items))) continue;
-    await dispatchFastAppendGroup(
-      options,
-      storage,
-      currentFence(),
-      group,
-      report,
-      () => refreshDispatchLeases(group.items),
-    );
-  }
+  // Ready effects run in ascending dispatcher-declared priority across BOTH
+  // dispatch buckets, so the host can keep its critical projection (System_State
+  // fast appends, then System_State regular followers, then Sync_Conflicts fast
+  // appends, then everything else) ahead of unrelated work. Only the dispatch
+  // SEQUENCE changes: claim windows, leases, fencing, per-target predecessor
+  // ordering, the limiter, and the bounded selection are untouched, every
+  // claimed group is still dispatched in this same pass, and unready
+  // predecessors are never forced (claiming enforces the durable guard).
 
   // Chunk each physical route to the dispatcher's bounded effect batch so one
   // apply call returns a complete result set. An oversized configured worker
@@ -493,8 +516,27 @@ async function runEffectWorker(
     regularRouteGroups,
     (group) => options.batchController?.limitFor(group.routeKey) ?? EFFECT_BATCH_LIMIT,
   );
-  for (const group of regularGroups) {
-    if (!(await refreshDispatchLeases(group.items))) continue;
+  const dispatchUnits = orderDispatchUnits(
+    fastAppendGroups,
+    regularGroups,
+    options.dispatcher,
+  );
+  for (const unit of dispatchUnits) {
+    const group = unit.group;
+    if (unit.bucket === "fast-append") {
+      if (!(await prepareDispatchFences(group.items))) continue;
+      await dispatchFastAppendGroup(
+        options,
+        storage,
+        currentFence(),
+        group,
+        report,
+        () => prepareDispatchFences(group.items),
+        renewDispatchEffectLeases,
+      );
+      continue;
+    }
+    if (!(await prepareDispatchFences(group.items))) continue;
     const deferredEffectIds = new Set<string>();
     let outcome: Awaited<ReturnType<Dispatcher["apply"]>>;
     const regularOperationCounts = countsForItems(group.items);
@@ -507,6 +549,7 @@ async function runEffectWorker(
       outcome = await options.dispatcher.apply({
         routeKey: requestRouteKey,
         effects: group.items.map((item) => item.pending),
+        beforeRemoteDispatch: () => renewDispatchEffectLeases(group.items),
       });
     } catch (error: unknown) {
       const uncertain = !isDispatchTransportError(error) ||
@@ -538,7 +581,8 @@ async function runEffectWorker(
         group.items,
         report,
         error,
-        () => refreshDispatchLeases(group.items),
+        () => prepareDispatchFences(group.items),
+        renewDispatchEffectLeases,
       );
       continue;
     }
@@ -598,13 +642,14 @@ async function runEffectWorker(
       }
       await completeProviderResult(options, storage, currentFence(), item, result.value, report);
     }
-    if (await refreshDispatchLeases(recoveryItems)) {
+    if (await prepareDispatchFences(recoveryItems)) {
       await recoverUnknownResults(
         options,
         storage,
         currentFence(),
         recoveryItems,
         report,
+        renewDispatchEffectLeases,
       );
     }
     emitWorkerTiming(options, {
@@ -615,7 +660,6 @@ async function runEffectWorker(
       operationCounts: regularOperationCounts,
     });
   }
-
   emitWorkerTiming(options, {
     scope: TIMING_SCOPES.WORKER,
     phase: "worker_total",

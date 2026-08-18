@@ -3,11 +3,11 @@
  *
  * This internal module owns the mapping from environment variables to the
  * sync service bootstrap: spreadsheet URL parsing, service-account credentials
- * file validation, polling interval parsing, projection auto-generation from
- * entity descriptors, and fail-closed startup failure classification. It is
- * never re-exported from `src/index.ts`; the public factory calls it only when
- * `HIKOUTEI_SYNC_SPREADSHEET_URL` is set, so local-only users never load the
- * sync module graph.
+ * file validation, polling interval parsing, request-start pacing override
+ * parsing, projection auto-generation from entity descriptors, and fail-closed
+ * startup failure classification. It is never re-exported from `src/index.ts`;
+ * the public factory calls it only when `HIKOUTEI_SYNC_SPREADSHEET_URL` is
+ * set, so local-only users never load the sync module graph.
  *
  * The env reader, transport, and diagnostic sink are injectable so tests can
  * exercise every startup branch with a stub transport, a fake env, and a
@@ -21,7 +21,6 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { z } from "zod";
 
 import {
   getEntityDescriptor,
@@ -41,11 +40,28 @@ import {
   GoogleSheetsApiTransportError,
 } from "../../../adapter/sheets/providers/google-sheets-api/errors.js";
 import { columnLetters } from "../../../adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import {
+  GOOGLE_SHEETS_API_DEFAULTS,
+} from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
 import { PRESENCE_KINDS } from "../../../shared/state/index.js";
+import {
+  DEFAULT_EFFECT_LEASE_DURATION_MS,
+  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
+} from "@hikoutei/ikisaki";
 import {
   SYNC_CONFLICT_PROJECTION_REGISTERED_RANGE,
 } from "../sheetsContract/conflictProjection.js";
 import { SyncSheetsContractError } from "../sheetsContract/errors.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+} from "../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+  HIKOUTEI_LOG_STABLE_CLASSES,
+  HIKOUTEI_LOG_STABLE_CODES,
+} from "../../../shared/observability/logEvents.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,
@@ -54,10 +70,6 @@ import {
   createInternalSyncService,
   type InternalSyncService,
 } from "./SyncServiceBootstrap.js";
-import {
-  positiveDecimalMillisecondsSchema,
-  syncCredentialsSchema,
-} from "./configSchemas.js";
 
 /** Env keys consumed by the sync auto-start bridge. */
 export const SYNC_ENV_KEYS = {
@@ -69,17 +81,57 @@ export const SYNC_ENV_KEYS = {
   POLLING_INTERVAL_MS: "HIKOUTEI_SYNC_POLLING_INTERVAL_MS",
   /** Optional metadata safety full-scan cadence in ms; defaults to 60 seconds. */
   FULL_SCAN_INTERVAL_MS: "HIKOUTEI_SYNC_FULL_SCAN_INTERVAL_MS",
+  /**
+   * Optional request-start pacing in ms for the direct provider's ONE shared
+   * read+write limiter; absent uses the safe default (2,500 ms). Internal
+   * only — never part of the root public API.
+   */
+  RATE_LIMIT_INTERVAL_MS: "HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS",
 } as const;
 
 /** Default polling cadence applied when the interval env vars are absent. */
 export const DEFAULT_SYNC_POLLING_INTERVAL_MS = 60_000;
 /** Default safety full-scan cadence applied when the interval env vars are absent. */
 export const DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS = 60_000;
+/** Lower bound for the sync request-start pacing env override (1 second). */
+export const MIN_SYNC_RATE_LIMIT_INTERVAL_MS = 1_000;
+/**
+ * Upper bound for the sync request-start pacing env override.
+ *
+ * A worst-case effect dispatch performs THREE sequential paced transport
+ * calls (two preflight/postcondition reads plus one batch write). The effect
+ * lease must still cover the whole sequence with the 30-second provider
+ * headroom, and a dispatch can wait up to one FULL interval for its first
+ * slot because the shared limiter may hold a prior reservation — admission
+ * is BOUNDED to one interval, so a request whose slot lies further out is
+ * refused before any SDK call (delivery-uncertain, requeued durably)
+ * instead of waiting past the lease. With the DEFAULT lease, write timeout,
+ * and read timeout the interval must satisfy
+ * `120s > 60s + I + 2 * max(10s, I) + 30s`, i.e. `I < 10s`. Below
+ * the 10 s read timeout the two read slots cost 2 x 10 s and the interval
+ * adds once, so the bound is `I < 120 - 60 - 2x10 - 30 = 10 s`; at or
+ * above the read timeout the interval dominates (`3I < 30s` has no
+ * solution at or above 10 s), so the below-read-slot branch is binding.
+ * The ceiling below is derived from those defaults (10,000 - 1 = 9,999 ms)
+ * and the service-level lease-headroom validation applies the same math to
+ * the ACTIVE lease and timeouts, so an override that could let pacing push
+ * a dispatch past the lease is rejected with a stable startup failure
+ * instead of risking lease expiry and duplicate remote delivery.
+ */
+export const MAX_SYNC_RATE_LIMIT_INTERVAL_MS = Math.max(
+  MIN_SYNC_RATE_LIMIT_INTERVAL_MS,
+  Math.floor(
+    DEFAULT_EFFECT_LEASE_DURATION_MS -
+      GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS -
+      EFFECT_LEASE_PROVIDER_HEADROOM_MS -
+      2 * GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS,
+  ) - 1,
+);
 
 /** Diagnostic log levels emitted by the auto-start bridge. */
 export type SyncDiagnosticLevel = "info" | "error";
 
-/** Diagnostic sink; defaults to console. Never receives secrets or full URLs. */
+/** Diagnostic sink; defaults to console. Receives only stable class/code summaries, never full failure messages. */
 export type SyncDiagnostic = (level: SyncDiagnosticLevel, message: string) => void;
 
 /** Internal auto-start options; none are part of the root application contract. */
@@ -197,19 +249,41 @@ export async function createTypedSheetsWithSync(
       SYNC_ENV_KEYS.FULL_SCAN_INTERVAL_MS,
       DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS,
     );
+    // The pacing env override applies ONLY to the real Google Sheets
+    // provider: it is resolved and validated only when no fake transport is
+    // injected, so local/fake suites stay immune to a misconfigured or
+    // invalid override in the host env.
+    const rateLimitIntervalMs = options.transport === undefined
+      ? resolveSyncRateLimitIntervalMs(env)
+      : undefined;
     const projections = buildSyncProjections(options.entities, spreadsheetId);
     const service = await createInternalSyncService({
       dbName: options.dbName,
       entities: [...options.entities],
       projections,
-      // Injected transports are a test-only affordance; the fast pacing keeps
-      // stub-based suites wall-clock cheap. Production builds the real
-      // ADC-backed transport with its default pacing.
+      // Injected transports are a test-only affordance; ZERO pacing keeps
+      // stub-based suites wall-clock cheap AND immune to the bounded
+      // admission (interval 0 never waits and never refuses). The pacing env
+      // override applies ONLY to the real Google Sheets provider (no injected
+      // transport): a valid override is plumbed through, and the production
+      // path builds the real ADC-backed transport with the provider's safe
+      // default (2,500 ms) when the override is absent. Fake transports never
+      // consult HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS, so local/fake suites
+      // stay immune to a misconfigured or invalid override in the host env.
       googleSheetsApi: options.transport === undefined
-        ? {}
-        : { transport: options.transport, rateLimitIntervalMs: 1 },
+        ? (rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs })
+        : {
+            transport: options.transport,
+            rateLimitIntervalMs: 0,
+          },
       pollingIntervalMs,
       pollingFullScanIntervalMs,
+    });
+    logHikouteiInternalEvent({
+      event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_STARTED,
+      level: "info",
+      component: HIKOUTEI_LOG_COMPONENTS.SYNC_AUTOSTART,
+      counts: { entities: options.entities.length },
     });
     return { kind: "sync", hikoutei: service.hikoutei, service };
   } catch (error: unknown) {
@@ -262,24 +336,22 @@ export async function validateSyncCredentialsFile(
       `Credentials file is not valid JSON: ${path}`,
     );
   }
-  const parsedRecord = z.record(z.string(), z.unknown()).safeParse(parsed);
-  if (!parsedRecord.success) {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_INVALID_JSON,
       `Credentials file is not valid JSON: ${path}`,
     );
   }
-  const credentials = syncCredentialsSchema.safeParse(parsedRecord.data);
-  if (!credentials.success) {
-    const missing = REQUIRED_CREDENTIAL_FIELDS.filter((field) =>
-      credentials.error.issues.some((issue) => issue.path[0] === field),
-    );
+  const record = parsed as Record<string, unknown>;
+  const missing = REQUIRED_CREDENTIAL_FIELDS.filter((field) =>
+    typeof record[field] !== "string" || (record[field] as string).trim() === "");
+  if (missing.length > 0) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FIELD_MISSING,
       `Credentials file is missing required fields: ${missing.join(", ")}`,
     );
   }
-  return { clientEmail: credentials.data.client_email };
+  return { clientEmail: record.client_email as string };
 }
 
 /**
@@ -389,26 +461,151 @@ function parseIntervalEnv(
 ): number {
   const raw = env[key];
   if (raw === undefined || raw.trim() === "") return fallback;
-  const value = positiveDecimalMillisecondsSchema.safeParse(raw);
-  if (!value.success) {
+  // Decimal-only shape: Number() would also accept hex ("0x10"), exponent
+  // ("1e3"), signed ("-1"), and whitespace-padded (" 60000") forms that
+  // violate the positive-integer-ms contract, so the raw string must match
+  // before conversion.
+  if (!/^\d+$/.test(raw)) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
       `Sync start failed: ${key} must be a positive integer (ms) — current value: ${raw}`,
     );
   }
-  return value.data;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      `Sync start failed: ${key} must be a positive integer (ms) — current value: ${raw}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Resolves the sync request-start pacing env override, or undefined.
+ *
+ * `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` is the internal override for the
+ * direct provider's ONE shared read+write request-start limiter. Absent or
+ * blank means the provider's safe default (2,500 ms) applies; a present
+ * value must be a plain decimal integer between 1,000 ms and
+ * `MAX_SYNC_RATE_LIMIT_INTERVAL_MS` (~10 s). The ceiling is the largest
+ * interval whose worst-case three-request paced dispatch still finishes
+ * inside the default effect lease (120 s) with the default write timeout
+ * (60 s), read timeout (10 s), and provider headroom (30 s): a dispatch
+ * can wait up to one full interval for its first slot because the shared
+ * limiter may hold a prior reservation, so the strict default-safe bound
+ * is `120s > 60s + I + 2 * max(10s, I) + 30s` and a larger interval could
+ * let pacing push the dispatch past the lease and risk duplicate remote
+ * delivery. Values outside those bounds (including hex,
+ * exponent, signed, padded, fractional, and non-numeric forms) fail closed
+ * with the stable startup code so a mistyped override can never silently
+ * drop pacing to a burst or outlive the effect lease. The key stays internal
+ * and is never part of the root public API.
+ */
+export function resolveSyncRateLimitIntervalMs(
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  const raw = env[SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  if (!/^\d+$/.test(raw)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      `Sync start failed: ${SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS} must be an integer between ` +
+        `${MIN_SYNC_RATE_LIMIT_INTERVAL_MS} and ${MAX_SYNC_RATE_LIMIT_INTERVAL_MS} ms — current value: ${raw}`,
+    );
+  }
+  const value = Number(raw);
+  if (
+    !Number.isSafeInteger(value) ||
+    value < MIN_SYNC_RATE_LIMIT_INTERVAL_MS ||
+    value > MAX_SYNC_RATE_LIMIT_INTERVAL_MS
+  ) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      `Sync start failed: ${SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS} must be an integer between ` +
+        `${MIN_SYNC_RATE_LIMIT_INTERVAL_MS} and ${MAX_SYNC_RATE_LIMIT_INTERVAL_MS} ms — current value: ${raw}`,
+    );
+  }
+  return value;
 }
 
 function raiseDiagnosed(diagnostic: SyncDiagnostic, failure: HikouteiError): never {
-  diagnostic("error", failure.message);
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_FAILED,
+    level: "error",
+    component: HIKOUTEI_LOG_COMPONENTS.SYNC_AUTOSTART,
+    ...describeErrorForInternalLog(failure),
+  });
+  // EVERY diagnostic sink — injected or default — receives only the
+  // stable class/code summary. Full failure messages can embed the
+  // service-account email, spreadsheet ID, credential path, or raw
+  // provider text and must never reach a sink; the thrown HikouteiError
+  // always carries the full public message regardless of the sink.
+  try {
+    diagnostic("error", stableStartupDiagnostic(failure));
+  } catch {
+    // Fail-open: a throwing diagnostic sink (injected or default) can
+    // never replace the classified startup failure. The original
+    // HikouteiError — with its stable class and machine-readable code —
+    // is preserved and rethrown unchanged, exactly as if the sink had
+    // succeeded.
+  }
   throw failure;
 }
 
+/** Stable error-class allowlist backing sink diagnostics (see logEvents.ts). */
+const STABLE_CLASS_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CLASSES);
+/** Stable error-code allowlist backing sink diagnostics (see logEvents.ts). */
+const STABLE_CODE_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CODES);
+
+/**
+ * Stable redacted startup summary for diagnostic sinks: class and code
+ * only, each checked against the shared stable allowlists.
+ *
+ * `failure.name` and `failure.code` are runtime strings that could carry
+ * secret-like text (paths, emails, tokens) if an unexpected error shape
+ * ever reached the sink path, so unknown or malformed values collapse to
+ * the fixed `unknown` class/code. The full public message is carried by
+ * the thrown HikouteiError alone and never reaches any sink.
+ */
+export function stableStartupDiagnostic(failure: HikouteiError): string {
+  const described = describeErrorForInternalLog(failure);
+  const errorClass = STABLE_CLASS_ALLOWLIST.has(described.errorClass)
+    ? described.errorClass
+    : "unknown";
+  const code = described.code !== undefined && STABLE_CODE_ALLOWLIST.has(described.code)
+    ? described.code
+    : "unknown";
+  return `Hikoutei sync autostart failed (class=${errorClass}, code=${code})`;
+}
+
+/**
+ * Shape gate for the default sink's error line (defense in depth).
+ *
+ * The error path receives only the stable class/code summary built by
+ * `stableStartupDiagnostic`, but the gate re-validates the exact summary
+ * shape before printing: an unexpected raw message (which could embed a
+ * path, email, spreadsheet ID, or provider text) collapses to the
+ * level-only fallback and never reaches the console.
+ */
+const STABLE_SUMMARY_SHAPE =
+  /^Hikoutei sync autostart failed \(class=(unknown|[A-Za-z][A-Za-z0-9]*), code=(unknown|[A-Za-z][A-Za-z0-9_]*)\)$/;
+
 function defaultDiagnostic(level: SyncDiagnosticLevel, message: string): void {
   if (level === "info") {
+    // The info path emits only the static local-mode notice.
     console.info(message);
-  } else {
+    return;
+  }
+  // The error path emits the already-redacted stable class/code summary
+  // (never the full failure message — that stays on the thrown
+  // HikouteiError). The shape gate above keeps the defense in depth:
+  // anything that is not the exact stable summary shape falls back to the
+  // level-only notice.
+  if (STABLE_SUMMARY_SHAPE.test(message)) {
     console.error(message);
+  } else {
+    console.error(`[hikoutei] sync autostart failed (level=${level})`);
   }
 }
 

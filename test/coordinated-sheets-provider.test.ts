@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CoordinatedLanePreconditionError,
   CoordinatedSheetsProvider,
   type CoordinatedSheetsInner,
 } from "../src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
@@ -405,6 +406,100 @@ describe("CoordinatedSheetsProvider", () => {
 
     const metrics = coordinator.laneMetrics();
     expect(metrics.get("default")?.completed).toBe(1);
+  });
+
+  it("runs the in-lane precondition after the queue wait and before the inner call", async () => {
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    const order: string[] = [];
+
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted!: () => void;
+    const holderStartedPromise = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const holder = coordinator.runSerializedControl(SAMPLE_PHYSICAL_SHEET, "holder", async () => {
+      holderStarted();
+      await holderGate;
+      order.push("holder-end");
+    });
+    await holderStartedPromise;
+
+    const dispatched = coordinator.runSerializedInner(
+      SAMPLE_PHYSICAL_SHEET,
+      "applyEffects",
+      (provider) => {
+        order.push("inner");
+        return provider.applyEffects({ ...sheetRequest(), effects: [] });
+      },
+      async () => {
+        order.push("renew");
+        return true;
+      },
+    );
+
+    // Give the queued dispatch time to reach the lane: the renewal must NOT
+    // run while the holder still owns the lane.
+    await delay(30);
+    expect(order).toEqual([]);
+
+    releaseHolder();
+    await Promise.all([holder, dispatched]);
+
+    // Renewal runs strictly after the lane queue wait and strictly before the
+    // inner provider call.
+    expect(order).toEqual(["holder-end", "renew", "inner"]);
+  });
+
+  it("aborts before the inner call when the precondition rejects and releases the lane", async () => {
+    const inner = new MockProvider();
+    const events: CoordinatorLaneEvent[] = [];
+    const coordinator = new CoordinatedSheetsProvider<Inner>({
+      inner,
+      onLaneEvent: (event) => events.push(event),
+    });
+    let renewalCalls = 0;
+
+    await expect(coordinator.runSerializedInner(
+      SAMPLE_PHYSICAL_SHEET,
+      "applyEffects",
+      (provider) => provider.applyEffects({ ...sheetRequest(), effects: [] }),
+      async () => {
+        renewalCalls += 1;
+        return false;
+      },
+    )).rejects.toBeInstanceOf(CoordinatedLanePreconditionError);
+
+    // The remote never ran and the failure is a stable redacted message with
+    // no effect IDs, payloads, or raw provider errors.
+    expect(renewalCalls).toBe(1);
+    expect(inner.mutationCalls).toBe(0);
+    expect(events[0]?.operation).toBe("applyEffects");
+    expect(events[0]?.outcome).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
+
+    // The lane was released: the next mutation proceeds without deadlock.
+    await coordinator.fastAppendRows({ ...sheetRequest(), rows: [] });
+    expect(inner.mutationCalls).toBe(1);
+  });
+
+  it("passes the inner provider to the remote closure without re-entering the lane", async () => {
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+
+    const result = await coordinator.runSerializedInner(
+      SAMPLE_PHYSICAL_SHEET,
+      "fastAppendRows",
+      (provider) => provider.fastAppendRows({ ...sheetRequest(), rows: [] }),
+      async () => true,
+    );
+
+    expect(result).toEqual({ results: [], hasMore: false });
+    expect(inner.mutationCalls).toBe(1);
+    // The remote ran inside the held lane: no concurrent mutation slipped in.
+    expect(inner.mutationMaxConcurrent).toBe(1);
   });
 });
 

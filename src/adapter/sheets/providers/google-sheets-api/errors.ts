@@ -15,6 +15,11 @@ import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "../../../../application/sync/sheetsContract/errors.js";
+import { logHikouteiInternalEvent } from "../../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../../../../shared/observability/logEvents.js";
 
 /** Stable transport error categories emitted by the direct provider. */
 export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {
@@ -26,6 +31,14 @@ export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {
   HTTP_ERROR: "google_sheets_api_http_error",
   /** A 2xx response whose structure cannot prove what was applied. */
   INVALID_RESPONSE: "google_sheets_api_invalid_response",
+  /**
+   * The shared request-start limiter refused the admission BEFORE any SDK
+   * call: the predicted wait exceeded the bounded queue horizon. No remote
+   * request was sent, and the limiter horizon was not advanced, so the
+   * durable worker requeues through the CAS/recovery path and a later pass
+   * can be admitted again.
+   */
+  REQUEST_START_REFUSED: "google_sheets_api_request_start_refused",
 } as const;
 
 export type GoogleSheetsApiTransportErrorCode =
@@ -80,6 +93,16 @@ export function invalidProviderRequest(label: string, message: string): never {
  * unverified evidence.
  */
 export function invalidProviderState(message: string): never {
+  // Boundary record for malformed 2xx payloads: only the stable code is
+  // logged, never the message (it can echo remote payload fragments).
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.TRANSPORT_RESPONSE_INVALID,
+    level: "warn",
+    component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
+    code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
+    errorClass: "SyncSheetsContractError",
+    retryable: true,
+  });
   throw new SyncSheetsContractError(
     SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
     `Google Sheets API provider: ${message}`,
