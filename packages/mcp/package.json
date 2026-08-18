@@ -14,7 +14,7 @@
   "type": "module",
   "private": true,
   "engines": {
-    "node": ">=22.3"
+    "node": ">=22.13"
   },
   "bin": {
     "spreadsheet-db-mcp": "./dist/index.js"

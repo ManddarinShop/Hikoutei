@@ -12,7 +12,7 @@
   "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
   "type": "module",
   "engines": {
-    "node": ">=22.3"
+    "node": ">=22.13"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -37,7 +37,8 @@
     "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json && npm run build -w spreadsheet-db-mcp",
     "typecheck": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.json --noEmit",
     "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
-    "test": "npm run build -w @hikoutei/ikisaki && vitest run"
+    "test": "npm run build -w @hikoutei/ikisaki && vitest run",
+    "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs"
   },
   "keywords": [
     "google-sheets",
