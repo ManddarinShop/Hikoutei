@@ -17,6 +17,7 @@ import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js"
 import {
   computeSyncVisibleHash,
   type SyncSheetsSnapshot,
+  type SyncSnapshotRow,
 } from "../../sheetsContract/syncSheets.js";
 import type { DesiredRow } from "./shared.js";
 
@@ -25,19 +26,40 @@ export type DriftKind = "drifted" | "missing";
 export interface DriftTarget {
   readonly kind: DriftKind;
   readonly desired: DesiredRow;
+  /**
+   * The observed snapshot row behind a drifted drift, so a repair planned
+   * for an existing row can guard on the row's CURRENT visible hash
+   * (computed from the exact System_State fields) instead of assuming an
+   * insert when no confirmed visible evidence exists. `undefined` for
+   * missing drifts, where the row is not observable.
+   */
+  readonly observed: SyncSnapshotRow | undefined;
 }
 
-export function computeDrifts(args: {
-  readonly snapshot: SyncSheetsSnapshot;
-  readonly desired: readonly DesiredRow[];
-  readonly systemFields: readonly string[];
-  readonly sheet: { readonly registeredRange: string; readonly businessKeyField: string };
-}): readonly DriftTarget[] {
-  const rowsByAnchor = new Map<string, SyncSheetsSnapshot["rows"][number]>();
+/** Anchor + business-key indices shared by drift detection and matching. */
+interface ObservedRowIndex {
+  readonly rowsByAnchor: Map<string, SyncSnapshotRow>;
+  readonly ambiguousAnchors: Set<string>;
+  readonly rowsByIdentity: Map<string, SyncSnapshotRow>;
+  readonly ambiguousIdentities: Set<string>;
+}
+
+/**
+ * Builds the deduplicated anchor/identity index for one snapshot.
+ *
+ * A duplicated physical anchor or business key is an anomaly, never a row
+ * choice: the affected locators are dropped from the index so neither the
+ * drift classifier nor the failed-head matcher can silently pick one row.
+ */
+function buildObservedRowIndex(
+  snapshot: SyncSheetsSnapshot,
+  businessKeyField: string,
+): ObservedRowIndex {
+  const rowsByAnchor = new Map<string, SyncSnapshotRow>();
   const ambiguousAnchors = new Set<string>();
-  const rowsByIdentity = new Map<string, SyncSheetsSnapshot["rows"][number]>();
+  const rowsByIdentity = new Map<string, SyncSnapshotRow>();
   const ambiguousIdentities = new Set<string>();
-  for (const row of args.snapshot.rows) {
+  for (const row of snapshot.rows) {
     if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT) {
       // A duplicated physical anchor is an anomaly, never a row choice: drop
       // the anchor index entry instead of letting the last row win silently.
@@ -49,7 +71,7 @@ export function computeDrifts(args: {
         rowsByAnchor.set(row.physicalAnchor.value, row);
       }
     }
-    const identity = snapshotIdentity(row, args.sheet.businessKeyField);
+    const identity = snapshotIdentity(row, businessKeyField);
     if (identity === undefined || ambiguousIdentities.has(identity)) continue;
     if (rowsByIdentity.has(identity)) {
       rowsByIdentity.delete(identity);
@@ -58,32 +80,83 @@ export function computeDrifts(args: {
       rowsByIdentity.set(identity, row);
     }
   }
+  return { rowsByAnchor, ambiguousAnchors, rowsByIdentity, ambiguousIdentities };
+}
+
+/**
+ * Resolves the observed snapshot row owned by one desired row.
+ *
+ * The primary locator's ambiguity is fatal: when the desired anchor is
+ * duplicated, identity fallback would silently pick one of the rows that the
+ * corrupted anchor cannot distinguish, so the binding stays unmatched. The
+ * same quarantine applies when the desired identity appears in the snapshot's
+ * duplicate set. Returns undefined when no row can prove ownership of this
+ * binding.
+ */
+function resolveObservedRow(
+  index: ObservedRowIndex,
+  desiredRow: DesiredRow,
+  businessKeyField: string,
+): SyncSnapshotRow | undefined {
+  const identity = desiredRowIdentity(desiredRow, businessKeyField);
+  // The primary locator's ambiguity is fatal: when the desired anchor is
+  // duplicated, identity fallback would silently pick one of the rows that
+  // the corrupted anchor cannot distinguish, so the binding is unmatched.
+  // The same quarantine applies to a desired identity that appears in the
+  // snapshot's duplicate set: the duplicated business key cannot prove that
+  // this binding owns even its unique anchor, so neither locator may match.
+  const identityAmbiguous = identity !== undefined && index.ambiguousIdentities.has(identity);
+  return index.ambiguousAnchors.has(desiredRow.anchorReference) || identityAmbiguous
+    ? undefined
+    : index.rowsByAnchor.get(desiredRow.anchorReference) ??
+      (identity === undefined ? undefined : index.rowsByIdentity.get(identity));
+}
+
+export function computeDrifts(args: {
+  readonly snapshot: SyncSheetsSnapshot;
+  readonly desired: readonly DesiredRow[];
+  readonly systemFields: readonly string[];
+  readonly sheet: { readonly registeredRange: string; readonly businessKeyField: string };
+}): readonly DriftTarget[] {
+  const index = buildObservedRowIndex(args.snapshot, args.sheet.businessKeyField);
 
   const drifts: DriftTarget[] = [];
   for (const desiredRow of args.desired) {
-    const identity = desiredRowIdentity(desiredRow, args.sheet.businessKeyField);
-    // The primary locator's ambiguity is fatal: when the desired anchor is
-    // duplicated, identity fallback would silently pick one of the rows that
-    // the corrupted anchor cannot distinguish, so the binding is unmatched.
-    // The same quarantine applies to a desired identity that appears in the
-    // snapshot's duplicate set: the duplicated business key cannot prove that
-    // this binding owns even its unique anchor, so neither locator may match.
-    const identityAmbiguous = identity !== undefined && ambiguousIdentities.has(identity);
-    const observed = ambiguousAnchors.has(desiredRow.anchorReference) || identityAmbiguous
-      ? undefined
-      : rowsByAnchor.get(desiredRow.anchorReference) ??
-        (identity === undefined ? undefined : rowsByIdentity.get(identity));
+    const observed = resolveObservedRow(index, desiredRow, args.sheet.businessKeyField);
     if (observed === undefined) {
-      drifts.push({ kind: "missing", desired: desiredRow });
+      drifts.push({ kind: "missing", desired: desiredRow, observed: undefined });
       continue;
     }
     const observedHash = computeObservedHash(observed, args.systemFields);
     const desiredHash = computeSyncVisibleHash(desiredRow.fields);
     if (observedHash !== desiredHash) {
-      drifts.push({ kind: "drifted", desired: desiredRow });
+      drifts.push({ kind: "drifted", desired: desiredRow, observed });
     }
   }
   return drifts;
+}
+
+/**
+ * Returns the observed snapshot row owned by each desired row.
+ *
+ * Honors the same duplication quarantine as drift detection: an ambiguous
+ * anchor or duplicated business key never resolves to a row. The failed-head
+ * repair path uses this to pass FRESH verified snapshot evidence into a
+ * repair baseline for a clean (already matching) row, so a repair never
+ * falls back to an unguarded insert for an existing Sheet row.
+ */
+export function findObservedRows(
+  snapshot: SyncSheetsSnapshot,
+  desired: readonly DesiredRow[],
+  businessKeyField: string,
+): ReadonlyMap<string, SyncSnapshotRow> {
+  const index = buildObservedRowIndex(snapshot, businessKeyField);
+  const matched = new Map<string, SyncSnapshotRow>();
+  for (const desiredRow of desired) {
+    const observed = resolveObservedRow(index, desiredRow, businessKeyField);
+    if (observed !== undefined) matched.set(desiredRow.entityId, observed);
+  }
+  return matched;
 }
 
 /** Reads a business-key value from a snapshot row for unanchored fast appends. */
