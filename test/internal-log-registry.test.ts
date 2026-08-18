@@ -48,7 +48,10 @@ describe("internal log stable-code registry", () => {
 
   it("contains no secret-like values (no dots, @, slashes, or URLs)", () => {
     for (const code of HIKOUTEI_LOG_STABLE_CODES) {
-      expect(code).toMatch(/^[a-z0-9_]+$|^SQLITE_[A-Z0-9_]+$/);
+      // `ERR_SQLITE_ERROR` is the exact stable node:sqlite driver code the
+      // persistence engine surfaces; every other code is a lowercase
+      // identifier, and anything else (URLs, emails, paths, IDs) is rejected.
+      expect(code).toMatch(/^[a-z0-9_]+$|^SQLITE_[A-Z0-9_]+$|^ERR_SQLITE_ERROR$/);
     }
     expect(new Set(HIKOUTEI_LOG_STABLE_CODES).size).toBe(HIKOUTEI_LOG_STABLE_CODES.length);
   });

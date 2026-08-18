@@ -176,7 +176,9 @@ export const liveSoakSheetsClient = (() => {
  * security/redaction asserts stay in the default `npm test` suite below; no
  * soak coverage is ever silently dropped, it is opt-in.
  */
-export const describeLongSoak = describe.runIf(process.env.SOAK_RUNNER_LONG === "1");
+export const describeLongSoak: ReturnType<typeof describe.runIf> = describe.runIf(
+  process.env.SOAK_RUNNER_LONG === "1",
+);
 
 /** Short budget (0.003h) that comfortably crosses the cycle-60 reopen. */
 export const SHORT_DURATION_HOURS = 0.003;
