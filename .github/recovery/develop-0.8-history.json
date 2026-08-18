@@ -105,7 +105,7 @@
     "pr": 264,
     "version": "0.8.22",
     "sourceRef": "a54c9ad2fdc2c74b7c48df5abcda7bafedaeb04d",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-264-ci-recovery.patch"
   },
   {
     "pr": 265,
