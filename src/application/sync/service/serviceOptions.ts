@@ -45,11 +45,6 @@ import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
 } from "./errors.js";
-import {
-  internalPositiveSafeIntegerSchema,
-  internalSyncRouteSchema,
-  internalSyncTextSchema,
-} from "./serviceOptionSchemas.js";
 
 /** Provider capability required by internal service startup (incl. table reads). */
 export type InternalSyncProvider = SyncSheetsProvider & SyncSheetsTableReader;
@@ -146,13 +141,13 @@ export function validateServiceOptions(
   options: InternalSyncServiceOptions,
   descriptors: ReadonlyMap<string, ResolvedHikouteiEntityDescriptor>,
 ): void {
-  if (!internalSyncTextSchema.safeParse(options.dbName).success) {
+  if (options.dbName.trim() === "") {
     throw new SyncServiceError(SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS, "sync service dbName is required.");
   }
   validateEffectLeaseHeadroom(options);
   if (
     options.pollingFullScanIntervalMs !== undefined &&
-    !internalPositiveSafeIntegerSchema.safeParse(options.pollingFullScanIntervalMs).success
+    (!Number.isSafeInteger(options.pollingFullScanIntervalMs) || options.pollingFullScanIntervalMs < 1)
   ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
@@ -161,7 +156,7 @@ export function validateServiceOptions(
   }
   if (
     options.reconciliationIntervalMs !== undefined &&
-    !internalPositiveSafeIntegerSchema.safeParse(options.reconciliationIntervalMs).success
+    (!Number.isSafeInteger(options.reconciliationIntervalMs) || options.reconciliationIntervalMs < 1)
   ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
@@ -211,7 +206,10 @@ export function validateServiceOptions(
 
 function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void {
   const effectLeaseDurationMs = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
-  if (!internalPositiveSafeIntegerSchema.safeParse(effectLeaseDurationMs).success) {
+  if (
+    !Number.isSafeInteger(effectLeaseDurationMs) ||
+    effectLeaseDurationMs < 1
+  ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
       "sync service effectLeaseDurationMs must be a positive safe integer.",
@@ -242,10 +240,17 @@ function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void 
     );
   }
   // A direct-mode dispatch performs up to THREE sequential paced transport
-  // calls (two preflight reads plus one write), each with its own timeout;
-  // the lease must cover the whole sequence, so the headroom check sums
-  // the write timeout and two read timeouts. Defaults: 60 + 2x10 + 30 =
-  // 110 s, inside the 120 s default effect lease.
+  // calls (two preflight/postcondition reads plus one write), each with its
+  // own timeout; the lease must cover the whole sequence. The request-start
+  // limiter keeps consecutive starts at least `intervalMs` apart, and a
+  // dispatch can wait up to one FULL interval for its first slot because
+  // the shared limiter may hold a prior reservation, so the paced worst
+  // case is the write timeout plus ONE interval (the first-slot wait) plus
+  // TWO more slots of the LARGER of the read timeout and the interval (a
+  // read duration covers its own interval wait when it is the larger term,
+  // and the interval covers it when it is not; the two never add on top of
+  // each other). Defaults with the 2,500 ms interval: 60 + 2.5 + 2x10 + 30
+  // = 112.5 s, inside the 120 s default effect lease.
   const readTimeoutMs = options.googleSheetsApi.readTimeoutMs
     ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS;
   if (
@@ -258,13 +263,23 @@ function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void 
       "sync service googleSheetsApi readTimeoutMs must be between 1 second and 60 seconds.",
     );
   }
+  const intervalMs = options.googleSheetsApi.rateLimitIntervalMs
+    ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS;
+  if (!Number.isSafeInteger(intervalMs) || intervalMs < 0) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service googleSheetsApi rateLimitIntervalMs must be a non-negative safe integer.",
+    );
+  }
   if (
-    effectLeaseDurationMs <= requestTimeoutMs + 2 * readTimeoutMs +
+    effectLeaseDurationMs <= requestTimeoutMs +
+      intervalMs +
+      2 * Math.max(readTimeoutMs, intervalMs) +
       EFFECT_LEASE_PROVIDER_HEADROOM_MS
   ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+      "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
     );
   }
 }
@@ -300,12 +315,8 @@ function validateRoute(entityName: string, projection: string, route: { readonly
   if (route === null || typeof route !== "object") {
     throwInvalidProjection(`sync route ${entityName}.${projection} must be an object.`);
   }
-  const parsed = internalSyncRouteSchema.safeParse(route);
-  if (!parsed.success) {
-    const candidate = route as unknown as Record<string, unknown>;
-    requireText(candidate.tabName, `sync route ${entityName}.${projection}.tabName`);
-    requireText(candidate.registeredRange, `sync route ${entityName}.${projection}.registeredRange`);
-  }
+  requireText(route.tabName, `sync route ${entityName}.${projection}.tabName`);
+  requireText(route.registeredRange, `sync route ${entityName}.${projection}.registeredRange`);
 }
 
 function addRoute(
@@ -329,8 +340,8 @@ export function createWriterOptions(options: InternalSyncServiceOptions): TypedS
   };
 }
 
-function requireText(value: unknown, label: string): void {
-  if (!internalSyncTextSchema.safeParse(value).success) {
+function requireText(value: string, label: string): void {
+  if (typeof value !== "string" || value.trim() === "") {
     throwInvalidProjection(`${label} must be a non-empty string.`);
   }
 }
