@@ -109,6 +109,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "google_sheets_api_network_error",
   "google_sheets_api_http_error",
   "google_sheets_api_invalid_response",
+  "google_sheets_api_request_start_refused",
   // Sync service bootstrap codes (src/application/sync/service/errors.ts).
   "invalid_sync_service_options",
   "invalid_sync_projection_config",
