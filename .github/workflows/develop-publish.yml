@@ -35,6 +35,18 @@ name: Publish develop package
 #    consumer scripts, ikisaki workspace, required npm scripts) fails in
 #    verify with a compatibility error; it is never claimed as verified.
 #
+#    An optional `recovery_patch` input applies an audited fix on top of the
+#    historical source (for example PR #246 / 0.8.5 needs PR #307's
+#    requireStatusCountRow validator because its syncStatus aggregate casts do
+#    not typecheck against current tooling). The input names a relative path
+#    under .github/recovery/patches/; the verify job fetches that file from
+#    the workflow's current develop commit before checking out the historical
+#    source, applies it with `git apply` after the SHA assertion and before
+#    the runner-only version bump, and records its path and sha256 inside the
+#    artifact. The patch is never executed; the publish job verifies the
+#    records before any registry mutation. Tag mode never accepts
+#    recovery_patch.
+#
 # Recovery never creates tags or alters the develop branch in any mode.
 on:
   push:
@@ -52,6 +64,10 @@ on:
         type: string
       version:
         description: "Strict numeric semver (X.Y.Z, no leading zeros or prerelease) to rebuild and publish from source_ref. Requires source_ref."
+        required: false
+        type: string
+      recovery_patch:
+        description: "Relative path under .github/recovery/patches/ of an audited patch to fetch from the current develop commit and apply (git apply, never executed) to the historical source after its SHA assertion. Valid only with source_ref/version; rejected in tag mode."
         required: false
         type: string
 
@@ -77,6 +93,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_SOURCE_REF: ${{ inputs.source_ref }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RECOVERY_PATCH: ${{ inputs.recovery_patch }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -84,6 +101,7 @@ jobs:
           tag=""
           version=""
           source_ref=""
+          recovery_patch=""
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             tag="$REF_NAME"
           elif [[ -n "$INPUT_TAG" ]]; then
@@ -129,10 +147,60 @@ jobs:
             fi
           fi
 
+          # recovery_patch is an audited patch applied on top of the
+          # historical source (see .github/recovery/patches/); it is valid
+          # only in historical mode and is rejected in tag/push mode.
+          if [[ -n "$INPUT_RECOVERY_PATCH" ]]; then
+            if [[ "$mode" != "historical" ]]; then
+              echo "recovery_patch is only valid with source_ref+version (historical recovery); rejected in tag mode" >&2
+              exit 1
+            fi
+            # Constrain the patch to a relative path under the recovery
+            # patches directory: no absolute paths, no .. traversal, and no
+            # backslashes. The verify job fetches exactly this path from the
+            # current develop commit; the publish job re-checks the recorded
+            # path before any registry mutation.
+            if [[ ! "$INPUT_RECOVERY_PATCH" =~ ^\.github/recovery/patches/[A-Za-z0-9._/-]+$ ]] \
+              || [[ "$INPUT_RECOVERY_PATCH" == *".."* ]]; then
+              echo "recovery_patch must be a relative path under .github/recovery/patches/: $INPUT_RECOVERY_PATCH" >&2
+              exit 1
+            fi
+            recovery_patch="$INPUT_RECOVERY_PATCH"
+          fi
+
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "recovery_patch=$recovery_patch" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch audited recovery patch from current develop commit
+        if: steps.resolve-mode.outputs.mode == 'historical' && steps.resolve-mode.outputs.recovery_patch != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_PATCH: ${{ steps.resolve-mode.outputs.recovery_patch }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # The patch file comes from the workflow's current develop commit
+          # (the immutable github.sha this run executes from), fetched before
+          # the historical checkout so an old PR head can never supply or
+          # alter the audited patch. The path was constrained by resolve-mode;
+          # it is re-asserted here before it is used in the fixed raw URL.
+          # The patch is plain text and is never executed: it is only fed to
+          # `git apply` after the historical checkout passes its SHA assertion.
+          if [[ ! "$RECOVERY_PATCH" =~ ^\.github/recovery/patches/[A-Za-z0-9._/-]+$ || "$RECOVERY_PATCH" == *".."* ]]; then
+            echo "recovery_patch failed path validation: $RECOVERY_PATCH" >&2
+            exit 1
+          fi
+          curl -fL --retry 3 --header "Authorization: Bearer $GH_TOKEN" \
+            "https://raw.githubusercontent.com/${{ github.repository }}/$RUN_SHA/$RECOVERY_PATCH" \
+            -o "$RUNNER_TEMP/hikoutei-recovery.patch"
+          # Require a non-empty file so a silent fetch failure cannot
+          # masquerade as a no-op patch; git apply below is the final gate.
+          test -s "$RUNNER_TEMP/hikoutei-recovery.patch"
+          echo "Fetched recovery patch $RECOVERY_PATCH from $RUN_SHA ($(wc -l < "$RUNNER_TEMP/hikoutei-recovery.patch") lines)."
 
       - name: Check out repository
         uses: actions/checkout@v5
@@ -158,6 +226,7 @@ jobs:
         env:
           SOURCE_REF: ${{ steps.resolve-mode.outputs.source_ref }}
           REQUESTED_VERSION: ${{ steps.resolve-mode.outputs.version }}
+          RECOVERY_PATCH: ${{ steps.resolve-mode.outputs.recovery_patch }}
         run: |
           set -euo pipefail
           # The caller supplied an immutable PR head SHA; refuse to proceed
@@ -167,6 +236,23 @@ jobs:
           if [[ "$actual_sha" != "$SOURCE_REF" ]]; then
             echo "checked out $actual_sha but source_ref is $SOURCE_REF" >&2
             exit 1
+          fi
+          # Audited recovery patch: applied only after the SHA assertion, so
+          # the code being patched is exactly the requested source. The patch
+          # was fetched earlier from the current develop commit and is never
+          # executed; a patch that does not apply fails the run clearly.
+          if [[ -n "$RECOVERY_PATCH" ]]; then
+            test -f "$RUNNER_TEMP/hikoutei-recovery.patch"
+            if ! git apply --check "$RUNNER_TEMP/hikoutei-recovery.patch"; then
+              echo "recovery patch $RECOVERY_PATCH does not apply to source_ref $SOURCE_REF; refusing to build" >&2
+              exit 1
+            fi
+            git apply "$RUNNER_TEMP/hikoutei-recovery.patch"
+            # Audit records for the publish job: the exact patch path and its
+            # sha256, carried inside the packed artifact.
+            printf '%s' "$RECOVERY_PATCH" > "$RUNNER_TEMP/hikoutei-recovery-patch-path.txt"
+            (cd "$RUNNER_TEMP" && sha256sum hikoutei-recovery.patch > hikoutei-recovery-patch.sha256)
+            echo "Applied recovery patch $RECOVERY_PATCH to $actual_sha."
           fi
           # Runner-only version bump: --no-git-tag-version updates
           # package.json and package-lock.json in the working tree without
@@ -325,6 +411,13 @@ jobs:
           # to different code or a different version.
           git rev-parse HEAD > "$package_dir/hikoutei-develop-tag-commit.sha"
           printf '%s' "$EXPECTED_VERSION" > "$package_dir/hikoutei-develop-requested-version.txt"
+          # Carry the audited recovery patch records (path + sha256) inside
+          # the artifact when a patch was applied, so the publish job can
+          # verify them before any registry mutation.
+          if [[ -f "$RUNNER_TEMP/hikoutei-recovery-patch-path.txt" ]]; then
+            cp "$RUNNER_TEMP/hikoutei-recovery-patch-path.txt" "$package_dir/hikoutei-recovery-patch-path.txt"
+            cp "$RUNNER_TEMP/hikoutei-recovery-patch.sha256" "$package_dir/hikoutei-recovery-patch.sha256"
+          fi
           # Build and pack the @hikoutei/ikisaki workspace package from the
           # same verified source so the publish job never builds or runs
           # source-controlled code — it only publishes this pre-built
@@ -458,6 +551,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_SOURCE_REF: ${{ inputs.source_ref }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RECOVERY_PATCH: ${{ inputs.recovery_patch }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -465,6 +559,7 @@ jobs:
           tag=""
           version=""
           source_ref=""
+          recovery_patch=""
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             tag="$REF_NAME"
           elif [[ -n "$INPUT_TAG" ]]; then
@@ -510,10 +605,32 @@ jobs:
             fi
           fi
 
+          # recovery_patch is an audited patch applied on top of the
+          # historical source (see .github/recovery/patches/); it is valid
+          # only in historical mode and is rejected in tag/push mode.
+          if [[ -n "$INPUT_RECOVERY_PATCH" ]]; then
+            if [[ "$mode" != "historical" ]]; then
+              echo "recovery_patch is only valid with source_ref+version (historical recovery); rejected in tag mode" >&2
+              exit 1
+            fi
+            # Constrain the patch to a relative path under the recovery
+            # patches directory: no absolute paths, no .. traversal, and no
+            # backslashes. The verify job fetches exactly this path from the
+            # current develop commit; the publish job re-checks the recorded
+            # path before any registry mutation.
+            if [[ ! "$INPUT_RECOVERY_PATCH" =~ ^\.github/recovery/patches/[A-Za-z0-9._/-]+$ ]] \
+              || [[ "$INPUT_RECOVERY_PATCH" == *".."* ]]; then
+              echo "recovery_patch must be a relative path under .github/recovery/patches/: $INPUT_RECOVERY_PATCH" >&2
+              exit 1
+            fi
+            recovery_patch="$INPUT_RECOVERY_PATCH"
+          fi
+
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "recovery_patch=$recovery_patch" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
         uses: actions/checkout@v5
@@ -544,6 +661,7 @@ jobs:
           MODE: ${{ steps.resolve-mode.outputs.mode }}
           SOURCE_REF: ${{ steps.resolve-mode.outputs.source_ref }}
           EXPECTED_VERSION: ${{ steps.resolve-mode.outputs.version }}
+          RECOVERY_PATCH: ${{ steps.resolve-mode.outputs.recovery_patch }}
         run: |
           set -euo pipefail
           # Refuse any registry mutation unless the checkout resolves to the
@@ -564,6 +682,34 @@ jobs:
           fi
           if [[ "$MODE" == "historical" && -n "$SOURCE_REF" && "$actual_sha" != "$SOURCE_REF" ]]; then
             echo "historical recovery checked out $actual_sha but source_ref is $SOURCE_REF" >&2
+            exit 1
+          fi
+          # Audited recovery patch records: when a recovery_patch was
+          # supplied, the artifact must carry both records and they must be
+          # internally valid — the recorded path must equal the validated
+          # input, and the sha256 record must be a well-formed checksum line
+          # naming the patch file. When no patch was supplied, the artifact
+          # must carry no such records. All of this is verified before any
+          # registry mutation; this job never executes source-controlled
+          # scripts, and the patch itself was never executed either.
+          if [[ "$MODE" == "historical" && -n "$RECOVERY_PATCH" ]]; then
+            patch_path_file="$package_dir/hikoutei-recovery-patch-path.txt"
+            patch_sha_file="$package_dir/hikoutei-recovery-patch.sha256"
+            if [[ ! -f "$patch_path_file" || ! -s "$patch_path_file" || ! -f "$patch_sha_file" || ! -s "$patch_sha_file" ]]; then
+              echo "artifact is missing recovery patch records for $RECOVERY_PATCH" >&2
+              exit 1
+            fi
+            recorded_path="$(cat "$patch_path_file")"
+            if [[ "$recorded_path" != "$RECOVERY_PATCH" ]]; then
+              echo "artifact recovery patch mismatch: recorded=$recorded_path input=$RECOVERY_PATCH" >&2
+              exit 1
+            fi
+            if ! grep -qE '^[0-9a-f]{64}  hikoutei-recovery\.patch$' "$patch_sha_file"; then
+              echo "artifact recovery patch sha256 record is malformed: $(cat "$patch_sha_file")" >&2
+              exit 1
+            fi
+          elif [[ -e "$package_dir/hikoutei-recovery-patch-path.txt" || -e "$package_dir/hikoutei-recovery-patch.sha256" ]]; then
+            echo "artifact carries recovery patch records but no recovery_patch input was given" >&2
             exit 1
           fi
           echo "Checked out $actual_sha for $EXPECTED_VERSION matching the verified artifact."
