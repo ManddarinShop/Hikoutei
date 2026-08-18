@@ -91,9 +91,9 @@ const SINK_FAILURE_LIMIT = 3;
 const REDACTED = "[redacted]";
 
 /** Set of every stable event name the log may carry. */
-const EVENT_ALLOWLIST = new Set(Object.values(HIKOUTEI_LOG_EVENTS));
+const EVENT_ALLOWLIST: ReadonlySet<string> = new Set(Object.values(HIKOUTEI_LOG_EVENTS));
 /** Set of every stable component tag the log may carry. */
-const COMPONENT_ALLOWLIST = new Set(Object.values(HIKOUTEI_LOG_COMPONENTS));
+const COMPONENT_ALLOWLIST: ReadonlySet<string> = new Set(Object.values(HIKOUTEI_LOG_COMPONENTS));
 /** Set of every stable error code the log may carry. */
 const CODE_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CODES);
 /** Set of every stable error class name the log may carry. */
