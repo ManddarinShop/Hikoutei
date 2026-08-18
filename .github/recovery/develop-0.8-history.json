@@ -213,7 +213,7 @@
     "pr": 283,
     "version": "0.8.40",
     "sourceRef": "b96fd7b872dd9e944bd44c37a2c36af0190e6735",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-283-close-recovery.patch"
   },
   {
     "pr": 284,
