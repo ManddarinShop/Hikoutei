@@ -34,10 +34,12 @@ import {
   isRecoverableEffectErrorCode,
   APPLY_EFFECT_RESULT_SQL,
   CLAIM_EFFECT_SQL,
+  COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL,
   COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL,
   INSERT_PENDING_EFFECT_SQL,
   INSERT_REPLANNED_EFFECT_SQL,
   MARK_DELIVERY_UNCERTAIN_SQL,
+  READ_OUTBOX_SCAN_READINESS_SQL,
   RECOVER_EXPIRED_LEASES_SQL,
   RENEW_EFFECT_LEASE_SQL,
   REQUEUE_CLAIMED_EFFECT_SQL,
@@ -544,4 +546,90 @@ export async function hasPendingOrProcessingEffectsWithAdapter(
   storage: SqlStorageAdapter,
 ): Promise<boolean> {
   return storage.read(({ sql }) => hasPendingOrProcessingEffectsWithSql(sql));
+}
+
+/**
+ * Readiness classification of the durable outbox for the FIRST
+ * reconciliation-scan gate.
+ *
+ * - `busy`: claimable drain work exists — a `pending` effect with no
+ *   earlier same-stream predecessor outside `applied`/`superseded` (a
+ *   genuinely claimable head), or `processing`/`delivery_uncertain` work
+ *   in flight. A first scan is deferred so it cannot enqueue corrections
+ *   while the initial backlog is still draining.
+ * - `repair-needed`: at least one terminal failed stream head exists (a
+ *   `failed` effect whose `last_error_code` is NULL or NOT recoverable).
+ *   Such a head blocks its stream; the scanner is the repair net that
+ *   supersedes it, so the gate must ALLOW the first scan even while the
+ *   outbox is busy.
+ * - `idle`: no busy work and no terminal failed head; the scan runs.
+ *
+ * `conflict` and `blocked_candidate` rows are deliberately neither busy
+ * work nor failed heads, and a `pending` follower behind them is not
+ * claimable: those lifecycle states must never defer the first scan, or a
+ * blocked stream could suppress the recovery that unblocks it forever.
+ */
+export type OutboxScanReadiness =
+  | { readonly status: "idle" }
+  | { readonly status: "busy" }
+  | { readonly status: "repair-needed" };
+
+/** Classifies the outbox scan readiness through an already-active SQL context. */
+export async function readOutboxScanReadinessWithSql(
+  sql: SqlExecutor,
+): Promise<OutboxScanReadiness> {
+  const row = await sql.get<{
+    readonly busy_count: number;
+    readonly terminal_failed_count: number;
+  }>(READ_OUTBOX_SCAN_READINESS_SQL);
+  const busyCount = row?.busy_count ?? 0;
+  const terminalFailedCount = row?.terminal_failed_count ?? 0;
+  if (terminalFailedCount > 0) return { status: "repair-needed" };
+  if (busyCount > 0) return { status: "busy" };
+  return { status: "idle" };
+}
+
+/** Classifies the outbox scan readiness through a fresh adapter read context. */
+export async function readOutboxScanReadinessWithAdapter(
+  storage: SqlStorageAdapter,
+): Promise<OutboxScanReadiness> {
+  return storage.read(({ sql }) => readOutboxScanReadinessWithSql(sql));
+}
+
+/**
+ * Readiness of the System_State projection for the FIRST polling pass and
+ * for external convergence barriers.
+ *
+ * - `draining`: at least one System_State effect is genuinely in flight
+ *   (processing/delivery_uncertain, or a `pending` effect that is a
+ *   claimable head). The first remote polling pass and external convergence
+ *   readers defer so they cannot compete with the initial System_State
+ *   drain on the shared request limiter.
+ * - `ready`: no claimable System_State drain work remains. Terminal lifecycle
+ *   states (applied, superseded, failed, conflict, blocked_candidate) never
+ *   defer, and a `pending` follower behind such a predecessor is not drain
+ *   work either, so a terminal failed head or an open conflict cannot keep
+ *   the first polling pass draining forever — the poll/read-based checks
+ *   surface those conditions themselves, exactly like the first
+ *   reconciliation scan readiness. This is deliberately NOT the whole-outbox
+ *   idle state: unrelated projections and repair-needed heads do not count.
+ */
+export type SystemStateDrainReadiness =
+  | { readonly status: "draining" }
+  | { readonly status: "ready" };
+
+/** Classifies the System_State drain readiness through an already-active SQL context. */
+export async function readSystemStateDrainReadinessWithSql(
+  sql: SqlExecutor,
+): Promise<SystemStateDrainReadiness> {
+  const row = await sql.get<{ readonly count: number }>(COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL);
+  const count = row?.count ?? 0;
+  return count > 0 ? { status: "draining" } : { status: "ready" };
+}
+
+/** Classifies the System_State drain readiness through a fresh adapter read context. */
+export async function readSystemStateDrainReadinessWithAdapter(
+  storage: SqlStorageAdapter,
+): Promise<SystemStateDrainReadiness> {
+  return storage.read(({ sql }) => readSystemStateDrainReadinessWithSql(sql));
 }
