@@ -63,19 +63,19 @@
     "pr": 256,
     "version": "0.8.15",
     "sourceRef": "58551d07543df3e6fbbef5753723054fe921b944",
-    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-256-ci-recovery.patch"
   },
   {
     "pr": 257,
     "version": "0.8.16",
     "sourceRef": "93fe60f43bd754db1a875b50183949b525b6fff3",
-    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-256-ci-recovery.patch"
   },
   {
     "pr": 258,
     "version": "0.8.17",
     "sourceRef": "549bd2a2ed80ae2032530a09ffadc26d5e3c1b99",
-    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-258-ci-recovery.patch"
   },
   {
     "pr": 259,
