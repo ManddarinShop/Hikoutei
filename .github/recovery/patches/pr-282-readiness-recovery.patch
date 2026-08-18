@@ -1,0 +1,504 @@
+diff --git a/packages/ikisaki/src/index.ts b/packages/ikisaki/src/index.ts
+index 94569cd..c3b2dd8 100644
+--- a/packages/ikisaki/src/index.ts
++++ b/packages/ikisaki/src/index.ts
+@@ -127,6 +127,11 @@ export {
+   listReadyFastAppendEffectsWithSql,
+   markDeliveryUncertainWithAdapter,
+   markDeliveryUncertainWithSql,
++  readOutboxScanReadinessWithAdapter,
++  readOutboxScanReadinessWithSql,
++  readSystemStateDrainReadinessWithAdapter,
++  readSystemStateDrainReadinessWithSql,
++  type SystemStateDrainReadiness,
+   recoverExpiredLeasesWithAdapter,
+   recoverExpiredLeasesWithSql,
+   releaseUnprocessedEffectWithAdapter,
+diff --git a/packages/ikisaki/src/outbox.ts b/packages/ikisaki/src/outbox.ts
+index c30a8ed..357b21c 100644
+--- a/packages/ikisaki/src/outbox.ts
++++ b/packages/ikisaki/src/outbox.ts
+@@ -34,10 +34,12 @@ import {
+   isRecoverableEffectErrorCode,
+   APPLY_EFFECT_RESULT_SQL,
+   CLAIM_EFFECT_SQL,
++  COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL,
+   COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL,
+   INSERT_PENDING_EFFECT_SQL,
+   INSERT_REPLANNED_EFFECT_SQL,
+   MARK_DELIVERY_UNCERTAIN_SQL,
++  READ_OUTBOX_SCAN_READINESS_SQL,
+   RECOVER_EXPIRED_LEASES_SQL,
+   RENEW_EFFECT_LEASE_SQL,
+   REQUEUE_CLAIMED_EFFECT_SQL,
+@@ -545,3 +547,89 @@ export async function hasPendingOrProcessingEffectsWithAdapter(
+ ): Promise<boolean> {
+   return storage.read(({ sql }) => hasPendingOrProcessingEffectsWithSql(sql));
+ }
++
++/**
++ * Readiness classification of the durable outbox for the FIRST
++ * reconciliation-scan gate.
++ *
++ * - `busy`: claimable drain work exists — a `pending` effect with no
++ *   earlier same-stream predecessor outside `applied`/`superseded` (a
++ *   genuinely claimable head), or `processing`/`delivery_uncertain` work
++ *   in flight. A first scan is deferred so it cannot enqueue corrections
++ *   while the initial backlog is still draining.
++ * - `repair-needed`: at least one terminal failed stream head exists (a
++ *   `failed` effect whose `last_error_code` is NULL or NOT recoverable).
++ *   Such a head blocks its stream; the scanner is the repair net that
++ *   supersedes it, so the gate must ALLOW the first scan even while the
++ *   outbox is busy.
++ * - `idle`: no busy work and no terminal failed head; the scan runs.
++ *
++ * `conflict` and `blocked_candidate` rows are deliberately neither busy
++ * work nor failed heads, and a `pending` follower behind them is not
++ * claimable: those lifecycle states must never defer the first scan, or a
++ * blocked stream could suppress the recovery that unblocks it forever.
++ */
++export type OutboxScanReadiness =
++  | { readonly status: "idle" }
++  | { readonly status: "busy" }
++  | { readonly status: "repair-needed" };
++
++/** Classifies the outbox scan readiness through an already-active SQL context. */
++export async function readOutboxScanReadinessWithSql(
++  sql: SqlExecutor,
++): Promise<OutboxScanReadiness> {
++  const row = await sql.get<{
++    readonly busy_count: number;
++    readonly terminal_failed_count: number;
++  }>(READ_OUTBOX_SCAN_READINESS_SQL);
++  const busyCount = row?.busy_count ?? 0;
++  const terminalFailedCount = row?.terminal_failed_count ?? 0;
++  if (terminalFailedCount > 0) return { status: "repair-needed" };
++  if (busyCount > 0) return { status: "busy" };
++  return { status: "idle" };
++}
++
++/** Classifies the outbox scan readiness through a fresh adapter read context. */
++export async function readOutboxScanReadinessWithAdapter(
++  storage: SqlStorageAdapter,
++): Promise<OutboxScanReadiness> {
++  return storage.read(({ sql }) => readOutboxScanReadinessWithSql(sql));
++}
++
++/**
++ * Readiness of the System_State projection for the FIRST polling pass and
++ * for external convergence barriers.
++ *
++ * - `draining`: at least one System_State effect is genuinely in flight
++ *   (processing/delivery_uncertain, or a `pending` effect that is a
++ *   claimable head). The first remote polling pass and external convergence
++ *   readers defer so they cannot compete with the initial System_State
++ *   drain on the shared request limiter.
++ * - `ready`: no claimable System_State drain work remains. Terminal lifecycle
++ *   states (applied, superseded, failed, conflict, blocked_candidate) never
++ *   defer, and a `pending` follower behind such a predecessor is not drain
++ *   work either, so a terminal failed head or an open conflict cannot keep
++ *   the first polling pass draining forever — the poll/read-based checks
++ *   surface those conditions themselves, exactly like the first
++ *   reconciliation scan readiness. This is deliberately NOT the whole-outbox
++ *   idle state: unrelated projections and repair-needed heads do not count.
++ */
++export type SystemStateDrainReadiness =
++  | { readonly status: "draining" }
++  | { readonly status: "ready" };
++
++/** Classifies the System_State drain readiness through an already-active SQL context. */
++export async function readSystemStateDrainReadinessWithSql(
++  sql: SqlExecutor,
++): Promise<SystemStateDrainReadiness> {
++  const row = await sql.get<{ readonly count: number }>(COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL);
++  const count = row?.count ?? 0;
++  return count > 0 ? { status: "draining" } : { status: "ready" };
++}
++
++/** Classifies the System_State drain readiness through a fresh adapter read context. */
++export async function readSystemStateDrainReadinessWithAdapter(
++  storage: SqlStorageAdapter,
++): Promise<SystemStateDrainReadiness> {
++  return storage.read(({ sql }) => readSystemStateDrainReadinessWithSql(sql));
++}
+diff --git a/packages/ikisaki/src/outboxSql.ts b/packages/ikisaki/src/outboxSql.ts
+index a54b680..660637e 100644
+--- a/packages/ikisaki/src/outboxSql.ts
++++ b/packages/ikisaki/src/outboxSql.ts
+@@ -273,6 +273,88 @@ export const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
+   WHERE status IN ('pending', 'processing', 'delivery_uncertain')
+ `;
+ 
++/**
++ * Counts claimable drain work and terminal failed heads in one read.
++ *
++ * `busy_count` counts only work the first reconciliation scan must defer
++ * for: `processing`/`delivery_uncertain` effects in flight, plus `pending`
++ * effects that are genuinely claimable heads (no earlier same-stream
++ * predecessor outside `applied`/`superseded`). A `pending` follower behind
++ * a `conflict` or `blocked_candidate` predecessor is NOT claimable drain
++ * work — it stays behind the candidate-pipeline lifecycle state until a
++ * later effect supersedes it, so counting it would defer the first scan
++ * forever and suppress the recovery that unblocks the stream.
++ *
++ * `terminal_failed_count` counts `failed` heads whose error code is NULL or
++ * outside the recoverable set (a NULL code is treated as terminal so SQL
++ * three-valued `NOT IN` cannot hide it): those heads block their streams
++ * and must force the first scan even while the outbox is otherwise busy.
++ */
++export const READ_OUTBOX_SCAN_READINESS_SQL = `
++  SELECT
++    (SELECT COUNT(*) FROM sheet_effect_outbox AS candidate
++      WHERE candidate.status IN ('processing', 'delivery_uncertain')
++         OR (candidate.status = 'pending' AND NOT EXISTS (
++              SELECT 1
++              FROM sheet_effect_outbox AS predecessor
++              WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
++                AND predecessor.target_kind = candidate.target_kind
++                AND predecessor.target_id = candidate.target_id
++                AND predecessor.stream_sequence < candidate.stream_sequence
++                AND predecessor.status NOT IN ('applied', 'superseded')
++            ))) AS busy_count,
++    (SELECT COUNT(*) FROM sheet_effect_outbox
++      WHERE status = 'failed'
++        AND (last_error_code IS NULL
++          OR last_error_code NOT IN (${RECOVERABLE_EFFECT_ERROR_CODE_SQL}))) AS terminal_failed_count
++`;
++
++/**
++ * Durable projection tag of the System_State projection (persisted contract).
++ *
++ * System_State is the one projection the startup path treats specially:
++ * while its effects are still in flight, the first polling pass and external
++ * convergence barriers defer so they cannot compete with the initial
++ * System_State drain on the shared request limiter.
++ */
++export const SYSTEM_STATE_PROJECTION = "system_state" as const;
++
++/**
++ * Counts System_State effects that are still in flight (nonterminal).
++ *
++ * `processing`/`delivery_uncertain` effects are always in flight, plus
++ * `pending` effects that are genuinely claimable heads (no earlier
++ * same-stream predecessor outside `applied`/`superseded`). A `pending`
++ * follower behind a `conflict` or `blocked_candidate` predecessor is NOT
++ * claimable drain work — it stays behind the candidate-pipeline lifecycle
++ * state until a later effect supersedes it, so counting it would defer the
++ * first polling pass (or an external convergence barrier) forever and
++ * suppress the polling/reconciliation pass that unblocks the stream.
++ *
++ * This mirrors the claimable-head semantics of
++ * `READ_OUTBOX_SCAN_READINESS_SQL`: terminal lifecycle states — applied,
++ * superseded, failed, conflict, blocked_candidate — never defer the
++ * polling/readiness gate, so a terminal failed head or an open conflict
++ * cannot stall the first polling pass forever.
++ */
++export const COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL = `
++  SELECT COUNT(*) AS count
++  FROM sheet_effect_outbox AS candidate
++  WHERE candidate.projection = '${SYSTEM_STATE_PROJECTION}'
++    AND (
++      candidate.status IN ('processing', 'delivery_uncertain')
++      OR (candidate.status = 'pending' AND NOT EXISTS (
++        SELECT 1
++        FROM sheet_effect_outbox AS predecessor
++        WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
++          AND predecessor.target_kind = candidate.target_kind
++          AND predecessor.target_id = candidate.target_id
++          AND predecessor.stream_sequence < candidate.stream_sequence
++          AND predecessor.status NOT IN ('applied', 'superseded')
++      ))
++    )
++`;
++
+ /** Reads the durable confirmed revision for one projection binding. */
+ export const READ_CONFIRMED_VISIBLE_REVISION_SQL = `
+   SELECT confirmed_visible_revision
+diff --git a/scripts/ci/local-soak/logLines.mjs b/scripts/ci/local-soak/logLines.mjs
+index af14a90..683cd47 100644
+--- a/scripts/ci/local-soak/logLines.mjs
++++ b/scripts/ci/local-soak/logLines.mjs
+@@ -114,10 +114,6 @@ export const LOGGED_STABLE_CODES = Object.freeze([
+   "sync_provider_unavailable",
+   "sync_service_startup_failed",
+   "sync_service_closed",
+-  // Canonical/observation/resolution evaluation codes.
+-  "canonical_state_required",
+-  "canonical_field_required",
+-  "base_field_revision_required",
+   // Storage/schema/effect codes.
+   "invalid_writer_lease_options",
+   "invalid_sync_registration",
+@@ -148,6 +144,12 @@ export const LOGGED_STABLE_CODES = Object.freeze([
+   "schema_column_missing",
+   "schema_version_invalid",
+   "invalid_sql_script",
++  // Canonical/observation/resolution evaluation codes.
++  "canonical_state_required",
++  "canonical_field_required",
++  "base_field_revision_required",
++  // Domain event-identity code.
++  "duplicate_changed_field",
+   // Mapped ORM facade codes.
+   "invalid_entity_mapping",
+   "duplicate_entity_mapping",
+@@ -159,44 +161,22 @@ export const LOGGED_STABLE_CODES = Object.freeze([
+   "canonical_commit_rejected",
+   "projection_outbox_blocked",
+   "observation_entity_mutation_failed",
+-  // SQLite driver family.
+-  "SQLITE_ERROR",
+-  "SQLITE_INTERNAL",
+-  "SQLITE_PERM",
+-  "SQLITE_ABORT",
+-  "SQLITE_BUSY",
+-  "SQLITE_LOCKED",
+-  "SQLITE_NOMEM",
+-  "SQLITE_READONLY",
+-  "SQLITE_INTERRUPT",
+-  "SQLITE_IOERR",
+-  "SQLITE_CORRUPT",
+-  "SQLITE_NOTFOUND",
+-  "SQLITE_FULL",
+-  "SQLITE_CANTOPEN",
+-  "SQLITE_PROTOCOL",
+-  "SQLITE_EMPTY",
+-  "SQLITE_SCHEMA",
+-  "SQLITE_TOOBIG",
+-  "SQLITE_CONSTRAINT",
+-  "SQLITE_MISMATCH",
+-  "SQLITE_MISUSE",
+-  "SQLITE_NOLFS",
+-  "SQLITE_AUTH",
+-  "SQLITE_FORMAT",
+-  "SQLITE_RANGE",
+-  "SQLITE_NOTADB",
+-  "SQLITE_NOTICE",
+-  "SQLITE_WARNING",
+-  "SQLITE_ROW",
+-  "SQLITE_DONE",
+-  "SQLITE_CONSTRAINT_UNIQUE",
+-  "SQLITE_CONSTRAINT_PRIMARYKEY",
+-  "SQLITE_CONSTRAINT_NOTNULL",
+-  "SQLITE_CONSTRAINT_CHECK",
+-  "SQLITE_CONSTRAINT_FOREIGNKEY",
+-  "SQLITE_CONSTRAINT_TRIGGER",
+-  "SQLITE_CONSTRAINT_DATATYPE",
++  // Stable-encoding codes (src/shared/encoding/constants.ts, re-exported
++  // from @hikoutei/kohkai). Raised by StableEncodingError during
++  // flush/evidence paths.
++  "unsupported_value_type",
++  "non_finite_number",
++  "invalid_date_format",
++  "invalid_date_byte_length",
++  "duplicate_object_key",
++  "unpaired_high_surrogate",
++  "unpaired_low_surrogate",
++  "cyclic_value",
++  // SQLite driver family (node:sqlite). Every SQLite-level failure in the
++  // engine's driver throws with the single stable code ERR_SQLITE_ERROR;
++  // the numeric SQLite result rides on errcode/errstr detail properties,
++  // which are never logged.
++  "ERR_SQLITE_ERROR",
+ ]);
+ 
+ /**
+@@ -213,7 +193,13 @@ export const LOGGED_STABLE_CLASSES = Object.freeze([
+   "URIError",
+   "AggregateError",
+   "HikouteiError",
++  "TypedSheetsOrmError",
+   "SyncSheetsContractError",
++  "SyncServiceError",
++  "StorageError",
++  "EvaluationContractError",
++  "StableEncodingError",
++  "DuplicateChangedFieldError",
+   "GoogleSheetsApiTransportError",
+   "ValidationError",
+   "CursorError",
+diff --git a/src/adapter/sheets/providers/google-sheets-api/errors.ts b/src/adapter/sheets/providers/google-sheets-api/errors.ts
+index 260e722..0747938 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/errors.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/errors.ts
+@@ -26,6 +26,8 @@ export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {
+   HTTP_ERROR: "google_sheets_api_http_error",
+   /** A 2xx response whose structure cannot prove what was applied. */
+   INVALID_RESPONSE: "google_sheets_api_invalid_response",
++  /** The request-start limiter refused admission before any SDK call; no remote request was sent. */
++  REQUEST_START_REFUSED: "google_sheets_api_request_start_refused",
+ } as const;
+ 
+ export type GoogleSheetsApiTransportErrorCode =
+diff --git a/src/application/sync/service/SyncServiceBootstrap.ts b/src/application/sync/service/SyncServiceBootstrap.ts
+index 632ddaa..0c0a651 100644
+--- a/src/application/sync/service/SyncServiceBootstrap.ts
++++ b/src/application/sync/service/SyncServiceBootstrap.ts
+@@ -19,6 +19,7 @@
+ 
+ import {
+   createInternalHikoutei,
++  type Hikoutei,
+ } from "../../../api/Hikoutei.js";
+ import {
+   resolveEntityDescriptors,
+@@ -51,6 +52,10 @@ import { createRemoteProvider } from "./remoteProvider.js";
+ import { createEffectSupervisor } from "./effectSupervisor.js";
+ import { createPollingSupervisor } from "./pollingSupervisor.js";
+ import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
++import {
++  registerSystemStateReadiness,
++  unregisterSystemStateReadiness,
++} from "./systemStateReadiness.js";
+ import {
+   createWriterOptions,
+   throwSyncResolutionError,
+@@ -154,7 +159,23 @@ export async function createInternalSyncService(
+       generated.bindings,
+       runtime.flushCoordinator,
+     );
+-    const hikoutei = createInternalHikoutei(provider, descriptors, stop);
++    // The runtime object is the readiness key: the beforeClose hook runs
++    // only after this assignment, so the captured reference is always the
++    // fully constructed runtime. Unregistering happens BEFORE the stop
++    // handler runs, so a closing runtime reports ready (no outbox to drain)
++    // the moment its close begins.
++    let hikoutei: Hikoutei;
++    const hikouteiClose = async (): Promise<void> => {
++      unregisterSystemStateReadiness(hikoutei);
++      await stop();
++    };
++    hikoutei = createInternalHikoutei(provider, descriptors, hikouteiClose);
++    // Register the runtime's System_State readiness right after bootstrap so
++    // external convergence barriers can wait on the drain; the runtime is
++    // unregistered on close (see hikouteiClose). Never part of the public
++    // API — the registration is keyed to the internal/public runtime object
++    // and read only through this internal module.
++    registerSystemStateReadiness(hikoutei, runtime.storage);
+     effectSupervisor.start();
+     pollingSupervisor.start();
+ 
+diff --git a/src/internal/syncStatus.ts b/src/internal/syncStatus.ts
+index 5a96919..7d79515 100644
+--- a/src/internal/syncStatus.ts
++++ b/src/internal/syncStatus.ts
+@@ -320,12 +320,49 @@ function readSpreadsheetId(database: DatabaseSync): string | null {
+   return authorityRow === undefined ? null : authorityRow.spreadsheet_id;
+ }
+ 
++/**
++ * Validates one raw `{ status, count }` aggregate row, or throws a
++ * structured read failure.
++ *
++ * SQLite `COUNT(*)` always yields a non-negative integer, so any other
++ * shape means the storage schema has drifted and the counts cannot be
++ * trusted; failing the whole read is safer than reporting false zeros.
++ */
++function requireStatusCountRow(row: unknown): { readonly status: string; readonly count: number } {
++  if (typeof row !== "object" || row === null) {
++    throw malformedStatusCountRow(row);
++  }
++  const { status, count } = row as Record<string, unknown>;
++  if (
++    typeof status !== "string" ||
++    typeof count !== "number" ||
++    !Number.isInteger(count) ||
++    count < 0
++  ) {
++    throw malformedStatusCountRow(row);
++  }
++  return { status, count };
++}
++
++/** Builds the structured read failure for one malformed aggregate row. */
++function malformedStatusCountRow(row: unknown): HikouteiSyncStatusError {
++  return new HikouteiSyncStatusError(
++    HIKOUTEI_SYNC_STATUS_ERROR_CODES.READ_FAILED,
++    `status query returned a malformed aggregate row: ${JSON.stringify(row)}`,
++  );
++}
++
+ /** Counts outbox effects by the delivery-relevant statuses. */
+ function readEffectCounts(database: DatabaseSync): HikouteiSyncEffectCounts {
+   const rows = database
+     .prepare("SELECT status, COUNT(*) AS count FROM sheet_effect_outbox GROUP BY status")
+-    .all() as ReadonlyArray<{ status: string; count: number }>;
+-  const byStatus = new Map(rows.map((row) => [row.status, row.count]));
++    .all();
++  const byStatus = new Map(
++    rows.map((row) => {
++      const validated = requireStatusCountRow(row);
++      return [validated.status, validated.count] as const;
++    }),
++  );
+   return {
+     pending: byStatus.get(EFFECT_STATUSES.PENDING) ?? 0,
+     processing: byStatus.get(EFFECT_STATUSES.PROCESSING) ?? 0,
+@@ -340,11 +377,13 @@ function readConflictCounts(database: DatabaseSync): HikouteiSyncConflictCounts
+     .prepare(
+       "SELECT status, COUNT(*) AS count FROM sync_conflict WHERE status IN (?, ?) GROUP BY status",
+     )
+-    .all(CONFLICT_STATUSES.OPEN, CONFLICT_STATUSES.NEEDS_REBASE) as ReadonlyArray<{
+-    status: string;
+-    count: number;
+-  }>;
+-  const byStatus = new Map(rows.map((row) => [row.status, row.count]));
++    .all(CONFLICT_STATUSES.OPEN, CONFLICT_STATUSES.NEEDS_REBASE);
++  const byStatus = new Map(
++    rows.map((row) => {
++      const validated = requireStatusCountRow(row);
++      return [validated.status, validated.count] as const;
++    }),
++  );
+   return {
+     open: byStatus.get(CONFLICT_STATUSES.OPEN) ?? 0,
+     needsRebase: byStatus.get(CONFLICT_STATUSES.NEEDS_REBASE) ?? 0,
+diff --git a/src/shared/observability/logEvents.ts b/src/shared/observability/logEvents.ts
+index b7b3545..fca0745 100644
+--- a/src/shared/observability/logEvents.ts
++++ b/src/shared/observability/logEvents.ts
+@@ -109,6 +109,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
+   "google_sheets_api_network_error",
+   "google_sheets_api_http_error",
+   "google_sheets_api_invalid_response",
++  "google_sheets_api_request_start_refused",
+   // Sync service bootstrap codes (src/application/sync/service/errors.ts).
+   "invalid_sync_service_options",
+   "invalid_sync_projection_config",
+diff --git a/test/internal-log-registry.test.ts b/test/internal-log-registry.test.ts
+index 26503f1..7c207f3 100644
+--- a/test/internal-log-registry.test.ts
++++ b/test/internal-log-registry.test.ts
+@@ -48,7 +48,10 @@ describe("internal log stable-code registry", () => {
+ 
+   it("contains no secret-like values (no dots, @, slashes, or URLs)", () => {
+     for (const code of HIKOUTEI_LOG_STABLE_CODES) {
+-      expect(code).toMatch(/^[a-z0-9_]+$|^SQLITE_[A-Z0-9_]+$/);
++      // `ERR_SQLITE_ERROR` is the exact stable node:sqlite driver code the
++      // persistence engine surfaces; every other code is a lowercase
++      // identifier, and anything else (URLs, emails, paths, IDs) is rejected.
++      expect(code).toMatch(/^[a-z0-9_]+$|^SQLITE_[A-Z0-9_]+$|^ERR_SQLITE_ERROR$/);
+     }
+     expect(new Set(HIKOUTEI_LOG_STABLE_CODES).size).toBe(HIKOUTEI_LOG_STABLE_CODES.length);
+   });
+diff --git a/tsconfig.test.json b/tsconfig.test.json
+index 7b50597..eef865e 100644
+--- a/tsconfig.test.json
++++ b/tsconfig.test.json
+@@ -2,7 +2,15 @@
+   "extends": "./tsconfig.json",
+   "compilerOptions": {
+     "noEmit": true,
+-    "rootDir": "."
++    "rootDir": ".",
++    "paths": {
++      // Mirrors the vitest `hikoutei` alias (vitest.config.ts): the soak
++      // executor tests import the public entrypoint by package name, and
++      // in the test typecheck that resolves to the current source tree so
++      // it never depends on a stale ./dist build.
++      "hikoutei": ["./src/index.ts"],
++      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
++    }
+   },
+   "include": [
+     "src/**/*.ts",
