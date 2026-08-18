@@ -17,11 +17,38 @@ import type { Presence } from "../state.js";
 import type { ClaimedEffect } from "./contracts.js";
 import type { ProviderTiming } from "./timing.js";
 
+/**
+ * Renews the effect leases of one claimed batch.
+ *
+ * Returns true only when every effect in the batch is still claimed and its
+ * lease was extended. A false result means at least one effect could not be
+ * renewed (expired or taken over); the caller must abort before any remote
+ * request and requeue/recover the batch through the durable outbox.
+ */
+export type EffectLeaseRenewal = (items: readonly ClaimedEffect[]) => Promise<boolean>;
+
 /** One route-bound batch of pending effects handed to the dispatcher. */
 export interface DispatchRequest {
   /** Opaque route identity produced by `Dispatcher.routeKeyFor`. */
   readonly routeKey: string;
   readonly effects: readonly PendingEffect[];
+  /**
+   * Optional lease-renewal hook the HOST dispatcher must invoke immediately
+   * before the provider remote call, after every internal serialization lane
+   * and limiter wait the host applies.
+   *
+   * The worker supplies the hook so the effect lease is renewed as late as
+   * possible: queue time on the physical-sheet mutation lane plus shared
+   * limiter waits can otherwise outlive a lease refreshed before dispatch
+   * starts. The hook is already bound to the request's claimed effects (the
+   * host only sees `PendingEffect` rows and cannot renew claims itself). When
+   * the hook is present, the host dispatcher must never issue a remote
+   * request without first invoking it, and must abort the whole batch with a
+   * classified delivery-uncertain/requeue-safe error when it resolves false
+   * or throws. Dispatchers that do not perform remote work (fakes, tests)
+   * must simply ignore the hook.
+   */
+  readonly beforeRemoteDispatch?: () => Promise<boolean>;
 }
 
 /** Receipt-backed per-effect fast-append outcome. */
@@ -202,6 +229,25 @@ export interface FastAppendDispatcher {
   isFastAppendCandidate(effect: PendingEffect): boolean;
   /** Dispatches append-only rows through the idempotent bulk operation. */
   fastAppend(request: DispatchRequest): Promise<FastAppendOutcome>;
+  /**
+   * Declares the dispatch-priority class of one pending effect.
+   *
+   * The worker runs READY effects in ascending priority order across both
+   * dispatch buckets (fast-append and regular), so a host can keep its
+   * critical projection ahead of unrelated work without touching claim
+   * windows, leases, fencing, predecessor ordering, the limiter, or bounded
+   * fairness. The method is optional: an absent declaration means every
+   * effect has priority 0 and the worker keeps the legacy order (all fast
+   * append groups before all regular groups).
+   *
+   * The priority is a payload-derived decision owned by the dispatcher; the
+   * worker never interprets effect payloads. Lower numbers run earlier;
+   * ties keep the ready-selection order (the sort is stable). No-throw
+   * contract: the predicate must never throw and must always return a
+   * number as a value; the worker guards the call defensively and degrades
+   * a throwing declaration to priority 0 for the affected group.
+   */
+  dispatchPriorityFor?(effect: PendingEffect): number;
 }
 
 /** Route, validation, apply, and postcondition-probe role of the dispatcher. */
@@ -262,10 +308,24 @@ export interface AuthorityDispatcher {
  * The dispatcher boundary implemented by the host application.
  *
  * The dispatcher owns every payload-derived decision: route keys, fast-append
- * candidacy, payload validation, the User_Input candidate gate, remote
- * evidence validation against effect targets, and transport-outcome
- * classification. The worker owns selection, claiming, grouping, lease
- * refresh, transitions, and recovery.
+ * candidacy, dispatch priority, payload validation, the User_Input candidate
+ * gate, remote evidence validation against effect targets, and transport-outcome
+ * classification. The worker owns selection, claiming, grouping, fence
+ * preparation, transitions, and recovery.
+ *
+ * The worker supplies `DispatchRequest.beforeRemoteDispatch` so the host can
+ * renew effect leases after its own serialization/limiter waits but before
+ * the provider remote call. A host dispatcher that performs remote work MUST
+ * invoke that hook (when present) immediately before the remote call and
+ * abort with a classified delivery-uncertain error when it fails; remote-less
+ * dispatchers ignore it.
+ *
+ * Ready effects run in ascending `dispatchPriorityFor` order across both
+ * dispatch buckets (see `FastAppendDispatcher.dispatchPriorityFor`); a
+ * dispatcher that omits the declaration keeps the legacy order. The ordering
+ * never forces unready predecessors: claiming still enforces the durable
+ * per-target predecessor guard, and every claimed group is dispatched in the
+ * same pass, so non-priority work cannot starve.
  */
 export type Dispatcher =
   FastAppendDispatcher & EffectDispatcher & CandidateGateDispatcher & AuthorityDispatcher;
