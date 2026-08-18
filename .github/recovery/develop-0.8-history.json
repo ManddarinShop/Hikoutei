@@ -93,13 +93,13 @@
     "pr": 261,
     "version": "0.8.20",
     "sourceRef": "efedb3b674028412885c9288e7eea6086dd9a78d",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-260-ci-recovery.patch"
   },
   {
     "pr": 262,
     "version": "0.8.21",
     "sourceRef": "9e2fc2d52369581192f0a8312bc7d615c8d677ac",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-260-ci-recovery.patch"
   },
   {
     "pr": 264,
