@@ -72,9 +72,21 @@ export function dateSerialFromIso(iso: string): number {
   return (Date.parse(iso) - Date.UTC(1899, 11, 30)) / 86_400_000;
 }
 
-/** Converts a date serial back to the canonical UTC ISO timestamp. */
+/**
+ * Converts a date serial back to the canonical UTC ISO timestamp.
+ *
+ * The epoch milliseconds are rounded to the nearest integer millisecond so
+ * floating-point noise in the serial (or in the serial-to-milliseconds
+ * product) cannot shift the rendered millisecond and break field-level
+ * compare-and-set hashes; canonical ISO timestamps are always integral
+ * milliseconds, so rounding recovers the exact value the serial was derived
+ * from. Invalid serials (NaN or non-finite) still fail exactly like the
+ * unrounded conversion: `new Date(...).toISOString()` throws a RangeError.
+ */
 export function isoFromDateSerial(serial: number): string {
-  return new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000).toISOString();
+  return new Date(
+    Math.round(Date.UTC(1899, 11, 30) + serial * 86_400_000),
+  ).toISOString();
 }
 
 /**

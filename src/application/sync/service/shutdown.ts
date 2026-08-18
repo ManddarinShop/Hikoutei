@@ -17,10 +17,10 @@ import {
   LOOKUP_RESULT_KINDS,
   readWriterLeaseWithAdapter,
   releaseWriterLeaseWithAdapter,
-  safeErrorMessage,
   type EffectWorkerSupervisor,
 } from "@hikoutei/ikisaki";
 import { RECONCILIATION_DEFAULTS } from "../outbound/reconciliation/ReconciliationScanner.js";
+import { stableConsoleErrorTag } from "../../../shared/observability/internalLog.js";
 import type { MappedUserInputPollingReport } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
 
@@ -78,8 +78,11 @@ export async function expireRuntimeWriterLeases(
         );
       }
     } catch (error: unknown) {
+      // Default console diagnostics emit only the stable allowlisted
+      // class/code tag — never the raw message, which can embed provider
+      // payload fragments, spreadsheet IDs, emails, or paths.
       console.warn(
-        `[sync-service] writer lease release failed for role "${role}": ${safeErrorMessage(error)}`,
+        `[sync-service] writer lease release failed for role "${role}": ${stableConsoleErrorTag(error)}`,
       );
     }
   }

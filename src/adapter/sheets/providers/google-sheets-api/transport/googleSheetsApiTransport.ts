@@ -11,7 +11,15 @@
 
 import { GoogleAuth } from "google-auth-library";
 import { sheets, type sheets_v4 } from "@googleapis/sheets";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
+import { presentValue, absentValue, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+} from "../../../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../../../../../shared/observability/logEvents.js";
 import { GOOGLE_SHEETS_API_SCOPES } from "../constants.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
@@ -186,7 +194,9 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
       );
       return response.data;
     } catch (error: unknown) {
-      throw classifyGoogleSheetsApiError(error);
+      const mapped = classifyGoogleSheetsApiError(error);
+      logTransportFailure(mapped);
+      throw mapped;
     }
   }
 
@@ -206,7 +216,9 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
       );
       return response.data;
     } catch (error: unknown) {
-      throw classifyGoogleSheetsApiError(error);
+      const mapped = classifyGoogleSheetsApiError(error);
+      logTransportFailure(mapped);
+      throw mapped;
     }
   }
 }
@@ -251,6 +263,48 @@ export function classifyGoogleSheetsApiError(error: unknown): GoogleSheetsApiTra
       ? absentValue()
       : presentValue(shape.code),
   );
+}
+
+/**
+ * Emits one redacted transport-failure event (fail-open, no message text).
+ *
+ * Timeout, network, 429, 408, and 5xx failures are classified retryable so
+ * log consumers can bucket transient Sheets quota/pacing pressure; proven
+ * pre-mutation 4xx status codes (400/401/403/404) are not. The HTTP status
+ * is carried as a numeric count only; the spreadsheet ID, URL, and response
+ * body never reach the log.
+ */
+function logTransportFailure(error: GoogleSheetsApiTransportError): void {
+  const status = error.status.kind === PRESENCE_KINDS.PRESENT
+    ? error.status.value
+    : undefined;
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.TRANSPORT_REQUEST_FAILED,
+    level: "warn",
+    component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
+    code: error.code,
+    errorClass: "GoogleSheetsApiTransportError",
+    retryable: isRetryableTransportStatus(status),
+    ...(status === undefined ? {} : { counts: { status } }),
+  });
+}
+
+/**
+ * True when the status kind marks a transient remote condition.
+ *
+ * Mirrors the shared `isGoogleSheetsApiDeliveryUncertain` boundary: an
+ * absent status (timeout/network), HTTP 408 (request timeout — the proxy or
+ * API may still have committed the write), HTTP 429, and every 5xx are
+ * retryable/uncertain; the proven pre-mutation 4xx rejections (400, 401,
+ * 403, 404) are not. This only buckets telemetry — gaxios auto-retry stays
+ * disabled (`retry: false`), so a mutating call is never blindly retried
+ * here; the durable worker owns retries through the shared outcome
+ * classifier.
+ */
+export function isRetryableTransportStatus(status: number | undefined): boolean {
+  if (status === undefined) return true;
+  if (status === 408 || status === 429) return true;
+  return status >= 500;
 }
 
 interface GaxiosErrorShape {

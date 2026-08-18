@@ -64,11 +64,18 @@ export const HIKOUTEI_LOG_COMPONENTS = {
  *
  * The literal strings mirror the `*_ERROR_CODES` constants across layers
  * (public API, sync sheets contract, Google Sheets transport, sync service,
- * storage, evaluation, mapped ORM) plus the SQLite driver family that can
- * surface through the persistence engine. This is a deliberate allowlist:
- * an unknown or arbitrary `error.code` (which could be an ID-like secret)
- * must never pass through to the log. A test asserts the registry stays in
- * sync with every `*_ERROR_CODES` constant in the repository.
+ * storage, evaluation, mapped ORM, domain event identity, stable encoding)
+ * plus the SQLite driver family that can surface through the persistence
+ * engine. Intentionally out of scope: the CLI setup taxonomy
+ * (`SETUP_ERROR_CODES` in `src/cli/errors.ts`) and the internal MCP
+ * sync-status reader (`HIKOUTEI_SYNC_STATUS_ERROR_CODES` in
+ * `src/internal/syncStatus.ts`) are separate tooling surfaces that never
+ * route through the runtime log, and the canonical-codec family of
+ * `@hikoutei/kohkai` is broader than the stable-encoding subset Hikoutei
+ * actually raises. This is a deliberate allowlist: an unknown or arbitrary
+ * `error.code` (which could be an ID-like secret) must never pass through
+ * to the log. A test asserts the registry stays in sync with every
+ * `*_ERROR_CODES` constant in the repository.
  */
 export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   // Public Hikoutei API lifecycle/sync codes (src/api/errors.ts).
@@ -109,10 +116,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "sync_provider_unavailable",
   "sync_service_startup_failed",
   "sync_service_closed",
-  // Canonical/observation/resolution evaluation codes (src/domain/errors/evaluation.ts).
-  "canonical_state_required",
-  "canonical_field_required",
-  "base_field_revision_required",
+
   // Storage/schema/effect codes (src/infrastructure/storage/errors.ts).
   "invalid_writer_lease_options",
   "invalid_sync_registration",
@@ -143,6 +147,12 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "schema_column_missing",
   "schema_version_invalid",
   "invalid_sql_script",
+  // Canonical/observation/resolution evaluation codes (src/domain/errors/evaluation.ts).
+  "canonical_state_required",
+  "canonical_field_required",
+  "base_field_revision_required",
+  // Domain event-identity code (src/domain/errors/identity.ts).
+  "duplicate_changed_field",
   // Mapped ORM facade codes (src/application/orm/errors.ts).
   "invalid_entity_mapping",
   "duplicate_entity_mapping",
@@ -154,44 +164,28 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "canonical_commit_rejected",
   "projection_outbox_blocked",
   "observation_entity_mutation_failed",
-  // SQLite driver family (better-sqlite3 codes surfaced by the engine).
-  "SQLITE_ERROR",
-  "SQLITE_INTERNAL",
-  "SQLITE_PERM",
-  "SQLITE_ABORT",
-  "SQLITE_BUSY",
-  "SQLITE_LOCKED",
-  "SQLITE_NOMEM",
-  "SQLITE_READONLY",
-  "SQLITE_INTERRUPT",
-  "SQLITE_IOERR",
-  "SQLITE_CORRUPT",
-  "SQLITE_NOTFOUND",
-  "SQLITE_FULL",
-  "SQLITE_CANTOPEN",
-  "SQLITE_PROTOCOL",
-  "SQLITE_EMPTY",
-  "SQLITE_SCHEMA",
-  "SQLITE_TOOBIG",
-  "SQLITE_CONSTRAINT",
-  "SQLITE_MISMATCH",
-  "SQLITE_MISUSE",
-  "SQLITE_NOLFS",
-  "SQLITE_AUTH",
-  "SQLITE_FORMAT",
-  "SQLITE_RANGE",
-  "SQLITE_NOTADB",
-  "SQLITE_NOTICE",
-  "SQLITE_WARNING",
-  "SQLITE_ROW",
-  "SQLITE_DONE",
-  "SQLITE_CONSTRAINT_UNIQUE",
-  "SQLITE_CONSTRAINT_PRIMARYKEY",
-  "SQLITE_CONSTRAINT_NOTNULL",
-  "SQLITE_CONSTRAINT_CHECK",
-  "SQLITE_CONSTRAINT_FOREIGNKEY",
-  "SQLITE_CONSTRAINT_TRIGGER",
-  "SQLITE_CONSTRAINT_DATATYPE",
+  // Stable-encoding codes (src/shared/encoding/constants.ts, re-exported from
+  // @hikoutei/kohkai). Raised by StableEncodingError when canonical stable
+  // bytes cannot be produced during flush/evidence paths.
+  "unsupported_value_type",
+  "non_finite_number",
+  "invalid_date_format",
+  "invalid_date_byte_length",
+  "duplicate_object_key",
+  "unpaired_high_surrogate",
+  "unpaired_low_surrogate",
+  "cyclic_value",
+  // SQLite driver family (node:sqlite codes surfaced by the engine).
+  // The persistence engine runs on MikroORM's NodeSqliteDialect over the
+  // `node:sqlite` built-in (Node 22.5+), never better-sqlite3. In that
+  // driver every SQLite-level failure (constraint, syntax, busy, corrupt,
+  // ...) throws with the single stable code `ERR_SQLITE_ERROR`; the numeric
+  // SQLite result rides on the `errcode`/`errstr` detail properties, which
+  // are never logged. The node:sqlite JS API can also throw generic Node
+  // codes (`ERR_INVALID_STATE`, `ERR_INVALID_ARG_TYPE`) on API misuse;
+  // those are intentionally not allowlisted — they are not driver codes,
+  // and the logged error class is the safe diagnostic.
+  "ERR_SQLITE_ERROR",
 ] as const);
 
 /**
@@ -202,6 +196,14 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
  * and the current persistence engine's error families. Unknown class names
  * are redacted; losing a diagnostic detail is always safer than risking a
  * secret-like value in the log.
+ *
+ * Intentionally out of scope: the CLI setup taxonomy (a `SetupFailure`
+ * value, never a class) and the MCP sync-status reader
+ * (`HikouteiSyncStatusError` in `src/internal/syncStatus.ts`) are separate
+ * tooling surfaces that never route through the runtime log, and the
+ * internal storage sentinels (`FenceLostError`, `CanonicalStaleError`,
+ * `AsyncFenceLostError`) are caught and converted into result kinds before
+ * any boundary, so they never surface as thrown classes.
  */
 export const HIKOUTEI_LOG_STABLE_CLASSES = Object.freeze([
   "Error",
@@ -213,7 +215,13 @@ export const HIKOUTEI_LOG_STABLE_CLASSES = Object.freeze([
   "URIError",
   "AggregateError",
   "HikouteiError",
+  "TypedSheetsOrmError",
   "SyncSheetsContractError",
+  "SyncServiceError",
+  "StorageError",
+  "EvaluationContractError",
+  "StableEncodingError",
+  "DuplicateChangedFieldError",
   "GoogleSheetsApiTransportError",
   // MikroORM validation and driver exception families.
   "ValidationError",

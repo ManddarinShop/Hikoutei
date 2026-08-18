@@ -42,6 +42,29 @@ export interface EffectWorkerSupervisorReconciliationOptions<
 > {
   /** Minimum delay between scan attempts. The first scan runs immediately. */
   readonly intervalMs?: number;
+  /**
+   * Delay before the FIRST scheduled scan attempt (default 0 = immediate).
+   *
+   * A host that starts with a large initial backlog (for example the real
+   * Google Sheets provider after a cold start) can delay the first scan so
+   * it does not compete with the initial drain on the shared request
+   * limiter. The delay applies once: the scan schedule then keeps the
+   * normal `intervalMs` cadence.
+   */
+  readonly initialReconciliationDelayMs?: number;
+  /**
+   * Deferral gate applied ONLY while the first scheduled scan is still
+   * pending (default: no gate, the first scan runs as soon as the schedule
+   * is due).
+   *
+   * When the gate resolves false the scan is deferred WITHOUT advancing the
+   * interval clock, so the next loop pass re-checks the gate as soon as the
+   * host reports readiness. After the first scan completes, the gate is no
+   * longer consulted: subsequent scans keep the normal lazy-repair behavior
+   * even while the outbox is busy. A gate that throws surfaces through the
+   * normal reconciliation error path and keeps the first scan pending.
+   */
+  readonly isFirstScanReady?: () => Promise<boolean>;
   /** Confirms that no pending or processing outbox work remains before scanning. */
   readonly isOutboxIdle?: () => Promise<boolean>;
   /** Runs one scan and enqueues corrections into the durable outbox. */
@@ -120,6 +143,9 @@ export class EffectWorkerSupervisor<
   private inFlightReconciliation: Promise<TReconciliationReport> | undefined;
   private stopPromise: Promise<void> | undefined;
   private nextReconciliationAt = 0;
+  private readonly initialReconciliationDelayMs: number;
+  private readonly isFirstScanReady: (() => Promise<boolean>) | undefined;
+  private firstScanPending = false;
   private wakeWaiter: (() => void) | undefined;
 
   public constructor(options: EffectWorkerSupervisorLoopOptions<TReconciliationReport>) {
@@ -149,6 +175,12 @@ export class EffectWorkerSupervisor<
       options.reconciliation?.intervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS,
       "sync effect supervisor reconciliation interval",
     );
+    this.initialReconciliationDelayMs = requireNonNegativeSafeInteger(
+      options.reconciliation?.initialReconciliationDelayMs ?? 0,
+      "sync effect supervisor initial reconciliation delay",
+    );
+    this.isFirstScanReady = options.reconciliation?.isFirstScanReady;
+    this.firstScanPending = options.reconciliation !== undefined;
     this.onReport = options.onReport;
     this.onError = options.onError;
   }
@@ -157,7 +189,10 @@ export class EffectWorkerSupervisor<
   public start(): void {
     if (this.running || !this.acceptingPasses) return;
     this.running = true;
-    this.nextReconciliationAt = this.now();
+    // The first scheduled scan is due after the initial delay (default 0:
+    // immediately after the first pass, exactly like the legacy schedule).
+    this.nextReconciliationAt = this.now() + this.initialReconciliationDelayMs;
+    this.firstScanPending = this.reconciliation !== undefined;
     this.loopPromise = this.runLoop();
   }
 
@@ -260,14 +295,31 @@ export class EffectWorkerSupervisor<
     const reconciliation = this.reconciliation;
     if (reconciliation === undefined || this.now() < this.nextReconciliationAt) return undefined;
 
-    // Reconciliation is a lazy repair net: it runs on its own schedule even
-    // while the worker pass is busy, because the corruption it repairs can
-    // itself be what keeps the outbox busy (a terminal failed head wedges
-    // every later effect on its stream). The scanner owns its own in-flight
-    // deferral and its fenced writer lease, so a busy worker cannot race it.
-    // Hosts that want an extra outbox-drain gate can supply isOutboxIdle.
-    this.nextReconciliationAt = this.now() + this.reconciliationIntervalMs;
     try {
+      // The FIRST scan has its own readiness gate: while it is still pending,
+      // a host can defer the scan without advancing the interval clock, so the
+      // next loop pass re-checks the gate as soon as readiness arrives. This is
+      // how a host keeps the first scan from competing with the initial drain
+      // without changing the post-first-scan behavior at all.
+      if (this.firstScanPending) {
+        if (this.isFirstScanReady !== undefined && !(await this.isFirstScanReady())) {
+          // Deferral: keep the schedule due. The gate is re-checked on the
+          // next loop pass, and the scan still runs at most once per pass.
+          return undefined;
+        }
+        // The gate allowed the first scan (or no gate is declared): from here
+        // on, scans follow the plain interval schedule even while the outbox
+        // is busy, exactly like the legacy supervisor.
+        this.firstScanPending = false;
+      }
+
+      // Reconciliation is a lazy repair net: it runs on its own schedule even
+      // while the worker pass is busy, because the corruption it repairs can
+      // itself be what keeps the outbox busy (a terminal failed head wedges
+      // every later effect on its stream). The scanner owns its own in-flight
+      // deferral and its fenced writer lease, so a busy worker cannot race it.
+      // Hosts that want an extra outbox-drain gate can supply isOutboxIdle.
+      this.nextReconciliationAt = this.now() + this.reconciliationIntervalMs;
       if (reconciliation.isOutboxIdle !== undefined && !(await reconciliation.isOutboxIdle())) {
         return undefined;
       }
@@ -490,6 +542,13 @@ function validateWorkerOptions(
 function requirePositiveSafeInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new RangeError(name + " must be a positive safe integer");
+  }
+  return value;
+}
+
+function requireNonNegativeSafeInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(name + " must be a non-negative safe integer");
   }
   return value;
 }

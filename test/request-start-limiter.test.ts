@@ -1,7 +1,8 @@
 /**
  * Credential-free unit coverage for the request-start interval limiter used
- * by the direct Google Sheets provider (reads and writes share one limiter
- * class each; concurrent callers must never start within one interval).
+ * by the direct Google Sheets provider. The provider keeps ONE shared
+ * limiter for reads AND writes (combined starts are serialized); concurrent
+ * callers must never start within one interval.
  */
 
 import { describe, expect, it } from "vitest";
@@ -71,5 +72,110 @@ describe("RequestStartLimiter", () => {
     expect(first).toBe(0);
     expect(second).toBe(0);
     expect(limiter.lastStart()).toBe(42);
+  });
+
+  it("refuses a bounded wait beyond the maximum WITHOUT reserving the slot", async () => {
+    // A NO-OP sleep models concurrent callers arriving in the same clock
+    // tick while an earlier reservation sleeps: the queue never drains by
+    // itself, which is exactly the burst the bounded admission must refuse.
+    const limiter = new RequestStartLimiter({
+      intervalMs: 1_100,
+      now: () => 1_000_000,
+      sleep: async () => undefined,
+    });
+
+    // First caller: immediate slot.
+    expect(await limiter.waitForSlot(1_100)).toEqual({ status: "admitted", waitedMs: 0 });
+    // Second caller in the same tick: exactly one interval of wait, admitted.
+    expect(await limiter.waitForSlot(1_100)).toEqual({ status: "admitted", waitedMs: 1_100 });
+    // Third caller: two intervals out — refused, and the horizon is NOT
+    // advanced past the second caller's slot. The refused slot stays open.
+    const refused = await limiter.waitForSlot(1_100);
+    expect(refused).toEqual({
+      status: "refused",
+      waitedMs: 2_200,
+      nextStartAt: 1_002_200,
+    });
+    expect(limiter.lastStart()).toBe(1_001_100);
+  });
+
+  it("still admits after time advances past the refused slot (no poisoning)", async () => {
+    let now = 1_000_000;
+    const limiter = new RequestStartLimiter({
+      intervalMs: 1_100,
+      now: () => now,
+      sleep: async () => undefined,
+    });
+
+    await limiter.waitForSlot(1_100); // admitted at t0
+    await limiter.waitForSlot(1_100); // admitted at t0+1,100
+    expect((await limiter.waitForSlot(1_100)).status).toBe("refused");
+    expect(limiter.lastStart()).toBe(1_001_100);
+
+    // Time advances only HALF an interval past the reserved slot: a
+    // poisoned horizon (advanced by the refusal) would still be beyond the
+    // bound, but the untouched horizon admits the caller with the remaining
+    // 600 ms wait.
+    now = 1_001_600;
+    expect(await limiter.waitForSlot(1_100)).toEqual({
+      status: "admitted",
+      waitedMs: 600,
+    });
+    expect(limiter.lastStart()).toBe(1_002_200);
+  });
+
+  it("refuses every queued reservation beyond one interval under concurrency", async () => {
+    let now = 1_000_000;
+    const limiter = new RequestStartLimiter({
+      intervalMs: 1_100,
+      now: () => now,
+      sleep: async () => undefined,
+    });
+
+    // Four callers arrive at the SAME instant: the immediate slot and the
+    // slot exactly one interval out are admitted; the third and fourth
+    // reservations (two and three intervals out) are refused up front
+    // without advancing the horizon. The slot reservation stays synchronous
+    // before any await, so no two callers can share one slot.
+    const results = await Promise.all([
+      limiter.waitForSlot(1_100),
+      limiter.waitForSlot(1_100),
+      limiter.waitForSlot(1_100),
+      limiter.waitForSlot(1_100),
+    ]);
+    expect(results[0]).toEqual({ status: "admitted", waitedMs: 0 });
+    expect(results[1]).toEqual({ status: "admitted", waitedMs: 1_100 });
+    expect(results[2]).toEqual({
+      status: "refused",
+      waitedMs: 2_200,
+      nextStartAt: 1_002_200,
+    });
+    expect(results[3]).toEqual({
+      status: "refused",
+      waitedMs: 2_200,
+      nextStartAt: 1_002_200,
+    });
+    expect(limiter.lastStart()).toBe(1_001_100);
+
+    // The queue drains: once time passes the open slot, a fresh bounded
+    // caller is admitted again with no wait (its reservation collapses to
+    // now because the open slot is already in the past).
+    now = 1_003_000;
+    expect(await limiter.waitForSlot(1_100)).toEqual({
+      status: "admitted",
+      waitedMs: 0,
+    });
+  });
+
+  it("rejects an invalid maximum wait bound and admits every zero-interval caller", async () => {
+    const limiter = new RequestStartLimiter({ intervalMs: 0 });
+    expect(await limiter.waitForSlot(0)).toEqual({ status: "admitted", waitedMs: 0 });
+
+    const bounded = new RequestStartLimiter({ intervalMs: 1_100 });
+    await expect(bounded.waitForSlot(-1)).rejects.toThrow(RangeError);
+    await expect(bounded.waitForSlot(1.5)).rejects.toThrow(RangeError);
+    await expect(bounded.waitForSlot(Number.NaN)).rejects.toThrow(RangeError);
+    // The validation never touches the horizon.
+    expect(bounded.lastStart()).toBeUndefined();
   });
 });

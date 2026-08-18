@@ -48,6 +48,10 @@ import {
   ensureSpreadsheetAuthorityWithAdapter,
 } from "../../../infrastructure/storage/sync/shared/spreadsheetAuthority.js";
 import {
+  hasCoordinatedSerializedInner,
+  CoordinatedLanePreconditionError,
+} from "../sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
+import {
   parseSyncProjectionEffectPayload,
   type ApplySyncEffectsRequest,
   type FastAppendRowsRequest,
@@ -71,6 +75,59 @@ import {
 } from "../sheetsContract/transportOutcome.js";
 import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
 import type { EffectTargetKind } from "../../../domain/model/constants.js";
+
+/**
+ * Dispatch-priority classes for ready projection effects.
+ *
+ * The worker runs ready effects in ascending declared priority across both
+ * dispatch buckets, so System_State converges ahead of unrelated work within
+ * the bounded soak convergence deadline. Only the dispatch sequence changes:
+ * claim windows, leases, fencing, per-target predecessor ordering, the
+ * limiter, and bounded fairness are untouched, and unready predecessors are
+ * never forced.
+ */
+export const SYNC_DISPATCH_PRIORITIES = {
+  /** New System_State entity rows appended through the fast path first. */
+  SYSTEM_STATE_FAST_APPEND: 0,
+  /** System_State update/delete/tombstone followers through the CAS path. */
+  SYSTEM_STATE_REGULAR: 1,
+  /** New Sync_Conflicts resolution rows appended through the fast path. */
+  SYNC_CONFLICTS_FAST_APPEND: 2,
+  /** User_Input and every other regular effect (repairs, deletes, resolves). */
+  OTHER_REGULAR: 3,
+} as const;
+
+/**
+ * Declares the dispatch-priority class of one pending effect.
+ *
+ * No-throw contract like the other classification predicates: a malformed
+ * payload degrades to the neutral `OTHER_REGULAR` priority instead of
+ * aborting the pass.
+ */
+export function sheetsDispatchPriorityFor(effect: PendingEffect): number {
+  try {
+    const converted = toProviderEffect(effect);
+    if (
+      converted.effectKind === EFFECT_KINDS.SYSTEM_PROJECTION &&
+      converted.projection === SYNC_PROJECTIONS.SYSTEM_STATE
+    ) {
+      return isFastAppendEffect(converted)
+        ? SYNC_DISPATCH_PRIORITIES.SYSTEM_STATE_FAST_APPEND
+        : SYNC_DISPATCH_PRIORITIES.SYSTEM_STATE_REGULAR;
+    }
+    if (
+      converted.effectKind === EFFECT_KINDS.RESOLUTION_PROJECTION &&
+      converted.projection === SYNC_PROJECTIONS.SYNC_CONFLICTS &&
+      isFastAppendEffect(converted)
+    ) {
+      return SYNC_DISPATCH_PRIORITIES.SYNC_CONFLICTS_FAST_APPEND;
+    }
+  } catch {
+    // Malformed payloads keep the neutral class; the worker's own
+    // payload validation fails them through the invalid-payload path.
+  }
+  return SYNC_DISPATCH_PRIORITIES.OTHER_REGULAR;
+}
 
 /**
  * Builds the stable grouping key shared by all provider operations on one
@@ -156,6 +213,10 @@ export class SheetsEffectDispatcher implements Dispatcher {
     return isSheetsFastAppendCandidate(effect);
   }
 
+  public dispatchPriorityFor(effect: PendingEffect): number {
+    return sheetsDispatchPriorityFor(effect);
+  }
+
   public payloadValidationError(effect: PendingEffect): Presence<string> {
     return sheetsPayloadValidationError(effect);
   }
@@ -163,9 +224,15 @@ export class SheetsEffectDispatcher implements Dispatcher {
   /** Dispatches append-only rows through the idempotent provider batch operation. */
   public async fastAppend(request: DispatchRequest): Promise<FastAppendOutcome> {
     const providerRequest = buildFastAppendRowsRequest(request.effects);
+    const physicalSheetId = request.effects[0]!.physical_sheet_id;
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["fastAppendRows"]>>;
     try {
-      response = await this.provider.fastAppendRows(providerRequest);
+      response = await this.dispatchBeforeRemote(
+        physicalSheetId,
+        "fastAppendRows",
+        request.beforeRemoteDispatch,
+        (provider) => provider.fastAppendRows(providerRequest),
+      );
     } catch (error: unknown) {
       throw toDispatchTransportError(error);
     }
@@ -218,7 +285,12 @@ export class SheetsEffectDispatcher implements Dispatcher {
     };
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["applyEffects"]>>;
     try {
-      response = await this.provider.applyEffects(providerRequest);
+      response = await this.dispatchBeforeRemote(
+        effects[0]!.physicalSheetId,
+        "applyEffects",
+        request.beforeRemoteDispatch,
+        (provider) => provider.applyEffects(providerRequest),
+      );
     } catch (error: unknown) {
       throw toDispatchTransportError(error);
     }
@@ -243,7 +315,12 @@ export class SheetsEffectDispatcher implements Dispatcher {
     };
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["readEffectPostconditions"]>>;
     try {
-      response = await this.provider.readEffectPostconditions(providerRequest);
+      response = await this.dispatchBeforeRemote(
+        effects[0]!.physicalSheetId,
+        "readEffectPostconditions",
+        request.beforeRemoteDispatch,
+        (provider) => provider.readEffectPostconditions(providerRequest),
+      );
     } catch (error: unknown) {
       throw toDispatchTransportError(error);
     }
@@ -312,6 +389,38 @@ export class SheetsEffectDispatcher implements Dispatcher {
       ownerId,
     });
     return result.kind === "claimed";
+  }
+
+  /**
+   * Runs one provider remote call with the worker's before-remote renewal.
+   *
+   * When the provider exposes the coordinator's `runSerializedInner`, the
+   * renewal hook runs AFTER the physical-sheet mutation lane is acquired and
+   * BEFORE the inner provider call, so lane queue time and shared limiter
+   * waits cannot outlive the effect lease. Bare providers without the hook
+   * get the renewal directly before the call. A failed renewal aborts with a
+   * classified delivery-uncertain error before any remote request so the
+   * worker requeues the batch through the durable outbox.
+   */
+  private async dispatchBeforeRemote<T>(
+    physicalSheetId: string,
+    operation: string,
+    beforeRemoteDispatch: (() => Promise<boolean>) | undefined,
+    remote: (provider: SyncEffectWorkerProvider) => Promise<T>,
+  ): Promise<T> {
+    if (beforeRemoteDispatch === undefined) return remote(this.provider);
+    if (hasCoordinatedSerializedInner(this.provider)) {
+      return this.provider.runSerializedInner(
+        physicalSheetId,
+        operation,
+        (inner) => remote(inner),
+        beforeRemoteDispatch,
+      );
+    }
+    if (!(await beforeRemoteDispatch())) {
+      throw new CoordinatedLanePreconditionError();
+    }
+    return remote(this.provider);
   }
 }
 
@@ -547,6 +656,13 @@ function isEffectTargetKind(value: string): value is EffectTargetKind {
 }
 
 function toDispatchTransportError(error: unknown): DispatchTransportError {
+  if (error instanceof CoordinatedLanePreconditionError) {
+    // A failed in-lane lease renewal proves no remote request was sent, but
+    // the effects were already requeued through the durable outbox; keep the
+    // batch retryable (delivery_uncertain) instead of closing it as an
+    // explicit remote failure. The message is static and redacted.
+    return new DispatchTransportError("delivery_uncertain", error.message);
+  }
   const outcome = classifyTransportOutcome(error);
   return new DispatchTransportError(
     outcome.kind === TRANSPORT_OUTCOME_KINDS.EXPLICIT_REMOTE_FAILURE
