@@ -51,31 +51,31 @@
     "pr": 254,
     "version": "0.8.13",
     "sourceRef": "d54eb928a07469c94ba9c7ebde5709c010ff7d8e",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
   },
   {
     "pr": 255,
     "version": "0.8.14",
     "sourceRef": "797e1adba691a878cb75c208b6e12d042c5d97f4",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
   },
   {
     "pr": 256,
     "version": "0.8.15",
     "sourceRef": "58551d07543df3e6fbbef5753723054fe921b944",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
   },
   {
     "pr": 257,
     "version": "0.8.16",
     "sourceRef": "93fe60f43bd754db1a875b50183949b525b6fff3",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
   },
   {
     "pr": 258,
     "version": "0.8.17",
     "sourceRef": "549bd2a2ed80ae2032530a09ffadc26d5e3c1b99",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-253-ci-recovery.patch"
   },
   {
     "pr": 259,
