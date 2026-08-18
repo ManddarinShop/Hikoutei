@@ -358,5 +358,3 @@ describe("soak log collection: logger contract mirror", () => {
     }
   });
 });
-
-
