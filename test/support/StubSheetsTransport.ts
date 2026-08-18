@@ -39,7 +39,7 @@ import {
 import { presentValue, absentValue } from "../../src/shared/state/index.js";
 import { computeSyncVisibleHash } from "../../src/application/sync/sheetsContract/syncSheets.js";
 import type { NormalizedCell } from "../../src/shared/encoding/types.js";
-import { dateSerialFromIso, isCanonicalDateNumberFormat } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import { dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
 /** One stored cell in the in-memory grid (real REST wire shapes). */
 export interface StubCell {
@@ -218,7 +218,10 @@ export function stubCellToNormalized(cell: StubCell | undefined): NormalizedCell
     if (format !== undefined && isCanonicalDateNumberFormat(format)) {
       return {
         kind: "date",
-        value: new Date(Date.UTC(1899, 11, 30) + value.numberValue * 86_400_000).toISOString(),
+        // Delegate to the provider conversion so the stub read-back (and
+        // the visible hashes derived from it) can never drift from the
+        // production serial-to-ISO rounding.
+        value: isoFromDateSerial(value.numberValue),
       };
     }
     return { kind: "number", value: value.numberValue };
