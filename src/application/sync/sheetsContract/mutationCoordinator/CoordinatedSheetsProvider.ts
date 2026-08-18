@@ -29,6 +29,9 @@
  *   stable sorted order, so it cannot deadlock with single-sheet mutations.
  * - Provisioning uses a dedicated lane so setup never races an append/write.
  * - A failing or throwing mutation releases the lane, so it never deadlocks.
+ * - `runSerializedInner` runs an optional in-lane precondition (the effect
+ *   lease renewal) after the lane is acquired and before the inner provider
+ *   call, so queue time plus limiter waits cannot outlive the lease.
  */
 
 import {
@@ -53,6 +56,7 @@ import type {
   SyncSheetsObservationBatchProvider,
   SyncSheetsTableReader,
   SyncTableRowsResult,
+  SyncEffectWorkerProvider,
 } from "../syncSheets.js";
 import { AsyncMutex, type AsyncMutexRelease } from "./asyncMutex.js";
 import {
@@ -65,6 +69,26 @@ import { classifyTransportOutcome } from "../transportOutcome.js";
 export type CoordinatedSheetsInner =
   SyncSheetsProvider &
   SyncSheetsTableReader;
+
+/**
+ * Redacted, stable diagnostic for an aborted in-lane precondition.
+ *
+ * Static by design: it never embeds effect IDs, payloads, sheet names, or
+ * provider errors, so it is safe to persist on outbox rows and logs.
+ */
+const COORDINATED_LANE_PRECONDITION_MESSAGE =
+  "Mutation lane precondition failed before the remote call; the request was not sent.";
+
+/**
+ * Thrown when an in-lane precondition callback rejects before the remote
+ * call. Carries only the static redacted message above.
+ */
+export class CoordinatedLanePreconditionError extends Error {
+  public constructor() {
+    super(COORDINATED_LANE_PRECONDITION_MESSAGE);
+    this.name = "CoordinatedLanePreconditionError";
+  }
+}
 
 // SyncSheetsProvisioner is intentionally not wrapped: provisioning runs once
 // at startup before the worker, so it stays on the original provisioner and
@@ -127,6 +151,29 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
     task: () => Promise<T>,
   ): Promise<T> {
     return this.runMutation(physicalSheetId, operation, task);
+  }
+
+  /**
+   * Runs one internal remote task on the mutation lane with an optional
+   * in-lane precondition hook.
+   *
+   * The effect dispatcher uses this so the worker's lease-renewal callback
+   * runs AFTER the lane is acquired (covering queue wait time) but BEFORE the
+   * inner provider's remote call (covering shared limiter waits and the call
+   * itself). The `remote` closure receives the INNER provider and must call
+   * it directly, so the call never re-enters this coordinator's lane and
+   * cannot deadlock. When `beforeRemote` resolves false (or throws), a
+   * `CoordinatedLanePreconditionError` is raised before any remote request
+   * and the lane is released normally; lane telemetry still records the
+   * aborted dispatch with a delivery-uncertain outcome.
+   */
+  public runSerializedInner<T>(
+    physicalSheetId: string,
+    operation: string,
+    remote: (inner: TInner) => Promise<T>,
+    beforeRemote?: () => Promise<boolean>,
+  ): Promise<T> {
+    return this.runMutation(physicalSheetId, operation, () => remote(this.inner), beforeRemote);
   }
 
   public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
@@ -237,15 +284,17 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
     physicalSheetId: string,
     operation: string,
     task: () => Promise<T>,
+    beforeRemote?: () => Promise<boolean>,
   ): Promise<T> {
     const key = this.resolveKey(physicalSheetId);
-    return this.runInLanes([key], operation, task);
+    return this.runInLanes([key], operation, task, beforeRemote);
   }
 
   private async runInLanes<T>(
     keys: readonly string[],
     operation: string,
     task: () => Promise<T>,
+    beforeRemote?: () => Promise<boolean>,
   ): Promise<T> {
     // Acquire lanes in stable sorted order so concurrent batch mutations cannot
     // deadlock with each other regardless of input order. Each release token is
@@ -263,6 +312,12 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
       const queueWaitMs = this.now() - queueStartedAt;
       const remoteStartedAt = this.now();
       try {
+        // The in-lane precondition runs after the queue wait but before any
+        // remote request; a false result aborts the dispatch with a redacted
+        // classified error instead of sending a write with an expired lease.
+        if (beforeRemote !== undefined && !(await beforeRemote())) {
+          throw new CoordinatedLanePreconditionError();
+        }
         const result = await task();
         this.emitSuccess(operation, ordered.join(","), queueWaitMs, remoteStartedAt);
         return result;
@@ -332,6 +387,26 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
 }
 
 const DEFAULT_LANE_KEY = "default";
+
+/** The in-lane dispatch capability the effect dispatcher detects on a provider. */
+export type CoordinatedSerializedInnerProvider = Pick<
+  CoordinatedSheetsProvider<CoordinatedSheetsInner>,
+  "runSerializedInner"
+>;
+
+/**
+ * Returns whether a provider exposes the coordinator's in-lane dispatch hook.
+ *
+ * The effect dispatcher uses this to route its `beforeRemoteDispatch` lease
+ * renewal through the acquired mutation lane; providers without the hook
+ * (bare fakes and test doubles) keep the direct call path and simply ignore
+ * the hook.
+ */
+export function hasCoordinatedSerializedInner(
+  provider: SyncEffectWorkerProvider,
+): provider is SyncEffectWorkerProvider & CoordinatedSerializedInnerProvider {
+  return typeof (provider as Partial<CoordinatedSerializedInnerProvider>).runSerializedInner === "function";
+}
 
 /** Returns the distinct, sorted lane keys for one batch mutation. */
 function distinctLaneKeys(keys: readonly string[]): readonly string[] {
