@@ -218,8 +218,8 @@
   {
     "pr": 284,
     "version": "0.8.41",
-    "sourceRef": "2224a7dc50e45bee7ab36b8900005dd993cdeac8",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "sourceRef": "21d1cb5b9a5bd849d9aebd049d8f02269d5ed6c4",
+    "recoveryPatch": ".github/recovery/patches/pr-284-ci-recovery-v3.patch"
   },
   {
     "pr": 285,
