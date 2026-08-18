@@ -3,7 +3,7 @@
     "pr": 246,
     "version": "0.8.5",
     "sourceRef": "aa4853866ac14729de45ea5c4c631d396fcdbf29",
-    "recoveryPatch": ".github/recovery/patches/sync-status-typecheck.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery.patch"
   },
   {
     "pr": 247,
