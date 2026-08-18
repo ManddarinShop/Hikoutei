@@ -273,6 +273,88 @@ export const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
   WHERE status IN ('pending', 'processing', 'delivery_uncertain')
 `;
 
+/**
+ * Counts claimable drain work and terminal failed heads in one read.
+ *
+ * `busy_count` counts only work the first reconciliation scan must defer
+ * for: `processing`/`delivery_uncertain` effects in flight, plus `pending`
+ * effects that are genuinely claimable heads (no earlier same-stream
+ * predecessor outside `applied`/`superseded`). A `pending` follower behind
+ * a `conflict` or `blocked_candidate` predecessor is NOT claimable drain
+ * work — it stays behind the candidate-pipeline lifecycle state until a
+ * later effect supersedes it, so counting it would defer the first scan
+ * forever and suppress the recovery that unblocks the stream.
+ *
+ * `terminal_failed_count` counts `failed` heads whose error code is NULL or
+ * outside the recoverable set (a NULL code is treated as terminal so SQL
+ * three-valued `NOT IN` cannot hide it): those heads block their streams
+ * and must force the first scan even while the outbox is otherwise busy.
+ */
+export const READ_OUTBOX_SCAN_READINESS_SQL = `
+  SELECT
+    (SELECT COUNT(*) FROM sheet_effect_outbox AS candidate
+      WHERE candidate.status IN ('processing', 'delivery_uncertain')
+         OR (candidate.status = 'pending' AND NOT EXISTS (
+              SELECT 1
+              FROM sheet_effect_outbox AS predecessor
+              WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
+                AND predecessor.target_kind = candidate.target_kind
+                AND predecessor.target_id = candidate.target_id
+                AND predecessor.stream_sequence < candidate.stream_sequence
+                AND predecessor.status NOT IN ('applied', 'superseded')
+            ))) AS busy_count,
+    (SELECT COUNT(*) FROM sheet_effect_outbox
+      WHERE status = 'failed'
+        AND (last_error_code IS NULL
+          OR last_error_code NOT IN (${RECOVERABLE_EFFECT_ERROR_CODE_SQL}))) AS terminal_failed_count
+`;
+
+/**
+ * Durable projection tag of the System_State projection (persisted contract).
+ *
+ * System_State is the one projection the startup path treats specially:
+ * while its effects are still in flight, the first polling pass and external
+ * convergence barriers defer so they cannot compete with the initial
+ * System_State drain on the shared request limiter.
+ */
+export const SYSTEM_STATE_PROJECTION = "system_state" as const;
+
+/**
+ * Counts System_State effects that are still in flight (nonterminal).
+ *
+ * `processing`/`delivery_uncertain` effects are always in flight, plus
+ * `pending` effects that are genuinely claimable heads (no earlier
+ * same-stream predecessor outside `applied`/`superseded`). A `pending`
+ * follower behind a `conflict` or `blocked_candidate` predecessor is NOT
+ * claimable drain work — it stays behind the candidate-pipeline lifecycle
+ * state until a later effect supersedes it, so counting it would defer the
+ * first polling pass (or an external convergence barrier) forever and
+ * suppress the polling/reconciliation pass that unblocks the stream.
+ *
+ * This mirrors the claimable-head semantics of
+ * `READ_OUTBOX_SCAN_READINESS_SQL`: terminal lifecycle states — applied,
+ * superseded, failed, conflict, blocked_candidate — never defer the
+ * polling/readiness gate, so a terminal failed head or an open conflict
+ * cannot stall the first polling pass forever.
+ */
+export const COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL = `
+  SELECT COUNT(*) AS count
+  FROM sheet_effect_outbox AS candidate
+  WHERE candidate.projection = '${SYSTEM_STATE_PROJECTION}'
+    AND (
+      candidate.status IN ('processing', 'delivery_uncertain')
+      OR (candidate.status = 'pending' AND NOT EXISTS (
+        SELECT 1
+        FROM sheet_effect_outbox AS predecessor
+        WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
+          AND predecessor.target_kind = candidate.target_kind
+          AND predecessor.target_id = candidate.target_id
+          AND predecessor.stream_sequence < candidate.stream_sequence
+          AND predecessor.status NOT IN ('applied', 'superseded')
+      ))
+    )
+`;
+
 /** Reads the durable confirmed revision for one projection binding. */
 export const READ_CONFIRMED_VISIBLE_REVISION_SQL = `
   SELECT confirmed_visible_revision
