@@ -87,7 +87,7 @@
     "pr": 260,
     "version": "0.8.19",
     "sourceRef": "b5304f740e5af4875e40cfe52402cf54f4df5c37",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-260-ci-recovery.patch"
   },
   {
     "pr": 261,
