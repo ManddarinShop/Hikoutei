@@ -19,6 +19,7 @@
 
 import {
   createInternalHikoutei,
+  type Hikoutei,
 } from "../../../api/Hikoutei.js";
 import {
   resolveEntityDescriptors,
@@ -51,6 +52,18 @@ import { createRemoteProvider } from "./remoteProvider.js";
 import { createEffectSupervisor } from "./effectSupervisor.js";
 import { createPollingSupervisor } from "./pollingSupervisor.js";
 import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
+import {
+  registerSystemStateReadiness,
+  unregisterSystemStateReadiness,
+} from "./systemStateReadiness.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+} from "../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../../../shared/observability/logEvents.js";
 import {
   createWriterOptions,
   throwSyncResolutionError,
@@ -154,7 +167,23 @@ export async function createInternalSyncService(
       generated.bindings,
       runtime.flushCoordinator,
     );
-    const hikoutei = createInternalHikoutei(provider, descriptors, stop);
+    // The runtime object is the readiness key: the beforeClose hook runs
+    // only after this assignment, so the captured reference is always the
+    // fully constructed runtime. Unregistering happens BEFORE the stop
+    // handler runs, so a closing runtime reports ready (no outbox to drain)
+    // the moment its close begins.
+    let hikoutei: Hikoutei;
+    const hikouteiClose = async (): Promise<void> => {
+      unregisterSystemStateReadiness(hikoutei);
+      await stop();
+    };
+    hikoutei = createInternalHikoutei(provider, descriptors, hikouteiClose);
+    // Phase 4: register the runtime's System_State readiness right after
+    // bootstrap so external convergence barriers can wait on the drain;
+    // unregistered on close (see hikouteiClose). Never part of the public
+    // API — the registration is keyed to the internal/public runtime object
+    // and read only through this internal module.
+    registerSystemStateReadiness(hikoutei, runtime.storage);
     effectSupervisor.start();
     pollingSupervisor.start();
 
@@ -169,6 +198,12 @@ export async function createInternalSyncService(
       close: () => hikoutei.close(),
     };
   } catch (error: unknown) {
+    logHikouteiInternalEvent({
+      event: HIKOUTEI_LOG_EVENTS.SYNC_SERVICE_START_FAILED,
+      level: "error",
+      component: HIKOUTEI_LOG_COMPONENTS.SYNC_SERVICE,
+      ...describeErrorForInternalLog(error),
+    });
     // Conflict-route registration claims this runtime's mapped-role writer
     // lease before remote provisioning runs; a provisioning failure would
     // otherwise leave the claim valid for the full lease window and every
