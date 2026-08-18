@@ -1088,6 +1088,219 @@ describe("runReconciliationScan", () => {
       .toEqual({ kind: "string", value: "paid" });
   });
 
+  it("repairs a wedged stream when the sheet already matches canonical and a follower is blocked", async () => {
+    const { adapter, provider } = await bootstrap({
+      entities: [
+        {
+          entityId: "order-1",
+          rowBindingId: "binding-1",
+          anchor: "anchor-1",
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+          },
+        },
+      ],
+      // The Sheet already matches canonical: no drift, yet the stream is
+      // wedged behind a terminal failed head that blocks every follower.
+      sheetRows: [
+        {
+          targetId: "order-1",
+          physicalAnchor: "anchor-1",
+          visibleRevision: 3,
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+            _deleted: { kind: "boolean", value: false },
+          },
+        },
+      ],
+    });
+    await seedVisibleState(adapter, "binding-1", 3, visibleHashFor({
+      id: { kind: "string", value: "order-1" },
+      status: { kind: "string", value: "paid" },
+      _deleted: { kind: "boolean", value: false },
+    }));
+    const wedged = await seedFailedHead(adapter, {
+      effectId: "effect-wedged-clean",
+      streamSequence: 1,
+      targetId: "order-1",
+      rowBindingId: "binding-1",
+      fields: {
+        id: { kind: "string", value: "order-1" },
+        status: { kind: "string", value: "paid" },
+      },
+      expectedVisibleRevision: 3,
+      expectedVisibleHash: visibleHashFor({
+        id: { kind: "string", value: "order-1" },
+        status: { kind: "string", value: "paid" },
+      }),
+      lastErrorCode: "delivery_uncertain_timeout",
+    });
+    // The blocked follower: an equivalent correction already in flight
+    // behind the failed head (appended, then blocked forever by the durable
+    // predecessor guard). Its target matches canonical, so the scan must
+    // not append a duplicate: it supersedes the failed head with the
+    // in-flight effect, which becomes the claimable stream head.
+    const follower = await seedEffect(adapter, {
+      effectId: "effect-follower-clean",
+      streamSequence: 2,
+      targetId: "order-1",
+      rowBindingId: "binding-1",
+      fields: {
+        id: { kind: "string", value: "order-1" },
+        status: { kind: "string", value: "paid" },
+        _deleted: { kind: "boolean", value: false },
+      },
+      expectedVisibleRevision: 3,
+      expectedVisibleHash: visibleHashFor({
+        id: { kind: "string", value: "order-1" },
+        status: { kind: "string", value: "paid" },
+        _deleted: { kind: "boolean", value: false },
+      }),
+    });
+
+    const report = await runReconciliationScan({
+      storage: adapter,
+      provider,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
+    });
+
+    // The Sheet matched canonical (no drift) yet the scan still repaired the
+    // wedged stream: no duplicate was appended and the failed head was
+    // superseded with the in-flight follower.
+    expect(report).toMatchObject({
+      matchedRows: 1,
+      driftedRows: 0,
+      missingRows: 0,
+      effectsEnqueued: 0,
+      fenceClaimed: true,
+    });
+    const pending = await listReadyEffectsWithAdapter(adapter, 10);
+    expect(pending.map((effect) => effect.effect_id)).toEqual([follower.effectId]);
+    await expect(effectRow(adapter, wedged.effectId)).resolves.toMatchObject({
+      status: "superseded",
+      supersedes_effect_id: follower.effectId,
+    });
+
+    const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
+    const workerReport = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 5_000,
+      maxEffects: 10,
+    });
+    // The follower is no longer blocked: the stream progressed and the
+    // canonical state is confirmed on the Sheet.
+    expect(workerReport).toMatchObject({ selected: 1, claimed: 1, applied: 1 });
+    await expect(effectRow(adapter, follower.effectId)).resolves.toMatchObject({
+      status: "applied",
+    });
+  });
+
+  it("appends a fresh repair superseding a terminal failed head when the sheet already matches and no correction is in flight", async () => {
+    const { adapter, provider } = await bootstrap({
+      entities: [
+        {
+          entityId: "order-1",
+          rowBindingId: "binding-1",
+          anchor: "anchor-1",
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+          },
+        },
+      ],
+      sheetRows: [
+        {
+          targetId: "order-1",
+          physicalAnchor: "anchor-1",
+          visibleRevision: 3,
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+            _deleted: { kind: "boolean", value: false },
+          },
+        },
+      ],
+    });
+    await seedVisibleState(adapter, "binding-1", 3, visibleHashFor({
+      id: { kind: "string", value: "order-1" },
+      status: { kind: "string", value: "paid" },
+      _deleted: { kind: "boolean", value: false },
+    }));
+    const wedged = await seedFailedHead(adapter, {
+      effectId: "effect-wedged-clean-2",
+      streamSequence: 1,
+      targetId: "order-1",
+      rowBindingId: "binding-1",
+      fields: {
+        id: { kind: "string", value: "order-1" },
+        status: { kind: "string", value: "paid" },
+      },
+      expectedVisibleRevision: 3,
+      expectedVisibleHash: visibleHashFor({
+        id: { kind: "string", value: "order-1" },
+        status: { kind: "string", value: "paid" },
+      }),
+      lastErrorCode: "delivery_uncertain_timeout",
+    });
+
+    const report = await runReconciliationScan({
+      storage: adapter,
+      provider,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
+    });
+
+    // No drift, but the terminal failed head wedges the stream: the scan
+    // appends a fresh repair and supersedes the failed head with it in the
+    // same fenced transaction.
+    expect(report).toMatchObject({
+      matchedRows: 1,
+      driftedRows: 0,
+      missingRows: 0,
+      effectsEnqueued: 1,
+      fenceClaimed: true,
+    });
+    const pending = await listReadyEffectsWithAdapter(adapter, 10);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.effect_id).not.toBe(wedged.effectId);
+    await expect(effectRow(adapter, wedged.effectId)).resolves.toMatchObject({
+      status: "superseded",
+      supersedes_effect_id: pending[0]?.effect_id,
+    });
+
+    const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
+    const workerReport = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 5_000,
+      maxEffects: 10,
+    });
+    // The repair wrote the identical canonical values with CAS evidence and
+    // the stream is unblocked for any later effect.
+    expect(workerReport).toMatchObject({ selected: 1, claimed: 1, applied: 1 });
+    await expect(effectRow(adapter, pending[0]!.effect_id)).resolves.toMatchObject({
+      status: "applied",
+    });
+    expect(provider.readRow("physical-recon", "anchor-1").fields.status)
+      .toEqual({ kind: "string", value: "paid" });
+  });
+
   it("supersedes non-recoverable failed heads but leaves recoverable failed heads on the worker retry path", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1422,6 +1635,225 @@ describe("runReconciliationScan", () => {
     const rescan = await runReconciliationScan({
       ...scanOptions,
       createId: scanIds,
+    });
+    expect(rescan).toMatchObject({ missingRows: 0, driftedRows: 0, effectsEnqueued: 0 });
+  });
+
+  it("repairs a clean failed-head stream from observed evidence when no confirmed state exists", async () => {
+    const { adapter, provider } = await bootstrap({
+      entities: [
+        {
+          entityId: "order-1",
+          rowBindingId: "binding-1",
+          anchor: "anchor-1",
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+          },
+        },
+      ],
+      // The Sheet already contains the row and it matches canonical, but the
+      // local visible-state confirmation is ABSENT (a response-loss restart:
+      // no sheet_visible_state row). The terminal failed head was a create
+      // baseline that delivery-uncertain timed out.
+      sheetRows: [
+        {
+          targetId: "order-1",
+          physicalAnchor: "anchor-1",
+          visibleRevision: 4,
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+            _deleted: { kind: "boolean", value: false },
+          },
+        },
+      ],
+    });
+    const wedged = await seedFailedHead(adapter, {
+      effectId: "effect-wedged-clean-noconf",
+      streamSequence: 1,
+      targetId: "order-1",
+      rowBindingId: "binding-1",
+      fields: {
+        id: { kind: "string", value: "order-1" },
+        status: { kind: "string", value: "paid" },
+      },
+      expectedVisibleRevision: 0,
+      expectedVisibleHash: "",
+      lastErrorCode: "delivery_uncertain_timeout",
+    });
+
+    const report = await runReconciliationScan({
+      storage: adapter,
+      provider,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
+    });
+
+    expect(report).toMatchObject({
+      matchedRows: 1,
+      driftedRows: 0,
+      missingRows: 0,
+      effectsEnqueued: 1,
+      fenceClaimed: true,
+    });
+    const pending = await listReadyEffectsWithAdapter(adapter, 10);
+    expect(pending).toHaveLength(1);
+    const repair = pending[0]!;
+    const payload = parseSyncProjectionEffectPayload(repair.payload_json);
+    // The repair is a GUARDED regular repair, not the old unguarded insert
+    // baseline: no confirmed state exists, so the observed row's current
+    // visible hash becomes the expected-hash guard and createIfMissing must
+    // be false — the row already exists, so an insert would fail on identity.
+    expect(payload.createIfMissing).toBe(false);
+    expect(repair.expected_visible_hash).toBe(visibleHashFor({
+      id: { kind: "string", value: "order-1" },
+      status: { kind: "string", value: "paid" },
+      _deleted: { kind: "boolean", value: false },
+    }));
+    expect(repair.expected_visible_revision).toBe(0);
+    await expect(effectRow(adapter, wedged.effectId)).resolves.toMatchObject({
+      status: "superseded",
+      supersedes_effect_id: repair.effect_id,
+    });
+
+    // The repair converges through the worker without an insert identity
+    // failure: the existing row matches its guarded expectation.
+    const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
+    const workerReport = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 5_000,
+      maxEffects: 10,
+    });
+    expect(workerReport).toMatchObject({ selected: 1, claimed: 1, applied: 1, failed: 0 });
+    await expect(effectRow(adapter, repair.effect_id)).resolves.toMatchObject({
+      status: "applied",
+    });
+    // The stream is recovered: a re-scan finds no drift and no failed head.
+    const rescan = await runReconciliationScan({
+      storage: adapter,
+      provider,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
+    });
+    expect(rescan).toMatchObject({
+      matchedRows: 1,
+      driftedRows: 0,
+      missingRows: 0,
+      effectsEnqueued: 0,
+    });
+  });
+
+  it("repairs a drifted row from observed evidence when no confirmed state exists", async () => {
+    const { adapter, provider } = await bootstrap({
+      entities: [
+        {
+          entityId: "order-1",
+          rowBindingId: "binding-1",
+          anchor: "anchor-1",
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "paid" },
+          },
+        },
+      ],
+      // The Sheet already contains the row but with stale content
+      // ("shipped"), and no sheet_visible_state confirmation exists (a
+      // response-loss restart). The old insert baseline produced a repair
+      // that the provider rejected forever as an insert for an existing
+      // identity; the observed row's current visible hash must guard a
+      // regular update instead.
+      sheetRows: [
+        {
+          targetId: "order-1",
+          physicalAnchor: "anchor-1",
+          visibleRevision: 4,
+          fields: {
+            id: { kind: "string", value: "order-1" },
+            status: { kind: "string", value: "shipped" },
+            _deleted: { kind: "boolean", value: false },
+          },
+        },
+      ],
+    });
+
+    const report = await runReconciliationScan({
+      storage: adapter,
+      provider,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
+    });
+    expect(report).toMatchObject({
+      driftedRows: 1,
+      missingRows: 0,
+      effectsEnqueued: 1,
+    });
+
+    const pending = await listReadyEffectsWithAdapter(adapter, 10);
+    expect(pending).toHaveLength(1);
+    const repair = pending[0]!;
+    const payload = parseSyncProjectionEffectPayload(repair.payload_json);
+    // Guarded regular repair: createIfMissing false, non-empty observed
+    // expected hash (the CURRENT "shipped" row), receipt revision 0.
+    expect(payload.createIfMissing).toBe(false);
+    expect(payload.targetVisibleHash).toBe(visibleHashFor({
+      id: { kind: "string", value: "order-1" },
+      status: { kind: "string", value: "paid" },
+      _deleted: { kind: "boolean", value: false },
+    }));
+    expect(repair.expected_visible_hash).toBe(visibleHashFor({
+      id: { kind: "string", value: "order-1" },
+      status: { kind: "string", value: "shipped" },
+      _deleted: { kind: "boolean", value: false },
+    }));
+    expect(repair.expected_visible_revision).toBe(0);
+
+    // The repair converges through the worker: the observed hash passes the
+    // CAS guard and the row is updated to canonical without overwriting
+    // anything unguarded.
+    const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
+    const workerReport = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 5_000,
+      maxEffects: 10,
+    });
+    expect(workerReport).toMatchObject({ selected: 1, claimed: 1, applied: 1, failed: 0 });
+    await expect(effectRow(adapter, repair.effect_id)).resolves.toMatchObject({
+      status: "applied",
+    });
+    expect(provider.readRow("physical-recon", "anchor-1").fields.status)
+      .toEqual({ kind: "string", value: "paid" });
+
+    // The stream settles: a re-scan finds no drift and enqueues nothing.
+    const rescan = await runReconciliationScan({
+      storage: adapter,
+      provider,
+      physicalSheetId: "physical-recon",
+      logicalSheetId: "logical-recon",
+      systemFields: [...SYSTEM_HEADERS],
+      schemaVersion: 1,
+      writerId: "reconciler",
+      now: () => 5_000,
+      createId: counter(),
     });
     expect(rescan).toMatchObject({ missingRows: 0, driftedRows: 0, effectsEnqueued: 0 });
   });
