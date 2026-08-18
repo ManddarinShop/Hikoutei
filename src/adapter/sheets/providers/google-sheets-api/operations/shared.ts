@@ -4,9 +4,10 @@
  *
  * The provider class hands one immutable `GoogleSheetsApiProviderDeps` object
  * to every operation function so the class stays a thin facade. Pacing
- * (read/write request-start limiters), redacted telemetry, route validation
- * against the registered definition, and batchUpdate reply validation live
- * here because every operation shares them.
+ * (ONE request-start limiter shared by reads and writes), redacted
+ * telemetry, route validation against the registered definition, and
+ * batchUpdate reply validation live here because every operation shares
+ * them.
  */
 
 import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
@@ -14,12 +15,23 @@ import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "../../../../../application/sync/sheetsContract/errors.js";
-import { classifyTransportOutcome } from "../../../../../application/sync/sheetsContract/transportOutcome.js";
-import { presentValue, absentValue, type Presence } from "../../../../../shared/state/index.js";
+import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "../../../../../application/sync/sheetsContract/transportOutcome.js";
+import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
+import {
+  logHikouteiInternalEvent,
+} from "../../../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../../../../../shared/observability/logEvents.js";
 import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import { RequestStartLimiter } from "../transport/rateLimiter.js";
-import { invalidProviderState } from "../errors.js";
+import {
+  GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
+  GoogleSheetsApiTransportError,
+  invalidProviderState,
+} from "../errors.js";
 import { batchUpdateResponseShapeSchema } from "../model/rawResponseSchemas.js";
 
 /** Immutable wiring every operation function receives from the provider. */
@@ -29,10 +41,55 @@ export interface GoogleSheetsApiProviderDeps {
   readonly transport: GoogleSheetsApiTransport;
   readonly readTimeoutMs: number;
   readonly maxBatchBytes: number;
-  readonly readLimiter: RequestStartLimiter;
-  readonly writeLimiter: RequestStartLimiter;
+  /** ONE limiter shared by reads and writes (combined starts are serialized). */
+  readonly requestLimiter: RequestStartLimiter;
+  /**
+   * Maximum admitted wait for ONE request start (the limiter's interval): a
+   * call whose predicted slot is further out is refused before transport.
+   */
+  readonly maxRequestStartWaitMs: number;
   readonly now: () => number;
   readonly onRequest: ((event: GoogleSheetsApiRequestEvent) => void) | undefined;
+}
+
+/**
+ * Static, redacted refusal message. Never embeds effect ids, sheet names,
+ * spreadsheet ids, or limiter state: the durable worker only needs the
+ * stable code to requeue through the CAS/recovery path.
+ */
+const REQUEST_START_REFUSED_MESSAGE =
+  "Google Sheets API request start refused before transport: the shared pacing queue exceeds the bounded admission wait.";
+
+/**
+ * Acquires one bounded request-start slot, refusing (and logging one
+ * redacted event) when the predicted wait exceeds the configured bound.
+ * A refusal NEVER advances the limiter horizon and throws the stable
+ * delivery-uncertain transport error before any SDK call, so the durable
+ * worker requeues instead of firing an unpaced burst.
+ */
+async function admitRequestStart(
+  deps: GoogleSheetsApiProviderDeps,
+  operation: "getSpreadsheet" | "batchUpdate",
+): Promise<void> {
+  const admission = await deps.requestLimiter.waitForSlot(deps.maxRequestStartWaitMs);
+  if (admission.status !== "refused") return;
+  // Boundary record for a locally refused start: only the stable code is
+  // logged (retryable, like the other delivery-uncertain buckets), never a
+  // message, payload, id, or URL.
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.TRANSPORT_REQUEST_FAILED,
+    level: "warn",
+    component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
+    code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
+    errorClass: "GoogleSheetsApiTransportError",
+    retryable: true,
+  });
+  throw new GoogleSheetsApiTransportError(
+    GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
+    REQUEST_START_REFUSED_MESSAGE,
+    absentValue(),
+    absentValue(),
+  );
 }
 
 /** Paces ONE `getSpreadsheet` transport call and emits one read event. */
@@ -40,7 +97,7 @@ export async function runRead<T>(
   deps: GoogleSheetsApiProviderDeps,
   task: () => Promise<T>,
 ): Promise<T> {
-  await deps.readLimiter.waitForSlot();
+  await admitRequestStart(deps, "getSpreadsheet");
   const startedAt = deps.now();
   try {
     const result = await task();
@@ -58,7 +115,7 @@ export async function runWrite<T>(
   deps: GoogleSheetsApiProviderDeps,
   task: () => Promise<T>,
 ): Promise<T> {
-  await deps.writeLimiter.waitForSlot();
+  await admitRequestStart(deps, "batchUpdate");
   const startedAt = deps.now();
   try {
     const result = await task();
@@ -71,7 +128,14 @@ export async function runWrite<T>(
   }
 }
 
-/** Emits one redacted telemetry event; diagnostics must never throw. */
+/**
+ * Emits one redacted telemetry event; diagnostics must never throw.
+ *
+ * The code is re-sanitized at the sink as defense in depth: every value
+ * reaching `onRequest` is either an allowlisted stable code or the fixed
+ * `unknown` category, so a future caller can never forward an arbitrary
+ * remote string.
+ */
 export function emitRequest(
   deps: GoogleSheetsApiProviderDeps,
   operation: "getSpreadsheet" | "batchUpdate",
@@ -89,7 +153,9 @@ export function emitRequest(
       durationMs: Math.max(0, deps.now() - startedAt),
       ok,
       httpStatus,
-      code,
+      code: code.kind === PRESENCE_KINDS.PRESENT
+        ? presentValue(sanitizeTransportRemoteCode(code.value))
+        : code,
     });
   } catch {
     // Diagnostics must never change a remote result.

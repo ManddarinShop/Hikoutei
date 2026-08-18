@@ -34,12 +34,31 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
   /** Upper bound for read timeouts; reads must stay well under the lease. */
   MAX_READ_TIMEOUT_MS: 60_000,
   /**
-   * Minimum interval between request starts of one class (reads or writes).
-   * Google Sheets quota is enforced per 100-second windows; the provider
-   * spaces request starts so a burst cannot exhaust the read or write budget
-   * before the worker's own backoff reacts.
+   * Minimum interval between request starts of the WHOLE provider: reads and
+   * writes share ONE request-start limiter, so at most one Sheets API
+   * request can start per interval regardless of class. Google Sheets quota
+   * is enforced per 100-second windows; the 2,500 ms default serializes
+   * combined read+write starts to about 40 starts per 100 s, leaving
+   * headroom inside the default per-user/per-project 100-second quotas for
+   * the observation and provisioning reads that run beside the worker. The
+   * exact quota stays provider and environment dependent, so operators can
+   * override the interval through the internal sync env key
+   * (HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS) or the internal provider option;
+   * the safe default is intentionally conservative. The interval is part of
+   * the effect-lease headroom contract: a worst-case dispatch (two
+   * preflight/postcondition reads plus one write, each paced and timed out,
+   * with up to one full interval of first-slot wait) must finish inside the
+   * lease with the 30-second provider headroom, and the internal service
+   * validation rejects an override that would let pacing outlive the lease
+   * (the env override is bounded to the largest default-safe interval,
+   * ~10 s). Admission is BOUNDED to one interval per request start: a call
+   * whose slot lies more than one interval out is refused before any SDK
+   * call with the stable delivery-uncertain
+   * `google_sheets_api_request_start_refused` error (the durable worker
+   * requeues), so an arbitrarily long queue of concurrent lock-free polling
+   * reads can never make a write wait past its lease.
    */
-  REQUEST_START_INTERVAL_MS: 1_100,
+  REQUEST_START_INTERVAL_MS: 2_500,
   /**
    * The provider stops adding effects to one batchUpdate once the serialized
    * body would exceed this budget and returns `hasMore` for the suffix. The

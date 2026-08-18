@@ -2,7 +2,7 @@
  * Full sync provider over the Google Sheets REST API.
  *
  * Implements every provider capability the sync runtime needs with ONE
- * provider instance (one transport, one read limiter, one write limiter, one
+ * provider instance (one transport, one shared request-start limiter, one
  * telemetry sink): the outbound effect worker (fast append, applyEffects,
  * postcondition recovery), projection provisioning, values-only table reads,
  * row-anchor assignment, and full metadata snapshots. The service-account
@@ -20,8 +20,14 @@
  *
  * Request pacing is per transport call: every `getSpreadsheet` (preflight
  * enumeration, preflight data, observation reads, post-reads, table reads,
- * provisioning reads) and every `batchUpdate` acquires its class limiter and
- * emits one redacted telemetry event.
+ * provisioning reads) and every `batchUpdate` acquires the ONE shared
+ * request-start limiter and emits one redacted telemetry event. Reads and
+ * writes serialize against each other, so a combined read+write burst can
+ * never outpace the interval. Admission is BOUNDED: a request whose slot
+ * lies more than one interval out is refused before any SDK call with the
+ * stable delivery-uncertain `google_sheets_api_request_start_refused`
+ * error, so an arbitrarily long limiter queue can never make a request
+ * wait past its effect lease — the durable worker requeues instead.
  */
 
 import type {
@@ -112,7 +118,11 @@ export interface GoogleSheetsApiProviderOptions {
    * lease.
    */
   readonly readTimeoutMs?: number;
-  /** Minimum interval between request starts per class; defaults to 1,100 ms. */
+  /**
+   * Minimum interval between request starts; defaults to 2,500 ms. Also the
+   * admission bound: a request whose slot lies more than one interval out is
+   * refused before any SDK call (delivery-uncertain, requeued durably).
+   */
   readonly rateLimitIntervalMs?: number;
   /** Serialized batchUpdate byte budget; defaults to ~2 MB. */
   readonly maxBatchBytes?: number;
@@ -134,11 +144,12 @@ export interface GoogleSheetsApiSyncProviderOptions extends GoogleSheetsApiProvi
  * Full sync provider over the Sheets REST API: outbound effects, provisioning,
  * table reads, anchors, and snapshots behind the shared provider contracts.
  *
- * All reads share one read limiter; all writes share one write limiter; the
- * worker-level append throttle stays enabled on top in service mode via the
- * bootstrap's bulk worker options. Provisioning runs at startup before the
- * worker, and observation anchors are the only metadata mutations outside
- * effect batches.
+ * All reads and writes share ONE request-start limiter, so combined
+ * read+write starts are serialized (at most one transport call per
+ * interval); the worker-level append throttle stays enabled on top in
+ * service mode via the bootstrap's bulk worker options. Provisioning runs
+ * at startup before the worker, and observation anchors are the only
+ * metadata mutations outside effect batches.
  *
  * The class is a thin facade: every method body lives in an operation module
  * under `operations/` and receives the immutable wiring from `this.deps`.
@@ -156,8 +167,9 @@ export class GoogleSheetsApiSyncProvider
   private readonly transportTimeoutMs: number;
   private readonly readTimeoutMs: number;
   private readonly maxBatchBytes: number;
-  private readonly readLimiter: RequestStartLimiter;
-  private readonly writeLimiter: RequestStartLimiter;
+  private readonly requestLimiter: RequestStartLimiter;
+  /** Bounded admission: at most one interval of wait per request start. */
+  private readonly maxRequestStartWaitMs: number;
   private readonly now: () => number;
   private readonly onRequest: ((event: GoogleSheetsApiRequestEvent) => void) | undefined;
   private readonly deps: GoogleSheetsApiProviderDeps;
@@ -211,16 +223,16 @@ export class GoogleSheetsApiSyncProvider
     this.readTimeoutMs = readTimeoutMs;
     this.maxBatchBytes = maxBatchBytes;
     this.now = options.now ?? Date.now;
-    this.readLimiter = new RequestStartLimiter({
+    this.requestLimiter = new RequestStartLimiter({
       intervalMs,
       now: this.now,
       ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     });
-    this.writeLimiter = new RequestStartLimiter({
-      intervalMs,
-      now: this.now,
-      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
-    });
+    // Admission bound equals the pacing interval: the immediate slot and the
+    // slot exactly one interval out are admitted, every deeper reservation is
+    // refused before any SDK call (delivery-uncertain, requeued by the
+    // durable worker) instead of waiting out an unbounded queue.
+    this.maxRequestStartWaitMs = intervalMs;
     this.onRequest = options.onRequest;
     this.deps = {
       spreadsheetId: this.spreadsheetId,
@@ -228,8 +240,8 @@ export class GoogleSheetsApiSyncProvider
       transport: this.transport,
       readTimeoutMs: this.readTimeoutMs,
       maxBatchBytes: this.maxBatchBytes,
-      readLimiter: this.readLimiter,
-      writeLimiter: this.writeLimiter,
+      requestLimiter: this.requestLimiter,
+      maxRequestStartWaitMs: this.maxRequestStartWaitMs,
       now: this.now,
       onRequest: this.onRequest,
     };
