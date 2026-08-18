@@ -3,7 +3,7 @@
     "pr": 246,
     "version": "0.8.5",
     "sourceRef": "aa4853866ac14729de45ea5c4c631d396fcdbf29",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery-v2.patch"
   },
   {
     "pr": 247,
