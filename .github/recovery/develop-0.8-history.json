@@ -225,7 +225,7 @@
     "pr": 285,
     "version": "0.8.42",
     "sourceRef": "fcedca09aa94ff11ac6b38e69e85631c54eefffa",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-285-lane-renewal-recovery-head-v2.patch"
   },
   {
     "pr": 286,
