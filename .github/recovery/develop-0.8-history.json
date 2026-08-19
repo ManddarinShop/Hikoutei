@@ -327,7 +327,7 @@
     "pr": 302,
     "version": "0.8.59",
     "sourceRef": "9ff0dbb90f46a8ff510150a2c033484841ca622c",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-302-service-recovery.patch"
   },
   {
     "pr": 303,
