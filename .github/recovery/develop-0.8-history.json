@@ -309,7 +309,7 @@
     "pr": 299,
     "version": "0.8.56",
     "sourceRef": "a4193b2b2678c28fed59e4b8716f09c9548d29db",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-299-worker-coverage-recovery.patch"
   },
   {
     "pr": 300,
