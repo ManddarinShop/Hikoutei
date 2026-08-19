@@ -315,7 +315,7 @@
     "pr": 300,
     "version": "0.8.57",
     "sourceRef": "f8c328d3eba586d720b18d21cd1e2063038eab77",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-300-telemetry-recovery.patch"
   },
   {
     "pr": 301,
