@@ -1552,6 +1552,19 @@ index a2d8565144f71ca2521a1a72512470ce821d68e4..c9f5e601bcb9b893ec9ddc97ad4a3eae
 +      : { status: "admitted", waitedMs: waited };
    }
  }
+diff --git a/src/application/sync/service/syncAutoStart.ts b/src/application/sync/service/syncAutoStart.ts
+index 9c1622c63ee70bf5a3655bf0e3d1bd9c6d5b8524..211fbf1c190f6d7bbf2798ed2ac3436fa3082763 100644
+--- a/src/application/sync/service/syncAutoStart.ts
++++ b/src/application/sync/service/syncAutoStart.ts
+@@ -207,7 +207,7 @@ export async function createTypedSheetsWithSync(
+       // ADC-backed transport with its default pacing.
+       googleSheetsApi: options.transport === undefined
+         ? {}
+-        : { transport: options.transport, rateLimitIntervalMs: 1 },
++        : { transport: options.transport, rateLimitIntervalMs: 0 },
+       pollingIntervalMs,
+       pollingFullScanIntervalMs,
+     });
 diff --git a/src/application/sync/service/systemStateReadiness.ts b/src/application/sync/service/systemStateReadiness.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..3b4037f406570c4fbf018d649a5d17c7ae7604bd
