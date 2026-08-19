@@ -345,7 +345,7 @@
     "pr": 305,
     "version": "0.8.62",
     "sourceRef": "e029ae1b76aaeed910a8fc5e7b7fc5c629e908eb",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-305-coordinated-recovery.patch"
   },
   {
     "pr": 306,
