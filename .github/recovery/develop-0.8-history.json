@@ -231,7 +231,7 @@
     "pr": 286,
     "version": "0.8.43",
     "sourceRef": "994efb54864953933477a0b3d08b0ea63f49f75d",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-286-polling-gate-recovery.patch"
   },
   {
     "pr": 287,
