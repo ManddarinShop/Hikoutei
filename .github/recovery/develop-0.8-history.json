@@ -333,7 +333,7 @@
     "pr": 303,
     "version": "0.8.60",
     "sourceRef": "30d0f474675184453622a29de9342e7c4118e51f",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-303-lifecycle-recovery.patch"
   },
   {
     "pr": 304,
