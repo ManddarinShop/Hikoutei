@@ -321,7 +321,7 @@
     "pr": 301,
     "version": "0.8.58",
     "sourceRef": "fa943d03d1222327e87afa06557a905aa6b16597",
-    "recoveryPatch": ".github/recovery/patches/pr-246-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-301-reconciliation-recovery.patch"
   },
   {
     "pr": 302,

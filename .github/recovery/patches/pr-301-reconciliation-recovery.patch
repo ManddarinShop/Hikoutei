@@ -1,0 +1,3114 @@
+diff --git a/packages/ikisaki/src/index.ts b/packages/ikisaki/src/index.ts
+index 94569cdcc252ecf6ffb818bdf0bacf2addfbde33..c3b2dd805b62ec8c38e0ad3e9d4b8ebc7ce6213c 100644
+--- a/packages/ikisaki/src/index.ts
++++ b/packages/ikisaki/src/index.ts
+@@ -127,6 +127,11 @@ export {
+   listReadyFastAppendEffectsWithSql,
+   markDeliveryUncertainWithAdapter,
+   markDeliveryUncertainWithSql,
++  readOutboxScanReadinessWithAdapter,
++  readOutboxScanReadinessWithSql,
++  readSystemStateDrainReadinessWithAdapter,
++  readSystemStateDrainReadinessWithSql,
++  type SystemStateDrainReadiness,
+   recoverExpiredLeasesWithAdapter,
+   recoverExpiredLeasesWithSql,
+   releaseUnprocessedEffectWithAdapter,
+diff --git a/packages/ikisaki/src/outbox.ts b/packages/ikisaki/src/outbox.ts
+index c30a8ed7f2a303adad82841fc0b7fbc7bfb73482..357b21cc79859ee6e80a9959c6a07ccb819dc67a 100644
+--- a/packages/ikisaki/src/outbox.ts
++++ b/packages/ikisaki/src/outbox.ts
+@@ -34,10 +34,12 @@ import {
+   isRecoverableEffectErrorCode,
+   APPLY_EFFECT_RESULT_SQL,
+   CLAIM_EFFECT_SQL,
++  COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL,
+   COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL,
+   INSERT_PENDING_EFFECT_SQL,
+   INSERT_REPLANNED_EFFECT_SQL,
+   MARK_DELIVERY_UNCERTAIN_SQL,
++  READ_OUTBOX_SCAN_READINESS_SQL,
+   RECOVER_EXPIRED_LEASES_SQL,
+   RENEW_EFFECT_LEASE_SQL,
+   REQUEUE_CLAIMED_EFFECT_SQL,
+@@ -545,3 +547,89 @@ export async function hasPendingOrProcessingEffectsWithAdapter(
+ ): Promise<boolean> {
+   return storage.read(({ sql }) => hasPendingOrProcessingEffectsWithSql(sql));
+ }
++
++/**
++ * Readiness classification of the durable outbox for the FIRST
++ * reconciliation-scan gate.
++ *
++ * - `busy`: claimable drain work exists — a `pending` effect with no
++ *   earlier same-stream predecessor outside `applied`/`superseded` (a
++ *   genuinely claimable head), or `processing`/`delivery_uncertain` work
++ *   in flight. A first scan is deferred so it cannot enqueue corrections
++ *   while the initial backlog is still draining.
++ * - `repair-needed`: at least one terminal failed stream head exists (a
++ *   `failed` effect whose `last_error_code` is NULL or NOT recoverable).
++ *   Such a head blocks its stream; the scanner is the repair net that
++ *   supersedes it, so the gate must ALLOW the first scan even while the
++ *   outbox is busy.
++ * - `idle`: no busy work and no terminal failed head; the scan runs.
++ *
++ * `conflict` and `blocked_candidate` rows are deliberately neither busy
++ * work nor failed heads, and a `pending` follower behind them is not
++ * claimable: those lifecycle states must never defer the first scan, or a
++ * blocked stream could suppress the recovery that unblocks it forever.
++ */
++export type OutboxScanReadiness =
++  | { readonly status: "idle" }
++  | { readonly status: "busy" }
++  | { readonly status: "repair-needed" };
++
++/** Classifies the outbox scan readiness through an already-active SQL context. */
++export async function readOutboxScanReadinessWithSql(
++  sql: SqlExecutor,
++): Promise<OutboxScanReadiness> {
++  const row = await sql.get<{
++    readonly busy_count: number;
++    readonly terminal_failed_count: number;
++  }>(READ_OUTBOX_SCAN_READINESS_SQL);
++  const busyCount = row?.busy_count ?? 0;
++  const terminalFailedCount = row?.terminal_failed_count ?? 0;
++  if (terminalFailedCount > 0) return { status: "repair-needed" };
++  if (busyCount > 0) return { status: "busy" };
++  return { status: "idle" };
++}
++
++/** Classifies the outbox scan readiness through a fresh adapter read context. */
++export async function readOutboxScanReadinessWithAdapter(
++  storage: SqlStorageAdapter,
++): Promise<OutboxScanReadiness> {
++  return storage.read(({ sql }) => readOutboxScanReadinessWithSql(sql));
++}
++
++/**
++ * Readiness of the System_State projection for the FIRST polling pass and
++ * for external convergence barriers.
++ *
++ * - `draining`: at least one System_State effect is genuinely in flight
++ *   (processing/delivery_uncertain, or a `pending` effect that is a
++ *   claimable head). The first remote polling pass and external convergence
++ *   readers defer so they cannot compete with the initial System_State
++ *   drain on the shared request limiter.
++ * - `ready`: no claimable System_State drain work remains. Terminal lifecycle
++ *   states (applied, superseded, failed, conflict, blocked_candidate) never
++ *   defer, and a `pending` follower behind such a predecessor is not drain
++ *   work either, so a terminal failed head or an open conflict cannot keep
++ *   the first polling pass draining forever — the poll/read-based checks
++ *   surface those conditions themselves, exactly like the first
++ *   reconciliation scan readiness. This is deliberately NOT the whole-outbox
++ *   idle state: unrelated projections and repair-needed heads do not count.
++ */
++export type SystemStateDrainReadiness =
++  | { readonly status: "draining" }
++  | { readonly status: "ready" };
++
++/** Classifies the System_State drain readiness through an already-active SQL context. */
++export async function readSystemStateDrainReadinessWithSql(
++  sql: SqlExecutor,
++): Promise<SystemStateDrainReadiness> {
++  const row = await sql.get<{ readonly count: number }>(COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL);
++  const count = row?.count ?? 0;
++  return count > 0 ? { status: "draining" } : { status: "ready" };
++}
++
++/** Classifies the System_State drain readiness through a fresh adapter read context. */
++export async function readSystemStateDrainReadinessWithAdapter(
++  storage: SqlStorageAdapter,
++): Promise<SystemStateDrainReadiness> {
++  return storage.read(({ sql }) => readSystemStateDrainReadinessWithSql(sql));
++}
+diff --git a/packages/ikisaki/src/outboxSql.ts b/packages/ikisaki/src/outboxSql.ts
+index a54b6807fdc5a8ccbba6b3982505367732d531d7..660637e87ece6adccc1269b1f462674695e75e5b 100644
+--- a/packages/ikisaki/src/outboxSql.ts
++++ b/packages/ikisaki/src/outboxSql.ts
+@@ -273,6 +273,88 @@ export const COUNT_PENDING_OR_PROCESSING_EFFECTS_SQL = `
+   WHERE status IN ('pending', 'processing', 'delivery_uncertain')
+ `;
+ 
++/**
++ * Counts claimable drain work and terminal failed heads in one read.
++ *
++ * `busy_count` counts only work the first reconciliation scan must defer
++ * for: `processing`/`delivery_uncertain` effects in flight, plus `pending`
++ * effects that are genuinely claimable heads (no earlier same-stream
++ * predecessor outside `applied`/`superseded`). A `pending` follower behind
++ * a `conflict` or `blocked_candidate` predecessor is NOT claimable drain
++ * work — it stays behind the candidate-pipeline lifecycle state until a
++ * later effect supersedes it, so counting it would defer the first scan
++ * forever and suppress the recovery that unblocks the stream.
++ *
++ * `terminal_failed_count` counts `failed` heads whose error code is NULL or
++ * outside the recoverable set (a NULL code is treated as terminal so SQL
++ * three-valued `NOT IN` cannot hide it): those heads block their streams
++ * and must force the first scan even while the outbox is otherwise busy.
++ */
++export const READ_OUTBOX_SCAN_READINESS_SQL = `
++  SELECT
++    (SELECT COUNT(*) FROM sheet_effect_outbox AS candidate
++      WHERE candidate.status IN ('processing', 'delivery_uncertain')
++         OR (candidate.status = 'pending' AND NOT EXISTS (
++              SELECT 1
++              FROM sheet_effect_outbox AS predecessor
++              WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
++                AND predecessor.target_kind = candidate.target_kind
++                AND predecessor.target_id = candidate.target_id
++                AND predecessor.stream_sequence < candidate.stream_sequence
++                AND predecessor.status NOT IN ('applied', 'superseded')
++            ))) AS busy_count,
++    (SELECT COUNT(*) FROM sheet_effect_outbox
++      WHERE status = 'failed'
++        AND (last_error_code IS NULL
++          OR last_error_code NOT IN (${RECOVERABLE_EFFECT_ERROR_CODE_SQL}))) AS terminal_failed_count
++`;
++
++/**
++ * Durable projection tag of the System_State projection (persisted contract).
++ *
++ * System_State is the one projection the startup path treats specially:
++ * while its effects are still in flight, the first polling pass and external
++ * convergence barriers defer so they cannot compete with the initial
++ * System_State drain on the shared request limiter.
++ */
++export const SYSTEM_STATE_PROJECTION = "system_state" as const;
++
++/**
++ * Counts System_State effects that are still in flight (nonterminal).
++ *
++ * `processing`/`delivery_uncertain` effects are always in flight, plus
++ * `pending` effects that are genuinely claimable heads (no earlier
++ * same-stream predecessor outside `applied`/`superseded`). A `pending`
++ * follower behind a `conflict` or `blocked_candidate` predecessor is NOT
++ * claimable drain work — it stays behind the candidate-pipeline lifecycle
++ * state until a later effect supersedes it, so counting it would defer the
++ * first polling pass (or an external convergence barrier) forever and
++ * suppress the polling/reconciliation pass that unblocks the stream.
++ *
++ * This mirrors the claimable-head semantics of
++ * `READ_OUTBOX_SCAN_READINESS_SQL`: terminal lifecycle states — applied,
++ * superseded, failed, conflict, blocked_candidate — never defer the
++ * polling/readiness gate, so a terminal failed head or an open conflict
++ * cannot stall the first polling pass forever.
++ */
++export const COUNT_ACTIVE_SYSTEM_STATE_EFFECTS_SQL = `
++  SELECT COUNT(*) AS count
++  FROM sheet_effect_outbox AS candidate
++  WHERE candidate.projection = '${SYSTEM_STATE_PROJECTION}'
++    AND (
++      candidate.status IN ('processing', 'delivery_uncertain')
++      OR (candidate.status = 'pending' AND NOT EXISTS (
++        SELECT 1
++        FROM sheet_effect_outbox AS predecessor
++        WHERE predecessor.logical_sheet_id = candidate.logical_sheet_id
++          AND predecessor.target_kind = candidate.target_kind
++          AND predecessor.target_id = candidate.target_id
++          AND predecessor.stream_sequence < candidate.stream_sequence
++          AND predecessor.status NOT IN ('applied', 'superseded')
++      ))
++    )
++`;
++
+ /** Reads the durable confirmed revision for one projection binding. */
+ export const READ_CONFIRMED_VISIBLE_REVISION_SQL = `
+   SELECT confirmed_visible_revision
+diff --git a/packages/ikisaki/src/worker/dispatch.ts b/packages/ikisaki/src/worker/dispatch.ts
+index c62dafda7bf6c71234f1ae01b57252b4981f98c4..35c0541b475461108c4efac52ec7794f8fe7a758 100644
+--- a/packages/ikisaki/src/worker/dispatch.ts
++++ b/packages/ikisaki/src/worker/dispatch.ts
+@@ -1,7 +1,7 @@
+ /** Fast-append dispatch and transport-failure handling for the effect worker. */
+ 
+ import type { ClaimedEffect } from "./contracts.js";
+-import type { FastAppendOutcome } from "./dispatcher.js";
++import type { EffectLeaseRenewal, FastAppendOutcome } from "./dispatcher.js";
+ import type { EffectWorkerBaseOptions } from "./options.js";
+ import type { MutableReport } from "./report.js";
+ import type { EffectWorkerStorage } from "./storage.js";
+@@ -49,6 +49,7 @@ export async function handleProviderDispatchError(
+   report: MutableReport,
+   error: unknown,
+   beforeRecovery?: () => Promise<boolean>,
++  renewEffectLeases?: EffectLeaseRenewal,
+ ): Promise<void> {
+   const outcome = isDispatchTransportError(error)
+     ? error
+@@ -67,7 +68,7 @@ export async function handleProviderDispatchError(
+     return;
+   }
+   if (beforeRecovery === undefined || await beforeRecovery()) {
+-    await recoverUnknownResults(options, storage, fence, items, report);
++    await recoverUnknownResults(options, storage, fence, items, report, renewEffectLeases);
+   }
+ }
+ 
+@@ -91,6 +92,7 @@ export async function dispatchFastAppendGroup(
+   },
+   report: MutableReport,
+   beforeRecovery?: () => Promise<boolean>,
++  renewEffectLeases?: EffectLeaseRenewal,
+ ): Promise<void> {
+   const throttleStartedAt = Date.now();
+   const throttledMs = await options.batchController?.waitForAppendThrottle(throttleStartedAt) ?? 0;
+@@ -110,9 +112,13 @@ export async function dispatchFastAppendGroup(
+   const batchLimit = options.batchController?.beginDispatch(requestRouteKey, providerStartedAt)
+     ?? group.items.length;
+   try {
++    const renewGroupLeases = renewEffectLeases;
+     outcome = await options.dispatcher.fastAppend({
+       routeKey: requestRouteKey,
+       effects: group.items.map((item) => item.pending),
++      ...(renewGroupLeases === undefined ? {} : {
++        beforeRemoteDispatch: () => renewGroupLeases(group.items),
++      }),
+     });
+   } catch (error: unknown) {
+     const uncertain = !isDispatchTransportError(error) ||
+@@ -145,6 +151,7 @@ export async function dispatchFastAppendGroup(
+       report,
+       error,
+       beforeRecovery,
++      renewEffectLeases,
+     );
+     return;
+   }
+@@ -175,6 +182,9 @@ export async function dispatchFastAppendGroup(
+   const deferredEffectIds = new Set<string>();
+   const recoveryItems: ClaimedEffect[] = [];
+   for (const item of group.items) {
++    // A suffix the provider intentionally deferred (`hasMore: true`) is
++    // released for the next pass; `hasMore: false` means the envelope is
++    // complete, so every expected effect id must appear in the results.
+     if (byEffectId.has(item.pending.effect_id) || !outcome.hasMore) continue;
+     if (await storage.releaseUnprocessedEffect({
+       ...resultFence,
+@@ -190,7 +200,13 @@ export async function dispatchFastAppendGroup(
+     if (deferredEffectIds.has(item.pending.effect_id)) continue;
+     const result = lookupResult(byEffectId.get(item.pending.effect_id));
+     if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
+-      await requeueFastAppendItems(storage, resultFence, [item], report);
++      // A `hasMore: false` response missing an expected effect id is a
++      // malformed or partial provider envelope, never proof the row was not
++      // applied. Requeuing would redrive the append without receipt or
++      // postcondition evidence; route the item through delivery-uncertain
++      // recovery so the pass probes receipts and settles from durable
++      // remote evidence instead.
++      recoveryItems.push(item);
+       continue;
+     }
+     if (isPresent(item.invalidPayloadError)) {
+@@ -237,6 +253,7 @@ export async function dispatchFastAppendGroup(
+         recoveryFence,
+         recoveryItems,
+         report,
++        renewEffectLeases,
+       );
+     }
+   }
+diff --git a/packages/ikisaki/src/worker/dispatcher.ts b/packages/ikisaki/src/worker/dispatcher.ts
+index 70cbde712d09adb00ebcffbc7a2f19b9ab70e3bc..8e0ce89198e9d12a1c488eaa6199f8aaf42ed990 100644
+--- a/packages/ikisaki/src/worker/dispatcher.ts
++++ b/packages/ikisaki/src/worker/dispatcher.ts
+@@ -17,11 +17,38 @@ import type { Presence } from "../state.js";
+ import type { ClaimedEffect } from "./contracts.js";
+ import type { ProviderTiming } from "./timing.js";
+ 
++/**
++ * Renews the effect leases of one claimed batch.
++ *
++ * Returns true only when every effect in the batch is still claimed and its
++ * lease was extended. A false result means at least one effect could not be
++ * renewed (expired or taken over); the caller must abort before any remote
++ * request and requeue/recover the batch through the durable outbox.
++ */
++export type EffectLeaseRenewal = (items: readonly ClaimedEffect[]) => Promise<boolean>;
++
+ /** One route-bound batch of pending effects handed to the dispatcher. */
+ export interface DispatchRequest {
+   /** Opaque route identity produced by `Dispatcher.routeKeyFor`. */
+   readonly routeKey: string;
+   readonly effects: readonly PendingEffect[];
++  /**
++   * Optional lease-renewal hook the HOST dispatcher must invoke immediately
++   * before the provider remote call, after every internal serialization lane
++   * and limiter wait the host applies.
++   *
++   * The worker supplies the hook so the effect lease is renewed as late as
++   * possible: queue time on the physical-sheet mutation lane plus shared
++   * limiter waits can otherwise outlive a lease refreshed before dispatch
++   * starts. The hook is already bound to the request's claimed effects (the
++   * host only sees `PendingEffect` rows and cannot renew claims itself). When
++   * the hook is present, the host dispatcher must never issue a remote
++   * request without first invoking it, and must abort the whole batch with a
++   * classified delivery-uncertain/requeue-safe error when it resolves false
++   * or throws. Dispatchers that do not perform remote work (fakes, tests)
++   * must simply ignore the hook.
++   */
++  readonly beforeRemoteDispatch?: () => Promise<boolean>;
+ }
+ 
+ /** Receipt-backed per-effect fast-append outcome. */
+@@ -202,6 +229,25 @@ export interface FastAppendDispatcher {
+   isFastAppendCandidate(effect: PendingEffect): boolean;
+   /** Dispatches append-only rows through the idempotent bulk operation. */
+   fastAppend(request: DispatchRequest): Promise<FastAppendOutcome>;
++  /**
++   * Declares the dispatch-priority class of one pending effect.
++   *
++   * The worker runs READY effects in ascending priority order across both
++   * dispatch buckets (fast-append and regular), so a host can keep its
++   * critical projection ahead of unrelated work without touching claim
++   * windows, leases, fencing, predecessor ordering, the limiter, or bounded
++   * fairness. The method is optional: an absent declaration means every
++   * effect has priority 0 and the worker keeps the legacy order (all fast
++   * append groups before all regular groups).
++   *
++   * The priority is a payload-derived decision owned by the dispatcher; the
++   * worker never interprets effect payloads. Lower numbers run earlier;
++   * ties keep the ready-selection order (the sort is stable). No-throw
++   * contract: the predicate must never throw and must always return a
++   * number as a value; the worker guards the call defensively and degrades
++   * a throwing declaration to priority 0 for the affected group.
++   */
++  dispatchPriorityFor?(effect: PendingEffect): number;
+ }
+ 
+ /** Route, validation, apply, and postcondition-probe role of the dispatcher. */
+@@ -262,10 +308,24 @@ export interface AuthorityDispatcher {
+  * The dispatcher boundary implemented by the host application.
+  *
+  * The dispatcher owns every payload-derived decision: route keys, fast-append
+- * candidacy, payload validation, the User_Input candidate gate, remote
+- * evidence validation against effect targets, and transport-outcome
+- * classification. The worker owns selection, claiming, grouping, lease
+- * refresh, transitions, and recovery.
++ * candidacy, dispatch priority, payload validation, the User_Input candidate
++ * gate, remote evidence validation against effect targets, and transport-outcome
++ * classification. The worker owns selection, claiming, grouping, fence
++ * preparation, transitions, and recovery.
++ *
++ * The worker supplies `DispatchRequest.beforeRemoteDispatch` so the host can
++ * renew effect leases after its own serialization/limiter waits but before
++ * the provider remote call. A host dispatcher that performs remote work MUST
++ * invoke that hook (when present) immediately before the remote call and
++ * abort with a classified delivery-uncertain error when it fails; remote-less
++ * dispatchers ignore it.
++ *
++ * Ready effects run in ascending `dispatchPriorityFor` order across both
++ * dispatch buckets (see `FastAppendDispatcher.dispatchPriorityFor`); a
++ * dispatcher that omits the declaration keeps the legacy order. The ordering
++ * never forces unready predecessors: claiming still enforces the durable
++ * per-target predecessor guard, and every claimed group is dispatched in the
++ * same pass, so non-priority work cannot starve.
+  */
+ export type Dispatcher =
+   FastAppendDispatcher & EffectDispatcher & CandidateGateDispatcher & AuthorityDispatcher;
+diff --git a/packages/ikisaki/src/worker/index.ts b/packages/ikisaki/src/worker/index.ts
+index 0915f36693aa71c0b823def10395e393a10f89d7..c7efee0d1c8779783de341ba5df77936a6bc4851 100644
+--- a/packages/ikisaki/src/worker/index.ts
++++ b/packages/ikisaki/src/worker/index.ts
+@@ -51,6 +51,7 @@ export type {
+   CandidateGateResult,
+   Dispatcher,
+   DispatchRequest,
++  EffectLeaseRenewal,
+   FastAppendEffectResult,
+   FastAppendOutcome,
+   Postcondition,
+diff --git a/packages/ikisaki/src/worker/routing.ts b/packages/ikisaki/src/worker/routing.ts
+index fa2614b9a163e8b1905f5c8ae894a9102b7f5b39..ad1361b3973c3fe5d2e9d09ca472bd276d379eec 100644
+--- a/packages/ikisaki/src/worker/routing.ts
++++ b/packages/ikisaki/src/worker/routing.ts
+@@ -20,6 +20,71 @@ export interface EffectRouteGroup {
+   readonly items: readonly ClaimedEffect[];
+ }
+ 
++/**
++ * Declared dispatch priority of one route group.
++ *
++ * The group takes the MINIMUM priority over its items, so a mixed-content
++ * route (possible only with a host route key that does not encode the
++ * projection) is never delayed by a lower-priority sibling. An absent or
++ * throwing declaration degrades to priority 0 (the legacy neutral order).
++ */
++export function dispatchPriorityForGroup(
++  group: EffectRouteGroup,
++  dispatcher: Dispatcher,
++): number {
++  let priority: number | undefined;
++  for (const item of group.items) {
++    try {
++      const declared = dispatcher.dispatchPriorityFor?.(item.pending) ?? 0;
++      if (priority === undefined || declared < priority) priority = declared;
++    } catch {
++      // The predicate is declared never to throw; a violating dispatcher
++      // keeps the neutral priority for the affected group instead of
++      // aborting the pass.
++    }
++  }
++  return priority ?? 0;
++}
++
++/** One dispatch unit: a route group plus the bucket that dispatches it. */
++export interface EffectDispatchUnit {
++  readonly bucket: "fast-append" | "regular";
++  readonly group: EffectRouteGroup;
++}
++
++/**
++ * Orders all dispatch units by ascending declared priority.
++ *
++ * The sort is stable: units with equal priority keep their ready-selection
++ * order. Without any declared priority every group is 0, so the legacy
++ * order (all fast-append groups before all regular groups) is preserved
++ * exactly. Only the dispatch SEQUENCE changes; claim windows, leases,
++ * fencing, per-target predecessor ordering, the limiter, and the bounded
++ * selection window are untouched.
++ */
++export function orderDispatchUnits(
++  fastAppendGroups: readonly EffectRouteGroup[],
++  regularGroups: readonly EffectRouteGroup[],
++  dispatcher: Dispatcher,
++): readonly EffectDispatchUnit[] {
++  const units: EffectDispatchUnit[] = [
++    ...fastAppendGroups.map((group) => ({ bucket: "fast-append" as const, group })),
++    ...regularGroups.map((group) => ({ bucket: "regular" as const, group })),
++  ];
++  units.sort((left, right) => {
++    const leftPriority = dispatchPriorityForGroup(left.group, dispatcher);
++    const rightPriority = dispatchPriorityForGroup(right.group, dispatcher);
++    if (leftPriority !== rightPriority) return leftPriority - rightPriority;
++    if (left.bucket !== right.bucket) {
++      // Legacy tie-break: the append path keeps its place ahead of the
++      // regular path when the host declares no distinguishing priority.
++      return left.bucket === "fast-append" ? -1 : 1;
++    }
++    return 0;
++  });
++  return units;
++}
++
+ /** Groups claimed effects by the dispatcher-declared route key. */
+ export function groupEffectsByRoute(
+   items: readonly ClaimedEffect[],
+diff --git a/packages/ikisaki/src/worker/supervisor.ts b/packages/ikisaki/src/worker/supervisor.ts
+index cc1c7a57f519bfafac831add45e0c940e5a0f25e..2f6212064b8055cc5d829885e9f0d03630b4d755 100644
+--- a/packages/ikisaki/src/worker/supervisor.ts
++++ b/packages/ikisaki/src/worker/supervisor.ts
+@@ -42,6 +42,29 @@ export interface EffectWorkerSupervisorReconciliationOptions<
+ > {
+   /** Minimum delay between scan attempts. The first scan runs immediately. */
+   readonly intervalMs?: number;
++  /**
++   * Delay before the FIRST scheduled scan attempt (default 0 = immediate).
++   *
++   * A host that starts with a large initial backlog (for example the real
++   * Google Sheets provider after a cold start) can delay the first scan so
++   * it does not compete with the initial drain on the shared request
++   * limiter. The delay applies once: the scan schedule then keeps the
++   * normal `intervalMs` cadence.
++   */
++  readonly initialReconciliationDelayMs?: number;
++  /**
++   * Deferral gate applied ONLY while the first scheduled scan is still
++   * pending (default: no gate, the first scan runs as soon as the schedule
++   * is due).
++   *
++   * When the gate resolves false the scan is deferred WITHOUT advancing the
++   * interval clock, so the next loop pass re-checks the gate as soon as the
++   * host reports readiness. After the first scan completes, the gate is no
++   * longer consulted: subsequent scans keep the normal lazy-repair behavior
++   * even while the outbox is busy. A gate that throws surfaces through the
++   * normal reconciliation error path and keeps the first scan pending.
++   */
++  readonly isFirstScanReady?: () => Promise<boolean>;
+   /** Confirms that no pending or processing outbox work remains before scanning. */
+   readonly isOutboxIdle?: () => Promise<boolean>;
+   /** Runs one scan and enqueues corrections into the durable outbox. */
+@@ -120,6 +143,9 @@ export class EffectWorkerSupervisor<
+   private inFlightReconciliation: Promise<TReconciliationReport> | undefined;
+   private stopPromise: Promise<void> | undefined;
+   private nextReconciliationAt = 0;
++  private readonly initialReconciliationDelayMs: number;
++  private readonly isFirstScanReady: (() => Promise<boolean>) | undefined;
++  private firstScanPending = false;
+   private wakeWaiter: (() => void) | undefined;
+ 
+   public constructor(options: EffectWorkerSupervisorLoopOptions<TReconciliationReport>) {
+@@ -149,6 +175,12 @@ export class EffectWorkerSupervisor<
+       options.reconciliation?.intervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS,
+       "sync effect supervisor reconciliation interval",
+     );
++    this.initialReconciliationDelayMs = requireNonNegativeSafeInteger(
++      options.reconciliation?.initialReconciliationDelayMs ?? 0,
++      "sync effect supervisor initial reconciliation delay",
++    );
++    this.isFirstScanReady = options.reconciliation?.isFirstScanReady;
++    this.firstScanPending = options.reconciliation !== undefined;
+     this.onReport = options.onReport;
+     this.onError = options.onError;
+   }
+@@ -157,7 +189,10 @@ export class EffectWorkerSupervisor<
+   public start(): void {
+     if (this.running || !this.acceptingPasses) return;
+     this.running = true;
+-    this.nextReconciliationAt = this.now();
++    // The first scheduled scan is due after the initial delay (default 0:
++    // immediately after the first pass, exactly like the legacy schedule).
++    this.nextReconciliationAt = this.now() + this.initialReconciliationDelayMs;
++    this.firstScanPending = this.reconciliation !== undefined;
+     this.loopPromise = this.runLoop();
+   }
+ 
+@@ -260,14 +295,31 @@ export class EffectWorkerSupervisor<
+     const reconciliation = this.reconciliation;
+     if (reconciliation === undefined || this.now() < this.nextReconciliationAt) return undefined;
+ 
+-    // Reconciliation is a lazy repair net: it runs on its own schedule even
+-    // while the worker pass is busy, because the corruption it repairs can
+-    // itself be what keeps the outbox busy (a terminal failed head wedges
+-    // every later effect on its stream). The scanner owns its own in-flight
+-    // deferral and its fenced writer lease, so a busy worker cannot race it.
+-    // Hosts that want an extra outbox-drain gate can supply isOutboxIdle.
+-    this.nextReconciliationAt = this.now() + this.reconciliationIntervalMs;
+     try {
++      // The FIRST scan has its own readiness gate: while it is still pending,
++      // a host can defer the scan without advancing the interval clock, so the
++      // next loop pass re-checks the gate as soon as readiness arrives. This is
++      // how a host keeps the first scan from competing with the initial drain
++      // without changing the post-first-scan behavior at all.
++      if (this.firstScanPending) {
++        if (this.isFirstScanReady !== undefined && !(await this.isFirstScanReady())) {
++          // Deferral: keep the schedule due. The gate is re-checked on the
++          // next loop pass, and the scan still runs at most once per pass.
++          return undefined;
++        }
++        // The gate allowed the first scan (or no gate is declared): from here
++        // on, scans follow the plain interval schedule even while the outbox
++        // is busy, exactly like the legacy supervisor.
++        this.firstScanPending = false;
++      }
++
++      // Reconciliation is a lazy repair net: it runs on its own schedule even
++      // while the worker pass is busy, because the corruption it repairs can
++      // itself be what keeps the outbox busy (a terminal failed head wedges
++      // every later effect on its stream). The scanner owns its own in-flight
++      // deferral and its fenced writer lease, so a busy worker cannot race it.
++      // Hosts that want an extra outbox-drain gate can supply isOutboxIdle.
++      this.nextReconciliationAt = this.now() + this.reconciliationIntervalMs;
+       if (reconciliation.isOutboxIdle !== undefined && !(await reconciliation.isOutboxIdle())) {
+         return undefined;
+       }
+@@ -494,6 +546,13 @@ function requirePositiveSafeInteger(value: number, name: string): number {
+   return value;
+ }
+ 
++function requireNonNegativeSafeInteger(value: number, name: string): number {
++  if (!Number.isSafeInteger(value) || value < 0) {
++    throw new RangeError(name + " must be a non-negative safe integer");
++  }
++  return value;
++}
++
+ function defaultWait(durationMs: number): Promise<void> {
+   return new Promise((resolve) => setTimeout(resolve, durationMs));
+ }
+diff --git a/packages/ikisaki/src/worker/transitions.ts b/packages/ikisaki/src/worker/transitions.ts
+index 67028ae94145e9b9b4bc230024e52b9e04b9144b..1a0c34841e65cc438956c698ac86b0853bed073e 100644
+--- a/packages/ikisaki/src/worker/transitions.ts
++++ b/packages/ikisaki/src/worker/transitions.ts
+@@ -5,6 +5,7 @@ import type { ClaimedEffect } from "./contracts.js";
+ import type { PendingEffect } from "../contracts.js";
+ import type {
+   ApplyEffectResult,
++  EffectLeaseRenewal,
+   Postcondition,
+   PostconditionResult,
+   RepairReplanRequest,
+@@ -143,7 +144,10 @@ const DURABLE_PROBE_MAX_UNCERTAIN_MS = 30_000;
+  * Recovers response-loss effects by reading their remote postconditions.
+  *
+  * The dispatcher classifies each read-back result; every effect is settled
+- * from durable evidence only, never from the lost response.
++ * from durable evidence only, never from the lost response. When supplied,
++ * `renewEffectLeases` is attached to the probe request so the host renews
++ * the effect leases inside its acquired-lane `beforeRemoteDispatch` hook
++ * immediately before the probe's remote read.
+  */
+ export async function recoverUnknownResults(
+   options: EffectWorkerBaseOptions,
+@@ -151,6 +155,7 @@ export async function recoverUnknownResults(
+   fence: FencingContext,
+   items: readonly ClaimedEffect[],
+   report: MutableReport,
++  renewEffectLeases?: EffectLeaseRenewal,
+ ): Promise<void> {
+   const liveFence = (): FencingContext => ({
+     ...fence,
+@@ -190,9 +195,13 @@ export async function recoverUnknownResults(
+   for (const group of groups) {
+     let results: readonly PostconditionResult[];
+     try {
++      const renewGroupLeases = renewEffectLeases;
+       const outcome = await options.dispatcher.readPostconditions({
+         routeKey: group.routeKey,
+         effects: group.items.map((item) => item.pending),
++        ...(renewGroupLeases === undefined ? {} : {
++          beforeRemoteDispatch: () => renewGroupLeases(group.items),
++        }),
+       });
+       results = outcome.results;
+     } catch (error: unknown) {
+diff --git a/packages/ikisaki/src/worker/worker.ts b/packages/ikisaki/src/worker/worker.ts
+index e5fc0859985dc36d8d73126746110d15bcbe5f44..a77b78aab93f437afce68ade4671e1c04a61e335 100644
+--- a/packages/ikisaki/src/worker/worker.ts
++++ b/packages/ikisaki/src/worker/worker.ts
+@@ -93,6 +93,7 @@ import {
+   fenceFromLease,
+   groupEffectsByRoute,
+   isFastAppendPendingEffect,
++  orderDispatchUnits,
+   type EffectRouteGroup,
+ } from "./routing.js";
+ import {
+@@ -173,7 +174,17 @@ async function runEffectWorker(
+     // reuse a pass-start timestamp after the writer lease has expired.
+     now: leaseNow(),
+   });
+-  const refreshDispatchLeases = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
++  /**
++   * Refreshes the writer fence and dispatch authority BEFORE the mutation
++   * lane is entered.
++   *
++   * Effect leases are deliberately NOT renewed here: queue time on the
++   * physical-sheet mutation lane plus shared limiter waits can outlive a
++   * lease refreshed this early. Renewal happens inside
++   * `renewDispatchEffectLeases`, which the host runs from its
++   * `beforeRemoteDispatch` hook immediately before the remote call.
++   */
++  const prepareDispatchFences = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
+     const now = leaseNow();
+     const writerRefresh = await storage.claimWriterLease({
+       role,
+@@ -204,6 +215,20 @@ async function runEffectWorker(
+         return false;
+       }
+     }
++    return true;
++  };
++  /**
++   * Renews only the effect leases of one claimed batch.
++   *
++   * Runs inside the host's acquired-lane `beforeRemoteDispatch` hook so the
++   * lease covers lane queue time, limiter waits, and the remote call itself.
++   * On any failed renewal the expired/overridden claim is recovered through
++   * the durable outbox (expired rows become delivery_uncertain pending a
++   * probe; stale rows are requeued) and this returns false; the caller must
++   * abort before any remote request, never sending a write with an
++   * expired or unknown lease.
++   */
++  const renewDispatchEffectLeases = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
+     const renewed: ClaimedEffect[] = [];
+     const notRenewed: ClaimedEffect[] = [];
+     for (const item of items) {
+@@ -346,13 +371,14 @@ async function runEffectWorker(
+     operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
+   });
+ 
+-  if (await refreshDispatchLeases(recoveryCandidates)) {
++  if (await prepareDispatchFences(recoveryCandidates)) {
+     await recoverUnknownResults(
+       options,
+       storage,
+       currentFence(),
+       recoveryCandidates,
+       report,
++      renewDispatchEffectLeases,
+     );
+   }
+ 
+@@ -456,17 +482,14 @@ async function runEffectWorker(
+       ?? options.batchController?.limitFor(group.routeKey)
+       ?? EFFECT_BATCH_LIMIT,
+   );
+-  for (const group of fastAppendGroups) {
+-    if (!(await refreshDispatchLeases(group.items))) continue;
+-    await dispatchFastAppendGroup(
+-      options,
+-      storage,
+-      currentFence(),
+-      group,
+-      report,
+-      () => refreshDispatchLeases(group.items),
+-    );
+-  }
++  // Ready effects run in ascending dispatcher-declared priority across BOTH
++  // dispatch buckets, so the host can keep its critical projection (System_State
++  // fast appends, then System_State regular followers, then Sync_Conflicts fast
++  // appends, then everything else) ahead of unrelated work. Only the dispatch
++  // SEQUENCE changes: claim windows, leases, fencing, per-target predecessor
++  // ordering, the limiter, and the bounded selection are untouched, every
++  // claimed group is still dispatched in this same pass, and unready
++  // predecessors are never forced (claiming enforces the durable guard).
+ 
+   // Chunk each physical route to the dispatcher's bounded effect batch so one
+   // apply call returns a complete result set. An oversized configured worker
+@@ -493,8 +516,27 @@ async function runEffectWorker(
+     regularRouteGroups,
+     (group) => options.batchController?.limitFor(group.routeKey) ?? EFFECT_BATCH_LIMIT,
+   );
+-  for (const group of regularGroups) {
+-    if (!(await refreshDispatchLeases(group.items))) continue;
++  const dispatchUnits = orderDispatchUnits(
++    fastAppendGroups,
++    regularGroups,
++    options.dispatcher,
++  );
++  for (const unit of dispatchUnits) {
++    const group = unit.group;
++    if (unit.bucket === "fast-append") {
++      if (!(await prepareDispatchFences(group.items))) continue;
++      await dispatchFastAppendGroup(
++        options,
++        storage,
++        currentFence(),
++        group,
++        report,
++        () => prepareDispatchFences(group.items),
++        renewDispatchEffectLeases,
++      );
++      continue;
++    }
++    if (!(await prepareDispatchFences(group.items))) continue;
+     const deferredEffectIds = new Set<string>();
+     let outcome: Awaited<ReturnType<Dispatcher["apply"]>>;
+     const regularOperationCounts = countsForItems(group.items);
+@@ -507,6 +549,7 @@ async function runEffectWorker(
+       outcome = await options.dispatcher.apply({
+         routeKey: requestRouteKey,
+         effects: group.items.map((item) => item.pending),
++        beforeRemoteDispatch: () => renewDispatchEffectLeases(group.items),
+       });
+     } catch (error: unknown) {
+       const uncertain = !isDispatchTransportError(error) ||
+@@ -538,7 +581,8 @@ async function runEffectWorker(
+         group.items,
+         report,
+         error,
+-        () => refreshDispatchLeases(group.items),
++        () => prepareDispatchFences(group.items),
++        renewDispatchEffectLeases,
+       );
+       continue;
+     }
+@@ -598,13 +642,14 @@ async function runEffectWorker(
+       }
+       await completeProviderResult(options, storage, currentFence(), item, result.value, report);
+     }
+-    if (await refreshDispatchLeases(recoveryItems)) {
++    if (await prepareDispatchFences(recoveryItems)) {
+       await recoverUnknownResults(
+         options,
+         storage,
+         currentFence(),
+         recoveryItems,
+         report,
++        renewDispatchEffectLeases,
+       );
+     }
+     emitWorkerTiming(options, {
+@@ -615,7 +660,6 @@ async function runEffectWorker(
+       operationCounts: regularOperationCounts,
+     });
+   }
+-
+   emitWorkerTiming(options, {
+     scope: TIMING_SCOPES.WORKER,
+     phase: "worker_total",
+diff --git a/packages/ikisaki/test/support/node-sqlite.d.ts b/packages/ikisaki/test/support/node-sqlite.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..b62d73cdd1fb94918579dc35d61f4ac9a7b494fc
+--- /dev/null
++++ b/packages/ikisaki/test/support/node-sqlite.d.ts
+@@ -0,0 +1,39 @@
++/**
++ * Minimal ambient typing for the `node:sqlite` built-in used by the kernel
++ * test adapter.
++ *
++ * The historical recovery environment resolves `@types/node@20.19`, which
++ * predates `node:sqlite` (Node 22.5+) and ships no `sqlite.d.ts`; without
++ * this declaration `tsc -p tsconfig.test.json` fails on
++ * `nodeSqliteAdapter.ts`, which imports the built-in. When the package
++ * resolves a newer `@types/node` that already types `node:sqlite`, the two
++ * ambient module declarations merge and `skipLibCheck` suppresses any
++ * overlap — the shim is otherwise inert. It covers only the surface the
++ * test adapter touches. This file should be deleted when the package's
++ * minimum `@types/node` ships real `node:sqlite` types.
++ */
++
++declare module "node:sqlite" {
++  /** Value accepted as a bound SQL parameter. */
++  type SQLInputValue = string | number | bigint | boolean | Uint8Array | null | undefined;
++
++  /** Prepared statement; results are `unknown` and narrowed by callers. */
++  interface StatementSync {
++    all(...anonymousParameters: unknown[]): unknown[];
++    get(...anonymousParameters: unknown[]): unknown;
++    run(...anonymousParameters: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
++  }
++
++  /** Options accepted by the `DatabaseSync` constructor. */
++  interface DatabaseSyncOptions {
++    enableForeignKeyConstraints?: boolean;
++  }
++
++  /** Synchronous SQLite connection over the Node built-in. */
++  class DatabaseSync {
++    constructor(location: string, options?: DatabaseSyncOptions);
++    prepare(sql: string): StatementSync;
++    exec(sql: string): void;
++    close(): void;
++  }
++}
+diff --git a/scripts/ci/local-soak/logLines.mjs b/scripts/ci/local-soak/logLines.mjs
+index af14a902db902ca0170c2ebbbdedca9405bc5283..683cd4705a961496af35b607b202054a271b84e8 100644
+--- a/scripts/ci/local-soak/logLines.mjs
++++ b/scripts/ci/local-soak/logLines.mjs
+@@ -114,10 +114,6 @@ export const LOGGED_STABLE_CODES = Object.freeze([
+   "sync_provider_unavailable",
+   "sync_service_startup_failed",
+   "sync_service_closed",
+-  // Canonical/observation/resolution evaluation codes.
+-  "canonical_state_required",
+-  "canonical_field_required",
+-  "base_field_revision_required",
+   // Storage/schema/effect codes.
+   "invalid_writer_lease_options",
+   "invalid_sync_registration",
+@@ -148,6 +144,12 @@ export const LOGGED_STABLE_CODES = Object.freeze([
+   "schema_column_missing",
+   "schema_version_invalid",
+   "invalid_sql_script",
++  // Canonical/observation/resolution evaluation codes.
++  "canonical_state_required",
++  "canonical_field_required",
++  "base_field_revision_required",
++  // Domain event-identity code.
++  "duplicate_changed_field",
+   // Mapped ORM facade codes.
+   "invalid_entity_mapping",
+   "duplicate_entity_mapping",
+@@ -159,44 +161,22 @@ export const LOGGED_STABLE_CODES = Object.freeze([
+   "canonical_commit_rejected",
+   "projection_outbox_blocked",
+   "observation_entity_mutation_failed",
+-  // SQLite driver family.
+-  "SQLITE_ERROR",
+-  "SQLITE_INTERNAL",
+-  "SQLITE_PERM",
+-  "SQLITE_ABORT",
+-  "SQLITE_BUSY",
+-  "SQLITE_LOCKED",
+-  "SQLITE_NOMEM",
+-  "SQLITE_READONLY",
+-  "SQLITE_INTERRUPT",
+-  "SQLITE_IOERR",
+-  "SQLITE_CORRUPT",
+-  "SQLITE_NOTFOUND",
+-  "SQLITE_FULL",
+-  "SQLITE_CANTOPEN",
+-  "SQLITE_PROTOCOL",
+-  "SQLITE_EMPTY",
+-  "SQLITE_SCHEMA",
+-  "SQLITE_TOOBIG",
+-  "SQLITE_CONSTRAINT",
+-  "SQLITE_MISMATCH",
+-  "SQLITE_MISUSE",
+-  "SQLITE_NOLFS",
+-  "SQLITE_AUTH",
+-  "SQLITE_FORMAT",
+-  "SQLITE_RANGE",
+-  "SQLITE_NOTADB",
+-  "SQLITE_NOTICE",
+-  "SQLITE_WARNING",
+-  "SQLITE_ROW",
+-  "SQLITE_DONE",
+-  "SQLITE_CONSTRAINT_UNIQUE",
+-  "SQLITE_CONSTRAINT_PRIMARYKEY",
+-  "SQLITE_CONSTRAINT_NOTNULL",
+-  "SQLITE_CONSTRAINT_CHECK",
+-  "SQLITE_CONSTRAINT_FOREIGNKEY",
+-  "SQLITE_CONSTRAINT_TRIGGER",
+-  "SQLITE_CONSTRAINT_DATATYPE",
++  // Stable-encoding codes (src/shared/encoding/constants.ts, re-exported
++  // from @hikoutei/kohkai). Raised by StableEncodingError during
++  // flush/evidence paths.
++  "unsupported_value_type",
++  "non_finite_number",
++  "invalid_date_format",
++  "invalid_date_byte_length",
++  "duplicate_object_key",
++  "unpaired_high_surrogate",
++  "unpaired_low_surrogate",
++  "cyclic_value",
++  // SQLite driver family (node:sqlite). Every SQLite-level failure in the
++  // engine's driver throws with the single stable code ERR_SQLITE_ERROR;
++  // the numeric SQLite result rides on errcode/errstr detail properties,
++  // which are never logged.
++  "ERR_SQLITE_ERROR",
+ ]);
+ 
+ /**
+@@ -213,7 +193,13 @@ export const LOGGED_STABLE_CLASSES = Object.freeze([
+   "URIError",
+   "AggregateError",
+   "HikouteiError",
++  "TypedSheetsOrmError",
+   "SyncSheetsContractError",
++  "SyncServiceError",
++  "StorageError",
++  "EvaluationContractError",
++  "StableEncodingError",
++  "DuplicateChangedFieldError",
+   "GoogleSheetsApiTransportError",
+   "ValidationError",
+   "CursorError",
+diff --git a/src/adapter/sheets/providers/google-sheets-api/GoogleSheetsApiSyncProvider.ts b/src/adapter/sheets/providers/google-sheets-api/GoogleSheetsApiSyncProvider.ts
+index a18a036bde93d997981d2785fbafed2b5b4ce2c5..1e83eb128341e4e39ad78ec53039645ec050f388 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/GoogleSheetsApiSyncProvider.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/GoogleSheetsApiSyncProvider.ts
+@@ -2,7 +2,7 @@
+  * Full sync provider over the Google Sheets REST API.
+  *
+  * Implements every provider capability the sync runtime needs with ONE
+- * provider instance (one transport, one read limiter, one write limiter, one
++ * provider instance (one transport, one shared request-start limiter, one
+  * telemetry sink): the outbound effect worker (fast append, applyEffects,
+  * postcondition recovery), projection provisioning, values-only table reads,
+  * row-anchor assignment, and full metadata snapshots. The service-account
+@@ -20,8 +20,14 @@
+  *
+  * Request pacing is per transport call: every `getSpreadsheet` (preflight
+  * enumeration, preflight data, observation reads, post-reads, table reads,
+- * provisioning reads) and every `batchUpdate` acquires its class limiter and
+- * emits one redacted telemetry event.
++ * provisioning reads) and every `batchUpdate` acquires the ONE shared
++ * request-start limiter and emits one redacted telemetry event. Reads and
++ * writes serialize against each other, so a combined read+write burst can
++ * never outpace the interval. Admission is BOUNDED: a request whose slot
++ * lies more than one interval out is refused before any SDK call with the
++ * stable delivery-uncertain `google_sheets_api_request_start_refused`
++ * error, so an arbitrarily long limiter queue can never make a request
++ * wait past its effect lease — the durable worker requeues instead.
+  */
+ 
+ import type {
+@@ -112,7 +118,11 @@ export interface GoogleSheetsApiProviderOptions {
+    * lease.
+    */
+   readonly readTimeoutMs?: number;
+-  /** Minimum interval between request starts per class; defaults to 1,100 ms. */
++  /**
++   * Minimum interval between request starts; defaults to 2,500 ms. Also the
++   * admission bound: a request whose slot lies more than one interval out is
++   * refused before any SDK call (delivery-uncertain, requeued durably).
++   */
+   readonly rateLimitIntervalMs?: number;
+   /** Serialized batchUpdate byte budget; defaults to ~2 MB. */
+   readonly maxBatchBytes?: number;
+@@ -134,11 +144,12 @@ export interface GoogleSheetsApiSyncProviderOptions extends GoogleSheetsApiProvi
+  * Full sync provider over the Sheets REST API: outbound effects, provisioning,
+  * table reads, anchors, and snapshots behind the shared provider contracts.
+  *
+- * All reads share one read limiter; all writes share one write limiter; the
+- * worker-level append throttle stays enabled on top in service mode via the
+- * bootstrap's bulk worker options. Provisioning runs at startup before the
+- * worker, and observation anchors are the only metadata mutations outside
+- * effect batches.
++ * All reads and writes share ONE request-start limiter, so combined
++ * read+write starts are serialized (at most one transport call per
++ * interval); the worker-level append throttle stays enabled on top in
++ * service mode via the bootstrap's bulk worker options. Provisioning runs
++ * at startup before the worker, and observation anchors are the only
++ * metadata mutations outside effect batches.
+  *
+  * The class is a thin facade: every method body lives in an operation module
+  * under `operations/` and receives the immutable wiring from `this.deps`.
+@@ -156,8 +167,9 @@ export class GoogleSheetsApiSyncProvider
+   private readonly transportTimeoutMs: number;
+   private readonly readTimeoutMs: number;
+   private readonly maxBatchBytes: number;
+-  private readonly readLimiter: RequestStartLimiter;
+-  private readonly writeLimiter: RequestStartLimiter;
++  private readonly requestLimiter: RequestStartLimiter;
++  /** Bounded admission: at most one interval of wait per request start. */
++  private readonly maxRequestStartWaitMs: number;
+   private readonly now: () => number;
+   private readonly onRequest: ((event: GoogleSheetsApiRequestEvent) => void) | undefined;
+   private readonly deps: GoogleSheetsApiProviderDeps;
+@@ -211,16 +223,16 @@ export class GoogleSheetsApiSyncProvider
+     this.readTimeoutMs = readTimeoutMs;
+     this.maxBatchBytes = maxBatchBytes;
+     this.now = options.now ?? Date.now;
+-    this.readLimiter = new RequestStartLimiter({
+-      intervalMs,
+-      now: this.now,
+-      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+-    });
+-    this.writeLimiter = new RequestStartLimiter({
++    this.requestLimiter = new RequestStartLimiter({
+       intervalMs,
+       now: this.now,
+       ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+     });
++    // Admission bound equals the pacing interval: the immediate slot and the
++    // slot exactly one interval out are admitted, every deeper reservation is
++    // refused before any SDK call (delivery-uncertain, requeued by the
++    // durable worker) instead of waiting out an unbounded queue.
++    this.maxRequestStartWaitMs = intervalMs;
+     this.onRequest = options.onRequest;
+     this.deps = {
+       spreadsheetId: this.spreadsheetId,
+@@ -228,8 +240,8 @@ export class GoogleSheetsApiSyncProvider
+       transport: this.transport,
+       readTimeoutMs: this.readTimeoutMs,
+       maxBatchBytes: this.maxBatchBytes,
+-      readLimiter: this.readLimiter,
+-      writeLimiter: this.writeLimiter,
++      requestLimiter: this.requestLimiter,
++      maxRequestStartWaitMs: this.maxRequestStartWaitMs,
+       now: this.now,
+       onRequest: this.onRequest,
+     };
+diff --git a/src/adapter/sheets/providers/google-sheets-api/constants.ts b/src/adapter/sheets/providers/google-sheets-api/constants.ts
+index 86351a2f4492e4c4bd959a52bc98be446c0ea623..3076b87b466cd205bc74c7d1664c20afc78901b2 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/constants.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/constants.ts
+@@ -34,12 +34,31 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
+   /** Upper bound for read timeouts; reads must stay well under the lease. */
+   MAX_READ_TIMEOUT_MS: 60_000,
+   /**
+-   * Minimum interval between request starts of one class (reads or writes).
+-   * Google Sheets quota is enforced per 100-second windows; the provider
+-   * spaces request starts so a burst cannot exhaust the read or write budget
+-   * before the worker's own backoff reacts.
++   * Minimum interval between request starts of the WHOLE provider: reads and
++   * writes share ONE request-start limiter, so at most one Sheets API
++   * request can start per interval regardless of class. Google Sheets quota
++   * is enforced per 100-second windows; the 2,500 ms default serializes
++   * combined read+write starts to about 40 starts per 100 s, leaving
++   * headroom inside the default per-user/per-project 100-second quotas for
++   * the observation and provisioning reads that run beside the worker. The
++   * exact quota stays provider and environment dependent, so operators can
++   * override the interval through the internal sync env key
++   * (HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS) or the internal provider option;
++   * the safe default is intentionally conservative. The interval is part of
++   * the effect-lease headroom contract: a worst-case dispatch (two
++   * preflight/postcondition reads plus one write, each paced and timed out,
++   * with up to one full interval of first-slot wait) must finish inside the
++   * lease with the 30-second provider headroom, and the internal service
++   * validation rejects an override that would let pacing outlive the lease
++   * (the env override is bounded to the largest default-safe interval,
++   * ~10 s). Admission is BOUNDED to one interval per request start: a call
++   * whose slot lies more than one interval out is refused before any SDK
++   * call with the stable delivery-uncertain
++   * `google_sheets_api_request_start_refused` error (the durable worker
++   * requeues), so an arbitrarily long queue of concurrent lock-free polling
++   * reads can never make a write wait past its lease.
+    */
+-  REQUEST_START_INTERVAL_MS: 1_100,
++  REQUEST_START_INTERVAL_MS: 2_500,
+   /**
+    * The provider stops adding effects to one batchUpdate once the serialized
+    * body would exceed this budget and returns `hasMore` for the suffix. The
+diff --git a/src/adapter/sheets/providers/google-sheets-api/errors.ts b/src/adapter/sheets/providers/google-sheets-api/errors.ts
+index 260e722d67b817206eb1775573ba868a51d6482b..1e1064667d9a5f567026dcd86ba61ca747de9235 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/errors.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/errors.ts
+@@ -15,6 +15,11 @@ import {
+   SYNC_SHEETS_ERROR_CODES,
+   SyncSheetsContractError,
+ } from "../../../../application/sync/sheetsContract/errors.js";
++import { logHikouteiInternalEvent } from "../../../../shared/observability/internalLog.js";
++import {
++  HIKOUTEI_LOG_COMPONENTS,
++  HIKOUTEI_LOG_EVENTS,
++} from "../../../../shared/observability/logEvents.js";
+ 
+ /** Stable transport error categories emitted by the direct provider. */
+ export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {
+@@ -26,6 +31,14 @@ export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {
+   HTTP_ERROR: "google_sheets_api_http_error",
+   /** A 2xx response whose structure cannot prove what was applied. */
+   INVALID_RESPONSE: "google_sheets_api_invalid_response",
++  /**
++   * The shared request-start limiter refused the admission BEFORE any SDK
++   * call: the predicted wait exceeded the bounded queue horizon. No remote
++   * request was sent, and the limiter horizon was not advanced, so the
++   * durable worker requeues through the CAS/recovery path and a later pass
++   * can be admitted again.
++   */
++  REQUEST_START_REFUSED: "google_sheets_api_request_start_refused",
+ } as const;
+ 
+ export type GoogleSheetsApiTransportErrorCode =
+@@ -80,6 +93,16 @@ export function invalidProviderRequest(label: string, message: string): never {
+  * unverified evidence.
+  */
+ export function invalidProviderState(message: string): never {
++  // Boundary record for malformed 2xx payloads: only the stable code is
++  // logged, never the message (it can echo remote payload fragments).
++  logHikouteiInternalEvent({
++    event: HIKOUTEI_LOG_EVENTS.TRANSPORT_RESPONSE_INVALID,
++    level: "warn",
++    component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
++    code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
++    errorClass: "SyncSheetsContractError",
++    retryable: true,
++  });
+   throw new SyncSheetsContractError(
+     SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
+     `Google Sheets API provider: ${message}`,
+diff --git a/src/adapter/sheets/providers/google-sheets-api/index.ts b/src/adapter/sheets/providers/google-sheets-api/index.ts
+index 14db5a2a891e304c5bea4cc656019706388a1fb7..e65d82dc522fc866b2970488d0af81fc5a1eb55e 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/index.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/index.ts
+@@ -15,6 +15,7 @@ export type {
+ export {
+   GoogleSheetsApiHttpTransport,
+   classifyGoogleSheetsApiError,
++  isRetryableTransportStatus,
+ } from "./transport/googleSheetsApiTransport.js";
+ export type {
+   GoogleSheetsApiTransport,
+diff --git a/src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.ts b/src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.ts
+index 9555b5cd43371c7a421c0d8f299c594fa579c172..93e3ae95ae7003cd3a47b2849a36099ef8086d0b 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.ts
+@@ -72,9 +72,21 @@ export function dateSerialFromIso(iso: string): number {
+   return (Date.parse(iso) - Date.UTC(1899, 11, 30)) / 86_400_000;
+ }
+ 
+-/** Converts a date serial back to the canonical UTC ISO timestamp. */
++/**
++ * Converts a date serial back to the canonical UTC ISO timestamp.
++ *
++ * The epoch milliseconds are rounded to the nearest integer millisecond so
++ * floating-point noise in the serial (or in the serial-to-milliseconds
++ * product) cannot shift the rendered millisecond and break field-level
++ * compare-and-set hashes; canonical ISO timestamps are always integral
++ * milliseconds, so rounding recovers the exact value the serial was derived
++ * from. Invalid serials (NaN or non-finite) still fail exactly like the
++ * unrounded conversion: `new Date(...).toISOString()` throws a RangeError.
++ */
+ export function isoFromDateSerial(serial: number): string {
+-  return new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000).toISOString();
++  return new Date(
++    Math.round(Date.UTC(1899, 11, 30) + serial * 86_400_000),
++  ).toISOString();
+ }
+ 
+ /**
+diff --git a/src/adapter/sheets/providers/google-sheets-api/operations/shared.ts b/src/adapter/sheets/providers/google-sheets-api/operations/shared.ts
+index a94cc63335fb4c0368f1fb52369f885e6d8a1827..18afe99fb4ace04f71e49e626d2cf1050d1cc616 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/operations/shared.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/operations/shared.ts
+@@ -4,9 +4,10 @@
+  *
+  * The provider class hands one immutable `GoogleSheetsApiProviderDeps` object
+  * to every operation function so the class stays a thin facade. Pacing
+- * (read/write request-start limiters), redacted telemetry, route validation
+- * against the registered definition, and batchUpdate reply validation live
+- * here because every operation shares them.
++ * (ONE request-start limiter shared by reads and writes), redacted
++ * telemetry, route validation against the registered definition, and
++ * batchUpdate reply validation live here because every operation shares
++ * them.
+  */
+ 
+ import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
+@@ -14,12 +15,23 @@ import {
+   SYNC_SHEETS_ERROR_CODES,
+   SyncSheetsContractError,
+ } from "../../../../../application/sync/sheetsContract/errors.js";
+-import { classifyTransportOutcome } from "../../../../../application/sync/sheetsContract/transportOutcome.js";
+-import { presentValue, absentValue, type Presence } from "../../../../../shared/state/index.js";
++import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "../../../../../application/sync/sheetsContract/transportOutcome.js";
++import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
++import {
++  logHikouteiInternalEvent,
++} from "../../../../../shared/observability/internalLog.js";
++import {
++  HIKOUTEI_LOG_COMPONENTS,
++  HIKOUTEI_LOG_EVENTS,
++} from "../../../../../shared/observability/logEvents.js";
+ import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
+ import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
+ import { RequestStartLimiter } from "../transport/rateLimiter.js";
+-import { invalidProviderState } from "../errors.js";
++import {
++  GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
++  GoogleSheetsApiTransportError,
++  invalidProviderState,
++} from "../errors.js";
+ import { batchUpdateResponseShapeSchema } from "../model/rawResponseSchemas.js";
+ 
+ /** Immutable wiring every operation function receives from the provider. */
+@@ -29,18 +41,63 @@ export interface GoogleSheetsApiProviderDeps {
+   readonly transport: GoogleSheetsApiTransport;
+   readonly readTimeoutMs: number;
+   readonly maxBatchBytes: number;
+-  readonly readLimiter: RequestStartLimiter;
+-  readonly writeLimiter: RequestStartLimiter;
++  /** ONE limiter shared by reads and writes (combined starts are serialized). */
++  readonly requestLimiter: RequestStartLimiter;
++  /**
++   * Maximum admitted wait for ONE request start (the limiter's interval): a
++   * call whose predicted slot is further out is refused before transport.
++   */
++  readonly maxRequestStartWaitMs: number;
+   readonly now: () => number;
+   readonly onRequest: ((event: GoogleSheetsApiRequestEvent) => void) | undefined;
+ }
+ 
++/**
++ * Static, redacted refusal message. Never embeds effect ids, sheet names,
++ * spreadsheet ids, or limiter state: the durable worker only needs the
++ * stable code to requeue through the CAS/recovery path.
++ */
++const REQUEST_START_REFUSED_MESSAGE =
++  "Google Sheets API request start refused before transport: the shared pacing queue exceeds the bounded admission wait.";
++
++/**
++ * Acquires one bounded request-start slot, refusing (and logging one
++ * redacted event) when the predicted wait exceeds the configured bound.
++ * A refusal NEVER advances the limiter horizon and throws the stable
++ * delivery-uncertain transport error before any SDK call, so the durable
++ * worker requeues instead of firing an unpaced burst.
++ */
++async function admitRequestStart(
++  deps: GoogleSheetsApiProviderDeps,
++  operation: "getSpreadsheet" | "batchUpdate",
++): Promise<void> {
++  const admission = await deps.requestLimiter.waitForSlot(deps.maxRequestStartWaitMs);
++  if (admission.status !== "refused") return;
++  // Boundary record for a locally refused start: only the stable code is
++  // logged (retryable, like the other delivery-uncertain buckets), never a
++  // message, payload, id, or URL.
++  logHikouteiInternalEvent({
++    event: HIKOUTEI_LOG_EVENTS.TRANSPORT_REQUEST_FAILED,
++    level: "warn",
++    component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
++    code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
++    errorClass: "GoogleSheetsApiTransportError",
++    retryable: true,
++  });
++  throw new GoogleSheetsApiTransportError(
++    GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
++    REQUEST_START_REFUSED_MESSAGE,
++    absentValue(),
++    absentValue(),
++  );
++}
++
+ /** Paces ONE `getSpreadsheet` transport call and emits one read event. */
+ export async function runRead<T>(
+   deps: GoogleSheetsApiProviderDeps,
+   task: () => Promise<T>,
+ ): Promise<T> {
+-  await deps.readLimiter.waitForSlot();
++  await admitRequestStart(deps, "getSpreadsheet");
+   const startedAt = deps.now();
+   try {
+     const result = await task();
+@@ -58,7 +115,7 @@ export async function runWrite<T>(
+   deps: GoogleSheetsApiProviderDeps,
+   task: () => Promise<T>,
+ ): Promise<T> {
+-  await deps.writeLimiter.waitForSlot();
++  await admitRequestStart(deps, "batchUpdate");
+   const startedAt = deps.now();
+   try {
+     const result = await task();
+@@ -71,7 +128,14 @@ export async function runWrite<T>(
+   }
+ }
+ 
+-/** Emits one redacted telemetry event; diagnostics must never throw. */
++/**
++ * Emits one redacted telemetry event; diagnostics must never throw.
++ *
++ * The code is re-sanitized at the sink as defense in depth: every value
++ * reaching `onRequest` is either an allowlisted stable code or the fixed
++ * `unknown` category, so a future caller can never forward an arbitrary
++ * remote string.
++ */
+ export function emitRequest(
+   deps: GoogleSheetsApiProviderDeps,
+   operation: "getSpreadsheet" | "batchUpdate",
+@@ -89,7 +153,9 @@ export function emitRequest(
+       durationMs: Math.max(0, deps.now() - startedAt),
+       ok,
+       httpStatus,
+-      code,
++      code: code.kind === PRESENCE_KINDS.PRESENT
++        ? presentValue(sanitizeTransportRemoteCode(code.value))
++        : code,
+     });
+   } catch {
+     // Diagnostics must never change a remote result.
+diff --git a/src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.ts b/src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.ts
+index 894d9b21cc8a99579e2b0836ee83c2881c4458cd..29008d21505faf93e50e1e39daae0a18ce49fe0d 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.ts
+@@ -11,7 +11,15 @@
+ 
+ import { GoogleAuth } from "google-auth-library";
+ import { sheets, type sheets_v4 } from "@googleapis/sheets";
+-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
++import { presentValue, absentValue, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
++import {
++  describeErrorForInternalLog,
++  logHikouteiInternalEvent,
++} from "../../../../../shared/observability/internalLog.js";
++import {
++  HIKOUTEI_LOG_COMPONENTS,
++  HIKOUTEI_LOG_EVENTS,
++} from "../../../../../shared/observability/logEvents.js";
+ import { GOOGLE_SHEETS_API_SCOPES } from "../constants.js";
+ import {
+   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
+@@ -186,7 +194,9 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
+       );
+       return response.data;
+     } catch (error: unknown) {
+-      throw classifyGoogleSheetsApiError(error);
++      const mapped = classifyGoogleSheetsApiError(error);
++      logTransportFailure(mapped);
++      throw mapped;
+     }
+   }
+ 
+@@ -206,7 +216,9 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
+       );
+       return response.data;
+     } catch (error: unknown) {
+-      throw classifyGoogleSheetsApiError(error);
++      const mapped = classifyGoogleSheetsApiError(error);
++      logTransportFailure(mapped);
++      throw mapped;
+     }
+   }
+ }
+@@ -253,6 +265,48 @@ export function classifyGoogleSheetsApiError(error: unknown): GoogleSheetsApiTra
+   );
+ }
+ 
++/**
++ * Emits one redacted transport-failure event (fail-open, no message text).
++ *
++ * Timeout, network, 429, 408, and 5xx failures are classified retryable so
++ * log consumers can bucket transient Sheets quota/pacing pressure; proven
++ * pre-mutation 4xx status codes (400/401/403/404) are not. The HTTP status
++ * is carried as a numeric count only; the spreadsheet ID, URL, and response
++ * body never reach the log.
++ */
++function logTransportFailure(error: GoogleSheetsApiTransportError): void {
++  const status = error.status.kind === PRESENCE_KINDS.PRESENT
++    ? error.status.value
++    : undefined;
++  logHikouteiInternalEvent({
++    event: HIKOUTEI_LOG_EVENTS.TRANSPORT_REQUEST_FAILED,
++    level: "warn",
++    component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
++    code: error.code,
++    errorClass: "GoogleSheetsApiTransportError",
++    retryable: isRetryableTransportStatus(status),
++    ...(status === undefined ? {} : { counts: { status } }),
++  });
++}
++
++/**
++ * True when the status kind marks a transient remote condition.
++ *
++ * Mirrors the shared `isGoogleSheetsApiDeliveryUncertain` boundary: an
++ * absent status (timeout/network), HTTP 408 (request timeout — the proxy or
++ * API may still have committed the write), HTTP 429, and every 5xx are
++ * retryable/uncertain; the proven pre-mutation 4xx rejections (400, 401,
++ * 403, 404) are not. This only buckets telemetry — gaxios auto-retry stays
++ * disabled (`retry: false`), so a mutating call is never blindly retried
++ * here; the durable worker owns retries through the shared outcome
++ * classifier.
++ */
++export function isRetryableTransportStatus(status: number | undefined): boolean {
++  if (status === undefined) return true;
++  if (status === 408 || status === 429) return true;
++  return status >= 500;
++}
++
+ interface GaxiosErrorShape {
+   readonly code: string | undefined;
+   readonly status: number | undefined;
+diff --git a/src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.ts b/src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.ts
+index a2d8565144f71ca2521a1a72512470ce821d68e4..c9f5e601bcb9b893ec9ddc97ad4a3eae3d3d3db4 100644
+--- a/src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.ts
++++ b/src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.ts
+@@ -2,10 +2,15 @@
+  * Request-start interval limiter used by the direct Sheets provider.
+  *
+  * Google Sheets quota windows are per 100 seconds, so bursty request starts
+- * can exhaust a class's budget before the worker's own latency/backoff reacts.
+- * The provider keeps two independent limiters (reads, writes) that only wait
+- * the time remaining since that class's last request START; an idle class is
+- * never throttled and concurrent classes never serialize against each other.
++ * can exhaust the budget before the worker's own latency/backoff reacts. The
++ * provider keeps ONE shared limiter for reads AND writes, so combined
++ * read+write request starts are serialized: at most one transport call
++ * (getSpreadsheet or batchUpdate) can start per interval no matter how many
++ * operations race. An idle provider is never throttled; the limiter only
++ * waits the time remaining since the previous request START. Admission is
++ * BOUNDED: a caller whose slot lies more than `maxWaitMs` out is refused
++ * without reserving anything, so a burst of concurrent callers can never
++ * queue an arbitrarily long line of future reservations.
+  */
+ 
+ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
+@@ -20,6 +25,24 @@ export interface RequestStartLimiterOptions {
+   readonly sleep?: (ms: number) => Promise<void>;
+ }
+ 
++/**
++ * Result of one BOUNDED `waitForSlot(maxWaitMs)` admission attempt.
++ *
++ * An admitted caller owns the reserved slot and waits `waitedMs`; a refused
++ * caller reserved NOTHING (the future slot stays available to later callers)
++ * and the limiter's `lastStartAt` is left untouched, so a refusal can never
++ * push the pacing horizon forward.
++ */
++export type RequestStartAdmission =
++  | { readonly status: "admitted"; readonly waitedMs: number }
++  | {
++    readonly status: "refused";
++    /** The wait the refused slot WOULD have required. */
++    readonly waitedMs: number;
++    /** The slot that was NOT reserved; still open to later callers. */
++    readonly nextStartAt: number;
++  };
++
+ /**
+  * Waits only the remaining interval since the previous request start.
+  *
+@@ -59,16 +82,48 @@ export class RequestStartLimiter {
+    * start at the same instant. A caller that arrives after its reserved slot
+    * has already passed waits zero (its reservation collapses to now).
+    */
+-  public async waitForSlot(): Promise<number> {
++  public waitForSlot(): Promise<number>;
++  /**
++   * Bounded admission: waits for the next slot only when the predicted wait
++   * is at most `maxWaitMs`, otherwise returns a REFUSED result without
++   * reserving or advancing the future slot.
++   *
++   * The bound keeps an unbounded queue of concurrent callers from each
++   * reserving a distant future slot: with `maxWaitMs` equal to `intervalMs`
++   * the immediate caller and the one exactly one interval out are admitted
++   * and every later reservation is refused up front. A refusal never records
++   * a start, so the pacing horizon is unchanged and a later caller can still
++   * be admitted once time advances past the reserved slot.
++   */
++  public waitForSlot(maxWaitMs: number): Promise<RequestStartAdmission>;
++  public async waitForSlot(
++    maxWaitMs?: number,
++  ): Promise<number | RequestStartAdmission> {
++    if (
++      maxWaitMs !== undefined &&
++      (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0)
++    ) {
++      throw new RangeError("maximum request-start wait must be a non-negative safe integer");
++    }
+     const now = this.now();
+     const nextStart = this.lastStartAt === undefined
+       ? now
+       : Math.max(now, this.lastStartAt + this.intervalMs);
+-    this.lastStartAt = nextStart;
+     const waited = Math.max(0, nextStart - now);
++    if (maxWaitMs !== undefined && waited > maxWaitMs) {
++      // Refused WITHOUT reserving: lastStartAt stays untouched, so a later
++      // bounded caller can still be admitted once the queue drains. The
++      // decision and the horizon read happen in the same synchronous tick
++      // as an admitted caller's reservation, so concurrent callers can never
++      // both see the same stale horizon and double-reserve a slot.
++      return { status: "refused", waitedMs: waited, nextStartAt: nextStart };
++    }
++    this.lastStartAt = nextStart;
+     if (waited > 0) {
+       await this.sleep(waited);
+     }
+-    return waited;
++    return maxWaitMs === undefined
++      ? waited
++      : { status: "admitted", waitedMs: waited };
+   }
+ }
+diff --git a/src/api/Hikoutei.ts b/src/api/Hikoutei.ts
+index 86857242852ff49cfd3217a509cb33c7220fa3d6..f1ea73adf269acefe14561f23dd33a02f5434105 100644
+--- a/src/api/Hikoutei.ts
++++ b/src/api/Hikoutei.ts
+@@ -21,6 +21,17 @@ import {
+   resolveEntityDescriptors,
+   type EntityDescriptorResolutionFailure,
+ } from "./internalEntityRegistry.js";
++import {
++  describeErrorForInternalLog,
++  getHikouteiInternalLogger,
++  logHikouteiInternalEvent,
++} from "../shared/observability/internalLog.js";
++import {
++  HIKOUTEI_LOG_COMPONENTS,
++  HIKOUTEI_LOG_EVENTS,
++} from "../shared/observability/logEvents.js";
++
++import { AsyncLocalStorage } from "node:async_hooks";
+ 
+ /** Environment variable that supplies the default SQLite path. */
+ const HIKOUTEI_DB_PATH_ENV = "HIKOUTEI_DB_PATH";
+@@ -58,10 +69,71 @@ export interface Hikoutei {
+   close(): Promise<void>;
+ }
+ 
++/**
++ * Close lifecycle states of one runtime.
++ *
++ * - `open`: no close attempt has succeeded; close() may run.
++ * - `closing`: one attempt is in flight; concurrent callers share it.
++ * - `closed`: a close attempt succeeded; close() is terminal and idempotent.
++ *
++ * A FAILED attempt explicitly returns the state to `open` (in
++ * performClose(), before the original error is rethrown), so a later
++ * close() genuinely retries the full cleanup instead of no-oping on a
++ * half-closed runtime.
++ */
++type CloseState = "open" | "closing" | "closed";
++
++/**
++ * Marks the async context of ONE beforeClose hook invocation with the
++ * runtime whose hook is running, plus an explicitly ACTIVE flag.
++ *
++ * MEDIUM 5: a close() called from INSIDE the runtime's own active
++ * beforeClose hook must never await that runtime's pending close attempt
++ * (self-deadlock — the attempt cannot settle until the hook returns). The
++ * stored runtime identity scopes the reentrancy exemption to the OWNING
++ * runtime: `marker.runtime === this` resolves immediately, while a close()
++ * on ANY OTHER runtime (a cross-runtime call made from inside the hook) is
++ * NOT reentrant and must share that runtime's single in-flight attempt
++ * like any ordinary concurrent caller — the global marker this replaces
++ * would have skipped it. Because single-flight permits at most one attempt
++ * per runtime, the runtime identity IS the attempt identity.
++ *
++ * Luna: the exemption additionally requires `active`. Detached callbacks
++ * (a `setImmediate`, a detached promise continuation) scheduled by the
++ * hook retain this AsyncLocalStorage store AFTER `run()` returns, so the
++ * identity alone would keep exempting them forever; the flag is cleared in
++ * `finally` when the hook's execution window ends, turning those callbacks
++ * into ordinary concurrent callers whose close() awaits the same
++ * close/drain attempt.
++ */
++interface BeforeCloseHookMarker {
++  readonly runtime: HikouteiImpl;
++  /** False once the hook invocation's execution window has ended. */
++  active: boolean;
++}
++
++const beforeCloseHookContext = new AsyncLocalStorage<BeforeCloseHookMarker>();
++
+ class HikouteiImpl implements Hikoutei {
+   /** Root entity manager; call `fork()` before request or job-local work. */
+   readonly em: EntityManager;
+-  private closed = false;
++  private closeState: CloseState = "open";
++  /**
++   * The single in-flight close attempt. Concurrent close() calls OUTSIDE
++   * the active beforeClose hook await this same promise, so cleanup runs
++   * exactly once per attempt and every caller observes the same outcome
++   * (single-flight). The shared promise represents the FULL close +
++   * process-logger-drain operation and settles only AFTER the drain
++   * completes (final safe step), so a close() that lands while the first
++   * attempt is still draining — including one arriving after
++   * performClose() succeeded but before the drain finished — awaits the
++   * SAME attempt until the drain is done instead of resolving early on
++   * the terminal marker or starting a second cleanup. A close() called
++   * from WITHIN the hook resolves immediately instead (MEDIUM 5:
++   * awaiting the pending attempt from the hook would self-deadlock). A
++   * failed attempt leaves the runtime retryable after the slot release.
++   */
++  private closeAttempt: Promise<void> | undefined;
+ 
+   constructor(
+     private readonly provider: ScalarEntityPersistenceProvider,
+@@ -73,29 +145,196 @@ class HikouteiImpl implements Hikoutei {
+ 
+   /** Stops internal service work, then releases the local SQLite connection. */
+   async close(): Promise<void> {
+-    if (this.closed) return;
+-    this.closed = true;
++    // Concurrent callers share the single in-flight attempt. This check
++    // comes BEFORE the terminal fast path so a caller that arrives after
++    // performClose() succeeded but while the final logger drain is still
++    // running awaits the SAME attempt (which settles only after drain)
++    // instead of resolving early on the closed marker — the shared
++    // promise represents the full close + drain operation.
++    if (this.closeAttempt !== undefined) {
++      // MEDIUM 5: a close awaited from within the ACTIVE beforeClose hook
++      // of THIS runtime must not await the pending attempt — the attempt
++      // cannot settle until the hook returns, so awaiting it would
++      // self-deadlock. The call resolves immediately: the close is already
++      // in progress and owned by the outer caller, so the hook must not
++      // rely on the reentrant promise for completion. The exemption is
++      // scoped to the OWNING runtime (runtime identity in the context) AND
++      // to the hook's execution window (`active`): a close() on a
++      // DIFFERENT runtime made from inside the hook, or a close() from a
++      // DETACHED callback (setImmediate/promise continuation) that runs
++      // AFTER the hook's execution window ended, is an ordinary concurrent
++      // call and shares that runtime's in-flight attempt, observing its
++      // exact outcome (Luna: the flag is cleared in `finally`, so the
++      // detached callback cannot bypass the close/drain attempt). Callers
++      // OUTSIDE any hook (no context store) keep sharing the attempt too.
++      const marker = beforeCloseHookContext.getStore();
++      if (marker !== undefined && marker.runtime === this && marker.active) {
++        return;
++      }
++      return this.closeAttempt;
++    }
++    // A successful close is terminal and idempotent: later calls resolve
++    // immediately without touching the provider again.
++    if (this.closeState === "closed") return;
+ 
+-    let beforeCloseError: unknown;
++    let settleAttempt: (outcome: { ok: true } | { ok: false; error: unknown }) => void = () => {};
++    const attempt = new Promise<void>((resolve, reject) => {
++      settleAttempt = (outcome) => {
++        if (outcome.ok) resolve();
++        else reject(outcome.error);
++      };
++    });
++    this.closeAttempt = attempt;
++    // The shared attempt is observed by concurrent callers outside the
++    // hook; when none exists, a failed attempt must not surface as an
++    // unhandled rejection. The no-op side handler marks the rejection
++    // handled for the runtime while those callers still receive the
++    // original rejection.
++    attempt.catch(() => undefined);
++    // The attempt's outcome is decided ONLY after the process logger
++    // drain completes (final safe step): the shared promise represents
++    // the full close + drain operation, so a concurrent caller awaiting
++    // it (including one that arrived while the drain was running) cannot
++    // proceed before every final event is on disk.
++    let failed = false;
++    let failure: unknown;
+     try {
+-      await this.beforeClose?.();
++      await this.performClose();
+     } catch (error: unknown) {
+-      beforeCloseError = error;
++      // Boolean flag, never `error !== undefined`: a hook or provider
++      // that throws `undefined` is still a FAILED attempt and the shared
++      // promise must reject, never resolve.
++      failed = true;
++      failure = error;
++    }
++    try {
++      // The soak collector reads the log file immediately after close();
++      // drain the process logger queue so every final event (including
++      // RUNTIME_CLOSED and any close-failure line) is on disk before the
++      // attempt settles. Drain is fail-open by contract, and even a
++      // throwing drain must never mask the close outcome — it is
++      // swallowed, never propagated.
++      await getHikouteiInternalLogger().drain();
++    } catch {
++      // Fail-open: the drain exists to flush diagnostics, so its failure
++      // must not change the close outcome decided above.
++    }
++    // Settle the shared attempt with the ORIGINAL outcome so every
++    // concurrent caller observes exactly the same success or failure.
++    if (failed) {
++      settleAttempt({ ok: false, error: failure });
++    } else {
++      settleAttempt({ ok: true });
+     }
++    // Release the shared slot only after the attempt settled (final safe
++    // step). On success performClose() made the close terminal; on
++    // failure performClose() already returned the state to retryable
++    // "open", so the NEXT close() call after the slot release genuinely
++    // re-runs the cleanup. The original failure is rethrown unchanged to
++    // THIS caller after the slot release; concurrent callers already
++    // received it through the shared attempt.
++    this.closeAttempt = undefined;
++    if (failed) throw failure;
++  }
+ 
++  /**
++   * Runs one full cleanup attempt (beforeClose + provider close).
++   *
++   * Marks the runtime terminally closed ONLY after the provider close
++   * succeeded. EVERY failure — a throwing beforeClose hook, a throwing
++   * provider close, or the aggregate of both — explicitly returns the
++   * state to retryable `open` before the original error is rethrown
++   * unchanged, so the next close() call genuinely re-runs the full
++   * cleanup instead of no-oping on a half-closed runtime.
++   */
++  private async performClose(): Promise<void> {
++    this.closeState = "closing";
+     try {
+-      await this.provider.close();
+-    } catch (providerError: unknown) {
+-      if (beforeCloseError !== undefined) {
+-        throw new AggregateError(
+-          [beforeCloseError, providerError],
+-          "Hikoutei failed to stop internal work and close SQLite.",
+-        );
++      let beforeCloseFailed = false;
++      let beforeCloseError: unknown;
++      try {
++        const beforeClose = this.beforeClose;
++        if (beforeClose !== undefined) {
++          // MEDIUM 5: the hook runs inside the marked async context so a
++          // close() called from within it is recognized as reentrant for
++          // THIS runtime (and never awaits its own pending attempt). The
++          // stored runtime identity scopes the exemption: a cross-runtime
++          // close() made from the hook is not reentrant.
++          //
++          // Luna: the exemption is scoped to the hook's EXECUTION WINDOW.
++          // Detached setImmediate/promise callbacks scheduled by the hook
++          // retain the AsyncLocalStorage store after run() returns, so the
++          // active flag is cleared in `finally` once the hook's execution
++          // has ended — those callbacks' close() then awaits the same
++          // close/drain attempt instead of bypassing it. The flag is
++          // cleared even when the hook throws.
++          const marker = { runtime: this, active: true };
++          try {
++            await beforeCloseHookContext.run(marker, () => beforeClose());
++          } finally {
++            marker.active = false;
++          }
++        }
++      } catch (error: unknown) {
++        // Boolean flag, never `error !== undefined`: a hook that throws
++        // `undefined` is still a FAILED hook and must keep the attempt
++        // failed and retryable instead of being treated as success.
++        beforeCloseFailed = true;
++        beforeCloseError = error;
++      }
++
++      try {
++        await this.provider.close();
++      } catch (providerError: unknown) {
++        logHikouteiInternalEvent({
++          event: HIKOUTEI_LOG_EVENTS.RUNTIME_CLOSE_FAILED,
++          level: "error",
++          component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
++          ...describeErrorForInternalLog(providerError),
++        });
++        if (beforeCloseFailed) {
++          // Luna: the AggregateError preserves BOTH original failure
++          // values as-thrown — including a hook that throws `undefined`
++          // or `null`, which are legitimate thrown values. The errors
++          // array must never replace the original hook failure with a
++          // synthetic Error, so diagnostics can always inspect exactly
++          // what each stage threw.
++          throw new AggregateError(
++            [beforeCloseError, providerError],
++            "Hikoutei failed to stop internal work and close SQLite.",
++          );
++        }
++        throw providerError;
+       }
+-      throw providerError;
+-    }
+ 
+-    if (beforeCloseError !== undefined) throw beforeCloseError;
++      if (beforeCloseFailed) {
++        logHikouteiInternalEvent({
++          event: HIKOUTEI_LOG_EVENTS.RUNTIME_CLOSE_FAILED,
++          level: "error",
++          component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
++          ...describeErrorForInternalLog(beforeCloseError),
++        });
++        // `throw beforeCloseError` is intentional: `undefined` is a
++        // legitimate thrown value and the rejection still marks the
++        // attempt failed (the caller's catch below returns the state to
++        // retryable open).
++        throw beforeCloseError;
++      }
++      this.closeState = "closed";
++      logHikouteiInternalEvent({
++        event: HIKOUTEI_LOG_EVENTS.RUNTIME_CLOSED,
++        level: "info",
++        component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
++      });
++    } catch (error: unknown) {
++      // Explicit state transition for EVERY failure path (beforeClose or
++      // provider): the runtime returns to retryable `open` so the next
++      // close() re-runs the cleanup. The original error is rethrown
++      // unchanged; the shared-attempt slot was already released by the
++      // caller's finally block.
++      this.closeState = "open";
++      throw error;
++    }
+   }
+ }
+ 
+diff --git a/src/application/sync/service/SyncPollingSupervisor.ts b/src/application/sync/service/SyncPollingSupervisor.ts
+index 8b07e47051d0a97d2bd9448b27c41aeeb22d5d48..08fdbe3cb95df56ebcfacca91ab1e64659ae9a3e 100644
+--- a/src/application/sync/service/SyncPollingSupervisor.ts
++++ b/src/application/sync/service/SyncPollingSupervisor.ts
+@@ -13,6 +13,18 @@ export interface SyncPollingSupervisorOptions<Report = unknown> {
+   readonly errorBackoffInitialMs?: number;
+   readonly errorBackoffMaxMs?: number;
+   readonly wait?: SyncPollingWait;
++  /**
++   * Deferral gate applied ONLY to the loop's FIRST pass (default: no gate).
++   *
++   * The first scheduled pass waits for this promise before any remote
++   * read starts, so a host can keep the first polling pass out of an
++   * initial drain on a shared request limiter. The gate is consulted once:
++   * after it resolves, passes keep the normal interval cadence. A gate
++   * that throws surfaces through the normal polling error path and is
++   * retried (with backoff) before any pass runs. Manual `runOnce()` calls
++   * are deliberately NOT gated: they are explicit caller-driven passes.
++   */
++  readonly waitForFirstPass?: () => Promise<void>;
+   readonly onReport?: (report: Report) => void;
+   readonly onError?: (error: unknown) => void;
+ }
+@@ -27,6 +39,8 @@ export class SyncPollingSupervisor<Report = unknown> {
+   private readonly errorBackoffInitialMs: number;
+   private readonly errorBackoffMaxMs: number;
+   private readonly wait: SyncPollingWait;
++  private readonly waitForFirstPass: (() => Promise<void>) | undefined;
++  private firstPassPending = false;
+   private readonly onReport: ((report: Report) => void) | undefined;
+   private readonly onError: ((error: unknown) => void) | undefined;
+   private running = false;
+@@ -51,6 +65,8 @@ export class SyncPollingSupervisor<Report = unknown> {
+       throw new RangeError("poll maximum error backoff must be at least the initial backoff");
+     }
+     this.wait = options.wait ?? defaultWait;
++    this.waitForFirstPass = options.waitForFirstPass;
++    this.firstPassPending = options.waitForFirstPass !== undefined;
+     this.onReport = options.onReport;
+     this.onError = options.onError;
+   }
+@@ -59,9 +75,19 @@ export class SyncPollingSupervisor<Report = unknown> {
+   public start(): void {
+     if (this.running || !this.acceptingPasses) return;
+     this.running = true;
++    // A stopped-and-restarted supervisor re-arms the first-pass gate: the
++    // loop never restarts (stop() is terminal for the accepting flag), but
++    // the flag is re-derived here so a fresh supervisor with a gate always
++    // consults it exactly once.
++    this.firstPassPending = this.waitForFirstPass !== undefined;
+     this.loopPromise = this.runLoop();
+   }
+ 
++  /** Returns whether a stop has been requested; used to interrupt gates. */
++  public isStopping(): boolean {
++    return !this.acceptingPasses || !this.running;
++  }
++
+   /** Runs one pass or joins the pass already in flight. */
+   public runOnce(): Promise<Report> {
+     if (!this.acceptingPasses) {
+@@ -97,6 +123,16 @@ export class SyncPollingSupervisor<Report = unknown> {
+     let errorBackoff = this.errorBackoffInitialMs;
+     while (this.running) {
+       try {
++        if (this.firstPassPending && this.waitForFirstPass !== undefined) {
++          // The FIRST pass is deferred until the host gate resolves (for
++          // example the System_State drain readiness check). The flag is
++          // cleared only AFTER the gate resolves, so a throwing gate keeps
++          // the first pass pending through the normal error backoff; a
++          // stop() requested while the gate waits is honored right here.
++          await this.waitForFirstPass();
++          this.firstPassPending = false;
++          if (!this.running) break;
++        }
+         const report = await this.runOnce();
+         this.notifyReport(report);
+         errorBackoff = this.errorBackoffInitialMs;
+diff --git a/src/application/sync/service/SyncServiceBootstrap.ts b/src/application/sync/service/SyncServiceBootstrap.ts
+index 632ddaabf8b73a283c6016114726c09a1f60e7e2..0c0a651f2e4cacb1c4764f62b88a4116a648a507 100644
+--- a/src/application/sync/service/SyncServiceBootstrap.ts
++++ b/src/application/sync/service/SyncServiceBootstrap.ts
+@@ -19,6 +19,7 @@
+ 
+ import {
+   createInternalHikoutei,
++  type Hikoutei,
+ } from "../../../api/Hikoutei.js";
+ import {
+   resolveEntityDescriptors,
+@@ -51,6 +52,10 @@ import { createRemoteProvider } from "./remoteProvider.js";
+ import { createEffectSupervisor } from "./effectSupervisor.js";
+ import { createPollingSupervisor } from "./pollingSupervisor.js";
+ import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
++import {
++  registerSystemStateReadiness,
++  unregisterSystemStateReadiness,
++} from "./systemStateReadiness.js";
+ import {
+   createWriterOptions,
+   throwSyncResolutionError,
+@@ -154,7 +159,23 @@ export async function createInternalSyncService(
+       generated.bindings,
+       runtime.flushCoordinator,
+     );
+-    const hikoutei = createInternalHikoutei(provider, descriptors, stop);
++    // The runtime object is the readiness key: the beforeClose hook runs
++    // only after this assignment, so the captured reference is always the
++    // fully constructed runtime. Unregistering happens BEFORE the stop
++    // handler runs, so a closing runtime reports ready (no outbox to drain)
++    // the moment its close begins.
++    let hikoutei: Hikoutei;
++    const hikouteiClose = async (): Promise<void> => {
++      unregisterSystemStateReadiness(hikoutei);
++      await stop();
++    };
++    hikoutei = createInternalHikoutei(provider, descriptors, hikouteiClose);
++    // Register the runtime's System_State readiness right after bootstrap so
++    // external convergence barriers can wait on the drain; the runtime is
++    // unregistered on close (see hikouteiClose). Never part of the public
++    // API — the registration is keyed to the internal/public runtime object
++    // and read only through this internal module.
++    registerSystemStateReadiness(hikoutei, runtime.storage);
+     effectSupervisor.start();
+     pollingSupervisor.start();
+ 
+diff --git a/src/application/sync/service/effectSupervisor.ts b/src/application/sync/service/effectSupervisor.ts
+index f23c5c35c98cdba1933e1ca67e9e844013c37bb0..7d3db62c488b5cfb764b64caa95f4634ffe48a9b 100644
+--- a/src/application/sync/service/effectSupervisor.ts
++++ b/src/application/sync/service/effectSupervisor.ts
+@@ -24,6 +24,7 @@ import {
+   createEffectWorkerSupervisor,
+   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
+   FAST_APPEND_BATCH_CANDIDATE_LIMIT,
++  readOutboxScanReadinessWithAdapter,
+   safeErrorMessage,
+   type EffectWorkerSupervisor,
+   type WorkerReport,
+@@ -34,6 +35,18 @@ import type { SyncTimingSink } from "../telemetry/syncTiming.js";
+ /** Minimum delay between System_State reconciliation scans attached to the loop. */
+ const DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS = 60_000;
+ 
++/**
++ * Delay before the FIRST reconciliation scan for the real Google provider.
++ *
++ * A cold-start service opens with the whole initial backlog already in the
++ * outbox; an immediate scan would compete with the System_State drain on the
++ * shared request-start limiter. Delaying the first scan by one cadence (and
++ * additionally gating it on outbox drain readiness, see below) keeps the
++ * scanner out of the critical convergence path. Injected test providers keep
++ * the generic supervisor default of 0 (immediate first scan).
++ */
++const DEFAULT_INITIAL_RECONCILIATION_DELAY_MS = 60_000;
++
+ /** Inputs shared with the composition root's runtime and remote provider. */
+ export interface CreateEffectSupervisorInput {
+   readonly storage: MikroOrmSqliteAdapter;
+@@ -114,6 +127,24 @@ export function createEffectSupervisor(
+     workerId: effectWorkerId,
+     reconciliation: {
+       intervalMs: options.reconciliationIntervalMs ?? DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS,
++      // Only the real Google Sheets provider starts with a large initial
++      // backlog; delay its first scan by one cadence so it cannot compete
++      // with the System_State drain on the shared limiter. Injected test
++      // providers keep the generic default (first scan immediately).
++      ...(options.googleSheetsApi === undefined
++        ? {}
++        : { initialReconciliationDelayMs: DEFAULT_INITIAL_RECONCILIATION_DELAY_MS }),
++      // First-scan gate: defer ONLY while normal claimable drain work is
++      // pending/processing/delivery_uncertain. A terminal failed head
++      // (repair-needed) must NEVER defer the scanner — the scanner is the
++      // repair net that supersedes the failed head, and deferring would
++      // wedge the stream forever. After the first scan the gate is no longer
++      // consulted, so busy-outbox scans keep the legacy lazy-repair
++      // behavior (isOutboxIdle stays omitted by design).
++      isFirstScanReady: async () => {
++        const readiness = await readOutboxScanReadinessWithAdapter(storage);
++        return readiness.status !== "busy";
++      },
+       // isOutboxIdle is optional on the supervisor contract and the scanner
+       // already defers while corrections are in flight, so it is omitted.
+       run: runSystemStateReconciliation,
+diff --git a/src/application/sync/service/pollingSupervisor.ts b/src/application/sync/service/pollingSupervisor.ts
+index f22474f69858a264db04d000cbbf663d574c6727..f331e9bc2a1ba3376b72997fc9322ff70e45e0ce 100644
+--- a/src/application/sync/service/pollingSupervisor.ts
++++ b/src/application/sync/service/pollingSupervisor.ts
+@@ -22,9 +22,19 @@ import {
+   type MappedUserInputPollingReport,
+ } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+ import { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
++import { readSystemStateDrainReadinessWithAdapter } from "@hikoutei/ikisaki";
+ 
+ const DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS = 60_000;
+ 
++/**
++ * SQLite poll cadence for the first-pass System_State drain gate.
++ *
++ * While the gate is pending the loop performs one cheap outbox read per
++ * tick and nothing else; 250 ms keeps the first polling pass starting
++ * promptly after the drain without hammering SQLite.
++ */
++const FIRST_POLLING_PASS_READINESS_POLL_MS = 250;
++
+ /** Inputs shared with the composition root's runtime and remote provider. */
+ export interface CreatePollingSupervisorInput {
+   readonly storage: MikroOrmSqliteAdapter;
+@@ -67,10 +77,54 @@ export function createPollingSupervisor(
+     if (report.safetyFullScan) lastSuccessfulFullScanAt = clock();
+     return report;
+   };
+-  return new SyncPollingSupervisor({
++  let supervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
++  supervisor = new SyncPollingSupervisor({
+     runPass: runPollingPass,
+     ...(options.pollingIntervalMs === undefined ? {} : { intervalMs: options.pollingIntervalMs }),
++    // First-polling-pass gate: on a cold start the effect worker drains the
++    // initial System_State backlog while the first polling pass would
++    // otherwise compete with it on the shared request limiter. The loop's
++    // FIRST pass therefore waits (SQLite-only checks, stop-interruptible)
++    // until no claimable System_State drain work is left; terminal failed
++    // or conflict rows — and the pending followers they block — never
++    // defer, so a stuck stream cannot stall polling forever. After the
++    // first pass the gate is no longer consulted and the normal cadence
++    // (interval + safety full scans) is preserved. Manual runOnce() calls
++    // are caller-driven and bypass the gate.
++    waitForFirstPass: async () => {
++      await waitForSystemStateDrainReadiness({
++        storage,
++        isStopping: () => supervisor.isStopping(),
++        pollIntervalMs: FIRST_POLLING_PASS_READINESS_POLL_MS,
++      });
++    },
+     onReport: (report) => options.onPollingReport?.(report),
+     ...(options.onPollingError === undefined ? {} : { onError: options.onPollingError }),
+   });
++  return supervisor;
++}
++
++/**
++ * Waits (SQLite-only) until no claimable System_State drain work remains.
++ *
++ * Polls the kernel's System_State drain classification through the shared
++ * storage adapter — never the remote provider — until it reports `ready`
++ * or until `isStopping()` turns true (the loop's stop() is honored within
++ * one poll tick, so shutdown never waits for the drain). Only genuinely
++ * claimable System_State work (processing/delivery_uncertain effects and
++ * pending claimable heads) defers; terminal failed/conflict rows and the
++ * pending followers they block never defer, so a permanently stuck stream
++ * cannot stall the first polling pass forever.
++ */
++export async function waitForSystemStateDrainReadiness(options: {
++  readonly storage: MikroOrmSqliteAdapter;
++  readonly isStopping: () => boolean;
++  readonly pollIntervalMs?: number;
++}): Promise<void> {
++  const pollIntervalMs = options.pollIntervalMs ?? FIRST_POLLING_PASS_READINESS_POLL_MS;
++  while (!options.isStopping()) {
++    const readiness = await readSystemStateDrainReadinessWithAdapter(options.storage);
++    if (readiness.status === "ready") return;
++    await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
++  }
+ }
+diff --git a/src/application/sync/service/syncAutoStart.ts b/src/application/sync/service/syncAutoStart.ts
+index 9c1622c63ee70bf5a3655bf0e3d1bd9c6d5b8524..d9a397cf4899f7ac127fe82b702ceba807daf657 100644
+--- a/src/application/sync/service/syncAutoStart.ts
++++ b/src/application/sync/service/syncAutoStart.ts
+@@ -202,12 +202,13 @@ export async function createTypedSheetsWithSync(
+       dbName: options.dbName,
+       entities: [...options.entities],
+       projections,
+-      // Injected transports are a test-only affordance; the fast pacing keeps
+-      // stub-based suites wall-clock cheap. Production builds the real
+-      // ADC-backed transport with its default pacing.
++      // Injected transports are a test-only affordance; zero pacing keeps
++      // stub-based suites deterministic and free of request-start refusals
++      // under concurrency. Production builds the real ADC-backed transport
++      // with its default pacing.
+       googleSheetsApi: options.transport === undefined
+         ? {}
+-        : { transport: options.transport, rateLimitIntervalMs: 1 },
++        : { transport: options.transport, rateLimitIntervalMs: 0 },
+       pollingIntervalMs,
+       pollingFullScanIntervalMs,
+     });
+diff --git a/src/application/sync/service/systemStateReadiness.ts b/src/application/sync/service/systemStateReadiness.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3b4037f406570c4fbf018d649a5d17c7ae7604bd
+--- /dev/null
++++ b/src/application/sync/service/systemStateReadiness.ts
+@@ -0,0 +1,69 @@
++/**
++ * Internal System_State readiness controller for external convergence
++ * barriers.
++ *
++ * External tooling (for example the local multi-table soak runner's live
++ * convergence phase) needs to know when a runtime's System_State outbox
++ * drain has finished so its own batched sheet reads do not compete with
++ * the initial drain on the shared request limiter. The sync service
++ * registers every runtime it bootstraps here and unregisters it when the
++ * runtime closes; a runtime that was never registered (plain local-only
++ * mode, or an already-closed runtime) reports ready immediately.
++ *
++ * This module is deliberately internal: it is never re-exported from
++ * `src/index.ts`, and applications observe readiness only through the
++ * library's own behavior.
++ */
++
++import type { Hikoutei } from "../../../api/Hikoutei.js";
++import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
++import {
++  readSystemStateDrainReadinessWithAdapter,
++  type SystemStateDrainReadiness,
++} from "@hikoutei/ikisaki";
++
++/** Storage handle bound to one registered runtime. */
++interface RegisteredRuntime {
++  readonly storage: MikroOrmSqliteAdapter;
++}
++
++/**
++ * Registry of bootstrapped runtimes keyed by the runtime object itself.
++ *
++ * A WeakMap keeps the registry inert: a runtime that is garbage-collected
++ * without closing (or whose registration leaked) never pins its storage
++ * or SQLite file open, and the key is the exact public `Hikoutei` object
++ * the caller holds.
++ */
++const registeredRuntimes = new WeakMap<Hikoutei, RegisteredRuntime>();
++
++/** Registers one bootstrapped runtime for readiness queries. */
++export function registerSystemStateReadiness(
++  runtime: Hikoutei,
++  storage: MikroOrmSqliteAdapter,
++): void {
++  registeredRuntimes.set(runtime, { storage });
++}
++
++/** Unregisters one runtime (called on close, before storage is released). */
++export function unregisterSystemStateReadiness(runtime: Hikoutei): void {
++  registeredRuntimes.delete(runtime);
++}
++
++/**
++ * Reports the CURRENT System_State drain readiness of one runtime.
++ *
++ * Only the System_State projection's claimable in-flight effects are
++ * considered — never the whole-outbox idle state. A pending follower behind
++ * a conflict/blocked_candidate/failed predecessor is not claimable drain
++ * work and never defers, so an open conflict cannot stall the barrier. A
++ * runtime without a registered sync service (local-only mode, or already
++ * closed) has no outbox to drain and is ready immediately.
++ */
++export async function readRuntimeSystemStateReadiness(
++  runtime: Hikoutei,
++): Promise<SystemStateDrainReadiness> {
++  const entry = registeredRuntimes.get(runtime);
++  if (entry === undefined) return { status: "ready" };
++  return readSystemStateDrainReadinessWithAdapter(entry.storage);
++}
+diff --git a/src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.ts b/src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.ts
+index 19aec03a7a37d7cfad7bade1975d262919bdde45..95ad800b2f59dfd5918ce34fc9f72f63ac07f52f 100644
+--- a/src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.ts
++++ b/src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.ts
+@@ -29,6 +29,9 @@
+  *   stable sorted order, so it cannot deadlock with single-sheet mutations.
+  * - Provisioning uses a dedicated lane so setup never races an append/write.
+  * - A failing or throwing mutation releases the lane, so it never deadlocks.
++ * - `runSerializedInner` runs an optional in-lane precondition (the effect
++ *   lease renewal) after the lane is acquired and before the inner provider
++ *   call, so queue time plus limiter waits cannot outlive the lease.
+  */
+ 
+ import {
+@@ -53,6 +56,7 @@ import type {
+   SyncSheetsObservationBatchProvider,
+   SyncSheetsTableReader,
+   SyncTableRowsResult,
++  SyncEffectWorkerProvider,
+ } from "../syncSheets.js";
+ import { AsyncMutex, type AsyncMutexRelease } from "./asyncMutex.js";
+ import {
+@@ -66,6 +70,26 @@ export type CoordinatedSheetsInner =
+   SyncSheetsProvider &
+   SyncSheetsTableReader;
+ 
++/**
++ * Redacted, stable diagnostic for an aborted in-lane precondition.
++ *
++ * Static by design: it never embeds effect IDs, payloads, sheet names, or
++ * provider errors, so it is safe to persist on outbox rows and logs.
++ */
++const COORDINATED_LANE_PRECONDITION_MESSAGE =
++  "Mutation lane precondition failed before the remote call; the request was not sent.";
++
++/**
++ * Thrown when an in-lane precondition callback rejects before the remote
++ * call. Carries only the static redacted message above.
++ */
++export class CoordinatedLanePreconditionError extends Error {
++  public constructor() {
++    super(COORDINATED_LANE_PRECONDITION_MESSAGE);
++    this.name = "CoordinatedLanePreconditionError";
++  }
++}
++
+ // SyncSheetsProvisioner is intentionally not wrapped: provisioning runs once
+ // at startup before the worker, so it stays on the original provisioner and
+ // never needs the mutation lane.
+@@ -129,6 +153,29 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
+     return this.runMutation(physicalSheetId, operation, task);
+   }
+ 
++  /**
++   * Runs one internal remote task on the mutation lane with an optional
++   * in-lane precondition hook.
++   *
++   * The effect dispatcher uses this so the worker's lease-renewal callback
++   * runs AFTER the lane is acquired (covering queue wait time) but BEFORE the
++   * inner provider's remote call (covering shared limiter waits and the call
++   * itself). The `remote` closure receives the INNER provider and must call
++   * it directly, so the call never re-enters this coordinator's lane and
++   * cannot deadlock. When `beforeRemote` resolves false (or throws), a
++   * `CoordinatedLanePreconditionError` is raised before any remote request
++   * and the lane is released normally; lane telemetry still records the
++   * aborted dispatch with a delivery-uncertain outcome.
++   */
++  public runSerializedInner<T>(
++    physicalSheetId: string,
++    operation: string,
++    remote: (inner: TInner) => Promise<T>,
++    beforeRemote?: () => Promise<boolean>,
++  ): Promise<T> {
++    return this.runMutation(physicalSheetId, operation, () => remote(this.inner), beforeRemote);
++  }
++
+   public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
+     return this.runMutation(request.physicalSheetId, "fastAppendRows", () =>
+       this.inner.fastAppendRows(request),
+@@ -237,15 +284,17 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
+     physicalSheetId: string,
+     operation: string,
+     task: () => Promise<T>,
++    beforeRemote?: () => Promise<boolean>,
+   ): Promise<T> {
+     const key = this.resolveKey(physicalSheetId);
+-    return this.runInLanes([key], operation, task);
++    return this.runInLanes([key], operation, task, beforeRemote);
+   }
+ 
+   private async runInLanes<T>(
+     keys: readonly string[],
+     operation: string,
+     task: () => Promise<T>,
++    beforeRemote?: () => Promise<boolean>,
+   ): Promise<T> {
+     // Acquire lanes in stable sorted order so concurrent batch mutations cannot
+     // deadlock with each other regardless of input order. Each release token is
+@@ -263,6 +312,12 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
+       const queueWaitMs = this.now() - queueStartedAt;
+       const remoteStartedAt = this.now();
+       try {
++        // The in-lane precondition runs after the queue wait but before any
++        // remote request; a false result aborts the dispatch with a redacted
++        // classified error instead of sending a write with an expired lease.
++        if (beforeRemote !== undefined && !(await beforeRemote())) {
++          throw new CoordinatedLanePreconditionError();
++        }
+         const result = await task();
+         this.emitSuccess(operation, ordered.join(","), queueWaitMs, remoteStartedAt);
+         return result;
+@@ -333,6 +388,26 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
+ 
+ const DEFAULT_LANE_KEY = "default";
+ 
++/** The in-lane dispatch capability the effect dispatcher detects on a provider. */
++export type CoordinatedSerializedInnerProvider = Pick<
++  CoordinatedSheetsProvider<CoordinatedSheetsInner>,
++  "runSerializedInner"
++>;
++
++/**
++ * Returns whether a provider exposes the coordinator's in-lane dispatch hook.
++ *
++ * The effect dispatcher uses this to route its `beforeRemoteDispatch` lease
++ * renewal through the acquired mutation lane; providers without the hook
++ * (bare fakes and test doubles) keep the direct call path and simply ignore
++ * the hook.
++ */
++export function hasCoordinatedSerializedInner(
++  provider: SyncEffectWorkerProvider,
++): provider is SyncEffectWorkerProvider & CoordinatedSerializedInnerProvider {
++  return typeof (provider as Partial<CoordinatedSerializedInnerProvider>).runSerializedInner === "function";
++}
++
+ /** Returns the distinct, sorted lane keys for one batch mutation. */
+ function distinctLaneKeys(keys: readonly string[]): readonly string[] {
+   return [...new Set(keys)].sort();
+diff --git a/src/internal/syncStatus.ts b/src/internal/syncStatus.ts
+index 5a9691907c9b722d0afddefb663aed97fddf9a0c..7d795154d865a1b354b34e520cab92d9c19e3dd1 100644
+--- a/src/internal/syncStatus.ts
++++ b/src/internal/syncStatus.ts
+@@ -320,12 +320,49 @@ function readSpreadsheetId(database: DatabaseSync): string | null {
+   return authorityRow === undefined ? null : authorityRow.spreadsheet_id;
+ }
+ 
++/**
++ * Validates one raw `{ status, count }` aggregate row, or throws a
++ * structured read failure.
++ *
++ * SQLite `COUNT(*)` always yields a non-negative integer, so any other
++ * shape means the storage schema has drifted and the counts cannot be
++ * trusted; failing the whole read is safer than reporting false zeros.
++ */
++function requireStatusCountRow(row: unknown): { readonly status: string; readonly count: number } {
++  if (typeof row !== "object" || row === null) {
++    throw malformedStatusCountRow(row);
++  }
++  const { status, count } = row as Record<string, unknown>;
++  if (
++    typeof status !== "string" ||
++    typeof count !== "number" ||
++    !Number.isInteger(count) ||
++    count < 0
++  ) {
++    throw malformedStatusCountRow(row);
++  }
++  return { status, count };
++}
++
++/** Builds the structured read failure for one malformed aggregate row. */
++function malformedStatusCountRow(row: unknown): HikouteiSyncStatusError {
++  return new HikouteiSyncStatusError(
++    HIKOUTEI_SYNC_STATUS_ERROR_CODES.READ_FAILED,
++    `status query returned a malformed aggregate row: ${JSON.stringify(row)}`,
++  );
++}
++
+ /** Counts outbox effects by the delivery-relevant statuses. */
+ function readEffectCounts(database: DatabaseSync): HikouteiSyncEffectCounts {
+   const rows = database
+     .prepare("SELECT status, COUNT(*) AS count FROM sheet_effect_outbox GROUP BY status")
+-    .all() as ReadonlyArray<{ status: string; count: number }>;
+-  const byStatus = new Map(rows.map((row) => [row.status, row.count]));
++    .all();
++  const byStatus = new Map(
++    rows.map((row) => {
++      const validated = requireStatusCountRow(row);
++      return [validated.status, validated.count] as const;
++    }),
++  );
+   return {
+     pending: byStatus.get(EFFECT_STATUSES.PENDING) ?? 0,
+     processing: byStatus.get(EFFECT_STATUSES.PROCESSING) ?? 0,
+@@ -340,11 +377,13 @@ function readConflictCounts(database: DatabaseSync): HikouteiSyncConflictCounts
+     .prepare(
+       "SELECT status, COUNT(*) AS count FROM sync_conflict WHERE status IN (?, ?) GROUP BY status",
+     )
+-    .all(CONFLICT_STATUSES.OPEN, CONFLICT_STATUSES.NEEDS_REBASE) as ReadonlyArray<{
+-    status: string;
+-    count: number;
+-  }>;
+-  const byStatus = new Map(rows.map((row) => [row.status, row.count]));
++    .all(CONFLICT_STATUSES.OPEN, CONFLICT_STATUSES.NEEDS_REBASE);
++  const byStatus = new Map(
++    rows.map((row) => {
++      const validated = requireStatusCountRow(row);
++      return [validated.status, validated.count] as const;
++    }),
++  );
+   return {
+     open: byStatus.get(CONFLICT_STATUSES.OPEN) ?? 0,
+     needsRebase: byStatus.get(CONFLICT_STATUSES.NEEDS_REBASE) ?? 0,
+diff --git a/src/shared/observability/logEvents.ts b/src/shared/observability/logEvents.ts
+index b7b35450b4dd79d6b61a0b7708346101fc005fd6..fca0745d4676b055b7a6880703fe4e21629fe658 100644
+--- a/src/shared/observability/logEvents.ts
++++ b/src/shared/observability/logEvents.ts
+@@ -109,6 +109,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
+   "google_sheets_api_network_error",
+   "google_sheets_api_http_error",
+   "google_sheets_api_invalid_response",
++  "google_sheets_api_request_start_refused",
+   // Sync service bootstrap codes (src/application/sync/service/errors.ts).
+   "invalid_sync_service_options",
+   "invalid_sync_projection_config",
+diff --git a/test/google-sheets-api-provider.test.ts b/test/google-sheets-api-provider.test.ts
+index 8e34679577063c886e473e7611eedd0b0c2c2325..aca5de83995bf70d1d14ff8182c792851d065af6 100644
+--- a/test/google-sheets-api-provider.test.ts
++++ b/test/google-sheets-api-provider.test.ts
+@@ -132,6 +132,10 @@ function buildProvider(
+     definitions: [SYSTEM_DEFINITION, USER_INPUT_DEFINITION, CONFLICT_DEFINITION],
+     transport,
+     requestTimeoutMs: 60_000,
++    // Zero interval unless a test pins the interval: pacing itself is covered
++    // by the dedicated pacing tests, so the default here must never make
++    // unrelated tests wait on — or be refused by — the request-start limiter.
++    rateLimitIntervalMs: options.rateLimitIntervalMs ?? 0,
+     ...(options.maxBatchBytes === undefined ? {} : { maxBatchBytes: options.maxBatchBytes }),
+     ...(options.rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs: options.rateLimitIntervalMs }),
+     ...(options.now === undefined ? {} : { now: options.now }),
+diff --git a/test/google-sheets-api-sync-provider.test.ts b/test/google-sheets-api-sync-provider.test.ts
+index 4deb8537d264c35ae3e6e8df04a58b81373befeb..4ba5c69c46a63457317ce1381a26b240a1c26c86 100644
+--- a/test/google-sheets-api-sync-provider.test.ts
++++ b/test/google-sheets-api-sync-provider.test.ts
+@@ -146,7 +146,10 @@ function buildProvider(
+     definitions: DEFINITIONS,
+     transport,
+     requestTimeoutMs: 60_000,
+-    rateLimitIntervalMs: 1,
++    // Zero interval: pacing itself is covered by the dedicated pacing tests
++    // below, so unrelated tests must never wait on — or be refused by — the
++    // request-start limiter. The pacing tests pin their own interval.
++    rateLimitIntervalMs: 0,
+     ...(options.onRequest === undefined ? {} : { onRequest: options.onRequest }),
+     ...(options.now === undefined ? {} : { now: options.now }),
+     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+@@ -1236,7 +1239,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
+     expect(readEvents.every((event) => event.operationCount === 1)).toBe(true);
+   });
+ 
+-  it("keeps read and write limiter slots independent", async () => {
++  it("serializes read AND write starts through ONE shared limiter", async () => {
+     let now = 1_000_000;
+     const spreadsheet = new StubSpreadsheet();
+     seedSystemTab(spreadsheet, 1);
+@@ -1254,19 +1257,18 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
+       },
+     });
+ 
+-    // One applyEffects run: the two reads gate each other on the read limiter
+-    // while the write starts immediately on its own limiter (it is only gated
+-    // by the fake clock the read waits already advanced).
++    // One applyEffects run: the two reads gate each other and the write
++    // shares the SAME limiter, so it starts one full interval after the
++    // second read instead of beside it (the old per-class behavior).
+     await provider.applyEffects(pacedApplyRequest());
+     const readStarts = transport.requestStarts.filter((entry) => entry.kind === "read");
+     const writeStarts = transport.requestStarts.filter((entry) => entry.kind === "write");
+     expect(readStarts).toHaveLength(2);
+     expect(writeStarts).toHaveLength(1);
+-    // The write did not wait for its own slot: it starts at the same fake
+-    // instant as the second (gated) read, and the total elapsed is exactly
+-    // one read interval (two reads gated; the write added no wait).
+-    expect(writeStarts[0]?.at).toBe(readStarts[1]?.at);
+-    expect(now).toBe(1_001_100);
++    expect(writeStarts[0]?.at).toBe((readStarts[1]?.at ?? 0) + 1_100);
++    // Total elapsed is exactly TWO intervals: read 1 at t0, read 2 at
++    // t0+1,100, write at t0+2,200.
++    expect(now).toBe(1_002_200);
+   });
+ 
+   it("applies the read timeout to every getSpreadsheet call but not writes", async () => {
+diff --git a/test/internal-log-registry.test.ts b/test/internal-log-registry.test.ts
+index 26503f1085bf44dc11b83516dcbe2eafea7ac5f2..7c207f39cb416e4f7ce8893a7e5df8f3bbb3ea09 100644
+--- a/test/internal-log-registry.test.ts
++++ b/test/internal-log-registry.test.ts
+@@ -48,7 +48,10 @@ describe("internal log stable-code registry", () => {
+ 
+   it("contains no secret-like values (no dots, @, slashes, or URLs)", () => {
+     for (const code of HIKOUTEI_LOG_STABLE_CODES) {
+-      expect(code).toMatch(/^[a-z0-9_]+$|^SQLITE_[A-Z0-9_]+$/);
++      // `ERR_SQLITE_ERROR` is the exact stable node:sqlite driver code the
++      // persistence engine surfaces; every other code is a lowercase
++      // identifier, and anything else (URLs, emails, paths, IDs) is rejected.
++      expect(code).toMatch(/^[a-z0-9_]+$|^SQLITE_[A-Z0-9_]+$|^ERR_SQLITE_ERROR$/);
+     }
+     expect(new Set(HIKOUTEI_LOG_STABLE_CODES).size).toBe(HIKOUTEI_LOG_STABLE_CODES.length);
+   });
+diff --git a/test/support/soakRunnerShared.ts b/test/support/soakRunnerShared.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8ca71f1614e28e9bcc88fecf22cc8eb2a90009bf
+--- /dev/null
++++ b/test/support/soakRunnerShared.ts
+@@ -0,0 +1,559 @@
++/**
++ * Shared preamble for the soak-runner split test files.
++ *
++ * Extracted verbatim from the preamble (lines 1-571) of the original
++ * 4,880-line `test/soak-runner.test.ts` at commit 7ee9b7d. Every split file
++ * imports these constants, the mocked Sheets client, the `describeLongSoak`
++ * gate, the temp-dir hooks, and the deterministic helpers instead of
++ * duplicating them.
++ *
++ * Vitest notes:
++ * - `vi.mock`/`vi.hoisted` cannot live here: the runner's import chain
++ *   (SyncServiceBootstrap -> remoteProvider -> googleSheetsApiTransport)
++ *   imports `@googleapis/sheets` at module scope, so each test file must
++ *   register its mocks (hoisted) before its own imports. The client is
++ *   shared through the async mock factory's dynamic import below; with
++ *   vitest's default per-file isolation the module is re-evaluated per
++ *   test file, giving each file the same fresh client state the original
++ *   single-file design had.
++ * - Hooks must be registered by each test file; this module only exports
++ *   the hook BODIES (`soakTestBeforeAll` etc.), which the test files wire
++ *   into their own `beforeAll`/`beforeEach`/`afterEach`/`afterAll`.
++ */
++
++
++import { describe, expect } from "vitest";
++import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
++import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import path from "node:path";
++import { finalizeOptions } from "../../scripts/ci/local-soak/args.mjs";
++import { buildSoakEntities, SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../../scripts/ci/local-soak/entities.mjs";
++import { SeededRandom, deriveSeed } from "../../scripts/ci/local-soak/prng.mjs";
++import {
++  generatePatch,
++  generateRow,
++  planActorOperation,
++  sharedEntityId,
++} from "../../scripts/ci/local-soak/operations.mjs";
++import { SoakOracle } from "../../scripts/ci/local-soak/oracle.mjs";
++import type { OracleFieldSpec } from "../../scripts/ci/local-soak/oracle.d.mts";
++import { createTypedSheets, type HikouteiEntity } from "../../src/index.js";
++import { resetHikouteiInternalLoggerForTests } from "../../src/shared/observability/internalLog.js";
++
++/**
++ * True when the platform can create symlinks (used to skip the symlink
++ * rejection regression tests on filesystems that cannot).
++ */
++export const SYMLINK_SUPPORTED = (() => {
++  const probeDir = mkdtempSync(path.join(tmpdir(), "soak-runner-symlink-probe-"));
++  try {
++    const target = path.join(probeDir, "target.txt");
++    writeFileSync(target, "probe", "utf8");
++    symlinkSync(target, path.join(probeDir, "link.txt"));
++    return existsSync(path.join(probeDir, "link.txt"));
++  } catch {
++    return false;
++  } finally {
++    rmSync(probeDir, { recursive: true, force: true });
++  }
++})();
++
++/**
++ * Stateful fake Google Sheets SDK client for the live-mode resume tests.
++ *
++ * Tracks the tabs sync provisioning creates (title + allocated sheet id) so
++ * a SECOND live runtime open on the same SQLite registry sees the same
++
++ * and the registry allowlist check would reject the open. Every tab is
++ * empty (no header rows), so provisioning treats existing tabs as
++ * "truly empty" and initializes their headers; live convergence/probe
++ * phases then fail deterministically within the run budget (no request
++ * hangs). Enumeration/properties reads list the stored tabs; grid reads
++ * return their (empty) grids; value reads return stored rows.
++ */
++export const liveSoakSheetsClient = (() => {
++  const tabs = new Map<string, { readonly sheetId: number; readonly rows: string[][] }>();
++  let nextSheetId = 1;
++  return {
++    spreadsheets: {
++      get: async (params: { fields?: string; ranges?: string[] }) => {
++        const fields = params?.fields ?? "";
++        const requestedTabs = (params?.ranges ?? []).map((range) =>
++          range.replace(/^'/, "").split("!")[0]?.replace(/'$/, "") ?? "");
++        const sheetEntries = requestedTabs
++          .map((title) => {
++            const tab = tabs.get(title);
++            return tab === undefined ? undefined : { title, tab };
++          })
++          .filter((entry): entry is { title: string; tab: { readonly sheetId: number; readonly rows: string[][] } } => entry !== undefined);
++        if (fields.includes("formattedValue")) {
++          return {
++            data: {
++              sheets: sheetEntries.map(({ title, tab }) => ({
++                properties: { sheetId: tab.sheetId, title },
++                data: [{
++                  startRow: 0,
++                  startColumn: 0,
++                  rowData: tab.rows.map((row) => ({
++                    values: row.map((formattedValue) => ({ formattedValue })),
++                  })),
++                }],
++              })),
++            },
++          };
++        }
++        if (fields.includes("data(")) {
++          // Grid reads (provisioning/observation): stored tabs return
++          // their grids so provisioning sees "truly empty" existing tabs.
++          return {
++            data: {
++              sheets: sheetEntries.map(({ title, tab }) => ({
++                properties: { sheetId: tab.sheetId, title },
++                data: [{
++                  startRow: 0,
++                  startColumn: 0,
++                  rowData: tab.rows.map((row) => ({
++                    values: row.map((value) => ({ userEnteredValue: { stringValue: value } })),
++                  })),
++                }],
++              })),
++            },
++          };
++        }
++        // Enumeration/properties reads: every tab known to this fake
++        // spreadsheet, so provisioning reuses the stored physical ids.
++        return {
++          data: {
++            sheets: [...tabs.entries()].map(([title, tab]) => ({
++              properties: { sheetId: tab.sheetId, title },
++            })),
++          },
++        };
++      },
++      batchUpdate: async (params: {
++        requestBody?: {
++          requests?: Array<{
++            addSheet?: { properties?: { title?: string } };
++          }>;
++        };
++      }) => {
++        const requests = params?.requestBody?.requests ?? [];
++        return {
++          data: {
++            replies: requests.map((request) => {
++              if (request?.addSheet === undefined) return {};
++              const title = request.addSheet.properties?.title ?? `sheet-${nextSheetId}`;
++              let tab = tabs.get(title);
++              if (tab === undefined) {
++                tab = { sheetId: nextSheetId++, rows: [] };
++                tabs.set(title, tab);
++              }
++              return { addSheet: { properties: { sheetId: tab.sheetId } } };
++            }),
++          },
++        };
++      },
++    },
++  };
++})();
++
++/**
++ * Opt-in gate for the genuinely long soak/recovery suites in this file.
++ *
++ * Every group below that drives the real `runLocalMultiTableSoak` loop
++ * (including the 60-cycle reopen cadence and resume/recovery paths) crosses
++ * real SQLite/runtime opens and takes minutes in aggregate, which made a
++ * plain Vitest run of this file time out. These groups are registered with
++ * `describeLongSoak` and only execute when `SOAK_RUNNER_LONG=1` (see the
++ * `test:soak` package script, which sets the flag portably across POSIX
++ * and Windows shells through the `scripts/run-soak-long.mjs` launcher):
++ *
++ *   npm run test:soak
++ *   SOAK_RUNNER_LONG=1 npx vitest run test/soak-runner.test.ts
++ *
++ * Focused/unit convergence, tombstone, batching, readiness, and
++ * security/redaction asserts stay in the default `npm test` suite below; no
++ * soak coverage is ever silently dropped, it is opt-in.
++ */
++export const describeLongSoak: ReturnType<typeof describe.runIf> = describe.runIf(
++  process.env.SOAK_RUNNER_LONG === "1",
++);
++
++/** Short budget (0.003h) that comfortably crosses the cycle-60 reopen. */
++export const SHORT_DURATION_HOURS = 0.003;
++
++let dir: string | undefined;
++
++/**
++ * Creates the shared per-file temp dir. Mirrors the original top-level
++ * `beforeAll` so each split file re-registers it with identical semantics
++ * (one temp dir per test file).
++ */
++export async function soakTestBeforeAll(): Promise<void> {
++  dir = await mkdtemp(path.join(tmpdir(), "soak-runner-"));
++}
++
++/**
++ * Drops the cached runtime log singleton. Mirrors the original top-level
++ * `beforeEach` (the runtime log file resolves lazily from process.env on
++ * first use; the runner pins a per-run log path per process).
++ */
++export function soakTestBeforeEach(): void {
++  resetHikouteiInternalLoggerForTests();
++}
++
++/** Clears runner-pinned log env vars. Mirrors the original `afterEach`. */
++export function soakTestAfterEach(): void {
++  delete process.env.HIKOUTEI_LOG_FILE;
++  delete process.env.HIKOUTEI_LOG_LEVEL;
++}
++
++/** Removes the shared per-file temp dir. Mirrors the original `afterAll`. */
++export async function soakTestAfterAll(): Promise<void> {
++  if (dir !== undefined) {
++    await rm(dir, { recursive: true, force: true });
++    dir = undefined;
++  }
++}
++
++
++export function requireDir(): string {
++  return dir ?? (() => { throw new Error("soak-runner beforeAll must create the temp dir"); })();
++}
++
++export function shortOptions(overrides = {}) {
++  const root = requireDir();
++  return finalizeOptions({
++    durationHours: SHORT_DURATION_HOURS,
++    intervalSeconds: 0,
++    actors: 2,
++    operationsPerActor: 4,
++    maxConsecutiveFailures: 3,
++    seed: "0x5a0b",
++    outputDir: path.join(root, "run-1"),
++    ...overrides,
++  });
++}
++
++/** Minimal VALID resume state fixture (local mode, one table). */
++export function validResumeStateFixture() {
++  return {
++    version: 1,
++    runId: "soak-abcd",
++    seed: 20260814,
++    mode: "local",
++    startedAtMs: Date.now(),
++    params: {
++      seed: 20260814,
++      durationMs: 7_200_000,
++      intervalSeconds: 0,
++      actors: 2,
++      operationsPerActor: 4,
++      resolvedTables: ["soak_tasks"],
++      maxConsecutiveFailures: 5,
++    },
++    lastCompletedCycle: 3,
++    cumulative: {
++      operations: 96,
++      expectedErrors: 0,
++      failures: 0,
++      retries: 0,
++      probes: { total: 0, ok: 0, skipped: 0, failed: 0 },
++      convergenceChecks: 0,
++      convergenceFailed: 0,
++    },
++    tableRows: { soak_tasks: 4 },
++  };
++}
++
++/**
++ * Writes a shape-valid service-account credentials file so a live-mode
++ * resume can pass the sync auto-start credentials boundary (the Google SDK
++ * is mocked in this file, so no network or real credentials are involved).
++ */
++export async function writeSoakCredentialsFile(): Promise<string> {
++  const credentialsPath = path.join(requireDir(), "soak-service-account.json");
++  await writeFile(credentialsPath, JSON.stringify({
++    type: "service_account",
++    project_id: "soak-test",
++    private_key_id: "k1",
++    private_key: "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
++    client_email: "soak@example.com",
++    client_id: "1",
++    token_uri: "https://oauth2.googleapis.com/token",
++  }), "utf8");
++  return credentialsPath;
++}
++
++/**
++ * Plants one field value into the run's SQLite authority through the
++ * PUBLIC EntityManager (no raw SQL), so the exact DB proof sees it.
++ */
++export async function plantSqliteValue(
++  runDir: string,
++  entry: { readonly name: string; readonly tableName: string },
++  id: string,
++  field: string,
++  value: string,
++): Promise<void> {
++  const { tokens } = buildSoakEntities();
++  const runtime = await createTypedSheets({
++    dbName: path.join(runDir, "soak.sqlite"),
++    entities: [...tokens] as unknown as readonly HikouteiEntity[],
++  });
++  try {
++    const em = runtime.em.fork();
++    const token = tokens[SOAK_ENTITY_ORDER.indexOf(entry)] as unknown as HikouteiEntity<{ id: string } & Record<string, unknown>>;
++    const row = await em.findOne(token, { id });
++    expect(row).not.toBeNull();
++    if (row === null) throw new Error(`row ${id} not found in ${entry.tableName}`);
++    (row as Record<string, unknown>)[field] = value;
++    await em.flush();
++  } finally {
++    await runtime.close();
++  }
++}
++
++/**
++ * Plants several field values into the run's SQLite authority through the
++ * PUBLIC EntityManager in ONE runtime session (no raw SQL), so the exact
++ * DB proof sees them. Used to plant the deterministic human-edit evidence
++ * for every ok probe of a fabricated live history.
++ */
++export async function plantSqliteValues(
++  runDir: string,
++  values: Array<{
++    entry: { readonly name: string; readonly tableName: string };
++    id: string;
++    field: string;
++    value: string;
++  }>,
++): Promise<void> {
++  if (values.length === 0) return;
++  const { tokens } = buildSoakEntities();
++  const runtime = await createTypedSheets({
++    dbName: path.join(runDir, "soak.sqlite"),
++    entities: [...tokens] as unknown as readonly HikouteiEntity[],
++  });
++  try {
++    const em = runtime.em.fork();
++    for (const { entry, id, field, value } of values) {
++      const entryIndex = SOAK_ENTITY_ORDER.findIndex((candidate) => candidate.name === entry.name);
++      const token = tokens[entryIndex] as unknown as HikouteiEntity<{ id: string } & Record<string, unknown>>;
++      const row = await em.findOne(token, { id });
++      expect(row).not.toBeNull();
++      if (row === null) throw new Error(`row ${id} not found in ${entry.tableName}`);
++      (row as Record<string, unknown>)[field] = value;
++    }
++    await em.flush();
++  } finally {
++    await runtime.close();
++  }
++}
++
++/**
++ * Deterministic human-edit evidence values for every ok probe of a
++ * fabricated live history: one (cycle, target, field, main-id, value) per
++ * probe-cadence cycle that carries an ok probe section. Mirrors the
++ * runner's exact probe rotation and value grammar.
++ */
++export async function plantedProbeEvidence(
++  runDir: string,
++  maxCycle: number,
++): Promise<Array<{
++  entry: { readonly name: string; readonly tableName: string };
++  id: string;
++  field: string;
++  value: string;
++}>> {
++  const state = JSON.parse(await readFile(path.join(runDir, "state.json"), "utf8")) as {
++    seed: number;
++  };
++  const seed = state.seed;
++  const cyclesPath = path.join(runDir, "cycles.jsonl");
++  const lines = (await readFile(cyclesPath, "utf8")).trim().split("\n");
++  const evidence = [];
++  for (const line of lines) {
++    const record = JSON.parse(line) as Record<string, unknown>;
++    if (record.abort !== undefined) continue;
++    const probe = record.probe as { status?: string } | undefined;
++    if (probe?.status !== "ok") continue;
++    const cycle = record.cycle as number;
++    if (cycle > maxCycle) continue;
++    const target = SOAK_ENTITY_ORDER[Math.floor(cycle / 10) % SOAK_ENTITY_ORDER.length]!;
++    evidence.push({
++      entry: target,
++      id: sharedEntityId(target.name, cycle, "main"),
++      field: deterministicProbeField(seed, target, cycle),
++      value: `human-edit-c${cycle}`,
++    });
++  }
++  return evidence;
++}
++
++/**
++ * Creates ONE new row in the run's SQLite authority through the PUBLIC
++ * EntityManager (no raw SQL), exactly like the interrupted run's own
++ * committed work would have.
++ */
++export async function plantNewRow(
++  runDir: string,
++  entry: { readonly name: string; readonly tableName: string },
++  row: Record<string, unknown>,
++): Promise<void> {
++  const { tokens } = buildSoakEntities();
++  const runtime = await createTypedSheets({
++    dbName: path.join(runDir, "soak.sqlite"),
++    entities: [...tokens] as unknown as readonly HikouteiEntity[],
++  });
++  try {
++    const em = runtime.em.fork();
++    // Resolve the token by NAME: callers pass `{ name, tableName }`
++    // literals that are not the SOAK_ENTITY_ORDER elements themselves.
++    const entryIndex = SOAK_ENTITY_ORDER.findIndex((candidate) => candidate.name === entry.name);
++    const token = tokens[entryIndex] as unknown as HikouteiEntity<{ id: string } & Record<string, unknown>>;
++    em.persist(em.create(token, row));
++    await em.flush();
++  } finally {
++    await runtime.close();
++  }
++}
++
++/**
++ * Deterministic FIRST forkIsolation operation of the soak workload.
++ *
++ * Replays the runner's exact deterministic generator (sequential prologue
++ * + up-front actor planning + per-op final-state application) from the
++ * stored seed/params and returns the first planned forkIsolation op with
++ * its two committed-stage candidates: the PRE-PATCH row (the valid
++ * committed state when the process died between the op's create flush and
++ * its patch flush) and the POST-PATCH row (the completed stage). The scan
++ * is a pure function of (seed, actors, operationsPerActor) — identical to
++ * the runner's own replay, so the op the test plants is the exact op the
++ * resumed run expects for that cycle.
++ */
++export function deterministicForkIsolationStage(
++  seed: number,
++  actors: number,
++  opsPerActor: number,
++): {
++  readonly cycle: number;
++  readonly entityName: string;
++  readonly tableName: string;
++  readonly mutateId: string;
++  readonly prePatchRow: Record<string, unknown>;
++  readonly postPatchRow: Record<string, unknown>;
++} {
++  const oracle = new SoakOracle(SOAK_FIELD_PLANS as Record<string, Record<string, OracleFieldSpec>>);
++  for (let cycle = 1; ; cycle += 1) {
++    for (let tableIndex = 0; tableIndex < SOAK_ENTITY_ORDER.length; tableIndex += 1) {
++      const entry = SOAK_ENTITY_ORDER[tableIndex]!;
++      const fieldPlan = SOAK_FIELD_PLANS[entry.name]!;
++      const rng = new SeededRandom(deriveSeed(seed, cycle * 7919 + tableIndex));
++      const mainId = sharedEntityId(entry.name, cycle, "main");
++      const churnId = sharedEntityId(entry.name, cycle, "churn");
++      const mainRow = { id: mainId, ...generateRow(rng, fieldPlan) };
++      const churnRow = { id: churnId, ...generateRow(rng, fieldPlan) };
++      const patch = generatePatch(rng, fieldPlan);
++      oracle.applyMutation({ op: "insert", entity: entry.name, row: mainRow });
++      oracle.applyMutation({ op: "insert", entity: entry.name, row: churnRow });
++      oracle.applyMutation({ op: "update", entity: entry.name, id: mainId, patch });
++      oracle.applyMutation({ op: "delete", entity: entry.name, id: churnId });
++    }
++    const plannedOps = [];
++    for (let actor = 0; actor < actors; actor += 1) {
++      for (let opIndex = 0; opIndex < opsPerActor; opIndex += 1) {
++        const entry = SOAK_ENTITY_ORDER[(actor * opsPerActor + opIndex) % SOAK_ENTITY_ORDER.length]!;
++        plannedOps.push(planActorOperation({
++          seed,
++          cycle,
++          actor,
++          opIndex,
++          entityName: entry.name,
++          fieldPlan: SOAK_FIELD_PLANS[entry.name]!,
++          oracle,
++        }));
++      }
++    }
++    for (const op of plannedOps) {
++      if (op.kind === "forkIsolation") {
++        const prePatchRow = { id: op.mutateId, ...op.row };
++        const postPatchRow = { ...prePatchRow, ...op.patch };
++        const entry = SOAK_ENTITY_ORDER.find((candidate) => candidate.name === op.entityName)!;
++        return {
++          cycle,
++          entityName: op.entityName,
++          tableName: entry.tableName,
++          mutateId: op.mutateId,
++          prePatchRow,
++          postPatchRow,
++        };
++      }
++      applyPlannedFinalState(oracle, op);
++    }
++  }
++}
++
++/** Applies one planned op's deterministic FINAL state to the replay oracle. */
++export function applyPlannedFinalState(
++  oracle: SoakOracle,
++  op: {
++    readonly kind: string;
++    readonly entityName: string;
++    readonly mutateId: string;
++    readonly row?: Record<string, unknown>;
++    readonly extraRows?: Record<string, unknown>[];
++    readonly patch?: Record<string, unknown>;
++  },
++): void {
++  switch (op.kind) {
++    case "create":
++      oracle.applyMutation({ op: "insert", entity: op.entityName, row: { id: op.mutateId, ...op.row } });
++      break;
++    case "update": {
++      const row: Record<string, unknown> = { ...op.patch };
++      const fieldPlan = SOAK_FIELD_PLANS[op.entityName]!;
++      for (const [field, spec] of Object.entries(fieldPlan)) {
++        if (spec.primary || row[field] !== undefined) continue;
++        row[field] = spec.type === "number" ? 0
++          : spec.type === "boolean" ? false
++            : spec.type === "date" ? new Date(0)
++              : "init";
++        if (spec.nullable && spec.type === "date") row[field] = null;
++      }
++      oracle.applyMutation({ op: "insert", entity: op.entityName, row: { id: op.mutateId, ...row } });
++      break;
++    }
++    case "batchPersist":
++      oracle.applyMutation({ op: "insert", entity: op.entityName, row: { id: op.mutateId, ...op.row } });
++      oracle.applyMutation({ op: "insert", entity: op.entityName, row: { id: `${op.mutateId}-x0`, ...op.extraRows?.[0] } });
++      oracle.applyMutation({ op: "insert", entity: op.entityName, row: { id: `${op.mutateId}-x1`, ...op.extraRows?.[1] } });
++      break;
++    case "transactionalCommit":
++      oracle.applyMutation({ op: "insert", entity: op.entityName, row: { id: op.mutateId, ...op.row } });
++      break;
++    case "forkIsolation":
++      oracle.applyMutation({ op: "insert", entity: op.entityName, row: { id: op.mutateId, ...op.row, ...op.patch } });
++      break;
++    default:
++      break; // read-only / rolled-back / delete kinds leave no row
++  }
++}
++
++/**
++ * Deterministic editable string field the runner's probe would pick for
++ * one cycle (the same rng/rotation as runHumanEditProbe).
++ */
++export function deterministicProbeField(
++  seed: number,
++  entry: { readonly name: string },
++  cycle: number,
++): string {
++  const fieldPlan = SOAK_FIELD_PLANS[entry.name]!;
++  const editableFields = Object.entries(fieldPlan)
++    .filter(([, spec]) => !spec.primary && spec.type === "string")
++    .map(([field]) => field);
++  const rng = new SeededRandom(deriveSeed(seed, cycle * 31 + 7));
++  return editableFields[rng.int(editableFields.length)]!;
++}
+diff --git a/tsconfig.test.json b/tsconfig.test.json
+index 7b50597505f7145096cf169d88db6d64c9a3a8ca..eef865e56c8f3ef2e5f8ab4745e198c708e3ed57 100644
+--- a/tsconfig.test.json
++++ b/tsconfig.test.json
+@@ -2,7 +2,15 @@
+   "extends": "./tsconfig.json",
+   "compilerOptions": {
+     "noEmit": true,
+-    "rootDir": "."
++    "rootDir": ".",
++    "paths": {
++      // Mirrors the vitest `hikoutei` alias (vitest.config.ts): the soak
++      // executor tests import the public entrypoint by package name, and
++      // in the test typecheck that resolves to the current source tree so
++      // it never depends on a stale ./dist build.
++      "hikoutei": ["./src/index.ts"],
++      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
++    }
+   },
+   "include": [
+     "src/**/*.ts",
