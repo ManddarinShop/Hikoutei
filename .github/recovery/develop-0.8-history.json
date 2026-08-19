@@ -297,7 +297,7 @@
     "pr": 297,
     "version": "0.8.54",
     "sourceRef": "9cf963d454a3c28a879baf12d3de32754001d7ca",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-297-readiness-recovery.patch"
   },
   {
     "pr": 298,
