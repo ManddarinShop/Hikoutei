@@ -303,7 +303,7 @@
     "pr": 298,
     "version": "0.8.55",
     "sourceRef": "744a0467b42f496fefa4189ceaf916c46626c3b4",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-298-routing-recovery.patch"
   },
   {
     "pr": 299,
