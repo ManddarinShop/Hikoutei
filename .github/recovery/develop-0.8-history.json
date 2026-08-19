@@ -243,7 +243,7 @@
     "pr": 288,
     "version": "0.8.45",
     "sourceRef": "d2548d64682a7a28432a93120f066f936b431d64",
-    "recoveryPatch": ".github/recovery/patches/pr-259-ci-recovery.patch"
+    "recoveryPatch": ".github/recovery/patches/pr-288-polling-recovery.patch"
   },
   {
     "pr": 289,
