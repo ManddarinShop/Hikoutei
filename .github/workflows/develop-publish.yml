@@ -95,6 +95,7 @@ jobs:
         env:
           TAG_NAME: ${{ steps.resolve-mode.outputs.tag }}
           EXPECTED_VERSION: ${{ steps.resolve-mode.outputs.version }}
+          MODE: ${{ steps.resolve-mode.outputs.mode }}
         run: |
           set -euo pipefail
           expected_version="$EXPECTED_VERSION"
