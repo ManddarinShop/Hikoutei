@@ -63,6 +63,19 @@ evidence. The same internal worker handles retries, response-loss recovery,
 and reconciliation. These operation types are implementation details and are
 not methods on the public EntityManager.
 
+### Spreadsheet-scoped batch merging
+
+Outbound effects for one spreadsheet are grouped to the spreadsheet scope and
+materialized in as few Google Sheets API round trips as possible. The provider
+reads every affected tab with one sheet enumeration plus one ranged read, then
+sends one `batchUpdate` whose requests target the different tabs' sheet ids —
+instead of one request cycle per tab. Each tab's effects are still planned and
+compare-and-set guarded against that tab's own preflight context, and fast
+append keeps a per-tab anchor for replay recognition. This keeps the remote
+request count constant per spreadsheet (roughly one read pass plus one write)
+regardless of how many tabs a dispatch touches, which matters under Google
+Sheets quota and rate limits.
+
 ## Inbound User_Input flow
 
 The internal service polls registered `User_Input` projections on a bounded

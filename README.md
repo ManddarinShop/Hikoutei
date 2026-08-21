@@ -299,7 +299,9 @@ entity API.
 
 ## Limitations
 
-- Google Sheets has quota, latency, and API rate limits.
+- Google Sheets has quota, latency, and API rate limits. The outbound sync
+  worker batches effects to the spreadsheet scope, so remote request volume
+  does not grow with the number of tabs a dispatch touches.
 - Sheet updates are asynchronous; the application should read its local state.
 - SQLite is local to the service and is not a distributed coordination layer.
 - Schema changes, manual edits, and conflicting updates still need an
