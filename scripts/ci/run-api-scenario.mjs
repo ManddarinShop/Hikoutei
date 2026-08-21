@@ -147,8 +147,11 @@ class FakeSyncSheetsProvider {
 
   async applyEffects(request) {
     this.calls.push({ method: "applyEffects", count: request.effects.length });
-    const sheet = this.requireSheet(request.sheetName);
-    const results = request.effects.map((effect) => this.applyEffect(sheet, effect));
+    // Effects may span multiple tabs after spreadsheet-level route grouping
+    // (one provider call carries several tabs' effects); route each effect
+    // to its own registered sheet like the real provider does.
+    const results = request.effects.map((effect) =>
+      this.applyEffect(this.requireSheet(effect.payload.sheetName), effect));
     return { results, snapshotHash: { kind: PRESENT, value: "fake-snapshot" }, hasMore: false };
   }
 

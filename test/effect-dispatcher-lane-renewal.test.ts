@@ -25,19 +25,28 @@ import {
   claimWriterLeaseWithAdapter,
   runEffectWorkerWithAdapter,
   type NewEffect,
+  type PendingEffect,
 } from "@hikoutei/ikisaki";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
+  type ApplySyncEffectsRequest,
+  type ApplySyncEffectsResult,
   type FastAppendRowsRequest,
   type FastAppendRowsResult,
+  type ReadSyncEffectPostconditionsRequest,
+  type SyncEffectPostconditionResult,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
 import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
 import type { CoordinatorLaneEvent } from "../src/application/sync/sheetsContract/mutationCoordinator/laneTelemetry.js";
 import {
   CoordinatedSheetsProvider,
 } from "../src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import {
+  SheetsEffectDispatcher,
+  SHEETS_SPREADSHEET_ROUTE_KEY,
+} from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import type { SqlStorageAdapter } from "../src/adapter/persistence/contracts/sql.js";
 import { FakeSyncSheetsProvider, type FakeSyncSheetInput } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
@@ -62,6 +71,8 @@ class Entity extends EntitySchema.class {}
 EntitySchema.setClass(Entity);
 
 const PHYSICAL_SHEET = "physical-lane";
+const PHYSICAL_SHEET_A = "physical-lane-a";
+const PHYSICAL_SHEET_B = "physical-lane-b";
 const LOGICAL_SHEET = "logical-lane";
 const WORKER_ID = "lane-renewal-worker";
 
@@ -86,6 +97,73 @@ class LaneProbeProvider extends FakeSyncSheetsProvider {
     return super.fastAppendRows(request);
   }
 }
+
+/** Fake provider that records when the combined multi-tab append call starts. */
+class MultiTabProbeProvider extends FakeSyncSheetsProvider {
+  public entryAt: number | undefined;
+
+  public override async fastAppendRows(
+    request: FastAppendRowsRequest,
+  ): Promise<FastAppendRowsResult> {
+    this.entryAt = Date.now();
+    return super.fastAppendRows(request);
+  }
+}
+
+/** Fake provider that records when the combined multi-tab regular apply call starts. */
+class MultiTabApplyProbeProvider extends FakeSyncSheetsProvider {
+  public entryAt: number | undefined;
+
+  public override async applyEffects(
+    request: ApplySyncEffectsRequest,
+  ): Promise<ApplySyncEffectsResult> {
+    this.entryAt = Date.now();
+    return super.applyEffects(request);
+  }
+}
+
+/** Fake provider that records when the combined multi-tab recovery read starts. */
+class MultiTabPostconditionProbeProvider extends FakeSyncSheetsProvider {
+  public entryAt: number | undefined;
+
+  public override async readEffectPostconditions(
+    request: ReadSyncEffectPostconditionsRequest,
+  ): Promise<readonly SyncEffectPostconditionResult[]> {
+    this.entryAt = Date.now();
+    return super.readEffectPostconditions(request);
+  }
+}
+
+/**
+ * Legacy coordinator that exposes only the single-lane in-lane hook
+ * (`runSerializedInner`), predating `runSerializedInnerForRoutes`.
+ */
+class LegacyCoordinatedProvider extends FakeSyncSheetsProvider {
+  public runSerializedInnerCalls = 0;
+
+  public async runSerializedInner<T>(
+    _physicalSheetId: string,
+    _operation: string,
+    remote: (inner: FakeSyncSheetsProvider) => Promise<T>,
+    beforeRemote?: () => Promise<boolean>,
+  ): Promise<T> {
+    this.runSerializedInnerCalls += 1;
+    if (beforeRemote !== undefined && !(await beforeRemote())) {
+      throw new Error("precondition failed");
+    }
+    return remote(this);
+  }
+}
+
+/** Storage the dispatcher never touches on the apply/readPostconditions path. */
+const UNUSED_STORAGE: SqlStorageAdapter = {
+  read: async () => {
+    throw new Error("storage must not be used on the apply/readPostconditions path");
+  },
+  transaction: async () => {
+    throw new Error("storage must not be used on the apply/readPostconditions path");
+  },
+};
 
 describe("effect dispatcher before-remote lease renewal", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
@@ -160,6 +238,208 @@ describe("effect dispatcher before-remote lease renewal", () => {
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
     // Lane telemetry still flows for the successful in-lane dispatch.
     expect(laneEvents.at(-1)?.outcome).toBe(TRANSPORT_OUTCOME_KINDS.SUCCESS);
+  });
+
+  it("acquires ALL distinct route lanes for a multi-tab fast append", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter, PHYSICAL_SHEET_A, "OrdersA");
+    await registerProjection(adapter, PHYSICAL_SHEET_B, "OrdersB");
+
+    const now = Date.now();
+    const fence = await claimTestFence(adapter, now);
+    const effectA = createAppendEffectFor("lane-a", PHYSICAL_SHEET_A, "OrdersA");
+    const effectB = createAppendEffectFor("lane-b", PHYSICAL_SHEET_B, "OrdersB");
+    await expect(appendPendingEffectsWithAdapter(adapter, fence, [effectA, effectB])).resolves.toBe(true);
+
+    const inner = new MultiTabProbeProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+      sheetInputFor(PHYSICAL_SHEET_B, "OrdersB"),
+    ]);
+    // Per-sheet lane resolver: each physical sheet gets its own mutation lane,
+    // so a multi-tab dispatch MUST acquire every involved lane to prevent a
+    // concurrent writer on any tab from interleaving during the combined call.
+    const coordinator = new CoordinatedSheetsProvider({
+      inner,
+      mutationKeyForPhysicalSheet: (id) => id,
+    });
+    const dispatcher = new SheetsEffectDispatcher({ provider: coordinator, storage: adapter });
+
+    // Hold the SECOND tab's lane: a multi-tab dispatch must acquire it too, so
+    // the provider call waits for this holder instead of running on the first
+    // lane alone.
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted!: () => void;
+    const holderStartedPromise = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    let holderEndedAt = 0;
+    const holder = coordinator.runSerializedControl(PHYSICAL_SHEET_B, "lane-holder", async () => {
+      holderStarted();
+      await holderGate;
+      holderEndedAt = Date.now();
+    });
+    await holderStartedPromise;
+
+    const pass = runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: WORKER_ID,
+      now,
+      maxEffects: 2,
+      effectLeaseDurationMs: 60_000,
+    });
+
+    // Keep the second lane held while the worker claims and queues: the
+    // multi-tab dispatch must wait out the full hold before its provider call.
+    await delay(300);
+    releaseHolder();
+    const report = await pass;
+    await holder;
+
+    expect(report).toMatchObject({ selected: 2, claimed: 2, applied: 2, failed: 0 });
+    // Both effects route through ONE combined fast-append call.
+    expect(inner.fastAppendCalls).toBe(1);
+    // The provider call started only after the second lane's holder finished,
+    // proving the multi-tab dispatch acquired BOTH distinct route lanes.
+    expect(inner.entryAt).toBeGreaterThanOrEqual(holderEndedAt);
+    await expect(readStatus(adapter, effectA.effectId)).resolves.toBe("applied");
+    await expect(readStatus(adapter, effectB.effectId)).resolves.toBe("applied");
+  });
+
+  it("acquires ALL distinct route lanes for a multi-tab apply", async () => {
+    const effectA = createAppendEffectFor("lane-apply-a", PHYSICAL_SHEET_A, "OrdersA");
+    const effectB = createAppendEffectFor("lane-apply-b", PHYSICAL_SHEET_B, "OrdersB");
+
+    const inner = new MultiTabApplyProbeProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+      sheetInputFor(PHYSICAL_SHEET_B, "OrdersB"),
+    ]);
+    const coordinator = new CoordinatedSheetsProvider({
+      inner,
+      mutationKeyForPhysicalSheet: (id) => id,
+    });
+    const dispatcher = new SheetsEffectDispatcher({ provider: coordinator, storage: UNUSED_STORAGE });
+
+    // Hold the SECOND tab's lane: a multi-tab apply must acquire it too, so
+    // the combined applyEffects call waits for this holder instead of running
+    // on the first lane alone.
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted!: () => void;
+    const holderStartedPromise = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    let holderEndedAt = 0;
+    const holder = coordinator.runSerializedControl(PHYSICAL_SHEET_B, "lane-holder", async () => {
+      holderStarted();
+      await holderGate;
+      holderEndedAt = Date.now();
+    });
+    await holderStartedPromise;
+
+    const applyPromise = dispatcher.apply({
+      routeKey: SHEETS_SPREADSHEET_ROUTE_KEY,
+      effects: [pendingFrom(effectA), pendingFrom(effectB)],
+      beforeRemoteDispatch: async () => true,
+    });
+
+    await delay(300);
+    releaseHolder();
+    const outcome = await applyPromise;
+    await holder;
+
+    // Both effects route through ONE combined applyEffects call.
+    expect(inner.applyEffectsCalls).toBe(1);
+    // The provider call started only after the second lane's holder finished,
+    // proving the multi-tab apply acquired BOTH distinct route lanes.
+    expect(inner.entryAt!).toBeGreaterThanOrEqual(holderEndedAt);
+    expect(outcome.results.map((r) => r.effectId).sort()).toEqual(
+      [effectA.effectId, effectB.effectId].sort(),
+    );
+  });
+
+  it("acquires ALL distinct route lanes for a multi-tab postcondition read", async () => {
+    const effectA = createAppendEffectFor("lane-read-a", PHYSICAL_SHEET_A, "OrdersA");
+    const effectB = createAppendEffectFor("lane-read-b", PHYSICAL_SHEET_B, "OrdersB");
+
+    const inner = new MultiTabPostconditionProbeProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+      sheetInputFor(PHYSICAL_SHEET_B, "OrdersB"),
+    ]);
+    const coordinator = new CoordinatedSheetsProvider({
+      inner,
+      mutationKeyForPhysicalSheet: (id) => id,
+    });
+    const dispatcher = new SheetsEffectDispatcher({ provider: coordinator, storage: UNUSED_STORAGE });
+
+    // Hold the SECOND tab's lane: a multi-tab recovery read must acquire it
+    // too so no writer can interleave on any tab during the combined probe.
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted!: () => void;
+    const holderStartedPromise = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    let holderEndedAt = 0;
+    const holder = coordinator.runSerializedControl(PHYSICAL_SHEET_B, "lane-holder", async () => {
+      holderStarted();
+      await holderGate;
+      holderEndedAt = Date.now();
+    });
+    await holderStartedPromise;
+
+    const readPromise = dispatcher.readPostconditions({
+      routeKey: SHEETS_SPREADSHEET_ROUTE_KEY,
+      effects: [pendingFrom(effectA), pendingFrom(effectB)],
+      beforeRemoteDispatch: async () => true,
+    });
+
+    await delay(300);
+    releaseHolder();
+    const outcome = await readPromise;
+    await holder;
+
+    expect(inner.postconditionBatchReads).toBe(1);
+    expect(inner.entryAt!).toBeGreaterThanOrEqual(holderEndedAt);
+    expect(outcome.results.map((r) => r.effectId).sort()).toEqual(
+      [effectA.effectId, effectB.effectId].sort(),
+    );
+  });
+
+  it("routes multi-tab calls through a legacy single-lane coordinator without crashing", async () => {
+    const effectA = createAppendEffectFor("lane-legacy-a", PHYSICAL_SHEET_A, "OrdersA");
+    const effectB = createAppendEffectFor("lane-legacy-b", PHYSICAL_SHEET_B, "OrdersB");
+
+    // A legacy coordinator exposes only `runSerializedInner` (no
+    // `runSerializedInnerForRoutes`): a multi-tab call must fall back to that
+    // single-lane hook instead of crashing on a missing method.
+    const inner = new LegacyCoordinatedProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+      sheetInputFor(PHYSICAL_SHEET_B, "OrdersB"),
+    ]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+
+    const outcome = await dispatcher.apply({
+      routeKey: SHEETS_SPREADSHEET_ROUTE_KEY,
+      effects: [pendingFrom(effectA), pendingFrom(effectB)],
+      beforeRemoteDispatch: async () => true,
+    });
+
+    expect(inner.runSerializedInnerCalls).toBe(1);
+    expect(inner.applyEffectsCalls).toBe(1);
+    expect(outcome.results.map((r) => r.effectId).sort()).toEqual(
+      [effectA.effectId, effectB.effectId].sort(),
+    );
   });
 
   it("never sends a write when the lease expires while queued on the lane and recovers durably", async () => {
@@ -417,9 +697,13 @@ async function claimTestFence(
 }
 
 function sheetInput(): FakeSyncSheetInput {
+  return sheetInputFor(PHYSICAL_SHEET, "Orders");
+}
+
+function sheetInputFor(physicalSheetId: string, sheetName: string): FakeSyncSheetInput {
   return {
-    physicalSheetId: PHYSICAL_SHEET,
-    sheetName: "Orders",
+    physicalSheetId,
+    sheetName,
     registeredRange: "A:B",
     projection: "system_state",
     schemaVersion: 1,
@@ -430,6 +714,11 @@ function sheetInput(): FakeSyncSheetInput {
 
 /** A create-if-missing append effect matching the fake sheet above. */
 function createAppendEffect(suffix: string): NewEffect {
+  return createAppendEffectFor(suffix, PHYSICAL_SHEET, "Orders");
+}
+
+/** A create-if-missing append effect for one physical sheet/tab. */
+function createAppendEffectFor(suffix: string, physicalSheetId: string, sheetName: string): NewEffect {
   const targetId = `order-${suffix}`;
   const fields = {
     id: { kind: "string" as const, value: targetId },
@@ -440,7 +729,7 @@ function createAppendEffect(suffix: string): NewEffect {
     effectKind: "system_projection",
     commitId: `commit-${suffix}`,
     logicalSheetId: LOGICAL_SHEET,
-    physicalSheetId: PHYSICAL_SHEET,
+    physicalSheetId,
     projection: "system_state",
     rowBindingId: { kind: PRESENCE_KINDS.ABSENT },
     conflictId: { kind: PRESENCE_KINDS.ABSENT },
@@ -454,7 +743,7 @@ function createAppendEffect(suffix: string): NewEffect {
     repairGuardHash: { kind: PRESENCE_KINDS.ABSENT },
     sourceQuarantineId: { kind: PRESENCE_KINDS.ABSENT },
     payloadJson: serializeSyncProjectionEffectPayload({
-      sheetName: "Orders",
+      sheetName,
       registeredRange: "A:B",
       schemaVersion: 1,
       targetAnchor: `${suffix}-anchor`,
@@ -469,15 +758,52 @@ function createAppendEffect(suffix: string): NewEffect {
   };
 }
 
-async function registerProjection(adapter: MikroOrmSqliteAdapter): Promise<void> {
+/** Lifts a durable outbox row into the pending shape used by dispatcher requests. */
+function pendingFrom(effect: NewEffect): PendingEffect {
+  return {
+    effect_id: effect.effectId,
+    effect_kind: effect.effectKind,
+    commit_id: effect.commitId,
+    logical_sheet_id: effect.logicalSheetId,
+    physical_sheet_id: effect.physicalSheetId,
+    projection: effect.projection,
+    row_binding_id: effect.rowBindingId.kind === PRESENCE_KINDS.PRESENT ? effect.rowBindingId.value : null,
+    conflict_id: effect.conflictId.kind === PRESENCE_KINDS.PRESENT ? effect.conflictId.value : null,
+    target_kind: effect.targetKind,
+    target_id: effect.targetId,
+    target_entity_revision: effect.targetEntityRevision.kind === APPLICABILITY_KINDS.APPLICABLE ? effect.targetEntityRevision.value : null,
+    target_field_revision_hash: effect.targetFieldRevisionHash.kind === APPLICABILITY_KINDS.APPLICABLE ? effect.targetFieldRevisionHash.value : null,
+    target_canonical_commit_id: effect.targetCanonicalCommitId.kind === APPLICABILITY_KINDS.APPLICABLE ? effect.targetCanonicalCommitId.value : null,
+    expected_visible_revision: effect.expectedVisibleRevision,
+    expected_visible_hash: effect.expectedVisibleHash,
+    repair_guard_hash: effect.repairGuardHash.kind === PRESENCE_KINDS.PRESENT ? effect.repairGuardHash.value : null,
+    source_quarantine_id: effect.sourceQuarantineId.kind === PRESENCE_KINDS.PRESENT ? effect.sourceQuarantineId.value : null,
+    payload_json: effect.payloadJson,
+    payload_hash: effect.payloadHash,
+    effect_dedupe_key: effect.effectDedupeKey,
+    stream_sequence: effect.streamSequence,
+    created_at: 0,
+    next_attempt_at: null,
+    uncertain_since: null,
+    next_probe_at: null,
+    dispatch_id: null,
+    status: "pending",
+  } as unknown as PendingEffect;
+}
+
+async function registerProjection(
+  adapter: MikroOrmSqliteAdapter,
+  physicalSheetId: string = PHYSICAL_SHEET,
+  sheetName: string = "Orders",
+): Promise<void> {
   await adapter.transaction(async ({ sql }) => {
     await sql.run(
-      "INSERT INTO sheet_registry (sheet_id, schema_version, ownership_manifest_json, business_key_field) VALUES (?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO sheet_registry (sheet_id, schema_version, ownership_manifest_json, business_key_field) VALUES (?, ?, ?, ?)",
       [LOGICAL_SHEET, 1, "{}", "id"],
     );
     await sql.run(
       "INSERT INTO physical_sheet_registry (physical_sheet_id, logical_sheet_id, spreadsheet_id, tab_name, registered_range, projection, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [PHYSICAL_SHEET, LOGICAL_SHEET, "spreadsheet", "Orders", "A:B", "system_state", 1],
+      [physicalSheetId, LOGICAL_SHEET, "spreadsheet", sheetName, "A:B", "system_state", 1],
     );
   });
 }
