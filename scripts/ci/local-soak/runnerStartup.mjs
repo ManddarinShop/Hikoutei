@@ -22,7 +22,7 @@ import { parseSpreadsheetIdFromUrl } from "./spreadsheetUrl.mjs";
  * tighter operation deadline (`min(run deadline, now + phase timeout)`) on
  * every call, so a phase can never outlive its own timeout.
  */
-async function detectLiveMode(deadlineAtMs) {
+export async function detectLiveMode(deadlineAtMs) {
   const url = process.env.HIKOUTEI_SYNC_SPREADSHEET_URL;
   const credentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if ((url === undefined || url.trim() === "") ||
@@ -53,7 +53,7 @@ async function detectLiveMode(deadlineAtMs) {
  * complete schema is validated BEFORE any runtime opens, so a malformed
  * state can never partially run.
  */
-async function loadOrInitState(artifacts, options, seed, mode, startedClock, progress) {
+export async function loadOrInitState(artifacts, options, seed, mode, startedClock, progress) {
   if (options.resume) {
     if (!existsSync(artifacts.paths.state)) {
       // A checkpoint marker without state means the run died before its
