@@ -176,6 +176,24 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
     return this.runMutation(physicalSheetId, operation, () => remote(this.inner), beforeRemote);
   }
 
+  /**
+   * Runs one internal remote task across ALL distinct mutation lanes for a
+   * multi-tab batch, with the same optional in-lane precondition hook as
+   * `runSerializedInner`. Acquiring every involved lane (in stable sorted
+   * order) prevents another writer from interleaving on any tab while the
+   * combined preflight/write or recovery read runs. Single-route callers keep
+   * the single-lane `runSerializedInner` path.
+   */
+  public runSerializedInnerForRoutes<T>(
+    physicalSheetIds: readonly string[],
+    operation: string,
+    remote: (inner: TInner) => Promise<T>,
+    beforeRemote?: () => Promise<boolean>,
+  ): Promise<T> {
+    const keys = distinctLaneKeys(physicalSheetIds.map((id) => this.resolveKey(id)));
+    return this.runInLanes(keys, operation, () => remote(this.inner), beforeRemote);
+  }
+
   public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
     return this.runMutation(request.physicalSheetId, "fastAppendRows", () =>
       this.inner.fastAppendRows(request),
@@ -392,7 +410,10 @@ const DEFAULT_LANE_KEY = "default";
 export type CoordinatedSerializedInnerProvider = Pick<
   CoordinatedSheetsProvider<CoordinatedSheetsInner>,
   "runSerializedInner"
->;
+> & {
+  /** Multi-route variant; absent on legacy coordinators that predate it. */
+  runSerializedInnerForRoutes?: CoordinatedSheetsProvider<CoordinatedSheetsInner>["runSerializedInnerForRoutes"];
+};
 
 /**
  * Returns whether a provider exposes the coordinator's in-lane dispatch hook.
@@ -406,6 +427,23 @@ export function hasCoordinatedSerializedInner(
   provider: SyncEffectWorkerProvider,
 ): provider is SyncEffectWorkerProvider & CoordinatedSerializedInnerProvider {
   return typeof (provider as Partial<CoordinatedSerializedInnerProvider>).runSerializedInner === "function";
+}
+
+/**
+ * Returns whether a provider exposes the coordinator's multi-route in-lane
+ * dispatch hook (`runSerializedInnerForRoutes`).
+ *
+ * The effect dispatcher uses this to decide whether a multi-tab call can
+ * acquire every involved mutation lane in one serialized pass. Legacy
+ * coordinators that predate the multi-route hook expose only
+ * `runSerializedInner`; the dispatcher falls back to that single-lane path
+ * instead of crashing on a missing method.
+ */
+export function hasCoordinatedSerializedInnerForRoutes(
+  provider: SyncEffectWorkerProvider,
+): provider is SyncEffectWorkerProvider &
+  Pick<CoordinatedSheetsProvider<CoordinatedSheetsInner>, "runSerializedInnerForRoutes"> {
+  return typeof (provider as Partial<CoordinatedSerializedInnerProvider>).runSerializedInnerForRoutes === "function";
 }
 
 /** Returns the distinct, sorted lane keys for one batch mutation. */

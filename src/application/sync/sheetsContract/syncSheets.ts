@@ -261,6 +261,16 @@ export interface FastAppendRow {
   /** Developer-metadata row anchor written in the same Sheets batch. */
   readonly anchor?: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
+  /**
+   * Optional per-row route so one fast-append request can span multiple tabs.
+   * When absent the provider falls back to the request-level route (single
+   * tab, the legacy shape). The dispatcher populates these from each effect.
+   */
+  readonly physicalSheetId?: string;
+  readonly projection?: SyncProjection;
+  readonly sheetName?: string;
+  readonly registeredRange?: string;
+  readonly schemaVersion?: number;
 }
 
 /** Per-effect result for one fast-append row. */

@@ -71,9 +71,10 @@ const ROUTE_BETA: RouteSpec = {
 
 describe("outbound effect dispatch batching", () => {
   describe("route grouping and predecessor order", () => {
-    it("groups effects by physical route and preserves selection order", () => {
-      // Input order intentionally interleaves two routes; grouping must keep
-      // each route together and preserve the per-route predecessor order.
+    it("groups all effects of one spreadsheet into one route and preserves selection order", () => {
+      // Route grouping is coarsened to the spreadsheet scope: the dispatcher
+      // wraps one provider bound to one spreadsheet, so effects across tabs
+      // group into ONE dispatch group while preserving the selection order.
       const items = [
         makeItem(ROUTE_ALPHA, "a-1"),
         makeItem(ROUTE_BETA, "b-1"),
@@ -84,15 +85,11 @@ describe("outbound effect dispatch batching", () => {
 
       const groups = groupEffectsByRoute(items, sheetsRouteKeyFor);
 
-      expect(groups).toHaveLength(2);
+      expect(groups).toHaveLength(1);
       const alpha = groups.find((group) => group.items[0]!.pending.effect_id === "a-1")!;
-      const beta = groups.find((group) => group.items[0]!.pending.effect_id === "b-1")!;
-      expect(ids(alpha)).toEqual(["a-1", "a-2", "a-3"]);
-      expect(ids(beta)).toEqual(["b-1", "b-2"]);
-      // Each route keeps one dispatcher route key carrying all of its effects.
+      expect(ids(alpha)).toEqual(["a-1", "b-1", "a-2", "b-2", "a-3"]);
+      // The whole spreadsheet shares one dispatcher route key.
       expect(alpha.routeKey).toBe(sheetsRouteKeyFor(alpha.items[0]!.pending));
-      expect(beta.routeKey).toBe(sheetsRouteKeyFor(beta.items[0]!.pending));
-      expect(alpha.routeKey).not.toBe(beta.routeKey);
     });
 
     it("chunks an oversized route at the Apps Script bounded effect batch", () => {
@@ -129,7 +126,9 @@ describe("outbound effect dispatch batching", () => {
       expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
     });
 
-    it("preserves physical-route grouping across distinct routes when chunking", () => {
+    it("coarsens distinct tabs of one spreadsheet into one route when chunking", () => {
+      // Two tabs of the same spreadsheet group into ONE route, so 25 effects
+      // chunk at the bounded batch into [20, 5].
       const items = [
         ...Array.from({ length: EFFECT_BATCH_LIMIT + 3 }, (_, index) =>
           makeItem(ROUTE_ALPHA, `a-${index}`),
@@ -139,13 +138,11 @@ describe("outbound effect dispatch batching", () => {
 
       const chunked = chunkEffectGroups(groupEffectsByRoute(items, sheetsRouteKeyFor));
 
-      expect(chunked).toHaveLength(3);
+      expect(chunked).toHaveLength(2);
       expect(chunked[0]!.routeKey).toBe(sheetsRouteKeyFor(chunked[0]!.items[0]!.pending));
       expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
       expect(chunked[1]!.routeKey).toBe(sheetsRouteKeyFor(chunked[1]!.items[0]!.pending));
-      expect(chunked[1]!.items).toHaveLength(3);
-      expect(chunked[2]!.routeKey).toBe(sheetsRouteKeyFor(chunked[2]!.items[0]!.pending));
-      expect(chunked[2]!.items).toHaveLength(2);
+      expect(chunked[1]!.items).toHaveLength(5);
     });
   });
 

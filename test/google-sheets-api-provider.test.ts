@@ -509,6 +509,95 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
 });
 
 describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => {
+  it("batches effects spanning MULTIPLE tabs into ONE batchUpdate targeting different sheetIds", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    // Seed two tabs that belong to one spreadsheet; the provider groups a
+    // spreadsheet-scoped request across all of them.
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    const systemEffect = effect({
+      effectId: "multi-system",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-system",
+      createIfMissing: true,
+      fields: { id: cell.string("u-system"), status: cell.string("pending") },
+    });
+    const inputEffect = effect({
+      effectId: "multi-input",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      targetAnchor: "anchor-input",
+      createIfMissing: true,
+      fields: { id: cell.string("u-input"), status: cell.string("pending") },
+    });
+
+    const result = await applyRequest(provider, [systemEffect, inputEffect]);
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
+
+    // ONE atomic batchUpdate whose requests target the different tabs' sheetIds.
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0];
+    expect(batch).toBeDefined();
+    if (batch === undefined) return;
+    const systemTab = spreadsheet.findTab("Users_System");
+    const inputTab = spreadsheet.findTab("Users_Input");
+    expect(systemTab).toBeDefined();
+    expect(inputTab).toBeDefined();
+    if (systemTab === undefined || inputTab === undefined) return;
+    const sheetIds = new Set(batch.map((request) => request.sheetId));
+    expect(sheetIds).toContain(systemTab.sheetId);
+    expect(sheetIds).toContain(inputTab.sheetId);
+    expect(sheetIds.size).toBeGreaterThan(1);
+    // Each tab's own effect landed in its own tab.
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("u-system"),
+      status: cell.string("pending"),
+    });
+    expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS)).toMatchObject({
+      id: cell.string("u-input"),
+      status: cell.string("pending"),
+    });
+  });
+
+  it("rejects a multi-route apply in inline postcondition mode before any mutation", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const systemEffect = effect({
+      effectId: "inline-system",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-a",
+      createIfMissing: true,
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const inputEffect = effect({
+      effectId: "inline-input",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      targetAnchor: "anchor-b",
+      createIfMissing: true,
+      fields: { id: cell.string("u2"), status: cell.string("pending") },
+    });
+    // Multi-route inline cannot verify written rows or persist receipts, so
+    // it must reject BEFORE any read or mutation instead of acknowledging
+    // unverified writes.
+    await expect(applyRequest(provider, [systemEffect, inputEffect], "inline"))
+      .rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    expect(transport.getSpreadsheetRequests).toHaveLength(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
   it("plans multiple creates into one target+receipt batch", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1242,6 +1331,89 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
 });
 
 describe("GoogleSheetsApiSyncProvider fast append", () => {
+  it("appends rows spanning MULTIPLE tabs in ONE batchUpdate targeting different sheetIds", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Orders_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [
+        SYSTEM_DEFINITION,
+        definition({
+          physicalSheetId: "orders:system_state",
+          tabName: "Orders_System",
+          projection: "system_state",
+          headers: SYSTEM_HEADERS,
+        }),
+      ],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 0,
+    });
+
+    const usersRow: FastAppendRow = {
+      effectId: "fast-users",
+      payloadHash: "payload-users",
+      fields: {
+        id: cell.string("u-fast"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    const ordersRow: FastAppendRow = {
+      effectId: "fast-orders",
+      payloadHash: "payload-orders",
+      fields: {
+        id: { kind: "string" as const, value: "order-fast" },
+        status: { kind: "string" as const, value: "pending" },
+        __typed_sheets_deleted: { kind: "boolean" as const, value: false },
+      },
+      physicalSheetId: "orders:system_state",
+      projection: "system_state",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+
+    const result = await provider.fastAppendRows({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      rows: [usersRow, ordersRow],
+    });
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
+
+    // ONE atomic batchUpdate whose requests target the different tabs' sheetIds.
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0];
+    expect(batch).toBeDefined();
+    if (batch === undefined) return;
+    const usersTab = spreadsheet.findTab("Users_System");
+    const ordersTab = spreadsheet.findTab("Orders_System");
+    expect(usersTab).toBeDefined();
+    expect(ordersTab).toBeDefined();
+    if (usersTab === undefined || ordersTab === undefined) return;
+    const sheetIds = new Set(batch.map((request) => request.sheetId));
+    expect(sheetIds).toContain(usersTab.sheetId);
+    expect(sheetIds).toContain(ordersTab.sheetId);
+    expect(sheetIds.size).toBeGreaterThan(1);
+    // Each row landed in its own tab.
+    expect(stubRowFields(usersTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: { kind: "string", value: "u-fast" },
+    });
+    expect(stubRowFields(ordersTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: { kind: "string", value: "order-fast" },
+    });
+  });
+
   it("appends up to 1,000 rows per request and defers the suffix", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -1327,7 +1499,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
-  it("requires an identity field for the route", async () => {
+  it("requires an identity field for the route before any preflight read", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedUserInputTab(spreadsheet, []);
     const transport = new StubSheetsTransport(spreadsheet);
@@ -1340,6 +1512,116 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
       schemaVersion: 1,
       rows: appendRows(1),
     })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    // Fail-fast: an identity-less route is rejected before any enumeration or
+    // ranged preflight read is burned, and before any mutation.
+    expect(transport.getSpreadsheetRequests).toHaveLength(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("rejects a multi-route request with an identity-less route before any preflight read", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const systemRow: FastAppendRow = {
+      effectId: "fast-system",
+      payloadHash: "payload-system",
+      fields: {
+        id: cell.string("u-fast"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    const inputRow: FastAppendRow = {
+      effectId: "fast-input",
+      payloadHash: "payload-input",
+      fields: {
+        id: cell.string("i-fast"),
+        status: cell.string("pending"),
+      },
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      sheetName: "Users_Input",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    await expect(provider.fastAppendRows({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      rows: [systemRow, inputRow],
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    // Fail-fast: the identity-less route is rejected before the shared
+    // enumeration/ranged preflight read, and before any mutation.
+    expect(transport.getSpreadsheetRequests).toHaveLength(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("appends a single-route request whose row overrides point to another tab on the overridden tab", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Orders_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [
+        SYSTEM_DEFINITION,
+        definition({
+          physicalSheetId: "orders:system_state",
+          tabName: "Orders_System",
+          projection: "system_state",
+          headers: SYSTEM_HEADERS,
+        }),
+      ],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 0,
+    });
+    // The request-level route is the top-level Users_System tab, but the row
+    // carries per-row route overrides pointing at Orders_System. The request
+    // collapses to ONE effective route, so it must append to the overridden
+    // tab, not the top-level one.
+    const ordersRow: FastAppendRow = {
+      effectId: "fast-orders",
+      payloadHash: "payload-orders",
+      fields: {
+        id: cell.string("order-fast"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+      physicalSheetId: "orders:system_state",
+      projection: "system_state",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    const result = await provider.fastAppendRows({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      rows: [ordersRow],
+    });
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied"]);
+    const ordersTab = spreadsheet.findTab("Orders_System");
+    const systemTab = spreadsheet.findTab("Users_System");
+    expect(ordersTab).toBeDefined();
+    expect(systemTab).toBeDefined();
+    if (ordersTab === undefined || systemTab === undefined) return;
+    // The row landed in the overridden Orders_System tab, not Users_System.
+    expect(stubRowFields(ordersTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: { kind: "string", value: "order-fast" },
+    });
+    expect(systemTab.lastContentRow()).toBe(0);
   });
 
   it("fails closed when an append row omits payloadHash", async () => {
@@ -1555,6 +1837,75 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     if (systemTab === undefined) throw new Error("system tab missing");
     expect(systemTab.lastContentRow()).toBe(1);
     expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).id).toEqual(cell.string("small"));
+  });
+
+  it("skips an oversize effect in a multi-tab group and applies the following valid effects without row gaps", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport, { maxBatchBytes: 6_000 });
+
+    // One oversized effect FIRST in the system tab's group, followed by a
+    // valid effect in the SAME group and a valid effect in another tab. The
+    // prefix search must respect the start offset so the valid effects that
+    // come after the oversized one are still included, and the included
+    // effects must be re-planned against the tab so the skipped slot does
+    // not leave a row gap.
+    const oversize = effect({
+      effectId: "multi-oversize",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-big",
+      createIfMissing: true,
+      fields: {
+        id: cell.string("big"),
+        status: cell.string("x".repeat(20_000)),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const systemSmall = effect({
+      effectId: "multi-system-small",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-small",
+      createIfMissing: true,
+      fields: {
+        id: cell.string("small"),
+        status: cell.string("ok"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const inputSmall = effect({
+      effectId: "multi-input-small",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      targetAnchor: "anchor-input",
+      createIfMissing: true,
+      fields: { id: cell.string("u-input"), status: cell.string("ok") },
+    });
+
+    const result = await applyRequest(provider, [oversize, systemSmall, inputSmall]);
+    // Only the oversized effect is schema_error; the valid effects in the
+    // SAME system tab group still apply after it.
+    expect(result.results.map((entry) => entry.status)).toEqual(["schema_error", "applied", "applied"]);
+    expect(result.results[0]?.reason).toEqual({
+      kind: "present",
+      value: "effect_payload_too_large",
+    });
+    expect(result.hasMore).toBe(false);
+
+    // ONE atomic batch carried the two valid effects; the oversized one was
+    // excluded, so its skipped slot must NOT leave a row gap in the tab.
+    expect(transport.batchUpdateCalls).toBe(1);
+    const systemTab = spreadsheet.findTab("Users_System");
+    if (systemTab === undefined) throw new Error("system tab missing");
+    expect(systemTab.lastContentRow()).toBe(1);
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).id).toEqual(cell.string("small"));
+    const inputTab = spreadsheet.findTab("Users_Input");
+    if (inputTab === undefined) throw new Error("input tab missing");
+    expect(inputTab.lastContentRow()).toBe(1);
+    expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS).id).toEqual(cell.string("u-input"));
   });
 
   it("measures the SDK-wrapped wire body, so wrapper overhead trims the batch", async () => {
