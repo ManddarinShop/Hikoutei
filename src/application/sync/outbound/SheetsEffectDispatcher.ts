@@ -49,6 +49,7 @@ import {
 } from "../../../infrastructure/storage/sync/shared/spreadsheetAuthority.js";
 import {
   hasCoordinatedSerializedInner,
+  hasCoordinatedSerializedInnerForRoutes,
   CoordinatedLanePreconditionError,
 } from "../sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
 import {
@@ -130,19 +131,20 @@ export function sheetsDispatchPriorityFor(effect: PendingEffect): number {
 }
 
 /**
- * Builds the stable grouping key shared by all provider operations on one
- * route. The route includes payload-derived tab/range/schema fields, so one
- * dispatched group always maps to exactly one provider request.
+ * Builds the stable grouping key for all provider operations on one route.
+ *
+ * Phase 1 of the batch-merge work: the route is coarsened to the spreadsheet
+ * scope. A dispatcher wraps exactly one provider bound to one spreadsheet, so
+ * every effect routed through it belongs to that spreadsheet; grouping by a
+ * spreadsheet-level key puts all tabs' effects into one dispatch group. The
+ * worker splits fast-append vs regular by `isFastAppendCandidate` and takes
+ * the MIN priority over a mixed-content group, so dropping the per-tab fields
+ * is safe. Chunking (EFFECT_BATCH_LIMIT) is a later phase and stays separate.
  */
-export function sheetsRouteKeyFor(effect: PendingEffect): string {
-  const payload = parseSyncProjectionEffectPayload(effect.payload_json);
-  return [
-    effect.physical_sheet_id,
-    payload.sheetName,
-    payload.registeredRange,
-    effect.projection,
-    payload.schemaVersion,
-  ].join("\u0000");
+export const SHEETS_SPREADSHEET_ROUTE_KEY = "spreadsheet-scope";
+
+export function sheetsRouteKeyFor(_effect: PendingEffect): string {
+  return SHEETS_SPREADSHEET_ROUTE_KEY;
 }
 
 /** Validates the opaque payload of one pending effect for the worker. */
@@ -224,11 +226,11 @@ export class SheetsEffectDispatcher implements Dispatcher {
   /** Dispatches append-only rows through the idempotent provider batch operation. */
   public async fastAppend(request: DispatchRequest): Promise<FastAppendOutcome> {
     const providerRequest = buildFastAppendRowsRequest(request.effects);
-    const physicalSheetId = request.effects[0]!.physical_sheet_id;
+    const physicalSheetIds = request.effects.map((effect) => effect.physical_sheet_id);
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["fastAppendRows"]>>;
     try {
       response = await this.dispatchBeforeRemote(
-        physicalSheetId,
+        physicalSheetIds,
         "fastAppendRows",
         request.beforeRemoteDispatch,
         (provider) => provider.fastAppendRows(providerRequest),
@@ -286,7 +288,7 @@ export class SheetsEffectDispatcher implements Dispatcher {
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["applyEffects"]>>;
     try {
       response = await this.dispatchBeforeRemote(
-        effects[0]!.physicalSheetId,
+        effects.map((effect) => effect.physicalSheetId),
         "applyEffects",
         request.beforeRemoteDispatch,
         (provider) => provider.applyEffects(providerRequest),
@@ -316,7 +318,7 @@ export class SheetsEffectDispatcher implements Dispatcher {
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["readEffectPostconditions"]>>;
     try {
       response = await this.dispatchBeforeRemote(
-        effects[0]!.physicalSheetId,
+        effects.map((effect) => effect.physicalSheetId),
         "readEffectPostconditions",
         request.beforeRemoteDispatch,
         (provider) => provider.readEffectPostconditions(providerRequest),
@@ -403,15 +405,41 @@ export class SheetsEffectDispatcher implements Dispatcher {
    * worker requeues the batch through the durable outbox.
    */
   private async dispatchBeforeRemote<T>(
-    physicalSheetId: string,
+    physicalSheetIds: readonly string[],
     operation: string,
     beforeRemoteDispatch: (() => Promise<boolean>) | undefined,
     remote: (provider: SyncEffectWorkerProvider) => Promise<T>,
   ): Promise<T> {
     if (beforeRemoteDispatch === undefined) return remote(this.provider);
     if (hasCoordinatedSerializedInner(this.provider)) {
+      const distinct = [...new Set(physicalSheetIds)];
+      if (distinct.length === 1) {
+        // Single-route call: keep the single-lane path byte-identical.
+        return this.provider.runSerializedInner(
+          distinct[0]!,
+          operation,
+          (inner) => remote(inner),
+          beforeRemoteDispatch,
+        );
+      }
+      // Multi-tab call: acquire EVERY distinct route lane so no other writer
+      // can interleave on any tab during the combined preflight/write or
+      // recovery read.
+      if (hasCoordinatedSerializedInnerForRoutes(this.provider)) {
+        return this.provider.runSerializedInnerForRoutes(
+          distinct,
+          operation,
+          (inner) => remote(inner),
+          beforeRemoteDispatch,
+        );
+      }
+      // Legacy coordinator that predates the multi-route hook exposes only
+      // `runSerializedInner`, which cannot acquire every lane in one call.
+      // Fall back to the first route's lane so the combined multi-tab call
+      // still runs under coordinator serialization without crashing on a
+      // missing method.
       return this.provider.runSerializedInner(
-        physicalSheetId,
+        distinct[0]!,
         operation,
         (inner) => remote(inner),
         beforeRemoteDispatch,
@@ -440,6 +468,11 @@ function buildFastAppendRowsRequest(
       payloadHash: effect.payloadHash,
       anchor: effect.payload.targetAnchor,
       fields: effect.payload.fields,
+      physicalSheetId: effect.physicalSheetId,
+      projection: effect.projection,
+      sheetName: effect.payload.sheetName,
+      registeredRange: effect.payload.registeredRange,
+      schemaVersion: effect.payload.schemaVersion,
     })),
   };
 }

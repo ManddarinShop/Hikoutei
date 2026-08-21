@@ -22,6 +22,7 @@ import { invalidProviderRequest } from "../errors.js";
 import {
   enumerateSheetProperties,
   readPreflightData,
+  readPreflightDataForRoutes,
   type PreflightContext,
 } from "../model/preflightContext.js";
 import { anchorColumnFor } from "../model/preflightRows.js";
@@ -60,6 +61,42 @@ export async function readPreflight(
       checkboxHeaders: routeOptions.checkboxHeaders,
       projection: definition.sheet.projection,
     }, sheets, deps.readTimeoutMs));
+}
+
+/**
+ * Reads the target and receipt tabs for MANY routes through the read lane
+ * with ONE enumeration and ONE ranged read covering all needed tabs, then
+ * builds a PreflightContext per route keyed by its sheetName.
+ */
+export async function readPreflightForRoutes(
+  deps: GoogleSheetsApiProviderDeps,
+  routes: ReadonlyArray<{
+    readonly sheetName: string;
+    readonly registeredRange: string;
+    readonly definition: RegisteredSyncProjectionDefinition;
+    readonly routeOptions: {
+      readonly identityField: Presence<string>;
+      readonly checkboxHeaders: readonly string[];
+    };
+  }>,
+): Promise<ReadonlyMap<string, PreflightContext>> {
+  const sheets = await runRead(deps, () =>
+    enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs));
+  return runRead(deps, () =>
+    readPreflightDataForRoutes(
+      deps.transport,
+      routes.map((route) => ({
+        spreadsheetId: deps.spreadsheetId,
+        sheetName: route.sheetName,
+        registeredRange: route.registeredRange,
+        headers: route.definition.headers,
+        identityField: route.routeOptions.identityField,
+        checkboxHeaders: route.routeOptions.checkboxHeaders,
+        projection: route.definition.sheet.projection,
+      })),
+      sheets,
+      deps.readTimeoutMs,
+    ));
 }
 
 /** Validates one observation request and derives its snapshot target. */

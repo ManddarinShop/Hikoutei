@@ -172,6 +172,187 @@ export function measureRequestBytes(requests: readonly GoogleSheetsApiWriteReque
   return new TextEncoder().encode(serializeBatchUpdateRequests(requests)).byteLength;
 }
 
+/** One route group's plans for a combined (multi-tab) batch. */
+export interface CombinedApplyRoute {
+  readonly context: PreflightContext;
+  readonly plans: readonly EffectPlan[];
+}
+
+/**
+ * Builds ONE atomic batchUpdate request list across several tabs, targeting
+ * each tab's sheetId, and appending ALL routes' receipts to the single shared
+ * receipt sheet once (created if absent). Preserves per-tab target rows.
+ */
+export function buildCombinedApplyRequests(
+  routes: readonly CombinedApplyRoute[],
+  options: { readonly updatedAt: string; readonly includeReceipts: boolean },
+): BuiltApplyBatch {
+  const requests: GoogleSheetsApiWriteRequest[] = [];
+  const allReceipts: PlannedReceipt[] = [];
+  for (const route of routes) {
+    if (options.includeReceipts) {
+      allReceipts.push(...collectBatchReceipts(route.plans, route.context, true));
+    }
+    // Emit this route's target mutations before the next tab so each
+    // request targets the tab's own sheetId.
+    const perTabAppended: WorkingRow[] = [];
+    const perTabUpdated: WorkingRow[] = [];
+    const perTabDeleted: WorkingRow[] = [];
+    for (const plan of route.plans) {
+      if (plan.mutation !== undefined) collectMutation(plan.mutation, perTabAppended, perTabUpdated, perTabDeleted);
+    }
+    if (perTabAppended.length > 0) pushAppendWrites(requests, route.context, perTabAppended);
+    for (const row of perTabUpdated) pushUpdateWrites(requests, route.context, row);
+    for (const row of [...perTabDeleted].sort((left, right) => right.rowNumber - left.rowNumber)) {
+      requests.push({
+        kind: "deleteDimension",
+        sheetId: route.context.sheetId,
+        dimension: "ROWS",
+        startIndex: row.rowNumber - 1,
+        endIndex: row.rowNumber,
+      });
+    }
+  }
+
+  // Receipt sheet is shared per spreadsheet: create it once if any route
+  // needs it and it is absent (all contexts share the same receipt sheet).
+  // Deduplicate receipts GLOBALLY across all routes so a malformed request
+  // reusing an effectId across tabs cannot write duplicate shared receipt rows.
+  let createdReceiptSheetId: number | undefined;
+  const receiptContext = routes[0]?.context;
+  const uniqueReceipts = receiptContext === undefined
+    ? []
+    : dedupeReceipts(allReceipts, receiptContext);
+  if (uniqueReceipts.length > 0 && receiptContext !== undefined &&
+      receiptContext.receiptSheetId.kind === PRESENCE_KINDS.ABSENT) {
+    createdReceiptSheetId = pushReceiptSheetCreation(requests, receiptContext);
+  }
+  if (uniqueReceipts.length > 0) {
+    if (receiptContext === undefined) {
+      invalidProviderState("combined apply has receipts but no context");
+    }
+    pushReceiptWrites(requests, receiptContext, uniqueReceipts, options.updatedAt, createdReceiptSheetId);
+  }
+  return { requests, bytes: measureRequestBytes(requests) };
+}
+
+/**
+ * Resolves how many leading effects fit across all route groups in one
+ * combined atomic batch. Binary-searches the shared prefix length over the
+ * flattened (route-ordered) plan list and marks effects that alone exceed the
+ * budget as schema-error indices, mirroring `resolveApplyBatchBudget`.
+ */
+export function resolveCombinedApplyBudget(
+  routes: readonly CombinedApplyRoute[],
+  options: {
+    readonly maxBatchBytes: number;
+    readonly includeReceipts: boolean;
+    readonly updatedAt: string;
+  },
+): { readonly includeCount: number; readonly schemaErrorIndices: readonly number[] } {
+  const total = routes.reduce((sum, route) => sum + route.plans.length, 0);
+  let cursor = 0;
+  const schemaErrorIndices: number[] = [];
+  while (cursor < total) {
+    const fitting = largestCombinedFittingPrefix(routes, options, cursor, total);
+    if (fitting > cursor) {
+      return { includeCount: fitting, schemaErrorIndices };
+    }
+    schemaErrorIndices.push(cursor);
+    cursor += 1;
+  }
+  return { includeCount: 0, schemaErrorIndices };
+}
+
+function largestCombinedFittingPrefix(
+  routes: readonly CombinedApplyRoute[],
+  options: {
+    readonly maxBatchBytes: number;
+    readonly includeReceipts: boolean;
+    readonly updatedAt: string;
+  },
+  start: number,
+  end: number,
+): number {
+  let low = start;
+  let high = end;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const built = buildCombinedApplyRequests(prefixCombinedRoutes(routes, start, mid), {
+      updatedAt: options.updatedAt,
+      includeReceipts: options.includeReceipts,
+    });
+    if (built.bytes <= options.maxBatchBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return low;
+}
+
+/** Slices the flat plan list to the `[start, end)` window across route groups. */
+function prefixCombinedRoutes(
+  routes: readonly CombinedApplyRoute[],
+  start: number,
+  end: number,
+): readonly CombinedApplyRoute[] {
+  const result: CombinedApplyRoute[] = [];
+  let flat = 0;
+  for (const route of routes) {
+    const routeEnd = flat + route.plans.length;
+    const lo = Math.max(start, flat);
+    const hi = Math.min(end, routeEnd);
+    if (hi > lo) {
+      result.push({ context: route.context, plans: route.plans.slice(lo - flat, hi - flat) });
+    }
+    flat = routeEnd;
+  }
+  return result;
+}
+
+/**
+ * Builds ONE atomic fast-append batch across multiple tabs: each tab's rows
+ * target its own sheetId, receipts are appended once to the shared receipt
+ * sheet, and the shared byte budget is respected.
+ */
+export function buildCombinedAppendRequests(
+  routes: ReadonlyArray<{
+    readonly context: PreflightContext;
+    readonly rows: readonly WorkingRow[];
+    readonly receipts: readonly PlannedReceipt[];
+  }>,
+  options: { readonly updatedAt: string },
+): BuiltApplyBatch {
+  const requests: GoogleSheetsApiWriteRequest[] = [];
+  const allReceipts: PlannedReceipt[] = [];
+  for (const route of routes) {
+    if (route.rows.length > 0) pushAppendWrites(requests, route.context, route.rows);
+    allReceipts.push(...route.receipts);
+  }
+  let createdReceiptSheetId: number | undefined;
+  const receiptContext = routes[0]?.context;
+  const uniqueReceipts = receiptContext === undefined
+    ? []
+    : dedupeReceipts(allReceipts, receiptContext);
+  if (uniqueReceipts.length > 0 && receiptContext !== undefined &&
+      receiptContext.receiptSheetId.kind === PRESENCE_KINDS.ABSENT) {
+    createdReceiptSheetId = pushReceiptSheetCreation(requests, receiptContext);
+  }
+  if (uniqueReceipts.length > 0 && receiptContext !== undefined) {
+    pushReceiptWrites(requests, receiptContext, uniqueReceipts, options.updatedAt, createdReceiptSheetId);
+  }
+  return { requests, bytes: measureRequestBytes(requests) };
+}
+
+/** Combined append route inputs for the multi-tab fast-append builder. */
+export interface CombinedAppendRoute {
+  readonly context: PreflightContext;
+  readonly rows: readonly WorkingRow[];
+  readonly receipts: readonly PlannedReceipt[];
+}
+
+
 /**
  * Collects one batch's receipts, deduplicated by effectId (queueReceipt_
  * semantics): receipts already stored in the sheet belong to replays and are
