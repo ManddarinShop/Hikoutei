@@ -7,6 +7,7 @@
 
 import { ROW_BINDING_STATES } from "../../../../domain/model/constants.js";
 import { isPositiveSafeInteger } from "../../../../shared/validation.js";
+
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
   commitCanonicalChangesWithSql,
@@ -15,8 +16,10 @@ import {
 import {
   insertMappedActiveRowBindingWithSql,
   readMappedActiveCanonicalEntityWithSql,
+  readMappedCanonicalEntityStateWithSql,
   readMappedCanonicalFieldRevisionsWithSql,
   readMappedRowBindingWithSql,
+  reactivateMappedTombstonedRowBindingWithSql,
   tombstoneMappedActiveRowBindingWithSql,
 } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import type { FencingContext } from "@hikoutei/ikisaki";
@@ -27,34 +30,76 @@ import {
   TypedSheetsOrmError,
 } from "../../errors.js";
 
-/** Creates the active row binding used by both physical projections. */
-export async function insertActiveRowBinding(
+/** Canonical entity lifecycle values used by mapped reactivation. */
+const CANONICAL_ENTITY_STATUSES = {
+  ACTIVE: "active",
+  TOMBSTONED: "tombstoned",
+} as const;
+
+/** Result of preparing a mapped create's row binding. */
+export type CreateRowBindingResult =
+  | { readonly kind: "created" }
+  | { readonly kind: "reactivated" };
+
+/**
+ * Prepares the active row binding used by both physical projections for a
+ * mapped create.
+ *
+ * A fresh ID gets an ordinary active binding. A recreate reusing the exact
+ * tombstoned identity (same logical sheet, deterministic anchor, binding, and
+ * canonical entity ID) CAS-reactivates only the state, preserving the row's
+ * candidate epoch and physical identity. Any other existing binding, or an
+ * identity mismatch, stays a structured row-binding conflict.
+ */
+export async function createRowBinding(
   sql: SqlExecutor,
   mapping: TypedSheetsEntityMapping,
   rowBindingId: string,
   entityId: string,
   anchor: string,
-): Promise<void> {
+): Promise<CreateRowBindingResult> {
   const existing = await readMappedRowBindingWithSql(sql, rowBindingId);
-  if (existing !== undefined) {
-    throw new TypedSheetsOrmError(
-      TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
-      `row binding ${rowBindingId} already exists for ${mapping.entityName}:${entityId}.`,
+  if (existing === undefined) {
+    const inserted = await insertMappedActiveRowBindingWithSql(
+      sql,
+      rowBindingId,
+      mapping.logicalSheetId,
+      anchor,
+      entityId,
     );
+    if (inserted.changes !== 1) {
+      throw new TypedSheetsOrmError(
+        TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
+        `could not create the row binding for ${mapping.entityName}:${entityId}.`,
+      );
+    }
+    return { kind: "created" };
   }
-  const inserted = await insertMappedActiveRowBindingWithSql(
-    sql,
-    rowBindingId,
-    mapping.logicalSheetId,
-    anchor,
-    entityId,
+  if (
+    existing.state === ROW_BINDING_STATES.TOMBSTONED &&
+    existing.logical_sheet_id === mapping.logicalSheetId &&
+    existing.anchor_reference === anchor &&
+    existing.entity_id === entityId
+  ) {
+    const reactivated = await reactivateMappedTombstonedRowBindingWithSql(
+      sql,
+      rowBindingId,
+      mapping.logicalSheetId,
+      anchor,
+      entityId,
+    );
+    if (reactivated.changes !== 1) {
+      throw new TypedSheetsOrmError(
+        TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
+        `row binding ${rowBindingId} cannot be reactivated for ${mapping.entityName}:${entityId}.`,
+      );
+    }
+    return { kind: "reactivated" };
+  }
+  throw new TypedSheetsOrmError(
+    TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
+    `row binding ${rowBindingId} already exists for ${mapping.entityName}:${entityId}.`,
   );
-  if (inserted.changes !== 1) {
-    throw new TypedSheetsOrmError(
-      TYPED_SHEETS_ORM_ERROR_CODES.ROW_BINDING_CONFLICT,
-      `could not create the row binding for ${mapping.entityName}:${entityId}.`,
-    );
-  }
 }
 
 /** Reads an existing binding's canonical identity for legacy-compatible updates. */
@@ -113,6 +158,26 @@ export async function requireActiveCanonicalEntityRevision(
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
       `active canonical state is unavailable for ${mapping.entityName}:${entityId}.`,
+    );
+  }
+  return entity.entity_revision;
+}
+
+/** Reads the tombstoned canonical entity revision that a reactivation must advance. */
+export async function requireTombstonedCanonicalEntityRevision(
+  sql: SqlExecutor,
+  mapping: TypedSheetsEntityMapping,
+  entityId: string,
+): Promise<number> {
+  const entity = await readMappedCanonicalEntityStateWithSql(sql, entityId);
+  if (
+    entity === undefined ||
+    entity.status !== CANONICAL_ENTITY_STATUSES.TOMBSTONED ||
+    !isPositiveSafeInteger(entity.entity_revision)
+  ) {
+    throw new TypedSheetsOrmError(
+      TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
+      `tombstoned canonical state is unavailable for ${mapping.entityName}:${entityId}.`,
     );
   }
   return entity.entity_revision;

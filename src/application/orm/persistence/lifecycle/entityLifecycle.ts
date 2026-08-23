@@ -32,6 +32,7 @@ import {
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import { readMappedCanonicalFieldsWithSql } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import type { FencingContext, CanonicalFieldWrite, CanonicalCommitInput } from "../support/contracts.js";
+import { CANONICAL_REACTIVATE_OPERATION } from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
 import type { ResolvedWriterOptions, MappedChangePlan } from "../support/contracts.js";
 import {
   claimBusinessKey,
@@ -40,11 +41,12 @@ import {
 } from "../support/businessKeys.js";
 import {
   canonicalFieldRevisions,
+  createRowBinding,
   existingCanonicalEntityId,
-  insertActiveRowBinding,
   requireActiveCanonicalEntityRevision,
   requireActiveRowBinding,
   requireAppliedCanonicalCommit,
+  requireTombstonedCanonicalEntityRevision,
   tombstoneActiveRowBinding,
 } from "../support/canonicalState.js";
 import { projectionEffects } from "../projection/projectionEffects.js";
@@ -159,8 +161,23 @@ async function createMappedEntity(
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
   options: { readonly suppressUserProjection?: boolean },
 ): Promise<string> {
-  await insertActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
+  const binding = await createRowBinding(sql, mapping, rowBindingId, entityId, anchor);
   const commitId = identifiedValue("commit", writer);
+  if (binding.kind === "reactivated") {
+    await reactivateMappedEntity(
+      sql,
+      fence,
+      writer,
+      mapping,
+      entityId,
+      rowBindingId,
+      anchor,
+      encodedEntity,
+      commitId,
+      options,
+    );
+    return commitId;
+  }
   const effects = await projectionEffects(
     sql,
     writer,
@@ -190,6 +207,82 @@ async function createMappedEntity(
   await requireAppliedCanonicalCommit(sql, fence, commit);
   await claimBusinessKey(sql, mapping, entityId, encodedEntity);
   return commitId;
+}
+
+/**
+ * Resurrects an exact tombstoned canonical identity with all fields advanced.
+ *
+ * A recreate of a previously-deleted primary key CAS-updates every mapped
+ * field to `field_revision + 1` and flips the entity from tombstoned to
+ * active with `entity_revision + 1`. Effects are planned for an INSERT so
+ * System_State clears the tombstone flag and User_Input recreates the row
+ * after its delete. Binding and business-key mutations happen outside the
+ * canonical savepoint, so any stale CAS failure rolls back the whole outer
+ * flush transaction instead of leaving a half-reactivated identity.
+ */
+async function reactivateMappedEntity(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  writer: ResolvedWriterOptions,
+  mapping: TypedSheetsEntityMapping,
+  entityId: string,
+  rowBindingId: string,
+  anchor: string,
+  encodedEntity: Readonly<Record<string, NormalizedCell>>,
+  commitId: string,
+  options: { readonly suppressUserProjection?: boolean },
+): Promise<void> {
+  const tombstonedRevision = await requireTombstonedCanonicalEntityRevision(sql, mapping, entityId);
+  const fieldRevisions = await canonicalFieldRevisions(sql, entityId);
+  const fields: CanonicalFieldWrite[] = mapping.fields.map((field) => {
+    const expectedFieldRevision = fieldRevisions.get(field.fieldName);
+    if (expectedFieldRevision === undefined) {
+      throw new TypedSheetsOrmError(
+        TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
+        `${mapping.entityName}.${field.property} has no canonical field revision to advance.`,
+      );
+    }
+    return {
+      fieldName: field.fieldName,
+      value: requireEncodedField(encodedEntity, field),
+      expectedFieldRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: expectedFieldRevision },
+      ownership: field.ownership,
+    };
+  });
+  if (fields.length !== fieldRevisions.size) {
+    throw new TypedSheetsOrmError(
+      TYPED_SHEETS_ORM_ERROR_CODES.CANONICAL_COMMIT_REJECTED,
+      `${mapping.entityName}:${entityId} has ambiguous canonical field state for recreation.`,
+    );
+  }
+  const nextEntityRevision = tombstonedRevision + 1;
+  const commit: CanonicalCommitInput = {
+    kind: CANONICAL_REACTIVATE_OPERATION,
+    entityId,
+    acceptedSnapshotHash: acceptedSnapshotHash(entityId, encodedEntity),
+    fields,
+    expectedEntityRevision: tombstonedRevision,
+    effects: [],
+    effectsFactory: async () => {
+      const canonicalFields = await readMappedCanonicalFieldsWithSql(sql, entityId);
+      return projectionEffects(
+        sql,
+        writer,
+        mapping,
+        entityId,
+        rowBindingId,
+        anchor,
+        canonicalFields,
+        SCALAR_ENTITY_CHANGE_KINDS.INSERT,
+        mapping.fields,
+        commitId,
+        nextEntityRevision,
+        { includeUserProjection: !options.suppressUserProjection },
+      );
+    },
+  };
+  await requireAppliedCanonicalCommit(sql, fence, commit);
+  await claimBusinessKey(sql, mapping, entityId, encodedEntity);
 }
 
 async function updateMappedEntity(

@@ -49,6 +49,7 @@ import {
 import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
 import {
   readMappedActiveCanonicalEntityWithSql,
+  readMappedCanonicalEntityStateWithSql,
   readMappedCanonicalFieldsWithSql,
 } from "../mapped/mappedPersistenceSql.js";
 
@@ -77,6 +78,13 @@ const UPDATE_CANONICAL_ENTITY_SQL = `
   UPDATE entity_state
   SET entity_revision = ?, accepted_snapshot_hash = ?
   WHERE entity_id = ? AND entity_revision = ? AND status = 'active'
+    AND EXISTS (${FENCE_EXISTS_SQL})
+`;
+
+const REACTIVATE_CANONICAL_ENTITY_SQL = `
+  UPDATE entity_state
+  SET entity_revision = ?, accepted_snapshot_hash = ?, status = 'active'
+  WHERE entity_id = ? AND entity_revision = ? AND status = 'tombstoned'
     AND EXISTS (${FENCE_EXISTS_SQL})
 `;
 
@@ -156,8 +164,30 @@ export interface CanonicalDeleteCommitInput extends CanonicalCommitBase {
   readonly expectedEntityRevision: number;
 }
 
+/**
+ * An internal create that resurrects an exact tombstoned canonical identity.
+ *
+ * Unlike an observation insert, every field is CAS-updated to its new
+ * normalized value with `field_revision + 1` and the entity flips from
+ * `tombstoned` to `active` with `entity_revision + 1`. This operation is not
+ * part of the public/inbound `ROW_OPERATIONS` set.
+ */
+export interface CanonicalReactivateCommitInput extends CanonicalCommitBase {
+  readonly kind: typeof CANONICAL_REACTIVATE_OPERATION;
+  /** Current tombstoned field revisions used by each field CAS. */
+  readonly fields: readonly CanonicalFieldWrite[];
+  /** Tombstoned entity revision observed before reactivation. */
+  readonly expectedEntityRevision: number;
+}
+
 /** A row-level canonical mutation prepared from one core evaluation result. */
-export type CanonicalCommitInput = CanonicalFieldCommitInput | CanonicalDeleteCommitInput;
+export type CanonicalCommitInput =
+  | CanonicalFieldCommitInput
+  | CanonicalDeleteCommitInput
+  | CanonicalReactivateCommitInput;
+
+/** Internal canonical reactivation operation tag (not part of public ROW_OPERATIONS). */
+export const CANONICAL_REACTIVATE_OPERATION = "reactivate" as const;
 
 /** Observable result of a fenced canonical commit attempt. */
 export type CanonicalCommitResult =
@@ -203,7 +233,9 @@ export async function commitCanonicalChangesWithSql(
       ? await applyInsertWithSql(sql, fence, input)
       : input.kind === ROW_OPERATIONS.UPDATE
         ? await applyUpdateWithSql(sql, fence, input)
-        : await applyDeleteWithSql(sql, fence, input);
+        : input.kind === ROW_OPERATIONS.DELETE
+          ? await applyDeleteWithSql(sql, fence, input)
+          : await applyReactivateWithSql(sql, fence, input);
     if (result.kind !== CANONICAL_COMMIT_RESULT_KINDS.APPLIED) {
       await rollbackSqlSavepoint(sql, "canonical_commit");
       return result;
@@ -355,6 +387,63 @@ async function applyDeleteWithSql(
   };
 }
 
+async function applyReactivateWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+  input: CanonicalReactivateCommitInput,
+): Promise<CanonicalCommitResult> {
+  const entity = await readMappedCanonicalEntityStateWithSql(sql, input.entityId);
+  if (
+    entity === undefined ||
+    entity.status !== "tombstoned" ||
+    entity.entity_revision !== input.expectedEntityRevision
+  ) {
+    return {
+      kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
+      target: CANONICAL_COMMIT_STALE_TARGETS.ENTITY,
+      fieldName: notApplicableValue(),
+    };
+  }
+
+  const fieldRevisions = new Map<string, number>();
+  for (const field of input.fields) {
+    const expectedFieldRevision = requireApplicableRevision(field.expectedFieldRevision);
+    const result = await sql.run(UPDATE_CANONICAL_FIELD_SQL, [
+      serializeCell(field.value),
+      input.entityId,
+      field.fieldName,
+      expectedFieldRevision,
+      field.ownership,
+      ...fenceParameters(fence),
+    ]);
+    if (result.changes !== 1) {
+      await throwFenceIfLostWithSql(sql, fence);
+      return {
+        kind: CANONICAL_COMMIT_RESULT_KINDS.STALE,
+        target: CANONICAL_COMMIT_STALE_TARGETS.FIELD,
+        fieldName: applicableValue(field.fieldName),
+      };
+    }
+    fieldRevisions.set(field.fieldName, expectedFieldRevision + 1);
+  }
+
+  const nextEntityRevision = entity.entity_revision + 1;
+  const entityResult = await sql.run(REACTIVATE_CANONICAL_ENTITY_SQL, [
+    nextEntityRevision,
+    toSqlNullable(input.acceptedSnapshotHash),
+    input.entityId,
+    input.expectedEntityRevision,
+    ...fenceParameters(fence),
+  ]);
+  if (entityResult.changes !== 1) return lostFenceOrStaleEntityWithSql(sql, fence);
+
+  return {
+    kind: CANONICAL_COMMIT_RESULT_KINDS.APPLIED,
+    entityRevision: nextEntityRevision,
+    fieldRevisions,
+  };
+}
+
 async function canonicalSnapshotHashWithSql(
   sql: SqlExecutor,
   entityId: string,
@@ -378,6 +467,11 @@ function validateInput(input: CanonicalCommitInput): Presence<string> {
       ? absentValue()
       : presentValue("delete must have a positive expected entity revision");
   }
+  if (input.kind === CANONICAL_REACTIVATE_OPERATION) {
+    if (!Number.isSafeInteger(input.expectedEntityRevision) || input.expectedEntityRevision < 1) {
+      return presentValue("reactivate must have a positive expected entity revision");
+    }
+  }
   if (input.fields.length === 0) return presentValue("at least one accepted field is required");
 
   const fieldNames = new Set<string>();
@@ -392,7 +486,7 @@ function validateInput(input: CanonicalCommitInput): Presence<string> {
       return presentValue("insert fields must not have an expected revision");
     }
     if (
-      input.kind === ROW_OPERATIONS.UPDATE &&
+      (input.kind === ROW_OPERATIONS.UPDATE || input.kind === CANONICAL_REACTIVATE_OPERATION) &&
       (field.expectedFieldRevision.kind !== APPLICABILITY_KINDS.APPLICABLE ||
         !Number.isSafeInteger(field.expectedFieldRevision.value) ||
         field.expectedFieldRevision.value < 1)

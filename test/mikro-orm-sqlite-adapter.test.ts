@@ -35,6 +35,7 @@ import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/sta
 import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
+  CANONICAL_REACTIVATE_OPERATION,
   commitCanonicalChangesWithSql,
 } from "../src/infrastructure/storage/state/canonical/canonicalCommit.js";
 import {
@@ -1252,6 +1253,123 @@ describe("MikroOrmSqliteAdapter", () => {
         effect_kind: "system_projection",
       },
     ]);
+  });
+
+  it("rolls a stale canonical reactivation back with its pending effects", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "sync_writer",
+      writerId: "worker-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    const fence = {
+      role: leaseClaim.lease.role,
+      writerEpoch: leaseClaim.lease.writerEpoch,
+      fencingToken: leaseClaim.lease.fencingToken,
+      now: 1000,
+    };
+
+    const reactivationResult = await adapter.transactional(async ({ entityManager, sql }) => {
+      const order = entityManager.create(Order, {
+        id: "order-reactivate-stale",
+        status: "pending",
+      });
+      entityManager.persist(order);
+      await entityManager.flush();
+
+      const insertResult = await commitCanonicalChangesWithSql(sql, fence, {
+        kind: ROW_OPERATIONS.INSERT,
+        entityId: order.id,
+        acceptedSnapshotHash: { kind: PRESENCE_KINDS.ABSENT },
+        fields: [
+          {
+            fieldName: "status",
+            value: { kind: "string", value: "pending" },
+            expectedFieldRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+            ownership: FIELD_OWNERSHIPS.USER,
+          },
+        ],
+        effects: [],
+      });
+      expect(insertResult.kind).toBe(CANONICAL_COMMIT_RESULT_KINDS.APPLIED);
+
+      const deletion = await commitCanonicalChangesWithSql(sql, fence, {
+        kind: ROW_OPERATIONS.DELETE,
+        entityId: order.id,
+        acceptedSnapshotHash: { kind: PRESENCE_KINDS.ABSENT },
+        expectedEntityRevision: 1,
+        effects: [],
+      });
+      expect(deletion.kind).toBe(CANONICAL_COMMIT_RESULT_KINDS.APPLIED);
+
+      // The entity is now tombstoned at revision 2. A stale caller that still
+      // holds expected revision 1 must fail closed and roll back its effects.
+      return commitCanonicalChangesWithSql(sql, fence, {
+        kind: CANONICAL_REACTIVATE_OPERATION,
+        entityId: order.id,
+        acceptedSnapshotHash: { kind: PRESENCE_KINDS.ABSENT },
+        fields: [
+          {
+            fieldName: "status",
+            value: { kind: "string", value: "reopened" },
+            expectedFieldRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: 1 },
+            ownership: FIELD_OWNERSHIPS.USER,
+          },
+        ],
+        expectedEntityRevision: 1,
+        effects: [
+          {
+            ...createPendingEffect(),
+            effectId: "effect-stale-reactivate",
+            targetId: order.id,
+            effectDedupeKey: "effect-stale-reactivate",
+          },
+        ],
+      });
+    });
+
+    expect(reactivationResult.kind).toBe(CANONICAL_COMMIT_RESULT_KINDS.STALE);
+
+    const canonicalEntities = await adapter.read(({ sql }) => {
+      return sql.all<CanonicalEntityRow>(
+        "SELECT entity_id, entity_revision, status FROM entity_state WHERE entity_id = ?",
+        ["order-reactivate-stale"],
+      );
+    });
+    const canonicalFields = await adapter.read(({ sql }) => {
+      return sql.all<CanonicalFieldRow>(
+        "SELECT entity_id, field_name, normalized_value, field_revision FROM entity_field_state WHERE entity_id = ?",
+        ["order-reactivate-stale"],
+      );
+    });
+    const effects = await adapter.read(({ sql }) => {
+      return sql.all<SyncOutboxRow>(
+        "SELECT effect_id, target_id, effect_kind FROM sheet_effect_outbox WHERE effect_id = ?",
+        ["effect-stale-reactivate"],
+      );
+    });
+
+    expect(canonicalEntities).toEqual([
+      { entity_id: "order-reactivate-stale", entity_revision: 2, status: "tombstoned" },
+    ]);
+    expect(canonicalFields).toEqual([
+      {
+        entity_id: "order-reactivate-stale",
+        field_name: "status",
+        normalized_value: '{"kind":"string","value":"pending"}',
+        field_revision: 1,
+      },
+    ]);
+    expect(effects).toEqual([]);
   });
 });
 
