@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.8.69",
+  "version": "0.8.70",
   "description": "Typed repository and safe write layer for Google Sheets-backed MVPs. SQLite-authoritative entity lifecycle with asynchronous Google Sheets projection.",
   "repository": {
     "type": "git",
