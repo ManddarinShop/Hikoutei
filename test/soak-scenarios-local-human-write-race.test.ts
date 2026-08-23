@@ -198,9 +198,12 @@ function projectPersistedRow(em: FakeEm, client: FakeClient, plan: PlanLike): vo
 // ---------------------------------------------------------------------------
 
 describe("localHumanWriteRace scenario", () => {
-  it("is registered alongside invalid-human-input as the second scenario", () => {
+  it("is registered among the registered scenarios", () => {
+    // Registry-agnostic: assert this scenario is registered without binding
+    // to the full ordered id list, so later scenario PRs never need to touch
+    // this test. Exact registry content is asserted once in the shared test.
     const ids = SCENARIO_REGISTRY.map((entry) => entry.id);
-    expect(ids).toEqual(["invalid-human-input", "local-human-write-race"]);
+    expect(ids).toContain("local-human-write-race");
   });
 
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
