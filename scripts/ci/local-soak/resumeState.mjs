@@ -158,6 +158,7 @@ function validateResumeCumulative(cumulative, fail) {
   const knownCounters = new Set([
     "operations", "expectedErrors", "failures", "retries", "probes",
     "convergenceChecks", "convergenceFailed",
+    "scenarioExpectedErrors", "scenarioFailures",
   ]);
   for (const key of Object.keys(cumulative)) {
     if (!knownCounters.has(key)) fail(`unknown state.cumulative field "${key}"`);
@@ -165,6 +166,15 @@ function validateResumeCumulative(cumulative, fail) {
   for (const key of ["operations", "expectedErrors", "failures", "retries",
     "convergenceChecks", "convergenceFailed"]) {
     if (!Number.isInteger(cumulative[key]) || cumulative[key] < 0) {
+      fail(`state.cumulative.${key} must be a non-negative integer`);
+    }
+  }
+  // Scenario counters are OPTIONAL (a legacy state predating scenario
+  // accounting omits them and defaults to zero); when present they must be
+  // non-negative integers.
+  for (const key of ["scenarioExpectedErrors", "scenarioFailures"]) {
+    if (cumulative[key] !== undefined &&
+        (!Number.isInteger(cumulative[key]) || cumulative[key] < 0)) {
       fail(`state.cumulative.${key} must be a non-negative integer`);
     }
   }

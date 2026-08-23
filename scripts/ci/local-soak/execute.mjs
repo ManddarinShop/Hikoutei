@@ -5,6 +5,12 @@
 import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { operationRecord } from "./artifacts.mjs";
+import { SCENARIO_REGISTRY } from "./scenarios/registry.mjs";
+import {
+  SCENARIO_PHASES,
+  composeScenarioBatch,
+  runScenarioPhase,
+} from "./scenarios/scheduler.mjs";
 import {
   OPERATION_ATTEMPTS,
   PROBE_EVERY_CYCLES,
@@ -43,6 +49,42 @@ import { recordOperationIfAbsent } from "./resume.mjs";
 import { sleep } from "./timing.mjs";
 
 /**
+ * Explicit abort envelope: carries the ORIGINAL thrown value (an Error, a
+ * primitive, or undefined) plus the partial scenario records collected
+ * before the abort. Because a rejection reason may be a primitive or
+ * undefined — a value that cannot carry properties — the envelope separates
+ * the thrown reason from the scenario records instead of annotating the
+ * thrown value, so the abort handoff works for every rejection kind.
+ *
+ * The envelope is a subclass of Error so it can be thrown and caught through
+ * normal async channels; the original reason is preserved verbatim in
+ * `cause` and never reconstructed or sanitized here.
+ */
+export class SoakCycleAbortError extends Error {
+  constructor(cause, scenarioRecords) {
+    super(cause instanceof Error ? cause.message : "soak-cycle-aborted");
+    this.name = "SoakCycleAbortError";
+    this.cause = cause;
+    this.scenarioRecords = scenarioRecords;
+  }
+}
+
+/**
+ * Unwraps an abort envelope back into the original error and its partial
+ * scenario records. A value that is not an abort envelope is returned as-is
+ * with no records, so callers that may also receive raw errors stay safe.
+ *
+ * @param {unknown} caught the thrown value.
+ * @returns {{ original: unknown, records: readonly object[] }}
+ */
+export function unwrapSoakAbort(caught) {
+  if (caught instanceof SoakCycleAbortError) {
+    return { original: caught.cause, records: caught.scenarioRecords };
+  }
+  return { original: caught, records: [] };
+}
+
+/**
  * Executes one full soak cycle and returns its redacted summary.
  *
  * The actor stream is planned UP FRONT, sequentially, against the
@@ -51,6 +93,25 @@ import { sleep } from "./timing.mjs";
  * through one mutex so verification always sees the committed state.
  */
 async function runOneCycle(context) {
+  // scenarioRecords must be visible to BOTH the cycle body and the abort
+  // path, so a mid-cycle throw can preserve the scenario work already done.
+  const scenarioRecords = [];
+  const collectScenarioRecords = (records) => { scenarioRecords.push(...records); };
+  try {
+    return await runOneCycleBody(context, scenarioRecords, collectScenarioRecords);
+  } catch (error) {
+    // HIGH 2 abort handoff: wrap the ORIGINAL thrown value (an Error, a
+    // primitive, or undefined) in an explicit envelope that also carries the
+    // partial scenario records collected before the throw. The thrown value
+    // itself is never mutated or annotated, so the envelope preserves the
+    // reason for Error, primitive, and undefined rejections alike and threads
+    // the completed scenario work into the abort artifact. The runner unwraps
+    // via `unwrapSoakAbort` before reasoning about the error class.
+    throw new SoakCycleAbortError(error, [...scenarioRecords]);
+  }
+}
+
+async function runOneCycleBody(context, scenarioRecords, collectScenarioRecords) {
   const { cycle, oracle, tokenByEntity, activeEntities, seed, options, live, artifacts, recording, progress } =
     context;
   const cycleStart = performance.now();
@@ -141,10 +202,52 @@ async function runOneCycle(context) {
     throw new SoakSimulatedInterruptionError();
   }
 
+  // Attack-scenario composition: deterministic per-cycle selection of 1-3
+  // scenarios (seeded shuffle bag over the registry) with assigned phase,
+  // order, jitter and target — all pure functions of (seed, cycle). The
+  // scenario plan is recorded redacted per cycle; the live action runs only
+  // when a live Sheets/observation client exists (local mode records
+  // `skipped` and never touches SQLite or the oracle, so the baseline
+  // workload, verification, and resume proofs are unchanged).
+  const scenarioBatch = composeScenarioBatch({ seed, cycle, registry: SCENARIO_REGISTRY, activeEntities });
+  // One mutex serializes the SHARED oracle-touching critical sections of
+  // BOTH concurrent actors AND scenarios: each scenario's public-DB
+  // mutation + oracle mirror/cleanup runs atomically against actor
+  // verification, so an actor can never observe an intermediate scenario
+  // row and falsely fail. External/direct Sheet calls and jitter stay
+  // outside the lock.
+  const oracleLock = createAsyncMutex();
+  const scenarioContext = {
+    cycle,
+    seed,
+    oracle,
+    hikoutei: context.hikoutei,
+    em: rootEm,
+    tokenByEntity,
+    activeEntities,
+    live,
+    deadlineAtMs: context.deadlineAtMs,
+    fieldPlans: SOAK_FIELD_PLANS,
+    oracleLock,
+    ...(context.dbName === undefined ? {} : { dbName: context.dbName }),
+    ...(context.activeTokens === undefined ? {} : { activeTokens: context.activeTokens }),
+  };
+
   // Sequential planning pass: every actor op is planned against the oracle
-  // state that exists NOW (after the prologue), which is itself a pure
-  // function of (seed, cycle). Planning never observes concurrent actors,
-  // so the same seed reproduces the same operation stream bit-for-bit.
+  // state that exists NOW (immediately after the prologue, before any
+  // attack scenario runs), which is itself a pure function of (seed, cycle).
+  // Planning never observes concurrent actors or scenario mutations, so the
+  // same seed reproduces the same operation stream bit-for-bit.
+  //
+  // HIGH actor-planning-vs-replay: the plans are FROZEN here — right after
+  // the prologue, BEFORE the after-prologue attack scenarios execute — so
+  // an after-prologue scenario that mutates the oracle (in live mode) can
+  // never change the operation kinds, ids, filters, or rows the production
+  // run plans. Replay derives its plans from the same prologue-only oracle,
+  // so production and replay are identical even when a scenario mutates the
+  // oracle; the public phase semantics are unchanged (planning is not actor
+  // execution, and the after-prologue scenarios still run after the prologue
+  // and before the actors).
   //
   // HIGH 2: on REPLAY of an interrupted cycle, the actor stream is taken
   // from the PURE deterministic replay (a function of the stored
@@ -152,58 +255,87 @@ async function runOneCycle(context) {
   // SQLite-rebuilt oracle — partial rows committed by the interrupted run
   // can never change the operation kinds, ids, filters, or rows the
   // recovery expects and re-executes.
-  const actorPlans = [];
-  if (context.reconcile === true && context.replayCycleOps !== undefined) {
-    const replayed = context.replayCycleOps.get(cycle) ?? [];
-    for (let actorIndex = 0; actorIndex < options.actors; actorIndex += 1) {
-      const start = actorIndex * options.operationsPerActor;
-      actorPlans.push(replayed.slice(start, start + options.operationsPerActor));
-    }
-  } else {
-    for (let actorIndex = 0; actorIndex < options.actors; actorIndex += 1) {
-      const plan = [];
-      for (let opIndex = 0; opIndex < options.operationsPerActor; opIndex += 1) {
-        const entry = activeEntities[
-          (actorIndex * options.operationsPerActor + opIndex) % activeEntities.length
-        ];
-        plan.push(planActorOperation({
-          seed,
-          cycle,
-          actor: actorIndex,
-          opIndex,
-          entityName: entry.name,
-          fieldPlan: SOAK_FIELD_PLANS[entry.name],
-          oracle,
-        }));
-      }
-      actorPlans.push(plan);
-    }
-  }
+  //
+  // MEDIUM: the actor stream is planned by the EXPORTED `planActorStream`
+  // helper so production, replay continuity, and the actor-freeze tests
+  // all exercise the exact same planning pass — never a duplicated loop.
+  const actorPlans = planActorStream({
+    seed,
+    cycle,
+    options,
+    activeEntities,
+    oracle,
+    reconcile: context.reconcile === true,
+    replayCycleOps: context.replayCycleOps,
+  });
 
-  // One mutex serializes the oracle-touching sections of concurrent actors:
-  // each flush+oracle-apply and each verify pair runs atomically, so a query
-  // is always compared to the oracle state committed at the same instant.
-  const oracleLock = createAsyncMutex();
-  const actorSummaries = await Promise.all(
-    actorPlans.map((plan, actorIndex) =>
-      runActor({ ...context, actorIndex, plan, oracleLock, rootEm, tablesTouched, counters: {
-        operations: 0, expectedErrors: 0, failures: 0, retries: 0,
-      } })),
-  );
-  for (const actor of actorSummaries) {
-    operations += actor.counters.operations;
-    expectedErrors += actor.counters.expectedErrors;
-    failures += actor.counters.failures;
-    retries += actor.counters.retries;
-    // Op records are appended in actor order so the JSONL stream is
-    // reproducible from (seed, cycle) alone; per-op timestamps stay
-    // wall-clock but every other field is deterministic. On replay the
-    // identity (cycle, actor, index) dedupes records the interrupted run
-    // already wrote, so a repeated resume can never duplicate history.
-    for (const record of actor.records) {
-      await recordOperationIfAbsent(recording, artifacts, record);
-    }
-  }
+  // Phase 1: after the prologue, before the actors begin. Same-phase
+  // scenarios run CONCURRENTLY; the records are sorted by deterministic
+  // order (independent of completion order) before collection. These
+  // after-prologue scenarios execute AFTER the actor plans above were
+  // frozen, so their oracle mutations (live mode) never change the planned
+  // actor stream.
+  await runScenarioPhase(
+    scenarioBatch, SCENARIO_PHASES.AFTER_PROLOGUE, scenarioContext,
+  ).then(collectScenarioRecords);
+
+  // Phase 2 (concurrent-with-actors): start the assigned scenarios now so
+  // they run in parallel with the forked actors, then join them after the
+  // actors settle — the scenario action overlaps the base workload.
+  // (The shared oracleLock was created before Phase 1 above and is wired
+  // into scenarioContext so every scenario phase serializes its public-DB
+  // + oracle critical sections against the actors.)
+  const concurrentScenarios = runScenarioPhase(
+    scenarioBatch, SCENARIO_PHASES.CONCURRENT_WITH_ACTORS, scenarioContext,
+  ).then(collectScenarioRecords);
+  // HIGH abort accounting: once the concurrent scenarios have started they
+  // are ALWAYS settled — even when an actor rejects — so their completed
+  // scenario records are collected into the cycle before the actor's
+  // original error propagates to the abort path. The concurrent scenario
+  // promise never itself rejects (runScenario maps unexpected throws to a
+  // failed record), so this join can never mask the actor error.
+  //
+  // HIGH 1: await EVERY actor with Promise.allSettled so all sibling actors
+  // fully settle (each releasing the oracle mutex and finishing its SQLite/
+  // oracle work) before the cycle aborts. A fail-fast Promise.all would
+  // reject on the first actor error while sibling actors still mutated
+  // SQLite/oracle during shutdown. allSettled never itself rejects, so we
+  // collect the fulfilled summaries and deterministically rethrow the FIRST
+  // actor rejection (lowest actor index — allSettled preserves input order)
+  // only after every actor AND the concurrent scenarios have settled.
+  const actorTasks = actorPlans.map((plan, actorIndex) =>
+    runActor({ ...context, actorIndex, plan, oracleLock, rootEm, tablesTouched, counters: {
+      operations: 0, expectedErrors: 0, failures: 0, retries: 0,
+    } }));
+  // HIGH 1 + finding 4: settle EVERY actor AND the already-started
+  // concurrent scenario phase through the SHARED `settleCycleWorkload`
+  // helper — the exact settlement algorithm this harness uses — so every
+  // promise settles (each actor releases the oracle mutex and finishes its
+  // SQLite/oracle work) before the cycle can abort, no unhandled rejection
+  // is left while the actors run, and the deterministic FIRST actor
+  // rejection (or the scenario phase rejection when no actor rejected) is
+  // rethrown only after everything has settled. The helper consumes the
+  // fulfilled actor summaries (counters + op records) only on the success
+  // path, so a rejected cycle writes no per-operation records — matching
+  // the resume contract.
+  await settleCycleWorkload({
+    actorTasks,
+    scenarioPhase: concurrentScenarios,
+    consumeActor: async (actor) => {
+      operations += actor.counters.operations;
+      expectedErrors += actor.counters.expectedErrors;
+      failures += actor.counters.failures;
+      retries += actor.counters.retries;
+      // Op records are appended in actor order so the JSONL stream is
+      // reproducible from (seed, cycle) alone; per-op timestamps stay
+      // wall-clock but every other field is deterministic. On replay the
+      // identity (cycle, actor, index) dedupes records the interrupted run
+      // already wrote, so a repeated resume can never duplicate history.
+      for (const record of actor.records) {
+        await recordOperationIfAbsent(recording, artifacts, record);
+      }
+    },
+  });
 
   // Verification phase: sampled oracle comparisons per table.
   const verification = await verifyAgainstOracle(context);
@@ -218,6 +350,12 @@ async function runOneCycle(context) {
     appliedProbe = probeResult.applied;
     if (probe.status === "failed") failures += 1;
   }
+
+  // Phase 3 (after-actors/before-final-convergence): scenario actions that
+  // own a post-workload window run before the live convergence check.
+  await runScenarioPhase(
+    scenarioBatch, SCENARIO_PHASES.AFTER_ACTORS, scenarioContext,
+  ).then(collectScenarioRecords);
 
   // Live convergence + invariants (duplicate/lost/extra/silent-overwrite).
   let convergence;
@@ -335,8 +473,127 @@ async function runOneCycle(context) {
       ...(probe === undefined ? {} : { probe }),
       ...(convergence === undefined ? {} : { convergence }),
       ...(reopen === undefined ? {} : { reopen }),
+      // Dedicated scenario totals, SEPARATE from the standard operation
+      // totals: a scenario failure must feed the run's failure budget and
+      // result without ever perturbing the baseline workload counters. The
+      // totals are the sum of the per-scenario records' counters, so the
+      // resume schema can bind them to the recorded scenario section.
+      scenarioTotals: {
+        expectedErrors: scenarioRecords.reduce((sum, record) => sum + (record.expectedErrors ?? 0), 0),
+        failures: scenarioRecords.reduce((sum, record) => sum + (record.failures ?? 0), 0),
+      },
+      // Per-cycle redacted attack scenarios, sorted deterministically by
+      // order. These are separate from the operation totals — scenario
+      // expected/failure counts never perturb the baseline workload counts.
+      ...(scenarioRecords.length === 0 ? {} : {
+        scenarios: scenarioRecords.sort((a, b) => a.order - b.order),
+      }),
     },
   };
+}
+
+/**
+ * Settles one cycle's actor stream AND its already-started concurrent
+ * scenario phase — the exact settlement algorithm the cycle executor uses.
+ *
+ * Every actor promise settles (Promise.allSettled), so each releases the
+ * shared oracle mutex and finishes its SQLite/oracle work before the cycle
+ * can abort; a fail-fast Promise.all would reject on the first actor error
+ * while sibling actors still mutated state during shutdown. The concurrent
+ * scenario phase — already started by the caller and wired to collect its
+ * records — is ALWAYS awaited too, so its scenario work is never abandoned
+ * and no rejection is left unhandled while the actors run.
+ *
+ * A rejection whose reason is `undefined` is tracked with an explicit
+ * boolean discriminant so it can never be mistaken for "no rejection". On
+ * failure the FIRST actor rejection (in actor order — allSettled preserves
+ * input order) is rethrown RAW (Error, string, or undefined); a
+ * concurrent-scenario rejection is rethrown only when NO actor rejected, so
+ * a real actor error is never masked by a scenario error. Fulfilled actor
+ * summaries are delivered to `consumeActor` ONLY on the success path (in
+ * actor order), so a rejected cycle writes no per-operation records,
+ * matching the resume contract.
+ *
+ * The returned promise rejects with the original actor/scenario rejection
+ * only after every actor and the scenario phase have settled.
+ *
+ * @param {{ actorTasks: readonly (Promise<object>)[], scenarioPhase: Promise<unknown>, consumeActor: (actor: object, index: number) => Promise<void> }} input
+ * @returns {Promise<void>}
+ */
+async function settleCycleWorkload({ actorTasks, scenarioPhase, consumeActor }) {
+  const actorResults = await Promise.allSettled(actorTasks);
+  const fulfilledActors = [];
+  let firstActorRejection;
+  let hasActorRejection = false;
+  for (let index = 0; index < actorResults.length; index += 1) {
+    const result = actorResults[index];
+    if (result.status === "fulfilled") {
+      fulfilledActors.push(result.value);
+    } else if (!hasActorRejection) {
+      firstActorRejection = result.reason;
+      hasActorRejection = true;
+    }
+  }
+  let scenarioError;
+  let scenarioRejected = false;
+  try {
+    await scenarioPhase;
+  } catch (error) {
+    scenarioError = error;
+    scenarioRejected = true;
+  }
+  if (hasActorRejection) throw firstActorRejection;
+  if (scenarioRejected) throw scenarioError;
+  for (let index = 0; index < fulfilledActors.length; index += 1) {
+    await consumeActor(fulfilledActors[index], index);
+  }
+}
+
+/**
+ * Plans one cycle's full actor stream up front.
+ *
+ * The EXACT planning pass the cycle executor uses, extracted so production,
+ * replay continuity, and the actor-freeze tests all exercise the same loop
+ * (never a duplicated plan). On a replay of an interrupted cycle the actor
+ * stream is taken from the pure deterministic replay (`replayCycleOps`);
+ * otherwise every op is planned against the given oracle state. Either way
+ * the stream is a pure function of (seed, cycle, params, active subset,
+ * oracle) and is frozen BEFORE any after-prologue scenario runs.
+ *
+ * @param {{ seed: number, cycle: number, options: { actors: number,
+ *   operationsPerActor: number }, activeEntities: readonly object[],
+ *   oracle: object, reconcile: boolean, replayCycleOps?: Map<number, object[]> }} input
+ * @returns {object[][]} per-actor arrays of planned ops, in actor order.
+ */
+export function planActorStream({ seed, cycle, options, activeEntities, oracle, reconcile, replayCycleOps }) {
+  const actorPlans = [];
+  if (reconcile === true && replayCycleOps !== undefined) {
+    const replayed = replayCycleOps.get(cycle) ?? [];
+    for (let actorIndex = 0; actorIndex < options.actors; actorIndex += 1) {
+      const start = actorIndex * options.operationsPerActor;
+      actorPlans.push(replayed.slice(start, start + options.operationsPerActor));
+    }
+  } else {
+    for (let actorIndex = 0; actorIndex < options.actors; actorIndex += 1) {
+      const plan = [];
+      for (let opIndex = 0; opIndex < options.operationsPerActor; opIndex += 1) {
+        const entry = activeEntities[
+          (actorIndex * options.operationsPerActor + opIndex) % activeEntities.length
+        ];
+        plan.push(planActorOperation({
+          seed,
+          cycle,
+          actor: actorIndex,
+          opIndex,
+          entityName: entry.name,
+          fieldPlan: SOAK_FIELD_PLANS[entry.name],
+          oracle,
+        }));
+      }
+      actorPlans.push(plan);
+    }
+  }
+  return actorPlans;
 }
 
 /**
@@ -421,7 +678,7 @@ function resolvePrologueInsert({ oracle, entityName, id, row, fieldPlan, postPat
  * A SoakAssertionError (e.g. a replay reconcile mismatch) records its
  * stable reason category instead of the generic cycle-error tag.
  */
-function abortedCycleResult(cycle, error, hikoutei) {
+function abortedCycleResult(cycle, error, hikoutei, partialScenarioRecords = []) {
   const described = describeError(error);
   const cleanupFailure = error instanceof SoakReopenCleanupError;
   const reason = error !== null && typeof error === "object" &&
@@ -430,6 +687,14 @@ function abortedCycleResult(cycle, error, hikoutei) {
     : cleanupFailure
       ? "reopen-cleanup-failed"
       : "cycle-error";
+  // HIGH 2 abort accounting: the partial scenario records are delivered in
+  // the EXPLICIT abort envelope (the fourth argument), NOT by annotating the
+  // thrown value — the reason may be a primitive or undefined and cannot
+  // carry properties. The envelope preserves the scenario work that did
+  // complete before the abort instead of silently dropping it.
+  const partialRecords = Array.isArray(partialScenarioRecords)
+    ? partialScenarioRecords
+    : [];
   return {
     hikoutei,
     reopened: false,
@@ -439,6 +704,16 @@ function abortedCycleResult(cycle, error, hikoutei) {
       // The aborted cycle counts as one attempted-and-failed unit so the
       // invariant total = ok + expectedErrors + failures holds everywhere.
       operations: { total: 1, ok: 0, expectedErrors: 0, failures: 1, retries: 0 },
+      // Dedicated scenario totals derived from the partial scenario
+      // records the abort preserved (zero when none had completed).
+      scenarioTotals: {
+        expectedErrors: partialRecords.reduce((sum, record) => sum + (record.expectedErrors ?? 0), 0),
+        failures: partialRecords.reduce((sum, record) => sum + (record.failures ?? 0), 0),
+      },
+      // Partial scenario records, sorted deterministically by order.
+      ...(partialRecords.length === 0 ? {} : {
+        scenarios: partialRecords.sort((a, b) => a.order - b.order),
+      }),
       abort: {
         reason,
         errorClass: sanitizeErrorClass(described.errorClass),
@@ -589,4 +864,5 @@ async function verifyCounts(hikoutei, context) {
 export {
   abortedCycleResult,
   runOneCycle,
+  settleCycleWorkload,
 };

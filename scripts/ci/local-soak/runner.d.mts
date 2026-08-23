@@ -35,6 +35,8 @@ export interface SoakRunSummary {
     readonly failed: number;
   };
   readonly convergence: { readonly checks: number; readonly failed: number };
+  /** Dedicated scenario totals, separate from the standard operation counters. */
+  readonly scenarios: { readonly expectedErrors: number; readonly failures: number };
   readonly tableRows: Readonly<Record<string, number>>;
   /** Present only when a resume reconciled an interrupted run. */
   readonly recovery?: {

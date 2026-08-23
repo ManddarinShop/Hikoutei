@@ -26,7 +26,8 @@ function buildSummary({
     stopReason === "simulated-interruption" ||
     replacementCloseError !== undefined ||
     finalizationFailures.length > 0 ||
-    state.cumulative.failures > 0
+    state.cumulative.failures > 0 ||
+    (state.cumulative.scenarioFailures ?? 0) > 0
       ? "failed"
       : "passed";
   const described = closeError === undefined ? undefined : describeError(closeError);
@@ -57,6 +58,13 @@ function buildSummary({
     convergence: {
       checks: state.cumulative.convergenceChecks,
       failed: state.cumulative.convergenceFailed,
+    },
+    // Dedicated scenario totals, separate from the standard operation
+    // counters: a scenario failure fails the run without perturbing the
+    // baseline workload totals.
+    scenarios: {
+      expectedErrors: state.cumulative.scenarioExpectedErrors ?? 0,
+      failures: state.cumulative.scenarioFailures ?? 0,
     },
     tableRows: state.tableRows,
     // Recovery section: a resume reconciled an interrupted run. The reason

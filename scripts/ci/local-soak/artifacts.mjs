@@ -23,6 +23,7 @@ import {
   sanitizeStableCode,
   sanitizeTableName,
 } from "./redact.mjs";
+import { sanitizeScenarioRecord } from "./scenarios/scenarioVocabulary.mjs";
 
 /** Artifact file names inside the output directory. */
 export const ARTIFACT_NAMES = Object.freeze({
@@ -794,7 +795,41 @@ export function cycleRecord(cycle, summary) {
     ...(summary.convergence === undefined ? {} : { convergence: sanitizeSection(summary.convergence) }),
     ...(summary.reopen === undefined ? {} : { reopen: sanitizeSection(summary.reopen) }),
     ...(summary.abort === undefined ? {} : { abort: sanitizeSection(summary.abort) }),
+    // Dedicated scenario totals, separate from the standard operation
+    // counters: scenario expected/failure counts never perturb the baseline
+    // workload totals, but they DO feed the run's failure budget/result.
+    // The totals are re-sanitized (non-negative integers) at this boundary.
+    // When the summary does not carry explicit totals (e.g. a test-built
+    // summary), they are derived from the scenario records so the durable
+    // record is always self-consistent.
+    scenarioTotals: {
+      expectedErrors: sanitizeScenarioCounter(
+        summary.scenarioTotals?.expectedErrors ??
+        (summary.scenarios ?? []).reduce((sum, entry) => sum + (entry.expectedErrors ?? 0), 0)),
+      failures: sanitizeScenarioCounter(
+        summary.scenarioTotals?.failures ??
+        (summary.scenarios ?? []).reduce((sum, entry) => sum + (entry.failures ?? 0), 0)),
+    },
+    // Per-cycle attack scenarios: each redacted scenario record carries
+    // only the fixed id/phase/order/tag/status plus expected/failure counts
+    // and an optional allowlisted targetTable (the soak table the plan
+    // targets) — never a plan entity, field, id, value, URL, or credential.
+    ...(summary.scenarios === undefined || summary.scenarios.length === 0 ? {} : {
+      scenarios: summary.scenarios.map(sanitizeScenarioRecord),
+    }),
   };
+}
+
+/**
+ * Coerces one scenario counter to a non-negative integer for the durable
+ * record (defense in depth: a malformed upstream total must never write a
+ * negative or fractional value into the JSONL).
+ *
+ * @param {unknown} value candidate scenario counter.
+ * @returns {number} non-negative integer (0 when malformed).
+ */
+function sanitizeScenarioCounter(value) {
+  return Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 /** Samples process resources for `resources.jsonl`. */
@@ -826,6 +861,10 @@ export function renderSummaryMarkdown(summary) {
     `- Operations: ${summary.operations.total} (ok ${summary.operations.ok}, expected errors ${summary.operations.expectedErrors}, failures ${summary.operations.failures}, retries ${summary.operations.retries})`,
     `- Probes: ${summary.probes.total} (ok ${summary.probes.ok}, skipped ${summary.probes.skipped}, failed ${summary.probes.failed})`,
     `- Convergence checks: ${summary.convergence.checks} (failed ${summary.convergence.failed})`,
+    // Redacted scenario totals line (numbers only), so a scenario-only
+    // failure stays visible in the markdown even when the operation failure
+    // count is zero.
+    `- Scenarios: ${summary.scenarios.expectedErrors} expected errors, ${summary.scenarios.failures} failures`,
     "",
     "| Table | Final live rows |", "| --- | ---: |",
     // Defense in depth: table names pass the soak vocabulary and counts

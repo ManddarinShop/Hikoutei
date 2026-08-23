@@ -15,6 +15,12 @@ export const KNOWN_STABLE_CODES: readonly string[];
 /** Explicit allowlist of every stable error class the soak records. */
 export const KNOWN_STABLE_CLASSES: readonly string[];
 
+/** Exact stale-write/CAS/conflict evidence codes (see KNOWN_STABLE_CODES). */
+export const CAS_STALE_CONFLICT_CODES: readonly string[];
+
+/** True when a rejected error carries exact stale-write/CAS/conflict evidence. */
+export function isStaleConflictEvidence(error: unknown): boolean;
+
 /** Stable redacted failure categories recorded in artifacts. */
 export const FAILURE_REASON_CODES: Readonly<Record<string, string>>;
 
