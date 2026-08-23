@@ -240,14 +240,42 @@ describe("soak artifacts: resources and markdown summary", () => {
       operations: { total: 64, ok: 60, expectedErrors: 3, failures: 1, retries: 2 },
       probes: { total: 0, ok: 0, skipped: 0, failed: 0 },
       convergence: { checks: 0, failed: 0 },
+      scenarios: { expectedErrors: 0, failures: 0 },
       tableRows: { soak_tasks: 8 },
     });
     expect(markdown).toContain("Status: **passed**");
     expect(markdown).toContain("Operations: 64 (ok 60, expected errors 3, failures 1, retries 2)");
+    expect(markdown).toContain("Scenarios: 0 expected errors, 0 failures");
     expect(markdown).toContain("| soak_tasks | 8 |");
     expect(markdown).toContain("Stop reason: duration-budget-reached");
     // No ids, URLs, or raw values in the rendered summary.
     expect(markdown).not.toMatch(/docs\.google\.com|spreadsheets\/d\//);
+  });
+
+  it("renders a scenario totals line so a scenario-only failure stays visible", () => {
+    const markdown = renderSummaryMarkdown({
+      scenario: "local-multitable-soak",
+      scenarioVersion: 1,
+      status: "failed",
+      mode: "local",
+      stopReason: "max-consecutive-failures",
+      seed: 20260814,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      finishedAt: "2026-01-01T00:01:00.000Z",
+      elapsedMs: 60_000,
+      durationBudgetMs: 60_000,
+      cyclesCompleted: 2,
+      // Scenario-only failure with ZERO operation failures must still be
+      // visible in the markdown.
+      operations: { total: 64, ok: 64, expectedErrors: 0, failures: 0, retries: 0 },
+      probes: { total: 0, ok: 0, skipped: 0, failed: 0 },
+      convergence: { checks: 0, failed: 0 },
+      scenarios: { expectedErrors: 2, failures: 3 },
+      tableRows: { soak_tasks: 8 },
+    });
+    expect(markdown).toContain("Scenarios: 2 expected errors, 3 failures");
+    expect(markdown).toContain("Operations: 64 (ok 64, expected errors 0, failures 0, retries 0)");
+    expect(markdown).toContain("Status: **failed**");
   });
 
   it("renders the recovery, cleanup, replacement-cleanup, and finalization sections", () => {
@@ -266,6 +294,7 @@ describe("soak artifacts: resources and markdown summary", () => {
       operations: { total: 64, ok: 60, expectedErrors: 3, failures: 1, retries: 2 },
       probes: { total: 0, ok: 0, skipped: 0, failed: 0 },
       convergence: { checks: 0, failed: 0 },
+      scenarios: { expectedErrors: 0, failures: 0 },
       tableRows: { soak_tasks: 8 },
       recovery: { status: "recovered", cycle: 5, reason: "completed-cycle-checkpoint" },
       cleanup: { status: "failed", reason: "runtime-close-failed", errorClass: "Error" },

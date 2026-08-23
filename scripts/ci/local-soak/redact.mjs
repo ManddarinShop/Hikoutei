@@ -20,6 +20,24 @@ export const EXPECTED_ERROR_CODES = Object.freeze({
 });
 
 /**
+ * EXACT set of stale-write/compare-and-set (CAS) / conflict evidence codes
+ * a raced local write may legitimately produce.
+ *
+ * Only these codes — the sync provider's guard/hash-mismatch codes — count
+ * as a proven stale-write conflict for the race scenarios. Validation codes
+ * (invalid scalar/query), transport/network failures, provisioning errors,
+ * and any unknown code are NOT stale-write evidence and must never be
+ * treated as an expected CAS conflict.
+ */
+export const CAS_STALE_CONFLICT_CODES = Object.freeze([
+  "visible_guard_mismatch",
+  "candidate_guard_mismatch",
+  "repair_guard_mismatch",
+  "invalid_deletion_guard",
+  "postcondition_hash_mismatch",
+]);
+
+/**
  * Explicit allowlist of every stable machine-readable error code the soak
  * records in artifacts. Unknown codes (arbitrary `error.code` values from
  * third-party or future provider layers) must never reach artifacts as
@@ -39,6 +57,11 @@ export const KNOWN_STABLE_CODES = Object.freeze([
   "google_sheets_api_http_error",
   "google_sheets_api_invalid_response",
   "google_sheets_api_request_start_refused",
+  // Exact stale-write/compare-and-set conflict evidence from the sync
+  // provider contract (see CAS_STALE_CONFLICT_CODES). These are stable
+  // public contract codes, allowlisted here so a real guard-mismatch code
+  // redacts unchanged if it ever reaches an artifact.
+  ...CAS_STALE_CONFLICT_CODES,
 ]);
 
 /**
@@ -117,6 +140,48 @@ export const KNOWN_REASON_CODES = Object.freeze([
   "no-string-field",
   "human-edit-not-accepted",
   "probe-error",
+  "scenario-error",
+  // Scenario fail-closed categories (a sync-capable context that cannot run
+  // a scenario is a recorded failure, never a local-mode skip): the live
+  // observation client or spreadsheet is missing, or the run mode is
+  // unknown/malformed.
+  "live-context-incomplete",
+  "unknown-mode",
+  // Scenario limitation categories (recorded when an attack scenario's live
+  // step is intentionally not fully exercised, never as an arbitrary
+  // failure): recovery of an invalid human input was not directly observed,
+  // and the close/reopen step of the reopen scenario was skipped because
+  // the harness exposes no runner-owned runtime-replacement seam.
+  "recovery-not-observed",
+  "reopen-skipped",
+  // The invalid human input's rejection could not be observed within the
+  // bounded authority poll (the scenario records a truthful skip instead of
+  // claiming an unobserved expected error).
+  "rejection-not-observable",
+  // The invalid human input was silently ACCEPTED into the authority — the
+  // corruption/non-recovery failure this scenario hunts (a real failure).
+  "invalid-accepted",
+  // The local-vs-human race winner is nondeterministic and cannot be proven
+  // from public reads alone; the scenario verifies observable invariants
+  // (no duplicate, no endless retry) and records this limitation.
+  "winner-not-verified",
+  // The local-vs-human race winner WAS resolved by a bounded public-authority
+  // observation (local or human value present in the authority, or the
+  // delete provably committed), with no silent loss: the race outcome is a
+  // verified ok.
+  "race-winner-verified",
+  // The invalid human input's dedicated row projection never appeared in the
+  // Sheet within the bounded window, so the invalid write was never attempted
+  // (the scenario records a truthful skip).
+  "projection-not-ready",
+  // The invalid human input was written but its cell value could not be
+  // observed on the Sheet within the bound, so an unchanged authority cannot
+  // be called a proven rejection (the scenario records a truthful skip).
+  "sheet-evidence-unavailable",
+  // The delete/recreate projection residue check is deferred to the cycle's
+  // convergence check (which excludes tombstones); the scenario verifies
+  // only the observable authority invariant.
+  "projection-residue-deferred",
   "cycle-error",
   "reopen-cleanup-failed",
   // Startup/reopen completed after the run's epoch deadline expired: the
@@ -175,6 +240,21 @@ export function sanitizeStableCode(candidate) {
   return typeof candidate === "string" && KNOWN_STABLE_CODES.includes(candidate)
     ? candidate
     : "unknown";
+}
+
+/**
+ * True when a rejected write's error carries EXACT stale-write/CAS/conflict
+ * evidence: a string `code` on {@link CAS_STALE_CONFLICT_CODES}. Only such
+ * evidence classifies a rejection as an expected compare-and-set conflict;
+ * a validation/transport/direct-write/unknown code is never treated as
+ * stale/conflict.
+ *
+ * @param {unknown} error a rejected promise's reason.
+ * @returns {boolean}
+ */
+export function isStaleConflictEvidence(error) {
+  return error !== null && typeof error === "object" &&
+    typeof error?.code === "string" && CAS_STALE_CONFLICT_CODES.includes(error.code);
 }
 
 /**

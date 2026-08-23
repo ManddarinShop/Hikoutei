@@ -25,3 +25,6 @@ export function buildSoakEntities(options?: {
 export function mutableFields(
   entityName: string,
 ): Array<{ readonly field: string; readonly type: string; readonly nullable?: boolean }>;
+
+/** Returns the known soak projection table name for one entity name (or undefined). */
+export function soakTableNameForEntity(entityName: string): string | undefined;

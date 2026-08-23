@@ -10,6 +10,8 @@
  */
 import { PROBE_EVERY_CYCLES, REOPEN_EVERY_CYCLES } from "./constants.mjs";
 import { SOAK_ENTITY_ORDER } from "./entities.mjs";
+import { composeScenarioBatch, SCENARIO_PHASE_VALUES } from "./scenarios/scheduler.mjs";
+import { SCENARIO_REGISTRY } from "./scenarios/registry.mjs";
 import {
   expectedTablesTouchedForCycle,
   hasEditableProbeField,
@@ -42,6 +44,102 @@ function isProvableFullCycleAbort(record) {
   return record?.abort !== undefined &&
     (record.abort.reason === "reopen-cleanup-failed" ||
      record.abort.reason === "deadline-expired");
+}
+
+/**
+ * Binds one cycle record's scenario section to the DETERMINISTIC batch the
+ * stored seed actually composes for that cycle.
+ *
+ * The recorded id/phase/order/tag must come from the seed's own
+ * `composeScenarioBatch` for that cycle (a pure function of seed + cycle +
+ * the registry), so a forged record that uses the right vocabulary but a
+ * batch the seed never produces is tampered history. The batch is composed
+ * with the SAME active entity/table subset the run used (reconstructed
+ * from the persisted `state.params.resolvedTables`), so a subset run's
+ * plans never point at an inactive entity and a full-registry recomposition
+ * (which would select targets outside the persisted subset) is never
+ * silently substituted.
+ *
+ * Completed (non-abort) cycles must hold the EXACT full batch: every
+ * composed scenario, with the exact id/phase/order/tag, in order (status and
+ * counters may reflect execution). An ABORT cycle may hold a valid ordered
+ * subset/prefix consistent with STARTED PHASES: since phases execute in
+ * order (after-prologue, concurrent-with-actors, after-actors) and a phase
+ * only runs after the previous one completed, the recorded scenarios must
+ * be the composed scenarios of the started phases — every earlier phase
+ * fully present, the aborted phase present as a (possibly partial) subset,
+ * and no later phase present. A record with NO scenario section (legacy)
+ * is compatible and passes.
+ *
+ * @param {number} seed the stored run seed.
+ * @param {number} cycle the cycle number.
+ * @param {object} record the validated cycle record.
+ * @param {readonly object[] | undefined} [activeEntities] the persisted
+ *   active entity/table subset the run composed the batch with; undefined
+ *   means a full run (every registered entity is active).
+ * @returns {string | undefined} an error reason, or undefined when valid.
+ */
+export function validateCycleScenarioBatch(seed, cycle, record, activeEntities) {
+  const recorded = record.scenarios;
+  if (recorded === undefined) return undefined; // legacy: no scenario section
+  const batch = composeScenarioBatch({ seed, cycle, registry: SCENARIO_REGISTRY, activeEntities });
+  const expected = batch.scenarios
+    .map((entry) => ({
+      id: entry.id,
+      phase: entry.phase,
+      order: entry.order,
+      tag: entry.plan?.tag,
+      // HIGH target-table proof: the recomposed plan's allowlisted soak
+      // table. The recorded batch must bind to the SAME active subset, so a
+      // full-registry record (whose targetTables span tables outside a
+      // one-table subset) fails even when id/phase/order/tag coincide.
+      targetTable: entry.targetTable,
+    }))
+    .sort((a, b) => a.order - b.order);
+  const byOrder = new Map(expected.map((entry) => [entry.order, entry]));
+  // Every recorded scenario must be an entry the seed actually composed for
+  // this cycle (same order, id, phase, tag) — vocabulary alone is never proof.
+  for (const entry of recorded) {
+    const exp = byOrder.get(entry.order);
+    if (exp === undefined || exp.id !== entry.id || exp.phase !== entry.phase || exp.tag !== entry.tag) {
+      return `recorded scenario order ${entry.order} (${entry.id}/${entry.phase}/${entry.tag}) is not in the seed's batch for this cycle`;
+    }
+    // HIGH target-table proof: EVERY recorded scenario entry must bind to
+    // the SAME active subset the plan recomposes under — a missing,
+    // unknown, or wrong-but-known targetTable fails even when
+    // id/phase/order/tag coincide. Backward compatibility applies only when
+    // the ENTIRE scenarios section is absent (legacy), never to an entry
+    // that exists without a target-table proof. The expected target table is
+    // the recomposed plan's allowlisted soak table, so an entry whose
+    // targetTable differs (or is absent) is tampered history.
+    if (entry.targetTable !== exp.targetTable) {
+      return `recorded scenario order ${entry.order} (${entry.id}) targets table ${entry.targetTable}, but the active subset composes ${exp.targetTable}; the recorded batch does not bind to this subset`;
+    }
+  }
+  const isAbort = record.abort !== undefined;
+  if (!isAbort) {
+    // Completed cycle: EXACT full batch, one entry per composed scenario.
+    if (recorded.length !== expected.length) {
+      return `completed cycle recorded ${recorded.length} scenarios but the seed composes ${expected.length}`;
+    }
+    return undefined;
+  }
+  // Abort cycle: a valid ordered subset/prefix consistent with started
+  // phases. Every earlier phase is fully present, the aborted phase is a
+  // subset, and no later phase is present.
+  const phaseIndex = new Map(SCENARIO_PHASE_VALUES.map((phase, index) => [phase, index]));
+  const recordedPhaseIndexes = recorded.map((entry) => phaseIndex.get(entry.phase) ?? -1);
+  const maxPhase = Math.max(...recordedPhaseIndexes);
+  for (const entry of expected) {
+    const index = phaseIndex.get(entry.phase) ?? -1;
+    if (index < maxPhase && !recorded.some((r) => r.order === entry.order)) {
+      return `abort cycle omits a scenario (order ${entry.order}) from an earlier started phase`;
+    }
+    if (index > maxPhase && recorded.some((r) => r.order === entry.order)) {
+      return `abort cycle records a scenario (order ${entry.order}) from a phase that cannot have started`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -93,6 +191,24 @@ export async function validateResumeHistory(artifacts, state, checkpoint) {
     cycleByNumber.set(record.cycle, record);
   }
 
+  // MEDIUM: a cycle's scenario section must bind to the DETERMINISTIC batch
+  // the stored seed actually composes for that cycle (seed + cycle + active
+  // entity subset + registry). Valid vocabulary alone is not enough: a
+  // forged record with the right id/tag/phase vocabulary but a batch that
+  // the seed never produces for that cycle is tampered history. The active
+  // subset is reconstructed from the persisted `resolvedTables` and threaded
+  // into the recomposition so a subset run's plans never point at an
+  // inactive entity and the proof never silently recomposes under the full
+  // registry when a persisted nonempty subset exists.
+  const activeEntities = SOAK_ENTITY_ORDER.filter((entry) =>
+    state.params.resolvedTables.includes(entry.tableName));
+  for (const [cycle, record] of cycleByNumber) {
+    const binding = validateCycleScenarioBatch(state.seed, cycle, record, activeEntities);
+    if (binding !== undefined) {
+      fail(`cycles.jsonl cycle ${cycle} scenario section does not match the deterministic batch the stored seed composes: ${binding}`);
+    }
+  }
+
   // Expected abort exceptions have an EXACT deterministic shape: one
   // attempted-and-failed unit, no executed-work fields, no sections.
   for (const record of cycleByNumber.values()) {
@@ -135,8 +251,6 @@ export async function validateResumeHistory(artifacts, state, checkpoint) {
   // config (e.g. actors=1, operationsPerActor=1) only touches the entity
   // names the stored actor stream actually selects, never every active
   // entity.
-  const activeEntities = SOAK_ENTITY_ORDER.filter((entry) =>
-    state.params.resolvedTables.includes(entry.tableName));
   const expectedTablesTouched = expectedTablesTouchedForCycle(state, activeEntities);
   for (const [cycle, record] of cycleByNumber) {
     if (record.abort !== undefined) continue; // exact abort shape checked above
@@ -413,6 +527,8 @@ export async function validateResumeHistory(artifacts, state, checkpoint) {
   let totalExpectedErrors = 0;
   let totalFailures = 0;
   let totalRetries = 0;
+  let totalScenarioExpectedErrors = 0;
+  let totalScenarioFailures = 0;
   let probesTotal = 0;
   let probesOk = 0;
   let probesSkipped = 0;
@@ -425,6 +541,10 @@ export async function validateResumeHistory(artifacts, state, checkpoint) {
     totalExpectedErrors += record.expectedErrors;
     totalFailures += record.failures;
     totalRetries += record.retries;
+    if (record.scenarioTotals !== undefined) {
+      totalScenarioExpectedErrors += record.scenarioTotals.expectedErrors;
+      totalScenarioFailures += record.scenarioTotals.failures;
+    }
     if (record.probe !== undefined) {
       probesTotal += 1;
       if (record.probe.status === "ok") probesOk += 1;
@@ -442,6 +562,15 @@ export async function validateResumeHistory(artifacts, state, checkpoint) {
   if (totalExpectedErrors !== cumulative.expectedErrors) mismatches.push("expectedErrors");
   if (totalFailures !== cumulative.failures) mismatches.push("failures");
   if (totalRetries !== cumulative.retries) mismatches.push("retries");
+  // Scenario totals are SEPARATE from the standard operation counters but
+  // must still match the state's dedicated scenario counters exactly (a
+  // legacy state without scenario counters defaults to zero).
+  if (totalScenarioExpectedErrors !== (cumulative.scenarioExpectedErrors ?? 0)) {
+    mismatches.push("scenarioExpectedErrors");
+  }
+  if (totalScenarioFailures !== (cumulative.scenarioFailures ?? 0)) {
+    mismatches.push("scenarioFailures");
+  }
   if (probesTotal !== cumulative.probes.total || probesOk !== cumulative.probes.ok ||
       probesSkipped !== cumulative.probes.skipped || probesFailed !== cumulative.probes.failed) {
     mismatches.push("probes");

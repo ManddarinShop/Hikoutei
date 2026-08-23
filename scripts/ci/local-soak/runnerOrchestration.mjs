@@ -121,10 +121,12 @@ import {
 import { resetHikouteiInternalLoggerForTests } from "./distFallback.mjs";
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS, buildSoakEntities } from "./entities.mjs";
 import { describeError, stableErrorTag } from "./errors.mjs";
-import { abortedCycleResult, runOneCycle } from "./execute.mjs";
+import { abortedCycleResult, runOneCycle, unwrapSoakAbort } from "./execute.mjs";
 import { SoakOracle } from "./oracle.mjs";
 import { parseSeed } from "./prng.mjs";
 import { sanitizeErrorClass, sanitizeStableCode } from "./redact.mjs";
+import { SCENARIO_REGISTRY } from "./scenarios/registry.mjs";
+import { runInterruptedCycleRecovery } from "./scenarios/scheduler.mjs";
 import {
   buildProbeEvidence,
   rebuildOracleFromSqlite,
@@ -378,6 +380,35 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
     // stable pre-mutation failure — SQLite is the authority and is never
     // silently reconciled, recreated, or trusted with a drifted schema.
     if (options.resume) {
+      // HIGH scenario-orphan recovery: an interrupted in-flight cycle (no
+      // cycle record) can leave deterministic DEDICATED rows behind when a
+      // mutating scenario's guaranteed finally never ran; the deterministic
+      // replay would reject those rows as foreign ids. Before the resume DB
+      // proof reads the authority, derive the SAME (seed, cycle) batch the
+      // interrupted run composed and run each mutating scenario's idempotent
+      // `recover` hook through the public EntityManager to remove the orphan
+      // dedicated row(s). Only the interrupted cycle is recovered (never a
+      // completed cycle), and only rows matching the scenario's own planned
+      // dedicated ids are ever removed.
+      if (recovery?.reason === RECOVERY_REASONS.INTERRUPTED_CYCLE_RECONCILED) {
+        await runInterruptedCycleRecovery({
+          seed,
+          cycle: recovery.cycle,
+          registry: SCENARIO_REGISTRY,
+          context: {
+            em: hikoutei.em,
+            tokenByEntity,
+            activeEntities,
+            // HIGH recovery delete race: the recover hooks remove orphan rows
+            // through the public EntityManager, producing an async Sheet delete
+            // effect. The runner passes the direct-Sheet seam + run deadline so
+            // recovery confirms the delete drained (projection absence/tombstone)
+            // before resume proof/rerun, failing closed when it cannot.
+            live,
+            deadlineAtMs,
+          },
+        });
+      }
       // Read the FULL authority row sets exactly once; the same rows feed
       // the DB-backed probe evidence and the exact DB proof.
       const observedByTable = await readObservedRows(hikoutei, activeEntities, tokenByEntity);
@@ -512,7 +543,14 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
             delayReopenOpenMs: options.__testDelayReplacementOpenMs,
             swapRowOnReopenCycle: options.__testSwapRowOnReopenCycle,
           });
-        } catch (error) {
+        } catch (caught) {
+          // runOneCycle delivers the abort as an explicit envelope that
+          // carries the ORIGINAL thrown value (an Error, a primitive, or
+          // undefined) plus any partial scenario records. Unwrap before
+          // reasoning about the error class, so the simulated-interruption
+          // and reopen-cleanup sentinels and the abort accounting all see the
+          // original reason.
+          const { original: error, records } = unwrapSoakAbort(caught);
           if (error instanceof SoakSimulatedInterruptionError) {
             // Simulated process death mid-cycle: the cycle's SQLite work
             // committed but no cycle record, state advance, or completed
@@ -523,7 +561,7 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
             stopReason = "simulated-interruption";
             break;
           }
-          cycleResult = abortedCycleResult(cycle, error, hikoutei);
+          cycleResult = abortedCycleResult(cycle, error, hikoutei, records);
           progress(`cycle ${cycle} aborted: ${stableErrorTag(error)}`);
           if (error instanceof SoakReopenCleanupError) {
             // The reopen handoff closed the old runtime and the replacement
@@ -561,6 +599,15 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
           state.cumulative.expectedErrors += cycleResult.summary.operations.expectedErrors;
           state.cumulative.failures += cycleResult.summary.operations.failures;
           state.cumulative.retries += cycleResult.summary.operations.retries;
+          // Scenario totals are SEPARATE from the standard operation
+          // counters (they never perturb the baseline workload totals) but
+          // they DO feed the run's failure budget and result below.
+          state.cumulative.scenarioExpectedErrors =
+            (state.cumulative.scenarioExpectedErrors ?? 0) +
+            (cycleResult.summary.scenarioTotals?.expectedErrors ?? 0);
+          state.cumulative.scenarioFailures =
+            (state.cumulative.scenarioFailures ?? 0) +
+            (cycleResult.summary.scenarioTotals?.failures ?? 0);
           state.cumulative.probes.total += cycleResult.summary.probe === undefined ? 0 : 1;
           if (cycleResult.summary.probe?.status === "ok") state.cumulative.probes.ok += 1;
           if (cycleResult.summary.probe?.status === "skipped") state.cumulative.probes.skipped += 1;
@@ -608,8 +655,13 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
         stopReason = "artifact-write-failed";
         break;
       }
-      if (cycleResult.summary.operations.failures > 0) {
-        consecutiveFailures += cycleResult.summary.operations.failures;
+      // The consecutive-failure budget counts BOTH standard operation
+      // failures and scenario failures, so a failed live scenario can never
+      // pass the run while the budget is exhausted.
+      const cycleFailures = cycleResult.summary.operations.failures +
+        (cycleResult.summary.scenarioTotals?.failures ?? 0);
+      if (cycleFailures > 0) {
+        consecutiveFailures += cycleFailures;
         if (consecutiveFailures >= state.params.maxConsecutiveFailures) {
           stopReason = "max-consecutive-failures";
           break;

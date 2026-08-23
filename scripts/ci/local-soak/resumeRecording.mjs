@@ -240,6 +240,14 @@ async function completeRecordedCycle({
   state.cumulative.expectedErrors += record.expectedErrors;
   state.cumulative.failures += record.failures;
   state.cumulative.retries += record.retries;
+  // Scenario totals are advanced from the recorded record's dedicated
+  // section (separate from the standard operation counters).
+  if (record.scenarioTotals !== undefined) {
+    state.cumulative.scenarioExpectedErrors = (state.cumulative.scenarioExpectedErrors ?? 0) +
+      record.scenarioTotals.expectedErrors;
+    state.cumulative.scenarioFailures = (state.cumulative.scenarioFailures ?? 0) +
+      record.scenarioTotals.failures;
+  }
   if (record.probe !== undefined) {
     state.cumulative.probes.total += 1;
     if (record.probe.status === "ok") state.cumulative.probes.ok += 1;

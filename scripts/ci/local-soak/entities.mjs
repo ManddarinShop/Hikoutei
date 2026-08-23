@@ -110,6 +110,24 @@ function entityProperties(entityName) {
 }
 
 /**
+ * Returns the known soak projection table name for one entity name, or
+ * `undefined` when the entity is not a registered soak entity.
+ *
+ * Used to derive the redacted, allowlisted `targetTable` proof a scenario
+ * record carries (never a raw entity id/value or URL). The table name is a
+ * fixed soak vocabulary entry, so it survives redaction unchanged and a
+ * resume proof can bind a recorded scenario batch to the actual active
+ * subset without ever recording raw ids. Unknown names return `undefined`
+ * so callers omit the field rather than record an unvetted name.
+ *
+ * @param {string} entityName a soak entity name.
+ * @returns {string | undefined} the entity's soak table name.
+ */
+export function soakTableNameForEntity(entityName) {
+  return SOAK_ENTITY_ORDER.find((entry) => entry.name === entityName)?.tableName;
+}
+
+/**
  * Returns the mutable (non-primary) field metadata for one entity.
  * @param {string} entityName
  */

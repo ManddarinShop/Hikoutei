@@ -28,6 +28,64 @@ const PROBE_ACCEPT_TIMEOUT_MS = 90_000;
 export const PROBE_ACCEPT_POLL_MS = 3_000;
 /** SQLite-only poll cadence of the System_State drain barrier (live mode). */
 export const SYSTEM_STATE_READINESS_POLL_MS = 250;
+/**
+ * Bounded authority poll for a scenario that must OBSERVE a live outcome
+ * (e.g. whether an invalid human input was rejected) before it can report
+ * an expected error or a failure. The poll is bounded by the earlier of
+ * this budget and the run's hard deadline, so a scenario observation can
+ * never outlive the run budget.
+ */
+const SCENARIO_OBSERVE_TIMEOUT_MS = 30_000;
+export const SCENARIO_OBSERVE_POLL_MS = 1_000;
+
+/**
+ * Consecutive positive settling observations required before an unchanged
+ * authority is classified as a REJECTION (invalid human input scenario).
+ *
+ * A rejection is never inferred from a single unchanged authority read —
+ * the worker could be slow to accept, so an unchanged authority alone
+ * proves nothing. The positive public/direct-Sheet combo (the invalid edit
+ * still observable on the Sheet cell WHILE the authority keeps the prior
+ * value) must be observed across this many separated polls before the
+ * scenario reports an expected rejection. If the authority ever shows the
+ * invalid value it is an ACCEPT (a corruption failure), and if the combo
+ * cannot settle by the deadline the scenario truthfully skips with
+ * `rejection-not-observable` (expectedErrors 0).
+ */
+export const SCENARIO_REJECTION_SETTLE_OBSERVATIONS = 3;
+
+/**
+ * Consecutive identical authority observations required before a local race
+ * winner (local/delete/human) is reported.
+ *
+ * The direct human edit lands asynchronously, so a SINGLE authority read
+ * right after the Sheet write must never be trusted as the winner — the
+ * human value may land a moment later and overwrite the local transition.
+ * The winner is reported only when the SAME observed winner (local, delete,
+ * or the human value) is seen across this many separated polls; if it ever
+ * changes (e.g. local -> human as the delayed edit lands) the streak resets
+ * and the later winner wins. If no single winner can settle before the
+ * deadline the scenario truthfully skips and cleans up (never a premature
+ * local/delete winner from one read).
+ */
+export const SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS = 2;
+
+/**
+ * Bounded window for confirming an interrupted-cycle orphan DELETE drained
+ * to the Sheet projection after public recovery removal.
+ *
+ * A recover hook removes an orphan dedicated row through the public
+ * EntityManager (remove + flush), which produces an ASYNC Sheet delete
+ * effect. Rerunning the same deterministic cycle recreates the id before
+ * the delete may deliver, so a stale delete/tombstone could remove the
+ * recreated row. Before the runner resumes proof/rerun it waits for the
+ * direct System projection to show the id absent (or tombstoned) within
+ * this window (bounded by the run deadline); if that cannot be proven the
+ * recovery fails closed and never reruns/recreates. The barrier uses only
+ * the direct-Sheet read seam — never internal outbox/storage.
+ */
+export const RECOVERY_DELETE_DRAIN_TIMEOUT_MS = 30_000;
+export const RECOVERY_DELETE_DRAIN_POLL_MS = 1_000;
 
 /**
  * System_State tombstone header marking durable deleted-row history.
@@ -180,6 +238,7 @@ export {
   REOPEN_BUDGET_MARGIN_MS,
   REOPEN_EVERY_CYCLES,
   RUN_ID_PATTERN,
+  SCENARIO_OBSERVE_TIMEOUT_MS,
   SoakDeadlineExpiredError,
   SoakReopenCleanupError,
   SoakSimulatedInterruptionError,
