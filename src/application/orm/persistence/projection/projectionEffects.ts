@@ -27,9 +27,15 @@ import {
   createUserInputDeleteEffect,
 } from "../../../sync/outbound/projection/ProjectionEffectFactory.js";
 import {
+  EFFECT_KINDS,
+  EFFECT_STATUSES,
+  isRecoverableEffectErrorCode,
+} from "@hikoutei/ikisaki";
+import {
   readMappedLatestProjectionEffectWithSql,
   readMappedVisibleProjectionStateWithSql,
 } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+import type { MappedLatestProjectionEffectSqlRow } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import {
   requireRegisteredSyncSheetWithSql,
 } from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
@@ -226,6 +232,40 @@ export async function projectionEffects(
   return effects;
 }
 
+/**
+ * Builds the recreate baseline when the newest User_Input effect is a delete.
+ *
+ * A physically deleted row must be recreated from an empty baseline: expected
+ * visible revision 0 and empty hash, with create-if-missing so the provider
+ * creates the row instead of mismatching its (gone) pre-delete hash. The
+ * stream sequence still follows the delete as predecessor + 1. Queueing is
+ * allowed while the delete is still in flight or failed recoverably; terminal
+ * unsafe states stay fail-closed.
+ */
+function userInputRecreateBaseline(
+  mapping: TypedSheetsEntityMapping,
+  projection: TypedSheetsEntityProjectionMapping,
+  latest: MappedLatestProjectionEffectSqlRow,
+  streamSequence: number,
+): ProjectionBaseline {
+  const deletable =
+    latest.status === EFFECT_STATUSES.PENDING ||
+    latest.status === EFFECT_STATUSES.PROCESSING ||
+    latest.status === EFFECT_STATUSES.DELIVERY_UNCERTAIN ||
+    latest.status === EFFECT_STATUSES.APPLIED ||
+    (latest.status === EFFECT_STATUSES.FAILED &&
+      isRecoverableEffectErrorCode(latest.last_error_code));
+  if (!deletable) {
+    throwProjectionBlocked(mapping, projection, `latest user_input effect is ${latest.status}`);
+  }
+  return {
+    expectedVisibleRevision: 0,
+    expectedVisibleHash: "",
+    createIfMissing: true,
+    streamSequence,
+  };
+}
+
 /** Loads and validates the registered route for a mapped projection. */
 export async function requireMappedRoute(
   sql: SqlExecutor,
@@ -272,6 +312,12 @@ export async function projectionBaseline(
     const streamSequence = latest.stream_sequence + 1;
     if (!isPositiveSafeInteger(streamSequence)) {
       throwProjectionBlocked(mapping, projection, "projection stream sequence overflowed");
+    }
+    if (
+      projection.projection === SYNC_PROJECTIONS.USER_INPUT &&
+      latest.effect_kind === EFFECT_KINDS.USER_INPUT_DELETE
+    ) {
+      return userInputRecreateBaseline(mapping, projection, latest, streamSequence);
     }
     if (
       latest.status === MAPPED_EFFECT_STATUSES.PENDING ||
