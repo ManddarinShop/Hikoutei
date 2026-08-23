@@ -175,9 +175,12 @@ function toCellStringForTest(value: unknown, spec: { type: string }): string {
 // ---------------------------------------------------------------------------
 
 describe("invalidHumanInput scenario", () => {
-  it("is registered as the single real scenario", () => {
+  it("is registered among the registered scenarios", () => {
+    // Registry-agnostic: assert this scenario is registered without binding
+    // to the full ordered id list, so later scenario PRs never need to touch
+    // this test. Exact registry content is asserted once in the shared test.
     const ids = SCENARIO_REGISTRY.map((scenario) => scenario.id);
-    expect(ids).toEqual(["invalid-human-input"]);
+    expect(ids).toContain("invalid-human-input");
   });
 
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
