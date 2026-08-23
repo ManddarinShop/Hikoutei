@@ -10,10 +10,13 @@
  * ANY registered scenario set — not just the four concrete scenarios that
  * shipped in their own PRs.
  *
- * The real `SCENARIO_REGISTRY` in `scenarios/registry.mjs` is shipped EMPTY
- * in this PR, so the tests that touch the real registry assert EMPTY-registry
- * safety (composition returns no scenarios; redaction collapses to the
- * unknown category; the resume batch proof composes an empty expected set).
+ * The tests that touch the real `SCENARIO_REGISTRY` in
+ * `scenarios/registry.mjs` are REGISTRY-CONTENT-AGNOSTIC: their assertions
+ * derive from the actual registry content (0, 1, or many registered
+ * scenarios) and hold for ANY registry, so the identical shared test file is
+ * reused by every scenario PR with zero merge conflicts. Redaction collapses
+ * ids/tags the registry never registers to the unknown category; the resume
+ * batch proof binds recorded sections to what the registry actually composes.
  * Acceptance/rejection of a stub-derived scenario vocabulary is exercised
  * through the resume schema's explicit `vocab` parameter, which is exactly
  * the seam scenario PRs use when they register modules.
@@ -48,6 +51,19 @@ const VALID_CLIENT = {
   readTabRows: async () => [],
   mutateInputCell: async () => ({ rowNumber: 1 }),
 };
+
+/**
+ * A scenario id guaranteed absent from the real registry, derived by picking
+ * a name against the current registry ids so a future scenario PR can never
+ * accidentally collide with the sentinel and break the collapse/rejection
+ * assertions that rely on it being foreign.
+ */
+function foreignSentinelId(): string {
+  const registered = new Set(SCENARIO_REGISTRY.map((scenario) => scenario.id));
+  let candidate = "scenario-definitely-not-registered";
+  while (registered.has(candidate)) candidate += "-x";
+  return candidate;
+}
 
 // ---------------------------------------------------------------------------
 // Stub registry: fake scenario modules exposing the scheduler contract.
@@ -228,29 +244,77 @@ describe("deterministic seeded scheduler (stub registry)", () => {
   });
 });
 
-describe("EMPTY-registry safety", () => {
-  it("composes an empty batch from the real (empty) registry", () => {
+describe("real-registry composition safety", () => {
+  // Registry-content-agnostic: every assertion below must hold for ANY real
+  // registry content (0, 1, or many scenarios registered), so this identical
+  // shared file is reused by every scenario PR without merge conflicts.
+  it("composes a deterministic batch from the real registry", () => {
     const batch = composeScenarioBatch({ seed: 1, cycle: 1, registry: SCENARIO_REGISTRY });
     expect(batch.cycle).toBe(1);
-    expect(batch.scenarios).toEqual([]);
+    // Every composed entry must be one of the actually-registered ids.
+    const registeredIds = SCENARIO_REGISTRY.map((scenario) => scenario.id);
+    for (const entry of batch.scenarios) {
+      expect(registeredIds).toContain(entry.id);
+    }
+    // The batch is deterministic for the seed.
+    const again = composeScenarioBatch({ seed: 1, cycle: 1, registry: SCENARIO_REGISTRY });
+    expect(again).toEqual(batch);
+    // Registry lookup resolves registered ids and rejects foreign ones.
+    for (const scenario of SCENARIO_REGISTRY) {
+      expect(getScenarioById(scenario.id)).toBe(scenario);
+    }
     expect(getScenarioById("scenario-stub-alpha")).toBeUndefined();
-    expect(SCENARIO_REGISTRY).toEqual([]);
+    // The real registry is a non-empty-agnostic array (any content is valid).
+    expect(Array.isArray(SCENARIO_REGISTRY)).toBe(true);
   });
 
-  it("runs an empty phase batch to no records", async () => {
+  it("runs a real-registry phase batch to one record per composed entry", async () => {
     const batch = composeScenarioBatch({ seed: 1, cycle: 1, registry: SCENARIO_REGISTRY });
-    const records = await runScenarioPhase(batch, SCENARIO_PHASES.AFTER_PROLOGUE, LOCAL_CONTEXT);
-    expect(records).toEqual([]);
+    const registeredIds = SCENARIO_REGISTRY.map((scenario) => scenario.id);
+    // Records correspond 1:1 to that phase's composed entries: none is
+    // fabricated and none dropped, whatever the registry composes.
+    for (const phase of SCENARIO_PHASE_VALUES) {
+      // Derive the expected set independently from the raw batch (filter by
+      // phase, sort by order) rather than reusing `scenariosForPhase`, so the
+      // cardinality/order assertions are not tautological.
+      const entries = batch.scenarios
+        .filter((entry) => entry.phase === phase)
+        .sort((a, b) => a.order - b.order);
+      const records = await runScenarioPhase(batch, phase, LOCAL_CONTEXT);
+      expect(records.length).toBe(entries.length);
+      expect(records.map((record) => record.order)).toEqual(
+        entries.map((entry) => entry.order),
+      );
+      // The recorded ids must match the composed entries' ids exactly, in
+      // order, so a duplicated or wrong registered scenario cannot pass.
+      expect(records.map((record) => record.id)).toEqual(
+        entries.map((entry) => entry.id),
+      );
+      for (const record of records) {
+        expect(registeredIds).toContain(record.id);
+      }
+    }
   });
 
-  it("runs interrupted-cycle recovery over an empty batch to zero removals", async () => {
+  it("runs interrupted-cycle recovery with a removal count within batch bounds", async () => {
+    const batch = composeScenarioBatch({ seed: 1, cycle: 1, registry: SCENARIO_REGISTRY });
+    // A recovery context with no tokens/active entities makes every recover
+    // hook a no-op, so removed is 0 regardless of registry content, and it
+    // can never exceed the composed batch size.
     const result = await runInterruptedCycleRecovery({
       seed: 1,
       cycle: 1,
       registry: SCENARIO_REGISTRY,
-      context: LOCAL_CONTEXT,
+      context: {
+        ...LOCAL_CONTEXT,
+        tokenByEntity: new Map(),
+        activeEntities: [],
+        em: { fork: () => ({ find: async () => [], remove: () => {}, flush: async () => {} }) },
+      },
     });
-    expect(result).toEqual({ removed: 0 });
+    expect(typeof result.removed).toBe("number");
+    expect(result.removed).toBeGreaterThanOrEqual(0);
+    expect(result.removed).toBeLessThanOrEqual(batch.scenarios.length);
   });
 });
 
@@ -405,17 +469,20 @@ describe("scenario execution wrapper (stub)", () => {
 });
 
 describe("scenario record redaction and resume schema (stub-derived vocab)", () => {
-  it("sanitizes a scenario record against the REAL (empty) registry collapse", () => {
-    // The shipped registry is empty, so no scenario id or tag is known:
-    // sanitization collapses those to the fixed `unknown` category. The
-    // phase/status vocabularies come from the scheduler/status allowlist
-    // (always populated) so they survive; the integer counters and a known
-    // allowlisted target table survive too.
+  it("sanitizes an unknown scenario id/tag against the real registry to the unknown category", () => {
+    // Registry-agnostic: an id/tag that is NOT in the real registry (whatever
+    // it contains) collapses to the fixed `unknown` category. The phase/status
+    // vocabularies come from the scheduler/status allowlist (always populated)
+    // so they survive; the integer counters and a known allowlisted target
+    // table survive too.
+    const fakeId = foreignSentinelId();
+    // Guard inline: the sentinel must not be a real registered id.
+    expect(SCENARIO_REGISTRY.map((scenario) => scenario.id)).not.toContain(fakeId);
     const sanitized = sanitizeScenarioRecord({
-      id: "scenario-stub-alpha",
+      id: fakeId,
       phase: "after-prologue",
       order: 0,
-      tag: "stub-alpha",
+      tag: fakeId,
       status: "ok",
       expectedErrors: 2,
       failures: 1,
@@ -602,16 +669,18 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
   });
 });
 
-describe("deterministic resume batch proof (empty real registry)", () => {
+describe("deterministic resume batch proof (real registry)", () => {
   // `validateCycleScenarioBatch` binds a cycle's recorded scenario section to
-  // the batch the REAL (currently empty) `SCENARIO_REGISTRY` composes for
-  // (seed, cycle). With no scenarios registered, the seed composes an empty
-  // batch, so any non-empty scenario section is tampered history while a
-  // legacy record (no scenario section) is compatible. Stub-derived batch
-  // acceptance is exercised through `composeScenarioBatch` + the resume
-  // schema `vocab` seam above; the proof itself is intentionally hardwired
-  // to the registered registry so a stub can never be mistaken for a real
-  // scenario set in production history validation.
+  // the batch the REAL `SCENARIO_REGISTRY` composes for (seed, cycle). The
+  // assertions below are REGISTRY-CONTENT-AGNOSTIC and hold for any registry
+  // (0, 1, or many scenarios registered): a legacy record without a scenario
+  // section is compatible, a recorded id the registry never composes is
+  // tampered history, and a recorded abort prefix that exactly matches the
+  // registry's own composition is accepted. Stub-derived batch acceptance is
+  // exercised through `composeScenarioBatch` + the resume schema `vocab` seam
+  // above; the proof itself is intentionally hardwired to the registered
+  // registry so a stub can never be mistaken for a real scenario set in
+  // production history validation.
   const seed = 4242;
 
   it("accepts a legacy record with the scenario section omitted", () => {
@@ -619,27 +688,37 @@ describe("deterministic resume batch proof (empty real registry)", () => {
     expect(validateCycleScenarioBatch(seed, 1, record)).toBeUndefined();
   });
 
-  it("rejects any recorded scenario the empty registry cannot compose", () => {
+  it("rejects any recorded scenario the real registry cannot compose", () => {
+    const fakeId = foreignSentinelId();
+    // Guard inline: the sentinel must not be a real registered id.
+    expect(SCENARIO_REGISTRY.map((scenario) => scenario.id)).not.toContain(fakeId);
     const record = {
       cycle: 1,
       abort: undefined,
       scenarios: [
-        {
-          id: "scenario-stub-alpha",
-          phase: "after-prologue",
-          order: 0,
-          tag: "stub-alpha",
-          targetTable: "soak_customers",
-        },
+        { id: fakeId, phase: "after-prologue", order: 0, tag: fakeId, targetTable: "soak_customers" },
       ],
     };
     const reason = validateCycleScenarioBatch(seed, 1, record);
     expect(reason).toMatch(/is not in the seed's batch/);
   });
 
-  it("accepts an abort cycle whose recorded prefix is empty (empty registry)", () => {
-    // An abort cycle with no composed scenarios is a valid ordered subset.
-    const record = { cycle: 1, abort: { reason: "cycle-error" }, scenarios: [] };
+  it("accepts an abort cycle whose recorded prefix matches the real registry's composition", () => {
+    // Whatever the registry composes (empty, one, or many scenarios), the
+    // exact composed batch is a valid ordered abort prefix: an empty batch
+    // yields an empty recorded prefix, a non-empty batch yields its entries.
+    const batch = composeScenarioBatch({ seed, cycle: 1, registry: SCENARIO_REGISTRY });
+    const record = {
+      cycle: 1,
+      abort: { reason: "cycle-error" },
+      scenarios: batch.scenarios.map((entry) => ({
+        id: entry.id,
+        phase: entry.phase,
+        order: entry.order,
+        tag: entry.plan.tag,
+        targetTable: entry.targetTable,
+      })),
+    };
     expect(validateCycleScenarioBatch(seed, 1, record)).toBeUndefined();
   });
 });
