@@ -13,6 +13,7 @@
 
 import * as invalidHumanInput from "./invalidHumanInput.mjs";
 import * as localHumanWriteRace from "./localHumanWriteRace.mjs";
+import * as deleteRecreateRace from "./deleteRecreateRace.mjs";
 import * as pendingDeliveryReopen from "./pendingDeliveryReopen.mjs";
 
 /**
@@ -22,7 +23,12 @@ import * as pendingDeliveryReopen from "./pendingDeliveryReopen.mjs";
  * one another. Add a scenario by importing its module here and appending it
  * to this array.
  */
-export const SCENARIO_REGISTRY = Object.freeze([invalidHumanInput, localHumanWriteRace, pendingDeliveryReopen]);
+export const SCENARIO_REGISTRY = Object.freeze([
+  invalidHumanInput,
+  localHumanWriteRace,
+  deleteRecreateRace,
+  pendingDeliveryReopen,
+]);
 
 /** Scenarios ordered by id for deterministic lookups. */
 const BY_ID = new Map(SCENARIO_REGISTRY.map((scenario) => [scenario.id, scenario]));
