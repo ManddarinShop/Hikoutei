@@ -2,10 +2,15 @@ name: Create main minor release
 
 # A main merge advances the minor version and creates the stable release tag.
 # The existing stable-publish workflow owns npm publication for that tag.
+# Pushes that only touch workflow/docs/README are not releases and do not bump the version.
 on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - 'README.md'
 
 concurrency:
   group: release-main
