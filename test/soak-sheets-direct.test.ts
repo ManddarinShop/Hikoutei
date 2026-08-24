@@ -23,7 +23,11 @@ import {
   DEFAULT_REQUEST_START_INTERVAL_MS,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DirectSheetsError,
+  evaluateDeletePostcondition,
   evaluateInputPostcondition,
+  evaluateInputPostconditionMulti,
+  evaluateInputPreWriteMulti,
+  evaluateInsertPostcondition,
   RECEIPT_TAB_NAME,
   resolveDeadlineTimeout,
   resolveRequestTimeoutMs,
@@ -161,6 +165,33 @@ const {
           const requests = (params as { requestBody?: { requests?: unknown[] } })
             ?.requestBody?.requests ?? [];
           for (const request of requests) {
+            const append = (request as { appendCells?: {
+              sheetId?: number;
+              rows?: { values?: { userEnteredValue?: { stringValue?: string } }[] }[];
+            } })?.appendCells;
+            if (append !== undefined && append.sheetId !== undefined && Array.isArray(append.rows)) {
+              const title = titleBySheetId[append.sheetId];
+              const tabRows = title !== undefined ? mutableRowsByTitle.get(title) : undefined;
+              if (tabRows !== undefined) {
+                const newRow = (append.rows[0]?.values ?? []).map((cell) =>
+                  cell?.userEnteredValue?.stringValue ?? "");
+                tabRows.push(newRow);
+              }
+              continue;
+            }
+            const del = (request as { deleteDimension?: {
+              range?: { sheetId?: number; dimension?: string; startIndex?: number; endIndex?: number };
+            } })?.deleteDimension;
+            if (del !== undefined && del.range?.sheetId !== undefined && del.range.dimension === "ROWS") {
+              const title = titleBySheetId[del.range.sheetId];
+              const tabRows = title !== undefined ? mutableRowsByTitle.get(title) : undefined;
+              if (tabRows !== undefined) {
+                const start = del.range.startIndex ?? 0;
+                const end = del.range.endIndex ?? start + 1;
+                tabRows.splice(start, end - start);
+              }
+              continue;
+            }
             const update = (request as { updateCells?: {
               start?: { sheetId?: number; rowIndex?: number; columnIndex?: number };
               rows?: { values?: { userEnteredValue?: { stringValue?: string } }[] }[];
@@ -1912,6 +1943,616 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
       identity: "task-main-c1",
       headerName: "title",
       value: "human-edit",
+    })).toEqual({ status: "identity_shifted" });
+  });
+});
+
+describe("soak sheets direct: multi-field human write (mutateInputCells)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    fakeRequests.length = 0;
+    fakeRanges.length = 0;
+    missingTabs.clear();
+    extraTabs.clear();
+    rowSnapshots.length = 0;
+    mutableRowsByTitle.clear();
+    mutableState.useMutableRows = false;
+    for (const key of Object.keys(sheetIdOverrides)) delete sheetIdOverrides[key];
+    fakeBatchUpdateBodies.length = 0;
+    while (gates.length > 0) gates.shift()!(undefined);
+  });
+
+  /** Releases the next gated SDK call. */
+  function releaseNextGate(): void {
+    const release = gates.shift();
+    expect(release).toBeTypeOf("function");
+    release!(undefined);
+  }
+
+  it("writes every requested field in ONE batchUpdate and verifies by identity", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_200_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    rowSnapshots.push(
+      [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      [["id", "title", "status"], ["task-main-c1", "human-title", "human-status"]],
+    );
+    const pending = client.mutateInputCells({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+      fields: { title: "human-title", status: "human-status" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot read
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // write
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition read
+    await expect(pending).resolves.toEqual({ rowNumber: 2 });
+
+    // ONE batchUpdate carrying BOTH field writes atomically.
+    expect(fakeRequests.map((request) => request.method)).toEqual(["get", "batchUpdate", "get"]);
+    expect(fakeBatchUpdateBodies[0]).toEqual({
+      requests: [
+        {
+          updateCells: {
+            start: { sheetId: 12, rowIndex: 1, columnIndex: 1 },
+            rows: [{ values: [{ userEnteredValue: { stringValue: "human-title" } }] }],
+            fields: "userEnteredValue",
+          },
+        },
+        {
+          updateCells: {
+            start: { sheetId: 12, rowIndex: 1, columnIndex: 2 },
+            rows: [{ values: [{ userEnteredValue: { stringValue: "human-status" } }] }],
+            fields: "userEnteredValue",
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects identity_shifted when a row insert shifts the multi-field target", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_300_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    mutableState.useMutableRows = true;
+    mutableRowsByTitle.set("SoakTask_Input", [
+      ["id", "title", "status"],
+      ["task-main-c1", "old", "open"],
+    ]);
+    const pending = client.mutateInputCells({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+      fields: { title: "human-title", status: "human-status" },
+    });
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "identity_shifted",
+      retryable: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot (identity at row 1)
+    await vi.advanceTimersByTimeAsync(0);
+    mutableRowsByTitle.get("SoakTask_Input")!.splice(1, 0, ["other-identity", "pending", "x"]);
+    releaseNextGate(); // write applies to row 1 (now other-identity)
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition observes collateral write
+    await rejection;
+    expect(mutableRowsByTitle.get("SoakTask_Input")).toEqual([
+      ["id", "title", "status"],
+      ["other-identity", "human-title", "human-status"],
+      ["task-main-c1", "old", "open"],
+    ]);
+  });
+
+  it("rejects missing_identity when the intended identity row is absent", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_400_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    rowSnapshots.push([["id", "title", "status"], ["other-identity", "a", "b"]]);
+    const pending = client.mutateInputCells({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+      fields: { title: "x", status: "y" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "missing_identity",
+      retryable: false,
+    });
+    // No write was issued for a missing identity.
+    expect(fakeRequests.map((request) => request.method)).toEqual(["get"]);
+  });
+});
+
+describe("soak sheets direct: human row insert (insertInputRow)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    fakeRequests.length = 0;
+    fakeRanges.length = 0;
+    missingTabs.clear();
+    extraTabs.clear();
+    rowSnapshots.length = 0;
+    mutableRowsByTitle.clear();
+    mutableState.useMutableRows = false;
+    for (const key of Object.keys(sheetIdOverrides)) delete sheetIdOverrides[key];
+    fakeBatchUpdateBodies.length = 0;
+    while (gates.length > 0) gates.shift()!(undefined);
+  });
+
+  /** Releases the next gated SDK call. */
+  function releaseNextGate(): void {
+    const release = gates.shift();
+    expect(release).toBeTypeOf("function");
+    release!(undefined);
+  }
+
+  it("appends a new row (id + fields) in ONE batchUpdate and verifies it landed", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_500_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    rowSnapshots.push(
+      [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      [["id", "title", "status"], ["task-main-c1", "old", "open"], ["task-new-c1", "new", "pending"]],
+    );
+    const pending = client.insertInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      row: { id: "task-new-c1", title: "new", status: "pending" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // write
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition
+    await expect(pending).resolves.toEqual({ rowNumber: 3 });
+
+    // ONE batchUpdate using the ATOMIC appendCells (never a stale
+    // row-index updateCells that could overwrite a concurrent insert).
+    expect(fakeRequests.map((request) => request.method)).toEqual(["get", "batchUpdate", "get"]);
+    expect(fakeBatchUpdateBodies[0]).toEqual({
+      requests: [{
+        appendCells: {
+          sheetId: 12,
+          rows: [{
+            values: [
+              { userEnteredValue: { stringValue: "task-new-c1" } },
+              { userEnteredValue: { stringValue: "new" } },
+              { userEnteredValue: { stringValue: "pending" } },
+            ],
+          }],
+          fields: "userEnteredValue",
+        },
+      }],
+    });
+  });
+
+  it("rejects identity_shifted when the id already exists (no write issued)", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_600_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    rowSnapshots.push([["id", "title", "status"], ["task-main-c1", "old", "open"]]);
+    const pending = client.insertInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      row: { id: "task-main-c1", title: "dup", status: "x" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "identity_shifted",
+      retryable: false,
+    });
+    expect(fakeRequests.map((request) => request.method)).toEqual(["get"]);
+  });
+
+  it("rejects identity_shifted when the inserted identity is absent after the write", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_700_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    rowSnapshots.push(
+      [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+    );
+    const pending = client.insertInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      row: { id: "task-new-c1", title: "new", status: "pending" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "identity_shifted",
+      retryable: false,
+    });
+  });
+
+  it("does not overwrite a concurrent insert (atomic appendCells)", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_750_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    mutableState.useMutableRows = true;
+    mutableRowsByTitle.set("SoakTask_Input", [
+      ["id", "title", "status"],
+      ["task-main-c1", "old", "open"],
+    ]);
+    const pending = client.insertInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      row: { id: "task-new-c1", title: "new", status: "pending" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot (append target would be row 2)
+    await vi.advanceTimersByTimeAsync(0);
+    // A concurrent actor appends a row into the slot the OLD stale-index
+    // implementation would have overwritten.
+    mutableRowsByTitle.get("SoakTask_Input")!.push(["task-concurrent", "c", "x"]);
+    releaseNextGate(); // appendCells appends at the TRUE end, never overwriting
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition
+    await expect(pending).resolves.toEqual({ rowNumber: 4 });
+    // No data loss: the concurrent row AND the inserted row both survive.
+    expect(mutableRowsByTitle.get("SoakTask_Input")).toEqual([
+      ["id", "title", "status"],
+      ["task-main-c1", "old", "open"],
+      ["task-concurrent", "c", "x"],
+      ["task-new-c1", "new", "pending"],
+    ]);
+  });
+
+  it("places appended values by RESOLVED header column index (id not first)", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_775_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    // The id column is NOT the first column; fields are supplied in a
+    // different order than the header. appendCells must place each value at
+    // its resolved column index, never by caller key order.
+    rowSnapshots.push(
+      [["title", "id", "status"], ["old", "task-main-c1", "open"]],
+      [["title", "id", "status"], ["old", "task-main-c1", "open"], ["new", "task-new-c1", "pending"]],
+    );
+    const pending = client.insertInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      row: { id: "task-new-c1", status: "pending", title: "new" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await expect(pending).resolves.toEqual({ rowNumber: 3 });
+
+    // Values are placed by column index: id at column 1, title at column 0,
+    // status at column 2 — NOT by the caller's key order.
+    expect(fakeBatchUpdateBodies[0]).toEqual({
+      requests: [{
+        appendCells: {
+          sheetId: 12,
+          rows: [{
+            values: [
+              { userEnteredValue: { stringValue: "new" } },
+              { userEnteredValue: { stringValue: "task-new-c1" } },
+              { userEnteredValue: { stringValue: "pending" } },
+            ],
+          }],
+          fields: "userEnteredValue",
+        },
+      }],
+    });
+  });
+});
+
+describe("soak sheets direct: human row delete (deleteInputRow)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    fakeRequests.length = 0;
+    fakeRanges.length = 0;
+    missingTabs.clear();
+    extraTabs.clear();
+    rowSnapshots.length = 0;
+    mutableRowsByTitle.clear();
+    mutableState.useMutableRows = false;
+    for (const key of Object.keys(sheetIdOverrides)) delete sheetIdOverrides[key];
+    fakeBatchUpdateBodies.length = 0;
+    while (gates.length > 0) gates.shift()!(undefined);
+  });
+
+  /** Releases the next gated SDK call. */
+  function releaseNextGate(): void {
+    const release = gates.shift();
+    expect(release).toBeTypeOf("function");
+    release!(undefined);
+  }
+
+  it("deletes the matching row in ONE batchUpdate and verifies the identity is gone", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_800_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    rowSnapshots.push(
+      [["id", "title", "status"], ["task-main-c1", "old", "open"], ["task-other", "a", "b"]],
+      [["id", "title", "status"], ["task-other", "a", "b"]],
+    );
+    const pending = client.deleteInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // delete
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition
+    await expect(pending).resolves.toEqual({ rowNumber: 2 });
+
+    expect(fakeRequests.map((request) => request.method)).toEqual(["get", "batchUpdate", "get"]);
+    expect(fakeBatchUpdateBodies[0]).toEqual({
+      requests: [{
+        deleteDimension: {
+          range: { sheetId: 12, dimension: "ROWS", startIndex: 1, endIndex: 2 },
+        },
+      }],
+    });
+  });
+
+  it("rejects missing_identity when the identity row is absent (no write issued)", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_900_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    rowSnapshots.push([["id", "title", "status"], ["task-other", "a", "b"]]);
+    const pending = client.deleteInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "missing_identity",
+      retryable: false,
+    });
+    expect(fakeRequests.map((request) => request.method)).toEqual(["get"]);
+  });
+
+  it("rejects identity_shifted when the identity is still present after the delete", async () => {
+    vi.useFakeTimers();
+    const startMs = 41_000_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    // A row shift placed the delete on the wrong row: the intended identity
+    // is still present in the post-write snapshot.
+    rowSnapshots.push(
+      [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+    );
+    const pending = client.deleteInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "identity_shifted",
+      retryable: false,
+    });
+  });
+
+  it("rejects identity_shifted when a stale deleteDimension destroys a non-target row", async () => {
+    vi.useFakeTimers();
+    const startMs = 41_050_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    mutableState.useMutableRows = true;
+    mutableRowsByTitle.set("SoakTask_Input", [
+      ["id", "title", "status"],
+      ["task-main-c1", "old", "open"],
+      ["task-other", "a", "b"],
+    ]);
+    const pending = client.deleteInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+    });
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "identity_shifted",
+      retryable: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot (target at row 1)
+    await vi.advanceTimersByTimeAsync(0);
+    // A concurrent actor deletes the target first, shifting the tab up.
+    mutableRowsByTitle.get("SoakTask_Input")!.splice(1, 1);
+    releaseNextGate(); // stale deleteDimension deletes row 1 (now task-other)
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition observes the unexplained loss
+    await rejection;
+    // The stale delete destroyed a NON-target identity; the harness fails
+    // closed instead of reporting a success for the wrong row.
+    expect(mutableRowsByTitle.get("SoakTask_Input")).toEqual([
+      ["id", "title", "status"],
+    ]);
+  });
+});
+
+describe("soak sheets direct: multi-field / insert / delete pure postconditions", () => {
+  it("evaluateInputPreWriteMulti resolves ready with field columns and rowIndex", () => {
+    expect(evaluateInputPreWriteMulti({
+      rows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      identity: "task-main-c1",
+      headerNames: ["title", "status"],
+    })).toEqual({
+      status: "ready",
+      idColumn: 0,
+      fieldColumns: { title: 1, status: 2 },
+      rowIndex: 1,
+    });
+  });
+
+  it("evaluateInputPreWriteMulti returns missing for an absent identity", () => {
+    expect(evaluateInputPreWriteMulti({
+      rows: [["id", "title", "status"], ["other", "a", "b"]],
+      identity: "task-main-c1",
+      headerNames: ["title"],
+    })).toEqual({ status: "missing" });
+  });
+
+  it("evaluateInputPreWriteMulti fails closed on a missing field header", () => {
+    expect(evaluateInputPreWriteMulti({
+      rows: [["id", "title"], ["task-main-c1", "old"]],
+      identity: "task-main-c1",
+      headerNames: ["status"],
+    })).toEqual({ status: "fail", statusClass: "missing_header" });
+  });
+
+  it("evaluateInputPostconditionMulti accepts all fields on the intended identity", () => {
+    expect(evaluateInputPostconditionMulti({
+      beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      afterRows: [["id", "title", "status"], ["task-main-c1", "human-title", "human-status"]],
+      identity: "task-main-c1",
+      headerNames: ["title", "status"],
+      values: { title: "human-title", status: "human-status" },
+    })).toEqual({ status: "ok" });
+  });
+
+  it("evaluateInputPostconditionMulti rejects when one field did not land", () => {
+    expect(evaluateInputPostconditionMulti({
+      beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      afterRows: [["id", "title", "status"], ["task-main-c1", "human-title", "open"]],
+      identity: "task-main-c1",
+      headerNames: ["title", "status"],
+      values: { title: "human-title", status: "human-status" },
+    })).toEqual({ status: "identity_shifted" });
+  });
+
+  it("evaluateInputPostconditionMulti rejects a collateral write at the write coordinate", () => {
+    expect(evaluateInputPostconditionMulti({
+      beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      afterRows: [
+        ["id", "title", "status"],
+        ["other-identity", "human-title", "human-status"],
+        ["task-main-c1", "human-title", "human-status"],
+      ],
+      identity: "task-main-c1",
+      headerNames: ["title", "status"],
+      values: { title: "human-title", status: "human-status" },
+      rowIndex: 1,
+    })).toEqual({ status: "identity_shifted" });
+  });
+
+  it("evaluateInsertPostcondition accepts a landed insert", () => {
+    expect(evaluateInsertPostcondition({
+      afterRows: [
+        ["id", "title", "status"],
+        ["task-main-c1", "old", "open"],
+        ["task-new-c1", "new", "pending"],
+      ],
+      identity: "task-new-c1",
+      headerNames: ["title", "status"],
+      values: { title: "new", status: "pending" },
+    })).toEqual({ status: "ok" });
+  });
+
+  it("evaluateInsertPostcondition rejects an absent inserted identity", () => {
+    expect(evaluateInsertPostcondition({
+      afterRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      identity: "task-new-c1",
+      headerNames: ["title", "status"],
+      values: { title: "new", status: "pending" },
+    })).toEqual({ status: "identity_shifted" });
+  });
+
+  it("evaluateDeletePostcondition accepts a landed delete", () => {
+    expect(evaluateDeletePostcondition({
+      beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      afterRows: [["id", "title", "status"]],
+      identity: "task-main-c1",
+    })).toEqual({ status: "ok" });
+  });
+
+  it("evaluateDeletePostcondition rejects a still-present identity", () => {
+    expect(evaluateDeletePostcondition({
+      beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      afterRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
+      identity: "task-main-c1",
+    })).toEqual({ status: "identity_shifted" });
+  });
+
+  it("evaluateDeletePostcondition rejects an absent pre-write identity", () => {
+    expect(evaluateDeletePostcondition({
+      beforeRows: [["id", "title", "status"], ["other", "a", "b"]],
+      afterRows: [["id", "title", "status"], ["other", "a", "b"]],
+      identity: "task-main-c1",
+    })).toEqual({ status: "identity_shifted" });
+  });
+
+  it("evaluateDeletePostcondition rejects an unexplained loss of a non-target identity", () => {
+    // A stale deleteDimension shifted onto a different row (because a
+    // concurrent actor deleted the target first) destroyed a non-target
+    // identity; that unexplained loss must fail closed.
+    expect(evaluateDeletePostcondition({
+      beforeRows: [
+        ["id", "title", "status"],
+        ["task-main-c1", "old", "open"],
+        ["task-other", "a", "b"],
+      ],
+      afterRows: [["id", "title", "status"], ["task-other", "a", "b"]],
+      identity: "task-main-c1",
+    })).toEqual({ status: "ok" });
+    // The target AND a non-target identity both disappeared: the delete
+    // removed the wrong row, so the loss is unexplained and fails closed.
+    expect(evaluateDeletePostcondition({
+      beforeRows: [
+        ["id", "title", "status"],
+        ["task-main-c1", "old", "open"],
+        ["task-other", "a", "b"],
+      ],
+      afterRows: [["id", "title", "status"]],
+      identity: "task-main-c1",
     })).toEqual({ status: "identity_shifted" });
   });
 });

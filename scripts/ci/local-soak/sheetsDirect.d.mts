@@ -113,6 +113,43 @@ export function createDirectSheetsClient(options?: {
     readonly value: string;
     readonly deadlineAtMs?: number;
   }): Promise<{ readonly rowNumber: number }>;
+  /**
+   * Overwrites MULTIPLE field cells of the row whose id column matches in
+   * ONE batchUpdate and verifies every field landed on the INTENDED
+   * identity row. `fields` maps each target field header to its value.
+   * `deadlineAtMs` is the probe phase's ACTIVE OPERATION deadline.
+   */
+  mutateInputCells(input: {
+    readonly spreadsheetId: string;
+    readonly tabName: string;
+    readonly identity: string;
+    readonly fields: Readonly<Record<string, string>>;
+    readonly deadlineAtMs?: number;
+  }): Promise<{ readonly rowNumber: number }>;
+  /**
+   * Appends a NEW row (id + field values) to the target tab in ONE
+   * batchUpdate (human row insert) and verifies the intended identity
+   * landed exactly once. `row` maps the id column (`id`) and each field
+   * header to its value. `deadlineAtMs` is the probe phase's ACTIVE
+   * OPERATION deadline.
+   */
+  insertInputRow(input: {
+    readonly spreadsheetId: string;
+    readonly tabName: string;
+    readonly row: Readonly<Record<string, string>>;
+    readonly deadlineAtMs?: number;
+  }): Promise<{ readonly rowNumber: number }>;
+  /**
+   * Deletes the row whose id column matches from the target tab in ONE
+   * batchUpdate (human row delete) and verifies the intended identity is
+   * gone. `deadlineAtMs` is the probe phase's ACTIVE OPERATION deadline.
+   */
+  deleteInputRow(input: {
+    readonly spreadsheetId: string;
+    readonly tabName: string;
+    readonly identity: string;
+    readonly deadlineAtMs?: number;
+  }): Promise<{ readonly rowNumber: number }>;
   /** `options.deadlineAtMs` is the ACTIVE OPERATION (phase) deadline. */
   deleteTabs(
     spreadsheetId: string,
@@ -180,6 +217,79 @@ export function evaluateInputPostcondition(input: {
   readonly headerName: string;
   readonly value: string;
   readonly rowIndex?: number;
+}): { readonly status: "ok" } | { readonly status: "identity_shifted" };
+
+/**
+ * Pure PRE-WRITE snapshot validation for a MULTI-FIELD direct human write
+ * (`mutateInputCells`): promotes a User_Input tab snapshot into a ready
+ * write coordinate for several fields of one row, or fails closed WITHOUT
+ * a write. Validates every requested field header and returns a
+ * field-name -> column-index map. A missing/duplicate/whitespace header, a
+ * non-empty row with a blank or non-string identity, or a duplicated
+ * nonblank identity returns a fixed `fail` status class; a structurally
+ * valid tab lacking the intended identity returns `missing`; on `ready`
+ * the id column, field columns, and the target's rowIndex are returned.
+ * Never returns an id or value.
+ */
+export function evaluateInputPreWriteMulti(input: {
+  readonly rows: ReadonlyArray<readonly unknown[]>;
+  readonly identity: string;
+  readonly headerNames: readonly string[];
+}):
+  | { readonly status: "ready"; readonly idColumn: number; readonly fieldColumns: Record<string, number>; readonly rowIndex: number }
+  | { readonly status: "missing" }
+  | { readonly status: "fail"; readonly statusClass: string };
+
+/**
+ * Pure postcondition check for a MULTI-FIELD direct human write, comparing
+ * the pre-write and post-write snapshots BY VALIDATED IDENTITY. Requires
+ * exactly one intended identity row before and after, that row to display
+ * EVERY requested field value, and — when `rowIndex` (the ORIGINAL write
+ * coordinate) is supplied — that the post-read row at that coordinate does
+ * not belong to a different nonblank identity while still displaying any
+ * requested value. A value placed on another identity, an absent/duplicated
+ * identity, a blank or non-string identity in a non-empty row, or a proven
+ * collateral write at the write coordinate returns `identity_shifted`;
+ * never a raw id/value.
+ */
+export function evaluateInputPostconditionMulti(input: {
+  readonly beforeRows: ReadonlyArray<readonly unknown[]>;
+  readonly afterRows: ReadonlyArray<readonly unknown[]>;
+  readonly identity: string;
+  readonly headerNames: readonly string[];
+  readonly values: Readonly<Record<string, unknown>>;
+  readonly rowIndex?: number;
+}): { readonly status: "ok" } | { readonly status: "identity_shifted" };
+
+/**
+ * Pure postcondition check for a direct human ROW INSERT: requires the
+ * intended identity to exist exactly once in the post-write snapshot and
+ * that identity's row to display every requested field value. A duplicated
+ * identity, an absent identity, a blank or non-string identity in a
+ * non-empty row, or any field that did not land on the intended identity
+ * returns `identity_shifted`; never a raw id/value.
+ */
+export function evaluateInsertPostcondition(input: {
+  readonly afterRows: ReadonlyArray<readonly unknown[]>;
+  readonly identity: string;
+  readonly headerNames: readonly string[];
+  readonly values: Readonly<Record<string, unknown>>;
+}): { readonly status: "ok" } | { readonly status: "identity_shifted" };
+
+/**
+ * Pure postcondition check for a direct human ROW DELETE: requires the
+ * intended identity to exist exactly once in the pre-write snapshot and to
+ * be ABSENT from the post-write snapshot, and that NO OTHER identity
+ * present before the delete is lost (a stale `deleteDimension` that shifted
+ * onto a different row would destroy a non-target identity). A duplicated
+ * identity, an absent pre-write identity, a still-present post-write
+ * identity, or a blank or non-string identity in a non-empty row returns
+ * `identity_shifted`; never a raw id/value.
+ */
+export function evaluateDeletePostcondition(input: {
+  readonly beforeRows: ReadonlyArray<readonly unknown[]>;
+  readonly afterRows: ReadonlyArray<readonly unknown[]>;
+  readonly identity: string;
 }): { readonly status: "ok" } | { readonly status: "identity_shifted" };
 
 /**
