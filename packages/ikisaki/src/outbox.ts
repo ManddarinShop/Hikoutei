@@ -8,6 +8,7 @@
  */
 
 import { STORAGE_ERROR_CODES, StorageError } from "./errors.js";
+import type { EffectKind } from "./constants.js";
 import { withSqlSavepoint } from "./sqlTransaction.js";
 import {
   fenceParameters,
@@ -214,8 +215,11 @@ export async function applyEffectResultWithSql(
 ): Promise<boolean> {
   if (!(await isFencingValidWithSql(sql, options))) return false;
   validateApplyResultOptions(options);
+  let confirmedEffectKind: EffectKind | undefined;
   if (options.projectionConfirmation !== undefined) {
-    await assertProjectionConfirmationTargetWithSql(
+    // The durable operation kind (from the claimed outbox row, never the
+    // receipt) selects the confirmation's revision rule.
+    confirmedEffectKind = await assertProjectionConfirmationTargetWithSql(
       sql,
       options.effectId,
       options.claimToken,
@@ -227,7 +231,11 @@ export async function applyEffectResultWithSql(
     const result = await sql.run(APPLY_EFFECT_RESULT_SQL, applyEffectResultParameters(options));
     if (result.changes !== 1) return false;
     if (options.projectionConfirmation !== undefined) {
-      await writeProjectionConfirmationWithSql(sql, options.projectionConfirmation);
+      await writeProjectionConfirmationWithSql(
+        sql,
+        options.projectionConfirmation,
+        confirmedEffectKind as EffectKind,
+      );
     }
     return true;
   });
