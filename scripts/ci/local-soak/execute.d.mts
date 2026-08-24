@@ -27,7 +27,7 @@ export function abortedCycleResult(
     };
     scenarioTotals: { expectedErrors: number; failures: number };
     scenarios?: readonly Record<string, unknown>[];
-    abort: { reason: string; errorClass: string; code?: string };
+    abort: { reason: string; errorClass: string; code?: string; statusClass?: string };
   };
 };
 

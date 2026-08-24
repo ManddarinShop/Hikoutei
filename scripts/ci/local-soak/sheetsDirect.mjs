@@ -281,11 +281,11 @@ export function createDirectSheetsClient({
     const headers = rows[0] ?? [];
     const idColumn = headers.indexOf("id");
     const fieldColumn = headers.indexOf(headerName);
-    if (idColumn < 0) throw new DirectSheetsError("identity header not found", "harness_error");
-    if (fieldColumn < 0) throw new DirectSheetsError("field header not found", "harness_error");
+    if (idColumn < 0) throw new DirectSheetsError("identity header not found", "missing_header");
+    if (fieldColumn < 0) throw new DirectSheetsError("field header not found", "missing_header");
     const rowIndex = rows.findIndex((row, index) =>
       index > 0 && row[idColumn] === identity);
-    if (rowIndex < 0) throw new DirectSheetsError("identity row not found", "harness_error");
+    if (rowIndex < 0) throw new DirectSheetsError("identity row not found", "missing_identity");
     const sheetId = await requireSheetId(spreadsheetId, tabName, deadlineAtMs);
     // MEDIUM 5: the write timeout is resolved NOW — immediately before this
     // SDK request — never from a clock read taken before the earlier read
@@ -320,7 +320,7 @@ export function createDirectSheetsClient({
     const sheet = (response?.data?.sheets ?? []).find((entry) =>
       entry?.properties?.title === tabName);
     if (sheet?.properties?.sheetId === undefined) {
-      throw new DirectSheetsError("tab not found", "harness_error");
+      throw new DirectSheetsError("tab not found", "missing_tab");
     }
     return sheet.properties.sheetId;
   }
@@ -394,38 +394,138 @@ export function resolveTabsToDelete(properties, tabNames, includeReceiptTab) {
   return targets;
 }
 
-/** Harness error carrying a stable class only (no remote payload). */
+/** Numeric HTTP statuses a convergence read may safely retry. */
+const RETRYABLE_HTTP_STATUSES = new Set([408, 429]);
+
+/** gaxios/node timeout and deadline codes (classified, never retained). */
+const TIMEOUT_CODES = new Set([
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "timeout",
+  "deadline",
+  "DEADLINE_EXCEEDED",
+  // Real gaxios timeout: the wrapped DOMException's `name` becomes the
+  // GaxiosError's top-level `code` (see gaxios common.js GaxiosError).
+  "TimeoutError",
+]);
+
+/** Known node/gaxios network codes (classified, never retained). */
+const NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EPIPE",
+  "ECONNABORTED",
+  "EADDRNOTAVAIL",
+  "EADDRINUSE",
+  "ENETDOWN",
+  "ENETRESET",
+  "EHOSTDOWN",
+  "EAGAIN",
+  "EALREADY",
+  "EINPROGRESS",
+  "EISCONN",
+  "ENOTCONN",
+  // Legacy gaxios code aliased to the canonical `network` class: a
+  // `network_or_unknown` SDK input is retryable network, never a distinct
+  // class the NEW classifier emits. The legacy ARTIFACT vocabulary stays
+  // accepted only for resume compatibility (see redact.mjs).
+  "network_or_unknown",
+]);
+
+/**
+ * Pure runtime classifier for one direct-client SDK failure.
+ *
+ * Maps an untrusted SDK rejection to a stable `statusClass` and a
+ * `retryable` flag using EXACT allowlists only. Numeric HTTP statuses
+ * come from `response.status`, a top-level `status`, or a numeric `code`;
+ * timeout/deadline and known network codes are classified by their exact
+ * code strings. A strictly bounded cause chain (the top-level error plus
+ * up to two nested causes) is inspected for string `code` candidates so a
+ * native-fetch network failure wrapped by gaxios can surface its
+ * allowlisted code (e.g. `ECONNRESET`) at `error.cause.cause.code`.
+ * Everything else falls back to `unknown`. The raw message, code, body,
+ * URL, id, and cell data are never retained — only the stable class and
+ * retryability survive.
+ *
+ * @param {unknown} error a rejected promise's reason.
+ * @returns {{ statusClass: string, retryable: boolean }}
+ */
+export function classifyDirectError(error) {
+  // MEDIUM: pick the FIRST candidate among response.status, top-level
+  // status, and code that is ITSELF an integer HTTP status. A malformed
+  // higher-priority candidate (a string, non-integer, or out-of-range
+  // value) must never suppress a later valid numeric value, and strings
+  // are never coerced into statuses.
+  for (const candidate of [error?.response?.status, error?.status, error?.code]) {
+    if (typeof candidate === "number" && Number.isInteger(candidate) &&
+        candidate >= 100 && candidate <= 599) {
+      return {
+        statusClass: `http_${candidate}`,
+        retryable: RETRYABLE_HTTP_STATUSES.has(candidate) || candidate >= 500,
+      };
+    }
+  }
+  // Walk a strictly bounded cause chain (the top-level error plus up to
+  // two nested causes) reading ONLY string `code` candidates, and classify
+  // only existing allowlisted timeout/network codes. A native-fetch network
+  // failure wrapped by gaxios can surface its allowlisted code (e.g.
+  // `ECONNRESET`) at `error.cause.cause.code`; the raw code, message, and
+  // object are never retained — only the stable class and retryability.
+  let node = error;
+  for (let depth = 0; depth <= 2 && node != null; depth++) {
+    const code = typeof node?.code === "string" ? node.code : undefined;
+    if (code !== undefined && TIMEOUT_CODES.has(code)) {
+      return { statusClass: "timeout", retryable: true };
+    }
+    if (code !== undefined && NETWORK_CODES.has(code)) {
+      return { statusClass: "network", retryable: true };
+    }
+    node = node?.cause;
+  }
+  if (error?.name === "TimeoutError") {
+    return { statusClass: "timeout", retryable: true };
+  }
+  // A real gaxios timeout can surface as a generic `name:'Error'` with no
+  // top-level code, an `AbortError` cause, and a `TimeoutError` signal
+  // reason. Recognize ONLY that exact combination — an arbitrary
+  // `AbortError` cause (no matching timeout signal reason) is never a
+  // timeout and falls through to unknown.
+  if (error?.cause?.name === "AbortError" &&
+      error?.config?.signal?.reason?.name === "TimeoutError") {
+    return { statusClass: "timeout", retryable: true };
+  }
+  return { statusClass: "unknown", retryable: false };
+}
+
+/** Harness error carrying a stable class and retryability only. */
 export class DirectSheetsError extends Error {
-  constructor(message, statusClass) {
+  constructor(message, statusClass, retryable = false) {
     super(message);
     this.name = "DirectSheetsError";
     this.statusClass = statusClass;
+    this.retryable = retryable;
   }
 }
 
 /**
  * Maps SDK failures to status-class-only harness errors.
  *
- * The message carries the stable status class (an HTTP status or a
- * network/transport class) and NOTHING else: raw provider messages, API
- * error reasons, response bodies, spreadsheet IDs, and URLs never enter
- * the error, its message, or any artifact.
+ * The message carries the stable status class and NOTHING else: raw
+ * provider messages, API error reasons, response bodies, spreadsheet IDs,
+ * and URLs never enter the error, its message, or any artifact. The
+ * `retryable` flag is set only for classes a convergence read may safely
+ * retry (timeout, network, HTTP 408/429/5xx).
  */
 function toStatusError(error) {
-  const status = error?.response?.status ?? error?.code;
-  // Numeric HTTP statuses classify as `http_<NNN>`; known named classes
-  // pass through; ANY other string (an SDK code or payload fragment) maps
-  // to the fixed `unknown` category so no arbitrary provider text can
-  // reach an artifact or console line.
-  let statusClass = "unknown";
-  if (typeof status === "number") {
-    statusClass = `http_${status}`;
-  } else if (status === "network_or_unknown") {
-    statusClass = "network_or_unknown";
-  }
+  const { statusClass, retryable } = classifyDirectError(error);
   throw new DirectSheetsError(
     `direct sheets request failed: ${statusClass}`,
     statusClass,
+    retryable,
   );
 }
 

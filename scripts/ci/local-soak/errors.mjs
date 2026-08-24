@@ -2,9 +2,9 @@
  * Stable redacted error description and tag helpers.
  * Depends only on the redaction allowlists.
  */
-import { sanitizeErrorClass, sanitizeStableCode } from "./redact.mjs";
+import { sanitizeErrorClass, sanitizeStableCode, sanitizeStatusClass } from "./redact.mjs";
 
-/** Extracts the error name and optional raw code for sanitization. */
+/** Extracts the error name and optional raw code/status class for sanitization. */
 export function describeError(error) {
   const errorClass = error !== null && typeof error === "object" &&
     typeof error?.name === "string" && error.name.length > 0
@@ -14,7 +14,11 @@ export function describeError(error) {
     typeof error?.code === "string"
     ? error.code
     : undefined;
-  return { errorClass, code };
+  const statusClass = error !== null && typeof error === "object" &&
+    typeof error?.statusClass === "string"
+    ? error.statusClass
+    : undefined;
+  return { errorClass, code, statusClass };
 }
 
 /** Stable redacted tag for progress lines (never the raw message). */
@@ -24,7 +28,17 @@ export function stableErrorTag(error) {
   // can embed a path, URL, or id-like token and must never reach stderr.
   const errorClass = sanitizeErrorClass(described.errorClass);
   const code = described.code === undefined ? undefined : sanitizeStableCode(described.code);
-  return code === undefined || code === "unknown"
+  const statusClass = described.statusClass === undefined
+    ? undefined
+    : sanitizeStatusClass(described.statusClass);
+  // Prefer a known non-unknown code; otherwise a known non-unknown status
+  // class; otherwise the class name only. A sanitized `unknown` code must
+  // never shadow a valid status class.
+  const stable =
+    code !== undefined && code !== "unknown" ? code
+    : statusClass !== undefined && statusClass !== "unknown" ? statusClass
+    : undefined;
+  return stable === undefined
     ? errorClass
-    : `${errorClass} (${code})`;
+    : `${errorClass} (${stable})`;
 }

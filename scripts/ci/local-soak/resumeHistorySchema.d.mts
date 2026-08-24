@@ -5,6 +5,9 @@
 /** Every probe failure reason a live run can record after redaction. */
 export const LIVE_PROBE_FAILURE_REASONS: readonly string[];
 
+/** True when a candidate is a known persisted status class (incl. `unknown`). */
+export function isKnownStatusClass(candidate: unknown): boolean;
+
 /** Reads one JSONL artifact strictly into parsed records. */
 export function readStrictJsonlRecords(
   filePath: string,

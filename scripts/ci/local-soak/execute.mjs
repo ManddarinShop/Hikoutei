@@ -44,6 +44,7 @@ import {
   sanitizeErrorClass,
   sanitizeReason,
   sanitizeStableCode,
+  sanitizeStatusClass,
 } from "./redact.mjs";
 import { recordOperationIfAbsent } from "./resume.mjs";
 import { sleep } from "./timing.mjs";
@@ -687,6 +688,13 @@ function abortedCycleResult(cycle, error, hikoutei, partialScenarioRecords = [])
     : cleanupFailure
       ? "reopen-cleanup-failed"
       : "cycle-error";
+  // The DirectSheetsError status class is preserved through the abort
+  // artifact (allowlisted only) so a live direct-client failure keeps a
+  // useful stable category; arbitrary status text collapses to `unknown`.
+  const statusClass = error !== null && typeof error === "object" &&
+    typeof error?.statusClass === "string"
+    ? sanitizeStatusClass(error.statusClass)
+    : undefined;
   // HIGH 2 abort accounting: the partial scenario records are delivered in
   // the EXPLICIT abort envelope (the fourth argument), NOT by annotating the
   // thrown value — the reason may be a primitive or undefined and cannot
@@ -718,6 +726,7 @@ function abortedCycleResult(cycle, error, hikoutei, partialScenarioRecords = [])
         reason,
         errorClass: sanitizeErrorClass(described.errorClass),
         ...(described.code === undefined ? {} : { code: sanitizeStableCode(described.code) }),
+        ...(statusClass === undefined ? {} : { statusClass }),
       },
     },
   };

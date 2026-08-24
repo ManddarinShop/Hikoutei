@@ -42,6 +42,9 @@ export function sanitizeErrorClass(candidate: unknown): string;
 /** Maps a candidate remote status class to the artifact-safe value. */
 export function sanitizeStatusClass(candidate: unknown): string;
 
+/** True when a candidate is a known stable status class (named or `http_<NNN>`). */
+export function isKnownStatusClass(candidate: unknown): boolean;
+
 /** Maps a candidate reason category to the artifact-safe value. */
 export function sanitizeReason(candidate: unknown): string;
 

@@ -166,8 +166,14 @@ export function describeSoakFailure(error) {
     typeof error?.statusClass === "string"
     ? sanitizeStatusClass(error.statusClass)
     : undefined;
-  const stable = code ?? statusClass;
-  return stable === undefined || stable === "unknown"
+  // Prefer a known non-unknown code; otherwise a known non-unknown status
+  // class; otherwise the class name only. A sanitized `unknown` code must
+  // never shadow a valid status class.
+  const stable =
+    code !== undefined && code !== "unknown" ? code
+    : statusClass !== undefined && statusClass !== "unknown" ? statusClass
+    : undefined;
+  return stable === undefined
     ? name
     : `${name} (${stable})`;
 }

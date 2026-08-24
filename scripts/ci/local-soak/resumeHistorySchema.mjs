@@ -15,6 +15,7 @@ import {
   KNOWN_STABLE_CLASSES,
   KNOWN_STABLE_CODES,
   KNOWN_TABLE_NAMES,
+  isKnownStatusClass,
 } from "./redact.mjs";
 import {
   KNOWN_SCENARIO_IDS,
@@ -93,7 +94,7 @@ function validateProbeShape(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, reason: "probe must be an object" };
   }
-  const known = new Set(["status", "reason", "table"]);
+  const known = new Set(["status", "reason", "table", "statusClass"]);
   for (const key of Object.keys(value)) {
     if (!known.has(key)) return { ok: false, reason: `unknown probe field "${key}"` };
   }
@@ -105,6 +106,9 @@ function validateProbeShape(value) {
   }
   if (value.table !== undefined && !isKnownTableOrEntityName(value.table)) {
     return { ok: false, reason: "probe.table is not a known table/entity name" };
+  }
+  if (value.statusClass !== undefined && !isKnownStatusClass(value.statusClass)) {
+    return { ok: false, reason: "probe.statusClass is not a known status class" };
   }
   return { ok: true };
 }
@@ -316,7 +320,7 @@ function validateAbortShape(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, reason: "abort must be an object" };
   }
-  const known = new Set(["reason", "errorClass", "code"]);
+  const known = new Set(["reason", "errorClass", "code", "statusClass"]);
   for (const key of Object.keys(value)) {
     if (!known.has(key)) return { ok: false, reason: `unknown abort field "${key}"` };
   }
@@ -326,8 +330,11 @@ function validateAbortShape(value) {
   if (!KNOWN_STABLE_CLASSES_HAS(value.errorClass)) {
     return { ok: false, reason: "abort.errorClass is not a known error class" };
   }
-  if (value.code !== undefined && !KNOWN_STABLE_CODES.includes(value.code)) {
+  if (value.code !== undefined && !KNOWN_STABLE_CODES_HAS(value.code)) {
     return { ok: false, reason: "abort.code is not a known stable code" };
+  }
+  if (value.statusClass !== undefined && !isKnownStatusClass(value.statusClass)) {
+    return { ok: false, reason: "abort.statusClass is not a known status class" };
   }
   return { ok: true };
 }
@@ -338,6 +345,16 @@ function KNOWN_STABLE_CLASSES_HAS(candidate) {
   // errors (a primitive or undefined rejection), so an abort whose reason
   // cannot be classified is still a record the runner can produce.
   return (typeof candidate === "string" && KNOWN_STABLE_CLASSES.includes(candidate)) ||
+    candidate === "unknown";
+}
+
+/** True when the code is on the stable allowlist (or the fixed redaction category). */
+function KNOWN_STABLE_CODES_HAS(candidate) {
+  // `sanitizeStableCode` collapses any non-allowlisted code to the fixed
+  // `unknown` category, so an abort/operation that records that redacted
+  // value is a record the runner can produce; arbitrary raw codes are still
+  // rejected because they never reach an artifact unredacted.
+  return (typeof candidate === "string" && KNOWN_STABLE_CODES.includes(candidate)) ||
     candidate === "unknown";
 }
 
@@ -515,7 +532,7 @@ function validateOperationRecordShape(record) {
       record.status !== "failed") {
     return { ok: false, reason: "status must be ok, expected_error, or failed" };
   }
-  if (record.code !== undefined && !KNOWN_STABLE_CODES.includes(record.code)) {
+  if (record.code !== undefined && !KNOWN_STABLE_CODES_HAS(record.code)) {
     return { ok: false, reason: "code is not a known stable code" };
   }
   if (record.reason !== undefined && !KNOWN_REASON_CODES.includes(record.reason)) {
@@ -565,6 +582,7 @@ function validateResourceRecordShape(record) {
 // surface so `resume.mjs` and `resumeRecording.mjs` imports stay
 // unchanged.
 export {
+  isKnownStatusClass,
   LIVE_PROBE_FAILURE_REASONS,
   readStrictJsonlRecords,
   validateCycleRecordShape,
