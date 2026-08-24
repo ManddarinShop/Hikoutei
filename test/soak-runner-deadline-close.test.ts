@@ -153,7 +153,43 @@ describe("soak runner stable error tags and CLI diagnostics", () => {
       name: "DirectSheetsError",
       statusClass: "ya29.jwt-token",
     })).toBe("DirectSheetsError");
+    // A sanitized unknown code must never shadow a valid status class.
+    expect(describeSoakFailure({
+      name: "DirectSheetsError",
+      code: "ya29.jwt-token",
+      statusClass: "http_429",
+    })).toBe("DirectSheetsError (http_429)");
     expect(describeSoakFailure(undefined)).toBe("unknown");
+  });
+
+  it("stableErrorTag preserves an allowlisted DirectSheetsError status class", () => {
+    // The stable progress tag must carry the allowlisted status class so
+    // a live direct-client failure is diagnosable on stderr, and must
+    // collapse arbitrary status text to the class name only.
+    expect(stableErrorTag({
+      name: "DirectSheetsError",
+      statusClass: "http_429",
+    })).toBe("DirectSheetsError (http_429)");
+    expect(stableErrorTag({
+      name: "DirectSheetsError",
+      statusClass: "timeout",
+    })).toBe("DirectSheetsError (timeout)");
+    expect(stableErrorTag({
+      name: "DirectSheetsError",
+      statusClass: "ya29.jwt-token",
+    })).toBe("DirectSheetsError");
+    // A sanitized unknown code must never shadow a valid status class.
+    expect(stableErrorTag({
+      name: "DirectSheetsError",
+      code: "ya29.jwt-token",
+      statusClass: "http_429",
+    })).toBe("DirectSheetsError (http_429)");
+    // A KNOWN code still wins over the status class (code is preferred).
+    expect(stableErrorTag({
+      name: "DirectSheetsError",
+      code: "google_sheets_api_network_error",
+      statusClass: "http_429",
+    })).toBe("DirectSheetsError (google_sheets_api_network_error)");
   });
 });
 

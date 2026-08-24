@@ -37,9 +37,9 @@ import {
   getScenarioById,
 } from "../scripts/ci/local-soak/scenarios/registry.mjs";
 import { sanitizeScenarioRecord } from "../scripts/ci/local-soak/scenarios/scenarioVocabulary.mjs";
-import { validateCycleRecordShape } from "../scripts/ci/local-soak/resumeHistorySchema.mjs";
+import { validateCycleRecordShape, validateOperationRecordShape } from "../scripts/ci/local-soak/resumeHistorySchema.mjs";
 import { validateCycleScenarioBatch } from "../scripts/ci/local-soak/resumeHistoryProof.mjs";
-import { KNOWN_REASON_CODES } from "../scripts/ci/local-soak/redact.mjs";
+import { KNOWN_REASON_CODES, isKnownStatusClass, sanitizeStatusClass } from "../scripts/ci/local-soak/redact.mjs";
 
 /**
  * A usable direct-Sheet client: a non-null, non-array object exposing the
@@ -728,5 +728,114 @@ describe("known reason vocabulary stays scenario-agnostic", () => {
     for (const reason of ["reopen-skipped", "recovery-not-observed", "scenario-error", "local-mode"]) {
       expect(KNOWN_REASON_CODES).toContain(reason);
     }
+  });
+});
+
+describe("abort/probe statusClass redaction roundtrip (resume compatibility)", () => {
+  /** A minimal valid cycle record with no scenario section. */
+  function minimalCycleRecord(overrides: Record<string, unknown> = {}): Record<string, any> {
+    return {
+      ts: "2025-01-01T00:00:00.000Z",
+      cycle: 1,
+      durationMs: 10,
+      tablesTouched: ["soak_customers"],
+      operations: 2,
+      expectedErrors: 0,
+      failures: 0,
+      retries: 0,
+      ...overrides,
+    };
+  }
+
+  it("sanitizeStatusClass emits the fixed unknown category that resume accepts", () => {
+    // A probe/abort whose status is unparseable collapses to `unknown` at
+    // the artifact boundary; the resume schema must accept that exact value.
+    expect(sanitizeStatusClass("ya29.jwt-token")).toBe("unknown");
+    expect(sanitizeStatusClass("")).toBe("unknown");
+    expect(sanitizeStatusClass(undefined)).toBe("unknown");
+    expect(isKnownStatusClass("unknown")).toBe(true);
+    // A real normalized status still passes both directions.
+    expect(sanitizeStatusClass("http_429")).toBe("http_429");
+    expect(isKnownStatusClass("http_429")).toBe(true);
+    // The legacy artifact vocabulary stays accepted for resume compat.
+    expect(isKnownStatusClass("network_or_unknown")).toBe(true);
+  });
+
+  it("accepts an abort whose status collapsed to the fixed unknown category", () => {
+    const result = validateCycleRecordShape(minimalCycleRecord({
+      abort: { reason: "cycle-error", errorClass: "DirectSheetsError", statusClass: "unknown" },
+    }));
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("accepts an abort whose code collapsed to the fixed unknown category and rejects an arbitrary code", () => {
+    // `sanitizeStableCode` collapses any non-allowlisted code to `unknown`,
+    // so an abort that records the redacted category is still valid history.
+    expect(validateCycleRecordShape(minimalCycleRecord({
+      abort: { reason: "cycle-error", errorClass: "DirectSheetsError", code: "unknown" },
+    }))).toEqual({ ok: true });
+    // A raw arbitrary code is never itself a recordable value.
+    expect(validateCycleRecordShape(minimalCycleRecord({
+      abort: { reason: "cycle-error", errorClass: "DirectSheetsError", code: "ya29.jwt-token" },
+    })).ok).toBe(false);
+    expect(validateCycleRecordShape(minimalCycleRecord({
+      abort: { reason: "cycle-error", errorClass: "DirectSheetsError", code: "secret-id-123" },
+    })).ok).toBe(false);
+  });
+
+  it("accepts a probe whose status collapsed to the fixed unknown category", () => {
+    const result = validateCycleRecordShape(minimalCycleRecord({
+      probe: { status: "failed", reason: "probe-error", statusClass: "unknown" },
+    }));
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("accepts a probe/abort with an allowlisted status and rejects a foreign status", () => {
+    // Allowlisted statuses pass the schema exactly as written.
+    expect(validateCycleRecordShape(minimalCycleRecord({
+      abort: { reason: "cycle-error", errorClass: "DirectSheetsError", statusClass: "http_429" },
+    })).ok).toBe(true);
+    expect(validateCycleRecordShape(minimalCycleRecord({
+      probe: { status: "failed", reason: "probe-error", statusClass: "network" },
+    })).ok).toBe(true);
+    // A foreign status that the sanitizer would collapse to `unknown` is
+    // NOT itself a recordable value (only the collapsed category is).
+    expect(validateCycleRecordShape(minimalCycleRecord({
+      abort: { reason: "cycle-error", errorClass: "DirectSheetsError", statusClass: "ya29.jwt-token" },
+    })).ok).toBe(false);
+    expect(validateCycleRecordShape(minimalCycleRecord({
+      probe: { status: "failed", reason: "probe-error", statusClass: "ya29.jwt-token" },
+    })).ok).toBe(false);
+  });
+});
+
+describe("operation-record code redaction roundtrip (resume compatibility)", () => {
+  /** A minimal valid operation record with no code/reason/counts. */
+  function minimalOperationRecord(overrides: Record<string, unknown> = {}): Record<string, any> {
+    return {
+      ts: "2025-01-01T00:00:00.000Z",
+      cycle: 1,
+      actor: 0,
+      index: 0,
+      kind: "create",
+      table: "soak_customers",
+      status: "ok",
+      durationMs: 1,
+      ...overrides,
+    };
+  }
+
+  it("accepts an operation whose code collapsed to the fixed unknown category", () => {
+    expect(validateOperationRecordShape(minimalOperationRecord({ code: "unknown" })))
+      .toEqual({ ok: true });
+  });
+
+  it("accepts an allowlisted code and rejects an arbitrary raw code", () => {
+    expect(validateOperationRecordShape(minimalOperationRecord({ code: "invalid_query" })).ok)
+      .toBe(true);
+    expect(validateOperationRecordShape(minimalOperationRecord({ code: "ya29.jwt-token" })).ok)
+      .toBe(false);
+    expect(validateOperationRecordShape(minimalOperationRecord({ code: "/etc/secret.json" })).ok)
+      .toBe(false);
   });
 });
