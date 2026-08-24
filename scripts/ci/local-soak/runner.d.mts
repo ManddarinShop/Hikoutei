@@ -176,7 +176,9 @@ export function waitForRuntimeSystemStateReadiness(
  * field through the User_Input tab and waits for SQLite to accept the
  * value within the phase deadline. The deadline is rechecked immediately
  * before every poll read and again before a success is accepted, so a
- * post-deadline value is recorded as failed, never as ok.
+ * post-deadline value is recorded as failed, never as ok. Before the
+ * single write it polls the User_Input tab until exactly one intended
+ * identity is observable within the same phase deadline.
  */
 export function runHumanEditProbe(
   context: {
@@ -187,7 +189,14 @@ export function runHumanEditProbe(
     readonly live: {
       readonly mode: "live";
       readonly spreadsheetId: string;
-      readonly client: { mutateInputCell(request: unknown): Promise<unknown> };
+      readonly client: {
+        readTabRows(
+          spreadsheetId: string,
+          tabName: string,
+          options: { readonly deadlineAtMs: number },
+        ): Promise<unknown[][]>;
+        mutateInputCell(request: unknown): Promise<unknown>;
+      };
     };
     readonly seed: number;
     readonly deadlineAtMs: number;
@@ -198,6 +207,23 @@ export function runHumanEditProbe(
   readonly record: Record<string, unknown>;
   readonly applied: { readonly entityName: string; readonly field: string; readonly value: string; readonly targetId: string } | undefined;
 }>;
+
+/**
+ * Pure User_Input readiness evaluation for one intended identity, applying
+ * the SAME full pre-write snapshot validation as the direct write (the
+ * shared `evaluateInputPreWrite`): missing/duplicate/whitespace headers, a
+ * non-empty row with a blank or non-string identity, or a duplicated
+ * nonblank identity (intended or not) return `fail` with a fixed status
+ * class; a structurally valid tab lacking the intended identity returns
+ * `missing` (the caller may reread before the deadline); and exactly one
+ * intended identity returns `ready`. `headerName` is the field the probe
+ * will write.
+ */
+export function evaluateInputReadiness(
+  rows: readonly unknown[][],
+  identity: string,
+  headerName: string,
+): { status: "ready" } | { status: "missing" } | { status: "fail"; statusClass: string };
 
 /**
  * Live convergence check: the observed projection id set must match the

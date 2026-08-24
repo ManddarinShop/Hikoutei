@@ -22,7 +22,79 @@ import {
 } from "./redact.mjs";
 import { readRuntimeSystemStateReadiness } from "./systemStateReadiness.mjs";
 import { boundedSleep } from "./timing.mjs";
-import { DirectSheetsError } from "./sheetsDirect.mjs";
+import { DirectSheetsError, evaluateInputPreWrite } from "./sheetsDirect.mjs";
+
+/**
+ * Evaluates a User_Input readiness snapshot for one intended identity
+ * BEFORE the probe's single direct write.
+ *
+ * Delegates to the SHARED pre-write evaluator (`evaluateInputPreWrite`) so
+ * the readiness barrier applies the exact same full header/row-shape
+ * validation the direct write performs: a missing/duplicate/whitespace
+ * header, a non-empty row with a blank or non-string identity, or a
+ * duplicated nonblank identity (intended or not) fails closed with the
+ * fixed class; a structurally valid tab that lacks the intended identity is
+ * `missing` (the caller may reread); and exactly one intended identity is
+ * `ready`. No id or value ever leaks.
+ *
+ * @param {readonly unknown[][]} rows data rows including the header row.
+ * @param {string} identity the intended main-row identity.
+ * @param {string} headerName the target field the probe will write.
+ * @returns {{status:"ready"} | {status:"missing"} | {status:"fail", statusClass:string}}
+ */
+export function evaluateInputReadiness(rows, identity, headerName) {
+  const verdict = evaluateInputPreWrite({ rows, identity, headerName });
+  if (verdict.status === "ready") return { status: "ready" };
+  return verdict;
+}
+
+/**
+ * Paced User_Input readiness barrier before the probe's single write.
+ *
+ * System_State convergence does not prove the editable User_Input row is
+ * already observable, so the probe polls the target tab until exactly one
+ * intended identity is visible within the phase deadline. Missing target
+ * identity is the ONLY retryable condition (bounded sleep then reread);
+ * a malformed header/identity fails closed immediately, and a transient
+ * Direct Sheets transport failure propagates (never retried here) to the
+ * probe's existing error classification. The write is never started
+ * post-deadline: the deadline is rechecked before every read, and a
+ * persistent absence or deadline expiry raises the allowlisted
+ * `missing_identity` class so the outer handler records a stable redacted
+ * probe failure.
+ *
+ * @param {object} live the live client context.
+ * @param {{name:string}} entry the probe entity entry.
+ * @param {string} identity the intended main-row identity.
+ * @param {string} headerName the target field the probe will write.
+ * @param {number} phaseDeadline epoch deadline (same clock as Date.now()).
+ * @returns {Promise<void>} resolves only when exactly one identity is ready.
+ */
+async function waitForInputReadiness(live, entry, identity, headerName, phaseDeadline) {
+  while (true) {
+    if (Date.now() >= phaseDeadline) {
+      throw new DirectSheetsError("input identity never became ready", "missing_identity");
+    }
+    const rows = await live.client.readTabRows(
+      live.spreadsheetId,
+      `${entry.name}_Input`,
+      { deadlineAtMs: phaseDeadline },
+    );
+    // A slow readiness read can resolve after the phase deadline (a request
+    // started just before it): a value observed only after the deadline must
+    // never be treated as ready. Recheck immediately before evaluating the
+    // snapshot, and never start a fresh read once expired.
+    if (Date.now() >= phaseDeadline) {
+      throw new DirectSheetsError("input identity never became ready", "missing_identity");
+    }
+    const verdict = evaluateInputReadiness(rows, identity, headerName);
+    if (verdict.status === "fail") {
+      throw new DirectSheetsError("input readiness invalid", verdict.statusClass);
+    }
+    if (verdict.status === "ready") return;
+    await boundedSleep(PROBE_ACCEPT_POLL_MS, phaseDeadline);
+  }
+}
 
 /**
  * Human-edit/CAS/conflict probe (live only): overwrites one editable string
@@ -58,6 +130,31 @@ export async function runHumanEditProbe(context, tablesTouched) {
   // outlive the phase timeout just because the run budget is larger.
   const phaseDeadline = Math.min(Date.now() + PROBE_ACCEPT_TIMEOUT_MS, context.deadlineAtMs);
   try {
+    // NEW: the probe's single direct write must not start until exactly
+    // one intended identity is observable on the User_Input tab — a
+    // System_State convergence pass does not prove the editable row has
+    // projected. `waitForInputReadiness` returns only when the target is
+    // ready, raises `missing_identity` on persistent absence/deadline
+    // expiry, and raises the allowlisted malformed class on a bad header
+    // or duplicate identity, all BEFORE any write. Exactly one
+    // `mutateInputCell` is issued below and is never retried or
+    // compensated.
+    await waitForInputReadiness(live, entry, targetId, field, phaseDeadline);
+    // The readiness read can resolve just AT the phase deadline; the write
+    // must never start after it. Recheck immediately before the single
+    // `mutateInputCell` and fail with the stable `missing_identity` class,
+    // zero writes.
+    if (Date.now() >= phaseDeadline) {
+      return {
+        record: {
+          status: "failed",
+          reason: "probe-error",
+          statusClass: "missing_identity",
+          table: sanitizeTableName(entry.tableName),
+        },
+        applied: undefined,
+      };
+    }
     await live.client.mutateInputCell({
       spreadsheetId: live.spreadsheetId,
       tabName: `${entry.name}_Input`,

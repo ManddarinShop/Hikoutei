@@ -139,6 +139,27 @@ export function resolveTabsToDelete(
 ): number[];
 
 /**
+ * ONE shared pure pre-write snapshot validation used by both the direct
+ * human write (`mutateInputCell`) and the probe's readiness barrier.
+ * Promotes a tab snapshot into a ready write coordinate, or fails closed
+ * WITHOUT a write: a missing/duplicate/whitespace header, a non-empty row
+ * with a blank or non-string identity, or a duplicated nonblank identity
+ * (intended or not) returns a fixed `fail` status class; a structurally
+ * valid tab lacking the intended identity returns `missing`; and on
+ * `ready` the resolved column indexes and the target's rowIndex are
+ * returned so the caller never revalidates. Fully blank padding rows are
+ * ignored. Never returns an id or value.
+ */
+export function evaluateInputPreWrite(input: {
+  readonly rows: ReadonlyArray<readonly unknown[]>;
+  readonly identity: string;
+  readonly headerName: string;
+}):
+  | { readonly status: "ready"; readonly idColumn: number; readonly fieldColumn: number; readonly rowIndex: number }
+  | { readonly status: "missing" }
+  | { readonly status: "fail"; readonly statusClass: string };
+
+/**
  * Pure postcondition check for one direct human write, comparing the
  * pre-write and post-write snapshots BY VALIDATED IDENTITY (never by
  * mutable row order). Requires exactly one intended identity row before

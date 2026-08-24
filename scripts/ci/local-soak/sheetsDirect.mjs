@@ -339,24 +339,20 @@ export function createDirectSheetsClient({
     // there is no separate sheet-id lookup between identity resolution and
     // the write.
     const { rows, sheetId } = await readInputSnapshot(spreadsheetId, tabName, deadlineAtMs);
-    const headerVerdict = validateInputHeaders(rows[0] ?? [], headerName);
-    if (headerVerdict.status !== "ok") {
-      throw new DirectSheetsError("input headers invalid", headerVerdict.status);
+    // ONE shared pre-write snapshot validation for headers, row shape, and
+    // identity uniqueness (also the probe's readiness barrier) promotes the
+    // snapshot to a ready write coordinate or fails closed without a write:
+    // a malformed tab raises the fixed class (`missing_header`,
+    // `malformed_header`, `identity_shifted`) and an absent target raises
+    // `missing_identity` — never a retried or compensated write.
+    const snapshotVerdict = evaluateInputPreWrite({ rows, identity, headerName });
+    if (snapshotVerdict.status === "fail") {
+      throw new DirectSheetsError("input snapshot invalid", snapshotVerdict.statusClass);
     }
-    const { idColumn, fieldColumn } = headerVerdict;
-    // Build and validate the pre-write identity index BEFORE the write: a
-    // duplicated nonblank identity or a non-empty row with a blank or
-    // non-string identity is a malformed tab that must fail closed with the
-    // stable non-retryable `identity_shifted` status WITHOUT issuing a
-    // write; an ambiguous target (present twice) is caught the same way. A
-    // missing target still fails as `missing_identity`, also before any
-    // write.
-    if (indexByIdentity(rows, idColumn, fieldColumn) === null) {
-      throw new DirectSheetsError("input identity index invalid", "identity_shifted");
+    if (snapshotVerdict.status === "missing") {
+      throw new DirectSheetsError("identity row not found", "missing_identity");
     }
-    const rowIndex = rows.findIndex((row, index) =>
-      index > 0 && row[idColumn] === identity);
-    if (rowIndex < 0) throw new DirectSheetsError("identity row not found", "missing_identity");
+    const { idColumn, fieldColumn, rowIndex } = snapshotVerdict;
     // MEDIUM 5: the write timeout is resolved NOW — immediately before this
     // SDK request — never from a clock read taken before the earlier
     // snapshot read, so a slow multi-request mutation can never run with a
@@ -579,6 +575,49 @@ function indexByIdentity(rows, idColumn, fieldColumn) {
     byId.set(rawId, normalizeCell(rawRow[fieldColumn]));
   }
   return byId;
+}
+
+/**
+ * ONE shared pure PRE-WRITE snapshot validation used by BOTH the direct
+ * human write and the probe's readiness barrier.
+ *
+ * Promotes a User_Input tab snapshot into a ready write coordinate, or
+ * fails closed WITHOUT a write. The full header and row-shape validation is
+ * identical for both callers so the readiness barrier can never accept a
+ * tab that the write itself would reject: a missing/duplicate/whitespace
+ * header, a non-empty row with a blank or non-string identity, or a
+ * duplicated nonblank identity (intended or not) returns a fixed `fail`
+ * class; a structurally valid tab that simply lacks the intended identity
+ * returns `missing` (the probe may reread before its deadline); and on
+ * `ready` the resolved column indexes AND the target's rowIndex are
+ * returned so the caller never revalidates. Fully blank padding rows are
+ * ignored and never fail. No id, value, or payload ever escapes.
+ *
+ * @param {object} input the pre-write snapshot inputs.
+ * @param {readonly unknown[][]} input.rows the tab rows including the header row.
+ * @param {string} input.identity the intended identity value.
+ * @param {string} input.headerName the target field header.
+ * @returns {{ status:"ready", idColumn:number, fieldColumn:number, rowIndex:number } |
+ *   { status:"missing" } | { status:"fail", statusClass:string }}
+ */
+export function evaluateInputPreWrite({ rows, identity, headerName }) {
+  const headers = Array.isArray(rows) ? rows[0] : undefined;
+  const headerVerdict = validateInputHeaders(headers ?? [], headerName);
+  if (headerVerdict.status !== "ok") {
+    return { status: "fail", statusClass: headerVerdict.status };
+  }
+  if (indexByIdentity(rows, headerVerdict.idColumn, headerVerdict.fieldColumn) === null) {
+    return { status: "fail", statusClass: "identity_shifted" };
+  }
+  const rowIndex = rows.findIndex((row, index) =>
+    index > 0 && row[headerVerdict.idColumn] === identity);
+  if (rowIndex < 0) return { status: "missing" };
+  return {
+    status: "ready",
+    idColumn: headerVerdict.idColumn,
+    fieldColumn: headerVerdict.fieldColumn,
+    rowIndex,
+  };
 }
 
 /**
