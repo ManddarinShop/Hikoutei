@@ -827,6 +827,143 @@ describe("mapped typed-sheets ORM", () => {
     });
   });
 
+  it("drains queued same-ID delete/recreate cycles in order with monotonic revisions", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteStorageSchema(storage);
+    const writer = deterministicWriter("mapped-delete-recreate-cycles-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const em = createMappedManager(storage, writer);
+    const provider = new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: "orders-system",
+        sheetName: "Orders_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: "orders-input",
+        sheetName: "Orders_Input",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+    ]);
+
+    const id = "order-delete-recreate-cycles";
+    // Queue delete/create/delete/create on ONE id without delivering between
+    // the flushes, so the outbox holds the whole lifecycle ahead of the drain.
+    let order = em.create(OrderToken, { id, status: "pending" });
+    em.persist(order);
+    await em.flush();
+    em.remove(order);
+    await em.flush();
+    order = em.create(OrderToken, { id, status: "reopened" });
+    em.persist(order);
+    await em.flush();
+    em.remove(order);
+    await em.flush();
+
+    const STUCK: readonly string[] = [EFFECT_STATUSES.PENDING, EFFECT_STATUSES.PROCESSING,
+      EFFECT_STATUSES.BLOCKED_CANDIDATE, EFFECT_STATUSES.FAILED,
+      EFFECT_STATUSES.DELIVERY_UNCERTAIN];
+    const activeStatuses = () => storage.read(({ sql }) => sql.all<{ status: string }>(
+      "SELECT status FROM sheet_effect_outbox",
+    ));
+
+    // Drain the whole queued sequence in order. Bounded passes mirror the live
+    // worker, which may split a queued lifecycle across claim passes.
+    let report = await runEffectWorkerWithAdapter({
+      storage,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+      workerId: "mapped-delete-recreate-cycles-worker",
+      now: 1_000,
+      maxEffects: 16,
+    });
+    expect(report.failed).toBe(0);
+    for (let pass = 0; pass < 10; pass += 1) {
+      const residue = (await activeStatuses()).filter((row) => STUCK.includes(row.status));
+      if (residue.length === 0) break;
+      report = await runEffectWorkerWithAdapter({
+        storage,
+        dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+        workerId: "mapped-delete-recreate-cycles-worker",
+        now: 1_000 + pass + 1,
+        maxEffects: 16,
+      });
+      expect(report.failed).toBe(0);
+    }
+
+    // No blocked, stuck, or unapplied residue after the drain.
+    const statuses = await activeStatuses();
+    for (const row of statuses) {
+      expect(STUCK).not.toContain(row.status);
+    }
+
+    // The final flush was a delete, so the User_Input projection must converge
+    // to no row and the System_State projection to a tombstoned row.
+    await expect(provider.readSnapshot({
+      physicalSheetId: "orders-input",
+      sheetName: "Orders_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+    })).resolves.toMatchObject({ rows: [] });
+    const systemSnapshot = await provider.readSnapshot({
+      physicalSheetId: "orders-system",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    expect(systemSnapshot.rows[0]?.cells.__typed_sheets_deleted?.normalizedCell).toEqual({
+      kind: NORMALIZED_CELL_KINDS.BOOLEAN,
+      value: true,
+    });
+
+    // Monotonic stream sequence across every physical sheet.
+    const effects = await readOutbox(storage);
+    for (const sheet of ["orders-system", "orders-input"]) {
+      const sequences = effects
+        .filter((effect) => effect.physical_sheet_id === sheet)
+        .map((effect) => effect.stream_sequence);
+      expect(sequences).toEqual([1, 2, 3, 4]);
+    }
+
+    // Stable binding with monotonic durable visible revisions, unchanged anchor
+    // and candidate epoch (no candidate interference across the cycle).
+    await expect(storage.read(({ sql }) => sql.all<{
+      row_binding_id: string;
+      anchor_reference: string;
+      entity_id: string | null;
+      candidate_epoch: number;
+    }>(
+      "SELECT row_binding_id, anchor_reference, entity_id, candidate_epoch FROM row_binding WHERE logical_sheet_id = ?",
+      ["orders"],
+    ))).resolves.toEqual([{
+      row_binding_id: typedSheetsEntityRowBindingId(orderMapping, id),
+      anchor_reference: `entity:${id}`,
+      entity_id: id,
+      candidate_epoch: 0,
+    }]);
+
+    const visible = await storage.read(({ sql }) => sql.get<{
+      confirmed_visible_revision: number;
+      confirmed_entity_revision: number | null;
+    }>(
+      "SELECT confirmed_visible_revision, confirmed_entity_revision FROM sheet_visible_state WHERE physical_sheet_id = 'orders-input'",
+    ));
+    expect(visible?.confirmed_visible_revision).toBeGreaterThanOrEqual(1);
+    const candidateEpochs = await storage.read(({ sql }) => sql.all<{ candidate_epoch: number }>(
+      "SELECT candidate_epoch FROM sheet_visible_field_state",
+    ));
+    expect(candidateEpochs.every((row) => row.candidate_epoch === 0)).toBe(true);
+  });
+
   it("recreates User_Input only across safe delete predecessor statuses", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
