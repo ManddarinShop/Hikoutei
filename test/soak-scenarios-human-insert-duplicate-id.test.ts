@@ -1,0 +1,338 @@
+/**
+ * Offline tests for the `humanInsertDuplicateId` soak scenario, driven
+ * against fake public seams (a fake direct-Sheet client and a fake
+ * EntityManager).
+ *
+ * No network, credentials, or live Google Sheets are used. The scenario's
+ * `plan` and `execute` are exercised exactly as the soak scheduler drives
+ * them, with the bounded observation polls shortened so the settle/rejection
+ * logic runs fast and deterministically. Only the `humanInsertDuplicateId`
+ * scenario module is imported; the other attack-scenario modules are
+ * deliberately not touched.
+ */
+import { describe, expect, it, vi } from "vitest";
+import * as humanInsertDuplicateId from "../scripts/ci/local-soak/scenarios/human-insert-duplicate-id.mjs";
+import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
+import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
+import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+
+// Shorten the scenario's bounded observation sleeps so the poll/settle loops
+// terminate quickly and deterministically (a real poll would be ~1s each).
+vi.mock("../scripts/ci/local-soak/timing.mjs", () => ({
+  boundedSleep: async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  },
+}));
+
+/** The one scenario module under test. */
+const scenario = humanInsertDuplicateId;
+
+/** Builds a deterministic plan targeting an entity in the active subset. */
+function buildPlan(seed: number, cycle = 1, order = 0): PlanLike {
+  const input: Record<string, unknown> = {
+    cycle,
+    order,
+    rng: new SeededRandom(seed),
+    activeEntities: SOAK_ENTITY_ORDER,
+  };
+  return scenario.plan(input as Parameters<typeof scenario.plan>[0]) as unknown as PlanLike;
+}
+
+interface PlanLike {
+  tag: string;
+  jitterMs: number;
+  target: { entityName: string; targetId: string };
+  dupRow: Record<string, unknown>;
+}
+
+/** A deterministic plan over SoakCustomer with a known duplicate-insert set. */
+function dupPlan(): PlanLike {
+  return {
+    tag: "human-insert-duplicate-id",
+    jitterMs: 1,
+    target: { entityName: "SoakCustomer", targetId: "dup-cust-c1-0" },
+    dupRow: {
+      id: "dup-cust-c1-0",
+      name: "duplicate-name",
+      tier: "duplicate-tier",
+      active: "duplicate-active",
+      signupAt: "duplicate-signup",
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fake seams.
+// ---------------------------------------------------------------------------
+
+/** A fake EntityManager over an in-memory id-keyed store. */
+class FakeEm {
+  store = new Map<string, Record<string, unknown>>();
+  findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
+  /** Throws on the flush whose 1-based call index matches. */
+  flushBehavior: ((flushIndex: number) => void) | undefined;
+  #flushIndex = 0;
+
+  fork(): FakeEm {
+    return this;
+  }
+  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
+    return row;
+  }
+  persist(entity: Record<string, unknown>): void {
+    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
+      this.store.set(entity.id, entity);
+    }
+  }
+  async flush(): Promise<void> {
+    this.#flushIndex += 1;
+    if (this.flushBehavior !== undefined) this.flushBehavior(this.#flushIndex);
+  }
+  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
+    const row = this.store.get(filter.id);
+    return row === undefined ? [] : [row];
+  }
+  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
+    if (this.findOneOverride !== undefined) {
+      const overridden = this.findOneOverride(filter.id);
+      if (overridden !== null && overridden !== undefined) return overridden;
+    }
+    const row = this.store.get(filter.id);
+    return row === undefined ? null : row;
+  }
+  remove(row: Record<string, unknown>): void {
+    if (row !== null && typeof row === "object" && typeof row.id === "string") {
+      this.store.delete(row.id);
+    }
+  }
+  rows(): Record<string, unknown>[] {
+    return [...this.store.values()];
+  }
+}
+
+/** A fake direct-Sheet client backed by in-memory tab state. */
+class FakeClient {
+  private tabs = new Map<string, { headers: string[]; rows: Map<string, unknown[]> }>();
+  insertCalls: { tabName: string; row: Record<string, unknown> }[] = [];
+  /** When set, the 1-based insert call at this index throws with this code. */
+  throwOnInsertCall: { index: number; code: string } | undefined;
+  /** When false, the seam fails to reject a duplicate id (a bug to expose). */
+  rejectDuplicateId = true;
+
+  ensureTab(tabName: string, headers: string[]): void {
+    this.tabs.set(tabName, { headers, rows: new Map() });
+  }
+
+  setCell(tabName: string, identity: string, values: Record<string, string>): void {
+    const tab = this.tabs.get(tabName);
+    if (tab === undefined) throw new Error(`no tab ${tabName}`);
+    tab.rows.set(identity, tab.headers.map((header) => values[header]));
+  }
+
+  async readTabRows(_spreadsheetId: string, tabName: string): Promise<unknown[][]> {
+    const tab = this.tabs.get(tabName);
+    if (tab === undefined) return [];
+    return [tab.headers, ...[...tab.rows.values()].map((row) => [...row])];
+  }
+
+  async insertInputRow(input: {
+    tabName: string;
+    row: Record<string, unknown>;
+  }): Promise<{ rowNumber: number }> {
+    this.insertCalls.push({ tabName: input.tabName, row: input.row });
+    if (this.throwOnInsertCall !== undefined && this.insertCalls.length === this.throwOnInsertCall.index) {
+      throw Object.assign(new Error("fake insert failure"), {
+        code: this.throwOnInsertCall.code,
+      });
+    }
+    const tab = this.tabs.get(input.tabName);
+    if (tab === undefined) return { rowNumber: 1 };
+    // Pre-write validation: reject an already-existing id with the stable
+    // identity_shifted code (never writes, never overwrites).
+    if (this.rejectDuplicateId) {
+      for (const identity of tab.rows.keys()) {
+        if (identity === String(input.row.id)) {
+          throw Object.assign(new Error("identity already exists"), {
+            code: "identity_shifted",
+          });
+        }
+      }
+    }
+    tab.rows.set(String(input.row.id), tab.headers.map((header) => String(input.row[header] ?? "")));
+    return { rowNumber: tab.rows.size + 1 };
+  }
+}
+
+/** Builds a live execution context wired to the fake seams. */
+function liveContext(
+  plan: PlanLike,
+  client: FakeClient,
+  em: FakeEm,
+  deadlineAtMs?: number,
+): Record<string, unknown> {
+  return {
+    seed: 1,
+    cycle: 1,
+    activeEntities: SOAK_ENTITY_ORDER,
+    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
+    em,
+    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
+    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
+  };
+}
+
+/**
+ * Mirrors the localHumanWriteRace test's authoritative-value pattern: hook
+ * the fake EntityManager's `persist` so the dedicated row's fields are
+ * projected into the fake _Input tab at the exact cell-strings the row will
+ * carry once the sync worker projects it. `awaitInputProjection` resolves on
+ * the first poll, so the duplicate insert proceeds deterministically.
+ */
+function projectPersistedRow(em: FakeEm, client: FakeClient, plan: PlanLike): void {
+  const originalPersist = em.persist.bind(em);
+  em.persist = (entity: Record<string, unknown>) => {
+    const fieldPlan = SOAK_FIELD_PLANS[plan.target.entityName]!;
+    const headers = ["id"];
+    const values: Record<string, string> = { id: plan.target.targetId };
+    for (const [field, spec] of Object.entries(fieldPlan)) {
+      if (spec.primary) continue;
+      headers.push(field);
+      const value = entity[field];
+      values[field] = value === null || value === undefined ? "" : String(value);
+    }
+    client.ensureTab(`${plan.target.entityName}_Input`, headers);
+    client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, values);
+    originalPersist(entity);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests.
+// ---------------------------------------------------------------------------
+
+describe("humanInsertDuplicateId scenario", () => {
+  it("is registered among the registered scenarios", () => {
+    // Registry-agnostic: assert this scenario is registered without binding
+    // to the full ordered id list, so later scenario PRs never need to touch
+    // this test. Exact registry content is asserted once in the shared test.
+    const ids = SCENARIO_REGISTRY.map((entry) => entry.id);
+    expect(ids).toContain("human-insert-duplicate-id");
+  });
+
+  it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
+    expect(scenario.id).toBe("human-insert-duplicate-id");
+    expect(scenario.kind).toBe("data");
+    expect(scenario.allowedPhases).toContain("concurrent-with-actors");
+    expect(scenario.allowedPhases).toContain("after-actors");
+    expect(scenario.TAG).toBe("human-insert-duplicate-id");
+    expect(typeof scenario.execute).toBe("function");
+    expect(typeof scenario.recover).toBe("function");
+    const plan = buildPlan(777);
+    const again = buildPlan(777);
+    expect(again).toEqual(plan);
+    expect(plan.tag).toBe("human-insert-duplicate-id");
+    // The target is a real entity and the id a dedicated duplicate id.
+    expect(SOAK_ENTITY_ORDER.some((entry) => entry.name === plan.target.entityName)).toBe(true);
+    expect(plan.target.targetId).toMatch(/^dup-/);
+    // The duplicate-insert set carries the SAME id with field values.
+    expect(plan.dupRow.id).toBe(plan.target.targetId);
+    expect(plan.jitterMs).toBeGreaterThan(0);
+  });
+
+  it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
+    const plan = dupPlan();
+    const context = {
+      seed: 1,
+      cycle: 1,
+      activeEntities: [], // none active -> the entity is not expected
+      tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
+      em: new FakeEm(),
+      live: { mode: "live", client: new FakeClient(), spreadsheetId: "spreadsheet-1" },
+      deadlineAtMs: Date.now() + 5000,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("local-mode");
+    expect(result.failures).toBe(0);
+  });
+
+  it("verifies a duplicate insert is rejected (expectedErrors 1) and the existing row is untouched", async () => {
+    const plan = dupPlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    // The identity conflict was rejected (fail-closed evidence) and the
+    // existing row was not overwritten -> a verified ok with one expected
+    // error, never a failure.
+    expect(result.status).toBe("ok");
+    expect(result.expectedErrors).toBe(1);
+    expect(result.failures).toBe(0);
+    // The duplicate insert was attempted exactly once with the same id.
+    const calls = client.insertCalls.filter((call) => call.row.id === plan.target.targetId);
+    expect(calls.length).toBe(1);
+    // No-overwrite invariant: the existing row's projected values are
+    // unchanged (the seam rejected the duplicate BEFORE writing, so the tab
+    // never carries the duplicate-insert values).
+    const cells = await client.readTabRows("spreadsheet-1", `${plan.target.entityName}_Input`);
+    const headers = cells[0]!;
+    const idColumn = headers.indexOf("id");
+    const projectedRow = cells.find((entry, index) => index > 0 && entry[idColumn] === plan.target.targetId);
+    expect(projectedRow).toBeDefined();
+    for (const [field, value] of Object.entries(plan.dupRow)) {
+      if (field === "id") continue;
+      const column = headers.indexOf(field);
+      expect(projectedRow![column]).not.toBe(String(value));
+    }
+    // Guaranteed cleanup removes the dedicated row.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("classifies a non-identity_shifted insert rejection as a real failure", async () => {
+    // A rejected duplicate insert is an expected fail-closed conflict ONLY
+    // on the exact `identity_shifted` evidence. A transport/validation
+    // rejection is a real failure.
+    const plan = dupPlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    client.throwOnInsertCall = { index: 1, code: "google_sheets_api_network_error" };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
+    // Guaranteed cleanup still removed the dedicated row.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
+    const plan = dupPlan();
+    const client = new FakeClient();
+    // The tab exists but the dedicated row is never projected into it.
+    client.ensureTab(`${plan.target.entityName}_Input`, ["id", "name"]);
+    const em = new FakeEm();
+    const context = liveContext(plan, client, em, Date.now() + 80);
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("projection-not-ready");
+    // No duplicate insert was ever attempted against a not-yet-projected row.
+    expect(client.insertCalls).toEqual([]);
+    // The dedicated row is still removed in cleanup.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("guarantees cleanup removes the dedicated row even when the seam fails to reject", async () => {
+    // A seam that fails to reject the duplicate (a bug) is the corruption
+    // failure this scenario hunts -> failed, but the guaranteed finally still
+    // removes the dedicated row so the authority matches the replay.
+    const plan = dupPlan();
+    const client = new FakeClient();
+    client.rejectDuplicateId = false; // the seam fails to reject the duplicate
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.failures).toBe(1);
+    expect(em.rows()).toEqual([]);
+  });
+});
