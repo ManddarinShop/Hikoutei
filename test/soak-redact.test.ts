@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FAILURE_REASON_CODES,
+  isKnownStatusClass,
   KNOWN_REASON_CODES,
   KNOWN_STABLE_CLASSES,
   KNOWN_STABLE_CODES,
@@ -68,6 +69,19 @@ describe("soak redaction: error classes and status classes", () => {
     expect(sanitizeStatusClass("http_200")).toBe("http_200");
     expect(sanitizeStatusClass("network_or_unknown")).toBe("network_or_unknown");
     expect(sanitizeStatusClass("harness_error")).toBe("harness_error");
+    expect(sanitizeStatusClass("missing_identity")).toBe("missing_identity");
+    // The direct-write identity-shift guard is a stable named class.
+    expect(sanitizeStatusClass("identity_shifted")).toBe("identity_shifted");
+    expect(isKnownStatusClass("identity_shifted")).toBe(true);
+    // The direct-write header and sheet-id guards are stable named classes.
+    expect(sanitizeStatusClass("malformed_header")).toBe("malformed_header");
+    expect(isKnownStatusClass("malformed_header")).toBe(true);
+    expect(sanitizeStatusClass("malformed_sheet_id")).toBe("malformed_sheet_id");
+    expect(isKnownStatusClass("malformed_sheet_id")).toBe(true);
+    // A fulfilled-but-malformed SDK reply (non-array data.sheets) is a
+    // stable non-retryable class, never a raw TypeError or raw payload.
+    expect(sanitizeStatusClass("malformed_reply")).toBe("malformed_reply");
+    expect(isKnownStatusClass("malformed_reply")).toBe(true);
     for (const secret of SECRETS) {
       expect(sanitizeStatusClass(secret)).toBe("unknown");
     }

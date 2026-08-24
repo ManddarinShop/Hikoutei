@@ -111,6 +111,26 @@ const KNOWN_STATUS_CLASSES = Object.freeze([
   "missing_tab",
   "missing_header",
   "missing_identity",
+  // A direct human write whose postcondition could not be verified on the
+  // intended identity row (value placed on another identity, an absent or
+  // duplicated identity, or a duplicate value): a non-retryable harness
+  // failure emitted by the direct client's identity-shift guard.
+  "identity_shifted",
+  // A direct-write tab's header row is malformed (empty header, duplicate
+  // header, or a request to write the `id` column itself): a non-retryable
+  // harness failure emitted before writing and during postcondition
+  // promotion.
+  "malformed_header",
+  // A sheetId from an untrusted SDK response is not a non-negative safe
+  // integer (null, string, fraction, NaN, negative, or out-of-safe-range):
+  // a non-retryable harness failure so a malformed id never reaches an
+  // update/delete request.
+  "malformed_sheet_id",
+  // A FULFILLED SDK response whose `data.sheets` is not an array (mutate
+  // snapshot/read or cleanup list path): a non-retryable harness failure
+  // emitted instead of a raw TypeError on a malformed payload, carrying no
+  // raw payload.
+  "malformed_reply",
 ]);
 
 /**
