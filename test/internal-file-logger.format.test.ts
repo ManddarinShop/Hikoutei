@@ -171,6 +171,36 @@ describe("internal file logger formatting and redaction", () => {
     expect(JSON.parse(unsafeComponent.line).component).toBe("[redacted]");
   });
 
+  it("passes allowlisted provider operation/reason through and redacts unsafe ones", () => {
+    const valid = formatHikouteiLogLine({
+      event: HIKOUTEI_LOG_EVENTS.TRANSPORT_RESPONSE_INVALID,
+      code: "invalid_sync_provider_response",
+      errorClass: "SyncSheetsContractError",
+      providerOperation: "postcondition_read",
+      providerReason: "missing_tab",
+    });
+    expect(valid.status).toBe("valid");
+    if (valid.status !== "valid") return;
+    const parsed = JSON.parse(valid.line) as Record<string, unknown>;
+    expect(parsed.providerOperation).toBe("postcondition_read");
+    expect(parsed.providerReason).toBe("missing_tab");
+
+    // Any non-allowlisted value (an id, URL, path, or arbitrary string) is
+    // replaced with the redaction marker and never serialized verbatim.
+    const unsafe = formatHikouteiLogLine({
+      event: HIKOUTEI_LOG_EVENTS.TRANSPORT_RESPONSE_INVALID,
+      providerOperation: "https://docs.google.com/spreadsheets/d/1AbC",
+      providerReason: "effect-id-123",
+    });
+    expect(unsafe.status).toBe("valid");
+    if (unsafe.status !== "valid") return;
+    const redacted = JSON.parse(unsafe.line) as Record<string, unknown>;
+    expect(redacted.providerOperation).toBe("[redacted]");
+    expect(redacted.providerReason).toBe("[redacted]");
+    expect(unsafe.line).not.toContain("docs.google.com");
+    expect(unsafe.line).not.toContain("effect-id-123");
+  });
+
   it("drops non-numeric counts and unknown extra fields entirely", () => {
     const result = formatHikouteiLogLine({
       // Extra fields are not part of the entry type; simulate an untyped
