@@ -492,28 +492,28 @@ export function createDirectSheetsClient({
     if (existing.has(row.id)) {
       throw new DirectSheetsError("identity already exists", "identity_shifted");
     }
-    const rowIndex = findAppendRowIndex(rows);
     await paceNextRequest();
     const timeout = nextRequestTimeout(deadlineAtMs);
-    const requests = [
-      {
-        updateCells: {
-          start: { sheetId, rowIndex, columnIndex: headerVerdict.idColumn },
-          rows: [{ values: [{ userEnteredValue: { stringValue: String(row.id) } }] }],
-          fields: "userEnteredValue",
-        },
-      },
+    // Atomic append: appendCells appends at the true end of the sheet and
+    // never overwrites an existing row, so a concurrent insert can never
+    // shift a stale row-index target onto another identity and destroy it.
+    const values = [
+      { userEnteredValue: { stringValue: String(row.id) } },
       ...fieldNames.map((headerName) => ({
-        updateCells: {
-          start: { sheetId, rowIndex, columnIndex: headerVerdict.fieldColumns[headerName] },
-          rows: [{ values: [{ userEnteredValue: { stringValue: String(row[headerName]) } }] }],
-          fields: "userEnteredValue",
-        },
+        userEnteredValue: { stringValue: String(row[headerName]) },
       })),
     ];
     await client.spreadsheets.batchUpdate({
       spreadsheetId,
-      requestBody: { requests },
+      requestBody: {
+        requests: [{
+          appendCells: {
+            sheetId,
+            rows: [{ values }],
+            fields: "userEnteredValue",
+          },
+        }],
+      },
     }, { timeout, retry: false }).catch(toStatusError);
     const postRows = await readTabRows(spreadsheetId, tabName, { deadlineAtMs });
     const fieldValues = {};
@@ -527,7 +527,7 @@ export function createDirectSheetsClient({
     if (verdict.status !== "ok") {
       throw new DirectSheetsError("direct human insert shifted identity", "identity_shifted");
     }
-    return { rowNumber: rowIndex + 1 };
+    return { rowNumber: postRows.length };
   }
 
   /**
@@ -582,7 +582,6 @@ export function createDirectSheetsClient({
       beforeRows: rows,
       afterRows: postRows,
       identity,
-      idColumn: headerVerdict.idColumn,
     });
     if (verdict.status !== "ok") {
       throw new DirectSheetsError("direct human delete shifted identity", "identity_shifted");
@@ -848,24 +847,6 @@ function indexByIdentities(rows, idColumn) {
 }
 
 /**
- * Resolves the first fully-blank data row index (>= 1) for appending a new
- * row, or the row just past the last returned row when none is blank. The
- * header row (index 0) is never a target.
- *
- * @param {readonly unknown[][]} rows tab rows including the header row.
- * @returns {number} the append row index.
- */
-function findAppendRowIndex(rows) {
-  for (let index = 1; index < rows.length; index++) {
-    const rawRow = rows[index];
-    if (rawRow === undefined || rawRow === null || rawRow.every(isBlankCell)) {
-      return index;
-    }
-  }
-  return rows.length;
-}
-
-/**
  * ONE shared pure PRE-WRITE snapshot validation used by BOTH the direct
  * human write and the probe's readiness barrier.
  *
@@ -1101,20 +1082,22 @@ export function evaluateInsertPostcondition({ afterRows, identity, headerNames, 
 /**
  * Pure postcondition check for a direct human ROW DELETE: requires the
  * intended identity to exist exactly once in the pre-write snapshot and to
- * be ABSENT from the post-write snapshot. A duplicated identity, an absent
- * pre-write identity, a still-present post-write identity (a row shift
- * placed the delete on the wrong row), or a blank or non-string identity
- * in a non-empty row returns `identity_shifted`. Only cell-shape
- * comparisons run here; no id, value, or payload is ever returned.
+ * be ABSENT from the post-write snapshot, and that NO OTHER identity
+ * present before the delete is lost. A stale `deleteDimension` that shifted
+ * onto a different row (because a concurrent actor deleted the target first)
+ * would destroy a non-target identity; that unexplained loss fails closed.
+ * A duplicated identity, an absent pre-write identity, a still-present
+ * post-write identity, or a blank or non-string identity in a non-empty row
+ * also returns `identity_shifted`. Only cell-shape comparisons run here;
+ * no id, value, or payload is ever returned.
  *
  * @param {object} input the postcondition inputs.
  * @param {readonly unknown[][]} input.beforeRows pre-write snapshot rows.
  * @param {readonly unknown[][]} input.afterRows post-write snapshot rows.
  * @param {string} input.identity the intended identity value.
- * @param {number} input.idColumn the id column index.
  * @returns {{ status: "ok" } | { status: "identity_shifted" }}
  */
-export function evaluateDeletePostcondition({ beforeRows, afterRows, identity, idColumn }) {
+export function evaluateDeletePostcondition({ beforeRows, afterRows, identity }) {
   const before = validateInputHeadersMulti(beforeRows?.[0] ?? [], []);
   const after = validateInputHeadersMulti(afterRows?.[0] ?? [], []);
   if (before.status !== "ok" || after.status !== "ok") return { status: "identity_shifted" };
@@ -1123,6 +1106,12 @@ export function evaluateDeletePostcondition({ beforeRows, afterRows, identity, i
   if (beforeById === null || afterById === null) return { status: "identity_shifted" };
   if (!beforeById.has(identity)) return { status: "identity_shifted" };
   if (afterById.has(identity)) return { status: "identity_shifted" };
+  // No OTHER identity may be lost: a stale deleteDimension that shifted onto
+  // a different row would destroy a non-target identity. New identities may
+  // appear (async projection) and are never compared.
+  for (const other of beforeById.keys()) {
+    if (other !== identity && !afterById.has(other)) return { status: "identity_shifted" };
+  }
   return { status: "ok" };
 }
 

@@ -279,16 +279,17 @@ export function evaluateInsertPostcondition(input: {
 /**
  * Pure postcondition check for a direct human ROW DELETE: requires the
  * intended identity to exist exactly once in the pre-write snapshot and to
- * be ABSENT from the post-write snapshot. A duplicated identity, an absent
- * pre-write identity, a still-present post-write identity (a row shift
- * placed the delete on the wrong row), or a blank or non-string identity
- * in a non-empty row returns `identity_shifted`; never a raw id/value.
+ * be ABSENT from the post-write snapshot, and that NO OTHER identity
+ * present before the delete is lost (a stale `deleteDimension` that shifted
+ * onto a different row would destroy a non-target identity). A duplicated
+ * identity, an absent pre-write identity, a still-present post-write
+ * identity, or a blank or non-string identity in a non-empty row returns
+ * `identity_shifted`; never a raw id/value.
  */
 export function evaluateDeletePostcondition(input: {
   readonly beforeRows: ReadonlyArray<readonly unknown[]>;
   readonly afterRows: ReadonlyArray<readonly unknown[]>;
   readonly identity: string;
-  readonly idColumn: number;
 }): { readonly status: "ok" } | { readonly status: "identity_shifted" };
 
 /**

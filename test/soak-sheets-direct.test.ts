@@ -165,6 +165,33 @@ const {
           const requests = (params as { requestBody?: { requests?: unknown[] } })
             ?.requestBody?.requests ?? [];
           for (const request of requests) {
+            const append = (request as { appendCells?: {
+              sheetId?: number;
+              rows?: { values?: { userEnteredValue?: { stringValue?: string } }[] }[];
+            } })?.appendCells;
+            if (append !== undefined && append.sheetId !== undefined && Array.isArray(append.rows)) {
+              const title = titleBySheetId[append.sheetId];
+              const tabRows = title !== undefined ? mutableRowsByTitle.get(title) : undefined;
+              if (tabRows !== undefined) {
+                const newRow = (append.rows[0]?.values ?? []).map((cell) =>
+                  cell?.userEnteredValue?.stringValue ?? "");
+                tabRows.push(newRow);
+              }
+              continue;
+            }
+            const del = (request as { deleteDimension?: {
+              range?: { sheetId?: number; dimension?: string; startIndex?: number; endIndex?: number };
+            } })?.deleteDimension;
+            if (del !== undefined && del.range?.sheetId !== undefined && del.range.dimension === "ROWS") {
+              const title = titleBySheetId[del.range.sheetId];
+              const tabRows = title !== undefined ? mutableRowsByTitle.get(title) : undefined;
+              if (tabRows !== undefined) {
+                const start = del.range.startIndex ?? 0;
+                const end = del.range.endIndex ?? start + 1;
+                tabRows.splice(start, end - start);
+              }
+              continue;
+            }
             const update = (request as { updateCells?: {
               start?: { sheetId?: number; rowIndex?: number; columnIndex?: number };
               rows?: { values?: { userEnteredValue?: { stringValue?: string } }[] }[];
@@ -2095,32 +2122,23 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
     releaseNextGate(); // postcondition
     await expect(pending).resolves.toEqual({ rowNumber: 3 });
 
-    // ONE batchUpdate writing the id column AND both fields.
+    // ONE batchUpdate using the ATOMIC appendCells (never a stale
+    // row-index updateCells that could overwrite a concurrent insert).
     expect(fakeRequests.map((request) => request.method)).toEqual(["get", "batchUpdate", "get"]);
     expect(fakeBatchUpdateBodies[0]).toEqual({
-      requests: [
-        {
-          updateCells: {
-            start: { sheetId: 12, rowIndex: 2, columnIndex: 0 },
-            rows: [{ values: [{ userEnteredValue: { stringValue: "task-new-c1" } }] }],
-            fields: "userEnteredValue",
-          },
+      requests: [{
+        appendCells: {
+          sheetId: 12,
+          rows: [{
+            values: [
+              { userEnteredValue: { stringValue: "task-new-c1" } },
+              { userEnteredValue: { stringValue: "new" } },
+              { userEnteredValue: { stringValue: "pending" } },
+            ],
+          }],
+          fields: "userEnteredValue",
         },
-        {
-          updateCells: {
-            start: { sheetId: 12, rowIndex: 2, columnIndex: 1 },
-            rows: [{ values: [{ userEnteredValue: { stringValue: "new" } }] }],
-            fields: "userEnteredValue",
-          },
-        },
-        {
-          updateCells: {
-            start: { sheetId: 12, rowIndex: 2, columnIndex: 2 },
-            rows: [{ values: [{ userEnteredValue: { stringValue: "pending" } }] }],
-            fields: "userEnteredValue",
-          },
-        },
-      ],
+      }],
     });
   });
 
@@ -2172,6 +2190,41 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
       statusClass: "identity_shifted",
       retryable: false,
     });
+  });
+
+  it("does not overwrite a concurrent insert (atomic appendCells)", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_750_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    mutableState.useMutableRows = true;
+    mutableRowsByTitle.set("SoakTask_Input", [
+      ["id", "title", "status"],
+      ["task-main-c1", "old", "open"],
+    ]);
+    const pending = client.insertInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      row: { id: "task-new-c1", title: "new", status: "pending" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot (append target would be row 2)
+    await vi.advanceTimersByTimeAsync(0);
+    // A concurrent actor appends a row into the slot the OLD stale-index
+    // implementation would have overwritten.
+    mutableRowsByTitle.get("SoakTask_Input")!.push(["task-concurrent", "c", "x"]);
+    releaseNextGate(); // appendCells appends at the TRUE end, never overwriting
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition
+    await expect(pending).resolves.toEqual({ rowNumber: 4 });
+    // No data loss: the concurrent row AND the inserted row both survive.
+    expect(mutableRowsByTitle.get("SoakTask_Input")).toEqual([
+      ["id", "title", "status"],
+      ["task-main-c1", "old", "open"],
+      ["task-concurrent", "c", "x"],
+      ["task-new-c1", "new", "pending"],
+    ]);
   });
 });
 
@@ -2281,6 +2334,44 @@ describe("soak sheets direct: human row delete (deleteInputRow)", () => {
       retryable: false,
     });
   });
+
+  it("rejects identity_shifted when a stale deleteDimension destroys a non-target row", async () => {
+    vi.useFakeTimers();
+    const startMs = 41_050_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    mutableState.useMutableRows = true;
+    mutableRowsByTitle.set("SoakTask_Input", [
+      ["id", "title", "status"],
+      ["task-main-c1", "old", "open"],
+      ["task-other", "a", "b"],
+    ]);
+    const pending = client.deleteInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+    });
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "identity_shifted",
+      retryable: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // snapshot (target at row 1)
+    await vi.advanceTimersByTimeAsync(0);
+    // A concurrent actor deletes the target first, shifting the tab up.
+    mutableRowsByTitle.get("SoakTask_Input")!.splice(1, 1);
+    releaseNextGate(); // stale deleteDimension deletes row 1 (now task-other)
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate(); // postcondition observes the unexplained loss
+    await rejection;
+    // The stale delete destroyed a NON-target identity; the harness fails
+    // closed instead of reporting a success for the wrong row.
+    expect(mutableRowsByTitle.get("SoakTask_Input")).toEqual([
+      ["id", "title", "status"],
+    ]);
+  });
 });
 
 describe("soak sheets direct: multi-field / insert / delete pure postconditions", () => {
@@ -2375,7 +2466,6 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
       beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
       afterRows: [["id", "title", "status"]],
       identity: "task-main-c1",
-      idColumn: 0,
     })).toEqual({ status: "ok" });
   });
 
@@ -2384,7 +2474,6 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
       beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
       afterRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
       identity: "task-main-c1",
-      idColumn: 0,
     })).toEqual({ status: "identity_shifted" });
   });
 
@@ -2393,7 +2482,32 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
       beforeRows: [["id", "title", "status"], ["other", "a", "b"]],
       afterRows: [["id", "title", "status"], ["other", "a", "b"]],
       identity: "task-main-c1",
-      idColumn: 0,
+    })).toEqual({ status: "identity_shifted" });
+  });
+
+  it("evaluateDeletePostcondition rejects an unexplained loss of a non-target identity", () => {
+    // A stale deleteDimension shifted onto a different row (because a
+    // concurrent actor deleted the target first) destroyed a non-target
+    // identity; that unexplained loss must fail closed.
+    expect(evaluateDeletePostcondition({
+      beforeRows: [
+        ["id", "title", "status"],
+        ["task-main-c1", "old", "open"],
+        ["task-other", "a", "b"],
+      ],
+      afterRows: [["id", "title", "status"], ["task-other", "a", "b"]],
+      identity: "task-main-c1",
+    })).toEqual({ status: "ok" });
+    // The target AND a non-target identity both disappeared: the delete
+    // removed the wrong row, so the loss is unexplained and fails closed.
+    expect(evaluateDeletePostcondition({
+      beforeRows: [
+        ["id", "title", "status"],
+        ["task-main-c1", "old", "open"],
+        ["task-other", "a", "b"],
+      ],
+      afterRows: [["id", "title", "status"]],
+      identity: "task-main-c1",
     })).toEqual({ status: "identity_shifted" });
   });
 });
