@@ -12,6 +12,9 @@
  */
 
 import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { NormalizedCell } from "../src/shared/encoding/types.js";
@@ -24,6 +27,12 @@ import {
   SYNC_SNAPSHOT_READ_MODES,
 } from "../src/application/sync/sheetsContract/constants.js";
 import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
+import {
+  getHikouteiInternalLogger,
+  HIKOUTEI_LOG_ENV_KEYS,
+  resetHikouteiInternalLoggerForTests,
+} from "../src/shared/observability/internalLog.js";
+import { HIKOUTEI_LOG_EVENTS } from "../src/shared/observability/logEvents.js";
 import type {
   ApplySyncEffectsRequest,
   ReadSyncSnapshotRequest,
@@ -340,6 +349,83 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(spreadsheet.findTab("Users_System")?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
   });
 
+  it("fails closed on a malformed userEnteredValue instead of initializing headers", async () => {
+    // A content cell whose userEnteredValue wrapper is a primitive is a
+    // malformed reply: provisioning must fail closed with the stable code
+    // instead of treating the tab as empty and initializing its headers.
+    const spreadsheet = new StubSpreadsheet();
+    const tab = spreadsheet.addTab("Users_System", {});
+    tab.cells.set("2,0", { userEnteredValue: "stray" } as unknown as StubCell);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.provisionRegistry(provisionRoutes()))
+      .rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("fails closed on a malformed format wrapper instead of initializing headers", async () => {
+    // A present userEnteredFormat/effectiveFormat (and its nested numberFormat)
+    // must be a record; a primitive wrapper must fail closed, never be treated
+    // as an ignorable format-only cell that triggers header initialization.
+    const spreadsheet = new StubSpreadsheet();
+    const tab = spreadsheet.addTab("Users_System", {});
+    tab.cells.set("2,0", {
+      userEnteredFormat: { numberFormat: "bad" },
+    } as unknown as StubCell);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.provisionRegistry(provisionRoutes()))
+      .rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("logs a stable redacted response_invalid record for a malformed provisioning cell", async () => {
+    const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-provision-log-"));
+    const originalLogFile = process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE];
+    const logFile = path.join(tempRoot, "hikoutei-log.txt");
+    try {
+      process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE] = logFile;
+      resetHikouteiInternalLoggerForTests();
+
+      const spreadsheet = new StubSpreadsheet();
+      const tab = spreadsheet.addTab("Users_System", {});
+      tab.cells.set("2,0", {
+        userEnteredValue: "RAW_MARKER_VALUE_12345",
+      } as unknown as StubCell);
+      const transport = new StubSheetsTransport(spreadsheet);
+      const provider = buildProvider(transport);
+
+      await expect(provider.provisionRegistry(provisionRoutes()))
+        .rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE });
+      expect(transport.batchUpdateCalls).toBe(0);
+
+      const logger = getHikouteiInternalLogger();
+      await logger.drain();
+      const raw = await readFile(logFile, "utf8");
+      const lines = raw.split("\n").filter((line) => line.trim() !== "")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      // The boundary emits only a stable, redacted record for the malformed
+      // reply: the stable event/code/class reach the log, never the raw value.
+      const invalid = lines.find((line) =>
+        line.event === HIKOUTEI_LOG_EVENTS.TRANSPORT_RESPONSE_INVALID);
+      expect(invalid).toBeDefined();
+      expect(invalid?.code).toBe(SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE);
+      expect(invalid?.errorClass).toBe("SyncSheetsContractError");
+      expect(raw).not.toContain("RAW_MARKER_VALUE_12345");
+      expect(raw).not.toContain("userEnteredValue");
+    } finally {
+      if (originalLogFile === undefined) {
+        delete process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE];
+      } else {
+        process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE] = originalLogFile;
+      }
+      resetHikouteiInternalLoggerForTests();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("treats a tab with one value cell anywhere as content that must match headers", async () => {
     // A single entered value outside the header row makes the tab a content
     // tab; with no registered header row the exact-match verification fails
@@ -619,6 +705,64 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       headers: USER_INPUT_HEADERS,
     });
     expect(result.rows[0]?.fields.status).toEqual(cell.string("#DIV/0!"));
+  });
+
+  it("fails closed when a literal cell carries a malformed effectiveValue", async () => {
+    // A present effectiveValue must be a record even on a literal/non-formula
+    // cell. A primitive effectiveValue is a malformed reply and must fail
+    // closed instead of falling through to the literal/blank path.
+    const spreadsheet = new StubSpreadsheet();
+    const tab = spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+    });
+    tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
+    tab.cells.set("1,1", {
+      userEnteredValue: { numberValue: 42 },
+      effectiveValue: 42,
+    } as unknown as StubCell);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.readRows({
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "Users_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+      headers: USER_INPUT_HEADERS,
+    })).rejects.toMatchObject({
+      code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
+    });
+  });
+
+  it("fails closed when a valid entered format hides a malformed effective format", async () => {
+    // Both present format wrappers (and their nested numberFormat containers)
+    // must be validated before entered is preferred over effective, so a
+    // well-formed entered DATE format can never mask a malformed effective
+    // numberFormat.
+    const spreadsheet = new StubSpreadsheet();
+    const tab = spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+    });
+    tab.cells.set("1,0", { userEnteredValue: { stringValue: "u1" } });
+    tab.cells.set("1,1", {
+      userEnteredValue: { numberValue: 42 },
+      userEnteredFormat: { numberFormat: GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT },
+      effectiveFormat: { numberFormat: "not-an-object" },
+    } as unknown as StubCell);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.readRows({
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "Users_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+      headers: USER_INPUT_HEADERS,
+    })).rejects.toMatchObject({
+      code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
+    });
   });
 
   it("fails closed on a missing tab, header drift, and malformed payloads", async () => {

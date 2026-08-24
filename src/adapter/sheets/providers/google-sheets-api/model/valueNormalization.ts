@@ -221,17 +221,22 @@ export function computedValueFromApiCell(
     invalidProviderState("Sheet cell value is not an object", GET_REPLY_MALFORMED);
   }
   const record = value as Record<string, unknown>;
-  // Validate every present CellData child container up front so a malformed
-  // primitive/null/array wrapper fails closed even for a literal cell, and a
-  // valid entered value cannot hide a malformed effective value.
-  const entered = requireApiContainer(record.userEnteredValue, "Sheet cell userEnteredValue must be an object");
-  const effective = requireApiContainer(record.effectiveValue, "Sheet cell effectiveValue must be an object");
-  const enteredRecord = recordLike(entered);
+  // Validate every present container before branch selection: a present
+  // effectiveValue must be a record even for literal/non-formula cells, and a
+  // present userEnteredValue likewise, so a malformed lower-priority wrapper
+  // can never fall through to the literal/blank path.
+  const enteredRecord = requireApiContainer(
+    record.userEnteredValue,
+    "Sheet cell userEnteredValue",
+  );
+  const effectiveRecord = requireApiContainer(
+    record.effectiveValue,
+    "Sheet cell effectiveValue",
+  );
   if (enteredRecord !== undefined && enteredRecord.formulaValue !== undefined) {
     if (typeof enteredRecord.formulaValue !== "string") {
       invalidProviderState("Sheet cell formulaValue is not a string", GET_REPLY_MALFORMED);
     }
-    const effectiveRecord = recordLike(effective);
     if (effectiveRecord === undefined) {
       invalidProviderState("Sheet formula cell has no effective value", GET_REPLY_MALFORMED);
     }
@@ -268,7 +273,7 @@ export function computedValueFromApiCell(
   if (enteredRecord !== undefined && enteredRecord.errorValue !== undefined) {
     return { kind: "string", value: errorDisplayString(record, enteredRecord) };
   }
-  const literal = observationLiteralFromApiValue(entered, numberFormat);
+  const literal = observationLiteralFromApiValue(enteredRecord, numberFormat);
   if (literal === undefined) {
     invalidProviderState("Sheet cell value is unsupported", GET_REPLY_MALFORMED);
   }
@@ -288,15 +293,22 @@ export function isComputedBlankCell(value: unknown, checkboxColumn: boolean): bo
   if (typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).length === 0) return true;
-  const entered = requireApiContainer(record.userEnteredValue, "Sheet cell userEnteredValue must be an object");
-  const effective = requireApiContainer(record.effectiveValue, "Sheet cell effectiveValue must be an object");
-  const enteredRecord = recordLike(entered);
+  // Validate every present relevant container before the blank decision so a
+  // malformed userEnteredValue/effectiveValue wrapper fails closed instead of
+  // being treated as blank.
+  const enteredRecord = requireApiContainer(
+    record.userEnteredValue,
+    "Sheet cell userEnteredValue",
+  );
+  const effectiveRecord = requireApiContainer(
+    record.effectiveValue,
+    "Sheet cell effectiveValue",
+  );
   if (enteredRecord === undefined) {
     // Formatting-only or effective-only cells carry no user value.
     return true;
   }
   if (enteredRecord.formulaValue !== undefined) {
-    const effectiveRecord = recordLike(effective);
     if (effectiveRecord === undefined) return false;
     if (effectiveRecord.stringValue !== undefined) {
       if (typeof effectiveRecord.stringValue !== "string") {

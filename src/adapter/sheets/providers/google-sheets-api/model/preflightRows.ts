@@ -268,8 +268,11 @@ export function gridRowCells(
  * Extracts the number format of one API cell, if any.
  *
  * The REST API models `CellFormat.numberFormat` as a `{ type, pattern }`
- * object, never a bare string; the user-entered format wins over the
- * effective format when both are present.
+ * object, never a bare string. Every present wrapper (`userEnteredFormat`,
+ * `effectiveFormat`, and their nested `numberFormat` containers) is
+ * validated before preference, so a valid entered format can never hide a
+ * malformed effective format; the user-entered format wins over the
+ * effective format only when both are well-formed.
  */
 export function apiCellNumberFormat(value: unknown): ParsedCellNumberFormat | undefined {
   if (value === null || typeof value !== "object") return undefined;
