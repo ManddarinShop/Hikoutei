@@ -101,6 +101,7 @@ import {
   SoakDeadlineExpiredError,
   SoakReopenCleanupError,
   SoakSimulatedInterruptionError,
+  resolveCycleDeadlineAtMs,
 } from "./constants.mjs";
 import {
   createArtifactWriter,
@@ -223,7 +224,18 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
   // built with the deadline before the state loads.
   const startedClock = performance.now();
   const deadlineAtMs = Date.now() + options.durationMs;
-  const live = await detectLiveMode(deadlineAtMs);
+  // Bounded close deadline for the LIVE direct observation client. The base
+  // deadline controls workload ADMISSION and stopping; the already-admitted
+  // final live cycle may close for at most one convergence budget past it
+  // (see resolveCycleDeadlineAtMs). The direct client must be constructed
+  // with the SAME bounded close deadline so its probe/convergence reads are
+  // capped by the close deadline, never by the earlier base deadline. Local
+  // mode ignores the client deadline entirely (the client is undefined).
+  const closeDeadlineAtMs = resolveCycleDeadlineAtMs({
+    mode: "live",
+    baseDeadlineAtMs: deadlineAtMs,
+  });
+  const live = await detectLiveMode(closeDeadlineAtMs);
   const state = await loadOrInitState(artifacts, options, parsedSeed, live.mode, startedClock, progress);
   // Recovery contract: the atomic checkpoint marker plus the recorded JSONL
   // identity determine whether the interrupted cycle needs a full SQLite
@@ -508,6 +520,23 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
         break;
       }
       cycle += 1;
+      // An ADMITTED live cycle gets the SAME bounded CLOSE deadline as the
+      // direct client: the base workload-admission deadline plus one
+      // existing convergence budget (see closeDeadlineAtMs above), so the
+      // in-flight final live cycle's probe/scenario/convergence barriers can
+      // drain its final effects for at most CONVERGENCE_TIMEOUT_MS past the
+      // base duration. Each phase still applies its own `min(now + own
+      // timeout, cycleDeadlineAtMs)`, so a non-final live cycle (whose phase
+      // timeout already binds well before the base deadline) is unchanged;
+      // only the admitted final cycle is extended, and only up to the bounded
+      // close deadline, never unbounded. Local mode keeps the original base
+      // deadline unchanged. The loop still starts NO new cycle at/after the
+      // base duration (the top-of-loop and post-cycle guards above/below), so
+      // this only ever closes out the already-admitted final live cycle and
+      // never starts a new one.
+      const cycleDeadlineAtMs = live.mode === "live"
+        ? closeDeadlineAtMs
+        : deadlineAtMs;
       // Reliability: any exception escaping the cycle (probe, convergence,
       // full scan, reopen, verification) becomes a stable redacted abort
       // record that counts toward the failure budget. Invariant failures
@@ -534,7 +563,7 @@ async function runSoakWithArtifacts(options, progress, artifacts) {
             recording,
             progress,
             dbName,
-            deadlineAtMs,
+            deadlineAtMs: cycleDeadlineAtMs,
             reconcile: cycle === reconcileCycle,
             replayCycleOps: resumeReplay?.cyclePlans,
             failOnCycle: options.__testFailOnCycle,

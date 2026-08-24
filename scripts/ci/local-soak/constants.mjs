@@ -22,6 +22,31 @@ const REOPEN_BUDGET_MARGIN_MS = 500;
 const OPERATION_ATTEMPTS = 3;
 /** Live convergence budget per cycle. */
 const CONVERGENCE_TIMEOUT_MS = 180_000;
+
+/**
+ * Resolves the bounded CLOSE deadline an admitted cycle may run under.
+ *
+ * Live mode grants an already-admitted final cycle ONE existing convergence
+ * budget past the base workload-admission deadline, so its probe/scenario/
+ * convergence barriers can drain final effects for at most
+ * `CONVERGENCE_TIMEOUT_MS` beyond the base duration. Local mode keeps the
+ * base deadline unchanged (no grace). Finite fractional epoch deadlines are
+ * preserved exactly (the addition is never rounded); the only clamp is
+ * overflow safety: a base deadline already within `CONVERGENCE_TIMEOUT_MS`
+ * of `Number.MAX_SAFE_INTEGER` returns the base rather than adding past the
+ * safe-integer ceiling, so a wrapped deadline can never extend a run.
+ *
+ * @param {{ mode: "live" | "local", baseDeadlineAtMs: number }} selection
+ *   the resolved run mode and the base workload-admission deadline (epoch ms).
+ * @returns {number} the cycle's epoch deadline in ms.
+ */
+export function resolveCycleDeadlineAtMs({ mode, baseDeadlineAtMs }) {
+  if (mode !== "live") return baseDeadlineAtMs;
+  if (baseDeadlineAtMs > Number.MAX_SAFE_INTEGER - CONVERGENCE_TIMEOUT_MS) {
+    return baseDeadlineAtMs;
+  }
+  return baseDeadlineAtMs + CONVERGENCE_TIMEOUT_MS;
+}
 export const CONVERGENCE_POLL_MS = 5_000;
 /** Human-edit acceptance budget. */
 const PROBE_ACCEPT_TIMEOUT_MS = 90_000;

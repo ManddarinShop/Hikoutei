@@ -110,6 +110,21 @@ export function boundedSleep(
   nowMs?: number,
 ): Promise<void>;
 
+/** Live convergence budget per cycle (ms). */
+export const CONVERGENCE_TIMEOUT_MS: number;
+
+/**
+ * Resolves the bounded CLOSE deadline an admitted cycle may run under:
+ * live mode grants an already-admitted final cycle one existing
+ * convergence budget past the base workload-admission deadline, local
+ * mode keeps the base deadline unchanged. Overflow-safe: a base deadline
+ * at/near `Number.MAX_SAFE_INTEGER` clamps to the base.
+ */
+export function resolveCycleDeadlineAtMs(args: {
+  readonly mode: "live" | "local";
+  readonly baseDeadlineAtMs: number;
+}): number;
+
 /** Poll interval of the live human-edit probe (deadline-bounded). */
 export const PROBE_ACCEPT_POLL_MS: number;
 

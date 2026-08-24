@@ -15,12 +15,15 @@ import { parseSpreadsheetIdFromUrl } from "./spreadsheetUrl.mjs";
 /**
  * Detects live vs local mode from the environment (never logs values).
  *
- * In live mode the direct observation client is built with the run's epoch
- * deadline so every Sheets request timeouts at the minimum of the client
- * default and the remaining run budget, and requests never start after the
- * deadline expired. Convergence/probe phases additionally pass their own
- * tighter operation deadline (`min(run deadline, now + phase timeout)`) on
- * every call, so a phase can never outlive its own timeout.
+ * In live mode the direct observation client is built with the MAXIMUM
+ * REQUEST/CLOSE deadline — the bounded close deadline past the base
+ * workload-admission budget — so every Sheets request timeouts at the
+ * minimum of the client default and the remaining close budget, and requests
+ * never start after the close deadline expired. Convergence/probe phases
+ * additionally pass their own tighter operation deadline
+ * (`min(close deadline, now + phase timeout)`) on every call, so a phase can
+ * never outlive its own timeout. Local mode ignores the deadline entirely
+ * (the client is undefined).
  */
 export async function detectLiveMode(deadlineAtMs) {
   const url = process.env.HIKOUTEI_SYNC_SPREADSHEET_URL;
