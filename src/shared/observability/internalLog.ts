@@ -39,6 +39,8 @@ import { dirname } from "node:path";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
+  HIKOUTEI_LOG_PROVIDER_OPERATIONS,
+  HIKOUTEI_LOG_PROVIDER_REASONS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
 } from "./logEvents.js";
@@ -98,6 +100,10 @@ const COMPONENT_ALLOWLIST: ReadonlySet<string> = new Set(Object.values(HIKOUTEI_
 const CODE_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CODES);
 /** Set of every stable error class name the log may carry. */
 const CLASS_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CLASSES);
+/** Set of every stable provider-operation tag the log may carry. */
+const PROVIDER_OPERATION_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_PROVIDER_OPERATIONS);
+/** Set of every stable provider-reason tag the log may carry. */
+const PROVIDER_REASON_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_PROVIDER_REASONS);
 /** Table/entity-name allowlist (matches the public SQL identifier rules). */
 const TABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
@@ -124,6 +130,10 @@ export interface HikouteiInternalLogEntry {
   readonly table?: string;
   /** Sanitized error class name such as `HikouteiError`. */
   readonly errorClass?: string;
+  /** Allowlisted provider operation the invalid state was detected in. */
+  readonly providerOperation?: string;
+  /** Allowlisted provider reason for the invalid state. */
+  readonly providerReason?: string;
   /** Operation duration in milliseconds. */
   readonly durationMs?: number;
   /** Numeric context only (counts, sizes). Non-numeric values are dropped. */
@@ -189,6 +199,8 @@ export function formatHikouteiLogLine(
   setIfDefined(line, "code", sanitizeAllowlisted(record.code, CODE_ALLOWLIST));
   setIfDefined(line, "table", sanitizeTableField(record.table));
   setIfDefined(line, "errorClass", sanitizeAllowlisted(record.errorClass, CLASS_ALLOWLIST));
+  setIfDefined(line, "providerOperation", sanitizeAllowlisted(record.providerOperation, PROVIDER_OPERATION_ALLOWLIST));
+  setIfDefined(line, "providerReason", sanitizeAllowlisted(record.providerReason, PROVIDER_REASON_ALLOWLIST));
   setIfDefined(line, "retryable", typeof record.retryable === "boolean" ? record.retryable : undefined);
   setIfDefined(line, "attempts", safeCountField(record.attempts));
   setIfDefined(line, "durationMs", safeCountField(record.durationMs));

@@ -12,6 +12,8 @@
 
 import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
 import {
+  SYNC_INVALID_PROVIDER_OPERATIONS,
+  SYNC_INVALID_PROVIDER_REASONS,
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "../../../../../application/sync/sheetsContract/errors.js";
@@ -229,40 +231,47 @@ export function effectRouteOptions(
 /**
  * Validates a batchUpdate reply shape: one reply per request, with the
  * addSheet reply carrying the created sheet id. A malformed 2xx response must
- * not close effects, so this throws a delivery-uncertain state error.
+ * not close effects, so this throws a delivery-uncertain state error
+ * classified as a `batch_update_reply` / `malformed_reply` invalid state.
  */
 export function requireValidBatchUpdateReply(value: unknown, requestCount: number): void {
+  const batchUpdateClassification = {
+    operation: SYNC_INVALID_PROVIDER_OPERATIONS.BATCH_UPDATE_REPLY,
+    reason: SYNC_INVALID_PROVIDER_REASONS.MALFORMED_REPLY,
+  } as const;
   const parsed = batchUpdateResponseShapeSchema.safeParse(value);
   if (!parsed.success) {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      invalidProviderState("batchUpdate response must be an object");
+      invalidProviderState("batchUpdate response must be an object", batchUpdateClassification);
     }
     invalidProviderState(
       `batchUpdate reply count does not match ${requestCount} requests`,
+      batchUpdateClassification,
     );
   }
   const record = parsed.data;
   if (record.replies.length !== requestCount) {
     invalidProviderState(
       `batchUpdate reply count does not match ${requestCount} requests`,
+      batchUpdateClassification,
     );
   }
   record.replies.forEach((reply, index) => {
     if (reply === null || typeof reply !== "object" || Array.isArray(reply)) {
-      invalidProviderState(`batchUpdate reply[${index}] must be an object`);
+      invalidProviderState(`batchUpdate reply[${index}] must be an object`, batchUpdateClassification);
     }
     const replyRecord = reply as Record<string, unknown>;
     const addSheet = replyRecord.addSheet;
     if (addSheet === undefined) return;
     if (addSheet === null || typeof addSheet !== "object" || Array.isArray(addSheet)) {
-      invalidProviderState(`batchUpdate reply[${index}].addSheet is invalid`);
+      invalidProviderState(`batchUpdate reply[${index}].addSheet is invalid`, batchUpdateClassification);
     }
     const properties = (addSheet as Record<string, unknown>).properties;
     if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
-      invalidProviderState(`batchUpdate reply[${index}].addSheet.properties is invalid`);
+      invalidProviderState(`batchUpdate reply[${index}].addSheet.properties is invalid`, batchUpdateClassification);
     }
     if (typeof (properties as Record<string, unknown>).sheetId !== "number") {
-      invalidProviderState(`batchUpdate reply[${index}].addSheet.properties.sheetId is invalid`);
+      invalidProviderState(`batchUpdate reply[${index}].addSheet.properties.sheetId is invalid`, batchUpdateClassification);
     }
   });
 }

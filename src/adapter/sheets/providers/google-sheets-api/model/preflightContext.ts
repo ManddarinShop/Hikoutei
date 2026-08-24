@@ -23,6 +23,9 @@ import {
 } from "./preflightFields.js";
 import { invalidProviderState } from "../errors.js";
 import type {
+  SyncMissingTabOperation,
+} from "../../../../../application/sync/sheetsContract/errors.js";
+import type {
   GoogleSheetsApiTransport,
   GoogleSheetsApiGetSpreadsheetRequest,
 } from "../transport/googleSheetsApiTransport.js";
@@ -226,13 +229,16 @@ export async function readPreflightData(
 /**
  * Reads one ranged getSpreadsheet across ALL needed tabs and builds a
  * PreflightContext for each route (keyed by its sheetName), sharing the
- * read across the routes of one spreadsheet.
+ * read across the routes of one spreadsheet. `operation` classifies an
+ * invalid provider state (e.g. a missing tab) detected while building a
+ * route context.
  */
 export async function readPreflightDataForRoutes(
   transport: GoogleSheetsApiTransport,
   routes: readonly PreflightRouteOptions[],
   sheets: readonly ParsedSheet[],
   timeoutMs?: number,
+  operation?: SyncMissingTabOperation,
 ): Promise<ReadonlyMap<string, PreflightContext>> {
   const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
   const dataRequest: GoogleSheetsApiGetSpreadsheetRequest = {
@@ -245,18 +251,19 @@ export async function readPreflightDataForRoutes(
   const dataDocument = parseSpreadsheetDocument(dataRaw, "grid data");
   const contexts = new Map<string, PreflightContext>();
   for (const route of routes) {
-    contexts.set(route.sheetName, buildRouteContext(dataDocument, sheets, route));
+    contexts.set(route.sheetName, buildRouteContext(dataDocument, sheets, route, operation));
   }
   return contexts;
 }
 
-/** Builds one route's pre- flicht context from an already-fetched document. */
+/** Builds one route's preflight context from an already-fetched document. */
 export function buildRouteContext(
   dataDocument: ParsedSpreadsheetDocument,
   sheets: readonly ParsedSheet[],
   route: PreflightRouteOptions,
+  operation?: SyncMissingTabOperation,
 ): PreflightContext {
-  const targetSheet = requireSheetByTitle(sheets, route.sheetName);
+  const targetSheet = requireSheetByTitle(sheets, route.sheetName, operation);
   const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
   const parsedRange = parseRegisteredRange(route.registeredRange);
   const targetData = requireGridDataForSheet(dataDocument, targetSheet.sheetId);

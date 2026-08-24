@@ -20,10 +20,10 @@ import {
   SYSTEM_COLUMN_REPROVISION_MESSAGE,
   gridHeaderCells,
 } from "../model/preflightHeaders.js";
-import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
+import { parseSpreadsheetDocument, requireApiContainer } from "../model/preflightParsing.js";
 import type { ParsedGridData } from "../model/preflightContext.js";
 import { GOOGLE_SHEETS_API_ROW_ID_HEADER } from "../constants.js";
-import { invalidProviderRequest, invalidProviderState } from "../errors.js";
+import { invalidProviderRequest, invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import { allocateSheetId } from "../model/sheetIdAllocator.js";
 import {
@@ -81,6 +81,8 @@ export async function provisionRegistry(
     const ranges = dataTargets.map((registration) => {
       const existing = existingByTitle.get(registration.sheetName);
       if (existing === undefined) {
+        // A valid GET lacking the tab is a missing tab in generic provisioning
+        // context, not a malformed reply: keep the safe unclassified default.
         invalidProviderState(`Registered sync sheet does not exist: ${registration.sheetName}`);
       }
       const endColumn = provisionGridEndColumn(registration, existing);
@@ -101,7 +103,7 @@ export async function provisionRegistry(
       }
       const grid = document.grids.get(existing.sheetId);
       if (grid === undefined) {
-        invalidProviderState(`grid data is missing for sheet ${existing.sheetId}`);
+        invalidProviderState(`grid data is missing for sheet ${existing.sheetId}`, GET_REPLY_MALFORMED);
       }
       grids.set(registration.sheetName, grid);
     }
@@ -135,7 +137,7 @@ export async function provisionRegistry(
     }
     const grid = grids.get(registration.sheetName);
     if (grid === undefined) {
-      invalidProviderState(`provisioning grid is missing for ${registration.sheetName}`);
+      invalidProviderState(`provisioning grid is missing for ${registration.sheetName}`, GET_REPLY_MALFORMED);
     }
     if (!gridHasContent(grid)) {
       // Truly empty tab: initialize the header row only.
@@ -266,24 +268,53 @@ function provisionGridEndColumn(
  * as a content tab that must match headers.
  */
 function gridHasContent(grid: ParsedGridData): boolean {
+  // Validate every present cell wrapper (not just the first content cell) so a
+  // malformed primitive/null/array wrapper anywhere in the grid fails closed
+  // instead of being silently treated as absent during the emptiness decision.
+  let hasContent = false;
   for (const row of grid.rowData) {
     for (const value of row.values) {
-      if (cellHasEnteredValue(value)) return true;
+      if (cellHasEnteredValue(value)) hasContent = true;
     }
   }
-  return false;
+  return hasContent;
+}
+
+/**
+ * Validates every present CellData child/format wrapper of one provisioning
+ * cell with the shared strict guard, then returns its validated
+ * userEnteredValue record (`undefined` when omitted).
+ *
+ * Present primitive/null/array `userEnteredValue`, `userEnteredFormat`,
+ * `effectiveFormat`, or nested `numberFormat` wrappers fail closed as
+ * `get_reply`/`malformed_reply`; omitted fields and `{}` containers stay
+ * valid. Provisioning decides emptiness and header content from these
+ * wrappers, so a malformed wrapper must never be silently treated as absent.
+ */
+function requireProvisioningCellWrappers(
+  cell: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const entered = requireApiContainer(cell.userEnteredValue, "cell userEnteredValue must be an object");
+  const userEnteredFormat = requireApiContainer(cell.userEnteredFormat, "cell userEnteredFormat must be an object");
+  const effectiveFormat = requireApiContainer(cell.effectiveFormat, "cell effectiveFormat must be an object");
+  if (userEnteredFormat !== undefined) {
+    requireApiContainer(userEnteredFormat.numberFormat, "cell userEnteredFormat.numberFormat must be an object");
+  }
+  if (effectiveFormat !== undefined) {
+    requireApiContainer(effectiveFormat.numberFormat, "cell effectiveFormat.numberFormat must be an object");
+  }
+  return entered;
 }
 
 /** Returns whether one API cell carries a real entered value. */
 function cellHasEnteredValue(value: unknown): boolean {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const entered = (value as Record<string, unknown>).userEnteredValue;
-  if (entered === null || typeof entered !== "object" || Array.isArray(entered)) return false;
-  const enteredRecord = entered as Record<string, unknown>;
-  return enteredRecord.stringValue !== undefined ||
-    enteredRecord.numberValue !== undefined ||
-    enteredRecord.boolValue !== undefined ||
-    enteredRecord.formulaValue !== undefined;
+  const entered = requireProvisioningCellWrappers(value as Record<string, unknown>);
+  if (entered === undefined) return false;
+  return entered.stringValue !== undefined ||
+    entered.numberValue !== undefined ||
+    entered.boolValue !== undefined ||
+    entered.formulaValue !== undefined;
 }
 
 /**
@@ -359,20 +390,18 @@ function assertProvisioningHeaders(
  */
 function provisioningHeaderString(value: unknown): string | null {
   if (value === null || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  const entered = record.userEnteredValue;
-  if (entered === null || typeof entered !== "object") return null;
-  const enteredRecord = entered as Record<string, unknown>;
-  if (enteredRecord.stringValue !== undefined) {
-    return typeof enteredRecord.stringValue === "string" ? enteredRecord.stringValue : null;
+  const entered = requireProvisioningCellWrappers(value as Record<string, unknown>);
+  if (entered === undefined) return null;
+  if (entered.stringValue !== undefined) {
+    return typeof entered.stringValue === "string" ? entered.stringValue : null;
   }
-  if (enteredRecord.numberValue !== undefined) {
-    return typeof enteredRecord.numberValue === "number" && Number.isFinite(enteredRecord.numberValue)
-      ? String(enteredRecord.numberValue)
+  if (entered.numberValue !== undefined) {
+    return typeof entered.numberValue === "number" && Number.isFinite(entered.numberValue)
+      ? String(entered.numberValue)
       : null;
   }
-  if (enteredRecord.boolValue !== undefined) {
-    return typeof enteredRecord.boolValue === "boolean" ? String(enteredRecord.boolValue) : null;
+  if (entered.boolValue !== undefined) {
+    return typeof entered.boolValue === "boolean" ? String(entered.boolValue) : null;
   }
   return null;
 }

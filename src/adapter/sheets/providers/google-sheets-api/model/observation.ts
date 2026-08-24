@@ -34,7 +34,7 @@ import type {
   SyncSnapshotCell,
   SyncSnapshotRow,
 } from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import { invalidProviderState } from "../errors.js";
+import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import type {
   GoogleSheetsApiTransport,
   GoogleSheetsApiGetSpreadsheetRequest,
@@ -52,7 +52,7 @@ import {
   readRegisteredHeaders,
 } from "./preflightHeaders.js";
 import { GOOGLE_SHEETS_API_OBSERVATION_FIELDS } from "./preflightFields.js";
-import { parseSpreadsheetDocument } from "./preflightParsing.js";
+import { parseSpreadsheetDocument, requireApiContainer } from "./preflightParsing.js";
 import {
   apiCellNumberFormat,
   gridRowCells,
@@ -151,11 +151,16 @@ export async function readTabGrids(
   for (const target of targets) {
     const sheet = findSheetByTitle(document.sheets, target.sheetName);
     if (sheet === undefined) {
+      // A structurally valid GET can simply lack the requested tab; this is
+      // generic observation/anchor context with no missing-tab taxonomy pair,
+      // so it keeps the safe unclassified default.
       invalidProviderState(`Registered sync sheet does not exist: ${target.sheetName}`);
     }
     const grid = document.grids.get(sheet.sheetId);
     if (grid === undefined) {
-      invalidProviderState(`grid data is missing for sheet ${sheet.sheetId}`);
+      // The request explicitly required grid data for a present tab, so a
+      // reply that omits it violated that structural expectation.
+      invalidProviderState(`grid data is missing for sheet ${sheet.sheetId}`, GET_REPLY_MALFORMED);
     }
     tabs.set(target.sheetName, {
       sheetId: sheet.sheetId,
@@ -343,11 +348,17 @@ function observeCell(
   lightweight: boolean,
   mergeRange: string | undefined,
 ): SyncSnapshotCell {
-  if (value === null || typeof value !== "object") {
+  // A null cell marks a position outside the row's values array (blank); any
+  // other non-record is a malformed CellData wrapper that must fail closed
+  // rather than silently becoming a blank cell.
+  if (value === null) {
     return literalObservation(null, lightweight);
   }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    invalidProviderState("Sheet cell value is not an object", GET_REPLY_MALFORMED);
+  }
   const record = value as Record<string, unknown>;
-  const entered = record.userEnteredValue;
+  const entered = requireApiContainer(record.userEnteredValue, "Sheet cell userEnteredValue must be an object");
   const enteredRecord = recordLike(entered);
   const formula = enteredRecord?.formulaValue;
   const formulaHash = typeof formula === "string" && formula.length > 0
@@ -406,7 +417,7 @@ function observeCell(
   }
   if (formula !== undefined) {
     if (typeof formula !== "string") {
-      invalidProviderState("Sheet cell formulaValue is not a string");
+      invalidProviderState("Sheet cell formulaValue is not a string", GET_REPLY_MALFORMED);
     }
     return {
       cellKind: CELL_OBSERVATION_KINDS.FORMULA,
@@ -482,13 +493,13 @@ function isDisplayedSheetError(value: string): boolean {
 function errorDisplayString(record: Record<string, unknown>): string {
   const formatted = record.formattedValue;
   if (typeof formatted === "string" && formatted.length > 0) return formatted;
-  const entered = record.userEnteredValue;
+  const entered = requireApiContainer(record.userEnteredValue, "Sheet cell userEnteredValue must be an object");
   const enteredRecord = recordLike(entered);
   const error = enteredRecord?.errorValue;
-  const errorRecord = recordLike(error);
+  const errorRecord = requireApiContainer(error, "Sheet cell errorValue must be an object");
   const message = errorRecord?.message;
   if (typeof message === "string" && message.length > 0) return message;
-  invalidProviderState("Sheet error cell has no display string");
+  invalidProviderState("Sheet error cell has no display string", GET_REPLY_MALFORMED);
 }
 
 /**

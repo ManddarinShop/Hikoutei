@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { invalidProviderState } from "../errors.js";
+import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 
 /** Structural shape shared by spreadsheet enumeration and grid responses. */
 export const spreadsheetDocumentShapeSchema = z.object({
@@ -22,13 +22,20 @@ export const batchUpdateResponseShapeSchema = z.object({
   replies: z.array(z.unknown()),
 }).passthrough();
 
-/** Parses one raw provider shape while retaining the provider error boundary. */
+/**
+ * Parses one raw provider shape while retaining the provider error boundary.
+ *
+ * Used exclusively for `spreadsheets.get` reply promotion, so a failed shape
+ * guard is classified as a `get_reply` / `malformed_reply` invalid state.
+ */
 export function parseProviderResponseShape<T>(
   schema: z.ZodType<T>,
   value: unknown,
   message: string,
 ): T {
   const parsed = schema.safeParse(value);
-  if (!parsed.success) invalidProviderState(message);
+  if (!parsed.success) {
+    invalidProviderState(message, GET_REPLY_MALFORMED);
+  }
   return parsed.data;
 }
