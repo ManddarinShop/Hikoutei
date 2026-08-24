@@ -395,6 +395,202 @@ export function createDirectSheetsClient({
   }
 
   /**
+   * Overwrites MULTIPLE field cells of the row whose id column matches
+   * (multi-field human edit) in ONE batchUpdate and verifies every field
+   * landed on the INTENDED identity row.
+   *
+   * Mirrors {@link mutateInputCell} but writes several fields of one row
+   * atomically in a single request. The target tab's rows AND its numeric
+   * sheetId are read in ONE `spreadsheets.get`; the write targets the row
+   * index from that single snapshot. Because Sheets has no identity
+   * compare-and-set by cell value, a User_Input row insert/delete between
+   * the snapshot and the write can shift the tab; a deadline-bound direct
+   * postcondition read runs right after the write and compares the
+   * pre-write and post-write snapshots BY VALIDATED IDENTITY. It requires
+   * exactly one intended identity row before and after, that row to
+   * display EVERY requested field value, and no proven collateral write at
+   * the original write coordinate. A value placed on another identity, an
+   * absent or duplicated identity, or any proven collateral field change
+   * rejects with the stable `identity_shifted` status class
+   * (non-retryable). The harness never compensates and never retries.
+   *
+   * `fields` maps each target field header to its value. `deadlineAtMs` is
+   * the probe phase's ACTIVE OPERATION deadline; every request of the call
+   * is asserted and timeouts against `min(phase deadline, run deadline)`.
+   */
+  async function mutateInputCells({ spreadsheetId, tabName, identity, fields, deadlineAtMs }) {
+    const headerNames = Object.keys(fields);
+    const { rows, sheetId } = await readInputSnapshot(spreadsheetId, tabName, deadlineAtMs);
+    const snapshotVerdict = evaluateInputPreWriteMulti({ rows, identity, headerNames });
+    if (snapshotVerdict.status === "fail") {
+      throw new DirectSheetsError("input snapshot invalid", snapshotVerdict.statusClass);
+    }
+    if (snapshotVerdict.status === "missing") {
+      throw new DirectSheetsError("identity row not found", "missing_identity");
+    }
+    const { fieldColumns, rowIndex } = snapshotVerdict;
+    await paceNextRequest();
+    const timeout = nextRequestTimeout(deadlineAtMs);
+    const requests = headerNames.map((headerName) => ({
+      updateCells: {
+        start: { sheetId, rowIndex, columnIndex: fieldColumns[headerName] },
+        rows: [{ values: [{ userEnteredValue: { stringValue: String(fields[headerName]) } }] }],
+        fields: "userEnteredValue",
+      },
+    }));
+    await client.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests },
+    }, { timeout, retry: false }).catch(toStatusError);
+    const postRows = await readTabRows(spreadsheetId, tabName, { deadlineAtMs });
+    const verdict = evaluateInputPostconditionMulti({
+      beforeRows: rows,
+      afterRows: postRows,
+      identity,
+      headerNames,
+      values: fields,
+      rowIndex,
+    });
+    if (verdict.status !== "ok") {
+      throw new DirectSheetsError("direct human write shifted identity", "identity_shifted");
+    }
+    return { rowNumber: rowIndex + 1 };
+  }
+
+  /**
+   * Appends a NEW row (id + field values) to the target tab in ONE
+   * batchUpdate (human row insert) and verifies the intended identity
+   * landed exactly once.
+   *
+   * The target tab's rows AND its numeric sheetId are read in ONE
+   * `spreadsheets.get`. The insert targets the first fully-blank data row
+   * from that single snapshot. Because Sheets has no identity
+   * compare-and-set by cell value, a concurrent row insert/delete can shift
+   * the tab; a deadline-bound direct postcondition read runs right after
+   * the write and requires the intended identity to exist exactly once
+   * with every requested field value. A duplicated identity, an absent
+   * identity, or any field that did not land on the intended identity
+   * rejects with the stable `identity_shifted` status class
+   * (non-retryable). The harness never compensates and never retries.
+   *
+   * `row` maps the id column (`id`) and each field header to its value.
+   * `deadlineAtMs` is the probe phase's ACTIVE OPERATION deadline; every
+   * request of the call is asserted and timeouts against
+   * `min(phase deadline, run deadline)`.
+   */
+  async function insertInputRow({ spreadsheetId, tabName, row, deadlineAtMs }) {
+    const fieldNames = Object.keys(row).filter((name) => name !== "id");
+    const { rows, sheetId } = await readInputSnapshot(spreadsheetId, tabName, deadlineAtMs);
+    const headerVerdict = validateInputHeadersMulti(rows?.[0] ?? [], fieldNames);
+    if (headerVerdict.status !== "ok") {
+      throw new DirectSheetsError("input snapshot invalid", headerVerdict.status);
+    }
+    const existing = indexByIdentities(rows, headerVerdict.idColumn);
+    if (existing === null) {
+      throw new DirectSheetsError("input snapshot invalid", "identity_shifted");
+    }
+    if (existing.has(row.id)) {
+      throw new DirectSheetsError("identity already exists", "identity_shifted");
+    }
+    const rowIndex = findAppendRowIndex(rows);
+    await paceNextRequest();
+    const timeout = nextRequestTimeout(deadlineAtMs);
+    const requests = [
+      {
+        updateCells: {
+          start: { sheetId, rowIndex, columnIndex: headerVerdict.idColumn },
+          rows: [{ values: [{ userEnteredValue: { stringValue: String(row.id) } }] }],
+          fields: "userEnteredValue",
+        },
+      },
+      ...fieldNames.map((headerName) => ({
+        updateCells: {
+          start: { sheetId, rowIndex, columnIndex: headerVerdict.fieldColumns[headerName] },
+          rows: [{ values: [{ userEnteredValue: { stringValue: String(row[headerName]) } }] }],
+          fields: "userEnteredValue",
+        },
+      })),
+    ];
+    await client.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests },
+    }, { timeout, retry: false }).catch(toStatusError);
+    const postRows = await readTabRows(spreadsheetId, tabName, { deadlineAtMs });
+    const fieldValues = {};
+    for (const headerName of fieldNames) fieldValues[headerName] = row[headerName];
+    const verdict = evaluateInsertPostcondition({
+      afterRows: postRows,
+      identity: row.id,
+      headerNames: fieldNames,
+      values: fieldValues,
+    });
+    if (verdict.status !== "ok") {
+      throw new DirectSheetsError("direct human insert shifted identity", "identity_shifted");
+    }
+    return { rowNumber: rowIndex + 1 };
+  }
+
+  /**
+   * Deletes the row whose id column matches from the target tab in ONE
+   * batchUpdate (human row delete) and verifies the intended identity is
+   * gone.
+   *
+   * The target tab's rows AND its numeric sheetId are read in ONE
+   * `spreadsheets.get`. The delete targets the row index from that single
+   * snapshot. Because Sheets has no identity compare-and-set by cell value,
+   * a concurrent row insert/delete can shift the tab and place the delete
+   * on a DIFFERENT row; a deadline-bound direct postcondition read runs
+   * right after the write and requires the intended identity to be ABSENT
+   * from the post-write snapshot. A still-present identity (a shift placed
+   * the delete on the wrong row), a duplicated identity, or an absent
+   * pre-write identity rejects with the stable `identity_shifted` status
+   * class (non-retryable). The harness never compensates and never retries.
+   *
+   * `deadlineAtMs` is the probe phase's ACTIVE OPERATION deadline; every
+   * request of the call is asserted and timeouts against
+   * `min(phase deadline, run deadline)`.
+   */
+  async function deleteInputRow({ spreadsheetId, tabName, identity, deadlineAtMs }) {
+    const { rows, sheetId } = await readInputSnapshot(spreadsheetId, tabName, deadlineAtMs);
+    const headerVerdict = validateInputHeadersMulti(rows?.[0] ?? [], []);
+    if (headerVerdict.status !== "ok") {
+      throw new DirectSheetsError("input snapshot invalid", headerVerdict.status);
+    }
+    const existing = indexByIdentities(rows, headerVerdict.idColumn);
+    if (existing === null) {
+      throw new DirectSheetsError("input snapshot invalid", "identity_shifted");
+    }
+    if (!existing.has(identity)) {
+      throw new DirectSheetsError("identity row not found", "missing_identity");
+    }
+    const rowIndex = rows.findIndex((row, index) =>
+      index > 0 && row[headerVerdict.idColumn] === identity);
+    await paceNextRequest();
+    const timeout = nextRequestTimeout(deadlineAtMs);
+    await client.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{
+          deleteDimension: {
+            range: { sheetId, dimension: "ROWS", startIndex: rowIndex, endIndex: rowIndex + 1 },
+          },
+        }],
+      },
+    }, { timeout, retry: false }).catch(toStatusError);
+    const postRows = await readTabRows(spreadsheetId, tabName, { deadlineAtMs });
+    const verdict = evaluateDeletePostcondition({
+      beforeRows: rows,
+      afterRows: postRows,
+      identity,
+      idColumn: headerVerdict.idColumn,
+    });
+    if (verdict.status !== "ok") {
+      throw new DirectSheetsError("direct human delete shifted identity", "identity_shifted");
+    }
+    return { rowNumber: rowIndex + 1 };
+  }
+
+  /**
    * Deletes the named projection tabs (cleanup only).
    *
    * The shared internal receipt tab is deleted ONLY for a full-table
@@ -430,7 +626,15 @@ export function createDirectSheetsClient({
     return { deleted: targets.length };
   }
 
-  return { readTabRows, readTabsRows, mutateInputCell, deleteTabs };
+  return {
+    readTabRows,
+    readTabsRows,
+    mutateInputCell,
+    mutateInputCells,
+    insertInputRow,
+    deleteInputRow,
+    deleteTabs,
+  };
 }
 
 /** Default pacing sleep backed by setTimeout (injectable in tests). */
@@ -536,6 +740,43 @@ function validateInputHeaders(headers, headerName) {
   return { status: "ok", idColumn, fieldColumn };
 }
 
+/**
+ * Validates the header row of a direct-write tab for MULTIPLE target
+ * fields (multi-field human edit / row insert). Headers must be
+ * non-empty, non-whitespace-only strings with no duplicates, exactly one
+ * `id`, and every requested field present; writing to the `id` column
+ * itself is rejected. Returns the resolved id column and a field-name ->
+ * column-index map on success, or a stable non-retryable harness status
+ * class (`missing_header` / `malformed_header`). Never returns raw headers
+ * or values.
+ *
+ * @param {readonly unknown[]} headers the tab's header row.
+ * @param {readonly string[]} headerNames requested field headers.
+ * @returns {{ status: "ok", idColumn: number, fieldColumns: Record<string, number> } |
+ *   { status: "missing_header" } | { status: "malformed_header" }}
+ */
+function validateInputHeadersMulti(headers, headerNames) {
+  if (!Array.isArray(headers)) return { status: "malformed_header" };
+  const seen = new Set();
+  for (const header of headers) {
+    if (typeof header !== "string" || header.trim() === "") {
+      return { status: "malformed_header" };
+    }
+    if (seen.has(header)) return { status: "malformed_header" };
+    seen.add(header);
+  }
+  const idColumn = headers.indexOf("id");
+  if (idColumn < 0) return { status: "missing_header" };
+  const fieldColumns = {};
+  for (const headerName of headerNames) {
+    if (headerName === "id") return { status: "malformed_header" };
+    const fieldColumn = headers.indexOf(headerName);
+    if (fieldColumn < 0) return { status: "missing_header" };
+    fieldColumns[headerName] = fieldColumn;
+  }
+  return { status: "ok", idColumn, fieldColumns };
+}
+
 /** Normalizes one sparse display cell: undefined/null/"" are the same blank. */
 function normalizeCell(cell) {
   return cell === undefined || cell === null ? "" : String(cell);
@@ -575,6 +816,53 @@ function indexByIdentity(rows, idColumn, fieldColumn) {
     byId.set(rawId, normalizeCell(rawRow[fieldColumn]));
   }
   return byId;
+}
+
+/**
+ * Indexes a tab's DATA rows by nonblank identity, skipping the header row
+ * and fully blank/padding rows. Fails closed (returns `null`) on any
+ * malformed row: a non-empty row whose identity is blank or not a string,
+ * or a duplicated nonblank identity. Unlike {@link indexByIdentity} this
+ * variant does not read a target field — it only validates identity
+ * uniqueness, which is all a multi-field write, row insert, or row delete
+ * needs before it resolves a write coordinate. No identity ever escapes.
+ *
+ * @param {readonly unknown[][]} rows tab rows including the header row.
+ * @param {number} idColumn the id column index.
+ * @returns {Map<string, true> | null}
+ */
+function indexByIdentities(rows, idColumn) {
+  const byId = new Map();
+  for (let index = 1; index < rows.length; index++) {
+    const rawRow = rows[index];
+    if (rawRow === undefined || rawRow === null) continue;
+    if (!Array.isArray(rawRow)) return null;
+    if (rawRow.every(isBlankCell)) continue;
+    const rawId = rawRow[idColumn];
+    if (rawId === undefined || rawId === null || rawId === "") return null;
+    if (typeof rawId !== "string") return null;
+    if (byId.has(rawId)) return null;
+    byId.set(rawId, true);
+  }
+  return byId;
+}
+
+/**
+ * Resolves the first fully-blank data row index (>= 1) for appending a new
+ * row, or the row just past the last returned row when none is blank. The
+ * header row (index 0) is never a target.
+ *
+ * @param {readonly unknown[][]} rows tab rows including the header row.
+ * @returns {number} the append row index.
+ */
+function findAppendRowIndex(rows) {
+  for (let index = 1; index < rows.length; index++) {
+    const rawRow = rows[index];
+    if (rawRow === undefined || rawRow === null || rawRow.every(isBlankCell)) {
+      return index;
+    }
+  }
+  return rows.length;
 }
 
 /**
@@ -681,6 +969,160 @@ export function evaluateInputPostcondition({
       return { status: "identity_shifted" };
     }
   }
+  return { status: "ok" };
+}
+
+/**
+ * Pure PRE-WRITE snapshot validation for a MULTI-FIELD direct human write
+ * (`mutateInputCells`): promotes a User_Input tab snapshot into a ready
+ * write coordinate for several fields of one row, or fails closed WITHOUT
+ * a write. Mirrors {@link evaluateInputPreWrite} but validates every
+ * requested field header and returns a field-name -> column-index map. A
+ * missing/duplicate/whitespace header, a non-empty row with a blank or
+ * non-string identity, or a duplicated nonblank identity returns a fixed
+ * `fail` class; a structurally valid tab lacking the intended identity
+ * returns `missing`; on `ready` the id column, field columns, and the
+ * target's rowIndex are returned. Fully blank padding rows are ignored.
+ * Never returns an id or value.
+ *
+ * @param {object} input the pre-write snapshot inputs.
+ * @param {readonly unknown[][]} input.rows the tab rows including the header row.
+ * @param {string} input.identity the intended identity value.
+ * @param {readonly string[]} input.headerNames the target field headers.
+ * @returns {{ status:"ready", idColumn:number, fieldColumns:Record<string, number>, rowIndex:number } |
+ *   { status:"missing" } | { status:"fail", statusClass:string }}
+ */
+export function evaluateInputPreWriteMulti({ rows, identity, headerNames }) {
+  const headers = Array.isArray(rows) ? rows[0] : undefined;
+  const headerVerdict = validateInputHeadersMulti(headers ?? [], headerNames);
+  if (headerVerdict.status !== "ok") {
+    return { status: "fail", statusClass: headerVerdict.status };
+  }
+  if (indexByIdentities(rows, headerVerdict.idColumn) === null) {
+    return { status: "fail", statusClass: "identity_shifted" };
+  }
+  const rowIndex = rows.findIndex((row, index) =>
+    index > 0 && row[headerVerdict.idColumn] === identity);
+  if (rowIndex < 0) return { status: "missing" };
+  return {
+    status: "ready",
+    idColumn: headerVerdict.idColumn,
+    fieldColumns: headerVerdict.fieldColumns,
+    rowIndex,
+  };
+}
+
+/**
+ * Pure postcondition check for a MULTI-FIELD direct human write, comparing
+ * the pre-write and post-write snapshots BY VALIDATED IDENTITY. Requires
+ * exactly one intended identity row before and after, that row to display
+ * EVERY requested field value, and — when `rowIndex` (the ORIGINAL write
+ * coordinate) is supplied — that the post-read row at that coordinate does
+ * not belong to a different nonblank identity while still displaying any
+ * requested value (a proven collateral write to the wrong identity's row).
+ * New/deleted unrelated rows may appear (async projection) and are never
+ * compared by order. A blank or non-string identity in a non-empty row, or
+ * a duplicated nonblank identity, fails closed. Only cell-shape
+ * comparisons run here; no id, value, or payload is ever returned.
+ *
+ * @param {object} input the postcondition inputs.
+ * @param {readonly unknown[][]} input.beforeRows pre-write snapshot rows.
+ * @param {readonly unknown[][]} input.afterRows post-write snapshot rows.
+ * @param {string} input.identity the intended identity value.
+ * @param {readonly string[]} input.headerNames the target field headers.
+ * @param {Record<string, unknown>} input.values the values the write intended to place.
+ * @param {number} [input.rowIndex] the original write row coordinate.
+ * @returns {{ status: "ok" } | { status: "identity_shifted" }}
+ */
+export function evaluateInputPostconditionMulti({
+  beforeRows, afterRows, identity, headerNames, values, rowIndex,
+}) {
+  const before = validateInputHeadersMulti(beforeRows?.[0] ?? [], headerNames);
+  const after = validateInputHeadersMulti(afterRows?.[0] ?? [], headerNames);
+  if (before.status !== "ok" || after.status !== "ok") return { status: "identity_shifted" };
+  const beforeById = indexByIdentities(beforeRows, before.idColumn);
+  const afterById = indexByIdentities(afterRows, after.idColumn);
+  if (beforeById === null || afterById === null) return { status: "identity_shifted" };
+  if (!beforeById.has(identity) || !afterById.has(identity)) return { status: "identity_shifted" };
+  for (const headerName of headerNames) {
+    const fieldColumn = after.fieldColumns[headerName];
+    const expected = String(values[headerName]);
+    const actual = normalizeCell(afterRows.find((row, index) =>
+      index > 0 && row[after.idColumn] === identity)?.[fieldColumn]);
+    if (actual !== expected) return { status: "identity_shifted" };
+  }
+  if (Number.isSafeInteger(rowIndex) && rowIndex >= 0 && rowIndex < afterRows.length) {
+    const writeRow = afterRows[rowIndex];
+    const writeId = writeRow?.[after.idColumn];
+    if (!isBlankCell(writeId) && writeId !== identity) {
+      for (const headerName of headerNames) {
+        const fieldColumn = after.fieldColumns[headerName];
+        if (normalizeCell(writeRow?.[fieldColumn]) === String(values[headerName])) {
+          return { status: "identity_shifted" };
+        }
+      }
+    }
+  }
+  return { status: "ok" };
+}
+
+/**
+ * Pure postcondition check for a direct human ROW INSERT: requires the
+ * intended identity to exist exactly once in the post-write snapshot and
+ * that identity's row to display every requested field value. A duplicated
+ * identity, an absent identity, a blank or non-string identity in a
+ * non-empty row, or any field that did not land on the intended identity
+ * returns `identity_shifted`. Only cell-shape comparisons run here; no id,
+ * value, or payload is ever returned.
+ *
+ * @param {object} input the postcondition inputs.
+ * @param {readonly unknown[][]} input.afterRows post-write snapshot rows.
+ * @param {string} input.identity the intended identity value.
+ * @param {readonly string[]} input.headerNames the inserted field headers.
+ * @param {Record<string, unknown>} input.values the field values inserted.
+ * @returns {{ status: "ok" } | { status: "identity_shifted" }}
+ */
+export function evaluateInsertPostcondition({ afterRows, identity, headerNames, values }) {
+  const after = validateInputHeadersMulti(afterRows?.[0] ?? [], headerNames);
+  if (after.status !== "ok") return { status: "identity_shifted" };
+  const afterById = indexByIdentities(afterRows, after.idColumn);
+  if (afterById === null) return { status: "identity_shifted" };
+  if (!afterById.has(identity)) return { status: "identity_shifted" };
+  for (const headerName of headerNames) {
+    const fieldColumn = after.fieldColumns[headerName];
+    const expected = String(values[headerName]);
+    const actual = normalizeCell(afterRows.find((row, index) =>
+      index > 0 && row[after.idColumn] === identity)?.[fieldColumn]);
+    if (actual !== expected) return { status: "identity_shifted" };
+  }
+  return { status: "ok" };
+}
+
+/**
+ * Pure postcondition check for a direct human ROW DELETE: requires the
+ * intended identity to exist exactly once in the pre-write snapshot and to
+ * be ABSENT from the post-write snapshot. A duplicated identity, an absent
+ * pre-write identity, a still-present post-write identity (a row shift
+ * placed the delete on the wrong row), or a blank or non-string identity
+ * in a non-empty row returns `identity_shifted`. Only cell-shape
+ * comparisons run here; no id, value, or payload is ever returned.
+ *
+ * @param {object} input the postcondition inputs.
+ * @param {readonly unknown[][]} input.beforeRows pre-write snapshot rows.
+ * @param {readonly unknown[][]} input.afterRows post-write snapshot rows.
+ * @param {string} input.identity the intended identity value.
+ * @param {number} input.idColumn the id column index.
+ * @returns {{ status: "ok" } | { status: "identity_shifted" }}
+ */
+export function evaluateDeletePostcondition({ beforeRows, afterRows, identity, idColumn }) {
+  const before = validateInputHeadersMulti(beforeRows?.[0] ?? [], []);
+  const after = validateInputHeadersMulti(afterRows?.[0] ?? [], []);
+  if (before.status !== "ok" || after.status !== "ok") return { status: "identity_shifted" };
+  const beforeById = indexByIdentities(beforeRows, before.idColumn);
+  const afterById = indexByIdentities(afterRows, after.idColumn);
+  if (beforeById === null || afterById === null) return { status: "identity_shifted" };
+  if (!beforeById.has(identity)) return { status: "identity_shifted" };
+  if (afterById.has(identity)) return { status: "identity_shifted" };
   return { status: "ok" };
 }
 
