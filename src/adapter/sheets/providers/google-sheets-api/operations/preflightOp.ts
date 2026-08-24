@@ -16,6 +16,9 @@ import {
   SYNC_PROJECTIONS,
 } from "../../../../../application/sync/sheetsContract/constants.js";
 import { SYNC_SHEETS_ERROR_CODES } from "../../../../../application/sync/sheetsContract/errors.js";
+import type {
+  SyncMissingTabOperation,
+} from "../../../../../application/sync/sheetsContract/errors.js";
 import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
 import type { Presence } from "../../../../../shared/state/index.js";
 import { invalidProviderRequest } from "../errors.js";
@@ -67,6 +70,11 @@ export async function readPreflight(
  * Reads the target and receipt tabs for MANY routes through the read lane
  * with ONE enumeration and ONE ranged read covering all needed tabs, then
  * builds a PreflightContext per route keyed by its sheetName.
+ *
+ * `operation` classifies an invalid provider state (such as a missing tab)
+ * detected during the read; it defaults to the preflight step. The
+ * postcondition-recovery path passes its own operation so a missing tab there
+ * is reported as `postcondition_read` rather than `preflight`.
  */
 export async function readPreflightForRoutes(
   deps: GoogleSheetsApiProviderDeps,
@@ -79,6 +87,7 @@ export async function readPreflightForRoutes(
       readonly checkboxHeaders: readonly string[];
     };
   }>,
+  operation?: SyncMissingTabOperation,
 ): Promise<ReadonlyMap<string, PreflightContext>> {
   const sheets = await runRead(deps, () =>
     enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs));
@@ -96,6 +105,7 @@ export async function readPreflightForRoutes(
       })),
       sheets,
       deps.readTimeoutMs,
+      operation,
     ));
 }
 

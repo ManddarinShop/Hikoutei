@@ -85,7 +85,8 @@ export type StubTransportFault =
   | { readonly kind: "timeout" }
   | { readonly kind: "network" }
   | { readonly kind: "malformedBatchUpdateReply" }
-  | { readonly kind: "malformedGetResponse" };
+  | { readonly kind: "malformedGetResponse" }
+  | { readonly kind: "malformedGetField" };
 
 /** One tab of the in-memory spreadsheet. */
 export class StubSheet {
@@ -275,6 +276,15 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
       if (fault.kind === "malformedGetResponse") {
         return { unexpected: true };
       }
+      if (fault.kind === "malformedGetField") {
+        // A structurally valid `spreadsheets.get` body whose field-level shape
+        // is malformed: the top-level shape guard passes but a field-level
+        // parser guard (here, a non-string tab title) must fail closed.
+        return {
+          spreadsheetId: this.spreadsheet.spreadsheetId,
+          sheets: [{ properties: { sheetId: 1, title: 42 } }],
+        };
+      }
       throw transportFaultError(fault);
     }
     // The real API returns only the sheets intersecting the requested ranges
@@ -333,8 +343,8 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
     if (this.fault !== undefined) {
       const fault = this.fault;
       this.fault = undefined;
-      if (fault.kind === "malformedGetResponse") {
-        throw new Error("stub fault misuse: malformedGetResponse only applies to getSpreadsheet");
+      if (fault.kind === "malformedGetResponse" || fault.kind === "malformedGetField") {
+        throw new Error("stub fault misuse: malformed get faults only apply to getSpreadsheet");
       }
       throw transportFaultError(fault);
     }

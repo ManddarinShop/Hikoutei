@@ -19,6 +19,10 @@ import type {
   SyncProjectionEffect,
 } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import { SYNC_POSTCONDITION_MODES } from "../../../../../application/sync/sheetsContract/constants.js";
+import {
+  SYNC_INVALID_PROVIDER_OPERATIONS,
+  SYNC_INVALID_PROVIDER_REASONS,
+} from "../../../../../application/sync/sheetsContract/errors.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
@@ -379,12 +383,19 @@ export async function readEffectPostconditions(
       definition: route.definition,
       routeOptions: route.routeOptions,
     })),
+    SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
   );
   const results: SyncEffectPostconditionResult[] = [];
   for (const route of routes) {
     const context = contexts.get(route.subRequest.sheetName);
     if (context === undefined) {
-      invalidProviderState(`preflight context is missing for ${route.subRequest.sheetName}`);
+      invalidProviderState(
+        `preflight context is missing for ${route.subRequest.sheetName}`,
+        {
+          operation: SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
+          reason: SYNC_INVALID_PROVIDER_REASONS.MISSING_TAB,
+        },
+      );
     }
     for (const effect of route.group) {
       results.push({

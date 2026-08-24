@@ -249,3 +249,35 @@ export const HIKOUTEI_LOG_STABLE_CLASSES = Object.freeze([
   "TableNotFoundException",
   "UniqueConstraintViolationException",
 ] as const);
+
+/**
+ * Explicit allowlist of provider-operation tags the internal log may carry in
+ * its `providerOperation` field.
+ *
+ * Mirrors `SYNC_INVALID_PROVIDER_OPERATIONS` in
+ * `src/application/sync/sheetsContract/errors.ts`. Only proven invalid-
+ * provider-state operations are allowed; anything else (including an ID-like
+ * or secret value) is redacted by the internal log writer.
+ */
+export const HIKOUTEI_LOG_PROVIDER_OPERATIONS = Object.freeze([
+  "preflight",
+  "batch_update_reply",
+  "get_reply",
+  "postcondition_read",
+  "unclassified",
+] as const);
+
+/**
+ * Explicit allowlist of provider-reason codes the internal log may carry in
+ * its `providerReason` field.
+ *
+ * Mirrors `SYNC_INVALID_PROVIDER_REASONS` in
+ * `src/application/sync/sheetsContract/errors.ts`. Every value is a stable
+ * lowercase identifier with no ID/URL/payload content.
+ */
+export const HIKOUTEI_LOG_PROVIDER_REASONS = Object.freeze([
+  "malformed_reply",
+  "identity_already_exists",
+  "missing_tab",
+  "unclassified",
+] as const);

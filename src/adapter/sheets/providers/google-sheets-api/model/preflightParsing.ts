@@ -9,7 +9,7 @@
  * are shared by the header and receipt readers.
  */
 
-import { invalidProviderState } from "../errors.js";
+import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import {
   parseProviderResponseShape,
   sheetEntryShapeSchema,
@@ -81,27 +81,27 @@ function parseSheetEntry(value: unknown, label: string): ParsedSheet {
   );
   const properties = sheet.properties;
   if (properties === undefined || properties === null || typeof properties !== "object" || Array.isArray(properties)) {
-    invalidProviderState(`${label}.properties must be an object`);
+    invalidProviderState(`${label}.properties must be an object`, GET_REPLY_MALFORMED);
   }
   const propertyRecord = properties as Record<string, unknown>;
   const sheetId = propertyRecord.sheetId;
   const title = propertyRecord.title;
   if (typeof sheetId !== "number" || !Number.isSafeInteger(sheetId)) {
-    invalidProviderState(`${label}.properties.sheetId is invalid`);
+    invalidProviderState(`${label}.properties.sheetId is invalid`, GET_REPLY_MALFORMED);
   }
   if (typeof title !== "string" || title.length === 0) {
-    invalidProviderState(`${label}.properties.title is invalid`);
+    invalidProviderState(`${label}.properties.title is invalid`, GET_REPLY_MALFORMED);
   }
   const hidden = propertyRecord.hidden;
   if (hidden !== undefined && typeof hidden !== "boolean") {
-    invalidProviderState(`${label}.properties.hidden is invalid`);
+    invalidProviderState(`${label}.properties.hidden is invalid`, GET_REPLY_MALFORMED);
   }
   const gridProperties = propertyRecord.gridProperties;
   const grid = gridProperties === undefined
     ? undefined
     : (() => {
       if (gridProperties === null || typeof gridProperties !== "object" || Array.isArray(gridProperties)) {
-        invalidProviderState(`${label}.properties.gridProperties is invalid`);
+        invalidProviderState(`${label}.properties.gridProperties is invalid`, GET_REPLY_MALFORMED);
       }
       const gridRecord = gridProperties as Record<string, unknown>;
       return {
@@ -124,7 +124,7 @@ function parseSheetEntry(value: unknown, label: string): ParsedSheet {
 
 function optionalPositiveInteger(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-    invalidProviderState(`${label} is invalid`);
+    invalidProviderState(`${label} is invalid`, GET_REPLY_MALFORMED);
   }
   return value;
 }
@@ -141,11 +141,11 @@ function parseGridDataArray(
     `${label} must be an array`,
   );
   if (grids.has(sheetId)) {
-    invalidProviderState(`${label} contains a duplicate grid for one sheet`);
+    invalidProviderState(`${label} contains a duplicate grid for one sheet`, GET_REPLY_MALFORMED);
   }
   entries.forEach((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      invalidProviderState(`${label}[${index}] must be an object`);
+      invalidProviderState(`${label}[${index}] must be an object`, GET_REPLY_MALFORMED);
     }
     const data = entry as Record<string, unknown>;
     const startRow = optionalNonNegativeInteger(data.startRow, `${label}[${index}].startRow`);
@@ -171,7 +171,7 @@ function parseMergedCells(
   );
   return entries.map((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      invalidProviderState(`${label}[${index}] must be an object`);
+      invalidProviderState(`${label}[${index}] must be an object`, GET_REPLY_MALFORMED);
     }
     const range = entry as Record<string, unknown>;
     const startRowIndex = optionalNonNegativeInteger(
@@ -191,12 +191,12 @@ function parseMergedCells(
       `${label}[${index}].endColumnIndex`,
     );
     if (endRowIndex <= startRowIndex || endColumnIndex <= startColumnIndex) {
-      invalidProviderState(`${label}[${index}] is not a valid cell range`);
+      invalidProviderState(`${label}[${index}] is not a valid cell range`, GET_REPLY_MALFORMED);
     }
     const sheetIdValue = range.sheetId;
     if (sheetIdValue !== undefined &&
         (typeof sheetIdValue !== "number" || !Number.isSafeInteger(sheetIdValue))) {
-      invalidProviderState(`${label}[${index}].sheetId is invalid`);
+      invalidProviderState(`${label}[${index}].sheetId is invalid`, GET_REPLY_MALFORMED);
     }
     return {
       ...(sheetIdValue === undefined ? {} : { sheetId: sheetIdValue }),
@@ -217,21 +217,29 @@ function parseRowData(value: unknown, label: string): readonly ParsedRowData[] {
   );
   return entries.map((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      invalidProviderState(`${label}[${index}] must be an object`);
+      invalidProviderState(`${label}[${index}] must be an object`, GET_REPLY_MALFORMED);
     }
     const row = entry as Record<string, unknown>;
     if (row.values === undefined) return { values: [] };
     if (!Array.isArray(row.values)) {
-      invalidProviderState(`${label}[${index}].values must be an array`);
+      invalidProviderState(`${label}[${index}].values must be an array`, GET_REPLY_MALFORMED);
     }
-    return { values: row.values };
+    // Every present cell entry must be a real CellData record (`{}` is a valid
+    // blank CellData). A primitive or null entry is a malformed wrapper and
+    // would otherwise be silently read as blank or drop its userEnteredValue.
+    const values = (row.values as unknown[]).map((cell, cellIndex) =>
+      requireApiContainer(
+        cell,
+        `${label}[${index}].values[${cellIndex}]`,
+      ) ?? {});
+    return { values };
   });
 }
 
 function optionalNonNegativeInteger(value: unknown, label: string): number {
   if (value === undefined) return 0;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    invalidProviderState(`${label} is invalid`);
+    invalidProviderState(`${label} is invalid`, GET_REPLY_MALFORMED);
   }
   return value;
 }
@@ -240,9 +248,9 @@ function optionalNonNegativeInteger(value: unknown, label: string): number {
 export function apiStringValue(value: unknown): string | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
-  const entered = record.userEnteredValue;
-  if (entered === null || typeof entered !== "object") return undefined;
-  const raw = (entered as Record<string, unknown>).stringValue;
+  const entered = requireApiContainer(record.userEnteredValue, "cell userEnteredValue must be an object");
+  if (entered === undefined) return undefined;
+  const raw = entered.stringValue;
   return typeof raw === "string" ? raw : undefined;
 }
 
@@ -250,8 +258,26 @@ export function apiStringValue(value: unknown): string | undefined {
 export function apiNumberValue(value: unknown): number | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
-  const entered = record.userEnteredValue;
-  if (entered === null || typeof entered !== "object") return undefined;
-  const raw = (entered as Record<string, unknown>).numberValue;
+  const entered = requireApiContainer(record.userEnteredValue, "cell userEnteredValue must be an object");
+  if (entered === undefined) return undefined;
+  const raw = entered.numberValue;
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+}
+
+/**
+ * Returns a present API container as a record, failing closed on a present
+ * primitive/null/array wrapper. `undefined` (an omitted field) stays omitted;
+ * `{}` is a valid blank record. Every present cell-value and cell-format
+ * container is validated through this guard at the raw GET boundary so a
+ * malformed wrapper can never be silently dropped or misread.
+ */
+export function requireApiContainer(
+  value: unknown,
+  label: string,
+): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    invalidProviderState(`${label} must be an object`, GET_REPLY_MALFORMED);
+  }
+  return value as Record<string, unknown>;
 }

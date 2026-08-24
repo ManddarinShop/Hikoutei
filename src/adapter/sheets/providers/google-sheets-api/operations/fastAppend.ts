@@ -24,6 +24,8 @@ import {
   type SyncProjection,
 } from "../../../../../application/sync/sheetsContract/syncSheets.js";
 import {
+  SYNC_INVALID_PROVIDER_OPERATIONS,
+  SYNC_INVALID_PROVIDER_REASONS,
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "../../../../../application/sync/sheetsContract/errors.js";
@@ -546,13 +548,33 @@ function assertAppendIdentityAvailability(
     }
     existing.set(row.identity.value, String(row.rowNumber));
   });
+  // Pending identities seen so far in this request, used to reject a local
+  // duplicate (two rows with the same identity in one batch) separately from a
+  // real remote collision in the sheet.
+  const pendingIdentities = new Set<string>();
   for (const row of pending) {
     const identity = appendIdentity(row, identityField);
     const location = existing.get(identity);
     if (location !== undefined) {
-      invalidProviderState(`sync identity already exists: ${identity} at ${location}`);
+      // A pending append row whose identity already exists remotely without a
+      // matching receipt is stale-state protection: the effect was most likely
+      // applied by a pass whose response was lost, so it is classified as an
+      // `identity_already_exists` preflight state (delivery-uncertain) rather
+      // than a malformed reply.
+      invalidProviderState(
+        `sync identity already exists: ${identity} at ${location}`,
+        {
+          operation: SYNC_INVALID_PROVIDER_OPERATIONS.PREFLIGHT,
+          reason: SYNC_INVALID_PROVIDER_REASONS.IDENTITY_ALREADY_EXISTS,
+        },
+      );
     }
-    existing.set(identity, "pending");
+    if (pendingIdentities.has(identity)) {
+      // A duplicate identity within the current request is a local call error,
+      // not a remote collision; it keeps the safe unclassified default.
+      invalidProviderState(`sync identity is duplicated in the pending batch: ${identity}`);
+    }
+    pendingIdentities.add(identity);
   }
 }
 

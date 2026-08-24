@@ -14,9 +14,15 @@ import { GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/p
 import { EVALUATION_ERROR_CODES } from "../src/domain/errors/evaluation.js";
 import { TYPED_SHEETS_ORM_ERROR_CODES } from "../src/application/orm/errors.js";
 import { SYNC_SERVICE_ERROR_CODES } from "../src/application/sync/service/errors.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
+import {
+  SYNC_INVALID_PROVIDER_OPERATIONS,
+  SYNC_INVALID_PROVIDER_REASONS,
+  SYNC_SHEETS_ERROR_CODES,
+} from "../src/application/sync/sheetsContract/errors.js";
 import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
 import {
+  HIKOUTEI_LOG_PROVIDER_OPERATIONS,
+  HIKOUTEI_LOG_PROVIDER_REASONS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
 } from "../src/shared/observability/logEvents.js";
@@ -67,6 +73,22 @@ describe("internal log stable-code registry", () => {
       "GoogleSheetsApiTransportError",
     ]) {
       expect(HIKOUTEI_LOG_STABLE_CLASSES).toContain(className);
+    }
+  });
+
+  it("allowlists exactly the provider operation/reason classification constants", () => {
+    // Exact contract: the runtime allowlist must equal the classification
+    // constants in both directions, so adding a constant without allowlisting
+    // it (or allowlisting a value with no constant) fails this test. The test
+    // lives in `test/` so it may import both sides without creating a source
+    // dependency cycle (`shared` cannot import `application`).
+    expect(HIKOUTEI_LOG_PROVIDER_OPERATIONS).toEqual(Object.values(SYNC_INVALID_PROVIDER_OPERATIONS));
+    expect(HIKOUTEI_LOG_PROVIDER_REASONS).toEqual(Object.values(SYNC_INVALID_PROVIDER_REASONS));
+    for (const operation of Object.values(SYNC_INVALID_PROVIDER_OPERATIONS)) {
+      expect(operation).toMatch(/^[a-z0-9_]+$/);
+    }
+    for (const reason of Object.values(SYNC_INVALID_PROVIDER_REASONS)) {
+      expect(reason).toMatch(/^[a-z0-9_]+$/);
     }
   });
 });
