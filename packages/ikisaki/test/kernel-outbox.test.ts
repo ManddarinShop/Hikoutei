@@ -41,7 +41,7 @@ import {
   type PendingEffect,
   type SqlExecutor,
 } from "../src/index.js";
-import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS, WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/index.js";
+import { APPLICABILITY_KINDS, EFFECT_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS, WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/index.js";
 import {
   claimTestFence,
   createKernelStore,
@@ -607,6 +607,152 @@ describe("consistency-queue kernel", () => {
         confirmed_field_hash: "field-hash-1",
         confirmed_visible_revision: 4,
       });
+    });
+
+    it("retains the durable revision for a lower-revision delete confirmation and still rejects the same lower non-delete", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+
+      // First a delivered create confirms durable revision 3.
+      const first = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [first]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: first.effectId,
+        claimToken: "claim-1",
+        leaseDurationMs: 30_000,
+      });
+      const baseConfirmation: EffectProjectionConfirmation = {
+        physicalSheetId: "physical-1",
+        projection: "system_state",
+        rowBindingId: "binding-1",
+        visibleRevision: 3,
+        visibleHash: "visible-hash-3",
+        entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+        fieldHashes: { name: "field-hash-3" },
+      };
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: first.effectId,
+          claimToken: "claim-1",
+          status: "applied",
+          projectionConfirmation: baseConfirmation,
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      // A same-ID recreate restarts the provider revision at 1 and advances
+      // the durable confirmed revision past 3 to 4 (the create rebase).
+      const second = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [second]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: second.effectId,
+        claimToken: "claim-2",
+        leaseDurationMs: 30_000,
+      });
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: second.effectId,
+          claimToken: "claim-2",
+          status: "applied",
+          projectionConfirmation: {
+            ...baseConfirmation,
+            visibleRevision: 1,
+            visibleHash: "visible-hash-1",
+            fieldHashes: { name: "field-hash-1" },
+            allowCreateRebaseline: true,
+          },
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      // A same-ID delete read back the pre-delete revision 1, below the durable
+      // 4. It must apply by retaining the durable revision (not rejecting and
+      // not incrementing), and its fields must apply at the same retained
+      // revision.
+      const third = newEffect({
+        effectKind: EFFECT_KINDS.USER_INPUT_DELETE,
+        rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" },
+      });
+      await appendPendingEffectsWithAdapter(adapter, fence, [third]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: third.effectId,
+        claimToken: "claim-3",
+        leaseDurationMs: 30_000,
+      });
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: third.effectId,
+          claimToken: "claim-3",
+          status: "applied",
+          projectionConfirmation: {
+            ...baseConfirmation,
+            visibleRevision: 1,
+            visibleHash: "visible-hash-delete",
+            fieldHashes: { name: "field-hash-delete" },
+          },
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      const visible = await adapter.read(({ sql }) =>
+        sql.get(
+          `SELECT confirmed_snapshot_hash, confirmed_visible_revision
+           FROM sheet_visible_state
+           WHERE physical_sheet_id = 'physical-1' AND projection = 'system_state' AND row_binding_id = 'binding-1'`,
+        ));
+      expect(visible).toMatchObject({
+        confirmed_snapshot_hash: "visible-hash-delete",
+        confirmed_visible_revision: 4,
+      });
+      const field = await adapter.read(({ sql }) =>
+        sql.get(
+          `SELECT confirmed_field_hash, confirmed_visible_revision, candidate_epoch
+           FROM sheet_visible_field_state
+           WHERE physical_sheet_id = 'physical-1' AND projection = 'system_state'
+             AND row_binding_id = 'binding-1' AND field_name = 'name'`,
+        ));
+      expect(field).toMatchObject({
+        confirmed_field_hash: "field-hash-delete",
+        confirmed_visible_revision: 4,
+        candidate_epoch: 0,
+      });
+
+      // An identical lower-revision confirmation that is NOT a delete must still
+      // fail closed as a regression, leaving the effect in processing.
+      const fourth = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [fourth]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: fourth.effectId,
+        claimToken: "claim-4",
+        leaseDurationMs: 30_000,
+      });
+      await expect(
+        withSql(adapter, (sql) =>
+          applyEffectResultWithSql(sql, {
+            ...fence,
+            effectId: fourth.effectId,
+            claimToken: "claim-4",
+            status: "applied",
+            projectionConfirmation: {
+              ...baseConfirmation,
+              visibleRevision: 1,
+              visibleHash: "visible-hash-1",
+              fieldHashes: { name: "field-hash-1" },
+            },
+            lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+            lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+          })),
+      ).rejects.toMatchObject({
+        code: STORAGE_ERROR_CODES.PROJECTION_CONFIRMATION_REGRESSION,
+      });
+      expect((await readOutboxRow(adapter, fourth.effectId))?.status).toBe("processing");
     });
 
     it("rejects confirmation evidence that does not belong to the claimed effect", async () => {
