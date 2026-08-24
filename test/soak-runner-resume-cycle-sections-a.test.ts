@@ -449,6 +449,99 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
   );
 
   it(
+    "accepts a failed live probe artifact carrying a statusClass past the proof",
+    { timeout: 90_000 },
+    async () => {
+      // HIGH: a failed direct-Sheets probe now persists an OPTIONAL
+      // statusClass, so the artifact is { status, reason, table,
+      // statusClass }. The resume proof must accept that four-field shape
+      // (and the legacy three-field form) as valid history — a valid run
+      // whose probe hit a direct-Sheets error must survive --resume, not
+      // be rejected for carrying the persisted status class. We fabricate
+      // the live run with a failed probe that carries a known status class
+      // and re-run resume: the proof must pass (only the sync startup
+      // credentials boundary may fail).
+      const runDir = await liveFabricatedRunDir("high8-failed-probe-statusclass");
+      const { writeFile: write } = await import("node:fs/promises");
+      const statePath = path.join(runDir, "state.json");
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      const cyclesPath = path.join(runDir, "cycles.jsonl");
+      const lines = (await readFile(cyclesPath, "utf8")).trim().split("\n");
+      let failed = 0;
+      const rewritten = lines.map((line) => {
+        const record = JSON.parse(line) as Record<string, unknown>;
+        const probe = record.probe as Record<string, unknown> | undefined;
+        if (probe !== undefined && probe.status === "ok") {
+          // Reproduce the runner's failed direct-probe artifact: the
+          // reason is always probe-error and the direct error's
+          // allowlisted status class is persisted alongside
+          // status/reason/table.
+          record.probe = {
+            status: "failed",
+            reason: "probe-error",
+            statusClass: "http_429",
+            table: probe.table,
+          };
+          failed += 1;
+        }
+        return JSON.stringify(record);
+      });
+      await write(cyclesPath, `${rewritten.join("\n")}\n`, "utf8");
+      state.cumulative.probes = {
+        total: state.cumulative.probes.total,
+        ok: state.cumulative.probes.total - failed,
+        skipped: 0,
+        failed,
+      };
+      await write(statePath, JSON.stringify(state), "utf8");
+
+      process.env.HIKOUTEI_SYNC_SPREADSHEET_URL =
+        "https://docs.google.com/spreadsheets/d/soaklive05/edit";
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = "fake-credentials.json";
+      try {
+        // The proof passed: the failure is the sync startup's credentials
+        // boundary, never a failed-probe schema/field rejection.
+        await expect(
+          runLocalMultiTableSoak(shortOptions({ outputDir: runDir, resume: true })),
+        ).rejects.toThrow(/Credentials file not found/);
+      } finally {
+        delete process.env.HIKOUTEI_SYNC_SPREADSHEET_URL;
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      }
+    },
+  );
+
+  it(
+    "rejects a failed live probe whose statusClass is raw or unknown",
+    { timeout: 90_000 },
+    async () => {
+      // HIGH: a failed probe may carry a statusClass ONLY through the
+      // persisted status-class validator; a raw/arbitrary status value
+      // never reaches an artifact unredacted and must be rejected on
+      // resume (rejected at the exact-shape pass, before any field-count
+      // or mode/cadence check).
+      const runDir = await liveFabricatedRunDir("high8-failed-probe-raw-statusclass");
+      await rewriteCycleRecord(runDir, 10, (record) => {
+        record.probe = {
+          status: "failed",
+          reason: "probe-error",
+          statusClass: "raw_provider_429",
+          table: "soak_orders",
+        };
+      });
+      process.env.HIKOUTEI_SYNC_SPREADSHEET_URL =
+        "https://docs.google.com/spreadsheets/d/soaklive06/edit";
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = "fake-credentials.json";
+      try {
+        await rejectResume(runDir, /probe\.statusClass is not a known status class/);
+      } finally {
+        delete process.env.HIKOUTEI_SYNC_SPREADSHEET_URL;
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      }
+    },
+  );
+
+  it(
     "rejects a reopen section that omits an active table",
     { timeout: 90_000 },
     async () => {

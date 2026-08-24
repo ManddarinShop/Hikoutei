@@ -17,6 +17,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertWithinRequestDeadline,
+  classifyDirectError,
   combinedDeadlineAtMs,
   createDirectSheetsClient,
   DEFAULT_REQUEST_START_INTERVAL_MS,
@@ -805,5 +806,246 @@ describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
     await pending;
     // Only the first batch ever started.
     expect(fakeRequests).toHaveLength(1);
+  });
+});
+
+describe("soak sheets direct: runtime failure classifier (fault injection)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    fakeRequests.length = 0;
+    fakeRanges.length = 0;
+    missingTabs.clear();
+    extraTabs.clear();
+    // Drain any unreleased gates so a failed test cannot leak pending
+    // promises into the next test.
+    while (gates.length > 0) {
+      gates.shift()!(undefined);
+    }
+  });
+
+  it("classifies numeric HTTP from response.status, top-level status, and numeric code", () => {
+    // response.status (gaxios GaxiosError shape).
+    expect(classifyDirectError({ response: { status: 403 } })).toEqual({
+      statusClass: "http_403",
+      retryable: false,
+    });
+    // Top-level status.
+    expect(classifyDirectError({ status: 500 })).toEqual({
+      statusClass: "http_500",
+      retryable: true,
+    });
+    // Numeric code.
+    expect(classifyDirectError({ code: 429 })).toEqual({
+      statusClass: "http_429",
+      retryable: true,
+    });
+    // 408 and 5xx are retryable; permanent 4xx is not.
+    expect(classifyDirectError({ response: { status: 408 } })).toEqual({
+      statusClass: "http_408",
+      retryable: true,
+    });
+    expect(classifyDirectError({ response: { status: 404 } })).toEqual({
+      statusClass: "http_404",
+      retryable: false,
+    });
+  });
+
+  it("classifies timeout and deadline shapes as retryable timeout", () => {
+    expect(classifyDirectError({ code: "ETIMEDOUT" })).toEqual({
+      statusClass: "timeout",
+      retryable: true,
+    });
+    expect(classifyDirectError({ code: "ESOCKETTIMEDOUT" })).toEqual({
+      statusClass: "timeout",
+      retryable: true,
+    });
+    expect(classifyDirectError({ code: "DEADLINE_EXCEEDED" })).toEqual({
+      statusClass: "timeout",
+      retryable: true,
+    });
+    // gaxios TimeoutError carries no code; the class name alone classifies.
+    expect(classifyDirectError({ name: "TimeoutError" })).toEqual({
+      statusClass: "timeout",
+      retryable: true,
+    });
+    // REAL gaxios timeout shape: the wrapped DOMException's `name` becomes
+    // the GaxiosError's top-level `code` (see gaxios common.js GaxiosError).
+    expect(classifyDirectError({
+      name: "Error",
+      code: "TimeoutError",
+      cause: { name: "TimeoutError" },
+    })).toEqual({ statusClass: "timeout", retryable: true });
+  });
+
+  it("classifies the REAL gaxios timeout shape but never an arbitrary AbortError", () => {
+    // A real gaxios timeout surfaces as a generic `name:'Error'` with NO
+    // top-level code, an `AbortError` cause, and a `TimeoutError` signal
+    // reason. Only that exact combination is a timeout.
+    expect(classifyDirectError({
+      name: "Error",
+      cause: { name: "AbortError" },
+      config: { signal: { reason: { name: "TimeoutError" } } },
+    })).toEqual({ statusClass: "timeout", retryable: true });
+    // An arbitrary AbortError cause with NO matching TimeoutError signal
+    // reason is NOT a timeout — it falls through to unknown (never
+    // retryable).
+    expect(classifyDirectError({ name: "Error", cause: { name: "AbortError" } }))
+      .toEqual({ statusClass: "unknown", retryable: false });
+    // A TimeoutError signal reason without an AbortError cause is also not
+    // the exact timeout shape.
+    expect(classifyDirectError({
+      name: "Error",
+      config: { signal: { reason: { name: "TimeoutError" } } },
+    })).toEqual({ statusClass: "unknown", retryable: false });
+  });
+
+  it("classifies known network codes as retryable network", () => {
+    for (const code of ["ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EPIPE"]) {
+      expect(classifyDirectError({ code })).toEqual({
+        statusClass: "network",
+        retryable: true,
+      });
+    }
+  });
+
+  it("classifies a gaxios-wrapped native-fetch network code from a bounded cause chain", () => {
+    // A native-fetch network failure wrapped by gaxios can surface its
+    // allowlisted code at `error.cause.cause.code` (top-level `code` is
+    // absent). The bounded cause-chain walk must find it.
+    expect(classifyDirectError({
+      name: "Error",
+      cause: { cause: { code: "ECONNRESET" } },
+    })).toEqual({ statusClass: "network", retryable: true });
+    // A timeout code at the same nested depth is also classified.
+    expect(classifyDirectError({
+      name: "Error",
+      cause: { cause: { code: "ETIMEDOUT" } },
+    })).toEqual({ statusClass: "timeout", retryable: true });
+    // HTTP status precedence is preserved even when a nested cause carries
+    // a network code.
+    expect(classifyDirectError({
+      response: { status: 404 },
+      cause: { cause: { code: "ECONNRESET" } },
+    })).toEqual({ statusClass: "http_404", retryable: false });
+  });
+
+  it("aliases the legacy network_or_unknown SDK code to canonical network", () => {
+    // The legacy gaxios `network_or_unknown` code is retryable network,
+    // never a distinct emitted class.
+    expect(classifyDirectError({ code: "network_or_unknown" })).toEqual({
+      statusClass: "network",
+      retryable: true,
+    });
+  });
+
+  it("picks the FIRST integer HTTP status across precedence levels", () => {
+    // A malformed higher-priority candidate must not suppress a later
+    // valid numeric value, and strings are never coerced into statuses.
+    // String response.status + numeric code 429 -> the 429 survives.
+    expect(classifyDirectError({
+      response: { status: "ya29.jwt-token" },
+      code: 429,
+    })).toEqual({ statusClass: "http_429", retryable: true });
+    // Non-integer response.status + top-level status 500 -> the 500 wins.
+    expect(classifyDirectError({
+      response: { status: 403.5 },
+      status: 500,
+    })).toEqual({ statusClass: "http_500", retryable: true });
+    // Out-of-range response.status + numeric code 429 -> the 429 wins.
+    expect(classifyDirectError({
+      response: { status: 999 },
+      code: 429,
+    })).toEqual({ statusClass: "http_429", retryable: true });
+    // A string status is never coerced, even as a later candidate.
+    expect(classifyDirectError({ status: "429" })).toEqual({
+      statusClass: "unknown",
+      retryable: false,
+    });
+  });
+
+  it("falls back to unknown (never retryable) and retains no raw text", () => {
+    // An arbitrary SDK code is unknown, never retained.
+    expect(classifyDirectError({ code: "SOME_RANDOM_PROVIDER_CODE" })).toEqual({
+      statusClass: "unknown",
+      retryable: false,
+    });
+    // An unknown code nested in the cause chain is redacted and never
+    // retried (only allowlisted codes are classified).
+    expect(classifyDirectError({
+      name: "Error",
+      cause: { cause: { code: "SOME_RANDOM_PROVIDER_CODE" } },
+    })).toEqual({ statusClass: "unknown", retryable: false });
+    // A non-numeric status (a payload fragment) is unknown.
+    expect(classifyDirectError({ response: { status: "ya29.jwt-token" } })).toEqual({
+      statusClass: "unknown",
+      retryable: false,
+    });
+    // A message-only error, a primitive, and null are all unknown.
+    expect(classifyDirectError({ message: "secret payload" })).toEqual({
+      statusClass: "unknown",
+      retryable: false,
+    });
+    expect(classifyDirectError(undefined)).toEqual({ statusClass: "unknown", retryable: false });
+    expect(classifyDirectError(null)).toEqual({ statusClass: "unknown", retryable: false });
+    expect(classifyDirectError("boom")).toEqual({ statusClass: "unknown", retryable: false });
+  });
+
+  it("classifies deterministic missing states as non-retryable harness classes", async () => {
+    vi.useFakeTimers();
+    const startMs = 30_000_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    // missing_header: the requested field column is absent.
+    const headerRejection = expect(client.mutateInputCell({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "task-main-c1",
+      headerName: "nonexistent-field",
+      value: "x",
+    })).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "missing_header",
+      retryable: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releasePacingGate();
+    await headerRejection;
+
+    // missing_identity: the identity row is absent.
+    const identityRejection = expect(client.mutateInputCell({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      identity: "no-such-row",
+      headerName: "title",
+      value: "x",
+    })).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "missing_identity",
+      retryable: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releasePacingGate();
+    await identityRejection;
+
+    // missing_tab: the sheet-id lookup cannot find the requested tab.
+    const tabRejection = expect(client.mutateInputCell({
+      spreadsheetId: "s",
+      tabName: "SoakOrder_System",
+      identity: "task-main-c1",
+      headerName: "title",
+      value: "x",
+    })).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "missing_tab",
+      retryable: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releasePacingGate();
+    // Flush the microtask so the sheet-id lookup request starts and its
+    // gate is pushed before the next release.
+    await vi.advanceTimersByTimeAsync(0);
+    releasePacingGate();
+    await tabRejection;
   });
 });

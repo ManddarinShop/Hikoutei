@@ -19,6 +19,7 @@ import {
   replayDeterministicHistory,
 } from "./replay.mjs";
 import {
+  isKnownStatusClass,
   LIVE_PROBE_FAILURE_REASONS,
   readStrictJsonlRecords,
   validateCycleRecordShape,
@@ -288,13 +289,24 @@ export async function validateResumeHistory(artifacts, state, checkpoint) {
           fail(`cycles.jsonl cycle ${cycle} carries an ok probe with fields an ok probe never has (status/table only)`);
         }
       } else if (record.probe.status === "failed") {
-        // A failed live probe is EXACTLY { status, reason, table } with a
-        // reason the runner can actually record after redaction.
+        // A failed live probe is EXACTLY { status, reason, table }, plus an
+        // OPTIONAL statusClass (only a direct-Sheets probe failure persists
+        // one, and only through the persisted status-class validator,
+        // including the exact `unknown` collapse). The legacy three-field
+        // form without statusClass stays valid; any other field set is a
+        // forged/tampered probe.
         if (!LIVE_PROBE_FAILURE_REASONS.includes(record.probe.reason)) {
           fail(`cycles.jsonl cycle ${cycle} probe failure reason is not one a live run can produce`);
         }
-        if (Object.keys(record.probe).length !== 3) {
-          fail(`cycles.jsonl cycle ${cycle} carries a failed probe with fields a failed probe never has (status/reason/table only)`);
+        const probeKeys = Object.keys(record.probe);
+        const baseKeys = probeKeys.filter((key) => key !== "statusClass").sort();
+        if (baseKeys.length !== 3 ||
+            !["reason", "status", "table"].every((key) => baseKeys.includes(key))) {
+          fail(`cycles.jsonl cycle ${cycle} carries a failed probe with fields a failed probe never has (status/reason/table, plus optional statusClass)`);
+        }
+        if (probeKeys.includes("statusClass") &&
+            !isKnownStatusClass(record.probe.statusClass)) {
+          fail(`cycles.jsonl cycle ${cycle} probe.statusClass is not a known status class`);
         }
       } else if (record.probe.status === "skipped" &&
           (hasEditableProbeField(probeTarget) ||

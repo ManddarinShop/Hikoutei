@@ -210,6 +210,42 @@ describe("soak artifacts: cycle records", () => {
     expect(JSON.stringify(record)).not.toContain(secret);
     expect(JSON.stringify(record)).not.toContain("/Users/secret");
   });
+
+  it("preserves an allowlisted abort statusClass and collapses arbitrary text", () => {
+    const record = cycleRecord(11, {
+      durationMs: 1,
+      tablesTouched: [],
+      operations: { total: 1, ok: 0, expectedErrors: 0, failures: 1, retries: 0 },
+      abort: {
+        reason: "cycle-error",
+        errorClass: "DirectSheetsError",
+        statusClass: "http_429",
+      },
+    });
+    expect(record.abort).toEqual({
+      reason: "cycle-error",
+      errorClass: "DirectSheetsError",
+      statusClass: "http_429",
+    });
+    // Arbitrary status text collapses to the fixed unknown category.
+    const secret = "ya29.jwt-token";
+    const redacted = cycleRecord(12, {
+      durationMs: 1,
+      tablesTouched: [],
+      operations: { total: 1, ok: 0, expectedErrors: 0, failures: 1, retries: 0 },
+      abort: {
+        reason: "cycle-error",
+        errorClass: "DirectSheetsError",
+        statusClass: secret,
+      },
+    });
+    expect(redacted.abort).toEqual({
+      reason: "cycle-error",
+      errorClass: "DirectSheetsError",
+      statusClass: "unknown",
+    });
+    expect(JSON.stringify(redacted)).not.toContain(secret);
+  });
 });
 
 describe("soak artifacts: resources and markdown summary", () => {

@@ -99,9 +99,18 @@ export const KNOWN_STABLE_CLASSES = Object.freeze([
  */
 const STATUS_CLASS_PATTERN = /^http_[1-5]\d\d$/;
 const KNOWN_STATUS_CLASSES = Object.freeze([
+  // Legacy SDK artifact vocabulary, kept accepted ONLY for resume
+  // compatibility. The classifier now aliases a `network_or_unknown` SDK
+  // input to the canonical `network` class, so new artifacts record
+  // `network`, never `network_or_unknown`.
   "network_or_unknown",
   "harness_error",
   "deadline_expired",
+  "timeout",
+  "network",
+  "missing_tab",
+  "missing_header",
+  "missing_identity",
 ]);
 
 /**
@@ -280,6 +289,26 @@ export function sanitizeStatusClass(candidate) {
   if (typeof candidate !== "string" || candidate.length === 0) return "unknown";
   if (STATUS_CLASS_PATTERN.test(candidate)) return candidate;
   return KNOWN_STATUS_CLASSES.includes(candidate) ? candidate : "unknown";
+}
+
+/**
+ * True when a candidate is a status class a recorded artifact may carry:
+ * a named class, a normalized `http_<NNN>`, the legacy `network_or_unknown`
+ * artifact vocabulary, or the fixed redaction category `unknown` (which
+ * {@link sanitizeStatusClass} emits for any unparseable status). This
+ * mirrors {@link sanitizeStatusClass} so a written artifact (including one
+ * whose status collapsed to `unknown`) is always accepted back on resume.
+ *
+ * @param {unknown} candidate
+ * @returns {boolean}
+ */
+export function isKnownStatusClass(candidate) {
+  if (typeof candidate !== "string" || candidate.length === 0) return false;
+  // The fixed redaction category (an unparseable status collapse) is a
+  // value the sanitizer itself produces, so it must validate on resume.
+  if (candidate === "unknown") return true;
+  if (STATUS_CLASS_PATTERN.test(candidate)) return true;
+  return KNOWN_STATUS_CLASSES.includes(candidate);
 }
 
 /**

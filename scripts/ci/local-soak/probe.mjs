@@ -22,6 +22,7 @@ import {
 } from "./redact.mjs";
 import { readRuntimeSystemStateReadiness } from "./systemStateReadiness.mjs";
 import { boundedSleep } from "./timing.mjs";
+import { DirectSheetsError } from "./sheetsDirect.mjs";
 
 /**
  * Human-edit/CAS/conflict probe (live only): overwrites one editable string
@@ -103,16 +104,45 @@ export async function runHumanEditProbe(context, tablesTouched) {
       applied: undefined,
     };
   } catch (error) {
+    const isDirect = error?.name === "DirectSheetsError";
     return {
       record: {
         status: "failed",
-        reason: error?.name === "DirectSheetsError"
-          ? sanitizeStatusClass(error.statusClass)
-          : "probe-error",
+        reason: "probe-error",
+        // The DirectSheetsError status class is preserved (allowlisted
+        // only) so a live probe failure keeps a useful stable category;
+        // arbitrary status text collapses to `unknown`.
+        ...(isDirect ? { statusClass: sanitizeStatusClass(error.statusClass) } : {}),
         table: sanitizeTableName(entry.tableName),
       },
       applied: undefined,
     };
+  }
+}
+
+/**
+ * One convergence read with a single bounded retry for transient
+ * transport failures.
+ *
+ * Only convergence GET/read operations retry, at most once, and only
+ * while the active phase deadline has not expired. Retryable classes are
+ * timeout, network, and HTTP 408/429/5xx (the `retryable` flag on
+ * DirectSheetsError). Writes, cleanup, harness invariants, missing
+ * tab/header/identity, unknown, permanent 4xx, and deadline expiry never
+ * retry. A second transient failure propagates as-is (bounded to one
+ * retry) so the cycle aborts with the stable status class.
+ *
+ * @param {() => Promise<unknown>} read the convergence read to run.
+ * @param {number} phaseDeadline epoch deadline (same clock as Date.now()).
+ * @returns {Promise<unknown>} the read result.
+ */
+async function readConvergenceRows(read, phaseDeadline) {
+  try {
+    return await read();
+  } catch (error) {
+    if (!(error instanceof DirectSheetsError) || !error.retryable) throw error;
+    if (Date.now() >= phaseDeadline) throw error;
+    return await read();
   }
 }
 
@@ -174,10 +204,13 @@ export async function checkSheetsConvergence(context, appliedProbe) {
         converged = false;
         break;
       }
-      rowsByTab = await live.client.readTabsRows(
-        live.spreadsheetId,
-        activeEntities.map((entry) => `${entry.name}_System`),
-        { deadlineAtMs: phaseDeadline },
+      rowsByTab = await readConvergenceRows(
+        () => live.client.readTabsRows(
+          live.spreadsheetId,
+          activeEntities.map((entry) => `${entry.name}_System`),
+          { deadlineAtMs: phaseDeadline },
+        ),
+        phaseDeadline,
       );
     }
     for (const entry of activeEntities) {
@@ -193,10 +226,13 @@ export async function checkSheetsConvergence(context, appliedProbe) {
           converged = false;
           break;
         }
-        rows = await live.client.readTabRows(
-          live.spreadsheetId,
-          `${entry.name}_System`,
-          { deadlineAtMs: phaseDeadline },
+        rows = await readConvergenceRows(
+          () => live.client.readTabRows(
+            live.spreadsheetId,
+            `${entry.name}_System`,
+            { deadlineAtMs: phaseDeadline },
+          ),
+          phaseDeadline,
         );
       }
       const headers = rows[0] ?? [];

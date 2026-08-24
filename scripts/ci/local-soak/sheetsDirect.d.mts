@@ -128,8 +128,25 @@ export function resolveTabsToDelete(
   includeReceiptTab: boolean,
 ): number[];
 
-/** Harness error carrying a stable class only (no remote payload). */
+/**
+ * Pure runtime classifier for one direct-client SDK failure.
+ *
+ * Maps an untrusted SDK rejection to a stable `statusClass` and a
+ * `retryable` flag using EXACT allowlists only (numeric HTTP statuses,
+ * timeout/deadline codes, known network codes, else `unknown`). A strictly
+ * bounded cause chain (top-level error plus up to two nested causes) is
+ * inspected for string `code` candidates so a gaxios-wrapped native-fetch
+ * network failure can surface its allowlisted code at `error.cause.cause.code`.
+ * The raw message, code, body, URL, id, and cell data are never retained.
+ */
+export function classifyDirectError(error: unknown): {
+  readonly statusClass: string;
+  readonly retryable: boolean;
+};
+
+/** Harness error carrying a stable class and retryability only. */
 export class DirectSheetsError extends Error {
   readonly statusClass: string;
-  constructor(message: string, statusClass: string);
+  readonly retryable: boolean;
+  constructor(message: string, statusClass: string, retryable?: boolean);
 }

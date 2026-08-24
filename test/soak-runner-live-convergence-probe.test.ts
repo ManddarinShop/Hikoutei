@@ -51,6 +51,7 @@ import {
   waitForRuntimeSystemStateReadiness,
 } from "../scripts/ci/local-soak/runner.mjs";
 import { describeSoakFailure } from "../scripts/ci/run-local-multitable-soak.mjs";
+import { DirectSheetsError } from "../scripts/ci/local-soak/sheetsDirect.mjs";
 import { resetHikouteiInternalLoggerForTests } from "../src/shared/observability/internalLog.js";
 import {
   createInternalSyncService,
@@ -444,5 +445,125 @@ describe("soak runner live convergence batched reads", () => {
     expect(result).toEqual({ status: "ok", cycle: 13 });
     expect(readTabsRows).toHaveBeenCalledTimes(1);
     expect(readTabRows).not.toHaveBeenCalled();
+  });
+});
+
+describe("soak runner live convergence bounded read retry", () => {
+  it("retries a transient GET once and succeeds on the second read", async () => {
+    // A retryable DirectSheetsError (timeout) on the first convergence
+    // read is retried once within the phase deadline; the second read
+    // succeeds, so the check converges.
+    const readTabsRows = vi.fn()
+      .mockRejectedValueOnce(new DirectSheetsError("direct sheets request failed: timeout", "timeout", true))
+      .mockResolvedValue({
+        User_System: [
+          ["id", "name"],
+          ["r1", "ada"],
+        ],
+      });
+    const result = await checkSheetsConvergence({
+      cycle: 20,
+      oracle: { ids: () => ["r1"] },
+      activeEntities: [{ name: "User" }],
+      live: {
+        spreadsheetId: "spreadsheet-id",
+        client: { readTabsRows, readTabRows: vi.fn() },
+      },
+      deadlineAtMs: Date.now() + 30_000,
+    }, undefined);
+    expect(result).toEqual({ status: "ok", cycle: 20 });
+    // Exactly one retry: two reads total.
+    expect(readTabsRows).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds a second transient failure to one retry and propagates it", async () => {
+    // Two consecutive retryable failures: the read is retried exactly
+    // once, then the second failure propagates (the cycle aborts with the
+    // stable status class) instead of retrying forever.
+    const readTabsRows = vi.fn()
+      .mockRejectedValueOnce(new DirectSheetsError("direct sheets request failed: network", "network", true))
+      .mockRejectedValueOnce(new DirectSheetsError("direct sheets request failed: network", "network", true));
+    await expect(checkSheetsConvergence({
+      cycle: 21,
+      oracle: { ids: () => ["r1"] },
+      activeEntities: [{ name: "User" }],
+      live: {
+        spreadsheetId: "spreadsheet-id",
+        client: { readTabsRows, readTabRows: vi.fn() },
+      },
+      deadlineAtMs: Date.now() + 30_000,
+    }, undefined)).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "network",
+      retryable: true,
+    });
+    // Bounded to one retry: two reads total, never more.
+    expect(readTabsRows).toHaveBeenCalledTimes(2);
+  });
+
+  it("never retries a permanent (non-retryable) failure", async () => {
+    // A non-retryable DirectSheetsError (permanent 4xx) propagates
+    // immediately with no retry.
+    const readTabsRows = vi.fn()
+      .mockRejectedValue(new DirectSheetsError("direct sheets request failed: http_404", "http_404", false));
+    await expect(checkSheetsConvergence({
+      cycle: 22,
+      oracle: { ids: () => ["r1"] },
+      activeEntities: [{ name: "User" }],
+      live: {
+        spreadsheetId: "spreadsheet-id",
+        client: { readTabsRows, readTabRows: vi.fn() },
+      },
+      deadlineAtMs: Date.now() + 30_000,
+    }, undefined)).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "http_404",
+      retryable: false,
+    });
+    expect(readTabsRows).toHaveBeenCalledTimes(1);
+  });
+
+  it("never retries a missing-tab/header/identity harness failure", async () => {
+    // A deterministic missing state is a harness invariant, never
+    // retryable: it propagates immediately.
+    const readTabsRows = vi.fn()
+      .mockRejectedValue(new DirectSheetsError("tab not found", "missing_tab", false));
+    await expect(checkSheetsConvergence({
+      cycle: 23,
+      oracle: { ids: () => ["r1"] },
+      activeEntities: [{ name: "User" }],
+      live: {
+        spreadsheetId: "spreadsheet-id",
+        client: { readTabsRows, readTabRows: vi.fn() },
+      },
+      deadlineAtMs: Date.now() + 30_000,
+    }, undefined)).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "missing_tab",
+      retryable: false,
+    });
+    expect(readTabsRows).toHaveBeenCalledTimes(1);
+  });
+
+  it("never retries a deadline-expired failure", async () => {
+    // A deadline-expired DirectSheetsError is a harness invariant, never
+    // retryable: it propagates immediately with no retry.
+    const readTabsRows = vi.fn()
+      .mockRejectedValue(new DirectSheetsError("direct sheets request skipped: run deadline expired", "deadline_expired", false));
+    await expect(checkSheetsConvergence({
+      cycle: 24,
+      oracle: { ids: () => ["r1"] },
+      activeEntities: [{ name: "User" }],
+      live: {
+        spreadsheetId: "spreadsheet-id",
+        client: { readTabsRows, readTabRows: vi.fn() },
+      },
+      deadlineAtMs: Date.now() + 30_000,
+    }, undefined)).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "deadline_expired",
+      retryable: false,
+    });
+    expect(readTabsRows).toHaveBeenCalledTimes(1);
   });
 });
