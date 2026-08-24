@@ -2226,6 +2226,51 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
       ["task-new-c1", "new", "pending"],
     ]);
   });
+
+  it("places appended values by RESOLVED header column index (id not first)", async () => {
+    vi.useFakeTimers();
+    const startMs = 40_775_000;
+    vi.setSystemTime(new Date(startMs));
+    const client = createDirectSheetsClient({ requestStartIntervalMs: 0 });
+
+    // The id column is NOT the first column; fields are supplied in a
+    // different order than the header. appendCells must place each value at
+    // its resolved column index, never by caller key order.
+    rowSnapshots.push(
+      [["title", "id", "status"], ["old", "task-main-c1", "open"]],
+      [["title", "id", "status"], ["old", "task-main-c1", "open"], ["new", "task-new-c1", "pending"]],
+    );
+    const pending = client.insertInputRow({
+      spreadsheetId: "s",
+      tabName: "SoakTask_Input",
+      row: { id: "task-new-c1", status: "pending", title: "new" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await vi.advanceTimersByTimeAsync(0);
+    releaseNextGate();
+    await expect(pending).resolves.toEqual({ rowNumber: 3 });
+
+    // Values are placed by column index: id at column 1, title at column 0,
+    // status at column 2 — NOT by the caller's key order.
+    expect(fakeBatchUpdateBodies[0]).toEqual({
+      requests: [{
+        appendCells: {
+          sheetId: 12,
+          rows: [{
+            values: [
+              { userEnteredValue: { stringValue: "new" } },
+              { userEnteredValue: { stringValue: "task-new-c1" } },
+              { userEnteredValue: { stringValue: "pending" } },
+            ],
+          }],
+          fields: "userEnteredValue",
+        },
+      }],
+    });
+  });
 });
 
 describe("soak sheets direct: human row delete (deleteInputRow)", () => {

@@ -497,12 +497,21 @@ export function createDirectSheetsClient({
     // Atomic append: appendCells appends at the true end of the sheet and
     // never overwrites an existing row, so a concurrent insert can never
     // shift a stale row-index target onto another identity and destroy it.
-    const values = [
-      { userEnteredValue: { stringValue: String(row.id) } },
-      ...fieldNames.map((headerName) => ({
+    // The values are placed by RESOLVED header column index (not by the
+    // caller's key order), so an id column that is not first, or fields
+    // supplied in any order, still land in the correct columns.
+    const maxColumn = Math.max(
+      headerVerdict.idColumn,
+      ...fieldNames.map((headerName) => headerVerdict.fieldColumns[headerName]),
+    );
+    const cells = new Array(maxColumn + 1).fill(null);
+    cells[headerVerdict.idColumn] = { userEnteredValue: { stringValue: String(row.id) } };
+    for (const headerName of fieldNames) {
+      cells[headerVerdict.fieldColumns[headerName]] = {
         userEnteredValue: { stringValue: String(row[headerName]) },
-      })),
-    ];
+      };
+    }
+    const values = cells.map((cell) => cell ?? { userEnteredValue: { stringValue: "" } });
     await client.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
@@ -527,7 +536,11 @@ export function createDirectSheetsClient({
     if (verdict.status !== "ok") {
       throw new DirectSheetsError("direct human insert shifted identity", "identity_shifted");
     }
-    return { rowNumber: postRows.length };
+    // Resolve the inserted identity's ACTUAL row (robust to a concurrent
+    // append landing between this append and the postcondition read).
+    const rowIndex = postRows.findIndex((postRow, index) =>
+      index > 0 && postRow[headerVerdict.idColumn] === row.id);
+    return { rowNumber: rowIndex + 1 };
   }
 
   /**
