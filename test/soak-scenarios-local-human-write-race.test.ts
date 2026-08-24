@@ -374,6 +374,25 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  it("cannot finish ok when the human-write postcondition detects an identity shift", async () => {
+    // The direct client's identity-shift guard rejects the human write with
+    // the stable `identity_shifted` class when the value landed on the wrong
+    // identity. That is NOT stale-write/CAS evidence, so the scenario must
+    // fail (never a verified race-winner ok) — a collateral write is never
+    // silently accepted.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
+    // Guaranteed cleanup still removed the dedicated row.
+    expect(em.rows()).toEqual([]);
+  });
+
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = racePlan("update");
     const client = new FakeClient();
