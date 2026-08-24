@@ -134,6 +134,32 @@ duration (durations themselves stay on `performance.now()`):
   budget is smaller than the poll interval, the sleep ends at the deadline,
   never after it.
 
+### Base duration vs the bounded close deadline
+
+`--duration-hours` controls **startup and new-cycle admission**, not every
+in-flight request. The base workload-admission deadline stops the run from
+starting a NEW cycle (and gates a runtime open/reopen), but ONE already-
+admitted final **live** cycle may close out for at most the existing
+**180 s convergence budget** past the base duration:
+
+- The live direct observation client is constructed with that bounded CLOSE
+  deadline (base + one convergence budget), so its probe/convergence reads
+  and cleanup are capped by the close deadline — never by the earlier base
+  deadline.
+- The already-admitted final live cycle runs under the SAME close deadline,
+  so its probe/scenario/convergence barriers can drain final effects for at
+  most 180 s past the base duration.
+- Every phase inside that admitted cycle still applies its own tighter
+  `min(now + phase timeout, cycle close deadline)`, and a genuine failure
+  still binds exactly as it would mid-run (the grace never masks an abort or
+  a failure count).
+- **Local mode adds no explicit close grace**: no subsequent cycle is
+  admitted after the base deadline, but an already-running local cycle
+  follows the existing in-flight semantics and may return after base.
+- The 180s budget is bounded, not open-ended: the run still stops once the
+  close deadline is reached, and operators retain the external 25m hard
+  timeout as the outer bound for the whole execution.
+
 ## Request pacing and quota headroom
 
 Google Sheets quota is enforced per 100-second windows, so Hikoutei's direct
