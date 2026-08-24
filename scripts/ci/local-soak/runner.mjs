@@ -20,5 +20,5 @@ export { closeRuntimeWithFinalRetry } from "./summary.mjs";
 export { openRuntimeWithinDeadline } from "./database.mjs";
 export { planResumeRecovery } from "./resume.mjs";
 export { replayDeterministicHistory } from "./replay.mjs";
-export { checkSheetsConvergence, extractProjectionIds, runHumanEditProbe, waitForRuntimeSystemStateReadiness } from "./probe.mjs";
+export { checkSheetsConvergence, evaluateInputReadiness, extractProjectionIds, runHumanEditProbe, waitForRuntimeSystemStateReadiness } from "./probe.mjs";
 export { runLocalMultiTableSoak } from "./runnerOrchestration.mjs";
