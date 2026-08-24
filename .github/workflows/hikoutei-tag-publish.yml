@@ -1,0 +1,109 @@
+name: Publish hikoutei tag only
+
+# Recovery publication for a single hikoutei version, decoupled from the
+# @hikoutei/ikisaki package. Used to publish per-PR hikoutei versions (e.g.
+# the 0.8.75..0.8.83 recovery line) whose embedded develop-publish workflow
+# would otherwise insist on moving the ikisaki `latest` dist-tag.
+#
+# The checked-out ref must carry a hikoutei version in package.json; that
+# version is what this workflow publishes (with `--provenance`) as `latest`.
+# ikisaki is intentionally NOT touched: its `latest` stays wherever the user
+# has placed it. Idempotent: if the version already exists, only the `latest`
+# dist-tag is re-applied. The run also refuses to move hikoutei `latest`
+# backward.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch/ref/commit to build hikoutei from'
+        required: true
+
+concurrency:
+  group: hikoutei-tag-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish hikoutei version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$name" != "hikoutei" ]]; then echo "unexpected package name: $name" >&2; exit 1; fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "invalid version: $version" >&2; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "hikoutei $version"
+
+      - name: Verify hikoutei latest is forward
+        shell: bash
+        env:
+          TARGET_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          current="$(npm view hikoutei dist-tags.latest --registry=https://registry.npmjs.org || true)"
+          if [[ -z "$current" || "$current" == "undefined" || "$current" == "null" ]]; then
+            echo "no current latest ($current); target $TARGET_VERSION"; exit 0
+          fi
+          # npm published versions are plain numeric semver here.
+          node -e '
+            const cur = process.argv[1].split(".").map(Number);
+            const tgt = process.argv[2].split(".").map(Number);
+            for (let i = 0; i < 3; i++) {
+              if (tgt[i] > cur[i]) process.exit(0);
+              if (tgt[i] < cur[i]) {
+                console.error(`latest would move backward: current=${process.argv[1]} target=${process.argv[2]}`);
+                process.exit(1);
+              }
+            }
+            console.log(`current ${process.argv[1]} == target ${process.argv[2]}`);
+          ' "$current" "$TARGET_VERSION"
+
+      - name: Install, verify, and build
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm run typecheck:test
+          npm test
+          npm run build
+
+      - name: Publish hikoutei (idempotent)
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TARGET_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "NPM_TOKEN secret is required." >&2
+            exit 1
+          fi
+          version="$TARGET_VERSION"
+          if npm view "hikoutei@${version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "hikoutei@${version} already published; re-applying latest dist-tag."
+            npm dist-tag add "hikoutei@${version}" latest --registry=https://registry.npmjs.org
+          else
+            npm publish --tag latest --access public --provenance
+          fi
