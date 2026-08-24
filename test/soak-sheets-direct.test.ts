@@ -29,6 +29,7 @@ import {
   resolveRequestTimeoutMs,
   resolveTabsToDelete,
 } from "../scripts/ci/local-soak/sheetsDirect.mjs";
+import { resolveCycleDeadlineAtMs } from "../scripts/ci/local-soak/runner.mjs";
 
 /** Fake SDK request log shared by the mocked client. */
 const {
@@ -427,6 +428,79 @@ describe("soak sheets direct: operation (phase) deadline", () => {
       expect(fakeRequests).toHaveLength(1);
     },
   );
+
+  it("a client built with the resolved live CLOSE deadline reads after the base deadline", async () => {
+    // The orchestration constructs the live direct observation client with
+    // the bounded CLOSE deadline (resolveCycleDeadlineAtMs live), NOT the
+    // base workload-admission deadline. Without that, the client's
+    // constructor deadline would cap every phase read at the EARLIER base
+    // deadline even though the admitted final live cycle was granted the
+    // bounded close. This proves a client built with the resolved close
+    // deadline serves a read that starts AFTER the base deadline but BEFORE
+    // the close deadline.
+    vi.useFakeTimers();
+    const startMs = 21_000_000;
+    const baseDeadlineAtMs = startMs + 10_000;
+    const closeDeadlineAtMs = resolveCycleDeadlineAtMs({
+      mode: "live",
+      baseDeadlineAtMs,
+    });
+    // Now is past the base workload deadline but inside the bounded close.
+    vi.setSystemTime(new Date(baseDeadlineAtMs + 1_000));
+    const client = createDirectSheetsClient({
+      deadlineAtMs: closeDeadlineAtMs,
+      requestStartIntervalMs: 0,
+    });
+
+    const pending = client.readTabRows("s", "SoakTask_Input", {
+      deadlineAtMs: closeDeadlineAtMs,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // The read is allowed: the effective deadline is the close deadline,
+    // so the request starts with a POSITIVE remaining budget (never 0 /
+    // never deadline_expired). The timeout is the request default capped by
+    // the remaining close budget — it is NOT zero, which a base-only client
+    // would have produced for this same post-base read.
+    expect(fakeRequests).toEqual([{ method: "get", timeout: DEFAULT_REQUEST_TIMEOUT_MS }]);
+    expect(DEFAULT_REQUEST_TIMEOUT_MS).toBeLessThan(closeDeadlineAtMs - baseDeadlineAtMs - 1_000);
+    releaseNextGate();
+    await expect(pending).resolves.toEqual([
+      ["id", "title"],
+      ["task-main-c1", "old"],
+    ]);
+  });
+
+  it("a client built with ONLY the base deadline rejects the same post-base read", async () => {
+    // Negative control: the old (buggy) wiring built the client with the
+    // base deadline alone. A read that starts after the base deadline then
+    // aborts with deadline_expired — proving the direct client MUST be
+    // constructed with the resolved close deadline for the granted close
+    // grace to have any effect on its probe/convergence reads.
+    vi.useFakeTimers();
+    const startMs = 22_000_000;
+    const baseDeadlineAtMs = startMs + 10_000;
+    const closeDeadlineAtMs = resolveCycleDeadlineAtMs({
+      mode: "live",
+      baseDeadlineAtMs,
+    });
+    vi.setSystemTime(new Date(baseDeadlineAtMs + 1_000));
+    const client = createDirectSheetsClient({
+      deadlineAtMs: baseDeadlineAtMs, // base only — the old wiring
+      requestStartIntervalMs: 0,
+    });
+
+    const rejection = expect(client.readTabRows("s", "SoakTask_Input", {
+      deadlineAtMs: closeDeadlineAtMs,
+    })).rejects.toMatchObject({
+      name: "DirectSheetsError",
+      statusClass: "deadline_expired",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await rejection;
+    // The request never started: the base-capable client aborts at the
+    // earlier base deadline, so the extended close never reached the wire.
+    expect(fakeRequests).toHaveLength(0);
+  });
 
   it(
     "mutateInputCell uses the phase deadline for EVERY request and aborts after the phase expires",

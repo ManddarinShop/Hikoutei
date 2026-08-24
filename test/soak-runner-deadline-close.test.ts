@@ -38,6 +38,7 @@ import {
   boundedSleep,
   checkSheetsConvergence,
   closeRuntimeWithFinalRetry,
+  CONVERGENCE_TIMEOUT_MS,
   deadlineRemainingMs,
   extractProjectionIds,
   isSafeEpochTimestampMs,
@@ -45,6 +46,7 @@ import {
   planResumeRecovery,
   RECOVERY_REASONS,
   replayDeterministicHistory,
+  resolveCycleDeadlineAtMs,
   runLocalMultiTableSoak,
   stableErrorTag,
   SYSTEM_STATE_READINESS_POLL_MS,
@@ -114,6 +116,44 @@ describe("soak runner deadline clock", () => {
     expect(elapsed).toBeLessThan(1_000);
     // An already-expired deadline resolves immediately.
     await boundedSleep(5_000, startedAt - 1, startedAt);
+  });
+});
+
+
+describe("soak runner bounded close deadline", () => {
+  it("grants an admitted live cycle exactly one convergence budget past the base deadline", () => {
+    const base = Date.now();
+    expect(resolveCycleDeadlineAtMs({ mode: "live", baseDeadlineAtMs: base }))
+      .toBe(base + CONVERGENCE_TIMEOUT_MS);
+  });
+
+  it("keeps the base deadline unchanged for local cycles (no grace)", () => {
+    const base = Date.now();
+    expect(resolveCycleDeadlineAtMs({ mode: "local", baseDeadlineAtMs: base })).toBe(base);
+  });
+
+  it("is overflow-safe: a base deadline near MAX_SAFE_INTEGER clamps to the base", () => {
+    // Adding the convergence budget would wrap past the safe-integer
+    // ceiling; the helper must return the base unchanged, never a wrapped
+    // (fractional/NaN-adjacent) deadline that could silently extend a run.
+    const base = Number.MAX_SAFE_INTEGER;
+    expect(resolveCycleDeadlineAtMs({ mode: "live", baseDeadlineAtMs: base })).toBe(base);
+    expect(resolveCycleDeadlineAtMs({ mode: "local", baseDeadlineAtMs: base })).toBe(base);
+  });
+
+  it("preserves finite fractional base deadlines exactly (never rounds away grace)", () => {
+    // A valid fractional `--duration-hours`/durationMs yields a fractional
+    // epoch deadline; adding the convergence budget must keep the fraction
+    // AND still grant the grace. The old `Number.isSafeInteger(sum)` check
+    // rejected any fractional sum and silently dropped the grace.
+    const base = Date.now() + 0.5;
+    const close = resolveCycleDeadlineAtMs({ mode: "live", baseDeadlineAtMs: base });
+    expect(close).toBe(base + CONVERGENCE_TIMEOUT_MS);
+    // The fractional part is preserved, not rounded away.
+    expect(close - base).toBe(CONVERGENCE_TIMEOUT_MS);
+    expect(Number.isInteger(close)).toBe(false);
+    // Local mode keeps the fractional base unchanged.
+    expect(resolveCycleDeadlineAtMs({ mode: "local", baseDeadlineAtMs: base })).toBe(base);
   });
 });
 
