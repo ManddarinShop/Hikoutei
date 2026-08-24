@@ -10,7 +10,7 @@
  */
 
 // Re-exports preserved for the CLI and the Vitest suite (PRs #261/#262).
-export { CONVERGENCE_POLL_MS, isSafeEpochTimestampMs, PROBE_ACCEPT_POLL_MS, RECOVERY_REASONS, SYSTEM_STATE_READINESS_POLL_MS } from "./constants.mjs";
+export { CONVERGENCE_POLL_MS, CONVERGENCE_TIMEOUT_MS, isSafeEpochTimestampMs, PROBE_ACCEPT_POLL_MS, RECOVERY_REASONS, resolveCycleDeadlineAtMs, SYSTEM_STATE_READINESS_POLL_MS } from "./constants.mjs";
 export { boundedSleep, deadlineRemainingMs } from "./timing.mjs";
 export { parseSpreadsheetIdFromUrl } from "./spreadsheetUrl.mjs";
 export { isExpectedPlainNodeTsLoaderFailure, shouldFallBackToDistOnSourceFailure } from "./distFallback.mjs";
