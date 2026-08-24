@@ -189,13 +189,37 @@ function liveContext(
 }
 
 /**
+ * The projected Sheet cell string a soak field value carries once the sync
+ * worker projects it: booleans as uppercase `TRUE`/`FALSE`, dates as
+ * canonical ISO strings, numbers/strings as String(), null as the empty cell.
+ * Mirrors the scenario's own `projectedCellString` so the fake projection is
+ * indistinguishable from the real Sheet.
+ */
+function projectedCell(value: unknown, type: string | undefined): string {
+  if (value === null || value === undefined) return "";
+  if (type === "boolean") return value ? "TRUE" : "FALSE";
+  if (type === "date") {
+    return (value instanceof Date ? value : new Date(value as string | number)).toISOString();
+  }
+  return String(value);
+}
+
+/**
  * Mirrors the localHumanWriteRace test's authoritative-value pattern: hook
  * the fake EntityManager's `persist` so the dedicated row's fields are
  * projected into the fake _Input tab at the exact cell-strings the row will
  * carry once the sync worker projects it. `awaitInputProjection` resolves on
  * the first poll, so the duplicate insert proceeds deterministically.
+ *
+ * `capture` (optional) records the projected cell strings so a test can
+ * assert the typed boolean/date display strings without re-deriving them.
  */
-function projectPersistedRow(em: FakeEm, client: FakeClient, plan: PlanLike): void {
+function projectPersistedRow(
+  em: FakeEm,
+  client: FakeClient,
+  plan: PlanLike,
+  capture?: { values: Record<string, string> },
+): void {
   const originalPersist = em.persist.bind(em);
   em.persist = (entity: Record<string, unknown>) => {
     const fieldPlan = SOAK_FIELD_PLANS[plan.target.entityName]!;
@@ -204,14 +228,16 @@ function projectPersistedRow(em: FakeEm, client: FakeClient, plan: PlanLike): vo
     for (const [field, spec] of Object.entries(fieldPlan)) {
       if (spec.primary) continue;
       headers.push(field);
-      const value = entity[field];
-      values[field] = value === null || value === undefined ? "" : String(value);
+      values[field] = projectedCell(entity[field], spec.type);
     }
+    if (capture) capture.values = values;
     client.ensureTab(`${plan.target.entityName}_Input`, headers);
     client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, values);
     originalPersist(entity);
   };
 }
+
+
 
 // ---------------------------------------------------------------------------
 // Tests.
@@ -298,6 +324,46 @@ describe("humanInsertDuplicateId scenario", () => {
       expect(projectedRow![column]).not.toBe(String(value));
     }
     // Guaranteed cleanup removes the dedicated row.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("matches boolean/date cells by their typed projected strings (TRUE / ISO)", async () => {
+    // SoakCustomer has boolean `active` and date `signupAt`. The scenario's
+    // direct-Sheet re-read must compare against the PROJECTED cell strings
+    // (uppercase TRUE/FALSE and canonical ISO), never String(true)/Date#toString,
+    // or a valid typed duplicate-id scenario would false-fail.
+    const plan = dupPlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    const capture: { values: Record<string, string> } = { values: {} };
+    projectPersistedRow(em, client, plan, capture);
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("ok");
+    expect(result.expectedErrors).toBe(1);
+    expect(result.failures).toBe(0);
+    // The fake projection carried the typed display strings for the boolean
+    // and date fields, and the identity re-read matched them exactly.
+    expect(capture.values.active).toMatch(/^(TRUE|FALSE)$/);
+    const signupAt = capture.values.signupAt;
+    expect(typeof signupAt).toBe("string");
+    expect(new Date(signupAt!).toISOString()).toBe(signupAt);
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("detects an overwrite when a typed boolean/date cell differs from the projected string", async () => {
+    // A leak that overwrites the Sheet with the duplicate-insert (string)
+    // values must be caught: the typed boolean/date cells no longer carry
+    // their projected TRUE/ISO strings, so the identity re-read is false.
+    const plan = dupPlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    client.rejectDuplicateId = true;
+    client.leakOnReject = true;
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
     expect(em.rows()).toEqual([]);
   });
 

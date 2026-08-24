@@ -175,7 +175,7 @@ export async function execute({ plan, context }) {
             // the Sheet is a real corruption even though the authority read
             // alone rejects it.
             const sheetSingle = await sheetIdentityExactOnce(
-              client, context.live.spreadsheetId, tabName, plan.target.targetId, originalRow,
+              client, context.live.spreadsheetId, tabName, plan.target.targetId, originalRow, plan.target.entityName,
             );
             if (!sheetSingle) {
               failures += 1;
@@ -294,9 +294,10 @@ function rowsMatch(row, originalRow) {
  * tab holds exactly one row for the id and that row carries the original
  * (string-coerced) values.
  *
+ * @param {string} entityName the entity the row belongs to (for field-type projection).
  * @returns {Promise<boolean>}
  */
-async function sheetIdentityExactOnce(client, spreadsheetId, tabName, targetId, originalRow) {
+async function sheetIdentityExactOnce(client, spreadsheetId, tabName, targetId, originalRow, entityName) {
   const rows = await client.readTabRows(spreadsheetId, tabName, { deadlineAtMs: undefined });
   const headers = rows[0] ?? [];
   const idColumn = headers.indexOf("id");
@@ -304,14 +305,33 @@ async function sheetIdentityExactOnce(client, spreadsheetId, tabName, targetId, 
   const identityRows = rows.filter((entry, index) => index > 0 && entry[idColumn] === targetId);
   if (identityRows.length !== 1) return false;
   const sheetRow = identityRows[0];
+  const fieldPlan = SOAK_FIELD_PLANS[entityName] ?? {};
   for (const [field, value] of Object.entries(originalRow)) {
     if (field === "id") continue;
     const column = headers.indexOf(field);
     if (column < 0) return false;
-    const cellString = value === null || value === undefined ? "" : String(value);
-    if (sheetRow[column] !== cellString) return false;
+    const type = fieldPlan[field]?.type;
+    if (sheetRow[column] !== projectedCellString(value, type)) return false;
   }
   return true;
+}
+
+/**
+ * The projected Sheet cell string for a soak field value. Booleans project
+ * as uppercase `TRUE`/`FALSE`, dates as canonical ISO strings, numbers and
+ * strings as their String() forms, and null/undefined as the empty cell.
+ *
+ * @param {unknown} value
+ * @param {string | undefined} type the field's soak type.
+ * @returns {string}
+ */
+function projectedCellString(value, type) {
+  if (value === null || value === undefined) return "";
+  if (type === "boolean") return value ? "TRUE" : "FALSE";
+  if (type === "date") {
+    return (value instanceof Date ? value : new Date(value)).toISOString();
+  }
+  return String(value);
 }
 
 /** Value equality that treats Date instances by their epoch time. */

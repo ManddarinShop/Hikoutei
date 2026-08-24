@@ -356,7 +356,6 @@ async function verifyStaysAbsent({ em, token, plan, context, critical }) {
  *
  * A run that dies before this scenario's guaranteed finally can leave the
  * deterministic dedicated `targetId` row in the authority; the resume replay
- * deterministic dedicated `targetId` row in the authority; the resume replay
  * would reject it as a foreign id. This hook removes that exact planned row
  * (and only it) through the public EntityManager, so a resume of an
  * interrupted in-flight cycle never fails the DB proof over an orphan. It is
