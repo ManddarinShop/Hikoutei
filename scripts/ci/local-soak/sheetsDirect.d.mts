@@ -121,12 +121,45 @@ export function createDirectSheetsClient(options?: {
   ): Promise<{ readonly deleted: number }>;
 };
 
-/** Pure tab-selection logic for cleanup (testable without credentials). */
+/**
+ * Pure tab-selection logic for cleanup (testable without credentials).
+ *
+ * Returns the sheet ids to delete: the named projection tabs plus, ONLY
+ * when `includeReceiptTab` is true, the shared receipt tab. A subset
+ * cleanup (`includeReceiptTab: false`) keeps the receipt tab so untouched
+ * tables can keep projecting. Throws `DirectSheetsError` (status class
+ * `malformed_sheet_id`) when a matching tab carries a sheetId that is not
+ * a non-negative safe integer, so a malformed id never reaches a delete
+ * request.
+ */
 export function resolveTabsToDelete(
   properties: ReadonlyArray<{ readonly sheetId?: number; readonly title?: string } | undefined>,
   tabNames: readonly string[],
   includeReceiptTab: boolean,
 ): number[];
+
+/**
+ * Pure postcondition check for one direct human write, comparing the
+ * pre-write and post-write snapshots BY VALIDATED IDENTITY (never by
+ * mutable row order). Requires exactly one intended identity row before
+ * and after, that row's target field to display `String(value)`, and —
+ * when `rowIndex` (the ORIGINAL write coordinate) is supplied — that the
+ * post-read row at that coordinate does not belong to a different nonblank
+ * identity while still displaying the requested value. Non-target
+ * identities are never compared field-by-field (concurrent actors
+ * legitimately update them). A value placed on another identity, an
+ * absent/duplicated identity, a blank or non-string identity in a non-empty
+ * row, or a proven collateral write at the write coordinate returns
+ * `identity_shifted`; never a raw id/value.
+ */
+export function evaluateInputPostcondition(input: {
+  readonly beforeRows: ReadonlyArray<readonly unknown[]>;
+  readonly afterRows: ReadonlyArray<readonly unknown[]>;
+  readonly identity: string;
+  readonly headerName: string;
+  readonly value: string;
+  readonly rowIndex?: number;
+}): { readonly status: "ok" } | { readonly status: "identity_shifted" };
 
 /**
  * Pure runtime classifier for one direct-client SDK failure.
