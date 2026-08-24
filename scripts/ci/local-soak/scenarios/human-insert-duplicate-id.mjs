@@ -52,6 +52,15 @@ export function plan({ cycle, order, rng, activeEntities }) {
   const fieldPlan = SOAK_FIELD_PLANS[entry.name];
   const abbreviation = entry.name.replace(/^Soak/, "").toLowerCase();
   const targetId = `dup-${abbreviation}-c${cycle}-${order}`;
+  // The direct insert seam's `insertInputRow` requires a Record<string,string>
+  // row (a Sheet row is always cells of strings), so the duplicate-insert
+  // value set is coerced to strings — the seam is never called with a
+  // number/boolean/date value.
+  const generated = generateRow(rng, fieldPlan);
+  const dupRow = { id: targetId };
+  for (const [field, value] of Object.entries(generated)) {
+    dupRow[field] = String(value);
+  }
   return {
     tag: TAG,
     // Short deterministic jitter so the duplicate insert lands while normal
@@ -59,9 +68,9 @@ export function plan({ cycle, order, rng, activeEntities }) {
     jitterMs: 1 + rng.int(60),
     target: { entityName: entry.name, targetId },
     // Deterministic duplicate-insert value set: the SAME id with different
-    // field values, so a silent overwrite or duplicate projection is
-    // distinguishable from the original row.
-    dupRow: { id: targetId, ...generateRow(rng, fieldPlan) },
+    // field values (coerced to strings), so a silent overwrite or duplicate
+    // projection is distinguishable from the original row.
+    dupRow,
   };
 }
 
@@ -118,49 +127,70 @@ export async function execute({ plan, context }) {
     } else {
       // Consume the plan's jitter (bounded by the run deadline) so the
       // duplicate insert lands while actors are mid-flight.
-      await boundedSleep(plan.jitterMs ?? 0, context.deadlineAtMs);
-      // Attempt the direct insert with the SAME id. The seam rejects an
-      // already-existing id with `identity_shifted` BEFORE writing (fail
-      // closed); a non-rejected insert or a non-identity rejection is a real
-      // failure.
-      let insertRejected = false;
-      let identityShifted = false;
-      try {
-        await client.insertInputRow({
-          spreadsheetId: context.live.spreadsheetId,
-          tabName,
-          row: plan.dupRow,
-          deadlineAtMs: context.deadlineAtMs,
-        });
-      } catch (error) {
-        insertRejected = true;
-        identityShifted = isIdentityShiftedRejection(error);
-      }
-      if (!insertRejected) {
-        // The seam did NOT reject the duplicate: a duplicate projection or
-        // silent overwrite was created — the corruption failure this scenario
-        // hunts.
-        failures += 1;
-        result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
-      } else if (!identityShifted) {
-        // A non-identity_shifted rejection (transport/validation) is a real
-        // failure, never an expected fail-closed conflict.
-        failures += 1;
-        result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
+      const deadlineAt = context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER;
+      await boundedSleep(plan.jitterMs ?? 0, deadlineAt);
+      // After the bounded jitter the run deadline may have expired. Never
+      // attempt the doomed direct insert against an expired budget: settle
+      // with a truthful skip and clean the authority below.
+      if (Date.now() >= deadlineAt) {
+        result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "deadline-expired" };
       } else {
-        // The identity conflict was rejected (fail-closed evidence). Verify
-        // the existing row was NOT overwritten and NO duplicate row appeared
-        // via a bounded authority observation.
-        const outcome = await observeNoDuplicate({ em, token, plan, originalRow, context });
-        if (outcome === "ok") {
-          result = { status: "ok", expectedErrors: 1, failures: 0 };
-        } else if (outcome === "duplicate" || outcome === "overwritten") {
+        // Attempt the direct insert with the SAME id. The seam rejects an
+        // already-existing id with `identity_shifted` BEFORE writing (fail
+        // closed); a non-rejected insert or a non-identity rejection is a real
+        // failure.
+        let insertRejected = false;
+        let identityShifted = false;
+        try {
+          await client.insertInputRow({
+            spreadsheetId: context.live.spreadsheetId,
+            tabName,
+            row: plan.dupRow,
+            deadlineAtMs: context.deadlineAtMs,
+          });
+        } catch (error) {
+          insertRejected = true;
+          identityShifted = isIdentityShiftedRejection(error);
+        }
+        if (!insertRejected) {
+          // The seam did NOT reject the duplicate: a duplicate projection or
+          // silent overwrite was created — the corruption failure this scenario
+          // hunts.
           failures += 1;
-          result = { status: "failed", expectedErrors: 1, failures, reason: "scenario-error" };
+          result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
+        } else if (!identityShifted) {
+          // A non-identity_shifted rejection (transport/validation) is a real
+          // failure, never an expected fail-closed conflict.
+          failures += 1;
+          result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
         } else {
-          // The authority could not settle on a single unchanged row within
-          // the bound: a truthful skip, never an unobserved ok.
-          result = { status: "skipped", expectedErrors: 1, failures: 0, reason: "winner-not-verified" };
+          // The identity conflict was rejected (fail-closed evidence). Verify
+          // the existing row was NOT overwritten and NO duplicate row appeared
+          // via a bounded authority observation.
+          const outcome = await observeNoDuplicate({ em, token, plan, originalRow, context });
+          if (outcome === "ok") {
+            // The authority settled on a single unchanged row. Re-read the
+            // _Input tab directly: the identity must appear EXACTLY once with
+            // its ORIGINAL projected values. A duplicate/overwrite leaked to
+            // the Sheet is a real corruption even though the authority read
+            // alone rejects it.
+            const sheetSingle = await sheetIdentityExactOnce(
+              client, context.live.spreadsheetId, tabName, plan.target.targetId, originalRow,
+            );
+            if (!sheetSingle) {
+              failures += 1;
+              result = { status: "failed", expectedErrors: 1, failures, reason: "scenario-error" };
+            } else {
+              result = { status: "ok", expectedErrors: 1, failures: 0 };
+            }
+          } else if (outcome === "duplicate" || outcome === "overwritten") {
+            failures += 1;
+            result = { status: "failed", expectedErrors: 1, failures, reason: "scenario-error" };
+          } else {
+            // The authority could not settle on a single unchanged row within
+            // the bound: a truthful skip, never an unobserved ok.
+            result = { status: "skipped", expectedErrors: 1, failures: 0, reason: "winner-not-verified" };
+          }
         }
       }
     }
@@ -249,6 +279,37 @@ function rowsMatch(row, originalRow) {
   for (const [field, value] of Object.entries(originalRow)) {
     if (field === "id") continue;
     if (!sameValue(row[field], value)) return false;
+  }
+  return true;
+}
+
+/**
+ * Direct-Sheet re-read asserting the dedicated identity appears EXACTLY once
+ * with its ORIGINAL projected cell values.
+ *
+ * The authority read alone rejects the duplicate-insert, but a write-then-
+ * postcondition failure that leaked a duplicate or overwrite to the Sheet (a
+ * duplicate projection row, or the existing row overwritten with the
+ * duplicate-insert values) is a real corruption. Returns `true` only when the
+ * tab holds exactly one row for the id and that row carries the original
+ * (string-coerced) values.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function sheetIdentityExactOnce(client, spreadsheetId, tabName, targetId, originalRow) {
+  const rows = await client.readTabRows(spreadsheetId, tabName, { deadlineAtMs: undefined });
+  const headers = rows[0] ?? [];
+  const idColumn = headers.indexOf("id");
+  if (idColumn < 0) return false;
+  const identityRows = rows.filter((entry, index) => index > 0 && entry[idColumn] === targetId);
+  if (identityRows.length !== 1) return false;
+  const sheetRow = identityRows[0];
+  for (const [field, value] of Object.entries(originalRow)) {
+    if (field === "id") continue;
+    const column = headers.indexOf(field);
+    if (column < 0) return false;
+    const cellString = value === null || value === undefined ? "" : String(value);
+    if (sheetRow[column] !== cellString) return false;
   }
   return true;
 }

@@ -15,7 +15,6 @@
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
-import { isStaleConflictEvidence } from "../redact.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS } from "../constants.mjs";
 import { boundedSleep } from "../timing.mjs";
 
@@ -156,42 +155,50 @@ export async function execute({ plan, context }) {
     } else {
       // Consume the plan's jitter so the no-op write lands while normal
       // actors are mid-flight. Bounded by the run deadline.
-      await boundedSleep(plan.jitterMs ?? 0, context.deadlineAtMs);
-      let writeRejected = false;
-      try {
-        await client.mutateInputCell({
-          spreadsheetId: context.live.spreadsheetId,
-          tabName,
-          identity: plan.target.targetId,
-          headerName: plan.target.field,
-          value: plan.humanValue,
-          deadlineAtMs: context.deadlineAtMs,
-        });
-      } catch (error) {
-        // A no-op write must never reject. Classify ONLY by exact stale/CAS
-        // evidence: a stale/CAS rejection is a FALSE CONFLICT (the exact
-        // failure this scenario hunts); any other rejection (transport,
-        // identity_shifted, validation) is a real failure. Both are failures
-        // for a no-op write.
-        writeRejected = true;
-        failures += 1;
-        result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
-      }
-      if (!writeRejected) {
-        // Verify the authority value is unchanged (no false conflict, no
-        // revision churn) and the projection is stable via a bounded
-        // observation. A changed authority value is the corruption this
-        // scenario hunts; an unsettled observation is a truthful skip.
-        const outcome = await observeNoOpStability(
-          em, token, plan, context, client, context.live.spreadsheetId, tabName,
-        );
-        if (outcome === "stable") {
-          result = { status: "ok", expectedErrors: 0, failures: 0, reason: "no-op-stable" };
-        } else if (outcome === "changed") {
+      const deadlineAt = context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER;
+      await boundedSleep(plan.jitterMs ?? 0, deadlineAt);
+      // After the bounded jitter the run deadline may have expired. Never
+      // start the doomed direct write against an expired budget: settle with
+      // a truthful skip and clean the authority below.
+      if (Date.now() >= deadlineAt) {
+        result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "deadline-expired" };
+      } else {
+        let writeRejected = false;
+        try {
+          await client.mutateInputCell({
+            spreadsheetId: context.live.spreadsheetId,
+            tabName,
+            identity: plan.target.targetId,
+            headerName: plan.target.field,
+            value: plan.humanValue,
+            deadlineAtMs: context.deadlineAtMs,
+          });
+        } catch (error) {
+          // A no-op write must never reject. Classify ONLY by exact stale/CAS
+          // evidence: a stale/CAS rejection is a FALSE CONFLICT (the exact
+          // failure this scenario hunts); any other rejection (transport,
+          // identity_shifted, validation) is a real failure. Both are failures
+          // for a no-op write.
+          writeRejected = true;
           failures += 1;
           result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
-        } else {
-          result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
+        }
+        if (!writeRejected) {
+          // Verify the authority value is unchanged (no false conflict, no
+          // revision churn) and the projection is stable via a bounded
+          // observation. A changed authority value is the corruption this
+          // scenario hunts; an unsettled observation is a truthful skip.
+          const outcome = await observeNoOpStability(
+            em, token, plan, context, client, context.live.spreadsheetId, tabName,
+          );
+          if (outcome === "stable") {
+            result = { status: "ok", expectedErrors: 0, failures: 0, reason: "no-op-stable" };
+          } else if (outcome === "changed") {
+            failures += 1;
+            result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
+          } else {
+            result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
+          }
         }
       }
     }

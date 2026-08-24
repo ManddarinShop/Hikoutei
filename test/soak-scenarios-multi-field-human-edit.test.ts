@@ -261,6 +261,44 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  it("never picks an inactive entity when the active subset has no eligible one", async () => {
+    // SoakFeatureFlag has only ONE non-primary string field, so it cannot
+    // host a multi-field edit. When the active subset is ONLY that entity,
+    // the plan must NOT fall back to an inactive entity (SOAK_ENTITY_ORDER[0]
+    // SoakCustomer); it keeps a deterministic plan over the active subset
+    // marked ineligible and execute truthfully skips.
+    const activeOnly = SOAK_ENTITY_ORDER.filter((entry) => entry.name === "SoakFeatureFlag");
+    const input: Record<string, unknown> = {
+      cycle: 1,
+      order: 0,
+      rng: new SeededRandom(7),
+      activeEntities: activeOnly,
+    };
+    const plan = scenario.plan(input as Parameters<typeof scenario.plan>[0]) as unknown as PlanLike & {
+      eligible?: boolean;
+    };
+    expect(plan.eligible).toBe(false);
+    // The plan targets ONLY the active subset, never an inactive entity.
+    expect(activeOnly.some((entry) => entry.name === plan.target.entityName)).toBe(true);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    const context = {
+      seed: 1,
+      cycle: 1,
+      activeEntities: activeOnly,
+      tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
+      em,
+      live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
+      deadlineAtMs: Date.now() + 5000,
+    };
+    const result = await scenario.execute({ plan: plan as PlanLike, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("no-eligible-entity");
+    expect(result.failures).toBe(0);
+    // No direct write was ever attempted.
+    expect(client.mutateCalls).toEqual([]);
+  });
+
   it("verifies an atomic multi-field human edit when all fields land (ok)", async () => {
     // Core hypothesis: a human multi-field edit must be applied atomically —
     // never partially, never with a field silently lost. When the authority

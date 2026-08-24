@@ -1,5 +1,5 @@
 /**
- * Type declarations for `scripts/ci/local-soak/scenarios/humanDeleteRow.mjs`.
+ * Type declarations for `scripts/ci/local-soak/scenarios/human-delete-row.mjs`.
  */
 
 /** Stable scenario id. */
@@ -18,6 +18,7 @@ export function plan(input: {
   phase: string;
   order: number;
   rng: object;
+  activeEntities?: readonly object[];
 }): Record<string, unknown>;
 
 /** Live action: race a public update against a direct human row delete. */

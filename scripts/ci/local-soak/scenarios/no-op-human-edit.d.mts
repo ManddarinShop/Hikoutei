@@ -18,6 +18,7 @@ export function plan(input: {
   phase: string;
   order: number;
   rng: object;
+  activeEntities?: readonly object[];
 }): Record<string, unknown>;
 
 /** Live action: write the same value already present in a cell (a no-op). */

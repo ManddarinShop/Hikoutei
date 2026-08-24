@@ -18,6 +18,7 @@ export function plan(input: {
   phase: string;
   order: number;
   rng: object;
+  activeEntities?: readonly object[];
 }): Record<string, unknown>;
 
 /** Live action: attempt a duplicate human row insert and verify fail-closed. */

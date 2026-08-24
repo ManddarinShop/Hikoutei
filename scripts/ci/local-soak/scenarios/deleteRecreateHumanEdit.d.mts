@@ -18,6 +18,7 @@ export function plan(input: {
   phase: string;
   order: number;
   rng: object;
+  activeEntities?: readonly object[];
 }): Record<string, unknown>;
 
 /** Live action: race a delete/recreate of the same id against a human edit. */

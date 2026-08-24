@@ -16,7 +16,7 @@ import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
-import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
+import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS } from "../constants.mjs";
 import { boundedSleep } from "../timing.mjs";
 
 /** Stable scenario id recorded in redacted artifacts. */
@@ -203,15 +203,20 @@ export async function execute({ plan, context }) {
       if (humanResult.status === "rejected" && !isStaleConflictEvidence(humanResult.reason)) {
         failures += 1;
       }
-      // Core invariant: the delete must WIN — the dedicated row must be ABSENT
-      // from the authority after the race. A present row means the human edit
-      // resurrected the deleted row (the failure this scenario hunts).
-      const rows = await em.find(token, { id: plan.target.targetId });
-      if (rows.length > 0) failures += 1;
+      // Core invariant: the delete must WIN — the dedicated row must STAY
+      // ABSENT from the authority across the settle threshold. The sync
+      // worker applies the direct human edit asynchronously, so a SINGLE
+      // immediate read could report ok before a late edit resurrects the
+      // deleted row. The bounded settled polling below closes that race: a
+      // row that reappears in a later poll (resurrection) is a failure, and
+      // a row that is never absent means the delete never won (also a
+      // failure).
+      const verdict = await verifyStaysAbsent({ em, token, plan, context, critical });
+      if (verdict === "resurrected" || verdict === "never-absent") failures += 1;
       // The stale-projection residue is deferred to the cycle's convergence
       // check (which excludes durable tombstones); a single immediate
       // projection read here would be unsettled and is never judged. The
-      // authority invariant (row absent = no resurrection) is verified above.
+      // authority invariant (row stays absent = delete wins) is verified above.
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
         : { status: "ok", expectedErrors: 0, failures: 0, reason: "projection-residue-deferred" };
@@ -300,10 +305,57 @@ async function awaitInputProjection(client, spreadsheetId, tabName, target, cont
 }
 
 /**
+ * Verifies the delete-wins invariant: the dedicated row must STAY ABSENT
+ * from the authority across the settle-threshold of consecutive separated
+ * reads.
+ *
+ * The sync worker applies the direct human edit asynchronously, so a single
+ * immediate authority read could report ok before a late edit resurrects the
+ * deleted row. This bounded poll converges that race: once the row is ABSENT
+ * across `SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS` consecutive separated
+ * reads the delete is confirmed to have won (`absent`); if the row reappears
+ * after being absent (a late human edit resurrected it) it returns
+ * `resurrected`; if the row is never absent by the deadline the delete never
+ * won (`never-absent`). Each poll acquires the shared oracle lock ONLY for
+ * the instant read (a short critical section), so concurrent actors overlap
+ * the sleeps between polls.
+ *
+ * @returns {Promise<"absent" | "resurrected" | "never-absent">}
+ */
+async function verifyStaysAbsent({ em, token, plan, context, critical }) {
+  const deadline = Math.min(
+    Date.now() + SCENARIO_OBSERVE_TIMEOUT_MS,
+    context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER,
+  );
+  let absentStreak = 0;
+  let sawAbsent = false;
+  while (true) {
+    if (Date.now() >= deadline) return sawAbsent ? "resurrected" : "never-absent";
+    let absent = false;
+    await critical(async () => {
+      const rows = await em.find(token, { id: plan.target.targetId });
+      absent = rows.length === 0;
+    });
+    if (absent) {
+      sawAbsent = true;
+      absentStreak += 1;
+      if (absentStreak >= SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS) return "absent";
+    } else {
+      // The row reappeared after being absent -> a late human edit
+      // resurrected the deleted row.
+      if (sawAbsent) return "resurrected";
+      absentStreak = 0;
+    }
+    await boundedSleep(SCENARIO_OBSERVE_POLL_MS, deadline);
+  }
+}
+
+/**
  * Deterministic, idempotent orphan recovery for this scenario's dedicated
  * race row on a process-death resume.
  *
  * A run that dies before this scenario's guaranteed finally can leave the
+ * deterministic dedicated `targetId` row in the authority; the resume replay
  * deterministic dedicated `targetId` row in the authority; the resume replay
  * would reject it as a foreign id. This hook removes that exact planned row
  * (and only it) through the public EntityManager, so a resume of an

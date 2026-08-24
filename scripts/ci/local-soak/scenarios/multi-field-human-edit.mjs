@@ -42,22 +42,41 @@ const MIN_STRING_FIELDS = 2;
 export function plan({ cycle, order, rng, activeEntities }) {
   // MEDIUM 2: the plan's target entity must be in the ACTIVE subset (a
   // --tables run activates only some entities), so a plan never points at an
-  // inactive entity. Falls back to the full entity order when no subset is
-  // given (full run / standalone tests). Only entities with 2+ non-primary
-  // string fields can host a multi-field human edit (2+ human fields plus a
-  // distinct public field).
+  // inactive entity. The eligible pool ALWAYS derives from the active subset
+  // when one is given (never a fallback to an inactive entity); it is only
+  // filtered by the 2+ non-primary string-field requirement. When the active
+  // subset has no eligible entity, keep a deterministic plan over that subset
+  // marked ineligible so `execute` truthfully skips.
   const basePool = activeEntities !== undefined && activeEntities.length > 0
     ? activeEntities
     : SOAK_ENTITY_ORDER;
   const pool = basePool.filter((entry) => stringFieldCount(entry.name) >= MIN_STRING_FIELDS);
-  const entry = pool.length > 0 ? pool[rng.int(pool.length)] : SOAK_ENTITY_ORDER[0];
+  const eligible = pool.length > 0;
+  const entry = eligible ? pool[rng.int(pool.length)] : basePool[rng.int(basePool.length)];
+  const abbreviation = entry.name.replace(/^Soak/, "").toLowerCase();
+  if (!eligible) {
+    // No active entity can host a multi-field edit. Keep a deterministic plan
+    // over the active subset whose execute truthfully skips — never fall back
+    // to a non-active entity.
+    return {
+      tag: TAG,
+      jitterMs: 1 + rng.int(80),
+      eligible: false,
+      humanFields: [],
+      humanValues: {},
+      target: {
+        entityName: entry.name,
+        field: "id",
+        targetId: `multi-${abbreviation}-c${cycle}-${order}`,
+      },
+    };
+  }
   const fieldPlan = SOAK_FIELD_PLANS[entry.name];
   const stringFields = Object.entries(fieldPlan).filter(([name, spec]) => !spec.primary && spec.type === "string");
   const humanCount = Math.min(stringFields.length, MIN_STRING_FIELDS + rng.int(2));
   const humanFields = pickDistinct(rng, stringFields, humanCount).map(([name]) => name);
   const publicCandidates = Object.entries(fieldPlan).filter(([name, spec]) => !spec.primary && !humanFields.includes(name));
   const [publicField] = publicCandidates[rng.int(publicCandidates.length)];
-  const abbreviation = entry.name.replace(/^Soak/, "").toLowerCase();
   const humanValues = {};
   for (const field of humanFields) {
     humanValues[field] = `human-multi-c${cycle}-${order}-${field}`;
@@ -67,6 +86,7 @@ export function plan({ cycle, order, rng, activeEntities }) {
     // Barrier jitter: the human multi-field edit lands deterministically
     // after the public-API update starts, so the race window is controlled.
     jitterMs: 1 + rng.int(80),
+    eligible: true,
     humanFields,
     humanValues,
     target: {
@@ -113,6 +133,11 @@ export async function execute({ plan, context }) {
   const expected = new Set(context.activeEntities.map((entry) => entry.name));
   if (token === undefined || !expected.has(plan.target.entityName)) {
     return { status: "skipped", expectedErrors: 0, failures: 0, reason: "local-mode" };
+  }
+  // No active entity can host a multi-field edit: the deterministic plan is
+  // marked ineligible and execute truthfully skips (never an inactive target).
+  if (plan.eligible === false) {
+    return { status: "skipped", expectedErrors: 0, failures: 0, reason: "no-eligible-entity" };
   }
   const fieldPlan = SOAK_FIELD_PLANS[plan.target.entityName];
   const rng = new SeededRandom(deriveSeed(context.seed, context.cycle * 829 + 61));

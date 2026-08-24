@@ -62,6 +62,7 @@ function racePlan(): PlanLike {
 class FakeEm {
   store = new Map<string, Record<string, unknown>>();
   findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
+  findOverride: ((id: string) => Record<string, unknown>[] | undefined) | undefined;
   /** Throws on the flush whose 1-based call index matches. */
   flushBehavior: ((flushIndex: number) => void) | undefined;
   #flushIndex = 0;
@@ -82,6 +83,10 @@ class FakeEm {
     if (this.flushBehavior !== undefined) this.flushBehavior(this.#flushIndex);
   }
   async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
+    if (this.findOverride !== undefined) {
+      const overridden = this.findOverride(filter.id);
+      if (overridden !== undefined) return overridden;
+    }
     const row = this.store.get(filter.id);
     return row === undefined ? [] : [row];
   }
@@ -264,6 +269,38 @@ describe("humanEditPublicDelete scenario", () => {
     expect(calls.length).toBe(1);
     expect(calls[0]!.value).toBe(plan.humanValue);
     // No-resurrection invariant: the row is absent after the delete wins.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("fails when a late human edit resurrects the row after the delete won", async () => {
+    // The sync worker applies the human edit asynchronously, so the deleted
+    // row can be resurrected AFTER it first appears absent. The old code
+    // reported ok on a single immediate read before the resurrection landed;
+    // the bounded settled polling must detect the reappearance and fail
+    // (never a verified ok).
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The delete removes the row from the authority; the bounded poll's FIRST
+    // read sees it absent, then a late human edit resurrects it on every
+    // subsequent read.
+    let findCount = 0;
+    em.findOverride = (id) => {
+      findCount += 1;
+      return findCount === 1
+        ? []
+        : [{ id, [plan.target.field]: plan.humanValue }];
+    };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
+    // The human edit was attempted once; the resurrection was detected, not
+    // reported as ok.
+    const calls = client.mutateCalls.filter((call) => call.identity === plan.target.targetId);
+    expect(calls.length).toBe(1);
+    // Guaranteed cleanup still leaves the authority without the row.
     expect(em.rows()).toEqual([]);
   });
 

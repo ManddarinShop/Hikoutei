@@ -118,6 +118,8 @@ class FakeClient {
   throwOnInsertCall: { index: number; code: string } | undefined;
   /** When false, the seam fails to reject a duplicate id (a bug to expose). */
   rejectDuplicateId = true;
+  /** When true, the seam corrupts the tab (overwrites with the duplicate) while still rejecting. */
+  leakOnReject = false;
 
   ensureTab(tabName: string, headers: string[]): void {
     this.tabs.set(tabName, { headers, rows: new Map() });
@@ -152,6 +154,11 @@ class FakeClient {
     if (this.rejectDuplicateId) {
       for (const identity of tab.rows.keys()) {
         if (identity === String(input.row.id)) {
+          if (this.leakOnReject) {
+            // A write-then-postcondition failure: the seam still corrupts the
+            // tab (overwrites with the duplicate-insert values) while rejecting.
+            tab.rows.set(String(input.row.id), tab.headers.map((header) => String(input.row[header] ?? "")));
+          }
           throw Object.assign(new Error("identity already exists"), {
             code: "identity_shifted",
           });
@@ -236,6 +243,12 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(plan.target.targetId).toMatch(/^dup-/);
     // The duplicate-insert set carries the SAME id with field values.
     expect(plan.dupRow.id).toBe(plan.target.targetId);
+    // Every duplicate-insert value is a string (the insert seam requires
+    // Record<string,string>; a number/boolean/date value would violate it).
+    for (const [field, value] of Object.entries(plan.dupRow)) {
+      expect(field).toBeDefined();
+      expect(typeof value).toBe("string");
+    }
     expect(plan.jitterMs).toBeGreaterThan(0);
   });
 
@@ -285,6 +298,25 @@ describe("humanInsertDuplicateId scenario", () => {
       expect(projectedRow![column]).not.toBe(String(value));
     }
     // Guaranteed cleanup removes the dedicated row.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("fails when a rejected duplicate insert still leaks an overwrite to the Sheet", async () => {
+    // The authority read alone reports the existing row unchanged, but a
+    // write-then-postcondition failure that leaked the duplicate values onto
+    // the Sheet (overwriting the row) must be detected by the direct-Sheet
+    // re-read: the identity must appear EXACTLY once with its ORIGINAL values.
+    const plan = dupPlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    client.rejectDuplicateId = true;
+    client.leakOnReject = true; // rejects but still overwrites the tab
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
+    // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });
 
