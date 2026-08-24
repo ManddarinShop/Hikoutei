@@ -15,6 +15,12 @@ import * as invalidHumanInput from "./invalidHumanInput.mjs";
 import * as localHumanWriteRace from "./localHumanWriteRace.mjs";
 import * as deleteRecreateRace from "./deleteRecreateRace.mjs";
 import * as pendingDeliveryReopen from "./pendingDeliveryReopen.mjs";
+import * as multiFieldHumanEdit from "./multi-field-human-edit.mjs";
+import * as deleteRecreateHumanEdit from "./deleteRecreateHumanEdit.mjs";
+import * as humanEditPublicDelete from "./human-edit-public-delete.mjs";
+import * as humanInsertDuplicateId from "./human-insert-duplicate-id.mjs";
+import * as humanDeleteRow from "./human-delete-row.mjs";
+import * as noOpHumanEdit from "./no-op-human-edit.mjs";
 
 /**
  * Every registered scenario, in stable registration order. Each entry is a
@@ -28,6 +34,12 @@ export const SCENARIO_REGISTRY = Object.freeze([
   localHumanWriteRace,
   deleteRecreateRace,
   pendingDeliveryReopen,
+  multiFieldHumanEdit,
+  deleteRecreateHumanEdit,
+  humanEditPublicDelete,
+  humanInsertDuplicateId,
+  humanDeleteRow,
+  noOpHumanEdit,
 ]);
 
 /** Scenarios ordered by id for deterministic lookups. */
