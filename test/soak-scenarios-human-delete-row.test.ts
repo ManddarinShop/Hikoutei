@@ -117,9 +117,6 @@ class FakeClient {
   deleteCalls: { identity: string }[] = [];
   /** When set, the 1-based delete call at this index throws with this code. */
   throwOnDeleteCall: { index: number; code: string } | undefined;
-  /** The authority the delete is applied to (simulating the sync worker). */
-  em: FakeEm | undefined;
-
   ensureTab(tabName: string, headers: string[]): void {
     this.tabs.set(tabName, { headers, rows: new Map() });
   }
@@ -149,8 +146,8 @@ class FakeClient {
     }
     const tab = this.tabs.get(input.tabName);
     if (tab !== undefined) tab.rows.delete(input.identity);
-    // Simulate the sync worker applying the observed delete to the authority.
-    this.em?.remove({ id: input.identity });
+    // SQLite is the authority: the human sheet delete removes the projection
+    // row from the tab but MUST NOT erase the SQLite row.
     return { rowNumber: 1 };
   }
 }
@@ -248,17 +245,14 @@ describe("humanDeleteRow scenario", () => {
     expect(result.failures).toBe(0);
   });
 
-  it("verifies the delete is applied and the row is NOT resurrected (ok)", async () => {
-    // Core hypothesis: a human delete raced with a public update must be
-    // observed and applied, and the concurrent public update must NOT
-    // resurrect the deleted row. When the delete is applied (the row is
-    // absent from the authority) and stays absent, the scenario reports a
-    // verified ok.
+  it("retains the authority row and applies the public update (ok)", async () => {
+    // Core hypothesis: SQLite is the authority, so a human sheet delete must
+    // NOT erase the SQLite row. The row is retained in the authority and the
+    // public update value is reflected; the scenario reports a verified ok.
     const plan = deletePlan();
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
-    client.em = em; // the delete is applied to the authority by the worker
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
     expect(result.status).toBe("ok");
     expect(result.reason).toBe("race-winner-verified");
@@ -266,8 +260,11 @@ describe("humanDeleteRow scenario", () => {
     // The human delete was attempted on the dedicated row exactly once.
     const calls = client.deleteCalls.filter((call) => call.identity === plan.target.targetId);
     expect(calls.length).toBe(1);
-    // No-resurrection invariant: the row is absent after the delete is
-    // observed/applied, and guaranteed cleanup leaves the authority empty.
+    // A verified ok is only reported when the authority-retention check
+    // observed the row present in SQLite with the public update value
+    // reflected, so the sheet delete did NOT erase the authority row.
+    // Guaranteed cleanup then removes the dedicated row and leaves the
+    // authority empty.
     expect(em.rows()).toEqual([]);
   });
 
@@ -279,7 +276,6 @@ describe("humanDeleteRow scenario", () => {
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
-    client.em = em;
     // The 2nd flush is the public update's commit; it rejects with a
     // non-stale transport code.
     em.flushBehavior = (index) => {
