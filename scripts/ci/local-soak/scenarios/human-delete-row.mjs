@@ -2,12 +2,13 @@
  * Scenario: a human deletes a row from User_Input while the public API
  * updates that same row.
  *
- * Hypothesis: a human deletes a row from User_Input while the public API
- * updates that same row. The delete must be observed and applied (or
- * correctly recorded as a conflict), and a concurrent public update must
- * NOT resurrect the deleted row or leave a stale projection. The scenario
- * exposes a human delete lost, a public update resurrecting a deleted row,
- * or a stale projection.
+ * Hypothesis: SQLite is the authority and User_Input is an asynchronous
+ * human-facing projection, so a human deleting a row from the Sheet MUST NOT
+ * destroy the authority row. The public API update of that same row must
+ * still apply to the authority, and the row must be RETAINED in SQLite even
+ * though its projection row was removed from the Sheet. The scenario exposes
+ * authority data loss (the human sheet delete wrongly erases the SQLite row)
+ * or a public update that fails to apply to the retained authority row.
  *
  * The race needs a live Sheets/observation seam plus the public EntityManager
  * fork, so it runs only in live mode; local mode records `skipped`.
@@ -87,13 +88,12 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * removed (in a guaranteed finally path) so the final SQLite state matches
  * the deterministic replay.
  *
- * After the race settles, the scenario verifies the no-resurrection
- * invariant: once the delete is observed/applied (the row is absent from
- * the authority), the row must STAY absent — a concurrent public update
- * must not resurrect it — and the projection must not show a stale row. A
- * delete that succeeded on the Sheet but never reached the authority is a
- * lost human delete (a real failure); a delete that never applied is a
- * truthful skip.
+ * After the race settles, the scenario verifies the authority-retention
+ * invariant: SQLite is the authority, so the human sheet delete must NOT
+ * erase the authority row. The dedicated row must be RETAINED in the
+ * authority, and the public update must apply to it (the row reflects the
+ * update value). Authority data loss (the row disappears from SQLite) or a
+ * public update that never lands on the retained row is a real failure.
  *
  * @param {{ plan: object, context: object }} input plan + live context.
  * @returns {Promise<object>} { status, expectedErrors, failures, cleanupFailures?, reason? }.
@@ -197,24 +197,20 @@ export async function execute({ plan, context }) {
       if (humanResult.status === "rejected" && !isStaleConflictEvidence(humanResult.reason)) {
         failures += 1;
       }
-      // Verify the no-resurrection invariant: once the delete is
-      // observed/applied (the row is absent from the authority), the row must
-      // STAY absent — a concurrent public update must not resurrect it — and
-      // the projection must not show a stale row. A delete that succeeded on
-      // the Sheet but never reached the authority is a lost human delete.
-      const humanSucceeded = humanResult.status === "fulfilled";
-      const verdict = await verifyNoResurrection({
-        em, token, plan, context, critical, client, tabName,
+      // Verify the authority-retention invariant: SQLite is the authority,
+      // so a human deleting the row from the Sheet projection MUST NOT erase
+      // the SQLite row. The dedicated row must be retained in the authority
+      // AND reflect the public update. Authority data loss (the row vanishes
+      // from SQLite) or a public update that never lands on the retained row
+      // is a real failure.
+      const verdict = await verifyAuthorityRetained({
+        em, token, plan, context, critical,
       });
-      if (verdict === "resurrected" || verdict === "stale-projection") failures += 1;
-      if (verdict === "unobserved" && humanSucceeded) {
-        // The human delete succeeded (row removed from the Sheet) but the
-        // authority never reflected it -> the human delete was lost.
-        failures += 1;
-      }
+      if (verdict === "lost") failures += 1;
+      if (verdict === "unobserved") failures += 1;
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-        : verdict === "applied"
+        : verdict === "retained"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
           : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
@@ -251,51 +247,43 @@ export async function execute({ plan, context }) {
 }
 
 /**
- * Verifies the no-resurrection invariant after the race settles.
+ * Verifies the authority-retention invariant after the race settles.
  *
- * Polls the public authority (EntityManager) for the dedicated row. Once the
- * row is ABSENT across the settle-threshold of consecutive separated reads,
- * the delete is observed/applied; the scenario then confirms the projection
- * does not show a stale row and returns `applied`. If the row reappears
- * after being absent, a concurrent public update resurrected the deleted row
- * (`resurrected`). If the row is never absent by the deadline, the delete
- * never applied (`unobserved` — the caller decides whether that is a lost
- * delete or a truthful skip).
+ * Polls the public authority (EntityManager) for the dedicated row. SQLite is
+ * the authority, so the row MUST be retained in SQLite even though the human
+ * removed its projection row from the Sheet. Returns `retained` once the row
+ * is present AND reflects the public update value across the settle-threshold
+ * of consecutive separated reads; `lost` if the row ever becomes ABSENT from
+ * the authority (a human sheet delete that erased the SQLite row — authority
+ * data loss); `unobserved` if no state settled before the deadline.
  *
  * Each poll acquires the shared oracle lock ONLY for the instant read (a
  * short critical section), so concurrent actors can overlap the sleeps
  * between polls.
  *
- * @returns {Promise<"applied" | "resurrected" | "stale-projection" | "unobserved">}
+ * @returns {Promise<"retained" | "lost" | "unobserved">}
  */
-async function verifyNoResurrection({ em, token, plan, context, critical, client, tabName }) {
+async function verifyAuthorityRetained({ em, token, plan, context, critical }) {
   const deadline = Math.min(
     Date.now() + SCENARIO_OBSERVE_TIMEOUT_MS,
     context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER,
   );
-  let absentStreak = 0;
-  let sawAbsent = false;
+  let retainedStreak = 0;
   while (true) {
-    if (Date.now() >= deadline) return sawAbsent ? "resurrected" : "unobserved";
-    let absent = false;
+    if (Date.now() >= deadline) return retainedStreak > 0 ? "retained" : "unobserved";
+    let row = null;
     await critical(async () => {
-      const row = await em.findOne(token, { id: plan.target.targetId });
-      absent = row === null;
+      row = await em.findOne(token, { id: plan.target.targetId });
     });
-    if (absent) {
-      sawAbsent = true;
-      absentStreak += 1;
-      if (absentStreak >= SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS) {
-        // The delete is applied and the authority stays absent. Confirm no
-        // stale projection: the row must also be absent from the _Input tab.
-        const projected = await readInputCell(client, context.live.spreadsheetId, tabName, plan.target, context);
-        return projected === undefined ? "applied" : "stale-projection";
-      }
+    if (row === null) return "lost";
+    // The public update applies to the retained authority row: the row's
+    // editable field reflects the public update value.
+    const landed = String(row[plan.target.field] ?? "") === String(plan.updateValue);
+    if (landed) {
+      retainedStreak += 1;
+      if (retainedStreak >= SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS) return "retained";
     } else {
-      // The row reappeared after being absent -> a concurrent public update
-      // resurrected the deleted row.
-      if (sawAbsent) return "resurrected";
-      absentStreak = 0;
+      retainedStreak = 0;
     }
     await boundedSleep(SCENARIO_OBSERVE_POLL_MS, deadline);
   }
