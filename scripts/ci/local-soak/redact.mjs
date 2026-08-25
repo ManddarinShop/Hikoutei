@@ -215,6 +215,21 @@ export const KNOWN_REASON_CODES = Object.freeze([
   // the human edit landed on the intended identity row, or every rejection
   // was the fail-closed `identity_shifted` guard (a verified ok).
   "guard-invariant-verified",
+  // The sheet-corruption-detection scenario: the injected corruption WAS
+  // detected and reported by the read seam (one expected error; nothing
+  // was repaired — `repaired: false` is the #194 defect evidence).
+  // The kind-specific reason keeps the redacted artifact diagnostic.
+  "corruption-detected-duplicate-identity",
+  "corruption-detected-shifted-cell",
+  "corruption-detected-missing-field",
+  // The injected corruption was observable on the Sheet but the detection
+  // read did NOT surface it: the guard deficiency this scenario hunts (a
+  // real failure).
+  "corruption-missed",
+  // The injected corrupted shape could not be produced in the tab (no
+  // blank row below the dedicated row, or the injected cells were not
+  // readable back): the scenario records a truthful skip, never a miss.
+  "injection-not-observable",
   "cycle-error",
   "reopen-cleanup-failed",
   // Startup/reopen completed after the run's epoch deadline expired: the
