@@ -211,6 +211,21 @@ export const KNOWN_REASON_CODES = Object.freeze([
   // convergence check (which excludes tombstones); the scenario verifies
   // only the observable authority invariant.
   "projection-residue-deferred",
+  // The sheet-corruption-detection scenario: the injected corruption WAS
+  // detected and reported by the read seam (one expected error; nothing
+  // was repaired — `repaired: false` is the #194 defect evidence).
+  // The kind-specific reason keeps the redacted artifact diagnostic.
+  "corruption-detected-duplicate-identity",
+  "corruption-detected-shifted-cell",
+  "corruption-detected-missing-field",
+  // The injected corruption was observable on the Sheet but the detection
+  // read did NOT surface it: the guard deficiency this scenario hunts (a
+  // real failure).
+  "corruption-missed",
+  // The injected corrupted shape could not be produced in the tab (no
+  // blank row below the dedicated row, or the injected cells were not
+  // readable back): the scenario records a truthful skip, never a miss.
+  "injection-not-observable",
   "cycle-error",
   "reopen-cleanup-failed",
   // Startup/reopen completed after the run's epoch deadline expired: the

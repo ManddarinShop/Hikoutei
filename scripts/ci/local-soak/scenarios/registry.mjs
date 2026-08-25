@@ -21,6 +21,7 @@ import * as humanEditPublicDelete from "./human-edit-public-delete.mjs";
 import * as humanInsertDuplicateId from "./human-insert-duplicate-id.mjs";
 import * as humanDeleteRow from "./human-delete-row.mjs";
 import * as noOpHumanEdit from "./no-op-human-edit.mjs";
+import * as sheetCorruptionDetection from "./sheetCorruptionDetection.mjs";
 
 /**
  * Every registered scenario, in stable registration order. Each entry is a
@@ -40,6 +41,7 @@ export const SCENARIO_REGISTRY = Object.freeze([
   humanInsertDuplicateId,
   humanDeleteRow,
   noOpHumanEdit,
+  sheetCorruptionDetection,
 ]);
 
 /** Scenarios ordered by id for deterministic lookups. */

@@ -638,6 +638,101 @@ export function createDirectSheetsClient({
     return { deleted: targets.length };
   }
 
+  /**
+   * Writes RAW cell values by explicit grid row/column index in ONE
+   * batchUpdate (corruption-injection seam only — never used for
+   * legitimate writes).
+   *
+   * The guarded write seams (`mutateInputCell`, `insertInputRow`,
+   * `deleteInputRow`) fail closed on every corrupted shape they can
+   * detect, so a soak scenario that must INJECT a corrupted shape (a
+   * duplicate identity row, or a cell-shifted row whose identity column
+   * is blank) needs one seam that can produce exactly those shapes. Every
+   * target cell is required to be BLANK in a fresh pre-write snapshot
+   * so a raw write can never overwrite a live actor row: an occupied target fails closed with the stable
+   * `identity_shifted` class and the scenario records a truthful skip.
+   * The injected shape itself is verified by the scenario's own pure
+   * detection over a direct read — this seam never runs a postcondition
+   * that would refuse the very corruption it is meant to produce.
+   *
+   * `writes` maps each write to `{ rowIndex, columnIndex, value }`
+   * (0-based grid coordinates, row 0 = header). `deadlineAtMs` is the
+   * probe phase's ACTIVE OPERATION deadline; every request of the call is
+   * asserted and timeouts against `min(phase deadline, run deadline)`.
+   */
+  async function injectInputCells({
+    spreadsheetId, tabName, writes, deadlineAtMs,
+  }) {
+    if (!Array.isArray(writes) || writes.length === 0) {
+      throw new DirectSheetsError("injection writes must be a non-empty array", "identity_shifted");
+    }
+    const { rows, sheetId } = await readInputSnapshot(spreadsheetId, tabName, deadlineAtMs);
+    for (const write of writes) {
+      if (!isValidGridCoordinate(write?.rowIndex) || !isValidGridCoordinate(write?.columnIndex)) {
+        throw new DirectSheetsError("injection write coordinate invalid", "identity_shifted");
+      }
+      if (!isBlankCell(rows[write.rowIndex]?.[write.columnIndex])) {
+        throw new DirectSheetsError("injection target cell not blank", "identity_shifted");
+      }
+    }
+    await paceNextRequest();
+    const timeout = nextRequestTimeout(deadlineAtMs);
+    await client.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: writes.map(({ rowIndex, columnIndex, value }) => ({
+          updateCells: {
+            start: { sheetId, rowIndex, columnIndex },
+            rows: [{ values: [{ userEnteredValue: { stringValue: String(value) } }] }],
+            fields: "userEnteredValue",
+          },
+        })),
+      },
+    }, { timeout, retry: false }).catch(toStatusError);
+    return { writes: writes.length };
+  }
+
+  /**
+   * Deletes ONE grid row by explicit 0-based index in one batchUpdate
+   * (corruption-injection cleanup only).
+   *
+   * The guarded `deleteInputRow` resolves its target BY IDENTITY, so it
+   * can never remove a corrupted row whose identity column is blank (a
+   * cell-shifted row) or the SECOND copy of a duplicated identity (it
+   * would always delete the first match). This seam removes the exact
+   * grid row the scenario injected; the scenario verifies the row still
+   * holds its injected content immediately before deleting, so a live row
+   * that raced into the coordinate is never removed. Row 0 (the header)
+   * and out-of-range indexes fail closed with the stable
+   * `identity_shifted` class.
+   *
+   * `deadlineAtMs` is the probe phase's ACTIVE OPERATION deadline; every
+   * request of the call is asserted and timeouts against
+   * `min(phase deadline, run deadline)`.
+   */
+  async function deleteInputRowAt({ spreadsheetId, tabName, rowIndex, deadlineAtMs }) {
+    if (!isValidGridCoordinate(rowIndex)) {
+      throw new DirectSheetsError("delete row index invalid", "identity_shifted");
+    }
+    const { rows, sheetId } = await readInputSnapshot(spreadsheetId, tabName, deadlineAtMs);
+    if (rowIndex <= 0 || rowIndex >= rows.length) {
+      throw new DirectSheetsError("delete row index out of range", "identity_shifted");
+    }
+    await paceNextRequest();
+    const timeout = nextRequestTimeout(deadlineAtMs);
+    await client.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [{
+          deleteDimension: {
+            range: { sheetId, dimension: "ROWS", startIndex: rowIndex, endIndex: rowIndex + 1 },
+          },
+        }],
+      },
+    }, { timeout, retry: false }).catch(toStatusError);
+    return { rowNumber: rowIndex + 1 };
+  }
+
   return {
     readTabRows,
     readTabsRows,
@@ -645,6 +740,8 @@ export function createDirectSheetsClient({
     mutateInputCells,
     insertInputRow,
     deleteInputRow,
+    injectInputCells,
+    deleteInputRowAt,
     deleteTabs,
   };
 }
@@ -704,6 +801,19 @@ export function resolveTabsToDelete(properties, tabNames, includeReceiptTab) {
  * @param {string} input.value the value the write intended to place.
  * @returns {{ status: "ok" } | { status: "identity_shifted" }}
  */
+/**
+ * True when a raw grid coordinate (row or column index) is usable for an
+ * injection write or raw row delete: a non-negative safe integer. `null`, strings,
+ * fractions, NaN, negative, and out-of-safe-range values are never usable
+ * and must never reach an update/delete request.
+ *
+ * @param {unknown} value a candidate coordinate.
+ * @returns {boolean}
+ */
+function isValidGridCoordinate(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 /**
  * True when a sheetId from an untrusted SDK response is a usable numeric
  * id: a non-negative safe integer. `null`, strings, fractions, NaN,
