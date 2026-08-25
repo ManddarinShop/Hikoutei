@@ -211,6 +211,10 @@ export const KNOWN_REASON_CODES = Object.freeze([
   // convergence check (which excludes tombstones); the scenario verifies
   // only the observable authority invariant.
   "projection-residue-deferred",
+  // The shifted-human-edit race settled with the identity invariant intact:
+  // the human edit landed on the intended identity row, or every rejection
+  // was the fail-closed `identity_shifted` guard (a verified ok).
+  "guard-invariant-verified",
   // The sheet-corruption-detection scenario: the injected corruption WAS
   // detected and reported by the read seam (one expected error; nothing
   // was repaired — `repaired: false` is the #194 defect evidence).
