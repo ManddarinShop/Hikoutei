@@ -387,7 +387,9 @@ describe("invalid provider-response classification (issue #357)", () => {
     // entered value is valid and the cell is not a formula.
     (tab.cells as unknown as Map<string, unknown>).set("1,0", {
       userEnteredValue: { stringValue: "literal-1" },
-      effectiveValue: 42,
+      // A numeric literal collides with the event's `ts` timestamp (seconds can
+      // be "42"), so use a string sentinel that can never appear in a timestamp.
+      effectiveValue: "malformed-literal-primitive-1",
     });
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
@@ -407,7 +409,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(event.providerReason).toBe(SYNC_INVALID_PROVIDER_REASONS.MALFORMED_REPLY);
     expect(event.message).toBeUndefined();
     expect(JSON.stringify(event)).not.toContain("literal-1");
-    expect(JSON.stringify(event)).not.toContain("42");
+    expect(JSON.stringify(event)).not.toContain("malformed-literal-primitive-1");
   });
 
   it("does not let a valid entered format hide a malformed effective numberFormat", async () => {
