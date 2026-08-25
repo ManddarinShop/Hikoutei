@@ -251,7 +251,10 @@ export async function execute({ plan, context }) {
       // Bounded observation: the human fields must not be silently lost. A
       // partial application (some fields landed, others not) is a failure;
       // an ACCEPTED human write whose fields never land is silent loss.
-      const humanLanded = await observeHumanFields(em, token, plan, context, critical);
+      // When an earlier step already recorded a failure, the outcome is
+      // settled and the observation only needs to bound its own work (no
+      // async-landing wait), so it is passed the current failure count.
+      const humanLanded = await observeHumanFields(em, token, plan, context, critical, humanAccepted, failures);
       if (humanLanded === "partial") failures += 1;
       if (humanLanded === "not-applied" && humanAccepted) failures += 1;
       result = failures > 0
@@ -298,16 +301,17 @@ export async function execute({ plan, context }) {
  * authority.
  *
  * Polls the authority (through the public EntityManager) until the human
- * fields settle on one state across `SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS`
- * separated reads. The human edit lands asynchronously, so a SINGLE read
- * could misclassify the state before all fields land; the settle threshold
- * closes that race. Returns:
+ * fields settle on one state. The human edit lands asynchronously (via the
+ * library's polling, up to one full polling round), so a positive state
+ * (landed/partial) settles only across `SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS`
+ * separated reads, and a still-"not-applied" row is polled until the
+ * observation deadline rather than being settled early. Returns:
  *
  * - "landed": ALL human fields show their human values (atomic application).
  * - "partial": SOME but not all human fields show their human values
  *   (partial field application — a failure).
- * - "not-applied": NONE of the human fields show their human values.
- * - "unobserved": no state settled before the deadline.
+ * - "not-applied": NONE of the human fields show their human values by the
+ *   deadline.
  *
  * Each poll acquires the shared oracle lock ONLY for the instant read (a
  * short critical section), so concurrent actors can overlap the sleeps
@@ -315,7 +319,7 @@ export async function execute({ plan, context }) {
  *
  * @returns {Promise<"landed" | "partial" | "not-applied" | "unobserved">}
  */
-async function observeHumanFields(em, token, plan, context, critical) {
+async function observeHumanFields(em, token, plan, context, critical, humanAccepted, alreadyFailed) {
   const deadline = Math.min(
     Date.now() + SCENARIO_OBSERVE_TIMEOUT_MS,
     context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER,
@@ -323,7 +327,13 @@ async function observeHumanFields(em, token, plan, context, critical) {
   let lastState;
   let streak = 0;
   while (true) {
-    if (Date.now() >= deadline) return "unobserved";
+    // The human write lands asynchronously (via the library's polling, up to
+    // one full polling round). Settling on the first few "not-applied"
+    // reads would misclassify a not-yet-applied write as silent loss and then
+    // delete the row before polling ever reflects it. So only a POSITIVE
+    // state (landed/partial) settles on the streak threshold; a still-
+    // "not-applied" row keeps being polled until the observation deadline.
+    if (Date.now() >= deadline) return lastState ?? "not-applied";
     let state = "not-applied";
     await critical(async () => {
       const row = await em.findOne(token, { id: plan.target.targetId });
@@ -342,7 +352,18 @@ async function observeHumanFields(em, token, plan, context, critical) {
       lastState = state;
       streak = 1;
     }
-    if (streak >= SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS) return state;
+    // A REJECTED human write (humanAccepted=false) never lands, so its
+    // "not-applied" state is final and settles on the streak threshold. An
+    // already-failed scenario (alreadyFailed > 0) has its outcome decided,
+    // so its observation likewise settles on the threshold instead of
+    // waiting out the async-landing deadline. Only an ACCEPTED write in an
+    // otherwise-clean scenario waits for the library's async polling to
+    // reflect it, so its still-"not-applied" row is polled until the
+    // deadline (a positive landed/partial always settles on the threshold).
+    if ((state !== "not-applied" || !humanAccepted || alreadyFailed > 0) &&
+        streak >= SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS) {
+      return state;
+    }
     await boundedSleep(SCENARIO_OBSERVE_POLL_MS, deadline);
   }
 }
