@@ -15,6 +15,7 @@ import * as invalidHumanInput from "./invalidHumanInput.mjs";
 import * as localHumanWriteRace from "./localHumanWriteRace.mjs";
 import * as deleteRecreateRace from "./deleteRecreateRace.mjs";
 import * as pendingDeliveryReopen from "./pendingDeliveryReopen.mjs";
+import * as shiftedHumanEdit from "./shiftedHumanEdit.mjs";
 
 /**
  * Every registered scenario, in stable registration order. Each entry is a
@@ -28,6 +29,7 @@ export const SCENARIO_REGISTRY = Object.freeze([
   localHumanWriteRace,
   deleteRecreateRace,
   pendingDeliveryReopen,
+  shiftedHumanEdit,
 ]);
 
 /** Scenarios ordered by id for deterministic lookups. */
