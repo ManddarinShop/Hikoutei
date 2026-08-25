@@ -150,6 +150,45 @@ export function createDirectSheetsClient(options?: {
     readonly identity: string;
     readonly deadlineAtMs?: number;
   }): Promise<{ readonly rowNumber: number }>;
+  /**
+   * Writes RAW cell values by explicit grid row/column index in ONE
+   * batchUpdate (corruption-injection seam only — never used for
+   * legitimate writes). Every target cell must be BLANK in the fresh
+   * pre-write snapshot, so a raw write can never overwrite a live actor row (occupied target fails closed
+   * with the stable `identity_shifted` class). The injected shape is
+   * verified by the scenario's own pure detection over a direct read, never
+   * by a postcondition that would refuse the corruption it produces.
+   * `writes` maps each write to `{ rowIndex, columnIndex, value }`
+   * (0-based grid coordinates, row 0 = header). `deadlineAtMs` is the
+   * probe phase's ACTIVE OPERATION deadline.
+   */
+  injectInputCells(input: {
+    readonly spreadsheetId: string;
+    readonly tabName: string;
+    readonly writes: ReadonlyArray<{
+      readonly rowIndex: number;
+      readonly columnIndex: number;
+      readonly value: string;
+    }>;
+    readonly deadlineAtMs?: number;
+  }): Promise<{ readonly writes: number }>;
+  /**
+   * Deletes ONE grid row by explicit 0-based index in one batchUpdate
+   * (corruption-injection cleanup only). Removes rows the guarded
+   * `deleteInputRow` cannot target by identity (a cell-shifted row with a
+   * blank identity column, or the second copy of a duplicated identity).
+   * The scenario verifies the row still holds its injected content before
+   * calling; row 0 and out-of-range indexes fail closed with the stable
+   * `identity_shifted` class. `deadlineAtMs` is the probe phase's ACTIVE
+   * OPERATION deadline.
+   */
+  deleteInputRowAt(input: {
+    readonly spreadsheetId: string;
+    readonly tabName: string;
+    readonly rowIndex: number;
+    readonly deadlineAtMs?: number;
+  }): Promise<{ readonly rowNumber: number }>;
+
   /** `options.deadlineAtMs` is the ACTIVE OPERATION (phase) deadline. */
   deleteTabs(
     spreadsheetId: string,
