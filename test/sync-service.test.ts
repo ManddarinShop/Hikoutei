@@ -176,11 +176,10 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       await em.flush();
     }
     await service.effectSupervisor.runOnce();
-    // Without an explicit batch controller the worker chunks the regular
-    // route at EFFECT_BATCH_LIMIT (300); the adaptive controller starts at
-    // its INITIAL (100) and grows toward the cap.
+    // The direct provider's adaptive controller starts at the provider's
+    // MAX_EFFECTS_PER_REQUEST cap (1,000), not the generic 100 default.
     expect(regularLimits.length).toBeGreaterThan(0);
-    for (const limit of regularLimits) expect(limit).toBe(100);
+    for (const limit of regularLimits) expect(limit).toBe(1_000);
   });
 
   it("uses the googleSheetsApi timeout for lease-headroom validation", async () => {
@@ -264,8 +263,8 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
   });
 
   it("rejects a default-pacing lease exactly at the paced worst case", async () => {
-    // The default interval (800 ms) participates in the bound: 60,000 +
-    // 800 + 2 x 10,000 + 30,000 = 110,800 ms is exactly the worst case,
+    // The default interval (900 ms) participates in the bound: 60,000 +
+    // 900 + 2 x 10,000 + 30,000 = 110,900 ms is exactly the worst case,
     // and the strict check rejects a lease that only equals it.
     const spreadsheet = new StubSpreadsheet();
     await expect(createInternalSyncService({
@@ -275,7 +274,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
       googleSheetsApi: {
         transport: new StubSheetsTransport(spreadsheet),
       },
-      effectLeaseDurationMs: 110_800,
+      effectLeaseDurationMs: 110_900,
     })).rejects.toMatchObject({
       code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
       message: "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
@@ -283,8 +282,8 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
   });
 
   it("accepts a default-pacing lease one millisecond above the paced worst case", async () => {
-    // 110,801 ms beats the strict 110.8 s worst case by 1 ms, so the
-    // DEFAULT 800 ms interval stays valid with the default 120 s lease.
+    // 110,901 ms beats the strict 110.9 s worst case by 1 ms, so the
+    // DEFAULT 900 ms interval stays valid with the default 120 s lease.
     // A no-op sleep keeps the stub-based provisioning instant while the
     // interval bound is still validated.
     const spreadsheet = new StubSpreadsheet();
@@ -296,7 +295,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
         transport: new StubSheetsTransport(spreadsheet),
         sleep: async () => undefined,
       },
-      effectLeaseDurationMs: 110_801,
+      effectLeaseDurationMs: 110_901,
       pollingIntervalMs: 3_600_000,
       effectIdleIntervalMs: 3_600_000,
     });

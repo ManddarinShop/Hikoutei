@@ -709,20 +709,22 @@ describe("env-driven sync auto-start", () => {
     })).toBeUndefined();
   });
 
-  it("accepts a plain decimal integer within the 2,000..9,999 ms bounds", () => {
-    // The env floor (2,000 ms) and the provider's default interval (800 ms,
-    // internal-only tuning target) are asserted independently here.
-    expect(GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS).toBe(800);
-    expect(MIN_SYNC_RATE_LIMIT_INTERVAL_MS).toBe(2_000);
+  it("accepts a plain decimal integer within the 900..9,999 ms bounds", () => {
+    // The provider's quota-safe default must equal the env floor: absent
+    // env falls back to the demonstrated-clean 900 ms interval (re-measured
+    // 2026-08-28 at the 1,000-effect request cap: 19-minute sustained soak,
+    // 64,000 effects, zero 429s).
+    expect(GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS).toBe(900);
+    expect(MIN_SYNC_RATE_LIMIT_INTERVAL_MS).toBe(900);
     expect(resolveSyncRateLimitIntervalMs({
       [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "2500",
     })).toBe(2_500);
-    // 2,000 ms is the quota-safe floor: the smallest interval demonstrated
-    // clean under the current shared service-account quota profile, so the
-    // exact floor value must be accepted.
+    // 900 ms is the quota-safe floor: the smallest interval demonstrated
+    // clean under the 1,000-effect cap profile, so the exact floor value
+    // must be accepted.
     expect(resolveSyncRateLimitIntervalMs({
-      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "2000",
-    })).toBe(2_000);
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "900",
+    })).toBe(900);
     expect(resolveSyncRateLimitIntervalMs({
       [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: String(MIN_SYNC_RATE_LIMIT_INTERVAL_MS),
     })).toBe(MIN_SYNC_RATE_LIMIT_INTERVAL_MS);
