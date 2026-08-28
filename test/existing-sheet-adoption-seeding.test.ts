@@ -25,8 +25,10 @@ import {
   ROW_BINDING_STATES,
 } from "../src/domain/model/constants.js";
 import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
+import { stableHash } from "../src/shared/encoding/stableEncode.js";
 import type { NormalizedCell } from "../src/shared/encoding/types.js";
 import { presentValue } from "../src/shared/state/constructors.js";
+import type { Presence } from "../src/shared/state/types.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import {
   registerTypedSheetsEntityMappings,
@@ -37,10 +39,17 @@ import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/p
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
+  SYNC_PROTOCOL_VERSIONS,
 } from "../src/application/sync/sheetsContract/constants.js";
+import {
+  CELL_OBSERVATION_KINDS,
+} from "../src/shared/encoding/constants.js";
+import type { InternalSyncProvider } from "../src/application/sync/service/serviceOptions.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshots,
+  type ReadSyncSnapshotRequest,
+  type SyncObservedSnapshot,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
 import {
   completeExistingSheetAdoption,
@@ -95,46 +104,85 @@ const BETA: NormalizedCell = { kind: "string", value: "Beta" };
 const TOTAL_1: NormalizedCell = { kind: "string", value: "100" };
 const TOTAL_2: NormalizedCell = { kind: "string", value: "200" };
 
-function observedSnapshot() {
-  const cells = (fields: Record<string, NormalizedCell>) =>
-    Object.fromEntries(
-      Object.entries(fields).map(([fieldName, value]) => [
-        fieldName,
-        {
-          cellKind: "value",
-          normalizedCell: value,
-          stableHash: { kind: "absent" },
-          formulaHash: { kind: "absent" },
-          mergeRange: { kind: "absent" },
-          errorCode: { kind: "absent" },
-        },
-      ]),
-    );
+function adoptionProvider() {
+  return new FakeSyncSheetsProvider([{
+    physicalSheetId: INPUT_PHYSICAL,
+    sheetName: "Probe_Input",
+    registeredRange: "A:D",
+    projection: SYNC_PROJECTIONS.USER_INPUT,
+    schemaVersion: 1,
+    headers: ["invoiceNo", "customer", "total", "__hikoutei_row_id"],
+    rows: [
+      {
+        targetId: "INV-1",
+        physicalAnchor: "entity:INV-1",
+        fields: { invoiceNo: INV_1, customer: ACME, total: TOTAL_1 },
+      },
+      {
+        targetId: "INV-2",
+        physicalAnchor: "entity:INV-2",
+        fields: { invoiceNo: INV_2, customer: BETA, total: TOTAL_2 },
+      },
+    ],
+  }], { realProviderSnapshotShape: true });
+}
+
+function inputRequest(): ReadSyncSnapshotRequest {
+  return {
+    physicalSheetId: INPUT_PHYSICAL,
+    sheetName: "Probe_Input",
+    registeredRange: "A:D",
+    projection: SYNC_PROJECTIONS.USER_INPUT,
+    schemaVersion: 1,
+    readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
+  };
+}
+
+/**
+ * Hand-built observed snapshot for the stability-gate test: the anchors are
+ * chosen by the test (a provider-generated anchor must fail the gate).
+ */
+function handBuiltObservedSnapshot(
+  overrides: readonly { readonly rowIndex: number; readonly anchor: string }[] = [],
+): SyncObservedSnapshot {
+  const cell = (value: NormalizedCell) => ({
+    cellKind: CELL_OBSERVATION_KINDS.LITERAL,
+    normalizedCell: value,
+    stableHash: { kind: "absent" } as Presence<string>,
+    formulaHash: { kind: "absent" } as Presence<string>,
+    mergeRange: { kind: "absent" } as Presence<string>,
+    errorCode: { kind: "absent" } as Presence<string>,
+  });
+  const fields = (pk: string, customer: string, total: string) => ({
+    invoiceNo: { kind: "string", value: pk } as NormalizedCell,
+    customer: { kind: "string", value: customer } as NormalizedCell,
+    total: { kind: "string", value: total } as NormalizedCell,
+  });
+  const rows = [
+    { pk: "INV-1", customer: "Acme", total: "100", anchor: "sync-anchor:7f3c" },
+    { pk: "INV-2", customer: "Beta", total: "200", anchor: "entity:INV-2" },
+  ];
+  void rows;
   return {
     anchors: { assigned: 0, existing: 2, duplicateAnchors: [] },
     snapshot: {
-      protocolVersion: "v1" as const,
+      protocolVersion: SYNC_PROTOCOL_VERSIONS.V1,
       sheetName: "Probe_Input",
       registeredRange: "A:D",
       projection: SYNC_PROJECTIONS.USER_INPUT,
       schemaVersion: 1,
       headers: ["invoiceNo", "customer", "total"],
-      rows: [
-        {
-          rowNumber: 2,
-          physicalAnchor: presentValue("entity:INV-1"),
-          visibleRevision: { kind: "absent" },
-          visibleHash: { kind: "absent" },
-          cells: cells({ invoiceNo: INV_1, customer: ACME, total: TOTAL_1 }),
+      rows: rows.map((row, index) => ({
+        rowNumber: index + 2,
+        physicalAnchor: presentValue(overrides.find((o) => o.rowIndex === index + 2)?.anchor ?? row.anchor),
+        visibleRevision: { kind: "absent" },
+        visibleHash: { kind: "absent" },
+        cells: {
+          invoiceNo: { ...cell(fields(row.pk, row.customer, row.total).invoiceNo!), stableHash: presentValue(stableHash(fields(row.pk, row.customer, row.total).invoiceNo!)) },
+          customer: { ...cell(fields(row.pk, row.customer, row.total).customer!), stableHash: presentValue(stableHash(fields(row.pk, row.customer, row.total).customer!)) },
+          total: { ...cell(fields(row.pk, row.customer, row.total).total!), stableHash: presentValue(stableHash(fields(row.pk, row.customer, row.total).total!)) },
         },
-        {
-          rowNumber: 3,
-          physicalAnchor: presentValue("entity:INV-2"),
-          visibleRevision: { kind: "absent" },
-          visibleHash: { kind: "absent" },
-          cells: cells({ invoiceNo: INV_2, customer: BETA, total: TOTAL_2 }),
-        },
-      ],
+      })),
       snapshotHash: "snapshot-hash",
       unanchoredRows: [],
       duplicateAnchors: [],
@@ -166,27 +214,8 @@ describe("existing-sheet adoption seeding engine", () => {
   it("binds every observed row: binding, canonical INSERT, business key, observed visible state", async () => {
     const { orm, storage } = await createStorage();
     try {
-      const observed = observedSnapshot() as never;
-      const [observedSnap] = await observeSyncSnapshots(
-        {
-          async ensureRowAnchors() {
-            return { assigned: 0, existing: 2, duplicateAnchors: [] };
-          },
-          async readSnapshot() {
-            return observed.snapshot;
-          },
-        },
-        [{
-          physicalSheetId: INPUT_PHYSICAL,
-          sheetName: "Probe_Input",
-          registeredRange: "A:D",
-          projection: SYNC_PROJECTIONS.USER_INPUT,
-          schemaVersion: 1,
-          readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
-        }],
-      );
-      void observed;
-      const rows = extractAdoptedSeedRows({ mapping, observed: observedSnap });
+      const [observedSnap] = await observeSyncSnapshots(adoptionProvider(), [inputRequest()]);
+      const rows = extractAdoptedSeedRows({ mapping, observed: observedSnap! });
       expect(rows.map((row) => row.visibleEntityId)).toEqual(["INV-1", "INV-2"]);
       expect(rows.map((row) => row.canonicalEntityId)).toEqual(["INV-1", "INV-2"]);
       expect(rows[0]!.anchor).toBe("entity:INV-1");
@@ -239,10 +268,9 @@ describe("existing-sheet adoption seeding engine", () => {
   it("rejects provider-generated anchors that are not derived from the PK (stability gate)", async () => {
     const { orm, storage } = await createStorage();
     try {
-      const snapshot = observedSnapshot() as { snapshot: { rows: { physicalAnchor: unknown }[] } };
       // A provider-generated anchor (e.g. sync-anchor:<uuid>) can never be
       // re-derived from the PK, so the stability gate must refuse startup.
-      snapshot.snapshot.rows[0]!.physicalAnchor = presentValue("sync-anchor:7f3c");
+      const snapshot = handBuiltObservedSnapshot([{ rowIndex: 2, anchor: "sync-anchor:7f3c" }]);
       const provider = {
         async ensureRowAnchors() {
           return { assigned: 0, existing: 2, duplicateAnchors: [] };
@@ -250,7 +278,7 @@ describe("existing-sheet adoption seeding engine", () => {
         async readSnapshot() {
           return snapshot.snapshot;
         },
-      };
+      } as unknown as InternalSyncProvider;
       await expect(completeExistingSheetAdoption({
         plan: {
           report: { mode: "dry-run", ok: true, entities: [] },
@@ -296,26 +324,8 @@ describe("existing-sheet adoption seeding engine", () => {
   it("absorbs the first human edit of a seeded row without quarantine (D6)", async () => {
     const { orm, storage } = await createStorage();
     try {
-      const observed = observedSnapshot() as never;
-      const [observedSnap] = await observeSyncSnapshots(
-        {
-          async ensureRowAnchors() {
-            return { assigned: 0, existing: 2, duplicateAnchors: [] };
-          },
-          async readSnapshot() {
-            return observed.snapshot;
-          },
-        },
-        [{
-          physicalSheetId: INPUT_PHYSICAL,
-          sheetName: "Probe_Input",
-          registeredRange: "A:D",
-          projection: SYNC_PROJECTIONS.USER_INPUT,
-          schemaVersion: 1,
-          readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
-        }],
-      );
-      const rows = extractAdoptedSeedRows({ mapping, observed: observedSnap });
+      const [observedSnap] = await observeSyncSnapshots(adoptionProvider(), [inputRequest()]);
+      const rows = extractAdoptedSeedRows({ mapping, observed: observedSnap! });
       await seedAdoptedEntityRows({
         storage,
         mapping,
