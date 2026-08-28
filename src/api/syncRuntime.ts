@@ -16,8 +16,9 @@
  * types, so a BREAKING internal change fails typecheck; purely ADDITIVE
  * internal fields flow through at runtime while the mirror lags by design.
  *
- * Adoption (MVP): ONE entity at a time, an empty local SQLite state, and the
- * adopted tab must satisfy the contiguous-block constraints of
+ * Adoption: one or more entities per service (each with an empty local
+ * SQLite state), and each adopted tab must satisfy the contiguous-block
+ * constraints of
  * `design/existing-sheet-adoption-design.md` (D1–D7). `mode: "dry-run"`
  * performs ZERO mutations and returns `{ kind: "adopt-dry-run", report }`;
  * `mode: "adopt"` binds + seeds every existing row fail-closed before the

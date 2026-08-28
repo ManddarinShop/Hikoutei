@@ -384,7 +384,9 @@ describe("existing-sheet adoption bootstrap gate", () => {
     });
   });
 
-  it("rejects more than one adopted entity (MVP constraint)", async () => {
+  it("validates each adopted entity independently (unknown entity rejected)", async () => {
+    // D7 Phase A removed the single-entity gate, but per-entity validation
+    // still fires for every entry: "Ghost" is absent from the projections.
     await expect(createInternalSyncService({
       dbName: ":memory:",
       entities: [AdoptInvoice],
@@ -399,7 +401,7 @@ describe("existing-sheet adoption bootstrap gate", () => {
       },
     })).rejects.toMatchObject({
       code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      message: expect.stringContaining("exactly one entity"),
+      message: expect.stringContaining("absent from the projections config"),
     });
   });
 
@@ -759,5 +761,170 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
   it("adopt mode with the legacy map is READY end to end", async () => {
     const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap, "adopt");
     expect(report.ok).toBe(true);
+  });
+});
+
+describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)", () => {
+  const AdoptMember = defineTypedSheetsEntity({
+    name: "AdoptMember",
+    tableName: "adopt_members",
+    properties: {
+      memberNo: { type: "string", primary: true },
+      displayName: { type: "string" },
+    },
+  });
+  const twoDescriptors = resolveEntityDescriptors([AdoptInvoice, AdoptMember], () => {
+    throw new Error("descriptor resolution failed");
+  });
+  const memberDescriptor = twoDescriptors.get("AdoptMember")!;
+  const MEMBER_OWNED = ["memberNo", "displayName"];
+
+  const twoProjections = {
+    spreadsheetId: "adopt-spreadsheet",
+    entities: {
+      AdoptInvoice: {
+        systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Invoices", registeredRange: "A:E" },
+        userOwnedFields: USER_OWNED,
+      },
+      AdoptMember: {
+        systemState: { tabName: "Members_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Members_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Members", registeredRange: "A:D" },
+        userOwnedFields: MEMBER_OWNED,
+      },
+    },
+  } as const;
+
+  class TwoTabTransport {
+    public async getSpreadsheet(): Promise<unknown> {
+      return {
+        sheets: [
+          { properties: { sheetId: 7, title: "Invoices", gridProperties: { columnCount: 4 } } },
+          { properties: { sheetId: 8, title: "Members", gridProperties: { columnCount: 2 } } },
+        ],
+      };
+    }
+    public async getValues(input: { range: string }): Promise<{ values?: readonly (readonly (string | number | boolean | null)[])[] }> {
+      if (input.range.startsWith("'Members'")) {
+        return { values: [["memberNo", "displayName"], ["M-1", "Ann"], ["M-2", "Bob"]] };
+      }
+      return { values: [["invoiceNo", "customer", "total", "note"], ["INV-1", "Acme", 100, null]] };
+    }
+    public async batchUpdate(): Promise<unknown> {
+      return {};
+    }
+  }
+
+  const twoEntityPlan = (mode: "dry-run" | "adopt", transport: unknown = new TwoTabTransport()) =>
+    planExistingSheetAdoptionStartup({
+      adopt: {
+        mode,
+        entities: {
+          AdoptInvoice: { tabName: "Invoices" },
+          AdoptMember: { tabName: "Members" },
+        },
+      },
+      spreadsheetId: "adopt-spreadsheet",
+      transport: transport as never,
+      descriptors: [adoptDescriptor, memberDescriptor],
+      projections: twoProjections,
+      userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED, AdoptMember: MEMBER_OWNED },
+    });
+
+  const reportOrThrow = (promise: Promise<unknown>) =>
+    promise.then(
+      (plan) => (plan as { report: ExistingSheetAdoptionRunReport }).report,
+      (error: unknown) => {
+        if (error instanceof ExistingSheetAdoptionDryRunReportError) return error.report;
+        throw error;
+      },
+    );
+
+  it("plans 2 ready entities in one dry-run and derives distinct system/conflict tabs", async () => {
+    const report = await reportOrThrow(twoEntityPlan("dry-run"));
+    expect(report.ok).toBe(true);
+    expect(report.entities).toHaveLength(2);
+    const [invoice, member] = report.entities;
+    expect(invoice!.entityName).toBe("AdoptInvoice");
+    expect(invoice!.status).toBe("ready");
+    expect(invoice!.totalRows).toBe(1);
+    expect(member!.entityName).toBe("AdoptMember");
+    expect(member!.status).toBe("ready");
+    expect(member!.totalRows).toBe(2);
+    // Base-tab-name-based derivation: each entity's derived System/Conflicts
+    // tab names come from ITS OWN projection route and differ per entity.
+    expect(invoice!.tabsToProvision).toEqual(["Invoices_System", "Invoices_Conflicts"]);
+    expect(member!.tabsToProvision).toEqual(["Members_System", "Members_Conflicts"]);
+  });
+
+  it("returns a 2-entity startup plan in adopt mode", async () => {
+    const plan = await twoEntityPlan("adopt");
+    expect(plan.report.ok).toBe(true);
+    expect(plan.entities).toHaveLength(2);
+    const byEntity = Object.fromEntries(plan.entities.map((entity) => [entity.entityName, entity]));
+    expect(byEntity.AdoptInvoice!.tabName).toBe("Invoices");
+    expect(byEntity.AdoptMember!.tabName).toBe("Members");
+    expect(byEntity.AdoptInvoice!.dataRows).toHaveLength(1);
+    expect(byEntity.AdoptMember!.dataRows).toHaveLength(2);
+  });
+
+  it("isolates failures: a blocked entity never hides the ready one", async () => {
+    class MissingColumnTransport extends TwoTabTransport {
+      public override async getValues(input: { range: string }): Promise<{ values?: readonly (readonly (string | number | boolean | null)[])[] }> {
+        // The Members tab is missing the REQUIRED column "displayName".
+        if (input.range.startsWith("'Members'")) {
+          return { values: [["memberNo"], ["M-1"]] };
+        }
+        return super.getValues(input);
+      }
+    }
+    let dryRunReport: ExistingSheetAdoptionRunReport;
+    try {
+      await twoEntityPlan("dry-run", new MissingColumnTransport());
+      expect.unreachable("blocked report must throw in dry-run");
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(ExistingSheetAdoptionDryRunReportError);
+      dryRunReport = (error as ExistingSheetAdoptionDryRunReportError).report;
+    }
+    expect(dryRunReport.ok).toBe(false);
+    expect(dryRunReport.entities).toHaveLength(2);
+    const [invoice, member] = dryRunReport.entities;
+    // The unblocked entity still appears independently and is ready.
+    expect(invoice!.entityName).toBe("AdoptInvoice");
+    expect(invoice!.status).toBe("ready");
+    expect(invoice!.totalRows).toBe(1);
+    // The blocked entity fails on its OWN missing column only.
+    expect(member!.entityName).toBe("AdoptMember");
+    expect(member!.status).toBe("blocked");
+    expect(member!.problems.some((p) => p.code === "MISSING_FIELD" && p.detail?.field === "displayName")).toBe(true);
+    expect(invoice!.problems.some((p) => p.code === "MISSING_FIELD")).toBe(false);
+  });
+
+  it("accepts 2 adopted entities at the service-options layer (gate removed)", async () => {
+    let report: ExistingSheetAdoptionRunReport | undefined;
+    try {
+      await createInternalSyncService({
+        dbName: ":memory:",
+        entities: [AdoptInvoice, AdoptMember],
+        projections: twoProjections,
+        googleSheetsApi: { transport: new TwoTabTransport() as never },
+        adopt: {
+          mode: "dry-run",
+          entities: {
+            AdoptInvoice: { tabName: "Invoices" },
+            AdoptMember: { tabName: "Members" },
+          },
+        },
+      });
+      expect.unreachable("dry-run must not start the service");
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(ExistingSheetAdoptionDryRunReportError);
+      report = (error as ExistingSheetAdoptionDryRunReportError).report;
+    }
+    expect(report.ok).toBe(true);
+    expect(report.entities).toHaveLength(2);
+    expect(report.entities.every((entity) => entity.status === "ready")).toBe(true);
   });
 });
