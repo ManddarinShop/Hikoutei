@@ -57,6 +57,7 @@ export type {
   Postcondition,
   PostconditionOutcome,
   PostconditionResult,
+  PreparedDispatch,
   RepairReplanFactory,
   RepairReplanRequest,
 } from "./dispatcher.js";

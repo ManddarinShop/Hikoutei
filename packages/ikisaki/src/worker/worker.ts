@@ -36,7 +36,13 @@ import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "../writerLease.js";
 import type { ClaimedEffect } from "./contracts.js";
-import type { Dispatcher } from "./dispatcher.js";
+import type {
+  Dispatcher,
+  ApplyOutcome,
+  DispatchRequest,
+  EffectLeaseRenewal,
+  PreparedDispatch,
+} from "./dispatcher.js";
 import type {
   EffectWorkerBaseOptions,
   EffectWorkerWithAdapterOptions,
@@ -94,6 +100,7 @@ import {
   groupEffectsByRoute,
   isFastAppendPendingEffect,
   orderDispatchUnits,
+  type EffectDispatchUnit,
   type EffectRouteGroup,
 } from "./routing.js";
 import {
@@ -218,17 +225,43 @@ async function runEffectWorker(
     return true;
   };
   /**
-   * Renews only the effect leases of one claimed batch.
+   * Renews the writer authority and the effect leases of one claimed batch.
    *
    * Runs inside the host's acquired-lane `beforeRemoteDispatch` hook so the
-   * lease covers lane queue time, limiter waits, and the remote call itself.
-   * On any failed renewal the expired/overridden claim is recovered through
-   * the durable outbox (expired rows become delivery_uncertain pending a
-   * probe; stale rows are requeued) and this returns false; the caller must
-   * abort before any remote request, never sending a write with an
-   * expired or unknown lease.
+   * leases cover lane queue time, limiter waits, and the remote call itself.
+   * The pre-lane `prepareDispatchFences` renewal covers selection/claim time;
+   * this in-lane renewal revalidates the WRITER lease after the lane wait so
+   * a long queue cannot expire it during remote work and permit a stale
+   * mutation after a takeover. On any failed renewal (writer takeover or an
+   * expired/overridden effect claim) the expired/overridden claim is
+   * recovered through the durable outbox (expired rows become
+   * delivery_uncertain pending a probe; stale rows are requeued) and this
+   * returns false; the caller must abort before any remote request, never
+   * sending a write with an expired or unknown lease.
    */
   const renewDispatchEffectLeases = async (items: readonly ClaimedEffect[]): Promise<boolean> => {
+    // Renew the WRITER lease in-lane so a long mutation-lane queue or shared
+    // limiter wait cannot expire it during remote work. A failed renewal
+    // (takeover) aborts before any remote request; the next pass recovers
+    // the claimed effects safely under the new fence.
+    const now = leaseNow();
+    const writerRefresh = await storage.claimWriterLease({
+      role,
+      writerId: options.workerId,
+      leaseDurationMs: leaseDuration,
+      now,
+    });
+    if (writerRefresh.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) return false;
+    if (
+      writerRefresh.lease.writerEpoch !== fence.writerEpoch ||
+      writerRefresh.lease.fencingToken !== fence.fencingToken
+    ) {
+      // The old fence expired and was taken over. Do not dispatch effects
+      // claimed under that token; the next pass will recover them safely.
+      fence = fenceFromLease(writerRefresh.lease, now);
+      await storage.recoverExpiredLeases(currentFence());
+      return false;
+    }
     const renewed: ClaimedEffect[] = [];
     const notRenewed: ClaimedEffect[] = [];
     for (const item of items) {
@@ -458,7 +491,8 @@ async function runEffectWorker(
   try {
     fastAppendRouteGroups = groupEffectsByRoute(
       fastAppendItems,
-      (effect) => options.dispatcher.routeKeyFor(effect),
+      (effect) => options.dispatcher.fastAppendRouteKeyFor?.(effect)
+        ?? options.dispatcher.routeKeyFor(effect),
     );
   } catch (error: unknown) {
     // The route predicate is declared never to throw, but a violating
@@ -521,10 +555,150 @@ async function runEffectWorker(
     regularGroups,
     options.dispatcher,
   );
-  for (const unit of dispatchUnits) {
+  // Read-ahead pipeline: overlap one route's regular preflight (a paced read)
+  // with the previous route's write/verify. Only a split-capable regular unit
+  // whose route DIFFERS from the current unit is preflighted ahead, so
+  // same-route writes and same-route preflight sequencing stay strictly serial
+  // (no concurrent SQLite transactions, no CAS-predecessor violation). A
+  // preflight does no SQLite work and no lease renewal, so it cannot race a
+  // result persistence or a before-remote renewal; CAS guards make a stale
+  // preflight safe (it resolves to a guard mismatch instead of overwriting).
+  const supportsSplit = (unit: EffectDispatchUnit): boolean =>
+    unit.bucket === "regular" &&
+    options.dispatcher.preflight !== undefined &&
+    options.dispatcher.applyPrepared !== undefined;
+  const dispatchRequestFor = (unit: EffectDispatchUnit): DispatchRequest => ({
+    routeKey: unit.group.routeKey,
+    effects: unit.group.items.map((item) => item.pending),
+    beforeRemoteDispatch: () => renewDispatchEffectLeases(unit.group.items),
+  });
+  // Fires a unit's preflight and feeds its latency/outcome into the adaptive
+  // batch controller so a slow or failed read backs the route off instead of
+  // letting later write successes falsely grow the batch limit.
+  const preflightWithTiming = (unit: EffectDispatchUnit): Promise<PreparedDispatch> => {
+    const routeKey = unit.group.routeKey;
+    const startedAt = Date.now();
+    const controller = options.batchController;
+    return options.dispatcher.preflight!(dispatchRequestFor(unit)).then(
+      (prepared) => {
+        controller?.observePreflight?.(routeKey, {
+          durationMs: Date.now() - startedAt,
+          succeeded: true,
+        });
+        return prepared;
+      },
+      (error: unknown) => {
+        controller?.observePreflight?.(routeKey, {
+          durationMs: Date.now() - startedAt,
+          succeeded: false,
+        });
+        throw error;
+      },
+    );
+  };
+  // Fires the NEXT unit's preflight ahead of the current write when the two
+  // routes differ (a same-route next unit must observe the current write).
+  // Read-ahead is only launched from a current REGULAR unit whose OWN preflight
+  // and fence/authority check have already completed: a fast-append unit's
+  // atomic multi-route write must not be overlapped by a regular preflight
+  // (which could observe a stale prepared state), and a next-route read may
+  // overlap the current WRITE but never the current preflight, so the two
+  // preflights in an A→B chain stay strictly sequential.
+  const fireNextPreflight = (current: EffectDispatchUnit, nextUnit: EffectDispatchUnit | undefined): void => {
+    if (
+      readAheadSuppressed ||
+      current.bucket !== "regular" ||
+      nextUnit === undefined ||
+      !supportsSplit(nextUnit) ||
+      nextUnit.group.routeKey === current.group.routeKey
+    ) return;
+    const prepared = preflightWithTiming(nextUnit);
+    // Observe the rejection immediately so a preflight that fails before the
+    // next loop iteration consumes it cannot surface as an unhandled
+    // rejection; the consumer still awaits the original promise and sees the
+    // rejection for requeue handling.
+    void prepared.catch(() => undefined);
+    pendingPrepared = prepared;
+    pendingPreparedUnit = nextUnit;
+  };
+  let pendingPrepared: Promise<PreparedDispatch> | undefined;
+  let pendingPreparedUnit: EffectDispatchUnit | undefined;
+  // Read-ahead safety latch: once a current unit's fence/write is not
+  // dispatchable or a preflight is refused/times out, stop overlapping any
+  // further read-ahead for the remainder of THIS pass and run the remaining
+  // units in safe sequential order. Reset implicitly because it is a local
+  // per-pass value.
+  let readAheadSuppressed = false;
+  const suppressReadAhead = (): void => {
+    readAheadSuppressed = true;
+    pendingPrepared = undefined;
+    pendingPreparedUnit = undefined;
+  };
+  // Settles an already-started read-ahead preflight (awaits it so it cannot
+  // overlap the next unit's own preflight) and then suppresses further
+  // read-ahead for the remainder of the pass. Used when a current unit's write
+  // fails: the read-ahead for the next unit was already fired, so it must be
+  // observed before the next unit runs its own preflight.
+  const settleAndSuppressReadAhead = async (): Promise<void> => {
+    const pending = pendingPrepared;
+    const pendingUnit = pendingPreparedUnit;
+    pendingPrepared = undefined;
+    pendingPreparedUnit = undefined;
+    readAheadSuppressed = true;
+    if (pending !== undefined) {
+      try {
+        await pending;
+      } catch {
+        // The read-ahead preflight failed; it is already observed via the
+        // `.catch(() => undefined)` in `fireNextPreflight`, so nothing to do.
+      }
+      // The read-ahead preflight was discarded (its write never runs), so drop
+      // its buffered latency from the route; otherwise the next sequential
+      // preflight for this route would add another sample and the next write
+      // could be charged twice and incorrectly backed off.
+      if (pendingUnit !== undefined) {
+        options.batchController?.abandonPreflight?.(pendingUnit.group.routeKey);
+      }
+    }
+  };
+  // Runs one regular unit's write+verify and result persistence, settling the
+  // pending read-ahead preflight if the unit throws. A result-persistence
+  // failure (or any post-write storage transition) must not leave the
+  // read-ahead's remote read unsettled or its controller latency retained when
+  // the pass aborts: the pending preflight is awaited (so no remote read is
+  // left unhandled) and its buffered latency is abandoned before the error
+  // propagates out of the pass.
+  const runRegularUnit = async (
+    group: EffectRouteGroup,
+    remote: () => Promise<ApplyOutcome>,
+  ): Promise<boolean> => {
+    try {
+      const writeOk = await dispatchRegularUnit(
+        options,
+        storage,
+        currentFence,
+        group,
+        report,
+        remote,
+        prepareDispatchFences,
+        renewDispatchEffectLeases,
+      );
+      if (!writeOk) await settleAndSuppressReadAhead();
+      return writeOk;
+    } catch (error: unknown) {
+      await settleAndSuppressReadAhead();
+      throw error;
+    }
+  };
+  for (let index = 0; index < dispatchUnits.length; index += 1) {
+    const unit = dispatchUnits[index]!;
+    const next = dispatchUnits[index + 1];
     const group = unit.group;
     if (unit.bucket === "fast-append") {
-      if (!(await prepareDispatchFences(group.items))) continue;
+      if (!(await prepareDispatchFences(group.items))) {
+        suppressReadAhead();
+        continue;
+      }
       await dispatchFastAppendGroup(
         options,
         storage,
@@ -536,129 +710,89 @@ async function runEffectWorker(
       );
       continue;
     }
-    if (!(await prepareDispatchFences(group.items))) continue;
-    const deferredEffectIds = new Set<string>();
-    let outcome: Awaited<ReturnType<Dispatcher["apply"]>>;
-    const regularOperationCounts = countsForItems(group.items);
-    const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
-    const providerStartedAt = Date.now();
-    const requestRouteKey = group.routeKey;
-    const batchLimit = options.batchController?.beginDispatch(requestRouteKey, providerStartedAt)
-      ?? EFFECT_BATCH_LIMIT;
-    try {
-      outcome = await options.dispatcher.apply({
-        routeKey: requestRouteKey,
-        effects: group.items.map((item) => item.pending),
-        beforeRemoteDispatch: () => renewDispatchEffectLeases(group.items),
-      });
-    } catch (error: unknown) {
-      const uncertain = !isDispatchTransportError(error) ||
-        error.kind === "delivery_uncertain";
-      options.batchController?.observe(requestRouteKey, {
-        durationMs: Date.now() - providerStartedAt,
-        responseSucceeded: false,
-        responseLoss: uncertain,
-      });
-      const failedDurationMs = Date.now() - providerStartedAt;
-      emitWorkerTiming(options, {
-        scope: TIMING_SCOPES.WORKER,
-        phase: "regular_provider_dispatch",
-        durationMs: failedDurationMs,
-        operationKinds: regularOperationKinds,
-        operationCounts: regularOperationCounts,
-        routeKey: requestRouteKey,
-        batchLimit,
-        responseSucceeded: false,
-      });
-      // Remote side may have written the effect before an uncertain
-      // transport failure. Explicit remote failures skip recovery because
-      // the provider already proved that the operation was rejected.
-      const resultFence = currentFence();
-      await handleProviderDispatchError(
-        options,
-        storage,
-        resultFence,
-        group.items,
-        report,
-        error,
-        () => prepareDispatchFences(group.items),
-        renewDispatchEffectLeases,
+    if (pendingPreparedUnit === unit) {
+      // This unit (B) was preflighted ahead by the previous unit's read-ahead;
+      // consume it now. Only AFTER B's own fence/authority check succeeds is
+      // C's preflight scheduled, immediately before B's write, so the A/B and
+      // B/C preflights never overlap while C overlaps B's write.
+      let prepared: PreparedDispatch;
+      try {
+        prepared = await pendingPrepared!;
+      } catch (error: unknown) {
+        pendingPrepared = undefined;
+        pendingPreparedUnit = undefined;
+        suppressReadAhead();
+        await handlePreflightFailure(
+          storage,
+          currentFence,
+          group,
+          report,
+          prepareDispatchFences,
+          error,
+        );
+        continue;
+      }
+      pendingPrepared = undefined;
+      pendingPreparedUnit = undefined;
+      if (!(await prepareDispatchFences(group.items))) {
+        // The prepared read succeeded but its write cannot run (fence or
+        // authority loss). Drop the buffered read-ahead latency so the next
+        // genuine write is not charged a read whose write never happened.
+        options.batchController?.abandonPreflight?.(group.routeKey);
+        suppressReadAhead();
+        continue;
+      }
+      fireNextPreflight(unit, next);
+      await runRegularUnit(
+        group,
+        () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
       );
       continue;
     }
-    const regularProviderDurationMs = Date.now() - providerStartedAt;
-    options.batchController?.observe(requestRouteKey, {
-      durationMs: regularProviderDurationMs,
-      responseSucceeded: outcome.results.length === group.items.length && !outcome.hasMore,
-      responseLoss: outcome.results.length !== group.items.length || outcome.hasMore,
-    });
-    emitProviderTiming(options, outcome.timing);
-    emitWorkerTiming(options, {
-      scope: TIMING_SCOPES.WORKER,
-      phase: "regular_provider_dispatch",
-      durationMs: regularProviderDurationMs,
-      operationKinds: regularOperationKinds,
-      operationCounts: regularOperationCounts,
-      routeKey: requestRouteKey,
-      batchLimit,
-      responseSucceeded: outcome.results.length === group.items.length && !outcome.hasMore,
-    });
-
-    const resultPersistenceStartedAt = Date.now();
-    const byEffectId = new Map(outcome.results.map((result) => [result.effectId, result]));
-    for (const item of group.items) {
-      const result = lookupResult(byEffectId.get(item.pending.effect_id));
-      if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND && outcome.hasMore) {
-        if (await storage.releaseUnprocessedEffect({
-          ...currentFence(),
-          effectId: item.pending.effect_id,
-          claimToken: item.claimToken,
-        })) {
-          report.deferred += 1;
-          deferredEffectIds.add(item.pending.effect_id);
-        }
-      }
-    }
-    const recoveryItems: ClaimedEffect[] = [];
-    for (const item of group.items) {
-      const result = lookupResult(byEffectId.get(item.pending.effect_id));
-      if (
-        result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND &&
-        deferredEffectIds.has(item.pending.effect_id)
-      ) continue;
-      if (
-        result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
-        result.value.payloadHash !== item.pending.payload_hash
-      ) {
-        recoveryItems.push(item);
+    if (supportsSplit(unit)) {
+      // Current unit A: complete A's own preflight and its fence/authority
+      // check FIRST, then start at most one next-route preflight immediately
+      // before dispatching A's write, so the read overlaps A's WRITE and never
+      // overlaps A's preflight.
+      let prepared: PreparedDispatch;
+      try {
+        prepared = await preflightWithTiming(unit);
+      } catch (error: unknown) {
+        suppressReadAhead();
+        await handlePreflightFailure(
+          storage,
+          currentFence,
+          group,
+          report,
+          prepareDispatchFences,
+          error,
+        );
         continue;
       }
-      if (result.value.status === "delivery_uncertain") {
-        // A success label without the acknowledged target state is not enough
-        // to close a durable effect. Treat it like a lost response and read
-        // back first.
-        recoveryItems.push(item);
+      if (!(await prepareDispatchFences(group.items))) {
+        // The preflight succeeded but its write is dropped on fence/authority
+        // loss; clear the buffered read latency so a future write is not
+        // charged a read whose write never ran.
+        options.batchController?.abandonPreflight?.(group.routeKey);
+        suppressReadAhead();
         continue;
       }
-      await completeProviderResult(options, storage, currentFence(), item, result.value, report);
-    }
-    if (await prepareDispatchFences(recoveryItems)) {
-      await recoverUnknownResults(
-        options,
-        storage,
-        currentFence(),
-        recoveryItems,
-        report,
-        renewDispatchEffectLeases,
+      fireNextPreflight(unit, next);
+      await runRegularUnit(
+        group,
+        () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
       );
+      continue;
     }
-    emitWorkerTiming(options, {
-      scope: TIMING_SCOPES.WORKER,
-      phase: "regular_result_persistence",
-      durationMs: Date.now() - resultPersistenceStartedAt,
-      operationKinds: regularOperationKinds,
-      operationCounts: regularOperationCounts,
-    });
+    // Legacy regular unit (dispatcher implements neither split method).
+    if (!(await prepareDispatchFences(group.items))) {
+      suppressReadAhead();
+      continue;
+    }
+    await runRegularUnit(
+      group,
+      () => options.dispatcher.apply(dispatchRequestFor(unit)),
+    );
   }
   emitWorkerTiming(options, {
     scope: TIMING_SCOPES.WORKER,
@@ -668,6 +802,219 @@ async function runEffectWorker(
     operationCounts: countsForItems(dispatchable),
   });
   return freezeReport(report);
+}
+
+/**
+ * Runs one regular route group's write+verify phase and persists its results.
+ *
+ * Shared by the legacy single `apply` path and the split
+ * `preflight`/`applyPrepared` path: `remote` performs the provider write
+ * (either `dispatcher.apply` or `dispatcher.applyPrepared`) and throws a
+ * classified `DispatchTransportError` on transport failure. `prepareFences`
+ * and `renewEffectLeases` are the same safety closures the single-apply path
+ * used, so lease/fence accounting, pacing, receipts, CAS evidence, response
+ * classification, hasMore/budget behavior, and result persistence are
+ * identical.
+ */
+async function dispatchRegularUnit(
+  options: EffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: () => FencingContext,
+  group: EffectRouteGroup,
+  report: MutableReport,
+  remote: () => Promise<ApplyOutcome>,
+  prepareFences: (items: readonly ClaimedEffect[]) => Promise<boolean>,
+  renewEffectLeases: EffectLeaseRenewal,
+): Promise<boolean> {
+  const deferredEffectIds = new Set<string>();
+  let outcome: ApplyOutcome;
+  const regularOperationCounts = countsForItems(group.items);
+  const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
+  const providerStartedAt = Date.now();
+  const requestRouteKey = group.routeKey;
+  const batchLimit = options.batchController?.beginDispatch(requestRouteKey, providerStartedAt)
+    ?? EFFECT_BATCH_LIMIT;
+  try {
+    outcome = await remote();
+  } catch (error: unknown) {
+    const uncertain = !isDispatchTransportError(error) ||
+      error.kind === "delivery_uncertain";
+    options.batchController?.observe(requestRouteKey, {
+      durationMs: Date.now() - providerStartedAt,
+      responseSucceeded: false,
+      responseLoss: uncertain,
+    });
+    const failedDurationMs = Date.now() - providerStartedAt;
+    emitWorkerTiming(options, {
+      scope: TIMING_SCOPES.WORKER,
+      phase: "regular_provider_dispatch",
+      durationMs: failedDurationMs,
+      operationKinds: regularOperationKinds,
+      operationCounts: regularOperationCounts,
+      routeKey: requestRouteKey,
+      batchLimit,
+      responseSucceeded: false,
+    });
+    // Remote side may have written the effect before an uncertain transport
+    // failure. Explicit remote failures skip recovery because the provider
+    // already proved that the operation was rejected.
+    await handleProviderDispatchError(
+      options,
+      storage,
+      fence(),
+      group.items,
+      report,
+      error,
+      () => prepareFences(group.items),
+      renewEffectLeases,
+    );
+    // The write failed (refusal, timeout, or delivery-uncertain fence loss):
+    // signal the caller to suppress any already-started read-ahead so the
+    // next unit cannot overlap a write that never ran.
+    return false;
+  }
+  const regularProviderDurationMs = Date.now() - providerStartedAt;
+  // A hasMore=true reply with a valid returned prefix is a healthy partial
+  // application whose suffix is deferred to the next pass (the provider
+  // stopped at its body budget), so it must not back the route off. Only a
+  // hasMore=false reply that is missing results (a lost response) keeps the
+  // delivery-uncertain recovery backoff.
+  const regularDispatchHealthy =
+    (outcome.results.length === group.items.length && !outcome.hasMore) ||
+    (outcome.hasMore && outcome.results.length > 0);
+  options.batchController?.observe(requestRouteKey, {
+    durationMs: regularProviderDurationMs,
+    responseSucceeded: regularDispatchHealthy,
+    responseLoss: !outcome.hasMore && outcome.results.length !== group.items.length,
+  });
+  emitProviderTiming(options, outcome.timing);
+  emitWorkerTiming(options, {
+    scope: TIMING_SCOPES.WORKER,
+    phase: "regular_provider_dispatch",
+    durationMs: regularProviderDurationMs,
+    operationKinds: regularOperationKinds,
+    operationCounts: regularOperationCounts,
+    routeKey: requestRouteKey,
+    batchLimit,
+    responseSucceeded: regularDispatchHealthy,
+    hasMore: outcome.hasMore,
+    requestedEffects: group.items.length,
+    acknowledgedEffects: outcome.results.length,
+  });
+
+  const resultPersistenceStartedAt = Date.now();
+  const byEffectId = new Map(outcome.results.map((result) => [result.effectId, result]));
+  for (const item of group.items) {
+    const result = lookupResult(byEffectId.get(item.pending.effect_id));
+    if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND && outcome.hasMore) {
+      if (await storage.releaseUnprocessedEffect({
+        ...fence(),
+        effectId: item.pending.effect_id,
+        claimToken: item.claimToken,
+      })) {
+        report.deferred += 1;
+        deferredEffectIds.add(item.pending.effect_id);
+      }
+    }
+  }
+  const recoveryItems: ClaimedEffect[] = [];
+  for (const item of group.items) {
+    const result = lookupResult(byEffectId.get(item.pending.effect_id));
+    if (
+      result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND &&
+      deferredEffectIds.has(item.pending.effect_id)
+    ) continue;
+    if (
+      result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
+      result.value.payloadHash !== item.pending.payload_hash
+    ) {
+      recoveryItems.push(item);
+      continue;
+    }
+    if (result.value.status === "delivery_uncertain") {
+      // A success label without the acknowledged target state is not enough
+      // to close a durable effect. Treat it like a lost response and read
+      // back first.
+      recoveryItems.push(item);
+      continue;
+    }
+    await completeProviderResult(options, storage, fence(), item, result.value, report);
+  }
+  if (await prepareFences(recoveryItems)) {
+    await recoverUnknownResults(
+      options,
+      storage,
+      fence(),
+      recoveryItems,
+      report,
+      renewEffectLeases,
+    );
+  } else {
+    // The recovery fence/authority check failed, so the uncertain results
+    // could not be settled this pass. Signal the caller to suppress read-ahead
+    // for the remainder of the pass.
+    return false;
+  }
+  emitWorkerTiming(options, {
+    scope: TIMING_SCOPES.WORKER,
+    phase: "regular_result_persistence",
+    durationMs: Date.now() - resultPersistenceStartedAt,
+    operationKinds: regularOperationKinds,
+    operationCounts: regularOperationCounts,
+  });
+  return true;
+}
+
+/**
+ * Handles a failed regular-unit preflight.
+ *
+ * A preflight is a read-only stage: no remote write was issued and no effect
+ * lease was renewed, so the claimed effects are safely requeued for the next
+ * pass (never routed into delivery-uncertain response recovery, which is only
+ * for a response lost after a write). The preflight is requeued under the
+ * fence so a fencing-takeover still aborts cleanly.
+ */
+async function handlePreflightFailure(
+  storage: EffectWorkerStorage,
+  fence: () => FencingContext,
+  group: EffectRouteGroup,
+  report: MutableReport,
+  prepareFences: (items: readonly ClaimedEffect[]) => Promise<boolean>,
+  error: unknown,
+): Promise<void> {
+  if (!(await prepareFences(group.items))) return;
+  // A provider-state/schema/route failure (explicit remote failure) cannot be
+  // fixed by retrying, so it closes the effects through the terminal failure
+  // path. A bounded transport refusal/timeout (delivery-uncertain) and any
+  // unclassified error are safely requeued for the next pass.
+  const terminal = isDispatchTransportError(error) && error.kind === "explicit_remote_failure";
+  if (terminal) {
+    const message = "Preflight read failed on provider state, schema, or route; the effect cannot be retried.";
+    for (const item of group.items) {
+      await completeFailure(
+        storage,
+        fence(),
+        item,
+        WORKER_ERROR_CODES.PROVIDER_SCHEMA_ERROR,
+        presentValue(message),
+        report,
+      );
+    }
+    return;
+  }
+  const message = "Preflight read failed before any remote write; the effect will be retried.";
+  for (const item of group.items) {
+    if (await storage.retryClaimedEffect({
+      ...fence(),
+      effectId: item.pending.effect_id,
+      claimToken: item.claimToken,
+      lastErrorCode: WORKER_ERROR_CODES.PROVIDER_RETRYABLE_ERROR,
+      lastErrorMessage: message,
+    })) {
+      report.deferred += 1;
+      report.requeued += 1;
+    }
+  }
 }
 
 function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWorkerStorage {

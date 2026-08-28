@@ -2,8 +2,8 @@
 
 export const ADAPTIVE_EFFECT_BATCH_LIMITS = {
   MINIMUM: 5,
-  INITIAL: 10,
-  MAXIMUM: 20,
+  INITIAL: 100,
+  MAXIMUM: 300,
 } as const;
 
 export const DEFAULT_EFFECT_BATCH_COALESCE_WINDOW_MS = 500;
@@ -20,7 +20,6 @@ interface RouteState {
   limit: number;
   stableSuccesses: number;
 }
-
 /**
  * Keeps a small, process-local batch policy while SQLite remains the durable
  * queue. A failed or slow route backs off without changing effect evidence;
@@ -36,6 +35,8 @@ export class AdaptiveEffectBatchController {
   private readonly growthStep: number;
   private readonly appendDispatchIntervalMs: number;
   private readonly routes = new Map<string, RouteState>();
+  /** Pending read-ahead preflight latency per route, added to the next write observation. */
+  private readonly routeReadMs = new Map<string, number>();
   private lastDispatchAt: number | undefined;
   private lastAppendDispatchAt: number | undefined;
 
@@ -93,9 +94,15 @@ export class AdaptiveEffectBatchController {
   /** Updates only the process-local limit from the completed provider attempt. */
   public observe(routeKey: string, observation: AdaptiveEffectBatchObservation): void {
     const state = this.routeState(routeKey);
+    // A read-ahead preflight runs before the write it feeds; fold its latency
+    // into the dispatch total so a slow read cannot hide behind a fast write
+    // and falsely grow the batch limit.
+    const accumulatedReadMs = this.routeReadMs.get(routeKey) ?? 0;
+    this.routeReadMs.delete(routeKey);
+    const durationMs = observation.durationMs + accumulatedReadMs;
     const unhealthy = observation.responseLoss ||
       !observation.responseSucceeded ||
-      observation.durationMs > this.highLatencyThresholdMs;
+      durationMs > this.highLatencyThresholdMs;
     if (unhealthy) {
       state.limit = Math.max(this.minimum, Math.floor(state.limit / 2));
       state.stableSuccesses = 0;
@@ -106,6 +113,42 @@ export class AdaptiveEffectBatchController {
       state.limit = Math.min(this.maximum, state.limit + this.growthStep);
       state.stableSuccesses = 0;
     }
+  }
+
+  /**
+   * Records one read-ahead preflight outcome for a route.
+   *
+   * A failed preflight backs the route off immediately (a read that keeps
+   * failing must not let later write successes grow the limit). A successful
+   * preflight accumulates its latency so the next write observation includes
+   * it; a slow read then contributes to backoff instead of being masked.
+   */
+  public observePreflight(
+    routeKey: string,
+    observation: { readonly durationMs: number; readonly succeeded: boolean },
+  ): void {
+    const state = this.routeState(routeKey);
+    if (!observation.succeeded) {
+      state.limit = Math.max(this.minimum, Math.floor(state.limit / 2));
+      state.stableSuccesses = 0;
+      return;
+    }
+    this.routeReadMs.set(routeKey, (this.routeReadMs.get(routeKey) ?? 0) + observation.durationMs);
+  }
+
+  /**
+   * Drops a route's buffered read-ahead latency when a prepared unit is
+   * abandoned before its write (e.g. fence/authority loss after the read).
+   *
+   * `observePreflight` folds the read latency into the NEXT write observation
+   * for the route. If that prepared unit is dropped before any write runs, the
+   * buffered latency would otherwise stay charged to a future write that never
+   * produced that read. Settling it here keeps the next genuine write's timing
+   * honest without backing the route off for a read whose write never
+   * happened.
+   */
+  public abandonPreflight(routeKey: string): void {
+    this.routeReadMs.delete(routeKey);
   }
 
   /** Waits at most the configured short coalescing window before selection. */

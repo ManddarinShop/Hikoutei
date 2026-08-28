@@ -138,6 +138,7 @@ export async function dispatchFastAppendGroup(
       routeKey: requestRouteKey,
       batchLimit,
       responseSucceeded: false,
+      requestedEffects: group.items.length,
     });
     const resultFence = {
       ...fence,
@@ -160,10 +161,18 @@ export async function dispatchFastAppendGroup(
     ...fence,
     now: options.clock?.() ?? fence.now + Math.max(0, Date.now() - providerStartedAt),
   };
+  // A hasMore=true reply with a valid returned prefix is a healthy partial
+  // application whose suffix is deferred to the next pass (the provider
+  // stopped at its body budget), so it must not back the route off. Only a
+  // hasMore=false reply that is missing results (a lost response) keeps the
+  // delivery-uncertain recovery backoff.
+  const fastAppendHealthy =
+    (outcome.results.length === group.items.length && !outcome.hasMore) ||
+    (outcome.hasMore && outcome.results.length > 0);
   options.batchController?.observe(requestRouteKey, {
     durationMs,
-    responseSucceeded: outcome.results.length === group.items.length && !outcome.hasMore,
-    responseLoss: outcome.results.length !== group.items.length || outcome.hasMore,
+    responseSucceeded: fastAppendHealthy,
+    responseLoss: !outcome.hasMore && outcome.results.length !== group.items.length,
   });
   emitProviderTiming(options, outcome.timing);
   emitWorkerTiming(options, {
@@ -174,7 +183,10 @@ export async function dispatchFastAppendGroup(
     operationCounts: { append: group.items.length, update: 0, delete: 0 },
     routeKey: requestRouteKey,
     batchLimit,
-    responseSucceeded: outcome.results.length === group.items.length && !outcome.hasMore,
+    responseSucceeded: fastAppendHealthy,
+    hasMore: outcome.hasMore,
+    requestedEffects: group.items.length,
+    acknowledgedEffects: outcome.results.length,
   });
 
   const resultPersistenceStartedAt = Date.now();

@@ -151,6 +151,19 @@ export interface ApplyOutcome {
   readonly timing?: ProviderTiming;
 }
 
+/**
+ * Opaque prepared-apply state returned by `preflight` and consumed by
+ * `applyPrepared`.
+ *
+ * The worker never inspects the value; the host dispatcher owns its concrete
+ * shape and narrows it back with its own runtime guard at the
+ * `applyPrepared` boundary. Marked nominal so the worker cannot fabricate or
+ * cast an unrelated value through the pipeline.
+ */
+export interface PreparedDispatch {
+  readonly __preparedDispatch: "hikoutei/dispatcher/prepared";
+}
+
 /** Read-back classification of one response-loss effect after a probe. */
 export type Postcondition =
   | {
@@ -227,6 +240,22 @@ export interface FastAppendDispatcher {
    * value.
    */
   isFastAppendCandidate(effect: PendingEffect): boolean;
+  /**
+   * Builds the worker-visible grouping key for fast-append effects.
+   *
+   * Unlike `routeKeyFor` (which distinguishes every physical route so the
+   * regular read-ahead pipeline can overlap one route's preflight with another
+   * route's write), the fast-append grouping key must keep effects that the
+   * provider commits in ONE atomic batch together. A host whose provider
+   * appends multiple tabs/spreadsheets atomically (one batchUpdate) returns a
+   * spreadsheet-scoped key here so the worker sends the whole multi-route
+   * batch in a single `fastAppend` call instead of splitting it per route. An
+   * absent declaration falls back to `routeKeyFor`, preserving legacy
+   * per-route append grouping for providers that cannot combine routes.
+   *
+   * No-throw contract, exactly like `routeKeyFor`.
+   */
+  fastAppendRouteKeyFor?(effect: PendingEffect): string;
   /** Dispatches append-only rows through the idempotent bulk operation. */
   fastAppend(request: DispatchRequest): Promise<FastAppendOutcome>;
   /**
@@ -277,6 +306,29 @@ export interface EffectDispatcher {
   payloadValidationError(effect: PendingEffect): Presence<string>;
   /** Dispatches one regular effect batch. */
   apply(request: DispatchRequest): Promise<ApplyOutcome>;
+  /**
+   * Optional split-dispatch preflight: read+plan stage for one regular batch.
+   *
+   * Returns an opaque `PreparedDispatch` token that `applyPrepared` later
+   * consumes for the write+verify stage. A dispatcher implementing BOTH
+   * `preflight` and `applyPrepared` lets the worker overlap one route's
+   * preflight (a read) with another route's applyPrepared (write+verify). A
+   * dispatcher implementing neither keeps the single legacy `apply` path;
+   * implementing only one of the two is invalid and the worker treats it as
+   * legacy `apply`. The preflight must NOT perform any remote mutation or
+   * effect-lease renewal (renewal stays in `applyPrepared`'s before-remote
+   * hook), so it is safe to run while another route writes.
+   */
+  preflight?(request: DispatchRequest): Promise<PreparedDispatch>;
+  /**
+   * Optional split-dispatch write+verify stage, consuming `preflight` state.
+   *
+   * Must honor `DispatchRequest.beforeRemoteDispatch` exactly like `apply`:
+   * renew the effect lease immediately before the remote call and abort the
+   * whole batch with a classified delivery-uncertain error when the renewal
+   * fails. Only present together with `preflight`.
+   */
+  applyPrepared?(request: DispatchRequest, prepared: PreparedDispatch): Promise<ApplyOutcome>;
   /** Reads back response-loss effects so the worker can settle them safely. */
   readPostconditions(request: DispatchRequest): Promise<PostconditionOutcome>;
 }
