@@ -167,6 +167,12 @@ export interface AdoptEntitySpec {
    * to `<tabName>_Conflicts`.
    */
   readonly syncConflictsTabName?: string;
+  /**
+   * §12: explicit header → property bindings for sheets whose headers differ
+   * from the property names (adoption-only). Mapped headers take precedence
+   * over name matching; a mapped PK header absorbs the identityFrom alias.
+   */
+  readonly columnMap?: Readonly<Record<string, string>>;
 }
 
 /** Public existing-sheet adoption spec (design `design/existing-sheet-adoption-design.md` §4.1). */
@@ -446,11 +452,16 @@ function withAdoptedTabOverrides(
 
 /** Narrows the public adopt spec to the internal bootstrap spec (same D1/D4 shape). */
 function toInternalAdoptSpec(adopt: AdoptSpec): ExistingSheetAdoptionSpec {
-  const entities: Record<string, { readonly tabName: string; readonly identityFrom?: string | "auto" }> = {};
+  const entities: Record<string, {
+    readonly tabName: string;
+    readonly identityFrom?: string | "auto";
+    readonly columnMap?: Readonly<Record<string, string>>;
+  }> = {};
   for (const [entityName, spec] of Object.entries(adopt.entities)) {
     entities[entityName] = {
       tabName: spec.tabName,
       ...(spec.identityFrom === undefined ? {} : { identityFrom: spec.identityFrom }),
+      ...(spec.columnMap === undefined ? {} : { columnMap: spec.columnMap }),
     };
   }
   return { mode: adopt.mode, entities };

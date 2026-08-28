@@ -121,6 +121,7 @@ export async function readRowsBatch(
     const rows = buildTableRowsFromGrid(grid, {
       registeredRange: request.registeredRange,
       headers: definition.headers,
+      ...(definition.physicalHeaders === undefined ? {} : { physicalHeaders: definition.physicalHeaders }),
       checkboxHeaders: definition.checkboxHeaders ?? [],
       anchorColumn: anchorColumnFor(request.registeredRange, request.projection),
     });
@@ -196,6 +197,7 @@ export async function observeSnapshots(
     const anchors = planRowAnchors(tab, {
       registeredRange: request.registeredRange,
       headers: target.headers,
+      ...(target.physicalHeaders === undefined ? {} : { physicalHeaders: target.physicalHeaders }),
       checkboxHeaders: target.checkboxHeaders,
       anchorColumn: target.anchorColumn,
     });

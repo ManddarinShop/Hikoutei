@@ -45,6 +45,9 @@ import { randomUUID } from "node:crypto";
 import type {
   InternalSyncProjectionConfig,
 } from "../contracts.js";
+import type {
+  RegisteredSyncProjectionDefinition,
+} from "../../sheetsContract/sheetsProvisioning.js";
 
 /** Stable failures raised by the existing-sheet adoption startup path. */
 export const EXISTING_SHEET_ADOPTION_ERROR_CODES = {
@@ -201,7 +204,7 @@ interface AnalyzeInput {
   readonly descriptor: ResolvedHikouteiEntityDescriptor;
   readonly userOwnedFields: readonly string[];
   readonly identityFrom: string | "auto" | undefined;
-  readonly columnMap: Readonly<Record<string, string>> | undefined;
+  readonly columnMap?: Readonly<Record<string, string>> | undefined;
   readonly systemStateTabName: string;
   readonly syncConflictsTabName: string;
 }
@@ -715,6 +718,40 @@ export interface ExistingSheetAdoptionStartupPlanEntity {
 export interface ExistingSheetAdoptionStartupPlan {
   readonly report: ExistingSheetAdoptionRunReport;
   readonly entities: readonly ExistingSheetAdoptionStartupPlanEntity[];
+}
+
+/**
+ * §12 columnMap: attaches the adopted route's PHYSICAL header row (the
+ * legacy headers) to the matching projection definition, positionally
+ * parallel to the canonical field-name headers. The alignment holds by
+ * construction: the C4 declaration-order gate forces the managed column
+ * order to equal the field declaration order, and an appended generated-PK
+ * column carries the property name itself as its header (no translation).
+ * Provisioning, observation, and the writer read this single source —
+ * three-way drift is structurally impossible.
+ */
+export function withAdoptedPhysicalHeaders(
+  definitions: readonly RegisteredSyncProjectionDefinition[],
+  plan: ExistingSheetAdoptionStartupPlan,
+): readonly RegisteredSyncProjectionDefinition[] {
+  const physicalByTab = new Map(
+    plan.entities.map((entity) => [
+      entity.tabTitle,
+      new Map(entity.layout.managedColumns.map((column) => [column.field, column.header])),
+    ]),
+  );
+  return definitions.map((definition) => {
+    const byField = physicalByTab.get(definition.sheet.tabName);
+    if (byField === undefined || definition.sheet.projection !== "user_input") {
+      return definition;
+    }
+    return {
+      ...definition,
+      // An unbound user-owned field can only be the appended generated PK,
+      // whose column header IS the property name (no translation).
+      physicalHeaders: definition.headers.map((field) => byField.get(field) ?? field),
+    };
+  });
 }
 
 /**

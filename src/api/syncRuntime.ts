@@ -48,6 +48,12 @@ export interface AdoptEntitySpec {
    * to `<tabName>_Conflicts`.
    */
   readonly syncConflictsTabName?: string;
+  /**
+   * §12: explicit header → property bindings for sheets whose headers differ
+   * from the property names (adoption-only). Mapped headers take precedence
+   * over name matching; a mapped PK header absorbs the identityFrom alias.
+   */
+  readonly columnMap?: Readonly<Record<string, string>>;
 }
 
 /** Public existing-sheet adoption spec (design §4.1). */

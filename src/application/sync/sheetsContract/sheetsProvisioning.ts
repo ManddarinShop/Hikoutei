@@ -26,6 +26,14 @@ import {
 export interface RegisteredSyncProjectionDefinition {
   readonly sheet: RegisteredSyncSheet;
   readonly headers: readonly string[];
+  /**
+   * §12 columnMap: for an ADOPTED route, the physical tab's real header row
+   * positionally parallel to `headers` (physicalHeaders[i] is the sheet
+   * header at the column carrying headers[i]). Header-row validation uses
+   * these while every downstream consumer keys by the canonical `headers`.
+   * Absent = the physical headers equal `headers` (default).
+   */
+  readonly physicalHeaders?: readonly string[];
   /** Header used to detect duplicate append identities before a remote write. */
   readonly identityField?: string;
   /** Converts a visible business key into the canonical entity identity. */
@@ -41,6 +49,12 @@ export interface SyncSheetsProvisionRoute {
   readonly projection: RegisteredProjection;
   readonly schemaVersion: number;
   readonly headers: readonly string[];
+  /**
+   * §12 columnMap: adopted-route physical headers, positionally parallel to
+   * `headers` (see RegisteredSyncProjectionDefinition). Header-row validation
+   * uses these; canonical `headers` stay the keying contract.
+   */
+  readonly physicalHeaders?: readonly string[];
   /** Business-key header retained for append identity validation and fallback lookup. */
   readonly identityField?: string;
   readonly checkboxHeaders?: readonly string[];
@@ -157,6 +171,7 @@ export async function provisionRegisteredSyncSheets(
       projection: definition.sheet.projection,
       schemaVersion,
       headers: definition.headers,
+      ...(definition.physicalHeaders === undefined ? {} : { physicalHeaders: definition.physicalHeaders }),
       ...(identityField === undefined ? {} : { identityField }),
       ...(definition.checkboxHeaders === undefined ? {} : { checkboxHeaders: definition.checkboxHeaders }),
     };

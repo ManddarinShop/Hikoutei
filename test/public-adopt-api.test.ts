@@ -299,6 +299,96 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     expect(spreadsheet.sheets[0]!.cell(1, 3)?.userEnteredValue?.numberValue).toBe(100);
   });
 
+  it("adopt mode with columnMap: legacy headers survive, seeding works end to end (design §12)", async () => {
+    // The §12 scenario: sheet headers differ from the property names. The
+    // translation table rides on the adopted route's definition — the tab's
+    // legacy headers are NEVER rewritten, and every downstream consumer keys
+    // by the canonical field names.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Invoices", {
+      headers: ["memo", "Invoice No", "Customer Name", "Total (USD)"],
+      rows: [
+        ["legacy note", "INV-1", "Acme", 100],
+        ["", "INV-2", "Beta", 200],
+      ],
+    });
+    const result = await createTypedSheetsWithSyncInternal({
+      dbName: join(tmpdir(), `hikoutei-adopt-colmap-${randomUUID()}.sqlite`),
+      entities: [AdoptApiInvoice],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]: "https://docs.google.com/spreadsheets/d/adopt-api-test-1/edit",
+        [SYNC_ENV_KEYS.CREDENTIALS_FILE]: credentialsPath(),
+        [SYNC_ENV_KEYS.POLLING_INTERVAL_MS]: "3600000",
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+      adopt: {
+        mode: "adopt",
+        entities: {
+          AdoptApiInvoice: {
+            tabName: "Invoices",
+            columnMap: {
+              "Invoice No": "invoiceNo",
+              "Customer Name": "customer",
+              "Total (USD)": "total",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.kind).toBe("sync");
+    const runtime = (result as { kind: "sync"; hikoutei: { close(): Promise<void> } }).hikoutei;
+    try {
+      // System tabs provisioned alongside the LEGACY-header tab.
+      const titles = spreadsheet.sheets.map((s) => s.title);
+      expect(titles).toContain("Invoices_System");
+      expect(titles).toContain("Invoices_Conflicts");
+
+      const invoices = spreadsheet.findTab("Invoices")!;
+      // The legacy headers are PRESERVED (adoption never rewrites them) and
+      // the row-id system column is appended after the managed block.
+      expect(invoices.cell(0, 1)?.userEnteredValue?.stringValue).toBe("Invoice No");
+      expect(invoices.cell(0, 2)?.userEnteredValue?.stringValue).toBe("Customer Name");
+      expect(invoices.cell(0, 3)?.userEnteredValue?.stringValue).toBe("Total (USD)");
+      expect(invoices.cell(0, 0)?.userEnteredValue?.stringValue).toBe("memo");
+      expect(invoices.cell(0, 4)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
+      // Deterministic anchors derived from the MAPPED PK values.
+      expect(invoices.cell(1, 4)?.userEnteredValue?.stringValue).toBe("entity:INV-1");
+      expect(invoices.cell(2, 4)?.userEnteredValue?.stringValue).toBe("entity:INV-2");
+      // Existing cells untouched.
+      expect(invoices.cell(1, 2)?.userEnteredValue?.stringValue).toBe("Acme");
+
+      // D6 absorption through the translated route: a human edit on the
+      // LEGACY header column flows sheet → SQLite → System_State.
+      const service = (result as { kind: "sync"; service: import("../src/application/sync/service/SyncServiceBootstrap.js").InternalSyncService }).service;
+      invoices.cell(1, 2)?.userEnteredValue?.stringValue;
+      spreadsheet.findTab("Invoices")!.cells.set("1,2", { userEnteredValue: { stringValue: "EditedLive" } });
+      await service.pollingSupervisor.runOnce();
+      const customerValue = await service.storage.read(({ sql }) =>
+        sql.get<{ normalized_value: string }>(
+          "SELECT normalized_value FROM entity_field_state WHERE field_name = 'customer' AND entity_id LIKE '%INV-1'",
+        ));
+      expect(JSON.parse(customerValue!.normalized_value).value).toBe("EditedLive");
+
+      // Drain the outbox: the System_State projection refreshes to the
+      // absorbed edit.
+      for (let pass = 0; pass < 6; pass += 1) {
+        await service.effectSupervisor.runOnce();
+        const pending = await service.storage.read(({ sql }) =>
+          sql.get<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE status = 'pending'",
+          ));
+        if ((pending?.count ?? 0) === 0) break;
+      }
+      const systemTab = spreadsheet.findTab("Invoices_System")!;
+      const systemRow = [1, 2].map((row) =>
+        [0, 1].map((col) => systemTab.cell(row, col)?.userEnteredValue?.stringValue));
+      expect(systemRow).toContainEqual(["INV-1", "EditedLive"]);
+    } finally {
+      await runtime.close().catch(() => undefined);
+    }
+  });
+
   it("adopt mode runs the full pipeline over the stub transport", async () => {
     const spreadsheet = foreignSpreadsheet();
     const result = await createTypedSheetsWithSyncInternal({

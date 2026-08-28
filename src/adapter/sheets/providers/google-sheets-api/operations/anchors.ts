@@ -54,6 +54,7 @@ export async function ensureRowAnchors(
   const plan = planRowAnchors(tab, {
     registeredRange: request.registeredRange,
     headers: definition.headers,
+    ...(definition.physicalHeaders === undefined ? {} : { physicalHeaders: definition.physicalHeaders }),
     checkboxHeaders: definition.checkboxHeaders ?? [],
     anchorColumn,
   });

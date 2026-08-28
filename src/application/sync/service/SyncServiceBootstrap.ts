@@ -54,6 +54,7 @@ import {
   resolveAdoptionReaderTransport,
   type ExistingSheetAdoptionStartupPlan,
   withAdoptionRegisteredRangeOverride,
+  withAdoptedPhysicalHeaders,
 } from "./adopt/existingSheetAdoption.js";
 import {
   applyAdoptionSystemColumns,
@@ -175,7 +176,18 @@ export async function createInternalSyncService(
         writer,
       ),
     ];
-    const remote = createRemoteProvider(options, projectionDefinitions);
+    // §12 columnMap: the ADOPTED User_Input route's physical header row
+    // carries the legacy headers (positionally parallel to the canonical
+    // field-name headers, guaranteed by the C4 declaration-order gate plus
+    // the appended-PK-last rule). Attach the physical headers to exactly
+    // that one definition — provisioning, observation, and the writer all
+    // read the translation from this single source. A name-bound route
+    // (no columnMap) derives identical physical headers, so attaching them
+    // unconditionally for adopted routes is a no-op there.
+    const definitionsForRemote = adoptionPlan === undefined
+      ? projectionDefinitions
+      : withAdoptedPhysicalHeaders(projectionDefinitions, adoptionPlan);
+    const remote = createRemoteProvider(options, definitionsForRemote);
     if (adoptionPlan !== undefined) {
       // D7 (fail-closed): adoption requires an empty canonical state for the
       // adopted entity — a nonempty local state would silently merge with
@@ -223,7 +235,7 @@ export async function createInternalSyncService(
         rows: adoptionPlan.entities[0]!.dataRows,
       });
     }
-    await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
+    await provisionRegisteredSyncSheets(remote.provisioner, definitionsForRemote);
     if (adoptionPlan !== undefined) {
       // Observe the adopted tab (anchors already in place), bind every row
       // in one all-or-nothing transaction, then re-verify until stable —

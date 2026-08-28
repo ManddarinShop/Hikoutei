@@ -88,6 +88,8 @@ export interface ObservedTab {
 export interface AnchorPlanningTarget {
   readonly registeredRange: string;
   readonly headers: readonly string[];
+  /** §12 columnMap: adopted-route physical headers (see the definition type). */
+  readonly physicalHeaders?: readonly string[];
   readonly checkboxHeaders: readonly string[];
   /**
    * 1-based absolute column of the system row-id column; `undefined` for
@@ -120,6 +122,12 @@ export interface SnapshotBuildTarget extends AnchorPlanningTarget {
   readonly projection: string;
   readonly schemaVersion: number;
   readonly readMode: SyncSnapshotReadMode;
+  /**
+   * §12 columnMap: adopted-route physical headers, positionally parallel to
+   * `headers`. When present the grid's header row is validated against them
+   * while cells stay keyed by the canonical `headers` (field names).
+   */
+  readonly physicalHeaders?: readonly string[];
 }
 
 /**
@@ -202,6 +210,7 @@ export function planRowAnchors(
       range,
       target.headers,
       GOOGLE_SHEETS_API_ROW_ID_HEADER,
+      target.physicalHeaders,
     );
   }
   const anchorsByRow = readAnchorIndex(tab.grid, anchorColumn);
@@ -271,6 +280,7 @@ export function buildSnapshotFromTab(
     range,
     target.headers,
     anchorColumn === undefined ? undefined : GOOGLE_SHEETS_API_ROW_ID_HEADER,
+    target.physicalHeaders,
   );
   const lightweight = target.readMode === SYNC_SNAPSHOT_READ_MODES.USER_INPUT;
   const anchorsByRow = readAnchorIndex(tab.grid, anchorColumn);
