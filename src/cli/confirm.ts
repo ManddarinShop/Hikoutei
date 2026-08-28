@@ -91,6 +91,38 @@ export async function promptLoginHandoff(
 const CONFIRMATION_PROMPT =
   "This will create Google Cloud resources (project, service account, key, spreadsheet). Continue? [y/N] ";
 
+export interface ConfirmAdoptOptions {
+  readonly yes: boolean;
+  readonly input: AsyncIterable<string>;
+  readonly output: { readonly write: (text: string) => void };
+  /** One-line summary of what adopt will do, embedded in the prompt. */
+  readonly summary: string;
+}
+
+const ADOPT_CONFIRMATION_PROMPT =
+  (summary: string) =>
+    `This will ADOPT ${summary}: the tab gains a row-id system column, the local ` +
+    "state is seeded from the existing rows, and fresh system tabs are provisioned. " +
+    "Existing cells are never rewritten. Continue? [y/N] ";
+
+/**
+ * Asks for confirmation before an adoption unless `--yes` was given. Same
+ * single-chunk contract as {@link confirmSetup}; dry-run callers never reach
+ * this (the flow only prompts in adopt mode).
+ */
+export async function confirmAdopt(options: ConfirmAdoptOptions): Promise<ConfirmSetupResult> {
+  if (options.yes) {
+    return { status: "confirmed" };
+  }
+  options.output.write(ADOPT_CONFIRMATION_PROMPT(options.summary));
+  const chunk = await readOneInputChunk(options.input);
+  if (chunk === null) {
+    return { status: "declined" };
+  }
+  const answer = chunk.trim().toLowerCase();
+  return answer === "y" || answer === "yes" ? { status: "confirmed" } : { status: "declined" };
+}
+
 /**
  * Asks for confirmation unless `--yes` or `--dry-run` was given.
  *
