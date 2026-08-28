@@ -10,9 +10,11 @@
  * module. The public-surface audit (test/hikoutei-public-surface-audit.test.ts)
  * walks the emitted declaration graph from the root entrypoint and forbids any
  * reach into engine/SDK packages; re-exporting internal sync types would pull
- * the Google transport and MikroORM declarations into that graph. The internal
- * report/options types remain structurally compatible with these mirrors, and
- * the compile-time equivalence is pinned by tests.
+ * the Google transport and MikroORM declarations into that graph. The mirrors
+ * are ASSIGNABILITY-PINNED at the wrapper boundary — the wrapper's return
+ * type forces the internal result/report to remain assignable to these public
+ * types, so a BREAKING internal change fails typecheck; purely ADDITIVE
+ * internal fields flow through at runtime while the mirror lags by design.
  *
  * Adoption (MVP): ONE entity at a time, an empty local SQLite state, and the
  * adopted tab must satisfy the contiguous-block constraints of

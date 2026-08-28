@@ -254,20 +254,56 @@ describe("runAdoptCli", () => {
     expect(calls[0]!.entities).toEqual([CliProbe]);
   });
 
-  it("adopt mode: confirms before running, and declines without side effects", async () => {
-    // Declined: the input yields "n".
-    const declinedOutput: string[] = [];
+  it("adopt mode: confirms before running; a DECLINED confirmation exits 1 on stderr with zero side effects", async () => {
+    // Declined: the input yields "n". Terra S2/S3: exit 1 (automation must
+    // not read a silently skipped adoption as success) and the prompt/cancel
+    // lines go to STDERR so --json stdout stays clean.
+    const stdout: string[] = [];
+    const stderr: string[] = [];
     let called = 0;
     const code = await runAdoptCli({
       options: { ...baseOptions, mode: "adopt", yes: false },
       entities: [CliProbe],
       runner: (async () => { called += 1; return { kind: "sync", hikoutei: undefined } as unknown as TypedSheetsWithSyncResult; }),
-      ...sinks(declinedOutput),
+      output: { write: (text: string) => { stdout.push(text); } },
+      error: { write: (text: string) => { stderr.push(text); } },
       input: (async function* () { yield "n\n"; })(),
     });
-    expect(code).toBe(ADOPT_SUCCESS_EXIT_CODE);
+    expect(code).toBe(ADOPT_RUNTIME_ERROR_EXIT_CODE);
     expect(called).toBe(0);
-    expect(declinedOutput.join("")).toContain("cancelled");
+    expect(stderr.join("")).toContain("cancelled");
+    expect(stdout).toEqual([]);
+  });
+
+  it("finalizes stdin exactly once on every outcome (Terra S1)", async () => {
+    for (const options of [
+      baseOptions,
+      { ...baseOptions, mode: "adopt" as const },
+    ]) {
+      let finalizations = 0;
+      const code = await runAdoptCli({
+        options,
+        entities: [CliProbe],
+        runner: async () => dryRunResult(readyEntityReport(), true),
+        ...sinks([]),
+        finalizeStdin: () => { finalizations += 1; },
+      });
+      expect(code).toBe(ADOPT_SUCCESS_EXIT_CODE);
+      expect(finalizations).toBe(1);
+    }
+  });
+
+  it("finalizes stdin even when the runner throws (Terra S1)", async () => {
+    let finalizations = 0;
+    const code = await runAdoptCli({
+      options: baseOptions,
+      entities: [CliProbe],
+      runner: runnerThrowing(Object.assign(new Error("boom"), { code: "sync_startup_failed" })),
+      ...sinks([], []),
+      finalizeStdin: () => { finalizations += 1; },
+    });
+    expect(code).toBe(ADOPT_RUNTIME_ERROR_EXIT_CODE);
+    expect(finalizations).toBe(1);
   });
 
   it("adopt mode: --yes skips the prompt and reports success", async () => {

@@ -113,7 +113,7 @@ export const ADOPT_HELP_TEXT = [
   "  -h, --help                Show this help.",
   "",
   "Exit codes: 0 success (a ready dry-run also exits 0), 1 failure (a blocked",
-  "dry-run exits 1), 2 argument errors.",
+  "dry-run, a declined confirmation, or a runtime error), 2 argument errors.",
 ].join("\n");
 
 /** Parses and defaults `hikoutei adopt` arguments. */

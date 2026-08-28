@@ -355,7 +355,12 @@ export function isModuleMainEntry(entryArg: string | undefined, moduleUrl: strin
  * release and is safe on every outcome — TTY, piped, never-read, or already
  * ended. Guarded and idempotent so it never throws or double-releases.
  */
-function createStdinFinalizer(): () => void {
+/**
+ * Destroys the process stdin exactly once so the CLI process can exit after
+ * a single-chunk confirmation read leaves the shared async iterator open.
+ * Exported for the adopt CLI, which prompts over the same shared stdin.
+ */
+export function createStdinFinalizer(): () => void {
   let finalized = false;
   return () => {
     if (finalized) {

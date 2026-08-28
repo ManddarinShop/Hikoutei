@@ -21,6 +21,9 @@ import type {
   TypedSheetsWithSyncResult,
 } from "../api/syncRuntime.js";
 
+/** Machine-readable CLI error prefix, shared with adoptMain.ts. */
+export const ADOPT_ERROR_PREFIX = "hikoutei-adopt";
+
 /** What the flow asks the runner to execute. */
 export interface AdoptRunnerInput {
   readonly spec: AdoptSpec;
@@ -40,9 +43,17 @@ export interface RunAdoptCliInput {
   readonly input: AsyncIterable<string>;
   readonly output: { readonly write: (text: string) => void };
   readonly error: { readonly write: (text: string) => void };
+  /**
+   * Releases the shared stdin stream so the CLI process can exit after the
+   * flow settles. The single-chunk confirmation read leaves the shared async
+   * iterator OPEN (`next()` without `return()`), which keeps a Node process
+   * alive forever on an open stdin pipe — the exact bug class the setup CLI
+   * fixed with its finalizer (see test/cli-setup.test.ts subprocess
+   * regression). Production passes `createStdinFinalizer()`; tests may count
+   * invocations instead.
+   */
+  readonly finalizeStdin?: () => void;
 }
-
-const ADOPT_ERROR_PREFIX = "hikoutei-adopt";
 
 /** Exit code 0: success (a READY dry-run included). */
 export const ADOPT_SUCCESS_EXIT_CODE = 0;
@@ -54,20 +65,33 @@ export const ADOPT_RUNTIME_ERROR_EXIT_CODE = 1;
  * code with a machine-readable `hikoutei-adopt:<code>:` line on stderr.
  */
 export async function runAdoptCli(input: RunAdoptCliInput): Promise<number> {
+  try {
+    return await runAdoptCliInner(input);
+  } finally {
+    // The single-chunk confirmation read leaves the shared stdin iterator
+    // open; destroy the stream so the CLI process can exit (Terra S1).
+    input.finalizeStdin?.();
+  }
+}
+
+async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
   const { options } = input;
 
   // Adopt mode mutates the spreadsheet and the local database: confirm unless
-  // --yes. Dry-run is read-only and never prompts.
+  // --yes. The prompt and the cancellation line go to STDERR so `--json`
+  // consumers always get a clean stdout payload (Terra S3).
   if (options.mode === "adopt" && !options.yes) {
     const confirmation = await confirmAdopt({
       yes: options.yes,
       input: input.input,
-      output: input.output,
+      output: input.error,
       summary: `adopt tab "${options.tabName}" as entity "${options.entityName}" into ${options.db}`,
     });
     if (confirmation.status === "declined") {
-      input.output.write("Adoption cancelled. The spreadsheet was not modified.\n");
-      return ADOPT_SUCCESS_EXIT_CODE;
+      // Exit 1, not 0: an automation run that forgot --yes must not read as
+      // a successful (silently skipped) adoption (Terra S2).
+      input.error.write("Adoption cancelled. Pass --yes to run without confirmation.\n");
+      return ADOPT_RUNTIME_ERROR_EXIT_CODE;
     }
   }
 
@@ -107,8 +131,8 @@ export async function runAdoptCli(input: RunAdoptCliInput): Promise<number> {
 
   if (result.kind === "local") {
     input.error.write(
-      "hikoutei-adopt:sync_disabled: sync is not configured — set --spreadsheet-url or " +
-      "HIKOUTEI_SYNC_SPREADSHEET_URL (and the credentials file) to adopt a tab.\n",
+      `${ADOPT_ERROR_PREFIX}:sync_disabled: sync is not configured — set --spreadsheet-url or ` +
+      `HIKOUTEI_SYNC_SPREADSHEET_URL (and the credentials file) to adopt a tab.\n`,
     );
     return ADOPT_RUNTIME_ERROR_EXIT_CODE;
   }
@@ -133,7 +157,7 @@ function reportError(input: RunAdoptCliInput, error: unknown): number {
     ? (error as { code: string }).code
     : "unexpected";
   const message = error instanceof Error ? error.message : String(error);
-  input.error.write(`hikoutei-adopt:${code}: ${message}\n`);
+  input.error.write(`${ADOPT_ERROR_PREFIX}:${code}: ${message}\n`);
   return ADOPT_RUNTIME_ERROR_EXIT_CODE;
 }
 

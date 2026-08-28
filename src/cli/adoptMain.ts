@@ -17,14 +17,21 @@ import type { HikouteiEntity } from "../api/entity.js";
 import { getEntityDescriptor, getRegisteredEntityTokens } from "../api/entity.js";
 import { HikouteiError } from "../api/errors.js";
 import { parseAdoptArgs } from "./adoptArgs.js";
-import { runAdoptCli, type AdoptRunner, type AdoptRunnerInput } from "./adoptFlow.js";
+import {
+  ADOPT_ERROR_PREFIX,
+  runAdoptCli,
+  type AdoptRunner,
+  type AdoptRunnerInput,
+} from "./adoptFlow.js";
 import {
   SETUP_ARG_ERROR_EXIT_CODE,
   SETUP_RUNTIME_ERROR_EXIT_CODE,
 } from "./errors.js";
-import { isModuleMainEntry } from "./setup.js";
+import { createStdinFinalizer, isModuleMainEntry } from "./setup.js";
 
-const ADOPT_ERROR_PREFIX = "hikoutei-adopt";
+// The adopt-specific stable error code (api/errors.ts owns the real taxonomy;
+// this alias keeps the machine-readable surface identical).
+const HIKOUTEI_ERROR_CODES_ADOPT_ENTITY_UNKNOWN = "sync_startup_failed" as const;
 
 /**
  * Loads the entities module and returns the token matching the requested
@@ -109,6 +116,9 @@ export async function runAdoptMain(argv: readonly string[]): Promise<number> {
       input: process.stdin,
       output: process.stdout,
       error: process.stderr,
+      // The confirmation prompt reads one stdin chunk and leaves the shared
+      // iterator open; destroy the stream so the process can exit (Terra S1).
+      finalizeStdin: createStdinFinalizer(),
     });
   } catch (error: unknown) {
     const code = typeof (error as { code?: unknown })?.code === "string"
@@ -119,10 +129,6 @@ export async function runAdoptMain(argv: readonly string[]): Promise<number> {
     return SETUP_RUNTIME_ERROR_EXIT_CODE;
   }
 }
-
-// The adopt-specific stable error code (api/errors.ts owns the real taxonomy;
-// this alias keeps the machine-readable surface identical).
-const HIKOUTEI_ERROR_CODES_ADOPT_ENTITY_UNKNOWN = "sync_startup_failed" as const;
 
 // ESM entrypoint guard: run main() only when this file is the process entry,
 // never when merely imported (see setup.ts for the same pattern).

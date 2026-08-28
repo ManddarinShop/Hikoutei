@@ -356,13 +356,16 @@ export async function createTypedSheetsWithSync(
       if (options.adopt?.mode === "adopt") {
         const blocked = error.report.entities
           .flatMap((entity) => entity.problems.map((problem) => `${entity.entityName}: ${problem.code}`));
-        return raiseDiagnosed(
-          diagnostic,
-          new HikouteiError(
-            HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
-            `existing-sheet adoption is blocked by the dry-run analysis (${blocked.join("; ") || "no detail"}); run mode "dry-run" for the full report.`,
-          ),
+        // The report rides on the error as an untyped `adoptionReport`
+        // property: typing it here would pull the internal adoption types
+        // into api/errors.ts and leak the SDK packages into the public
+        // declaration graph (public-surface audit rule). Terra N1.
+        const failure = new HikouteiError(
+          HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+          `existing-sheet adoption is blocked by the dry-run analysis (${blocked.join("; ") || "no detail"}); run mode "dry-run" for the full report.`,
         );
+        Object.assign(failure, { adoptionReport: error.report });
+        return raiseDiagnosed(diagnostic, failure);
       }
       const result: AdoptDryRunResult = { kind: "adopt-dry-run", report: error.report };
       return result;
@@ -401,12 +404,8 @@ function withAdoptedTabOverrides(
         `adopt.entities references entity "${entityName}" that is not part of this runtime (declared: ${[...descriptorByName.keys()].join(", ") || "none"}).`,
       );
     }
-    if (descriptorByName.get(entityName) === undefined) {
-      throw new HikouteiError(
-        HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
-        `adopt.entities key "${entityName}" does not match a declared entity.`,
-      );
-    }
+    // NOTE: configs is derived from buildSyncProjections(options.entities),
+    // so a config existing implies its descriptor exists — no second check.
     if (config.userInput === undefined) {
       throw new HikouteiError(
         HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
