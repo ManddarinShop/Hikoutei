@@ -80,6 +80,15 @@ export interface ExistingSheetAdoptionEntitySpec {
    * appending a generated PK column (D4).
    */
   readonly identityFrom?: string | "auto";
+  /**
+   * Explicit header → property binding for sheets whose headers differ from
+   * the entity's property names (design §12, C1: adoption-only). Mapped
+   * headers take precedence over name matching; unmapped headers keep the
+   * name-binding/ignore rules. The map must cover headers that EXIST in the
+   * tab and properties that ARE declared; a mapped PK header absorbs the D4
+   * alias (identityFrom may name the mapped header).
+   */
+  readonly columnMap?: Readonly<Record<string, string>>;
 }
 
 /** Top-level adoption startup spec. */
@@ -95,6 +104,12 @@ export interface ExistingSheetAdoptionColumnBinding {
   readonly columnIndex: number;
   readonly columnLetter: string;
   readonly header: string;
+  /**
+   * When the binding came from `columnMap`, the sheet header it was mapped
+   * FROM (the map key). The exact-header expectation for this column is this
+   * value instead of `field` (design §12).
+   */
+  readonly mappedFromHeader?: string;
 }
 
 export type ExistingSheetAdoptionProblemSeverity = "error" | "warning";
@@ -115,7 +130,10 @@ export interface ExistingSheetAdoptionProblem {
     | "DECLARATION_ORDER_MISMATCH"
     | "NO_BOUND_COLUMNS"
     | "EXACT_HEADER_MISMATCH"
-    | "IDENTITY_ALIAS_UNSUPPORTED";
+    | "IDENTITY_ALIAS_UNSUPPORTED"
+    | "COLUMN_MAP_UNKNOWN_PROPERTY"
+    | "COLUMN_MAP_DUPLICATE_PROPERTY"
+    | "COLUMN_MAP_UNKNOWN_HEADER";
   readonly message: string;
   readonly detail?: Readonly<Record<string, string | number | readonly string[] | readonly number[]>>;
 }
@@ -183,6 +201,7 @@ interface AnalyzeInput {
   readonly descriptor: ResolvedHikouteiEntityDescriptor;
   readonly userOwnedFields: readonly string[];
   readonly identityFrom: string | "auto" | undefined;
+  readonly columnMap: Readonly<Record<string, string>> | undefined;
   readonly systemStateTabName: string;
   readonly syncConflictsTabName: string;
 }
@@ -263,6 +282,53 @@ export function analyzeExistingSheetAdoptionEntity(
   const fields = userOwnedFields.length > 0 ? userOwnedFields : descriptor.properties.map((p) => p.name);
   const primaryKey = descriptor.primaryKey;
 
+  // columnMap validation + resolution (design §12): explicit header → property
+  // bindings take precedence over name matching. The map must reference
+  // headers that EXIST (uniquely) in the tab and properties that ARE declared
+  // user-owned; two headers mapping to one property is ambiguous and fails.
+  const columnMap = input.columnMap;
+  const headerByField = new Map<string, { header: string; index: number }>();
+  if (columnMap !== undefined) {
+    const propertyByHeader = new Map<string, string>();
+    for (const [header, property] of Object.entries(columnMap)) {
+      if (propertyByName.get(property) === undefined) {
+        problems.push({
+          severity: "error",
+          code: "COLUMN_MAP_UNKNOWN_PROPERTY",
+          message: `columnMap maps header "${header}" to property "${property}", which the entity "${entityName}" does not declare.`,
+          detail: { header, property },
+        });
+        continue;
+      }
+      if (propertyByHeader.get(header) !== undefined) {
+        continue; // duplicate key is impossible in a Record; kept for clarity
+      }
+      if (propertyByHeader.size > 0 && [...propertyByHeader.values()].includes(property)) {
+        problems.push({
+          severity: "error",
+          code: "COLUMN_MAP_DUPLICATE_PROPERTY",
+          message: `columnMap maps two headers ("${[...propertyByHeader.entries()].find(([, p]) => p === property)?.[0] ?? ""}", "${header}") to the same property "${property}"; the binding would be ambiguous.`,
+          detail: { property, header },
+        });
+        continue;
+      }
+      const index = headerIndexByName.get(header.trim());
+      if (index === undefined || ambiguousNames.has(header.trim())) {
+        problems.push({
+          severity: "error",
+          code: "COLUMN_MAP_UNKNOWN_HEADER",
+          message: ambiguousNames.has(header.trim())
+            ? `columnMap references header "${header}", which appears more than once in tab "${tabName}".`
+            : `columnMap references header "${header}", which does not exist in tab "${tabName}" (check for typos; the report lists every unmapped header).`,
+          detail: { header },
+        });
+        continue;
+      }
+      propertyByHeader.set(header, property);
+      headerByField.set(property, { header, index });
+    }
+  }
+
   // PK resolution (D4) runs FIRST: the identity column participates in the
   // binding set, so every derived state (bindings, ignored columns, segments,
   // contiguity) is computed from the FINAL binding set. An explicit
@@ -293,19 +359,28 @@ export function analyzeExistingSheetAdoptionEntity(
       pkHeader = headers[index]!;
     }
   } else {
-    const index = headerIndexByName.get(primaryKey);
-    if (index !== undefined && !ambiguousNames.has(primaryKey)) {
+    // "auto": the PK property's column — via columnMap (§12) first, then the
+    // exact name match (D2).
+    const mapped = headerByField.get(primaryKey);
+    if (mapped !== undefined) {
       pkSource = "existing-column";
-      pkColumnIndex = index;
-      pkHeader = headers[index]!;
+      pkColumnIndex = mapped.index;
+      pkHeader = headers[mapped.index]!;
     } else {
-      pkSource = "auto-generate";
-      problems.push({
-        severity: "warning",
-        code: "NO_PK_CANDIDATE",
-        message: `No column matches the primary key "${primaryKey}". Adoption will append a generated PK column.`,
-        detail: { primaryKey },
-      });
+      const index = headerIndexByName.get(primaryKey);
+      if (index !== undefined && !ambiguousNames.has(primaryKey)) {
+        pkSource = "existing-column";
+        pkColumnIndex = index;
+        pkHeader = headers[index]!;
+      } else {
+        pkSource = "auto-generate";
+        problems.push({
+          severity: "warning",
+          code: "NO_PK_CANDIDATE",
+          message: `No column matches the primary key "${primaryKey}". Adoption will append a generated PK column.`,
+          detail: { primaryKey },
+        });
+      }
     }
   }
 
@@ -319,11 +394,27 @@ export function analyzeExistingSheetAdoptionEntity(
       continue;
     }
     if (field === primaryKey && pkColumnIndex !== undefined) {
+      const mapped = headerByField.get(field);
       bindings.push({
         field,
         columnIndex: pkColumnIndex,
         columnLetter: columnLetters(pkColumnIndex + 1),
         header: pkHeader!,
+        ...(mapped === undefined ? {} : { mappedFromHeader: mapped.header }),
+      });
+      continue;
+    }
+    const mapped = headerByField.get(field);
+    if (mapped !== undefined) {
+      // columnMap binding (§12): explicit header → property. Precedence over
+      // name matching; the report carries the mapped-from header so consumers
+      // (and the exact-header gate) know the sheet's real header.
+      bindings.push({
+        field,
+        columnIndex: mapped.index,
+        columnLetter: columnLetters(mapped.index + 1),
+        header: headers[mapped.index]!,
+        mappedFromHeader: mapped.header,
       });
       continue;
     }
@@ -693,6 +784,7 @@ export async function planExistingSheetAdoptionStartup(input: {
       descriptor,
       userOwnedFields: input.userOwnedFieldsByEntity[entityName] ?? [],
       identityFrom: spec.identityFrom,
+      columnMap: spec.columnMap,
       systemStateTabName: input.projections.entities[entityName]!.systemState.tabName,
       syncConflictsTabName: input.projections.entities[entityName]!.syncConflicts.tabName,
     });
@@ -700,11 +792,14 @@ export async function planExistingSheetAdoptionStartup(input: {
     // occupied append columns) and exact-header mismatches surface in the
     // REPORT so dry-run and adopt agree on readiness — never "dry-run
     // ready, adopt rejected".
-    // MVP decision (D4): identityFrom aliases are NOT supported — the PK
-    // header must equal the PK property name exactly, so an explicit
-    // identityFrom naming a different column blocks the adoption.
+    // D4 (as amended by §12/C2): identityFrom aliases are absorbed by
+    // columnMap — an alias is allowed when the map binds that header to the
+    // PK property. Without a map the alias still blocks.
+    const identityAliasAllowed = spec.identityFrom !== undefined
+      && spec.columnMap !== undefined
+      && spec.columnMap[spec.identityFrom] === descriptor.primaryKey;
     const identityAliasProblems: ExistingSheetAdoptionProblem[] = [];
-    if (spec.identityFrom !== undefined && spec.identityFrom !== "auto" && spec.identityFrom !== descriptor.primaryKey) {
+    if (spec.identityFrom !== undefined && spec.identityFrom !== "auto" && spec.identityFrom !== descriptor.primaryKey && !identityAliasAllowed) {
       identityAliasProblems.push({
         severity: "error",
         code: "IDENTITY_ALIAS_UNSUPPORTED",
@@ -732,11 +827,14 @@ export async function planExistingSheetAdoptionStartup(input: {
       });
       const exactHeaderProblems: ExistingSheetAdoptionProblem[] = [];
       for (const binding of reportEntity.bindings) {
-        if (binding.header !== binding.field) {
+        // §12/C2: a columnMap-bound column's exact-header expectation is the
+        // MAP KEY (the sheet's real header), not the property name.
+        const expectedHeader = binding.mappedFromHeader ?? binding.field;
+        if (binding.header !== expectedHeader) {
           exactHeaderProblems.push({
             severity: "error",
             code: "EXACT_HEADER_MISMATCH",
-            message: `adoption (MVP) requires the header of column ${binding.columnLetter} to be exactly "${binding.field}", but tab "${tab.title}" has "${binding.header}".`,
+            message: `adoption (MVP) requires the header of column ${binding.columnLetter} to be exactly "${expectedHeader}", but tab "${tab.title}" has "${binding.header}".`,
             detail: { column: binding.columnLetter, header: binding.header, field: binding.field },
           });
         }

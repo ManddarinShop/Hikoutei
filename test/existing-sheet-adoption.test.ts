@@ -492,9 +492,13 @@ describe("review round 2 regressions", () => {
     rows: readonly (readonly (string | undefined)[])[],
     mode: "dry-run" | "adopt" = "dry-run",
     identityFrom: string | "auto" = "auto",
+    columnMap?: Readonly<Record<string, string>>,
   ) =>
     planExistingSheetAdoptionStartup({
-      adopt: { mode, entities: { AdoptInvoice: { tabName: "Invoices", identityFrom } } },
+      adopt: {
+        mode,
+        entities: { AdoptInvoice: { tabName: "Invoices", identityFrom, ...(columnMap === undefined ? {} : { columnMap }) } },
+      },
       spreadsheetId: "adopt-spreadsheet",
       transport: {
         async getSpreadsheet() {
@@ -589,5 +593,171 @@ describe("review round 2 regressions", () => {
       throw error;
     });
     expect(plan.entities).toHaveLength(1);
+  });
+});
+describe("columnMap — explicit header → property bindings (design §12)", () => {
+  // Legacy headers that do NOT match the property names. Column order still
+  // follows the entity declaration order (C4): invoiceNo, customer, total.
+  const legacyHeaders = ["memo", "Invoice No", "Customer Name", "Total (USD)", "note"];
+  const legacyRows = [
+    ["legacy note", "INV-1", "Acme", "100", ""],
+    ["", "INV-2", "Beta", "200", ""],
+  ];
+  const legacyColumnMap = {
+    "Invoice No": "invoiceNo",
+    "Customer Name": "customer",
+    "Total (USD)": "total",
+  };
+
+  const legacyPlanWith = (
+    headers: readonly string[],
+    rows: readonly (readonly (string | undefined)[])[],
+    columnMap: Readonly<Record<string, string>> | undefined,
+    mode: "dry-run" | "adopt" = "dry-run",
+    identityFrom: string | "auto" = "auto",
+  ) =>
+    planExistingSheetAdoptionStartup({
+      adopt: {
+        mode,
+        entities: { AdoptInvoice: { tabName: "Invoices", identityFrom, ...(columnMap === undefined ? {} : { columnMap }) } },
+      },
+      spreadsheetId: "adopt-spreadsheet",
+      transport: {
+        async getSpreadsheet() {
+          return { sheets: [{ properties: { sheetId: 7, title: "Invoices", gridProperties: { columnCount: headers.length } } }] };
+        },
+        async getValues() {
+          return { values: [headers, ...rows.map((row) => row.map((cell) => cell ?? null))] };
+        },
+        async batchUpdate() {
+          return {};
+        },
+      },
+      descriptors: [adoptDescriptor],
+      projections: {
+        spreadsheetId: "adopt-spreadsheet",
+        entities: {
+          AdoptInvoice: {
+            systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+            syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+            userInput: { tabName: "Invoices", registeredRange: "A:E" },
+            userOwnedFields: USER_OWNED,
+          },
+        },
+      },
+      userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED },
+    });
+
+  function dryRunReport(headers: readonly string[], rows: readonly (readonly (string | undefined)[])[], columnMap: Readonly<Record<string, string>> | undefined, mode: "dry-run" | "adopt" = "dry-run", identityFrom: string | "auto" = "auto") {
+    // dry-run ALWAYS throws the report; adopt mode resolves the plan for a
+    // READY analysis and throws the same report error when blocked.
+    return legacyPlanWith(headers, rows, columnMap, mode, identityFrom).then(
+      (plan) => plan.report,
+      (error: unknown) => {
+        if (error instanceof ExistingSheetAdoptionDryRunReportError) return error.report;
+        throw error;
+      },
+    );
+  }
+
+  it("binds headers through the map and reports the mapped-from headers", async () => {
+    const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap);
+    const entity = report.entities[0]!;
+    expect(entity.status).toBe("ready");
+    expect(entity.bindings).toEqual([
+      { field: "invoiceNo", columnIndex: 1, columnLetter: "B", header: "Invoice No", mappedFromHeader: "Invoice No" },
+      { field: "customer", columnIndex: 2, columnLetter: "C", header: "Customer Name", mappedFromHeader: "Customer Name" },
+      { field: "total", columnIndex: 3, columnLetter: "D", header: "Total (USD)", mappedFromHeader: "Total (USD)" },
+      { field: "note", columnIndex: 4, columnLetter: "E", header: "note" },
+    ]);
+    // C3: the unmapped `memo` header is an ignored column (sitting LEFT of
+    // the managed block, per the MVP layout rule).
+    expect(entity.ignoredColumns).toEqual([
+      { columnLetter: "A", header: "memo" },
+    ]);
+  });
+
+  it("keeps name-binding for fields not in the map", async () => {
+    const report = await dryRunReport(
+      ["memo", "Invoice No", "customer", "Total (USD)", "note"],
+      legacyRows,
+      { "Invoice No": "invoiceNo", "Total (USD)": "total" },
+    );
+    const entity = report.entities[0]!;
+    expect(entity.status).toBe("ready");
+    const byField = Object.fromEntries(entity.bindings.map((b) => [b.field, b]));
+    expect(byField.customer).toMatchObject({ columnLetter: "C", header: "customer" });
+    expect(byField.customer!.mappedFromHeader).toBeUndefined();
+    expect(byField.note).toMatchObject({ columnLetter: "E", header: "note" });
+  });
+
+  it("absorbs the D4 identityFrom alias when the map binds the PK header", async () => {
+    const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap, "adopt", "Invoice No");
+    expect(report.entities[0]!.status).toBe("ready");
+    expect(report.entities[0]!.problems.some((p) => p.code === "IDENTITY_ALIAS_UNSUPPORTED")).toBe(false);
+  });
+
+  it("still blocks an identityFrom alias WITHOUT a map (D4 unchanged)", async () => {
+    const report = await dryRunReport(
+      ["Invoice No", "customer", "total"],
+      [["INV-1", "Acme", "100"]],
+      undefined,
+      "adopt",
+      "Invoice No",
+    );
+    expect(report.entities[0]!.problems.some((p) => p.code === "IDENTITY_ALIAS_UNSUPPORTED")).toBe(true);
+  });
+
+  it("resolves the PK through the map with identityFrom auto", async () => {
+    const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap);
+    const entity = report.entities[0]!;
+    expect(entity.pk).toMatchObject({ source: "existing-column", column: "Invoice No" });
+  });
+
+  it("flags a map header that does not exist in the tab (typo exposure)", async () => {
+    const report = await dryRunReport(
+      ["Invoice No", "customer", "Total (USD)"],
+      [["INV-1", "Acme", "100"]],
+      { "Invoice No": "invoiceNo", "Custmer Name": "customer", "Total (USD)": "total" },
+    );
+    const entity = report.entities[0]!;
+    expect(entity.problems.some((p) => p.code === "COLUMN_MAP_UNKNOWN_HEADER" && p.severity === "error")).toBe(true);
+    // The typo'd field falls back to name matching (still binds here), but
+    // the unknown-header error blocks the adoption either way.
+    expect(entity.status).toBe("blocked");
+  });
+
+  it("flags a map value that the entity does not declare", async () => {
+    const report = await dryRunReport(
+      ["Invoice No", "customer", "total"],
+      [["INV-1", "Acme", "100"]],
+      { "Invoice No": "invoiceNo", customer: "custmer" },
+    );
+    expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_MAP_UNKNOWN_PROPERTY")).toBe(true);
+  });
+
+  it("flags two headers mapping to one property", async () => {
+    const report = await dryRunReport(
+      ["Invoice No", "Other Invoice", "customer", "total"],
+      [["INV-1", "INV-1x", "Acme", "100"]],
+      { "Invoice No": "invoiceNo", "Other Invoice": "invoiceNo" },
+    );
+    expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_MAP_DUPLICATE_PROPERTY")).toBe(true);
+  });
+
+  it("enforces the declaration ORDER over mapped fields (C4)", async () => {
+    // The map cannot reorder: sheet order invoiceNo, total, customer vs the
+    // declaration order invoiceNo, customer, total must block.
+    const report = await dryRunReport(
+      ["memo", "Invoice No", "Total (USD)", "customer"],
+      [["legacy", "INV-1", "100", "Acme"]],
+      { "Invoice No": "invoiceNo", "Total (USD)": "total" },
+    );
+    expect(report.entities[0]!.problems.some((p) => p.code === "DECLARATION_ORDER_MISMATCH")).toBe(true);
+  });
+
+  it("adopt mode with the legacy map is READY end to end", async () => {
+    const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap, "adopt");
+    expect(report.ok).toBe(true);
   });
 });
