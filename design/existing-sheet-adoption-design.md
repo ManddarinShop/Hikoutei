@@ -151,3 +151,44 @@ adopt: {
 - 어답션 드리프트 캡처 리포트.
 - System_State 모드 어답션(시트를 프로젝션으로 편입 — 수동 편집 되돌림 정책이
   허용되는 워크플로용).
+## 10. 다음 세션 인계 — 라이브 스모크 실행 계획 (Phase 4, 미착수)
+
+> 이 섹션은 새 세션에서 그대로 이어받기 위한 체크포인트다 (2026-08-28 작성).
+> Phase 1-3 구현 완료 (PR #385, #386 머지됨). 아래 스모크가 통과되어야
+> "라이브 검증 완료"가 된다.
+
+### 준비물
+- SA 크리덴셜: `GOOGLE_APPLICATION_CREDENTIALS` (기존 테스트 SA 사용)
+- 스프레드시트: SA 소유 테스트 시트에 **실제 데이터가 있는 탭** 1개
+  (10~50행, 컬럼명 == 엔티티 프로퍼티 이름, 연속 블록 — D3/D4 제약 준수)
+- 테스트 엔티티 정의: 탭 컬럼 순서대로 프로퍼티 선언 (generated PK면 PK를
+  마지막에 선언)
+
+### 실행 시나리오 (순서대로)
+1. dry-run (`adopt.mode: "dry-run"`) → 리포트 확인: 바인딩, 무시 컬럼,
+   연속성, COLUMN_OCCUPIED 없음
+2. adopt 모드 기동 → System_State/Conflicts 탭 자동 생성, row_id 컬럼
+   append, 결정적 앵커(`entity:<pk>`) 기입 확인
+3. SQLite 시딩 확인: row_binding(anchor)/entity_state/business_key_index/
+   sheet_visible_state(관측 해시)
+4. System_State 자동 백필: 빈 탭 → 리콘실 대량 append로 채워짐 확인
+5. 사람 편집 흡수 (D6): 탭에서 셀 수정 → 폴링 → SQLite 반영 →
+   System_State 프로젝션 갱신
+6. CleanupScanner 안전 (D5): 스캔 실행 후에도 미바인딩 삭제 없음 확인
+
+### 주의사항
+- 테스트 대상 탭은 어답션 후 라이브러리 소유가 됨 → **복사본 탭**에서 실행
+- 429/쿼터: 새 기본값(900ms/1,000)이 이미 측정됨 — 추가 조치 불필요
+- 실패 시: 체크포인트 상태와 리포트를 아티팩트로 남기고 원인 분류
+
+### 산출물
+- `.local/adopt-live-smoke-<runId>.json` + 이 문서에 결과 섹션 추가
+- 성공 시: 2순위(공개 API 노출)로 진행
+
+### 새 세션 인수인계 절차
+- 새 세션 첫 메시지: "design/existing-sheet-adoption-design.md 읽고 섹션
+  10(라이브 스모크 실행 계획)부터 진행해줘"
+- 작업 순서 제안: ① 라이브 스모크 → ② 공개 API 노출 (adopt 옵션/CLI) →
+  ③ 기능 확장 (columnMap · 다중 엔티티 · 병합 · 별칭)
+- Terra 리뷰어 usage limit은 시간 경과 후 리셋; 리셋 전에는 메인 직접
+  검증으로 대체 (CI + 1,8xx 테스트 스위트가 품질 게이트 유지)
