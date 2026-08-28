@@ -44,6 +44,7 @@ import type {
   EnsureSyncRowAnchorsResult,
   FastAppendRowsRequest,
   FastAppendRowsResult,
+  PreparedApplyEffects,
   ReadSyncEffectPostconditionsRequest,
   ReadSyncSnapshotRequest,
   ReadSyncTableRowsRequest,
@@ -87,6 +88,18 @@ export class CoordinatedLanePreconditionError extends Error {
   public constructor() {
     super(COORDINATED_LANE_PRECONDITION_MESSAGE);
     this.name = "CoordinatedLanePreconditionError";
+  }
+}
+
+/**
+ * Raised when a coordinated provider wraps an inner provider that does not
+ * implement the split apply stages. The dispatcher catches this and falls
+ * back to the inner's single legacy `applyEffects` path.
+ */
+export class CoordinatedSplitApplyUnsupportedError extends Error {
+  public constructor() {
+    super("the inner provider does not support split apply preflight");
+    this.name = "CoordinatedSplitApplyUnsupportedError";
   }
 }
 
@@ -203,6 +216,81 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
   public async applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
     return this.runMutation(request.physicalSheetId, "applyEffects", () =>
       this.inner.applyEffects(request),
+    );
+  }
+
+  /**
+   * Lock-free read+plan stage of one apply request.
+   *
+   * Preflight is a read-only stage (sheet enumeration plus a ranged data
+   * read) and must NOT hold the mutation lane: a read-ahead worker wants to
+   * run another route's preflight concurrently with a write. The subsequent
+   * write+verify stage is serialized under the lanes (by the dispatcher via
+   * `runSerializedInner`, and by this coordinator's own `applyPreparedEffects`
+   * for direct callers), and the CAS guards already make a stale read safe.
+   */
+  public async preflightApplyEffects(
+    request: ApplySyncEffectsRequest,
+  ): Promise<PreparedApplyEffects> {
+    if (
+      this.inner.preflightApplyEffects === undefined ||
+      this.inner.applyPreparedEffects === undefined
+    ) {
+      // The inner is a legacy provider (e.g. a fake or an older provider) or
+      // exposes only ONE of the two split stages. Split apply is only valid
+      // when BOTH exist; a partial inner must use the single `applyEffects`
+      // path. Signal unsupported so the dispatcher falls back to the inner's
+      // single `applyEffects` call.
+      throw new CoordinatedSplitApplyUnsupportedError();
+    }
+    return this.inner.preflightApplyEffects(request);
+  }
+
+  /**
+   * Write+verify stage of one apply request, serialized under the mutation
+   * lanes derived from the prepared state's own effect routes.
+   *
+   * The write stage is a REMOTE MUTATION, so unlike the lock-free preflight
+   * above it must never bypass the lanes: a direct consumer of this
+   * coordinator that calls `applyPreparedEffects` itself (instead of going
+   * through the effect dispatcher) previously reached the inner provider
+   * unserialized and could interleave with a concurrent fast append or
+   * regular write on the same spreadsheet. The call therefore acquires every
+   * involved lane (stable sorted order, same as `observeSnapshots`) before
+   * delegating.
+   *
+   * The dispatcher path cannot deadlock on this: it dispatches through
+   * `runSerializedInner`/`runSerializedInnerForRoutes`, whose `remote` closure
+   * receives the INNER provider and calls it directly, so it never re-enters
+   * this method while its lanes are already held. No caller may invoke this
+   * method from inside a `runSerializedControl`/`runSerializedInner` task (the
+   * lanes are not reentrant); the only production writer path is the
+   * dispatcher's out-of-lane preflight plus in-lane write, which this change
+   * keeps byte-identical.
+   */
+  public async applyPreparedEffects(
+    prepared: PreparedApplyEffects,
+  ): Promise<ApplySyncEffectsResult> {
+    if (
+      this.inner.preflightApplyEffects === undefined ||
+      this.inner.applyPreparedEffects === undefined
+    ) {
+      // A partial inner must never be driven into `applyPrepared`; signal
+      // unsupported so the dispatcher falls back to the inner's single
+      // `applyEffects` call.
+      throw new CoordinatedSplitApplyUnsupportedError();
+    }
+    const innerApplyPrepared = this.inner.applyPreparedEffects;
+    // Derive the lanes from the prepared state's own per-effect route fields
+    // so a multi-tab prepared state holds every involved lane, exactly like
+    // the dispatcher's `runSerializedInnerForRoutes` multi-tab dispatch. The
+    // token crosses an opaque boundary, so an unusable shape fails closed
+    // before any lane is acquired or any remote call is made.
+    const keys = distinctLaneKeys(
+      preparedLanePhysicalSheetIds(prepared).map((id) => this.resolveKey(id)),
+    );
+    return this.runInLanes(keys, "applyPreparedEffects", () =>
+      innerApplyPrepared.call(this.inner, prepared),
     );
   }
 
@@ -449,4 +537,29 @@ export function hasCoordinatedSerializedInnerForRoutes(
 /** Returns the distinct, sorted lane keys for one batch mutation. */
 function distinctLaneKeys(keys: readonly string[]): readonly string[] {
   return [...new Set(keys)].sort();
+}
+
+/**
+ * Collects the physical sheet ids one prepared apply state would mutate, from
+ * its own per-effect route fields.
+ *
+ * The prepared token crosses an opaque boundary, so its route shape is
+ * validated here: a token without the request effects it was preflighted from
+ * cannot be mapped to mutation lanes and fails closed before any lane is
+ * acquired or any remote call is made.
+ */
+function preparedLanePhysicalSheetIds(prepared: PreparedApplyEffects): readonly string[] {
+  const effects: unknown = prepared.request?.effects;
+  if (!Array.isArray(effects) || effects.length === 0) {
+    throw new TypeError("prepared apply state carries no effect routes");
+  }
+  const ids: string[] = [];
+  for (const effect of effects) {
+    const physicalSheetId = (effect as SyncProjectionEffect | undefined)?.physicalSheetId;
+    if (typeof physicalSheetId !== "string" || physicalSheetId.length === 0) {
+      throw new TypeError("prepared apply state carries an effect without a physical sheet id");
+    }
+    ids.push(physicalSheetId);
+  }
+  return ids;
 }

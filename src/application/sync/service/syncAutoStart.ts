@@ -82,9 +82,9 @@ export const SYNC_ENV_KEYS = {
   /** Optional metadata safety full-scan cadence in ms; defaults to 60 seconds. */
   FULL_SCAN_INTERVAL_MS: "HIKOUTEI_SYNC_FULL_SCAN_INTERVAL_MS",
   /**
-   * Optional request-start pacing in ms for the direct provider's ONE shared
-   * read+write limiter; absent uses the safe default (2,500 ms). Internal
-   * only — never part of the root public API.
+   * Optional request-start pacing in ms for the direct provider's
+   * independent read and write request-start limiters; absent uses the safe
+   * default (2,000 ms). Internal only — never part of the root public API.
    */
   RATE_LIMIT_INTERVAL_MS: "HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS",
 } as const;
@@ -93,8 +93,8 @@ export const SYNC_ENV_KEYS = {
 export const DEFAULT_SYNC_POLLING_INTERVAL_MS = 60_000;
 /** Default safety full-scan cadence applied when the interval env vars are absent. */
 export const DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS = 60_000;
-/** Lower bound for the sync request-start pacing env override (1 second). */
-export const MIN_SYNC_RATE_LIMIT_INTERVAL_MS = 1_000;
+/** Lower bound for the sync request-start pacing env override (2 seconds). */
+export const MIN_SYNC_RATE_LIMIT_INTERVAL_MS = 2_000;
 /**
  * Upper bound for the sync request-start pacing env override.
  *
@@ -102,7 +102,8 @@ export const MIN_SYNC_RATE_LIMIT_INTERVAL_MS = 1_000;
  * calls (two preflight/postcondition reads plus one batch write). The effect
  * lease must still cover the whole sequence with the 30-second provider
  * headroom, and a dispatch can wait up to one FULL interval for its first
- * slot because the shared limiter may hold a prior reservation — admission
+ * slot because the request's own read or write class limiter may hold a prior
+ * reservation — admission
  * is BOUNDED to one interval, so a request whose slot lies further out is
  * refused before any SDK call (delivery-uncertain, requeued durably)
  * instead of waiting past the lease. With the DEFAULT lease, write timeout,
@@ -267,7 +268,7 @@ export async function createTypedSheetsWithSync(
       // override applies ONLY to the real Google Sheets provider (no injected
       // transport): a valid override is plumbed through, and the production
       // path builds the real ADC-backed transport with the provider's safe
-      // default (2,500 ms) when the override is absent. Fake transports never
+      // default (2,000 ms) when the override is absent. Fake transports never
       // consult HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS, so local/fake suites
       // stay immune to a misconfigured or invalid override in the host env.
       googleSheetsApi: options.transport === undefined
@@ -485,15 +486,16 @@ function parseIntervalEnv(
  * Resolves the sync request-start pacing env override, or undefined.
  *
  * `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` is the internal override for the
- * direct provider's ONE shared read+write request-start limiter. Absent or
- * blank means the provider's safe default (2,500 ms) applies; a present
- * value must be a plain decimal integer between 1,000 ms and
+ * direct provider's independent read and write request-start limiters. Absent or
+ * blank means the provider's safe default (2,000 ms) applies; a present
+ * value must be a plain decimal integer between 2,000 ms and
  * `MAX_SYNC_RATE_LIMIT_INTERVAL_MS` (~10 s). The ceiling is the largest
  * interval whose worst-case three-request paced dispatch still finishes
  * inside the default effect lease (120 s) with the default write timeout
  * (60 s), read timeout (10 s), and provider headroom (30 s): a dispatch
- * can wait up to one full interval for its first slot because the shared
- * limiter may hold a prior reservation, so the strict default-safe bound
+ * can wait up to one full interval for its first slot because the
+ * request's own class limiter may hold a prior reservation, so the strict
+ * default-safe bound
  * is `120s > 60s + I + 2 * max(10s, I) + 30s` and a larger interval could
  * let pacing push the dispatch past the lease and risk duplicate remote
  * delivery. Values outside those bounds (including hex,

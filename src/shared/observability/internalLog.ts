@@ -104,6 +104,12 @@ const CLASS_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CLASSES
 const PROVIDER_OPERATION_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_PROVIDER_OPERATIONS);
 /** Set of every stable provider-reason tag the log may carry. */
 const PROVIDER_REASON_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_PROVIDER_REASONS);
+/** Set of every stable request-start pacing lane the log may carry. */
+const REQUEST_START_PACING_ALLOWLIST: ReadonlySet<string> = new Set([
+  "polling",
+  "preflight",
+  "write",
+]);
 /** Table/entity-name allowlist (matches the public SQL identifier rules). */
 const TABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
@@ -134,6 +140,8 @@ export interface HikouteiInternalLogEntry {
   readonly providerOperation?: string;
   /** Allowlisted provider reason for the invalid state. */
   readonly providerReason?: string;
+  /** Request-start pacing lane (`polling`, `preflight`, or `write`). */
+  readonly pacing?: string;
   /** Operation duration in milliseconds. */
   readonly durationMs?: number;
   /** Numeric context only (counts, sizes). Non-numeric values are dropped. */
@@ -201,6 +209,7 @@ export function formatHikouteiLogLine(
   setIfDefined(line, "errorClass", sanitizeAllowlisted(record.errorClass, CLASS_ALLOWLIST));
   setIfDefined(line, "providerOperation", sanitizeAllowlisted(record.providerOperation, PROVIDER_OPERATION_ALLOWLIST));
   setIfDefined(line, "providerReason", sanitizeAllowlisted(record.providerReason, PROVIDER_REASON_ALLOWLIST));
+  setIfDefined(line, "pacing", sanitizeAllowlisted(record.pacing, REQUEST_START_PACING_ALLOWLIST));
   setIfDefined(line, "retryable", typeof record.retryable === "boolean" ? record.retryable : undefined);
   setIfDefined(line, "attempts", safeCountField(record.attempts));
   setIfDefined(line, "durationMs", safeCountField(record.durationMs));

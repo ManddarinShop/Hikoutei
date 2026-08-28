@@ -361,13 +361,34 @@ export async function persistConflictAttemptsWithSql(
   eventId: string,
 ): Promise<readonly string[]> {
   if (input.evaluation.conflicts.length === EMPTY_ARRAY_LENGTH_ZERO) return [];
-  if (
-    binding.state !== ROW_BINDING_STATES.ACTIVE ||
-    binding.entity_id.kind !== PRESENCE_KINDS.PRESENT
-  ) {
+  const entityPresent = binding.entity_id.kind === PRESENCE_KINDS.PRESENT;
+  // A non-active binding is an expected lifecycle race ONLY in the shapes the
+  // schema's transitions actually produce: a candidate awaiting activation
+  // (no entity), a tombstoned binding still pointing at its former entity, or
+  // an ambiguous binding with no trusted identity. Any other state/entity
+  // combination (a candidate or ambiguous binding carrying an entity, a
+  // tombstoned binding with none, or an unknown runtime state) is an
+  // invariant violation the schema does not enforce — fail closed as corrupt
+  // storage instead of silently re-quarantining it as stale.
+  const lifecycleRace =
+    (binding.state === ROW_BINDING_STATES.CANDIDATE && !entityPresent) ||
+    (binding.state === ROW_BINDING_STATES.TOMBSTONED && entityPresent) ||
+    (binding.state === ROW_BINDING_STATES.AMBIGUOUS && !entityPresent);
+  if (lifecycleRace) {
+    // The observed conflict has no active entity to attach to; treat it as
+    // stale so the polling pass defers/re-quarantines the row instead of
+    // aborting as `observation_storage_inconsistent`.
+    throw new CanonicalStaleError();
+  }
+  if (binding.state !== ROW_BINDING_STATES.ACTIVE || !entityPresent) {
+    // An ACTIVE binding must always reference its entity, and any non-active
+    // state that is not a known lifecycle race (or an unknown runtime state)
+    // is an invariant violation, never a lifecycle race. Retain the
+    // storage-inconsistent error so corrupt storage fails closed instead of
+    // being silently re-quarantined as stale.
     throw new StorageError(
       STORAGE_ERROR_CODES.OBSERVATION_STORAGE_INCONSISTENT,
-      "a conflict requires an active entity binding",
+      "row binding has an invalid lifecycle state or entity shape",
     );
   }
 

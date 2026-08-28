@@ -239,18 +239,11 @@ function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void 
       "sync service googleSheetsApi requestTimeoutMs must be between 1 second and 120 seconds.",
     );
   }
-  // A direct-mode dispatch performs up to THREE sequential paced transport
-  // calls (two preflight/postcondition reads plus one write), each with its
-  // own timeout; the lease must cover the whole sequence. The request-start
-  // limiter keeps consecutive starts at least `intervalMs` apart, and a
-  // dispatch can wait up to one FULL interval for its first slot because
-  // the shared limiter may hold a prior reservation, so the paced worst
-  // case is the write timeout plus ONE interval (the first-slot wait) plus
-  // TWO more slots of the LARGER of the read timeout and the interval (a
-  // read duration covers its own interval wait when it is the larger term,
-  // and the interval covers it when it is not; the two never add on top of
-  // each other). Defaults with the 2,500 ms interval: 60 + 2.5 + 2x10 + 30
-  // = 112.5 s, inside the 120 s default effect lease.
+  // Preserve the existing provider-headroom bound for the ordinary deferred
+  // three-request worker shape. The complete fast-append/legacy path, which
+  // may add receipt initialization and uses the actual bounded admission wait,
+  // is checked explicitly below. Defaults with the 2,000 ms interval:
+  // 60 + 2 + 2x10 + 30 = 112 s, inside the 120 s default effect lease.
   const readTimeoutMs = options.googleSheetsApi.readTimeoutMs
     ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS;
   if (
@@ -280,6 +273,51 @@ function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void 
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
       "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
+    );
+  }
+  // The provider's first fast-append/legacy apply can add one receipt-init
+  // read after its two preflight reads. Count that complete leased path
+  // explicitly: three timed reads, one timed write, and one bounded admission
+  // wait for each request start. The receipt-init read is a single write-lane
+  // ranged `spreadsheets.get` of the receipt tab (refreshReceiptForWrite), so
+  // the stale branch — a concurrent write creating the tab between preflight
+  // and write — is covered by the same count instead of adding a separate
+  // enumeration read that could push the branch past the default lease. The
+  // read-ahead preflight is read-only and happens before the in-lane renewal;
+  // the service worker also forces deferred postconditions, so inline
+  // verify/follow-up writes are not part of this worker lease window.
+  const requestStartMaxWaitMs = options.googleSheetsApi.requestStartMaxWaitMs
+    ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_MAX_ADMISSION_WAIT_MS;
+  if (
+    !Number.isSafeInteger(requestStartMaxWaitMs) ||
+    requestStartMaxWaitMs < 0
+  ) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service googleSheetsApi requestStartMaxWaitMs must be a non-negative safe integer.",
+    );
+  }
+  const maxFastOrLegacyDispatchMs = requestTimeoutMs +
+    3 * readTimeoutMs +
+    4 * requestStartMaxWaitMs;
+  if (effectLeaseDurationMs <= maxFastOrLegacyDispatchMs) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs must cover the complete paced Google Sheets fast-append or legacy apply path, including receipt initialization, before the effect lease can expire.",
+    );
+  }
+  // The writer lease is renewed in-lane immediately before the remote call,
+  // at the same instant as the effect lease. A request-start limiter wait
+  // (up to `requestStartMaxWaitMs`) happens INSIDE the remote call, so the
+  // writer lease must outlive the effect lease by at least that wait; a
+  // limiter wait that outlives writer authority would let a stale mutation
+  // run after a takeover. The writer lease is fixed at the 180-second default
+  // in the service, so the effect lease plus the admission wait must stay
+  // inside it.
+  if (effectLeaseDurationMs + requestStartMaxWaitMs >= DEFAULT_WRITER_LEASE_DURATION_MS) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs plus the Google Sheets API request-start admission wait must stay inside the 180-second writer lease so a limiter wait cannot outlive writer authority.",
     );
   }
 }

@@ -269,7 +269,7 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   // timeout bounds the WHOLE sequential dispatch (two preflight reads plus
   // one write), so it sums the write timeout and two read timeouts instead
   // of the single write timeout. Injected test providers carry no transport
-  // timeouts and keep the bounded 20-item window with no bulk throttle.
+  // timeouts and keep the bounded 100-item window with no bulk throttle.
   const outboundTimeoutMs = options.googleSheetsApi === undefined
     ? undefined
     : (options.googleSheetsApi.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS) +
