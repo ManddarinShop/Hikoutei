@@ -8,8 +8,9 @@
  * `@googleapis/sheets` dependency and ADC service-account credentials. It
  * never prints spreadsheet IDs, URLs, emails, or cell payloads; failures are
  * reported by status class and stable remote code only. All request starts
- * of one client share a pacing gate (default 2,500 ms, matching the library
- * provider's safe default) so harness observation can never burst past the
+ * of one client share a pacing gate (default 2,500 ms — a separate, coarser
+ * harness-only gate, deliberately NOT the library provider's 2,000 ms
+ * per-class pacing) so harness observation can never burst past the
  * library's own quota pacing.
  */
 
@@ -28,12 +29,15 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 /**
  * Default minimum interval between direct-client request starts.
  *
- * Matches the library provider's safe default (2,500 ms): the soak harness's
- * observation/probe/cleanup requests share ONE pacing gate per client, so a
- * convergence or probe phase can never fire an unpaced burst on top of the
- * library's own worker traffic and invalidate the quota test the library is
- * under. Harness-only: the soak workload (cycles, operations, probes) is
- * unchanged; only request START times are spaced.
+ * A separate, COARSER harness-only gate, intentionally NOT the library
+ * provider's safe default: the real provider paces reads and writes on two
+ * independent per-class timelines at a 2,000 ms default, while this harness
+ * client serializes its observation/probe/cleanup requests through ONE
+ * shared read+write gate at 2,500 ms, so a convergence or probe phase can
+ * never fire an unpaced burst on top of the library's own worker traffic and
+ * invalidate the quota test the library is under. Harness-only: the soak
+ * workload (cycles, operations, probes) is unchanged; only request START
+ * times are spaced.
  */
 export const DEFAULT_REQUEST_START_INTERVAL_MS = 2_500;
 
@@ -137,8 +141,9 @@ export function combinedDeadlineAtMs(deadlineAtMs, phaseDeadlineAtMs) {
  * run budget and aborts requests once the deadline expired; `requestTimeoutMs`
  * remains the per-request ceiling. `requestStartIntervalMs` (optional,
  * default 2,500 ms) paces ALL request starts of this client through one
- * shared read+write gate — the soak harness's observation requests must not
- * burst past the library's own pacing. `now`/`sleep` are injectable so
+ * shared read+write gate — a separate, coarser harness-only gate (NOT the
+ * provider's 2,000 ms per-class read/write timelines) so the soak harness's
+ * observation requests must not burst past the library's own pacing. `now`/`sleep` are injectable so
  * pacing tests can drive the gate without real time; the deadline clock
  * always stays on `Date.now()`.
  */

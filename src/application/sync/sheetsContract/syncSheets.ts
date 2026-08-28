@@ -313,12 +313,41 @@ export interface ReadSyncEffectPostconditionsRequest {
 }
 
 /**
+ * Prepared-apply state carried from `preflightApplyEffects` to
+ * `applyPreparedEffects`.
+ *
+ * The worker treats the value as an opaque token and never inspects it; the
+ * provider owns its concrete shape and narrows it back with a runtime `kind`
+ * guard at the `applyPreparedEffects` boundary. Only the shared discriminant
+ * and the request the state was preflighted from are declared here so
+ * unrelated providers cannot invent a conflicting shape across the interface
+ * and so the dispatcher can bind the prepared state to the exact request it
+ * was created for.
+ */
+export interface PreparedApplyEffects {
+  readonly kind: "single" | "multi";
+  /** The exact request this prepared state was preflighted from. */
+  readonly request: ApplySyncEffectsRequest;
+}
+
+/**
  * Full effect capability required for fast append, regular updates, deletes,
  * and recovery.
+ *
+ * `preflightApplyEffects` / `applyPreparedEffects` are an OPTIONAL split of
+ * `applyEffects`: a preflight does the read+plan stage (no remote mutation)
+ * and returns an opaque `PreparedApplyEffects`, which a later
+ * `applyPreparedEffects` consumes for the write+verify stage. Providers that
+ * implement neither optional method keep the single legacy `applyEffects`
+ * path. The worker and dispatcher feature-detect the pair before using it.
  */
 export interface SyncEffectWorkerProvider {
   fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult>;
   applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult>;
+  /** Optional read+plan stage that produces opaque prepared state. */
+  preflightApplyEffects?(request: ApplySyncEffectsRequest): Promise<PreparedApplyEffects>;
+  /** Optional write+verify stage that consumes the prepared state. */
+  applyPreparedEffects?(prepared: PreparedApplyEffects): Promise<ApplySyncEffectsResult>;
   readEffectPostcondition(effect: SyncProjectionEffect): Promise<SyncEffectPostcondition>;
   readEffectPostconditions(
     request: ReadSyncEffectPostconditionsRequest,

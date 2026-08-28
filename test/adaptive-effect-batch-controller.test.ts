@@ -5,21 +5,21 @@ import {
 } from "@hikoutei/ikisaki";
 
 describe("adaptive effect batch controller", () => {
-  it("starts at ten, halves unhealthy routes, and grows stable routes", () => {
+  it("starts at fifty-one, halves unhealthy routes, and grows stable routes", () => {
     const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
 
-    expect(controller.limitFor("route-a")).toBe(10);
+    expect(controller.limitFor("route-a")).toBe(100);
     controller.observe("route-a", {
       durationMs: 31_000,
       responseSucceeded: true,
       responseLoss: false,
     });
-    expect(controller.limitFor("route-a")).toBe(5);
+    expect(controller.limitFor("route-a")).toBe(50);
 
     controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
     controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
     controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
-    expect(controller.limitFor("route-a")).toBe(10);
+    expect(controller.limitFor("route-a")).toBe(55);
   });
 
   it("coalesces only a short burst without holding effect rows in memory", async () => {

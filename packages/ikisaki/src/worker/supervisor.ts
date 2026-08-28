@@ -18,6 +18,15 @@ import {
   type AdaptiveEffectBatchController as AdaptiveEffectBatchControllerType,
 } from "./batch.js";
 
+/**
+ * Conservative generic default for the SQLite selection upper bound when a
+ * host does not configure `maxEffects`. This is intentionally smaller than
+ * the provider-specific 100-item in-flight window
+ * (`EFFECT_BATCH_LIMIT`/`MAX_IN_FLIGHT_EFFECTS`), which only applies to the
+ * real Google Sheets provider path; the generic supervisor keeps a modest
+ * per-pass selection so a host that never tunes the worker does not lease a
+ * large backlog. Hosts that want the full window set `maxEffects` explicitly.
+ */
 const DEFAULT_MAX_EFFECTS = 20;
 const DEFAULT_IDLE_INTERVAL_MS = 1_000;
 const DEFAULT_ERROR_BACKOFF_INITIAL_MS = 1_000;

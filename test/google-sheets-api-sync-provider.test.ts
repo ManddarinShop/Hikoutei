@@ -45,6 +45,14 @@ import {
   type GoogleSheetsApiRequestEvent,
 } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import {
+  PromiseTailLock,
+  runWrite,
+  type GoogleSheetsApiProviderDeps,
+} from "../src/adapter/sheets/providers/google-sheets-api/operations/shared.js";
+import { readRows } from "../src/adapter/sheets/providers/google-sheets-api/operations/readRows.js";
+import { readEffectPostcondition } from "../src/adapter/sheets/providers/google-sheets-api/operations/applyEffects.js";
+import { RequestStartLimiter, ReadQoSScheduler } from "../src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import {
   GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
   GOOGLE_SHEETS_API_ENUMERATION_FIELDS,
   GOOGLE_SHEETS_API_OBSERVATION_FIELDS,
@@ -53,7 +61,7 @@ import {
   GOOGLE_SHEETS_API_PROVISION_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
 } from "../src/adapter/sheets/providers/google-sheets-api/model/preflightFields.js";
-import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
+import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
@@ -224,6 +232,17 @@ function seedSystemTab(spreadsheet: StubSpreadsheet, rows: number): void {
       "pending",
       false,
     ]),
+  });
+}
+
+function seedReceiptTab(spreadsheet: StubSpreadsheet): void {
+  // Seed the shared (hidden) receipt tab so an apply preflight discovers it
+  // present and skips the receipt-init refresh; keeps pacing/read-count tests
+  // focused on preflight + write rather than the receipt-init path (which the
+  // dedicated concurrent-receipt test covers).
+  spreadsheet.addTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME, {
+    headers: ["effectId", "payloadHash", "status", "visibleHash", "visibleRevision", "updatedAt"],
+    hidden: true,
   });
 }
 
@@ -1359,6 +1378,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     const events: GoogleSheetsApiRequestEvent[] = [];
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
+    seedReceiptTab(spreadsheet);
     const transport = new StubSheetsTransport(spreadsheet);
     transport.now = () => now;
     const provider = new GoogleSheetsApiSyncProvider({
@@ -1391,10 +1411,49 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(readEvents.every((event) => event.operationCount === 1)).toBe(true);
   });
 
-  it("serializes read AND write starts through ONE shared limiter", async () => {
+  it("routes outbound preflight reads as preflight and polling reads as polling", async () => {
+    const events: GoogleSheetsApiRequestEvent[] = [];
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, 1);
+    seedReceiptTab(spreadsheet);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [SYSTEM_DEFINITION],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 0,
+      onRequest: (event) => events.push(event),
+    });
+    const readRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+      headers: SYSTEM_HEADERS,
+    };
+    // Outbound read-ahead (preflightApplyEffects) uses the PREFLIGHT class;
+    // the polling values read uses the POLLING class; both share ONE read QoS
+    // scheduler but carry distinct pacing tags in telemetry.
+    await provider.preflightApplyEffects(pacedApplyRequest());
+    await provider.readRows(readRequest);
+    const preflightReads = events.filter(
+      (event) => event.operation === "getSpreadsheet" && event.pacing === "preflight",
+    );
+    const pollingReads = events.filter(
+      (event) => event.operation === "getSpreadsheet" && event.pacing === "polling",
+    );
+    // Two preflight reads (enumeration + data) plus one polling read.
+    expect(preflightReads).toHaveLength(2);
+    expect(pollingReads).toHaveLength(1);
+  });
+
+  it("paces reads among themselves and starts a write beside the reads (independent limiters)", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
+    seedReceiptTab(spreadsheet);
     const transport = new StubSheetsTransport(spreadsheet);
     transport.now = () => now;
     const provider = new GoogleSheetsApiSyncProvider({
@@ -1409,24 +1468,28 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       },
     });
 
-    // One applyEffects run: the two reads gate each other and the write
-    // shares the SAME limiter, so it starts one full interval after the
-    // second read instead of beside it (the old per-class behavior).
+    // One applyEffects run: the two reads gate each other through the READ
+    // limiter; the write uses the independent WRITE limiter (idle) so it
+    // starts beside the second read's completion, not one interval later.
     await provider.applyEffects(pacedApplyRequest());
     const readStarts = transport.requestStarts.filter((entry) => entry.kind === "read");
     const writeStarts = transport.requestStarts.filter((entry) => entry.kind === "write");
     expect(readStarts).toHaveLength(2);
     expect(writeStarts).toHaveLength(1);
-    expect(writeStarts[0]?.at).toBe((readStarts[1]?.at ?? 0) + 1_100);
-    // Total elapsed is exactly TWO intervals: read 1 at t0, read 2 at
-    // t0+1,100, write at t0+2,200.
-    expect(now).toBe(1_002_200);
+    expect((readStarts[1]?.at ?? 0) - (readStarts[0]?.at ?? 0)).toBe(1_100);
+    // The write is NOT serialized by the reads: it starts beside the second
+    // read's completion (its own limiter is idle), not one interval later.
+    expect(writeStarts[0]?.at).toBe(readStarts[1]?.at ?? 0);
+    // Total elapsed is exactly ONE interval: read 1 at t0, read 2 at
+    // t0+1,100, write beside read 2 at t0+1,100.
+    expect(now).toBe(1_001_100);
   });
 
-  it("paces concurrent reads and writes of different operations through one limiter", async () => {
+  it("serializes reads against reads and writes against writes with independent limiters", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 2);
+    seedReceiptTab(spreadsheet);
     const transport = new StubSheetsTransport(spreadsheet);
     transport.now = () => now;
     const provider = new GoogleSheetsApiSyncProvider({
@@ -1441,23 +1504,35 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       },
     });
 
-    // Two applyEffects runs (4 reads + 2 writes) share ONE limiter, so the
-    // SECOND run's first read must start a full interval after the FIRST
-    // run's write — under the old per-class design that read started beside
-    // the write (gap 0). Every consecutive start of either class stays at
-    // least one interval apart.
+    // Two applyEffects runs (4 reads + 2 writes). The READ limiter paces
+    // the reads among themselves (t0, t0+1,100, t0+2,200, t0+3,300) and the
+    // WRITE limiter paces the writes among themselves, but a read and a
+    // write may start at the same instant (cross-class boundaries are NOT
+    // gated): each write starts beside its run's second read.
     await provider.applyEffects(pacedApplyRequest("u1", "paced-1"));
     await provider.applyEffects(pacedApplyRequest("u2", "paced-2"));
-    const starts = transport.requestStarts.map((entry) => entry.at);
-    expect(starts).toHaveLength(6);
-    for (let index = 1; index < starts.length; index += 1) {
-      expect((starts[index] ?? 0) - (starts[index - 1] ?? 0)).toBeGreaterThanOrEqual(1_100);
+    const readStarts = transport.requestStarts
+      .filter((entry) => entry.kind === "read")
+      .map((entry) => entry.at);
+    const writeStarts = transport.requestStarts
+      .filter((entry) => entry.kind === "write")
+      .map((entry) => entry.at);
+    expect(readStarts).toHaveLength(4);
+    expect(writeStarts).toHaveLength(2);
+    // Reads serialize among themselves: every read is >=1,100 ms after the
+    // previous read.
+    for (let index = 1; index < readStarts.length; index += 1) {
+      expect((readStarts[index] ?? 0) - (readStarts[index - 1] ?? 0)).toBeGreaterThanOrEqual(1_100);
     }
-    // The cross-class boundary: second run's read 1 starts 1,100 ms after
-    // the first run's write (not beside it).
-    expect((starts[3] ?? 0) - (starts[2] ?? 0)).toBeGreaterThanOrEqual(1_100);
-    // Six slots at 1,100 ms apart: exactly five intervals of fake time.
-    expect(now).toBe(1_000_000 + 5 * 1_100);
+    // Writes serialize among themselves.
+    expect((writeStarts[1] ?? 0) - (writeStarts[0] ?? 0)).toBeGreaterThanOrEqual(1_100);
+    // Cross-class boundaries are NOT gated: each write starts beside its
+    // run's second read (gap 0) instead of one interval later.
+    expect(writeStarts[0]).toBe(readStarts[1]);
+    expect(writeStarts[1]).toBe(readStarts[3]);
+    expect(readStarts).toEqual([1_000_000, 1_001_100, 1_002_200, 1_003_300]);
+    // Reads determine the elapsed time: four slots at 1,100 ms apart.
+    expect(now).toBe(1_003_300);
   });
 
   it("refuses a queued fourth request beyond one interval with zero remote calls", async () => {
@@ -1472,6 +1547,9 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       transport,
       requestTimeoutMs: 60_000,
       rateLimitIntervalMs: 1_100,
+      // Pin the admission bound to one interval so the 1-interval refusal
+      // boundary is exercised (the default bound is a few intervals).
+      requestStartMaxWaitMs: 1_100,
       now: () => now,
       // The clock advances only when a sleep RESOLVES (real-world behavior):
       // every queued caller's synchronous reservation prefix runs at the
@@ -1533,10 +1611,11 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(transport.requestStarts[2]?.at).toBe(1_002_200);
   });
 
-  it("refuses queued WRITES through the same bound when reads hold the shared queue", async () => {
+  it("paces WRITES on their own limiter, never queued behind reads", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
+    seedReceiptTab(spreadsheet);
     const transport = new StubSheetsTransport(spreadsheet);
     transport.now = () => now;
     const provider = new GoogleSheetsApiSyncProvider({
@@ -1547,7 +1626,6 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       rateLimitIntervalMs: 1_100,
       now: () => now,
       sleep: async (ms: number) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
         now += ms;
       },
     });
@@ -1577,38 +1655,182 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       }],
     };
 
-    // Two reads and two fastAppend WRITES queue at the same instant. The
-    // shared bound admits the two reads; each write is refused at its FIRST
-    // preflight read, so the remote sees zero batchUpdate calls — reads and
-    // writes share the same bounded queue.
-    const settled = await Promise.allSettled([
-      provider.readRows(readRequest),
-      provider.readRows(readRequest),
-      provider.fastAppendRows(appendRequest),
-      provider.fastAppendRows(appendRequest),
-    ]);
-    expect(transport.getSpreadsheetCalls).toBe(2);
-    expect(transport.batchUpdateCalls).toBe(0);
-    expect(settled[0]?.status).toBe("fulfilled");
-    expect(settled[1]?.status).toBe("fulfilled");
-    for (const result of [settled[2], settled[3]]) {
-      expect(result?.status).toBe("rejected");
-      if (result?.status !== "rejected") continue;
-      expect((result.reason as GoogleSheetsApiTransportError).code).toBe(
-        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
-      );
-    }
-
-    // Once the queue drains, a write is admitted and commits remotely.
-    now = 1_003_000;
+    // Two standalone reads fill the READ limiter (admission bound = two
+    // slots). A WRITE that follows runs its own two preflight READS on the
+    // read limiter's next free slots, then its batch on the independent
+    // WRITE limiter — which the reads never charged, so the batch starts
+    // BESIDE the final preflight read instead of one full interval later as
+    // the old ONE shared limiter would have forced. Reads do not queue
+    // writes, and the write commits remotely.
+    await provider.readRows(readRequest);
+    await provider.readRows(readRequest);
     const appended = await provider.fastAppendRows(appendRequest);
     expect(appended.results[0]?.status).toBe("applied");
     expect(transport.batchUpdateCalls).toBe(1);
+
+    // Reads: t0, t0+1,100 (the two standalone reads), then the append's
+    // enumeration and data preflight reads at t0+2,200 and t0+3,300. The
+    // WRITE starts beside the final preflight read on the idle write limiter.
+    const readStarts = transport.requestStarts
+      .filter((entry) => entry.kind === "read")
+      .map((entry) => entry.at - 1_000_000);
+    const writeStarts = transport.requestStarts
+      .filter((entry) => entry.kind === "write")
+      .map((entry) => entry.at - 1_000_000);
+    expect(readStarts).toEqual([0, 1_100, 2_200, 3_300]);
+    expect(writeStarts).toEqual([3_300]);
+    expect(now).toBe(1_003_300);
+  });
+
+  it("paces postcondition reads on the WRITE limiter: not refused when the read limiter is saturated", async () => {
+    let now = 1_000_000;
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, 1);
+    const transport = new StubSheetsTransport(spreadsheet);
+    transport.now = () => now;
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [SYSTEM_DEFINITION],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 1_100,
+      // Four queued reads saturate the READ lane; the postcondition read is
+      // paced on the WRITE lane. Keep the admission bound at one interval so
+      // the read-lane saturation deterministically refuses the 3rd/4th reads.
+      requestStartMaxWaitMs: 1_100,
+      now: () => now,
+      // The clock advances only when a sleep RESOLVES, so every queued
+      // caller's synchronous reservation prefix runs at the same frozen
+      // instant and the admission bound is exercised deterministically.
+      sleep: async (ms: number) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        now += ms;
+      },
+    });
+    const readRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+      headers: SYSTEM_HEADERS,
+    };
+
+    // Four queued reads saturate the READ limiter (two admitted, two
+    // refused). A postcondition read that shared the read limiter would be
+    // the fifth read and refused — but it is paced on the WRITE limiter
+    // (idle), so its two reads are admitted and it succeeds.
+    const settled = await Promise.allSettled([
+      provider.readRows(readRequest),
+      provider.readRows(readRequest),
+      provider.readRows(readRequest),
+      provider.readRows(readRequest),
+      provider.readEffectPostcondition(postconditionProbe()),
+    ]);
+    const refused = settled.filter((entry) => entry.status === "rejected");
+    expect(refused).toHaveLength(2);
+    for (const entry of refused) {
+      if (entry.status !== "rejected") continue;
+      const error = entry.reason;
+      expect(error).toBeInstanceOf(GoogleSheetsApiTransportError);
+      expect((error as GoogleSheetsApiTransportError).code).toBe(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
+      );
+    }
+    const postcondition = settled[4];
+    expect(postcondition?.status).toBe("fulfilled");
+  });
+
+  it("paces postcondition reads on the WRITE limiter: refused when the write limiter is saturated", async () => {
+    let now = 1_000_000;
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, 1);
+    const transport = new StubSheetsTransport(spreadsheet);
+    transport.now = () => now;
+    const readScheduler = new ReadQoSScheduler({
+      intervalMs: 1_100,
+      now: () => now,
+      sleep: async (ms: number) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        now += ms;
+      },
+    });
+    const writeLimiter = new RequestStartLimiter({
+      intervalMs: 1_100,
+      now: () => now,
+      sleep: async (ms: number) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        now += ms;
+      },
+    });
+    const deps: GoogleSheetsApiProviderDeps = {
+      spreadsheetId: SPREADSHEET_ID,
+      providerNonce: "provider:test",
+      preparedStateRegistry: new WeakSet<object>(),
+      definitions: [SYSTEM_DEFINITION],
+      transport,
+      receiptInitLock: new PromiseTailLock(),
+      readTimeoutMs: 60_000,
+      maxBatchBytes: 2_000_000,
+      readScheduler,
+      writeLimiter,
+      maxRequestStartWaitMs: 1_100,
+      now: () => now,
+      onRequest: undefined,
+    };
+
+    // Fire three pure batchUpdate writes and one postcondition read in the
+    // SAME synchronous tick. The write limiter admits only two slots
+    // (immediate + one interval out), so the third write and the
+    // postcondition read (also paced on the write limiter) are refused
+    // before any SDK call. The READ lane stays idle throughout.
+    const settled = await Promise.allSettled([
+      runWrite(deps, () => transport.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requests: [] })),
+      runWrite(deps, () => transport.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requests: [] })),
+      runWrite(deps, () => transport.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requests: [] })),
+      readEffectPostcondition(deps, postconditionProbe("u1", "post-1")),
+    ]);
+    const refused = settled.filter((entry) => entry.status === "rejected");
+    // The third write and the postcondition read are both refused on the
+    // write lane. If the postcondition read were paced on the read limiter
+    // (idle) it would be admitted, so this proves write-lane pacing.
+    expect(refused.length).toBeGreaterThanOrEqual(2);
+    for (const entry of refused) {
+      if (entry.status !== "rejected") continue;
+      const error = entry.reason;
+      expect(error).toBeInstanceOf(GoogleSheetsApiTransportError);
+      expect((error as GoogleSheetsApiTransportError).code).toBe(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
+      );
+    }
+    const postcondition = settled[3];
+    expect(postcondition?.status).toBe("rejected");
+
+    // The refusals never advanced the write limiter horizon and never
+    // touched the READ limiter: a fresh read is admitted immediately.
+    const late = await readRows(deps, {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+      headers: SYSTEM_HEADERS,
+    });
+    expect(late.rows).toHaveLength(1);
+
+    // The refusals also never advanced the WRITE limiter horizon: a fresh
+    // write is admitted once the clock passes the reserved slot. If a refused
+    // caller had reserved a future slot, this write would be pushed out and
+    // refused instead.
+    const lateWrite = await runWrite(deps, () =>
+      transport.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requests: [] }));
+    expect(lateWrite).toBeDefined();
   });
 
   it("applies the read timeout to every getSpreadsheet call but not writes", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
+    seedReceiptTab(spreadsheet);
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = new GoogleSheetsApiSyncProvider({
       spreadsheetId: SPREADSHEET_ID,
@@ -1626,6 +1848,62 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     // The transport-level write timeout stays the configured write timeout;
     // the read override only affects getSpreadsheet requests.
     expect(provider.timeoutMs).toBe(60_000);
+  });
+
+  it("skips the inline verify read when an INLINE apply contains only deletions", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "x", "sync-anchor:anchor-1"]],
+    });
+    seedReceiptTab(spreadsheet);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [USER_INPUT_DEFINITION],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 0,
+    });
+    const fields = { id: cell.string("u1"), status: cell.string("x") };
+    const targetVisibleHash = computeSyncVisibleHash(fields);
+    const deleteEffect: SyncProjectionEffect = {
+      effectId: "delete-1",
+      payloadHash: "delete-1-payload",
+      effectKind: "user_input_delete",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      targetKind: "entity",
+      targetId: "entity:users:u1",
+      rowBindingId: presentValue("row:sync-anchor:anchor-1"),
+      conflictId: absentValue(),
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: targetVisibleHash,
+      repairGuardHash: absentValue(),
+      payload: {
+        sheetName: "Users_Input",
+        registeredRange: "A:C",
+        schemaVersion: 1,
+        targetAnchor: "sync-anchor:anchor-1",
+        fields,
+        targetVisibleHash,
+        createIfMissing: false,
+        expectedCandidateHash: { kind: "not_applicable" },
+      },
+    };
+    const result = await provider.applyEffects({
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "Users_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+      postconditionMode: "inline",
+      effects: [deleteEffect],
+    });
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied"]);
+    // Preflight = two getSpreadsheet reads; the inline verify read is skipped
+    // because no included plan needs verification (deletions never verify).
+    expect(transport.getSpreadsheetRequests).toHaveLength(2);
   });
 
   it("rejects a readTimeoutMs outside the 1..60 second bounds at construction", () => {
@@ -1687,6 +1965,44 @@ function pacedApplyRequest(id = "u1", effectId = "paced-1"): ApplySyncEffectsReq
     schemaVersion: 1,
     postconditionMode: "deferred",
     effects: [effect],
+  };
+}
+
+/**
+ * Builds one system_state effect used as a postcondition-recovery probe.
+ * `id`/`effectId` default to the first seeded row so callers can build
+ * disjoint concurrent probes.
+ */
+function postconditionProbe(id = "u1", effectId = "post-1"): SyncProjectionEffect {
+  const fields = {
+    id: cell.string(id),
+    status: cell.string("pending"),
+    __typed_sheets_deleted: cell.bool(false),
+  };
+  const targetVisibleHash = computeSyncVisibleHash(fields);
+  return {
+    effectId,
+    payloadHash: `${effectId}-payload`,
+    effectKind: "system_projection",
+    physicalSheetId: SYSTEM_SHEET_ID,
+    projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+    targetKind: "entity",
+    targetId: `entity:users:${id}`,
+    rowBindingId: presentValue(`row:${id}`),
+    conflictId: absentValue(),
+    expectedVisibleRevision: 1,
+    expectedVisibleHash: targetVisibleHash,
+    repairGuardHash: absentValue(),
+    payload: {
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+      targetAnchor: id,
+      fields,
+      targetVisibleHash,
+      createIfMissing: true,
+      expectedCandidateHash: { kind: "not_applicable" },
+    },
   };
 }
 

@@ -320,7 +320,8 @@ function extractGaxiosErrorShape(error: unknown): GaxiosErrorShape {
   }
   const code = parseRawErrorText(record.code);
   const responseRecord = parseRawErrorRecord(record.response);
-  const status = parseRawHttpStatus(responseRecord?.status);
+  const status = parseRawHttpStatus(record.status) ??
+    parseRawHttpStatus(responseRecord?.status);
   const dataRecord = parseRawErrorRecord(responseRecord?.data);
   const errorRecord = parseRawErrorRecord(dataRecord?.error);
   const apiErrorStatus = parseRawErrorText(errorRecord?.status);

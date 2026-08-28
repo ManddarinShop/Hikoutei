@@ -39,6 +39,7 @@ import {
   type TypedSheetsWithSyncResult,
 } from "../src/application/sync/service/syncAutoStart.js";
 import type { InternalSyncService } from "../src/application/sync/service/SyncServiceBootstrap.js";
+import { GOOGLE_SHEETS_API_DEFAULTS } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,
@@ -708,10 +709,20 @@ describe("env-driven sync auto-start", () => {
     })).toBeUndefined();
   });
 
-  it("accepts a plain decimal integer within the 1,000..9,999 ms bounds", () => {
+  it("accepts a plain decimal integer within the 2,000..9,999 ms bounds", () => {
+    // The env floor (2,000 ms) and the provider's default interval (800 ms,
+    // internal-only tuning target) are asserted independently here.
+    expect(GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS).toBe(800);
+    expect(MIN_SYNC_RATE_LIMIT_INTERVAL_MS).toBe(2_000);
     expect(resolveSyncRateLimitIntervalMs({
       [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "2500",
     })).toBe(2_500);
+    // 2,000 ms is the quota-safe floor: the smallest interval demonstrated
+    // clean under the current shared service-account quota profile, so the
+    // exact floor value must be accepted.
+    expect(resolveSyncRateLimitIntervalMs({
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "2000",
+    })).toBe(2_000);
     expect(resolveSyncRateLimitIntervalMs({
       [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: String(MIN_SYNC_RATE_LIMIT_INTERVAL_MS),
     })).toBe(MIN_SYNC_RATE_LIMIT_INTERVAL_MS);
@@ -724,12 +735,14 @@ describe("env-driven sync auto-start", () => {
   it("rejects non-decimal, out-of-bounds, and malformed pacing values", () => {
     // Number() would coerce several of these (0x10 -> 16, 1e3 -> 1000,
     // -1 -> -1, " 2500" -> 2500); the decimal-only bounded contract must
-    // reject every one of them with the stable startup code. 10000 is the
-    // first interval whose worst-case paced dispatch (60 s write + 10 s
+    // reject every one of them with the stable startup code. 899 sits just
+    // below the 900 ms quota-safe floor (the 800-899 ms band is untested at
+    // the 1,000-effect cap), so it is rejected; 10000 is the first interval
+    // whose worst-case paced dispatch (60 s write + 10 s
     // first-slot wait + 2 x 10 s paced slots + 30 s headroom) exactly
     // exhausts the 120 s default effect lease, so it is unsafe and must be
     // rejected too.
-    for (const invalid of ["abc", "0", "999", "10000", "15000", "70000", "0x10", "1e3", "-1", " 2500", "2500.5"]) {
+    for (const invalid of ["abc", "0", "899", "10000", "15000", "70000", "0x10", "1e3", "-1", " 2500", "2500.5"]) {
       expect(() => resolveSyncRateLimitIntervalMs({
         [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: invalid,
       })).toThrowError(expect.objectContaining({
@@ -764,7 +777,8 @@ describe("env-driven sync auto-start", () => {
     // The internal override applies ONLY to the real Google Sheets provider:
     // injected fake transports keep ZERO test pacing, so the provisioning
     // request starts stay ~0 ms apart instead of being spaced at the
-    // override's 1,000 ms.
+    // override's 1,999 ms (a value below the 2,000 ms env floor, which is
+    // only legal here because a fake transport never consults the key).
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
     const service = await openSync(
@@ -772,14 +786,14 @@ describe("env-driven sync auto-start", () => {
       credentialsPath,
       ":memory:",
       [],
-      { [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "1000" },
+      { [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "1999" },
     );
     expect(service).toBeDefined();
     const starts = transport.requestStarts.map((entry) => entry.at);
     expect(starts.length).toBeGreaterThanOrEqual(2);
     const gap = (starts[1] ?? 0) - (starts[0] ?? 0);
     // The zero test pacing (plus stub overhead) must be far below the
-    // override's 1,000 ms; wide margins keep the wall-clock assertion robust.
+    // override's 1,999 ms; wide margins keep the wall-clock assertion robust.
     expect(gap).toBeLessThan(500);
   });
 
@@ -788,7 +802,7 @@ describe("env-driven sync auto-start", () => {
     // an injected fake transport the env key is not consulted at all, so the
     // service starts normally.
     const credentialsPath = writeCredentialsFile(credentialsDir());
-    for (const invalid of ["abc", "999", "10000", "15000", "0x10"]) {
+    for (const invalid of ["abc", "999", "1999", "10000", "15000", "0x10"]) {
       const { transport } = newTransport();
       const service = await openSync(
         transport,

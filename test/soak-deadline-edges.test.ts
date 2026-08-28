@@ -32,6 +32,18 @@ const EDITABLE_FIELDS = Object.entries(SOAK_FIELD_PLANS.SoakTask ?? {})
   .filter(([, spec]) => !spec.primary && spec.type === "string")
   .map(([field]) => field);
 
+/**
+ * A coherent pre-write canonical baseline: the editable fields are empty,
+ * matching the User_Input tab's displayed cells BEFORE the probe writes.
+ * The coherent-baseline check requires the canonical row's editable values
+ * to match the User_Input baseline, so the pre-write row must carry the
+ * same empty cells the tab displays. Shared by both probe describes (the
+ * polling edges and the User_Input readiness suites).
+ */
+function coherentBaselineRow() {
+  return { id: "task-main-c0", ...Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, ""])) };
+}
+
 /** Deferred that the test resolves explicitly (never a timer). */
 function deferred<T = void>(): { promise: Promise<T>; release: (value: T) => void } {
   let release!: (value: T) => void;
@@ -50,8 +62,13 @@ afterEach(() => {
 });
 
 describe("probe polling deadline edges", () => {
-  /** Builds a probe context whose findOne resolves through `readRow`. */
-  function probeContext(deadlineAtMs: number, readRow: () => Promise<unknown>) {
+  /**
+   * Builds a probe context whose canonical-baseline read resolves through
+   * `baselineRow` (the first two findOne calls: the readiness baseline and
+   * the immediate pre-write revalidation) and whose acceptance read resolves
+   * through `readRow` (after the write).
+   */
+  function probeContext(deadlineAtMs: number, readRow: () => Promise<unknown>, baselineRow: () => unknown = coherentBaselineRow) {
     let findOneCalls = 0;
     const applyMutation = vi.fn();
     const mutateInputCell = vi.fn(async () => undefined);
@@ -62,6 +79,13 @@ describe("probe polling deadline edges", () => {
       ["id", ...EDITABLE_FIELDS],
       ["task-main-c0", ...EDITABLE_FIELDS.map(() => "")],
     ]);
+    const findOne = async (): Promise<unknown> => {
+      findOneCalls += 1;
+      // First two calls are the pre-write canonical-baseline checks (the
+      // readiness loop and the immediate pre-write revalidation); later calls
+      // are the post-write acceptance poll.
+      return findOneCalls <= 2 ? baselineRow() : readRow();
+    };
     const context = {
       cycle: 0,
       oracle: { applyMutation },
@@ -76,12 +100,7 @@ describe("probe polling deadline edges", () => {
       deadlineAtMs,
       hikoutei: {
         em: {
-          fork: () => ({
-            findOne: async () => {
-              findOneCalls += 1;
-              return readRow();
-            },
-          }),
+          fork: () => ({ findOne }),
         },
       },
     };
@@ -119,7 +138,10 @@ describe("probe polling deadline edges", () => {
     const record = await probe;
     expect(record.record.status).toBe("failed");
     expect(record.record.reason).toBe("human-edit-not-accepted");
-    expect(findOneCalls()).toBe(0);
+    // Two readiness canonical-baseline reads ran BEFORE the write (the
+    // readiness loop and the immediate pre-write revalidation); the
+    // acceptance poll never started (the deadline was rechecked first).
+    expect(findOneCalls()).toBe(2);
     expect(applyMutation).not.toHaveBeenCalled();
   });
 
@@ -130,19 +152,29 @@ describe("probe polling deadline edges", () => {
     const { context, findOneCalls, applyMutation } = probeContext(
       deadlineAtMs,
       () => slowRead.promise,
+      // The canonical baseline resolves immediately so the write happens;
+      // only the acceptance read is slow and resolves after the deadline.
+      coherentBaselineRow,
     );
     const probe = runHumanEditProbe(context, new Set());
 
     // The first sleep ends well inside the budget, so the poll read
     // STARTS before the deadline...
     await vi.advanceTimersByTimeAsync(PROBE_ACCEPT_POLL_MS);
-    expect(findOneCalls()).toBe(1);
+    // Two canonical-baseline reads before the write (readiness + pre-write
+    // revalidation), then the acceptance read that is about to start (and will
+    // resolve late).
+    expect(findOneCalls()).toBe(3);
     // ...but resolves only after it (a slow read that began pre-deadline).
     await vi.advanceTimersByTimeAsync(8_000);
     slowRead.release(matchingRow());
     const record = await probe;
     expect(record.record.status).toBe("failed");
     expect(record.record.reason).toBe("human-edit-not-accepted");
+    // Two canonical-baseline reads before the write, one acceptance read that
+    // began before the deadline and resolved late. The late acceptance is
+    // never accepted as success.
+    expect(findOneCalls()).toBe(3);
     expect(applyMutation).not.toHaveBeenCalled();
   });
 
@@ -158,7 +190,9 @@ describe("probe polling deadline edges", () => {
     const record = await probe;
     expect(record.record.status).toBe("ok");
     expect(record.record.table).toBe("soak_tasks");
-    expect(findOneCalls()).toBe(1);
+    // Two canonical-baseline reads before the write (readiness + pre-write
+    // revalidation), one acceptance read.
+    expect(findOneCalls()).toBe(3);
     expect(applyMutation).toHaveBeenCalledTimes(1);
     expect(record.applied).toEqual({
       entityName: "SoakTask",
@@ -190,7 +224,17 @@ describe("probe User_Input readiness", () => {
     mutateInputCell = vi.fn(async () => undefined),
   ) {
     const applyMutation = vi.fn();
-    const findOne = vi.fn(async () => matchingRow());
+    let findOneCalls = 0;
+    // The first two findOne calls are the pre-write canonical-baseline checks
+    // (readiness + pre-write revalidation) and must be coherent with the
+    // User_Input tab's empty editable cells; later calls are the acceptance
+    // poll and must carry the accepted human value.
+    const findOne = vi.fn(async () => {
+      findOneCalls += 1;
+      return findOneCalls <= 2
+        ? { id: "task-main-c0", ...Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, ""])) }
+        : matchingRow();
+    });
     const context = {
       cycle: 0,
       oracle: { applyMutation },
@@ -227,7 +271,9 @@ describe("probe User_Input readiness", () => {
     await vi.advanceTimersByTimeAsync(PROBE_ACCEPT_POLL_MS);
     const record = await probe;
     expect(record.record.status).toBe("ok");
-    expect(readTabRows).toHaveBeenCalledTimes(2);
+    // Two readiness reads (missing then ready) plus the immediate pre-write
+    // revalidation read.
+    expect(readTabRows).toHaveBeenCalledTimes(3);
     expect(mutateInputCell).toHaveBeenCalledTimes(1);
     expect(applyMutation).toHaveBeenCalledTimes(1);
   });
@@ -253,6 +299,93 @@ describe("probe User_Input readiness", () => {
     // and no read starts after the deadline.
     expect(readTabRows).toHaveBeenCalledTimes(1);
     expect(mutateInputCell).not.toHaveBeenCalled();
+  });
+
+  it("does not write to a stale baseline: the canonical row was deleted (binding tombstoned), so the probe fails missing_identity", async () => {
+    // A present identity on the User_Input tab is not a current writable
+    // baseline: the scenario cleanup may have already deleted the canonical
+    // row (tombstoned its binding), so a human edit written there would
+    // never be accepted. The probe must NOT write and fails with the stable
+    // `missing_identity` class instead of a doomed write.
+    const startedAt = Date.now();
+    const deadlineAtMs = startedAt + PROBE_ACCEPT_POLL_MS;
+    const applyMutation = vi.fn();
+    const findOne = vi.fn(async () => null); // canonical row deleted
+    const mutateInputCell = vi.fn(async () => undefined);
+    const readTabRows = vi.fn().mockResolvedValue(readyInputTab());
+    const context = {
+      cycle: 0,
+      oracle: { applyMutation },
+      tokenByEntity: new Map([["SoakTask", {}]]),
+      activeEntities: [{ name: "SoakTask", tableName: "soak_tasks" }],
+      live: {
+        mode: "live" as const,
+        spreadsheetId: "stub-spreadsheet",
+        client: { mutateInputCell, readTabRows },
+      },
+      seed: 12345,
+      deadlineAtMs,
+      hikoutei: { em: { fork: () => ({ findOne }) } },
+    };
+    const probe = runHumanEditProbe(context, new Set());
+    await vi.advanceTimersByTimeAsync(PROBE_ACCEPT_POLL_MS);
+    const record = await probe;
+    expect(record.record).toMatchObject({
+      status: "failed",
+      reason: "probe-error",
+      statusClass: "missing_identity",
+      table: "soak_tasks",
+    });
+    // The canonical baseline is required before any write.
+    expect(findOne).toHaveBeenCalledTimes(1);
+    expect(mutateInputCell).not.toHaveBeenCalled();
+    expect(applyMutation).not.toHaveBeenCalled();
+  });
+
+  it("does not write to an incoherent baseline: the canonical row's editable values differ from the User_Input display", async () => {
+    // A present identity whose canonical row exists is still not a current
+    // writable baseline when the canonical editable values DIFFER from the
+    // User_Input displayed cells (a stale projection that has not caught up
+    // to a canonical update). The coherent-baseline check must fail closed
+    // with zero writes and the stable `missing_identity` class.
+    const startedAt = Date.now();
+    const deadlineAtMs = startedAt + PROBE_ACCEPT_POLL_MS;
+    const applyMutation = vi.fn();
+    // The canonical row exists but its editable field values differ from the
+    // User_Input tab's empty displayed cells.
+    const findOne = vi.fn(async () => ({
+      id: "task-main-c0",
+      ...Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, "stale-value"])),
+    }));
+    const mutateInputCell = vi.fn(async () => undefined);
+    const readTabRows = vi.fn().mockResolvedValue(readyInputTab());
+    const context = {
+      cycle: 0,
+      oracle: { applyMutation },
+      tokenByEntity: new Map([["SoakTask", {}]]),
+      activeEntities: [{ name: "SoakTask", tableName: "soak_tasks" }],
+      live: {
+        mode: "live" as const,
+        spreadsheetId: "stub-spreadsheet",
+        client: { mutateInputCell, readTabRows },
+      },
+      seed: 12345,
+      deadlineAtMs,
+      hikoutei: { em: { fork: () => ({ findOne }) } },
+    };
+    const probe = runHumanEditProbe(context, new Set());
+    await vi.advanceTimersByTimeAsync(PROBE_ACCEPT_POLL_MS);
+    const record = await probe;
+    expect(record.record).toMatchObject({
+      status: "failed",
+      reason: "probe-error",
+      statusClass: "missing_identity",
+      table: "soak_tasks",
+    });
+    // The coherent baseline is required before any write.
+    expect(findOne).toHaveBeenCalledTimes(1);
+    expect(mutateInputCell).not.toHaveBeenCalled();
+    expect(applyMutation).not.toHaveBeenCalled();
   });
 
   it("fails closed immediately without a write on a duplicated intended identity", async () => {
@@ -412,7 +545,8 @@ describe("probe User_Input readiness", () => {
     expect(record.record.status).toBe("ok");
     expect(mutateInputCell).toHaveBeenCalledTimes(1);
     expect(applyMutation).toHaveBeenCalledTimes(1);
-    expect(readTabRows).toHaveBeenCalledTimes(1);
+    // One readiness read plus the immediate pre-write revalidation read.
+    expect(readTabRows).toHaveBeenCalledTimes(2);
   });
 
   it("never writes when a slow readiness read resolves ready AT/after the deadline", async () => {
@@ -439,6 +573,71 @@ describe("probe User_Input readiness", () => {
     });
     expect(mutateInputCell).not.toHaveBeenCalled();
     expect(readTabRows).toHaveBeenCalledTimes(1);
+  });
+
+  it("never writes when the pre-write canonical revalidation read resolves after the deadline", async () => {
+    // The readiness loop resolves a coherent baseline, but the immediate
+    // pre-write canonical revalidation read (the second findOne) is slow and
+    // resolves only after the phase deadline. The revalidation returns true
+    // (its canonical read resolved late with a coherent row), so the final
+    // atomic deadline check must stop the single write: zero writes, stable
+    // missing_identity.
+    const startedAt = Date.now();
+    const deadlineAtMs = startedAt + 10_000;
+    const slowCanonical = deferred<unknown>();
+    const applyMutation = vi.fn();
+    const mutateInputCell = vi.fn(async () => undefined);
+    const readTabRows = vi.fn(async () => [
+      ["id", ...EDITABLE_FIELDS],
+      ["task-main-c0", ...EDITABLE_FIELDS.map(() => "")],
+    ]);
+    let findOneCalls = 0;
+    const findOne = async (): Promise<unknown> => {
+      findOneCalls += 1;
+      // First call: the readiness canonical-baseline check (immediate).
+      // Second call: the pre-write revalidation canonical read, which is slow
+      // and resolves only after the phase deadline.
+      if (findOneCalls === 1) return coherentBaselineRow();
+      return slowCanonical.promise;
+    };
+    const context = {
+      cycle: 0,
+      oracle: { applyMutation },
+      tokenByEntity: new Map([["SoakTask", {}]]),
+      activeEntities: [{ name: "SoakTask", tableName: "soak_tasks" }],
+      live: {
+        mode: "live" as const,
+        spreadsheetId: "stub-spreadsheet",
+        client: { mutateInputCell, readTabRows },
+      },
+      seed: 12345,
+      deadlineAtMs,
+      hikoutei: { em: { fork: () => ({ findOne }) } },
+    };
+    const probe = runHumanEditProbe(context, new Set());
+    // The readiness read and its canonical check resolve immediately; the
+    // pre-write revalidation read starts inside the budget. Flush the
+    // microtask chain until the revalidation's canonical read is pending.
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 8 && findOneCalls < 2; i += 1) {
+      await Promise.resolve();
+    }
+    expect(findOneCalls).toBe(2);
+    // The pre-write canonical read resolves only AT/after the phase
+    // deadline (start + 10s) with a coherent baseline: the revalidation
+    // itself returns true, so the final atomic deadline check must be the
+    // barrier that stops the write before it starts.
+    await vi.advanceTimersByTimeAsync(10_000);
+    slowCanonical.release(coherentBaselineRow());
+    const record = await probe;
+    expect(record.record).toMatchObject({
+      status: "failed",
+      reason: "probe-error",
+      statusClass: "missing_identity",
+      table: "soak_tasks",
+    });
+    expect(mutateInputCell).not.toHaveBeenCalled();
+    expect(applyMutation).not.toHaveBeenCalled();
   });
 });
 

@@ -26,6 +26,7 @@ import {
   type PendingEffect,
   type PostconditionOutcome,
   type Presence,
+  type PreparedDispatch,
   presentValue,
   absentValue,
   WORKER_ERROR_CODES,
@@ -37,6 +38,34 @@ import {
   newEffect,
 } from "./support/kernelFixtures.js";
 import type { NodeSqliteTestAdapter } from "./support/nodeSqliteAdapter.js";
+import type {
+  SqlStorageAdapter,
+  SqlStorageContext,
+} from "../src/sql.js";
+
+/**
+ * Wraps a kernel store so the FIRST result-persistence transaction after the
+ * write succeeds throws, simulating a storage failure while persisting an
+ * applied result. The write itself is a remote dispatcher call, so arming the
+ * flag inside `applyPrepared` makes the next `transaction` (result
+ * persistence) throw.
+ */
+class ThrowingResultPersistenceAdapter implements SqlStorageAdapter {
+  public throwOnResultPersistence = false;
+  constructor(private readonly inner: NodeSqliteTestAdapter) {}
+  read<T>(operation: (context: SqlStorageContext) => Promise<T>): Promise<T> {
+    return this.inner.read(operation);
+  }
+  async transaction<T>(operation: (context: SqlStorageContext) => Promise<T>): Promise<T> {
+    if (this.throwOnResultPersistence) {
+      throw new Error("injected result persistence failure");
+    }
+    return this.inner.transaction(operation);
+  }
+  close(): void {
+    this.inner.close();
+  }
+}
 
 /** Fast-append classification that mirrors the kernel's SQL-visible shape. */
 function isAppendShaped(effect: PendingEffect): boolean {
@@ -55,6 +84,15 @@ interface FakeDispatcherOptions {
   readonly dispatchPriorityFor?: (effect: PendingEffect) => number;
   readonly payloadValidationError?: (effect: PendingEffect) => Presence<string>;
   readonly routeKeyFor?: (effect: PendingEffect) => string;
+  /** Spreadsheet-scoped fast-append grouping key; defaults to `routeKeyFor`. */
+  readonly fastAppendRouteKeyFor?: (effect: PendingEffect) => string;
+  /**
+   * Optional split-dispatch stages. When both are supplied the worker routes
+   * regular units through preflight + applyPrepared; when neither is supplied
+   * it keeps the single legacy `apply` path. Supplying only one is invalid.
+   */
+  readonly preflight?: (request: DispatchRequest) => Promise<PreparedDispatch>;
+  readonly applyPrepared?: (request: DispatchRequest, prepared: PreparedDispatch) => Promise<ApplyOutcome>;
   /**
    * Models the host-dispatcher contract: invoke the request's
    * `beforeRemoteDispatch` hook immediately before the canned remote result
@@ -68,19 +106,56 @@ class FakeDispatcher implements Dispatcher {
   public applyCalls = 0;
   public fastAppendCalls = 0;
   public probeCalls = 0;
+  public preflightCalls = 0;
+  public applyPreparedCalls = 0;
   public readonly lastApplyRequests: DispatchRequest[] = [];
   public readonly lastFastAppendRequests: DispatchRequest[] = [];
   /** Interleaved remote-call log in dispatch order: bucket + request. */
   public readonly callLog: Array<{ readonly bucket: "apply" | "fastAppend"; readonly request: DispatchRequest }> = [];
+  /** Split-stage call log in dispatch order (only when split is enabled). */
+  public readonly splitCallLog: Array<{ readonly phase: "preflight" | "applyPrepared"; readonly request: DispatchRequest }> = [];
 
   private readonly options: FakeDispatcherOptions;
 
+  /**
+   * Split-dispatch stages. Only defined when BOTH options are supplied; the
+   * worker feature-detects the pair so an option-less fake keeps the legacy
+   * single `apply` path (matching a host dispatcher that omits the methods).
+   */
+  public readonly preflight?: (request: DispatchRequest) => Promise<PreparedDispatch>;
+  public readonly applyPrepared?: (request: DispatchRequest, prepared: PreparedDispatch) => Promise<ApplyOutcome>;
+
   public constructor(options: FakeDispatcherOptions = {}) {
     this.options = options;
+    const split = options.preflight !== undefined && options.applyPrepared !== undefined;
+    if (split) {
+      this.preflight = this.preflightImpl;
+      this.applyPrepared = this.applyPreparedImpl;
+    }
   }
+
+  private readonly preflightImpl = async (request: DispatchRequest): Promise<PreparedDispatch> => {
+    this.preflightCalls += 1;
+    this.splitCallLog.push({ phase: "preflight", request });
+    return this.options.preflight!(request);
+  };
+
+  private readonly applyPreparedImpl = async (
+    request: DispatchRequest,
+    prepared: PreparedDispatch,
+  ): Promise<ApplyOutcome> => {
+    this.applyPreparedCalls += 1;
+    this.splitCallLog.push({ phase: "applyPrepared", request });
+    await this.invokeBeforeRemoteOrThrow(request);
+    return this.options.applyPrepared!(request, prepared);
+  };
 
   public routeKeyFor(effect: PendingEffect): string {
     return this.options.routeKeyFor?.(effect) ?? [effect.physical_sheet_id, effect.projection].join("\u0000");
+  }
+
+  public fastAppendRouteKeyFor(effect: PendingEffect): string {
+    return this.options.fastAppendRouteKeyFor?.(effect) ?? this.routeKeyFor(effect);
   }
 
   public isFastAppendCandidate(effect: PendingEffect): boolean {
@@ -242,6 +317,57 @@ describe("effect worker", () => {
     // claim time would leave it near 121_000 and fail this bound.
     expect(hookRenewed).toBe(true);
     expect(leaseUntilAtProviderCall).toBeGreaterThan(121_100);
+    await expect(outboxStatus(adapter, effect.effectId)).resolves.toBe("applied");
+  });
+
+  it("renews the writer lease inside the before-remote hook so a long queue cannot expire it", async () => {
+    // The writer/authority renewal happens BEFORE the mutation lane is
+    // acquired; the in-lane hook must ALSO renew the WRITER lease so a long
+    // lane queue or limiter wait cannot expire it during remote work and
+    // permit a stale mutation after a takeover.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const effect = regularEffect("before-remote-writer-renewal");
+    await appendPendingEffectsWithAdapter(adapter, fence, [effect]);
+
+    let writerLeaseUntilAtHook: number | undefined;
+    const dispatcher = new FakeDispatcher({
+      apply: async (request) => {
+        // Model a long mutation-lane queue: time passes after the claim and
+        // before the host's before-remote hook. The hook must renew the
+        // WRITER lease from THIS instant so a long queue cannot expire it
+        // during remote work.
+        await delay(200);
+        const renewed = await request.beforeRemoteDispatch?.() ?? true;
+        writerLeaseUntilAtHook = await readWriterLeaseUntil(adapter);
+        return {
+          hasMore: false,
+          results: request.effects.map((pending) => ({
+            effectId: pending.effect_id,
+            payloadHash: pending.payload_hash,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+        };
+      },
+    });
+
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 1_000,
+      maxEffects: 5,
+    });
+
+    expect(report).toMatchObject({ applied: 1, failed: 0 });
+    // The in-lane hook renewed the writer lease from the hook instant
+    // (~200ms past the claim), so the lease extends ~180s past the 1_000+200
+    // worker clock. A renewal that happened only at claim time would leave it
+    // near 181_000 and fail this bound.
+    expect(writerLeaseUntilAtHook).toBeGreaterThan(181_100);
     await expect(outboxStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
@@ -797,6 +923,50 @@ describe("effect worker", () => {
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
   });
 
+  it("emits hasMore, requested, and acknowledged counts on fast-append timing", async () => {
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const first = newEffect({ effectId: "append-timing-first", targetId: "entity-first" });
+    const suffix = newEffect({ effectId: "append-timing-suffix", targetId: "entity-suffix" });
+    await appendPendingEffectsWithAdapter(adapter, fence, [first, suffix]);
+
+    const dispatcher = new FakeDispatcher({
+      fastAppend: async (request) => ({
+        hasMore: true,
+        results: request.effects
+          .filter((pending) => pending.effect_id === first.effectId)
+          .map((pending) => ({
+            effectId: pending.effect_id,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+      }),
+    });
+    const timingEvents: Array<Record<string, unknown>> = [];
+    await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 1_000,
+      maxEffects: 5,
+      maxFastAppendCandidates: 2,
+      onTiming: (event) => timingEvents.push(event as unknown as Record<string, unknown>),
+    });
+
+    const dispatchEvent = timingEvents.find((event) =>
+      event.phase === "append_provider_dispatch" && event.scope === "worker");
+    expect(dispatchEvent).toBeDefined();
+    // Fast-append timing carries the same envelope fields as regular dispatch:
+    // the provider's hasMore flag, the requested effect count, and the
+    // acknowledged/result count.
+    expect(dispatchEvent?.hasMore).toBe(true);
+    expect(dispatchEvent?.responseSucceeded).toBe(true);
+    expect(dispatchEvent?.requestedEffects).toBe(2);
+    expect(dispatchEvent?.acknowledgedEffects).toBe(1);
+  });
+
   it("fails an effect per-effect when the dispatcher candidate predicate throws", async () => {
     const adapter = createKernelStore();
     const fence = await claimTestFence(adapter);
@@ -1054,6 +1224,104 @@ describe("effect worker", () => {
     ]);
   });
 
+  it("keeps mixed physical routes in ONE atomic fast-append call when the dispatcher declares spreadsheet-scoped append grouping", async () => {
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    // Two fast-append effects on DIFFERENT physical routes of one spreadsheet
+    // (system_state and sync_conflicts projections). The dispatcher declares a
+    // spreadsheet-scoped fast-append grouping key, so the worker must send them
+    // as ONE fast-append call (the provider commits the whole multi-route batch
+    // atomically) instead of splitting per route.
+    const sysAppend = newEffect({ effectId: "sys-append-atomic", targetId: "entity-atomic-a" });
+    const conflictAppend = newEffect({
+      effectId: "conflict-append-atomic",
+      effectKind: "resolution_projection",
+      projection: "sync_conflicts",
+      targetKind: "conflict",
+      targetId: "conflict-atomic",
+      expectedVisibleRevision: 0,
+      expectedVisibleHash: "",
+    });
+    await appendPendingEffectsWithAdapter(adapter, fence, [sysAppend, conflictAppend]);
+
+    const dispatcher = new FakeDispatcher({
+      isFastAppendCandidate: (effect) =>
+        isAppendShaped(effect) ||
+        (effect.projection === "sync_conflicts" &&
+          effect.expected_visible_revision === 0 &&
+          effect.expected_visible_hash === ""),
+      // Spreadsheet-scoped append grouping: every append on this dispatcher's
+      // single spreadsheet shares one grouping key.
+      fastAppendRouteKeyFor: () => "spreadsheet-scope",
+    });
+
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 1_000,
+      maxEffects: 10,
+    });
+
+    expect(report).toMatchObject({ selected: 2, claimed: 2, applied: 2 });
+    // ONE fast-append call carries BOTH mixed-route effects (atomic multi-route
+    // batch), never a per-route split.
+    expect(dispatcher.fastAppendCalls).toBe(1);
+    expect(dispatcher.callLog.filter((entry) => entry.bucket === "fastAppend")).toHaveLength(1);
+    const fastRequest = dispatcher.lastFastAppendRequests[0];
+    expect(fastRequest).toBeDefined();
+    expect(fastRequest?.effects.map((effect) => effect.effect_id).sort()).toEqual(
+      [sysAppend.effectId, conflictAppend.effectId].sort(),
+    );
+  });
+
+  it("does not partially commit when the single multi-route fast-append fails", async () => {
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const appA = newEffect({ effectId: "atomic-fail-a", targetId: "entity-atomic-fail-a" });
+    const appB = newEffect({
+      effectId: "atomic-fail-b",
+      effectKind: "resolution_projection",
+      projection: "sync_conflicts",
+      targetKind: "conflict",
+      targetId: "conflict-fail",
+      expectedVisibleRevision: 0,
+      expectedVisibleHash: "",
+    });
+    await appendPendingEffectsWithAdapter(adapter, fence, [appA, appB]);
+
+    const dispatcher = new FakeDispatcher({
+      isFastAppendCandidate: (effect) =>
+        isAppendShaped(effect) ||
+        (effect.projection === "sync_conflicts" &&
+          effect.expected_visible_revision === 0 &&
+          effect.expected_visible_hash === ""),
+      fastAppendRouteKeyFor: () => "spreadsheet-scope",
+      fastAppend: async () => {
+        // The ONE atomic multi-route call is rejected as an explicit remote
+        // failure, so the provider proved the whole batch was refused. The
+        // worker must close EVERY mixed-route row identically (all failed)
+        // and never mark one row applied while another is still unsettled.
+        throw new DispatchTransportError("explicit_remote_failure", "remote fast append rejected");
+      },
+    });
+
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-1",
+      now: 1_000,
+      maxEffects: 10,
+    });
+
+    // One call, and NO effect is applied: the whole atomic multi-route batch
+    // was refused, so every mixed-route row closes together (no partial commit).
+    expect(dispatcher.fastAppendCalls).toBe(1);
+    expect(report).toMatchObject({ selected: 2, claimed: 2, applied: 0, failed: 2 });
+    await expect(outboxStatus(adapter, appA.effectId)).resolves.toBe("failed");
+    await expect(outboxStatus(adapter, appB.effectId)).resolves.toBe("failed");
+  });
+
   it("never forces an unready predecessor ahead of priority work", async () => {
     const adapter = createKernelStore();
     const fence = await claimTestFence(adapter);
@@ -1298,6 +1566,666 @@ describe("reconciliation first-scan scheduling", () => {
       },
     })).toThrow("initial reconciliation delay must be a non-negative safe integer");
   });
+
+  describe("split read-ahead pipeline (preflight + applyPrepared)", () => {
+    /** Regular effect on a chosen route (never fast-append shaped). */
+    const routeRegular = (effectId: string, physicalSheetId: string): NewEffect =>
+      newEffect({
+        effectId,
+        physicalSheetId,
+        targetId: "entity-" + effectId,
+        expectedVisibleRevision: 1,
+        expectedVisibleHash: "baseline-" + effectId,
+      });
+
+    /** Split-capable dispatcher whose stages record concurrency and order. */
+    const createTracker = (stepMs = 5): {
+      readonly dispatcher: FakeDispatcher;
+      readonly probe: { readonly maxActive: number; readonly events: string[] };
+    } => {
+      const probe = { maxActive: 0, events: [] as string[] };
+      let active = 0;
+      const enter = async (label: string): Promise<void> => {
+        active += 1;
+        probe.maxActive = Math.max(probe.maxActive, active);
+        probe.events.push(`${label}:enter`);
+        await delay(stepMs);
+        probe.events.push(`${label}:exit`);
+        active -= 1;
+      };
+      const dispatcher = new FakeDispatcher({
+        routeKeyFor: (effect) => effect.physical_sheet_id,
+        preflight: async (request) => {
+          await enter(`preflight:${request.routeKey}`);
+          return { __preparedDispatch: "hikoutei/dispatcher/prepared" };
+        },
+        applyPrepared: async (request) => {
+          await enter(`write:${request.routeKey}`);
+          return {
+            hasMore: false,
+            results: request.effects.map((effect) => ({
+              effectId: effect.effect_id,
+              payloadHash: effect.payload_hash,
+              status: "applied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            })),
+          };
+        },
+      });
+      return { dispatcher, probe };
+    };
+
+    it("overlaps a next-route preflight with the current route's write", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("read-ahead-a", "sheet-a"),
+        routeRegular("read-ahead-b", "sheet-b"),
+      ]);
+      const { dispatcher, probe } = createTracker();
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "read-ahead-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 2, applied: 2, failed: 0 });
+      expect(dispatcher.applyCalls).toBe(0);
+      expect(dispatcher.preflightCalls).toBe(2);
+      expect(dispatcher.applyPreparedCalls).toBe(2);
+      // A next-route preflight ran while the current route's write was in
+      // flight (the read-ahead benefit), not strictly serialized.
+      expect(probe.maxActive).toBeGreaterThanOrEqual(2);
+      // The read-ahead preflight for sheet-b fired before sheet-a's write.
+      const phases = dispatcher.splitCallLog.map((c) => `${c.phase}:${c.request.routeKey}`);
+      expect(phases.indexOf("preflight:sheet-b")).toBeLessThan(
+        phases.indexOf("applyPrepared:sheet-a"),
+      );
+    });
+
+    it("keeps preflight and write strictly serial within one route", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("serial-1", "sheet-a"),
+        routeRegular("serial-2", "sheet-a"),
+      ]);
+      const { dispatcher, probe } = createTracker();
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "serial-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 2, applied: 2, failed: 0 });
+      // Both effects share one route, so one preflight then one serial write.
+      expect(dispatcher.preflightCalls).toBe(1);
+      expect(dispatcher.applyPreparedCalls).toBe(1);
+      expect(probe.maxActive).toBe(1);
+      const events = probe.events;
+      expect(events.indexOf("preflight:sheet-a:exit")).toBeLessThan(
+        events.indexOf("write:sheet-a:enter"),
+      );
+    });
+
+    it("requeues a route whose preflight fails before any write", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [regularEffect("preflight-fail")]);
+      const dispatcher = new FakeDispatcher({
+        preflight: async () => {
+          throw new Error("preflight read failed");
+        },
+        applyPrepared: async (request) => ({
+          hasMore: false,
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+        }),
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "preflight-fail-worker",
+        now: 1_000,
+        maxEffects: 1,
+      });
+      expect(report).toMatchObject({ claimed: 1, applied: 0, failed: 0, requeued: 1 });
+      expect(dispatcher.applyPreparedCalls).toBe(0);
+      await expect(outboxStatus(adapter, "preflight-fail")).resolves.toBe("pending");
+    });
+
+    it("terminally fails a route whose applyPrepared reports an explicit rejection", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [regularEffect("applyprepared-fail")]);
+      const dispatcher = new FakeDispatcher({
+        preflight: async () => ({ __preparedDispatch: "hikoutei/dispatcher/prepared" }),
+        applyPrepared: async () => {
+          throw new DispatchTransportError("explicit_remote_failure", "the remote rejected before any write");
+        },
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "applyprepared-fail-worker",
+        now: 1_000,
+        maxEffects: 1,
+      });
+      expect(report).toMatchObject({ claimed: 1, applied: 0, failed: 1 });
+      expect(dispatcher.probeCalls).toBe(0);
+      await expect(outboxStatus(adapter, "applyprepared-fail")).resolves.toBe("failed");
+    });
+
+    it("chains three routes so the third preflights while the second writes", async () => {
+      // A→B→C: C's preflight must fire once B's prepared state is consumed and
+      // B's write is running (one route of read-ahead ahead of the writes).
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("chain-a", "sheet-a"),
+        routeRegular("chain-b", "sheet-b"),
+        routeRegular("chain-c", "sheet-c"),
+      ]);
+      const { dispatcher, probe } = createTracker();
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "chain-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 3, applied: 3, failed: 0 });
+      expect(dispatcher.preflightCalls).toBe(3);
+      expect(dispatcher.applyPreparedCalls).toBe(3);
+      const phases = dispatcher.splitCallLog.map((c) => `${c.phase}:${c.request.routeKey}`);
+      // C's preflight overlaps B's write (read-ahead one route past the
+      // previously consumed prepared state), not strictly after B's write.
+      expect(phases.indexOf("preflight:sheet-c")).toBeLessThan(
+        phases.indexOf("applyPrepared:sheet-b"),
+      );
+      // C's write still strictly follows B's write (writes never reorder).
+      expect(phases.indexOf("applyPrepared:sheet-b")).toBeLessThan(
+        phases.indexOf("applyPrepared:sheet-c"),
+      );
+      expect(probe.maxActive).toBeGreaterThanOrEqual(2);
+    });
+
+    it("requeues a read-ahead route whose preflight fails before its write", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("read-ahead-fail-a", "sheet-a"),
+        routeRegular("read-ahead-fail-b", "sheet-b"),
+      ]);
+      const dispatcher = new FakeDispatcher({
+        routeKeyFor: (effect) => effect.physical_sheet_id,
+        preflight: async (request) => {
+          if (request.routeKey === "sheet-b") throw new Error("read-ahead preflight failed");
+          return { __preparedDispatch: "hikoutei/dispatcher/prepared" };
+        },
+        applyPrepared: async (request) => ({
+          hasMore: false,
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+        }),
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "read-ahead-fail-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      // The read-ahead preflight for sheet-b fired during sheet-a's write and
+      // rejected; the worker must requeue sheet-b (never an unhandled
+      // rejection, never a write) while sheet-a still applies.
+      expect(report).toMatchObject({ claimed: 2, applied: 1, requeued: 1 });
+      await expect(outboxStatus(adapter, "read-ahead-fail-a")).resolves.toBe("applied");
+      await expect(outboxStatus(adapter, "read-ahead-fail-b")).resolves.toBe("pending");
+    });
+
+    it("does not overlap a regular read-ahead preflight with a fast-append unit", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        newEffect({ effectId: "fast-append-1", physicalSheetId: "sheet-fast" }),
+        routeRegular("regular-1", "sheet-regular"),
+      ]);
+      const probe = { maxActive: 0, events: [] as string[] };
+      let active = 0;
+      const enter = async (label: string): Promise<void> => {
+        active += 1;
+        probe.maxActive = Math.max(probe.maxActive, active);
+        probe.events.push(`${label}:enter`);
+        await delay(5);
+        probe.events.push(`${label}:exit`);
+        active -= 1;
+      };
+      const dispatcher = new FakeDispatcher({
+        routeKeyFor: (effect) => effect.physical_sheet_id,
+        fastAppendRouteKeyFor: () => "spreadsheet-scope",
+        fastAppend: async (request) => {
+          await enter("fastAppend");
+          return {
+            hasMore: false,
+            results: request.effects.map((effect) => ({
+              effectId: effect.effect_id,
+              status: "applied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            })),
+          };
+        },
+        preflight: async (request) => {
+          await enter(`preflight:${request.routeKey}`);
+          return { __preparedDispatch: "hikoutei/dispatcher/prepared" };
+        },
+        applyPrepared: async (request) => {
+          await enter(`write:${request.routeKey}`);
+          return {
+            hasMore: false,
+            results: request.effects.map((effect) => ({
+              effectId: effect.effect_id,
+              payloadHash: effect.payload_hash,
+              status: "applied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            })),
+          };
+        },
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "fast-overlap-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 2, applied: 2, failed: 0 });
+      // The regular route's read-ahead preflight must NOT overlap the
+      // fast-append's atomic multi-route write (no concurrent preflight), so
+      // the fast-append's prepared state cannot be made stale by a read.
+      expect(probe.maxActive).toBe(1);
+    });
+
+    it("never overlaps two preflights while the next preflight overlaps the current write", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("serial-a", "sheet-a"),
+        routeRegular("serial-b", "sheet-b"),
+      ]);
+      const { dispatcher, probe } = createTracker();
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "no-overlap-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 2, applied: 2, failed: 0 });
+      const events = probe.events;
+      // B's preflight starts only AFTER A's preflight completes (A/B
+      // preflights never overlap) and BEFORE A's write so B overlaps A's
+      // write — the read-ahead benefit without two concurrent preflights.
+      expect(events.indexOf("preflight:sheet-b:enter")).toBeGreaterThan(
+        events.indexOf("preflight:sheet-a:exit"),
+      );
+      expect(events.indexOf("preflight:sheet-b:enter")).toBeLessThan(
+        events.indexOf("write:sheet-a:enter"),
+      );
+      expect(maxConcurrentPreflights(events)).toBe(1);
+      // A write still overlaps the next preflight.
+      expect(probe.maxActive).toBeGreaterThanOrEqual(2);
+    });
+
+    it("chains three routes without ever overlapping two preflights", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("chain-a", "sheet-a"),
+        routeRegular("chain-b", "sheet-b"),
+        routeRegular("chain-c", "sheet-c"),
+      ]);
+      const { dispatcher, probe } = createTracker();
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "chain-noverlap-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 3, applied: 3, failed: 0 });
+      const events = probe.events;
+      // Each preflight begins only after the previous preflight ends (one
+      // route of read-ahead, but preflights stay strictly sequential).
+      expect(events.indexOf("preflight:sheet-b:enter")).toBeGreaterThan(
+        events.indexOf("preflight:sheet-a:exit"),
+      );
+      expect(events.indexOf("preflight:sheet-c:enter")).toBeGreaterThan(
+        events.indexOf("preflight:sheet-b:exit"),
+      );
+      expect(maxConcurrentPreflights(events)).toBe(1);
+      // Yet each write overlaps the next preflight (read-ahead one route ahead).
+      expect(probe.maxActive).toBeGreaterThanOrEqual(2);
+    });
+
+    it("suppresses read-ahead after a preflight refusal and requeues safely", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("refused-a", "sheet-a"),
+        routeRegular("refused-b", "sheet-b"),
+        routeRegular("refused-c", "sheet-c"),
+      ]);
+      const probe = { maxActive: 0, events: [] as string[] };
+      let active = 0;
+      const enter = async (label: string): Promise<void> => {
+        active += 1;
+        probe.maxActive = Math.max(probe.maxActive, active);
+        probe.events.push(`${label}:enter`);
+        await delay(5);
+        probe.events.push(`${label}:exit`);
+        active -= 1;
+      };
+      const dispatcher = new FakeDispatcher({
+        routeKeyFor: (effect) => effect.physical_sheet_id,
+        preflight: async (request) => {
+          if (request.routeKey === "sheet-a") throw new Error("refused read-ahead preflight");
+          await enter(`preflight:${request.routeKey}`);
+          return { __preparedDispatch: "hikoutei/dispatcher/prepared" };
+        },
+        applyPrepared: async (request) => {
+          await enter(`write:${request.routeKey}`);
+          return {
+            hasMore: false,
+            results: request.effects.map((effect) => ({
+              effectId: effect.effect_id,
+              payloadHash: effect.payload_hash,
+              status: "applied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            })),
+          };
+        },
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "suppress-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 3, applied: 2, failed: 0, requeued: 1 });
+      await expect(outboxStatus(adapter, "refused-a")).resolves.toBe("pending");
+      await expect(outboxStatus(adapter, "refused-b")).resolves.toBe("applied");
+      await expect(outboxStatus(adapter, "refused-c")).resolves.toBe("applied");
+      // After A's preflight refusal, read-ahead is suppressed for the rest of
+      // the pass: C's preflight does NOT overlap B's write, and no two
+      // preflights overlap anywhere.
+      const events = probe.events;
+      expect(events.indexOf("preflight:sheet-c:enter")).toBeGreaterThan(
+        events.indexOf("write:sheet-b:exit"),
+      );
+      expect(maxConcurrentPreflights(events)).toBe(1);
+    });
+
+    it("suppresses read-ahead after a write failure so no C preflight overlaps B", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("fail-a", "sheet-a"),
+        routeRegular("fail-b", "sheet-b"),
+        routeRegular("fail-c", "sheet-c"),
+      ]);
+      const probe = { maxActive: 0, events: [] as string[] };
+      let active = 0;
+      const enter = async (label: string): Promise<void> => {
+        active += 1;
+        probe.maxActive = Math.max(probe.maxActive, active);
+        probe.events.push(`${label}:enter`);
+        await delay(5);
+        probe.events.push(`${label}:exit`);
+        active -= 1;
+      };
+      const dispatcher = new FakeDispatcher({
+        routeKeyFor: (effect) => effect.physical_sheet_id,
+        preflight: async (request) => {
+          await enter(`preflight:${request.routeKey}`);
+          return { __preparedDispatch: "hikoutei/dispatcher/prepared" };
+        },
+        applyPrepared: async (request) => {
+          if (request.routeKey === "sheet-a") {
+            throw new DispatchTransportError("delivery_uncertain", "A write failed");
+          }
+          await enter(`write:${request.routeKey}`);
+          return {
+            hasMore: false,
+            results: request.effects.map((effect) => ({
+              effectId: effect.effect_id,
+              payloadHash: effect.payload_hash,
+              status: "applied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            })),
+          };
+        },
+        readPostconditions: async (request) => ({
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            postcondition: {
+              disposition: "unapplied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            },
+          })),
+        }),
+      });
+      const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
+      const abandoned: string[] = [];
+      const abandonPreflight = controller.abandonPreflight.bind(controller);
+      controller.abandonPreflight = (routeKey: string): void => {
+        abandoned.push(routeKey);
+        abandonPreflight(routeKey);
+      };
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "write-fail-suppress-worker",
+        now: 1_000,
+        maxEffects: 5,
+        batchController: controller,
+      });
+      // A's write failed (delivery-uncertain) and was requeued; B and C applied.
+      expect(report).toMatchObject({ claimed: 3, applied: 2, failed: 0, requeued: 1 });
+      // B was read-ahead preflighted during A's write; when A's write failed
+      // that pending preflight was discarded, so its buffered latency must be
+      // abandoned (not double-charged to a later sheet-b write).
+      expect(abandoned).toContain("sheet-b");
+      await expect(outboxStatus(adapter, "fail-a")).resolves.toBe("pending");
+      await expect(outboxStatus(adapter, "fail-b")).resolves.toBe("applied");
+      await expect(outboxStatus(adapter, "fail-c")).resolves.toBe("applied");
+      // After A's write failure, read-ahead is suppressed for the rest of the
+      // pass: C's preflight does NOT overlap B's write.
+      const events = probe.events;
+      expect(events.indexOf("preflight:sheet-c:enter")).toBeGreaterThan(
+        events.indexOf("write:sheet-b:exit"),
+      );
+      expect(maxConcurrentPreflights(events)).toBe(1);
+    });
+
+    it("settles the pending read-ahead preflight when result persistence throws", async () => {
+      const inner = createKernelStore();
+      const fence = await claimTestFence(inner);
+      await appendPendingEffectsWithAdapter(inner, fence, [
+        routeRegular("persist-a", "sheet-a"),
+        routeRegular("persist-b", "sheet-b"),
+        routeRegular("persist-c", "sheet-c"),
+      ]);
+      const adapter = new ThrowingResultPersistenceAdapter(inner);
+      const dispatcher = new FakeDispatcher({
+        routeKeyFor: (effect) => effect.physical_sheet_id,
+        preflight: async () => ({ __preparedDispatch: "hikoutei/dispatcher/prepared" }),
+        applyPrepared: async (request) => {
+          if (request.routeKey === "sheet-a") {
+            // A's write succeeds; arm the adapter so the NEXT transaction
+            // (A's result persistence) throws.
+            adapter.throwOnResultPersistence = true;
+          }
+          return {
+            hasMore: false,
+            results: request.effects.map((effect) => ({
+              effectId: effect.effect_id,
+              payloadHash: effect.payload_hash,
+              status: "applied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            })),
+          };
+        },
+        readPostconditions: async (request) => ({
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            postcondition: {
+              disposition: "unapplied" as const,
+              visibleRevision: 1,
+              visibleHash: "visible-1",
+              fieldHashes: {},
+            },
+          })),
+        }),
+      });
+      const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
+      const abandoned: string[] = [];
+      const abandonPreflight = controller.abandonPreflight.bind(controller);
+      controller.abandonPreflight = (routeKey: string): void => {
+        abandoned.push(routeKey);
+        abandonPreflight(routeKey);
+      };
+      // A's write succeeds but its result persistence throws; the pass aborts
+      // and the pending read-ahead preflight for sheet-b must be settled and
+      // its buffered latency abandoned so no remote read is left unhandled and
+      // no controller state is retained.
+      await expect(runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "persist-throw-worker",
+        now: 1_000,
+        maxEffects: 5,
+        batchController: controller,
+      })).rejects.toThrow("injected result persistence failure");
+      expect(abandoned).toContain("sheet-b");
+    });
+
+    it("terminally fails a route whose preflight reports an explicit remote failure", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [regularEffect("preflight-permanent")]);
+      const dispatcher = new FakeDispatcher({
+        preflight: async () => {
+          throw new DispatchTransportError("explicit_remote_failure", "provider state/schema/route error");
+        },
+        applyPrepared: async (request) => ({
+          hasMore: false,
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+        }),
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "preflight-permanent-worker",
+        now: 1_000,
+        maxEffects: 1,
+      });
+      expect(report).toMatchObject({ claimed: 1, applied: 0, failed: 1, requeued: 0 });
+      await expect(outboxStatus(adapter, "preflight-permanent")).resolves.toBe("failed");
+    });
+
+    it("requeues a route whose preflight reports a delivery-uncertain transport failure", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [regularEffect("preflight-transient")]);
+      const dispatcher = new FakeDispatcher({
+        preflight: async () => {
+          throw new DispatchTransportError("delivery_uncertain", "bounded transport refusal/timeout");
+        },
+        applyPrepared: async (request) => ({
+          hasMore: false,
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+        }),
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "preflight-transient-worker",
+        now: 1_000,
+        maxEffects: 1,
+      });
+      expect(report).toMatchObject({ claimed: 1, applied: 0, failed: 0, requeued: 1 });
+      await expect(outboxStatus(adapter, "preflight-transient")).resolves.toBe("pending");
+    });
+
+    it("falls back to the legacy single apply when the dispatcher lacks split stages", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      await appendPendingEffectsWithAdapter(adapter, fence, [
+        routeRegular("legacy-a", "sheet-a"),
+        routeRegular("legacy-b", "sheet-b"),
+      ]);
+      const dispatcher = new FakeDispatcher({
+        routeKeyFor: (effect) => effect.physical_sheet_id,
+      });
+      const report = await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "legacy-split-worker",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect(report).toMatchObject({ claimed: 2, applied: 2, failed: 0 });
+      expect(dispatcher.applyCalls).toBe(2);
+      expect(dispatcher.preflightCalls).toBe(0);
+      expect(dispatcher.applyPreparedCalls).toBe(0);
+    });
+  });
 });
 
 describe("adaptive batch controller", () => {
@@ -1307,7 +2235,7 @@ describe("adaptive batch controller", () => {
       coalesceWindowMs: 0,
     });
 
-    expect(controller.limitFor("route-a")).toBe(10);
+    expect(controller.limitFor("route-a")).toBe(100);
     controller.beginAppendDispatch(1_000);
     const waited = await controller.waitForAppendThrottle(1_020);
     expect(waited).toBeGreaterThanOrEqual(30);
@@ -1317,11 +2245,11 @@ describe("adaptive batch controller", () => {
       responseSucceeded: false,
       responseLoss: true,
     });
-    expect(controller.limitFor("route-a")).toBe(5);
+    expect(controller.limitFor("route-a")).toBe(50);
     for (let index = 0; index < 3; index += 1) {
       controller.observe("route-a", { durationMs: 10, responseSucceeded: true, responseLoss: false });
     }
-    expect(controller.limitFor("route-a")).toBe(10);
+    expect(controller.limitFor("route-a")).toBe(55);
   });
 
   it("rejects invalid adaptive batch limit configurations", () => {
@@ -1329,6 +2257,172 @@ describe("adaptive batch controller", () => {
       .toThrow("adaptive effect batch limits must satisfy minimum <= initial <= maximum");
     expect(() => new AdaptiveEffectBatchController({ initial: 0 }))
       .toThrow("adaptive initial must be a positive safe integer");
+  });
+
+  it("backs a route off when its preflight read fails", () => {
+    const controller = new AdaptiveEffectBatchController({
+      coalesceWindowMs: 0,
+    });
+    expect(controller.limitFor("route-read")).toBe(100);
+    controller.observePreflight("route-read", { durationMs: 12, succeeded: false });
+    // A failed preflight halves the limit so later write successes cannot
+    // falsely regrow it.
+    expect(controller.limitFor("route-read")).toBe(50);
+  });
+
+  it("includes preflight read latency in the write observation so slow reads back off", () => {
+    const controller = new AdaptiveEffectBatchController({
+      coalesceWindowMs: 0,
+      highLatencyThresholdMs: 100,
+    });
+    // A fast write that would otherwise count as healthy is pushed over the
+    // latency threshold by a slow read-ahead preflight.
+    controller.observePreflight("route-latency", { durationMs: 90, succeeded: true });
+    controller.observe("route-latency", { durationMs: 20, responseSucceeded: true, responseLoss: false });
+    expect(controller.limitFor("route-latency")).toBe(50);
+  });
+
+  it("grows a route only when the read+write total stays healthy", () => {
+    const controller = new AdaptiveEffectBatchController({
+      coalesceWindowMs: 0,
+      highLatencyThresholdMs: 1_000,
+    });
+    for (let index = 0; index < 3; index += 1) {
+      controller.observePreflight("route-fast", { durationMs: 5, succeeded: true });
+      controller.observe("route-fast", { durationMs: 5, responseSucceeded: true, responseLoss: false });
+    }
+    expect(controller.limitFor("route-fast")).toBe(105);
+  });
+
+  it("clears buffered preflight latency when a prepared unit is abandoned (fence loss)", () => {
+    const controller = new AdaptiveEffectBatchController({
+      coalesceWindowMs: 0,
+      highLatencyThresholdMs: 100,
+    });
+    // A successful read-ahead preflight folds its latency into the next write
+    // observation. If that write is then dropped (fence/authority loss before
+    // the write), the buffered latency must be settled so it is NOT double
+    // charged to a future genuine write of the same route.
+    controller.observePreflight("route-abandoned", { durationMs: 90, succeeded: true });
+    controller.abandonPreflight("route-abandoned");
+    // The next genuine write is fast and healthy, so it must grow the route
+    // instead of being pushed over the latency threshold by a stale read whose
+    // write never ran.
+    controller.observe("route-abandoned", { durationMs: 20, responseSucceeded: true, responseLoss: false });
+    expect(controller.limitFor("route-abandoned")).toBe(100);
+    // Without the clear, the 90ms read would have pushed 20+90=110 over the
+    // 100ms threshold and halved the limit instead.
+  });
+
+  it("treats a hasMore=true partial prefix as healthy and only backs off a hasMore=false missing result", async () => {
+    const routeKey = "physical-1\u0000system_state";
+    // hasMore=true with a valid returned prefix: the provider stopped at its
+    // body budget and the suffix is deferred, so the route must NOT back off.
+    const partialAdapter = createKernelStore();
+    const partialFence = await claimTestFence(partialAdapter);
+    await appendPendingEffectsWithAdapter(partialAdapter, partialFence, [
+      regularEffect("partial-a"),
+      regularEffect("partial-b"),
+    ]);
+    const partialDispatcher = new FakeDispatcher({
+      apply: async (request) => ({
+        hasMore: true,
+        results: request.effects.slice(0, 1).map((effect) => ({
+          effectId: effect.effect_id,
+          payloadHash: effect.payload_hash,
+          status: "applied" as const,
+          visibleRevision: 1,
+          visibleHash: "visible-1",
+          fieldHashes: {},
+        })),
+      }),
+    });
+    const partialController = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
+    await runEffectWorkerWithAdapter({
+      storage: partialAdapter,
+      dispatcher: partialDispatcher,
+      workerId: "partial-worker",
+      now: 1_000,
+      maxEffects: 5,
+      batchController: partialController,
+    });
+    expect(partialController.limitFor(routeKey)).toBe(100);
+
+    // hasMore=false with a missing result: the provider claims completion but
+    // did not acknowledge every effect, so delivery-uncertain recovery backs
+    // the route off.
+    const missingAdapter = createKernelStore();
+    const missingFence = await claimTestFence(missingAdapter);
+    await appendPendingEffectsWithAdapter(missingAdapter, missingFence, [
+      regularEffect("missing-a"),
+      regularEffect("missing-b"),
+    ]);
+    const missingDispatcher = new FakeDispatcher({
+      apply: async (request) => ({
+        hasMore: false,
+        results: request.effects.slice(0, 1).map((effect) => ({
+          effectId: effect.effect_id,
+          payloadHash: effect.payload_hash,
+          status: "applied" as const,
+          visibleRevision: 1,
+          visibleHash: "visible-1",
+          fieldHashes: {},
+        })),
+      }),
+    });
+    const missingController = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
+    await runEffectWorkerWithAdapter({
+      storage: missingAdapter,
+      dispatcher: missingDispatcher,
+      workerId: "missing-worker",
+      now: 1_000,
+      maxEffects: 5,
+      batchController: missingController,
+    });
+    expect(missingController.limitFor(routeKey)).toBe(50);
+  });
+
+  it("keeps a hasMore=true fast-append prefix healthy without backing off the route", async () => {
+    const routeKey = "physical-1\u0000system_state";
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const first = newEffect({ effectId: "append-adaptive-first", targetId: "entity-first" });
+    const suffix = newEffect({ effectId: "append-adaptive-suffix", targetId: "entity-suffix" });
+    await appendPendingEffectsWithAdapter(adapter, fence, [first, suffix]);
+
+    const dispatcher = new FakeDispatcher({
+      fastAppend: async (request) => ({
+        // The provider stopped at its body budget after the first effect:
+        // hasMore proves the deferral, so the suffix is released for the next
+        // pass and the route must NOT back off.
+        hasMore: true,
+        results: request.effects
+          .filter((pending) => pending.effect_id === first.effectId)
+          .map((pending) => ({
+            effectId: pending.effect_id,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+      }),
+    });
+    const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
+
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "adaptive-append-worker",
+      now: 1_000,
+      maxEffects: 5,
+      maxFastAppendCandidates: 2,
+      batchController: controller,
+    });
+
+    expect(controller.limitFor(routeKey)).toBe(100);
+    expect(report).toMatchObject({ applied: 1, deferred: 1, requeued: 0, failed: 0 });
+    await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
+    await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
   });
 });
 
@@ -1361,8 +2455,33 @@ function readLeaseUntil(adapter: NodeSqliteTestAdapter, effectId: string): Promi
   });
 }
 
+function readWriterLeaseUntil(adapter: NodeSqliteTestAdapter): Promise<number | undefined> {
+  return adapter.read(async ({ sql }) => {
+    const row = await sql.get<{ readonly lease_until: number | null }>(
+      "SELECT lease_until FROM writer_lease WHERE role = ?",
+      ["sync-effect-worker"],
+    );
+    return row?.lease_until ?? undefined;
+  });
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Counts the maximum number of concurrently active preflight stages in a log. */
+function maxConcurrentPreflights(events: readonly string[]): number {
+  let active = 0;
+  let max = 0;
+  for (const event of events) {
+    if (event.startsWith("preflight:") && event.endsWith(":enter")) {
+      active += 1;
+      max = Math.max(max, active);
+    } else if (event.startsWith("preflight:") && event.endsWith(":exit")) {
+      active -= 1;
+    }
+  }
+  return max;
 }
 
 function outboxError(

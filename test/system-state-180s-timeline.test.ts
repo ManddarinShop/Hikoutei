@@ -2,6 +2,17 @@
  * Phase 0 deterministic request-timeline proof for the 180 s convergence
  * deadline (no credentials, no network, no provider).
  *
+ * HISTORICAL / PRE-CURRENT-PROVIDER MODEL: this proof intentionally models
+ * the provider as it existed at Phase-0 time — ONE shared read+write request-
+ * start limiter with `SLOT_INTERVAL_MS = 2_500`. It is NOT documentation of
+ * the current runtime: the current provider paces reads and writes on two
+ * independent per-class timelines (a shared read QoS timeline for
+ * polling/preflight reads plus a separate write limiter, postcondition reads
+ * paced on the write lane) at a 2,000 ms default interval with a separate
+ * bounded admission wait (`requestStartMaxWaitMs`, default 5,000 ms). The
+ * 2,500 ms value, the shared limiter, and all assertions below are fixed
+ * historical fixtures and must not be read as current provider behavior.
+ *
  * Reproduces the documented live-smoke failure deterministically: a
  * six-table cycle of 4 actors x 20 operations (104 operations, 56 durable
  * projection effects) whose System_State projection still carried six extra
@@ -42,7 +53,9 @@
 
 import { describe, expect, it } from "vitest";
 
-/** Provider default: at most one transport request start per interval. */
+/** Historical Phase-0 fixture: at most one shared read/write start per
+ * interval (pre-current-provider model; the current provider uses 2,000 ms
+ * per-class timelines plus a separate bounded admission wait). */
 const SLOT_INTERVAL_MS = 2_500;
 /** Realistic single-call durations inside the provider timeouts. */
 const READ_DURATION_MS = 1_000;

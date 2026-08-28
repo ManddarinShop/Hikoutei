@@ -1,5 +1,5 @@
 /**
- * Apply-effects operation for the Google Sheets API sync provider.
+ * Apply-effects operations for the Google Sheets API sync provider.
  *
  * Applies regular update/delete/create effects through one atomic batch:
  * schema-error effects sit before the included run, rejected plans
@@ -7,11 +7,18 @@
  * verifies written rows with a re-read, and deferred mode relies on the
  * atomic target+receipt batch. Response-loss recovery classifies effects
  * through a fresh target+receipt read.
+ *
+ * The flow is split into a `preflightApplyEffects` read+plan stage and an
+ * `applyPreparedEffects` write+verify stage so a read-ahead worker can run
+ * one route's preflight concurrently with another route's write. The legacy
+ * `applyEffects` wrapper keeps calling the two stages in order, so its
+ * behavior is byte-identical to a single combined call.
  */
 
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
+  PreparedApplyEffects,
   ReadSyncEffectPostconditionsRequest,
   SyncEffectPostcondition,
   SyncEffectPostconditionResult,
@@ -23,7 +30,9 @@ import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
 } from "../../../../../application/sync/sheetsContract/errors.js";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
+import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
+import type { Presence } from "../../../../../shared/state/index.js";
+import { presentValue, absentValue, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
@@ -52,10 +61,10 @@ import {
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
-import { readPreflight, readPreflightForRoutes } from "./preflightOp.js";
+import { readPreflight, readPreflightForRoutes, refreshReceiptForWrite } from "./preflightOp.js";
 
 /**
- * Derives the per-route identity of one provider effect so effects spanning
+ * Derived per-route identity of one provider effect so effects spanning
  * multiple tabs can be grouped and planned against their own tab context.
  */
 export function effectRouteKey(effect: SyncProjectionEffect): string {
@@ -68,28 +77,63 @@ export function effectRouteKey(effect: SyncProjectionEffect): string {
   ].join("\u0000");
 }
 
-/** Applies regular update/delete/create effects through one atomic batch. */
-export async function applyEffects(
-  deps: GoogleSheetsApiProviderDeps,
-  request: ApplySyncEffectsRequest,
-): Promise<ApplySyncEffectsResult> {
-  if (request.effects.length === 0) {
-    invalidProviderRequest("apply effects", "effects must not be empty");
-  }
-  const postconditionMode = request.postconditionMode ?? SYNC_POSTCONDITION_MODES.INLINE;
-  if (
-    postconditionMode !== SYNC_POSTCONDITION_MODES.INLINE &&
-    postconditionMode !== SYNC_POSTCONDITION_MODES.DEFERRED
-  ) {
-    invalidProviderRequest("apply effects", "postconditionMode must be inline or deferred");
-  }
-  const bounded = request.effects.slice(0, GOOGLE_SHEETS_API_DEFAULTS.MAX_EFFECTS_PER_REQUEST);
-  const groups = groupEffectsByRoute(bounded);
-  if (groups.length === 1) {
-    return applyEffectsSingleRoute(deps, request, bounded, postconditionMode);
-  }
-  return applyEffectsMultiRoute(deps, request, bounded, groups, postconditionMode);
+/**
+ * Read+plan state for a SINGLE-route batch, produced by the preflight stage.
+ *
+ * Carries every validated route/plan/context/evidence the write+verify stage
+ * needs so `applyPreparedEffects` never re-reads the sheet. The `kind`
+ * discriminant is shared with the provider boundary; the rest is provider
+ * internal and never crosses the dispatcher boundary. The `spreadsheetId`
+ * binds this prepared state to the exact provider instance/spreadsheet that
+ * produced it so a foreign or stale token is rejected before any write.
+ */
+export interface PreparedSingleRouteApply extends PreparedApplyEffects {
+  readonly kind: "single";
+  readonly spreadsheetId: string;
+  /** Per-instance provider nonce that produced this state (see deps). */
+  readonly providerNonce: string;
+  readonly request: ApplySyncEffectsRequest;
+  readonly postconditionMode: "inline" | "deferred";
+  readonly bounded: readonly SyncProjectionEffect[];
+  readonly definition: RegisteredSyncProjectionDefinition;
+  readonly routeOptions: {
+    readonly identityField: Presence<string>;
+    readonly checkboxHeaders: readonly string[];
+  };
+  readonly context: PreflightContext;
+  readonly includeCount: number;
+  readonly schemaErrorIndices: readonly number[];
+  /** Plans for the included prefix, re-planned against the preflight context. */
+  readonly included: readonly EffectPlan[];
+  /** Receipt timestamp resolved at preflight so budget and write agree. */
+  readonly updatedAt: string;
 }
+
+/**
+ * Read+plan state for a MULTI-route (combined-tab) batch, produced by the
+ * preflight phase. The multi-route path supports only deferred receipts.
+ * The `spreadsheetId` binds this prepared state to the exact provider
+ * instance/spreadsheet that produced it.
+ */
+export interface PreparedMultiRouteApply extends PreparedApplyEffects {
+  readonly kind: "multi";
+  readonly spreadsheetId: string;
+  /** Per-instance provider nonce that produced this state (see deps). */
+  readonly providerNonce: string;
+  readonly request: ApplySyncEffectsRequest;
+  readonly postconditionMode: "deferred";
+  readonly bounded: readonly SyncProjectionEffect[];
+  readonly combinedRoutes: readonly CombinedApplyRoute[];
+  readonly includeCount: number;
+  readonly schemaErrorIndices: readonly number[];
+  /** Included routes re-planned against each tab's context for the write. */
+  readonly included: readonly CombinedApplyRoute[];
+  /** Receipt timestamp written at preflight time so budget and write agree. */
+  readonly updatedAt: string;
+}
+
+/** Concrete prepared-apply state narrowed by the runtime `kind` guard. */
+export type PreparedApplyEffectsState = PreparedSingleRouteApply | PreparedMultiRouteApply;
 
 /** Groups effects by their own route, preserving per-route order. */
 function groupEffectsByRoute(
@@ -108,83 +152,341 @@ function groupEffectsByRoute(
   return [...groups.values()];
 }
 
-/**
- * Applies effects that all target ONE route (the common single-tab path),
- * byte-identical to the pre-batching provider.
- */
-async function applyEffectsSingleRoute(
+/** Validates and bounds one apply request into its per-route groups. */
+function prepareApplyRequest(
   deps: GoogleSheetsApiProviderDeps,
   request: ApplySyncEffectsRequest,
-  bounded: readonly SyncProjectionEffect[],
-  postconditionMode: "inline" | "deferred",
+): {
+  readonly postconditionMode: "inline" | "deferred";
+  readonly bounded: readonly SyncProjectionEffect[];
+  readonly groups: readonly (readonly SyncProjectionEffect[])[];
+} {
+  if (request.effects.length === 0) {
+    invalidProviderRequest("apply effects", "effects must not be empty");
+  }
+  const postconditionMode = request.postconditionMode ?? SYNC_POSTCONDITION_MODES.INLINE;
+  if (
+    postconditionMode !== SYNC_POSTCONDITION_MODES.INLINE &&
+    postconditionMode !== SYNC_POSTCONDITION_MODES.DEFERRED
+  ) {
+    invalidProviderRequest("apply effects", "postconditionMode must be inline or deferred");
+  }
+  const bounded = request.effects.slice(0, GOOGLE_SHEETS_API_DEFAULTS.MAX_EFFECTS_PER_REQUEST);
+  const groups = groupEffectsByRoute(bounded);
+  return { postconditionMode, bounded, groups };
+}
+
+/**
+ * Read+plan stage of one apply request. Performs the paced reads and the
+ * planner/budget work and returns opaque prepared state that
+ * `applyPreparedEffects` consumes. No remote mutation happens here.
+ */
+export async function preflightApplyEffects(
+  deps: GoogleSheetsApiProviderDeps,
+  request: ApplySyncEffectsRequest,
+): Promise<PreparedApplyEffects> {
+  const prepared = prepareApplyRequest(deps, request);
+  let state: PreparedApplyEffects;
+  if (prepared.groups.length === 1) {
+    state = await preflightSingleRoute(deps, request, prepared);
+  } else {
+    state = await preflightMultiRoute(deps, request, prepared);
+  }
+  // Register the exact produced state so the write+verify stage can reject a
+  // forged or replaced nested plan by identity before any remote call.
+  deps.preparedStateRegistry.add(state);
+  return state;
+}
+
+/** Write+verify stage of one apply batch, consuming preflight prepared state. */
+export async function applyPreparedEffects(
+  deps: GoogleSheetsApiProviderDeps,
+  prepared: PreparedApplyEffects,
 ): Promise<ApplySyncEffectsResult> {
+  const state = asPreparedApplyState(prepared);
+  // Bind the prepared state to the exact provider instance/spreadsheet that
+  // produced it: a token prepared by a different spreadsheet (or a stale
+  // token replayed after the provider was re-pointed) must fail closed before
+  // any write.
+  if (state.spreadsheetId !== deps.spreadsheetId) {
+    invalidProviderState("prepared apply effects state is bound to a different spreadsheet");
+  }
+  if (state.providerNonce !== deps.providerNonce) {
+    invalidProviderState("prepared apply effects state is bound to a different provider instance");
+  }
+  if (!deps.preparedStateRegistry.has(state)) {
+    invalidProviderState("prepared apply effects state was not produced by this provider");
+  }
+  // One-shot consumption: remove the state from the registry on first apply so
+  // a replayed or concurrently reused prepared token cannot re-run the same
+  // stale plan (duplicate append or delete the next row). The has+delete pair
+  // is synchronous, so two concurrent applies cannot both pass the check.
+  deps.preparedStateRegistry.delete(state);
+  if (state.kind === "single") {
+    return applyPreparedSingleRoute(deps, state);
+  }
+  return applyPreparedMultiRoute(deps, state);
+}
+
+/**
+ * Runtime-narrows an opaque `PreparedApplyEffects` to the concrete provider
+ * state over `unknown` with a type predicate (no untyped double cast).
+ * Validates the `kind` discriminant and the essential nested state each kind
+ * must carry so a malformed, stale, or foreign prepared token fails closed
+ * before any write. The `spreadsheetId` binding is checked by the caller
+ * against the active provider instance.
+ */
+function asPreparedApplyState(value: unknown): PreparedApplyEffectsState {
+  if (isPreparedSingleRouteApply(value)) return value;
+  if (isPreparedMultiRouteApply(value)) return value;
+  invalidProviderState("unrecognized prepared apply effects state");
+}
+
+/** Type predicate for the concrete single-route prepared-apply state. */
+function isPreparedSingleRouteApply(value: unknown): value is PreparedSingleRouteApply {
+  return isRecord(value) &&
+    value.kind === "single" &&
+    typeof value.spreadsheetId === "string" &&
+    typeof value.providerNonce === "string" &&
+    isRecord(value.request) &&
+    Array.isArray(value.bounded) &&
+    isRecord(value.context) &&
+    Array.isArray(value.included) &&
+    typeof value.updatedAt === "string";
+}
+
+/** Type predicate for the concrete multi-route prepared-apply state. */
+function isPreparedMultiRouteApply(value: unknown): value is PreparedMultiRouteApply {
+  return isRecord(value) &&
+    value.kind === "multi" &&
+    typeof value.spreadsheetId === "string" &&
+    typeof value.providerNonce === "string" &&
+    isRecord(value.request) &&
+    Array.isArray(value.bounded) &&
+    Array.isArray(value.combinedRoutes) &&
+    Array.isArray(value.included) &&
+    typeof value.updatedAt === "string";
+}
+
+/** True for a non-array object value. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Applies regular update/delete/create effects through one atomic batch. */
+export async function applyEffects(
+  deps: GoogleSheetsApiProviderDeps,
+  request: ApplySyncEffectsRequest,
+): Promise<ApplySyncEffectsResult> {
+  return applyPreparedEffects(deps, await preflightApplyEffects(deps, request));
+}
+
+/** Read+plan stage for a single-tab batch. */
+async function preflightSingleRoute(
+  deps: GoogleSheetsApiProviderDeps,
+  request: ApplySyncEffectsRequest,
+  prepared: {
+    readonly postconditionMode: "inline" | "deferred";
+    readonly bounded: readonly SyncProjectionEffect[];
+  },
+): Promise<PreparedSingleRouteApply> {
   const definition = definitionForPhysicalSheet(deps, request.physicalSheetId);
   validateRoute(request, definition);
   const routeOptions = effectRouteOptions(definition);
   const context = await readPreflight(deps, request, definition, routeOptions);
-  const plans = planEffectBatch({ ...request, effects: bounded }, context);
-  const includeReceipts = postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
+  const plans = planEffectBatch({ ...request, effects: prepared.bounded }, context);
+  const includeReceipts = prepared.postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
   const updatedAt = new Date(deps.now()).toISOString();
   const resolution = resolveApplyBatchBudget(context, plans, {
     maxBatchBytes: deps.maxBatchBytes,
     includeReceipts,
     updatedAt,
   });
-  const schemaErrorIndices = new Set(resolution.schemaErrorIndices);
   const includedStart = resolution.schemaErrorIndices.length;
-  const includedEffects = bounded.slice(includedStart, resolution.includeCount);
+  const includedEffects = prepared.bounded.slice(includedStart, resolution.includeCount);
   const included = planEffectBatch({ ...request, effects: includedEffects }, context);
-  if (included.length > 0) {
-    const batch = buildApplyBatchRequests(context, included, { updatedAt, includeReceipts });
-    if (batch.requests.length > 0) {
-      const response = await runWrite(deps, () =>
-        deps.transport.batchUpdate({
-          spreadsheetId: deps.spreadsheetId,
-          requests: batch.requests,
-        }));
-      requireValidBatchUpdateReply(response, batch.requests.length);
-    }
-  }
+  return {
+    kind: "single",
+    spreadsheetId: deps.spreadsheetId,
+    providerNonce: deps.providerNonce,
+    request,
+    postconditionMode: prepared.postconditionMode,
+    bounded: prepared.bounded,
+    definition,
+    routeOptions,
+    context,
+    includeCount: resolution.includeCount,
+    schemaErrorIndices: resolution.schemaErrorIndices,
+    included,
+    updatedAt,
+  };
+}
 
-  const verified = new Set<number>();
-  if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE && included.length > 0) {
-    const verifyContext = await readPreflight(deps, request, definition, routeOptions);
-    included.forEach((plan, index) => {
-      if (!plan.verify || plan.mutation === undefined || plan.mutation.kind === "delete") return;
-      const row = findProbeRowInContext(verifyContext, plan);
-      const current = row === undefined ? undefined : currentHash(row, plan.outcome.effect.payload.fields);
-      if (current === plan.outcome.effect.payload.targetVisibleHash) {
-        verified.add(index);
+/** Write+verify stage for a single-tab batch. */
+async function applyPreparedSingleRoute(
+  deps: GoogleSheetsApiProviderDeps,
+  prepared: PreparedSingleRouteApply,
+): Promise<ApplySyncEffectsResult> {
+  const {
+    request,
+    postconditionMode,
+    bounded,
+    definition,
+    routeOptions,
+    context,
+    includeCount,
+    schemaErrorIndices,
+    included,
+    updatedAt,
+  } = prepared;
+  const includeReceipts = postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
+  // Writes one target+receipt batch against `ctx`. Extracted so the shared
+  // receipt-tab initialization guard (see below) can wrap refresh+write as
+  // one atomic unit.
+  const writeTarget = async (ctx: PreflightContext): Promise<void> => {
+    if (included.length === 0) return;
+    const batch = buildApplyBatchRequests(ctx, included, { updatedAt, includeReceipts });
+    if (batch.requests.length === 0) return;
+    const response = await runWrite(deps, () =>
+      deps.transport.batchUpdate({
+        spreadsheetId: deps.spreadsheetId,
+        requests: batch.requests,
+      }), {
+      requestCount: batch.requests.length,
+      bodyBytes: batch.bytes,
+      requestedEffects: request.effects.length,
+      includedEffects: included.length,
+    });
+    requireValidBatchUpdateReply(response, batch.requests.length);
+  };
+  // A read-ahead preflight may have observed the shared receipt tab before a
+  // concurrent write created it. Two stale preflights (possibly on different
+  // routes of the same spreadsheet) would otherwise both re-read the tab as
+  // absent and both emit a duplicate addSheet. Serialize refresh + the batch
+  // that creates the tab on the per-spreadsheet receipt-init lock so the
+  // first writer creates it and later writers refresh to see it present and
+  // append instead. Steady state (receipt present at preflight) never takes
+  // this lock.
+  // Runs the target write, the inline verify read, and the inline receipt
+  // follow-up against `ctx`, returning the context used for receipt writes
+  // and the set of verified plan indices. Extracted so the shared
+  // receipt-tab initialization guard (below) can wrap refresh + EVERY
+  // receipt-creating write (target and follow-up) as one atomic unit: in
+  // inline mode the follow-up is the only write that creates the receipt tab,
+  // so it must run under the same lock as the refresh that re-checks it.
+  const writeAndVerify = async (ctx: PreflightContext): Promise<{
+    readonly writeContext: PreflightContext;
+    readonly verified: ReadonlySet<number>;
+  }> => {
+    await writeTarget(ctx);
+    const verified = new Set<number>();
+    // The inline verify read is the tail of the write: it re-reads the
+    // just-written row, so it is paced on the WRITE limiter (serializes
+    // against writes) rather than competing with the read burst. It only runs
+    // when at least one included plan needs verification (a non-deletion
+    // write); a deletion-only batch skips the read entirely.
+    if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE && included.some((plan) => plan.verify)) {
+      const verifyContext = await readPreflight(deps, request, definition, routeOptions, "write");
+      included.forEach((plan, index) => {
+        if (!plan.verify || plan.mutation === undefined || plan.mutation.kind === "delete") return;
+        const row = findProbeRowInContext(verifyContext, plan);
+        const current = row === undefined ? undefined : currentHash(row, plan.outcome.effect.payload.fields);
+        if (current === plan.outcome.effect.payload.targetVisibleHash) {
+          verified.add(index);
+        }
+      });
+    }
+    // Receipt handling still runs for deletion receipts even when no plan needs
+    // verification: deletions don't verify but still persist their receipt.
+    if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE && included.length > 0) {
+      const verifyReceipts: PlannedReceipt[] = [];
+      included.forEach((plan, index) => {
+        if (plan.receipt === undefined) return;
+        if (ctx.receipts.has(plan.receipt.effectId)) return;
+        if (plan.outcome.kind === "applied" && !plan.outcome.deletion && !verified.has(index)) return;
+        verifyReceipts.push(plan.receipt);
+      });
+      if (verifyReceipts.length > 0) {
+        const receiptBatch = buildAppendBatchRequests(ctx, [], verifyReceipts, { updatedAt });
+        const response = await runWrite(deps, () =>
+          deps.transport.batchUpdate({
+            spreadsheetId: deps.spreadsheetId,
+            requests: receiptBatch.requests,
+          }), {
+          requestCount: receiptBatch.requests.length,
+          bodyBytes: receiptBatch.bytes,
+          requestedEffects: 0,
+          includedEffects: verifyReceipts.length,
+        });
+        requireValidBatchUpdateReply(response, receiptBatch.requests.length);
       }
-    });
-    const verifyReceipts: PlannedReceipt[] = [];
-    included.forEach((plan, index) => {
-      if (plan.receipt === undefined) return;
-      if (context.receipts.has(plan.receipt.effectId)) return;
-      if (plan.outcome.kind === "applied" && !plan.outcome.deletion && !verified.has(index)) return;
-      verifyReceipts.push(plan.receipt);
-    });
-    if (verifyReceipts.length > 0) {
-      const receiptBatch = buildAppendBatchRequests(context, [], verifyReceipts, { updatedAt });
-      const response = await runWrite(deps, () =>
-        deps.transport.batchUpdate({
-          spreadsheetId: deps.spreadsheetId,
-          requests: receiptBatch.requests,
-        }));
-      requireValidBatchUpdateReply(response, receiptBatch.requests.length);
     }
-  }
+    return { writeContext: ctx, verified };
+  };
+  // A read-ahead preflight may have observed the shared receipt tab before a
+  // concurrent write created it. Two stale preflights (possibly on different
+  // routes of the same spreadsheet) would otherwise both re-read the tab as
+  // absent and both emit a duplicate addSheet. Serialize refresh + the batch
+  // that creates the tab on the per-spreadsheet receipt-init lock so the
+  // first writer creates it and later writers refresh to see it present and
+  // append instead. Steady state (receipt present at preflight) never takes
+  // this lock.
+  //
+  // Applying the prepared plans from the preflight-time context is safe by
+  // construction for provider-mediated writes:
+  // - Same route: the write stage runs under one coordinator mutation lane
+  //   (`runSerializedInner` for the dispatcher, and
+  //   `CoordinatedSheetsProvider.applyPreparedEffects` acquires the lanes
+  //   itself for direct callers), and the worker never preflights a same-route
+  //   unit ahead of an in-flight same-route write, so a same-route context
+  //   cannot be invalidated between preflight and write.
+  // - Different routes: provisioning forbids two definitions on one tab
+  //   (duplicate tab names are rejected), so concurrent cross-route writes
+  //   target DISJOINT tabs and cannot shift this route's target rows; the only
+  //   shared structure is the receipt tab, whose appends reserve rows with
+  //   insertDimension (shift, not overwrite) so an out-of-order cross-route
+  //   receipt append cannot destroy an earlier receipt.
+  // - Shared receipt tab absent at preflight: handled by the refresh under
+  //   this lock, and the receipt-dedup below (`ctx.receipts.has`) honors the
+  //   refreshed receipt state before any receipt write.
+  // A stale plan can therefore only diverge through an OUT-OF-BAND sheet edit
+  // (a human editing the tab directly), which races identically in the legacy
+  // sequential `applyEffects` path (its preflight-to-write window exists
+  // there too) and is classified after the fact by the deferred
+  // postcondition/receipt evidence; a fresh in-lane re-read per write would
+  // double write-path remote reads and break the counted lease-headroom
+  // bound, so it is deliberately not added here.
+  // If no included plan can write (every bounded effect was a schema error),
+  // there is no receipt-producing write to protect: skip the receipt-init
+  // refresh and lock entirely and return the per-effect schema-error results
+  // below without any write-side refresh. The same guard covers a
+  // deterministic no-op included set (every plan is a guard mismatch or
+  // repair-reobserve: no mutation and no receipt): the refresh's write-lane
+  // admission can be REFUSED under saturation, and that refusal must not
+  // turn a deterministic no-op into a delivery-uncertain requeue.
+  const persistsReceiptOrWrite = included.some((plan) =>
+    plan.mutation !== undefined || plan.receipt !== undefined);
+  const { writeContext, verified } =
+    included.length > 0 &&
+      persistsReceiptOrWrite &&
+      context.receiptSheetId.kind === PRESENCE_KINDS.ABSENT
+      ? await deps.receiptInitLock.run(async () => {
+          const refreshed = await refreshReceiptForWrite(deps, context);
+          return writeAndVerify(refreshed);
+        })
+      : await writeAndVerify(context);
 
+  const schemaErrorIndexSet = new Set(schemaErrorIndices);
   const results: SyncEffectResult[] = [];
   let includedCursor = 0;
   bounded.forEach((effect, index) => {
-    if (schemaErrorIndices.has(index)) {
+    if (schemaErrorIndexSet.has(index)) {
       results.push(
         encodeSchemaErrorResult(effect, GOOGLE_SHEETS_API_EFFECT_REASONS.EFFECT_PAYLOAD_TOO_LARGE),
       );
       return;
     }
-    if (index >= resolution.includeCount) return;
+    if (index >= includeCount) return;
     const planIndex = includedCursor;
     includedCursor += 1;
     const plan = included[planIndex];
@@ -216,20 +518,17 @@ async function applyEffectsSingleRoute(
   };
 }
 
-/**
- * Applies effects spanning MULTIPLE tabs in ONE atomic batch: one sheet
- * enumeration, one ranged read across all needed tabs, one batchUpdate whose
- * requests target the different tabs' sheetIds. Each tab's effects are
- * planned and CAS-guarded against that tab's own preflight context.
- */
-async function applyEffectsMultiRoute(
+/** Read+plan stage for a multi-tab batch. */
+async function preflightMultiRoute(
   deps: GoogleSheetsApiProviderDeps,
   request: ApplySyncEffectsRequest,
-  bounded: readonly SyncProjectionEffect[],
-  groups: readonly (readonly SyncProjectionEffect[])[],
-  postconditionMode: "inline" | "deferred",
-): Promise<ApplySyncEffectsResult> {
-  if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE) {
+  prepared: {
+    readonly postconditionMode: "inline" | "deferred";
+    readonly bounded: readonly SyncProjectionEffect[];
+    readonly groups: readonly (readonly SyncProjectionEffect[])[];
+  },
+): Promise<PreparedMultiRouteApply> {
+  if (prepared.postconditionMode === SYNC_POSTCONDITION_MODES.INLINE) {
     // The multi-route path cannot verify written rows or persist receipts
     // (it writes one atomic batch across tabs and has no single-tab re-read
     // loop). Accepting inline would acknowledge writes that were never
@@ -239,9 +538,10 @@ async function applyEffectsMultiRoute(
       "multi-route apply does not support inline postcondition mode; use deferred",
     );
   }
+  const { postconditionMode } = prepared;
   const includeReceipts = postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
   const updatedAt = new Date(deps.now()).toISOString();
-  const routeSpecs = groups.map((group) => {
+  const routeSpecs = prepared.groups.map((group) => {
     const first = group[0]!;
     const definition = definitionForPhysicalSheet(deps, first.physicalSheetId);
     const subRequest: ApplySyncEffectsRequest = {
@@ -291,37 +591,62 @@ async function applyEffectsMultiRoute(
     resolution.schemaErrorIndices.length,
     resolution.includeCount,
   );
-  if (included.length > 0) {
-    const batch = buildCombinedApplyRequests(included, { updatedAt, includeReceipts });
-    if (batch.requests.length > 0) {
-      const response = await runWrite(deps, () =>
-        deps.transport.batchUpdate({
-          spreadsheetId: deps.spreadsheetId,
-          requests: batch.requests,
-        }));
-      requireValidBatchUpdateReply(response, batch.requests.length);
-    }
-  }
+  return {
+    kind: "multi",
+    spreadsheetId: deps.spreadsheetId,
+    providerNonce: deps.providerNonce,
+    request,
+    postconditionMode: "deferred",
+    bounded: prepared.bounded,
+    combinedRoutes,
+    includeCount: resolution.includeCount,
+    schemaErrorIndices: resolution.schemaErrorIndices,
+    included,
+    updatedAt,
+  };
+}
+
+/** Write+verify stage for a multi-tab batch. */
+async function applyPreparedMultiRoute(
+  deps: GoogleSheetsApiProviderDeps,
+  prepared: PreparedMultiRouteApply,
+): Promise<ApplySyncEffectsResult> {
+  const { request, bounded, combinedRoutes, includeCount, schemaErrorIndices, included, updatedAt } = prepared;
+  // The shared receipt tab may have been created by a concurrent route's
+  // write after this multi-route preflight observed it absent. When the
+  // first tab's preflight saw the tab absent, serialize refresh + the
+  // combined batch (which creates or appends to the tab) on the
+  // per-spreadsheet receipt-init lock so two stale preflights on the same
+  // spreadsheet cannot both emit a duplicate addSheet; steady state (the tab
+  // present at preflight) never takes this lock.
+  // Same deterministic-no-op guard as the single-route stage: a combined
+  // batch whose included plans carry no mutation and no receipt writes
+  // nothing, so it must not take the receipt-init refresh (whose write-lane
+  // admission can be refused) or its lock.
+  const persistsReceiptOrWrite = included.some((route) =>
+    route.plans.some((plan) => plan.mutation !== undefined || plan.receipt !== undefined));
+  const needsReceiptInit = included[0]?.context.receiptSheetId.kind === PRESENCE_KINDS.ABSENT &&
+    persistsReceiptOrWrite;
+  const writeIncluded = needsReceiptInit
+    ? await deps.receiptInitLock.run(() =>
+        refreshMultiRouteReceiptAndWrite(deps, included, updatedAt, true, request.effects.length))
+    : await refreshMultiRouteReceiptAndWrite(deps, included, updatedAt, false, request.effects.length);
 
   const results: SyncEffectResult[] = [];
   // The combined budget and schema-error indices are in the flat GROUPED
   // plan order (route by route), not the original request order. Build the
   // result set by walking that grouped list so each result carries its own
   // effectId (the worker matches results byId, so order does not matter).
-  const schemaErrorIndices = new Set(resolution.schemaErrorIndices);
+  const schemaErrorIndicesSet = new Set(schemaErrorIndices);
   let flatIndex = 0;
   for (const route of combinedRoutes) {
     for (const plan of route.plans) {
-      if (schemaErrorIndices.has(flatIndex)) {
+      if (schemaErrorIndicesSet.has(flatIndex)) {
         results.push(
           encodeSchemaErrorResult(plan.outcome.effect, GOOGLE_SHEETS_API_EFFECT_REASONS.EFFECT_PAYLOAD_TOO_LARGE),
         );
-      } else if (flatIndex < resolution.includeCount) {
-        let result = encodeOutcomeResult(plan.outcome);
-        if (postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED) {
-          result = withDeferredPostcondition(result);
-        }
-        results.push(result);
+      } else if (flatIndex < includeCount) {
+        results.push(withDeferredPostcondition(encodeOutcomeResult(plan.outcome)));
       }
       flatIndex += 1;
     }
@@ -384,6 +709,10 @@ export async function readEffectPostconditions(
       routeOptions: route.routeOptions,
     })),
     SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
+    // The postcondition-recovery read verifies a just-written row, so it is
+    // paced on the WRITE limiter (serializes against writes) instead of the
+    // read burst.
+    "write",
   );
   const results: SyncEffectPostconditionResult[] = [];
   for (const route of routes) {
@@ -406,6 +735,47 @@ export async function readEffectPostconditions(
     }
   }
   return results;
+}
+
+/**
+ * Refreshes the shared receipt tab (when a preflight observed it absent) and
+ * writes the combined multi-tab batch. Called under the per-spreadsheet
+ * receipt-init lock so concurrent writes on the same spreadsheet cannot both
+ * emit a duplicate addSheet. Returns the routes with their refreshed
+ * contexts (the first tab's context now carries the receipt when present).
+ */
+async function refreshMultiRouteReceiptAndWrite(
+  deps: GoogleSheetsApiProviderDeps,
+  included: readonly CombinedApplyRoute[],
+  updatedAt: string,
+  // Passed from the caller's receipt-init decision so a deterministic no-op
+  // batch skips the write-lane refresh entirely (see applyPreparedMultiRoute).
+  needsReceiptInit: boolean,
+  // Effects requested for the whole apply request (the original request
+  // length, not the budget-fitting included prefix).
+  requestedEffects: number,
+): Promise<readonly CombinedApplyRoute[]> {
+  const first = included[0];
+  let writeIncluded = included;
+  if (first !== undefined && needsReceiptInit) {
+    const refreshed = await refreshReceiptForWrite(deps, first.context);
+    writeIncluded = included.map((route, index) => (index === 0 ? { ...route, context: refreshed } : route));
+  }
+  if (writeIncluded.length === 0) return writeIncluded;
+  const batch = buildCombinedApplyRequests(writeIncluded, { updatedAt, includeReceipts: true });
+  if (batch.requests.length === 0) return writeIncluded;
+  const response = await runWrite(deps, () =>
+    deps.transport.batchUpdate({
+      spreadsheetId: deps.spreadsheetId,
+      requests: batch.requests,
+    }), {
+    requestCount: batch.requests.length,
+    bodyBytes: batch.bytes,
+    requestedEffects,
+    includedEffects: writeIncluded.reduce((total, route) => total + route.plans.length, 0),
+  });
+  requireValidBatchUpdateReply(response, batch.requests.length);
+  return writeIncluded;
 }
 
 /** Locates one planned write's row in a fresh verification context. */

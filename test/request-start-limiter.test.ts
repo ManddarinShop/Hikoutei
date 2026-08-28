@@ -1,8 +1,11 @@
 /**
- * Credential-free unit coverage for the request-start interval limiter used
- * by the direct Google Sheets provider. The provider keeps ONE shared
- * limiter for reads AND writes (combined starts are serialized); concurrent
- * callers must never start within one interval.
+ * Credential-free unit coverage for the GENERIC single-lane
+ * `RequestStartLimiter` primitive: concurrent callers of one lane must never
+ * start within one interval. This is NOT a test of the current provider's
+ * read/write architecture — the provider composes SEPARATE instances of this
+ * primitive (a shared read QoS scheduler and a write limiter) plus an
+ * independent bounded admission wait (`requestStartMaxWaitMs`), so a read
+ * and a write can start concurrently there.
  */
 
 import { describe, expect, it } from "vitest";

@@ -1,6 +1,8 @@
 import { z } from "zod";
 
-const recordSchema = z.record(z.string(), z.unknown());
+// Gaxios errors are class instances; passthrough retains their enumerable fields
+// while still rejecting null, primitives, and arrays at this boundary.
+const recordSchema = z.object({}).passthrough();
 const nonEmptyTextSchema = z.string().min(1);
 const integerStatusSchema = z.number().int();
 const textStatusSchema = z.string().regex(/^\d{3}$/);
