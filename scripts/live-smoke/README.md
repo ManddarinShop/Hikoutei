@@ -23,6 +23,9 @@ network).
 #    Add HIKOUTEI_ADOPT_SMOKE_LEGACY=1 for the §12 columnMap variant
 #    (legacy headers Invoice No / Customer Name / Total (USD) + columnMap
 #    recorded in the state file — 37 checks incl. header preservation).
+#    Add HIKOUTEI_ADOPT_SMOKE_MULTI=1 for the §13 multi-entity variant
+#    (two tabs Invoices + Customers in the SAME spreadsheet, both recorded
+#    under `tabs` — 29 checks across both entities).
 GOOGLE_APPLICATION_CREDENTIALS=<sa.json> \
 HIKOUTEI_ADOPT_SMOKE_SPREADSHEET_ID=<spreadsheetId> \
   node scripts/live-smoke/prepare-sheet.mjs
@@ -36,7 +39,8 @@ GOOGLE_APPLICATION_CREDENTIALS=<sa.json> \
 State/artifacts (gitignored defaults):
 
 - State file: `HIKOUTEI_ADOPT_SMOKE_STATE` (default
-  `.local/adopt-smoke-sheet.private.json`) — tab name + `baselineRows`.
+  `.local/adopt-smoke-sheet.private.json`) — tab name + `baselineRows`
+  (plus `tabs` for the multi-entity variant).
 - Artifact: `HIKOUTEI_ADOPT_SMOKE_ARTIFACT_DIR` (default `.local`) —
   `adopt-live-smoke-<runId>.json` + the run's SQLite DB.
 
@@ -59,3 +63,22 @@ Known modeling trap (§11 finding): the sheet's numeric `total` cells require
 the entity property to be declared `number` — a `string` declaration makes the
 first polling pass quarantine every row as `invalid_cell`. Cell-kind
 validation at seeding time is a §9 follow-up.
+
+## Multi-entity variant (§13, D7)
+
+`HIKOUTEI_ADOPT_SMOKE_MULTI=1` (with the same prepare + run steps) adopts TWO
+entities from the SAME spreadsheet in one service: `AdoptSmokeInvoices`
+(memo | invoiceNo | customer | total) + `AdoptSmokeCustomers`
+(memo | customerId | name | tier). The runner verifies BOTH entities
+through dry-run ready → adopt → SQLite seeding → System_State backfill.
+
+| Step | Verifies (both entities) |
+|---|---|
+| 1 dry-run | report ok with 2 entities, both status ready, name bindings, row counts, no error problems |
+| 2 adopt | both System_State/Conflicts provisioned, both `__hikoutei_row_id` appended, both deterministic anchors `entity:<pk>`, both existing cells preserved |
+| 3 seeding | row_binding/entity_state/business_key_index/visible-state counts (×2), zero quarantine, both anchor↔canonical-id pairs 1:1 |
+| 4 backfill | both System_State row counts + PK sets + projected field values |
+
+Edit absorption (D6) + cleanup safety (D5) are exercised per-entity in the
+public E2E (`test/public-adopt-api.test.ts`), so the multi live path re-checks
+the multi-entity core instead of duplicating them.
