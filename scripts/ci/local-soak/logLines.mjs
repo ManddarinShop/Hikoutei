@@ -117,6 +117,7 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   // Existing-sheet adoption codes.
   "existing_sheet_adoption_dry_run_report",
   "existing_sheet_adoption_not_implemented",
+  "existing_sheet_adoption_cell_kind_mismatch",
   // Storage/schema/effect codes.
   "invalid_writer_lease_options",
   "invalid_sync_registration",

@@ -119,6 +119,8 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   // Existing-sheet adoption (src/application/sync/service/adopt/existingSheetAdoption.ts).
   "existing_sheet_adoption_dry_run_report",
   "existing_sheet_adoption_not_implemented",
+  // Adoption seeding fail-closed cell validation (adopt/adoptionSeeding.ts).
+  "existing_sheet_adoption_cell_kind_mismatch",
 
   // Storage/schema/effect codes (src/infrastructure/storage/errors.ts).
   "invalid_writer_lease_options",

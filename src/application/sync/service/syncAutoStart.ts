@@ -60,6 +60,10 @@ import {
   type ExistingSheetAdoptionSpec,
 } from "./adopt/existingSheetAdoption.js";
 import {
+  SYNC_SERVICE_ERROR_CODES,
+  SyncServiceError,
+} from "./errors.js";
+import {
   describeErrorForInternalLog,
   logHikouteiInternalEvent,
 } from "../../../shared/observability/internalLog.js";
@@ -369,6 +373,18 @@ export async function createTypedSheetsWithSync(
       }
       const result: AdoptDryRunResult = { kind: "adopt-dry-run", report: error.report };
       return result;
+    }
+    // The cell-kind-mismatch startup failure carries the precise diagnosis
+    // (rows, fields, declared vs observed kinds); re-raise it with the full
+    // message instead of the generic "Sync start failed" wrapper so the
+    // public path is actionable (internal callers keep the stable
+    // SyncServiceError code).
+    if (error instanceof SyncServiceError
+      && error.code === SYNC_SERVICE_ERROR_CODES.ADOPTION_CELL_KIND_MISMATCH) {
+      return raiseDiagnosed(
+        diagnostic,
+        new HikouteiError(HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED, error.message),
+      );
     }
     const failure = error instanceof HikouteiError
       ? error

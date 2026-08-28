@@ -250,6 +250,55 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     expect(spreadsheet.sheets[0]!.cells.has("0,4")).toBe(false);
   });
 
+  it("adopt mode refuses a cell-kind mismatch before ANY mutation (live-incident regression)", async () => {
+    // The live-smoke incident: numeric sheet `total` cells bound to a
+    // string-declared property. The seeding must fail closed at startup —
+    // otherwise the first poll quarantines every adopted row.
+    const spreadsheet = foreignSpreadsheet();
+    const StringTotalInvoice = defineTypedSheetsEntity({
+      name: "AdoptApiStringTotal",
+      tableName: "adopt_api_string_total",
+      properties: {
+        invoiceNo: { type: "string", primary: true },
+        customer: { type: "string" },
+        total: { type: "string" }, // mismatch: the sheet holds numeric cells
+      },
+    });
+
+    await expect(createTypedSheetsWithSyncInternal({
+      dbName: `:memory:${randomUUID()}`,
+      entities: [StringTotalInvoice],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]: "https://docs.google.com/spreadsheets/d/adopt-api-test-1/edit",
+        [SYNC_ENV_KEYS.CREDENTIALS_FILE]: credentialsPath(),
+        [SYNC_ENV_KEYS.POLLING_INTERVAL_MS]: "3600000",
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+      adopt: { mode: "adopt", entities: { AdoptApiStringTotal: { tabName: "Invoices", identityFrom: "auto" } } },
+    })).rejects.toMatchObject({
+      // The public path classifies to sync_startup_failed but PRESERVES the
+      // precise cell-kind diagnosis in the message; internal callers see the
+      // stable existing_sheet_adoption_cell_kind_mismatch SyncServiceError.
+      code: HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      message: expect.stringContaining("row 2 field \"total\" (declared string, sheet number)"),
+    });
+    // D5 checkpoint semantics: provisioning + the row-id/anchor pass run
+    // BEFORE seeding observation (snapshot_taken → row_id_written → seeded),
+    // so the failure leaves an IDEMPOTENT-RESUMABLE sheet state — the system
+    // tabs exist and the row-id column is appended, but NO SQLite state was
+    // written and the EXISTING cells are untouched. Re-running after fixing
+    // the declaration resumes cleanly.
+    expect(spreadsheet.sheets.map((s) => s.title)).toEqual([
+      "Invoices",
+      "Invoices_System",
+      "Invoices_Conflicts",
+    ]);
+    expect(spreadsheet.sheets[0]!.cell(0, 4)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
+    // Existing business cells preserved.
+    expect(spreadsheet.sheets[0]!.cell(1, 1)?.userEnteredValue?.stringValue).toBe("INV-1");
+    expect(spreadsheet.sheets[0]!.cell(1, 3)?.userEnteredValue?.numberValue).toBe(100);
+  });
+
   it("adopt mode runs the full pipeline over the stub transport", async () => {
     const spreadsheet = foreignSpreadsheet();
     const result = await createTypedSheetsWithSyncInternal({
