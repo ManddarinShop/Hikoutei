@@ -109,6 +109,9 @@ const CONFIRM_OBSERVED_VISIBLE_STATE_SQL = `
   WHERE sheet_visible_state.confirmed_visible_revision <= excluded.confirmed_visible_revision
 `;
 
+/** Exported for the adoption seeding engine (same upsert, one transaction). */
+export { CONFIRM_OBSERVED_VISIBLE_STATE_SQL };
+
 const CONFIRM_OBSERVED_VISIBLE_FIELD_STATE_SQL = `
   INSERT INTO sheet_visible_field_state (
     physical_sheet_id, projection, row_binding_id, field_name,
