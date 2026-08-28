@@ -189,51 +189,74 @@ export async function createInternalSyncService(
       : withAdoptedPhysicalHeaders(projectionDefinitions, adoptionPlan);
     const remote = createRemoteProvider(options, definitionsForRemote);
     if (adoptionPlan !== undefined) {
-      // D7 (fail-closed): adoption requires an empty canonical state for the
-      // adopted entity — a nonempty local state would silently merge with
-      // (or collide against) the adopted rows. Checked BEFORE the first
-      // sheet mutation.
-      const adoptionEntity = adoptionPlan.entities[0]!;
-      const adoptionMapping = runtime.mappings.mappings.find(
-        (candidate) => candidate.entityName === adoptionEntity.entityName,
-      );
-      if (adoptionMapping !== undefined) {
-        const existing = await runtime.storage.transaction(async ({ sql }) =>
-          sql.all<{ entity_id: string }>(
-            "SELECT entity_id FROM entity_state WHERE entity_id IN (SELECT entity_id FROM row_binding WHERE logical_sheet_id = ?)",
-            [adoptionMapping.logicalSheetId],
-          ));
-        if (existing.length > 0) {
+      // D7 (F3): adoption resolves tab names case-insensitively, so two
+      // entities adopting `Invoices` and `invoices` collapse onto ONE sheet
+      // id. Applying system columns twice to the same tab (or provisioning it
+      // twice) corrupts it, so reject duplicate resolved sheet ids BEFORE the
+      // first mutation.
+      const seenAdoptionSheetIds = new Set<number>();
+      for (const adoptionEntity of adoptionPlan.entities) {
+        if (seenAdoptionSheetIds.has(adoptionEntity.sheetId)) {
           throw new SyncServiceError(
             SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-            `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}"; found ${existing.length} existing row(s).`,
+            `existing-sheet adoption resolves multiple entities to the same tab (sheet id ${adoptionEntity.sheetId}); adopt tab names must be distinct.`,
+          );
+        }
+        seenAdoptionSheetIds.add(adoptionEntity.sheetId);
+      }
+      // D7 (fail-closed): adoption requires an empty canonical state for EACH
+      // adopted entity — a nonempty local state would silently merge with (or
+      // collide against) the adopted rows. Validate EVERY adopted entity before
+      // the first sheet mutation so a later entity can never leave an earlier
+      // one's system columns already written (multi-entity adoption).
+      for (const adoptionEntity of adoptionPlan.entities) {
+        const adoptionMapping = runtime.mappings.mappings.find(
+          (candidate) => candidate.entityName === adoptionEntity.entityName,
+        );
+        if (adoptionMapping !== undefined) {
+          const existing = await runtime.storage.transaction(async ({ sql }) =>
+            sql.all<{ entity_id: string }>(
+              "SELECT entity_id FROM entity_state WHERE entity_id IN (SELECT entity_id FROM row_binding WHERE logical_sheet_id = ?)",
+              [adoptionMapping.logicalSheetId],
+            ));
+          if (existing.length > 0) {
+            throw new SyncServiceError(
+              SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+              `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}"; found ${existing.length} existing row(s).`,
+            );
+          }
+        }
+        // D7 also covers the application-owned ORM entity table: seeding INSERTs
+        // into it, so any pre-existing row would collide (or silently merge)
+        // with the adopted rows. Fail closed BEFORE the first sheet mutation.
+        const ormRowCount = await runtime.storage.transaction(async ({ sql }) =>
+          sql.get<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM ${adoptionEntity.entityTableName}`,
+            [],
+          ));
+        if ((ormRowCount?.count ?? 0) > 0) {
+          throw new SyncServiceError(
+            SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+            `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}": table "${adoptionEntity.entityTableName}" already holds ${ormRowCount?.count ?? 0} row(s).`,
           );
         }
       }
-      // D7 also covers the application-owned ORM entity table: seeding INSERTs
-      // into it, so any pre-existing row would collide (or silently merge)
-      // with the adopted rows. Fail closed BEFORE the first sheet mutation.
-      const ormRowCount = await runtime.storage.transaction(async ({ sql }) =>
-        sql.get<{ count: number }>(
-          `SELECT COUNT(*) AS count FROM ${adoptionEntity.entityTableName}`,
-          [],
-        ));
-      if ((ormRowCount?.count ?? 0) > 0) {
-        throw new SyncServiceError(
-          SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-          `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}": table "${adoptionEntity.entityTableName}" already holds ${ormRowCount?.count ?? 0} row(s).`,
-        );
+      // D7 (fail-closed, second pass): ONLY once every adopted entity's local
+      // state is proven empty do we write system columns. This second loop has
+      // no throw points before/among its writes, so no entity is ever mutated
+      // when the adoption as a whole must reject.
+      for (const adoptionEntity of adoptionPlan.entities) {
+        await applyAdoptionSystemColumns({
+          transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
+          spreadsheetId: options.projections.spreadsheetId,
+          sheetId: adoptionEntity.sheetId,
+          rowIdColumnIndex: adoptionEntity.rowIdColumnIndex,
+          ...(adoptionEntity.pkAppend === undefined
+            ? {}
+            : { pkAppend: adoptionEntity.pkAppend }),
+          rows: adoptionEntity.dataRows,
+        });
       }
-      await applyAdoptionSystemColumns({
-        transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
-        spreadsheetId: options.projections.spreadsheetId,
-        sheetId: adoptionPlan.entities[0]!.sheetId,
-        rowIdColumnIndex: adoptionPlan.entities[0]!.rowIdColumnIndex,
-        ...(adoptionPlan.entities[0]!.pkAppend === undefined
-          ? {}
-          : { pkAppend: adoptionPlan.entities[0]!.pkAppend }),
-        rows: adoptionPlan.entities[0]!.dataRows,
-      });
     }
     await provisionRegisteredSyncSheets(remote.provisioner, definitionsForRemote);
     if (adoptionPlan !== undefined) {
