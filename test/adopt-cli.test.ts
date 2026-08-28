@@ -91,6 +91,25 @@ describe("parseAdoptArgs", () => {
     expect(parsed.status).toBe("invalid");
   });
 
+  it("parses repeated --map bindings into the columnMap (§12)", () => {
+    const parsed = parseAdoptArgs(baseArgv([
+      "--map", "Invoice No=invoiceNo",
+      "--map", "총액=total",
+    ]));
+    expect(parsed.status).toBe("valid");
+    if (parsed.status !== "valid") return;
+    expect(parsed.options.columnMap).toEqual({
+      "Invoice No": "invoiceNo",
+      "총액": "total",
+    });
+  });
+
+  it("rejects a malformed --map binding", () => {
+    expect(parseAdoptArgs(baseArgv(["--map", "Invoice No=invoiceNo".replace("=invoiceNo", "")])).status).toBe("invalid");
+    expect(parseAdoptArgs(baseArgv(["--map", "novalue"])).status).toBe("invalid");
+    expect(parseAdoptArgs(baseArgv(["--map", "=total"])).status).toBe("invalid");
+  });
+
   it("requires --entities in adopt mode but not in dry-run mode", () => {
     const adopt = parseAdoptArgs([...baseArgv(), "--mode", "adopt"]);
     expect(adopt.status).toBe("invalid");
@@ -236,7 +255,13 @@ describe("runAdoptCli", () => {
     const stdout: string[] = [];
     const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
     await runAdoptCli({
-      options: { ...baseOptions, systemTabName: "Ledger_State", credentialsPath: "/sa.json", spreadsheetUrl: "https://x" },
+      options: {
+        ...baseOptions,
+        systemTabName: "Ledger_State",
+        credentialsPath: "/sa.json",
+        spreadsheetUrl: "https://x",
+        columnMap: { "Invoice No": "invoiceNo" },
+      },
       entities: [CliProbe],
       runner,
       ...sinks(stdout),
@@ -245,7 +270,12 @@ describe("runAdoptCli", () => {
     expect(calls[0]!.spec).toEqual({
       mode: "dry-run",
       entities: {
-        Invoice: { tabName: "Invoices", identityFrom: "auto", systemStateTabName: "Ledger_State" },
+        Invoice: {
+          tabName: "Invoices",
+          identityFrom: "auto",
+          systemStateTabName: "Ledger_State",
+          columnMap: { "Invoice No": "invoiceNo" },
+        },
       },
     });
     expect(calls[0]!.dbName).toBe("./hikoutei.sqlite");

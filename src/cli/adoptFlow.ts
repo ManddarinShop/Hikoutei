@@ -103,6 +103,7 @@ async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
         identityFrom: options.identityFrom,
         ...(options.systemTabName === undefined ? {} : { systemStateTabName: options.systemTabName }),
         ...(options.conflictsTabName === undefined ? {} : { syncConflictsTabName: options.conflictsTabName }),
+        ...(options.columnMap === undefined ? {} : { columnMap: options.columnMap }),
       },
     },
   };

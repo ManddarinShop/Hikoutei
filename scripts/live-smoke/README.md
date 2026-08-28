@@ -20,6 +20,9 @@ network).
 # 1) prepare: creates a fresh 20-row tab ("AdoptSmoke_Invoices_<suffix>",
 #    layout: memo | invoiceNo | customer | total — ignored column LEFT of the
 #    managed block) and records the exact written rows
+#    Add HIKOUTEI_ADOPT_SMOKE_LEGACY=1 for the §12 columnMap variant
+#    (legacy headers Invoice No / Customer Name / Total (USD) + columnMap
+#    recorded in the state file — 37 checks incl. header preservation).
 GOOGLE_APPLICATION_CREDENTIALS=<sa.json> \
 HIKOUTEI_ADOPT_SMOKE_SPREADSHEET_ID=<spreadsheetId> \
   node scripts/live-smoke/prepare-sheet.mjs

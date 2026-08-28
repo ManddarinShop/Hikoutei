@@ -118,7 +118,18 @@ function serviceOpts(mode) {
     // Direct Google Sheets API mode (ADC) — mandatory for adopt (MVP), and the
     // provider's safe default pacing (900 ms / 1,000) applies.
     googleSheetsApi: {},
-    adopt: { mode, entities: { AdoptSmokeInvoice: { tabName: TAB, identityFrom: "auto" } } },
+    adopt: {
+      mode,
+      entities: {
+        AdoptSmokeInvoice: {
+          tabName: TAB,
+          identityFrom: "auto",
+          // §12: legacy-header variant carries the explicit header → property
+          // bindings recorded by the prepare script.
+          ...(sheet.columnMap === undefined ? {} : { columnMap: sheet.columnMap }),
+        },
+      },
+    },
     onPollingReport: (r) => events.polling.push({ t: Date.now(), rowsScanned: r.rowsScanned, changedRows: r.changedRows, appliedRows: r.appliedRows, quarantinedRows: r.quarantinedRows, unknownBusinessKeyRows: r.unknownBusinessKeyRows, duplicateBusinessKeyRows: r.duplicateBusinessKeyRows }),
     onPollingError: (e) => events.pollingErrors.push(String(e?.message ?? e)),
     onReconciliationReport: (r) => events.reconciliation.push({ t: Date.now(), effectsEnqueued: r.effectsEnqueued }),
@@ -144,6 +155,11 @@ try {
   }
   const ent = report.entities[0];
   const bindings = Object.fromEntries(ent.bindings.map((b) => [b.field, b.columnLetter]));
+  // §12: with a columnMap the resolved PK column's header is the MAPPED
+  // legacy header (e.g. "Invoice No"), not the property name.
+  const expectedPkColumn = sheet.columnMap === undefined
+    ? "invoiceNo"
+    : Object.entries(sheet.columnMap).find(([, property]) => property === "invoiceNo")?.[0];
   const s1 = [
     check("dry-run.ok", report.ok === true, { ok: report.ok }),
     check("dry-run.status-ready", ent.status === "ready", { status: ent.status }),
@@ -152,7 +168,7 @@ try {
     check("dry-run.contiguous", ent.contiguity === "contiguous", { contiguity: ent.contiguity, segments: ent.segments }),
     check("dry-run.no-column-occupied", !ent.problems.some((p) => p.code === "COLUMN_OCCUPIED"), ent.problems.map((p) => p.code)),
     check("dry-run.no-error-problems", !ent.problems.some((p) => p.severity === "error"), ent.problems),
-    check("dry-run.pk-existing-column", ent.pk.source === "existing-column" && ent.pk.column === "invoiceNo", ent.pk),
+    check("dry-run.pk-existing-column", ent.pk.source === "existing-column" && ent.pk.column === expectedPkColumn, ent.pk),
     check("dry-run.rows", ent.totalRows === ROWS && ent.emptyRows === 0, { totalRows: ent.totalRows, emptyRows: ent.emptyRows }),
     check("dry-run.rowid-to-be-added", ent.columnsToBeAdded.includes("__hikoutei_row_id"), ent.columnsToBeAdded),
     check("dry-run.tabs-to-provision", ent.tabsToProvision.includes(SYSTEM_TAB) && ent.tabsToProvision.includes(CONFLICTS_TAB), ent.tabsToProvision),
@@ -176,11 +192,16 @@ try {
   const anchors = adoptedValues.slice(1).map((r) => r[4]);
   const expectedAnchors = Array.from({ length: ROWS }, (_, i) => `entity:INV-${pad(i + 1)}`);
   const cellsPreserved = JSON.stringify(adoptedValues.map((r) => r.slice(0, 4))) === JSON.stringify(baseline);
+  // §12: with a columnMap the LEGACY headers must be preserved verbatim.
+  const legacyHeadersPreserved = sheet.columnMap === undefined
+    ? undefined
+    : JSON.stringify(headerRow.slice(0, 4)) === JSON.stringify(baseline[0]);
   const s2 = [
     check("adopt.system-tabs-provisioned", nowVisible, { before: tabsBefore.length, systemTab: tabsAfter.includes(SYSTEM_TAB), conflictsTab: tabsAfter.includes(CONFLICTS_TAB) }),
     check("adopt.rowid-header-appended", headerRow[4] === "__hikoutei_row_id", headerRow),
     check("adopt.deterministic-anchors", JSON.stringify(anchors) === JSON.stringify(expectedAnchors), { first: anchors[0], last: anchors.at(-1) }),
     check("adopt.existing-cells-preserved", cellsPreserved, cellsPreserved ? undefined : "A1:D21 diverged from baseline"),
+    ...(legacyHeadersPreserved === undefined ? [] : [check("adopt.legacy-headers-preserved", legacyHeadersPreserved === true)]),
   ];
   RUN.steps["2-adopt"] = { pass: s2.every((c) => c.ok), checks: s2 };
 

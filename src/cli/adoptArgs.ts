@@ -39,6 +39,8 @@ export interface AdoptOptions {
   readonly credentialsPath?: string;
   /** Module that registers the application entities on import. */
   readonly entitiesModule?: string;
+  /** §12 columnMap: sheet header → property bindings (from repeated --map). */
+  readonly columnMap?: Readonly<Record<string, string>>;
   /** Skip the interactive confirmation in adopt mode. */
   readonly yes: boolean;
   /** Emit machine-readable JSON instead of a human report. */
@@ -64,6 +66,7 @@ const ADOPT_FLAGS = {
   SPREADSHEET_URL: "--spreadsheet-url",
   CREDENTIALS: "--credentials",
   ENTITIES: "--entities",
+  MAP: "--map",
   YES: "--yes",
   JSON: "--json",
 } as const;
@@ -73,7 +76,7 @@ const VALUE_FLAGS = new Set<string>([
   ADOPT_FLAGS.ENTITY, ADOPT_FLAGS.TAB, ADOPT_FLAGS.IDENTITY_FROM,
   ADOPT_FLAGS.SYSTEM_TAB, ADOPT_FLAGS.CONFLICTS_TAB, ADOPT_FLAGS.MODE,
   ADOPT_FLAGS.DB, ADOPT_FLAGS.SPREADSHEET_URL, ADOPT_FLAGS.CREDENTIALS,
-  ADOPT_FLAGS.ENTITIES,
+  ADOPT_FLAGS.ENTITIES, ADOPT_FLAGS.MAP,
 ]);
 
 export const ADOPT_HELP_TEXT = [
@@ -102,6 +105,10 @@ export const ADOPT_HELP_TEXT = [
   "  --identity-from <header|auto>  PK column header; \"auto\" (default) prefers",
   "                            the PK property's header and appends a generated",
   "                            PK column when absent.",
+  "  --map \"Header=property\"  §12 columnMap binding for legacy headers; repeat",
+  "                            the flag for each column (e.g. --map \"Invoice",
+  "                            No=invoiceNo\" --map \"총액\"=total\"). Mapped PK",
+  "                            headers absorb the identityFrom alias.",
   "  --system-tab <name>       Fresh System_State tab (default <tab>_System).",
   "  --conflicts-tab <name>    Fresh Sync_Conflicts tab (default <tab>_Conflicts).",
   "  --db <path>               SQLite path (default ./hikoutei.sqlite).",
@@ -119,6 +126,7 @@ export const ADOPT_HELP_TEXT = [
 /** Parses and defaults `hikoutei adopt` arguments. */
 export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
   const values = new Map<string, string>();
+  const mapEntries: [string, string][] = [];
   const flags = new Set<string>();
   let index = 0;
   while (index < argv.length) {
@@ -134,13 +142,26 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
       if (value === undefined || value.startsWith("--")) {
         return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, `flag ${token} requires a value`) };
       }
-      values.set(token, value);
+      if (token === ADOPT_FLAGS.MAP) {
+        // §12: --map is REPEATABLE — every occurrence adds one header →
+        // property binding.
+        const separator = value.indexOf("=");
+        if (separator <= 0 || separator === value.length - 1) {
+          return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, `--map requires "Header=property", received "${value}"`) };
+        }
+        mapEntries.push([value.slice(0, separator), value.slice(separator + 1)]);
+      } else {
+        values.set(token, value);
+      }
       index += 2;
       continue;
     }
     flags.add(token);
     index += 1;
   }
+  const columnMap = mapEntries.length === 0
+    ? undefined
+    : Object.fromEntries(mapEntries);
 
   const missing = [ADOPT_FLAGS.ENTITY, ADOPT_FLAGS.TAB].filter((flag) => !values.has(flag));
   if (missing.length > 0) {
@@ -182,6 +203,7 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
       ...(spreadsheetUrl === undefined ? {} : { spreadsheetUrl }),
       ...(credentialsPath === undefined ? {} : { credentialsPath }),
       ...(entitiesModule === undefined ? {} : { entitiesModule }),
+      ...(columnMap === undefined ? {} : { columnMap }),
       ...(systemTabName === undefined ? {} : { systemTabName }),
       ...(conflictsTabName === undefined ? {} : { conflictsTabName }),
       yes: flags.has(ADOPT_FLAGS.YES),

@@ -40,7 +40,18 @@ const tabName = `AdoptSmoke_Invoices_${suffix}`;
 const ROWS = 20;
 const customers = ["Acme", "Beta", "Gamma", "Delta", "Epsilon"];
 const pad = (n) => String(n).padStart(3, "0");
-const rows = [["memo", "invoiceNo", "customer", "total"]];
+// §12: HIKOUTEI_ADOPT_SMOKE_LEGACY=1 prepares a LEGACY-header variant
+// (memo | Invoice No | Customer Name | Total (USD)) and records the
+// columnMap in the state file — positionally identical to the canonical
+// layout, so the smoke's positional checks work for both.
+const legacy = process.env.HIKOUTEI_ADOPT_SMOKE_LEGACY === "1";
+const headers = legacy
+  ? ["memo", "Invoice No", "Customer Name", "Total (USD)"]
+  : ["memo", "invoiceNo", "customer", "total"];
+const columnMap = legacy
+  ? { "Invoice No": "invoiceNo", "Customer Name": "customer", "Total (USD)": "total" }
+  : undefined;
+const rows = [headers];
 for (let i = 1; i <= ROWS; i++) {
   rows.push([
     i % 3 === 0 ? `legacy note ${i}` : "",
@@ -72,6 +83,7 @@ writeFileSync(statePath, JSON.stringify({
   tabName,
   rows: ROWS,
   baselineRows: rows,
+  ...(columnMap === undefined ? {} : { columnMap }),
   marker: randomUUID(),
 }, null, 2), { mode: 0o600 });
-console.log(JSON.stringify({ created: true, spreadsheetId, tabName, populatedRows: ROWS, statePath }));
+console.log(JSON.stringify({ created: true, spreadsheetId, tabName, populatedRows: ROWS, legacy, statePath }));
