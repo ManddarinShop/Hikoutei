@@ -7,6 +7,10 @@ export const SYNC_SERVICE_ERROR_CODES = {
   PROVIDER_UNAVAILABLE: "sync_provider_unavailable",
   STARTUP_FAILED: "sync_service_startup_failed",
   CLOSED: "sync_service_closed",
+  /** Existing-sheet adoption dry-run finished; the full report rides on the error. */
+  ADOPTION_DRY_RUN_REPORT: "existing_sheet_adoption_dry_run_report",
+  /** Adopt-mode requested before the seeding engine milestone lands. */
+  ADOPTION_NOT_IMPLEMENTED: "existing_sheet_adoption_not_implemented",
 } as const;
 
 export type SyncServiceErrorCode =

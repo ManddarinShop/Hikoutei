@@ -114,6 +114,9 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "sync_provider_unavailable",
   "sync_service_startup_failed",
   "sync_service_closed",
+  // Existing-sheet adoption codes.
+  "existing_sheet_adoption_dry_run_report",
+  "existing_sheet_adoption_not_implemented",
   // Storage/schema/effect codes.
   "invalid_writer_lease_options",
   "invalid_sync_registration",

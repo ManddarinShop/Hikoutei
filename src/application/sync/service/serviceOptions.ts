@@ -29,6 +29,7 @@ import type {
 import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheetsContract/syncSheets.js";
 import type { CoordinatorLaneEvent } from "../sheetsContract/mutationCoordinator/laneTelemetry.js";
 import type { GoogleSheetsApiProviderOptions } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
+import type { ExistingSheetAdoptionSpec } from "./adopt/existingSheetAdoption.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
@@ -69,6 +70,15 @@ export interface InternalSyncServiceOptions {
    * account shared on the spreadsheet). Never part of the root API.
    */
   readonly googleSheetsApi?: GoogleSheetsApiProviderOptions;
+  /**
+   * Existing-sheet adoption (MVP, direct mode only). In `dry-run` mode the
+   * service reads the foreign tab, analyzes header-name bindings, and throws
+   * `ExistingSheetAdoptionDryRunReportError` carrying the full report before
+   * any provisioning mutation or supervisor start. In `adopt` mode the
+   * seeding engine (next milestone) binds every existing row before the
+   * CleanupScanner can ever observe the tab (fail-closed ordering, D5).
+   */
+  readonly adopt?: ExistingSheetAdoptionSpec;
   readonly writerId?: string;
   readonly workerId?: string;
   readonly maxEffects?: number;
@@ -190,6 +200,9 @@ export function validateServiceOptions(
       "sync service cannot supply both an injected provider and googleSheetsApi client settings.",
     );
   }
+  if (options.adopt !== undefined) {
+    validateExistingSheetAdoptionOptions(options);
+  }
   if (options.provisioner !== undefined && options.provider === undefined) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
@@ -201,6 +214,54 @@ export function validateServiceOptions(
       SYNC_SERVICE_ERROR_CODES.PROVIDER_UNAVAILABLE,
       "sync service requires an injected provider or googleSheetsApi client settings.",
     );
+  }
+  if (options.adopt !== undefined) {
+    validateExistingSheetAdoptionOptions(options);
+  }
+}
+
+/**
+ * Existing-sheet adoption MVP constraints (D1/D7 of
+ * `design/existing-sheet-adoption-design.md`): direct Google Sheets API mode
+ * only (the foreign-tab reader needs the raw transport), one entity per
+ * service, and the adopt tab must equal that entity's configured User_Input
+ * route so the existing tab becomes the human input surface.
+ */
+function validateExistingSheetAdoptionOptions(options: InternalSyncServiceOptions): void {
+  const adopt = options.adopt!;
+  if (options.googleSheetsApi === undefined || options.provider !== undefined) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "existing-sheet adoption requires the direct googleSheetsApi provider (no injected provider).",
+    );
+  }
+  const adoptEntityNames = Object.keys(adopt.entities);
+  if (adoptEntityNames.length !== 1) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      `existing-sheet adoption MVP supports exactly one entity; received ${adoptEntityNames.length}.`,
+    );
+  }
+  for (const entityName of adoptEntityNames) {
+    const entityConfig = options.projections.entities[entityName];
+    if (entityConfig === undefined) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        `existing-sheet adoption references entity "${entityName}" that is absent from the projections config.`,
+      );
+    }
+    if (entityConfig.userInput === undefined) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        `existing-sheet adoption requires entity "${entityName}" to declare a userInput route (the adopted tab becomes the User_Input surface).`,
+      );
+    }
+    if (adopt.entities[entityName]!.tabName !== entityConfig.userInput.tabName) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        `existing-sheet adoption tabName "${adopt.entities[entityName]!.tabName}" must equal the userInput route tab "${entityConfig.userInput.tabName}" for entity "${entityName}".`,
+      );
+    }
   }
 }
 
