@@ -43,9 +43,13 @@ import {
   observeSyncSnapshots,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
 import {
+  completeExistingSheetAdoption,
   extractAdoptedSeedRows,
   seedAdoptedEntityRows,
 } from "../src/application/sync/service/adopt/adoptionSeeding.js";
+import {
+  SYNC_SERVICE_ERROR_CODES,
+} from "../src/application/sync/service/errors.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const AdoptProbeSchema = defineEntity({
@@ -227,6 +231,63 @@ describe("existing-sheet adoption seeding engine", () => {
       expect(visible[0]!.confirmed_snapshot_hash).toBe(
         computeSyncVisibleHash({ invoiceNo: INV_1, customer: ACME, total: TOTAL_1 }),
       );
+    } finally {
+      await orm.close(true);
+    }
+  });
+
+  it("rejects provider-generated anchors that are not derived from the PK (stability gate)", async () => {
+    const { orm, storage } = await createStorage();
+    try {
+      const snapshot = observedSnapshot() as { snapshot: { rows: { physicalAnchor: unknown }[] } };
+      // A provider-generated anchor (e.g. sync-anchor:<uuid>) can never be
+      // re-derived from the PK, so the stability gate must refuse startup.
+      snapshot.snapshot.rows[0]!.physicalAnchor = presentValue("sync-anchor:7f3c");
+      const provider = {
+        async ensureRowAnchors() {
+          return { assigned: 0, existing: 2, duplicateAnchors: [] };
+        },
+        async readSnapshot() {
+          return snapshot.snapshot;
+        },
+      };
+      await expect(completeExistingSheetAdoption({
+        plan: {
+          report: { mode: "dry-run", ok: true, entities: [] },
+          entities: [{
+            entityName: "AdoptProbe",
+            tabName: "Probe_Input",
+            entityTableName: "adopt_seed_probe",
+            sheetId: 1,
+            tabTitle: "Probe_Input",
+            layout: {
+              entityName: "AdoptProbe",
+              tabName: "Probe_Input",
+              managedColumns: [],
+              rowIdColumnIndex: 3,
+              pkColumnIndex: 0,
+              pkGenerated: false,
+              pkHeader: "invoiceNo",
+              registeredRange: "A:D",
+              appendedColumns: [],
+            },
+            rowIdColumnIndex: 3,
+            dataRows: [],
+          }],
+        },
+        provider,
+        storage,
+        mappings: [mapping],
+        writer: {
+          writerId: "adopt-stability-writer",
+          role: "adopt-stability",
+          leaseDurationMs: 1_000,
+          now: () => 1_000,
+        },
+      })).rejects.toMatchObject({
+        code: SYNC_SERVICE_ERROR_CODES.STARTUP_FAILED,
+        message: expect.stringContaining('row 2: anchor "sync-anchor:7f3c" is not the derived anchor "entity:INV-1"'),
+      });
     } finally {
       await orm.close(true);
     }

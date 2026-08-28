@@ -469,16 +469,42 @@ export async function completeExistingSheetAdoption(input: {
       const boundByAnchor = new Map(
         bindings.map((binding) => [binding.anchor_reference, binding]),
       );
-      const unboundRows: number[] = [];
+      // Reuse the seed-row extraction: it pairs each observed row's anchor
+      // with the visible PK and the canonical identity derived from it.
+      const seedRowByAnchor = new Map(rows.map((row) => [row.anchor, row]));
+      const failures: string[] = [];
       for (const row of observedSnapshot.rows) {
         if (row.physicalAnchor.kind !== PRESENCE_KINDS.PRESENT) continue;
-        const binding = boundByAnchor.get(row.physicalAnchor.value);
-        if (binding === undefined || binding.state !== "active") unboundRows.push(row.rowNumber);
+        const anchor = row.physicalAnchor.value;
+        const binding = boundByAnchor.get(anchor);
+        if (binding === undefined || binding.state !== "active") {
+          failures.push(`row ${row.rowNumber}: no active row binding for anchor "${anchor}"`);
+          continue;
+        }
+        const seedRow = seedRowByAnchor.get(anchor);
+        if (seedRow === undefined) {
+          failures.push(`row ${row.rowNumber}: anchor "${anchor}" has no usable primary-key value`);
+          continue;
+        }
+        // The anchor must be DERIVED from the PK (`mapping.anchorForEntity`) —
+        // a provider-generated anchor (e.g. `sync-anchor:<uuid>`) cannot be
+        // reproduced from the sheet, so the binding would be unmatchable.
+        const expectedAnchor = mapping.anchorForEntity(seedRow.visibleEntityId);
+        if (anchor !== expectedAnchor) {
+          failures.push(`row ${row.rowNumber}: anchor "${anchor}" is not the derived anchor "${expectedAnchor}"`);
+          continue;
+        }
+        // The binding must point at the CANONICAL entity identity derived
+        // from the row's own PK, not an unrelated id.
+        const expectedEntityId = mapping.canonicalEntityIdFor(seedRow.visibleEntityId);
+        if (binding.entity_id !== expectedEntityId) {
+          failures.push(`row ${row.rowNumber}: binding entity_id "${binding.entity_id}" does not match the canonical identity "${expectedEntityId}"`);
+        }
       }
-      if (unanchored > 0 || unboundRows.length > 0) {
+      if (unanchored > 0 || failures.length > 0) {
         throw new SyncServiceError(
           SYNC_SERVICE_ERROR_CODES.STARTUP_FAILED,
-          `adoption seeding for ${entity.entityName} left rows unbound (unanchored: ${unanchored}, unbound: ${unboundRows.length} at rows ${unboundRows.slice(0, 20).join(",")}); the startup is refused (fail-closed).`,
+          `adoption seeding for ${entity.entityName} did not verify (unanchored: ${unanchored}, failures: ${failures.length}): ${failures.slice(0, 20).join("; ")} — the startup is refused (fail-closed).`,
         );
       }
       if (seeded.seeded === 0) {

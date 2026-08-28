@@ -198,6 +198,20 @@ export async function createInternalSyncService(
           );
         }
       }
+      // D7 also covers the application-owned ORM entity table: seeding INSERTs
+      // into it, so any pre-existing row would collide (or silently merge)
+      // with the adopted rows. Fail closed BEFORE the first sheet mutation.
+      const ormRowCount = await runtime.storage.transaction(async ({ sql }) =>
+        sql.get<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM ${adoptionEntity.entityTableName}`,
+          [],
+        ));
+      if ((ormRowCount?.count ?? 0) > 0) {
+        throw new SyncServiceError(
+          SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+          `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}": table "${adoptionEntity.entityTableName}" already holds ${ormRowCount?.count ?? 0} row(s).`,
+        );
+      }
       await applyAdoptionSystemColumns({
         transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
         spreadsheetId: options.projections.spreadsheetId,

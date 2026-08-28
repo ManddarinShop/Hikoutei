@@ -114,7 +114,8 @@ export interface ExistingSheetAdoptionProblem {
     | "COLUMN_OCCUPIED"
     | "DECLARATION_ORDER_MISMATCH"
     | "NO_BOUND_COLUMNS"
-    | "EXACT_HEADER_MISMATCH";
+    | "EXACT_HEADER_MISMATCH"
+    | "IDENTITY_ALIAS_UNSUPPORTED";
   readonly message: string;
   readonly detail?: Readonly<Record<string, string | number | readonly string[] | readonly number[]>>;
 }
@@ -532,12 +533,34 @@ export function computeExistingSheetAdoptionLayout(input: {
   ];
   for (const column of appendedColumns) {
     const occupant = input.headers[column.columnIndex]?.trim();
+    // Idempotent retry: a header that already IS the expected system header
+    // means a previous adoption attempt wrote it — treat the column as
+    // already applied. Its data cells (row ids / generated PK values) were
+    // written too, so they are expected and must not block the retry.
+    if (occupant === column.header) continue;
     if (occupant !== undefined && occupant !== "") {
       extraProblems.push({
         severity: "error",
         code: "COLUMN_OCCUPIED",
         message: `adoption column "${column.header}" (column ${columnLetters(column.columnIndex + 1)}) must be free, but tab "${input.tabName}" has "${occupant}" there.`,
         detail: { column: column.header, occupant },
+      });
+      continue;
+    }
+    // A blank header does NOT make the column free: applyAdoptionSystemColumns
+    // would overwrite any data sitting below it. Every data cell at the
+    // appended index must be empty.
+    const dataRowNumbers: number[] = [];
+    input.rows.forEach((row, rowIndex) => {
+      const cell = row[column.columnIndex];
+      if (cell !== undefined && cell !== "") dataRowNumbers.push(rowIndex + 2);
+    });
+    if (dataRowNumbers.length > 0) {
+      extraProblems.push({
+        severity: "error",
+        code: "COLUMN_OCCUPIED",
+        message: `adoption column "${column.header}" (column ${columnLetters(column.columnIndex + 1)}) must be free, but tab "${input.tabName}" has data below an empty header at row(s) ${dataRowNumbers.slice(0, 20).join(",")}.`,
+        detail: { column: column.header, rowNumbers: dataRowNumbers.slice(0, 50) },
       });
     }
   }
@@ -553,12 +576,19 @@ export function computeExistingSheetAdoptionLayout(input: {
     ? [...declaredUserOwned.filter((name) => name !== pkProperty), pkProperty]
     : declaredUserOwned;
   const sheetManagedOrder = managed.map((column) => column.field);
-  if (sheetManagedOrder.join("\u0000") !== expectedSheetOrder.join("\u0000")) {
+  // A generated PK is NOT a sheet column yet: the analyzer deliberately omits
+  // it from the bindings, so it must join the comparison as the VIRTUAL
+  // appended column after all bound managed columns — otherwise the order
+  // could never match and generated-PK adoption would be blocked forever.
+  const comparedSheetOrder = pkGenerated
+    ? [...sheetManagedOrder, pkProperty]
+    : sheetManagedOrder;
+  if (comparedSheetOrder.join("\u0000") !== expectedSheetOrder.join("\u0000")) {
     extraProblems.push({
       severity: "error",
       code: "DECLARATION_ORDER_MISMATCH",
-      message: `adoption (MVP) requires tab "${input.tabName}" columns in the entity's declaration order. Expected [${expectedSheetOrder.join(", ")}] but found [${sheetManagedOrder.join(", ")}]. Reorder the entity properties (or the columns) and retry.`,
-      detail: { expected: expectedSheetOrder, found: sheetManagedOrder },
+      message: `adoption (MVP) requires tab "${input.tabName}" columns in the entity's declaration order. Expected [${expectedSheetOrder.join(", ")}] but found [${comparedSheetOrder.join(", ")}]. Reorder the entity properties (or the columns) and retry.`,
+      detail: { expected: expectedSheetOrder, found: comparedSheetOrder },
     });
   }
 
@@ -670,8 +700,27 @@ export async function planExistingSheetAdoptionStartup(input: {
     // occupied append columns) and exact-header mismatches surface in the
     // REPORT so dry-run and adopt agree on readiness — never "dry-run
     // ready, adopt rejected".
+    // MVP decision (D4): identityFrom aliases are NOT supported — the PK
+    // header must equal the PK property name exactly, so an explicit
+    // identityFrom naming a different column blocks the adoption.
+    const identityAliasProblems: ExistingSheetAdoptionProblem[] = [];
+    if (spec.identityFrom !== undefined && spec.identityFrom !== "auto" && spec.identityFrom !== descriptor.primaryKey) {
+      identityAliasProblems.push({
+        severity: "error",
+        code: "IDENTITY_ALIAS_UNSUPPORTED",
+        message: `adoption (MVP) requires the primary-key header of tab "${tab.title}" to equal the PK property "${descriptor.primaryKey}"; identityFrom aliases ("${spec.identityFrom}") are not supported yet.`,
+        detail: { identityFrom: spec.identityFrom, primaryKey: descriptor.primaryKey },
+      });
+    }
     let finalEntity = reportEntity;
-    if (reportEntity.status === "ready") {
+    if (identityAliasProblems.length > 0) {
+      finalEntity = {
+        ...reportEntity,
+        status: "blocked",
+        problems: [...reportEntity.problems, ...identityAliasProblems],
+      };
+    }
+    if (finalEntity.status === "ready") {
       const { layout, extraProblems } = computeExistingSheetAdoptionLayout({
         entityName,
         tabName: tab.title,

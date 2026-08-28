@@ -487,9 +487,14 @@ describe("review round 2 regressions", () => {
       },
     },
   } as const;
-  const planWith = (headers: readonly string[], rows: readonly (readonly (string | undefined)[])[]) =>
+  const planWith = (
+    headers: readonly string[],
+    rows: readonly (readonly (string | undefined)[])[],
+    mode: "dry-run" | "adopt" = "dry-run",
+    identityFrom: string | "auto" = "auto",
+  ) =>
     planExistingSheetAdoptionStartup({
-      adopt: { mode: "dry-run", entities: { AdoptInvoice: { tabName: "Invoices", identityFrom: "auto" } } },
+      adopt: { mode, entities: { AdoptInvoice: { tabName: "Invoices", identityFrom } } },
       spreadsheetId: "adopt-spreadsheet",
       transport: {
         async getSpreadsheet() {
@@ -507,16 +512,58 @@ describe("review round 2 regressions", () => {
       userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED },
     });
 
-  it("blocks when the row-id append column has DATA below an empty header (data loss guard)", async () => {
+  it("blocks when the row-id append column has DATA below an EMPTY header (data loss guard)", async () => {
+    // The appended column's header is blank but live data sits below it:
+    // header-only inspection would treat the column as free and
+    // applyAdoptionSystemColumns would overwrite that data.
     try {
       await planWith(
-        ["invoiceNo", "customer", "total", "note", "legacy"],
+        ["invoiceNo", "customer", "total", "note", ""],
         [["INV-1", "Acme", "100", "", "old data"], ["INV-2", "Beta", "200", "", "more"]],
       );
       expect.unreachable("occupied data column must block");
     } catch (error: unknown) {
       const report = (error as ExistingSheetAdoptionDryRunReportError).report;
-      expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_OCCUPIED")).toBe(true);
+      expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_OCCUPIED" && p.severity === "error")).toBe(true);
+    }
+  });
+
+  it("does NOT block generated-PK adoption: virtual PK appended last satisfies the declaration order", async () => {
+    const plan = await planWith(
+      ["customer", "total", "note"],
+      [["Acme", "100", ""], ["Beta", "200", "ok"]],
+      "adopt",
+    );
+    expect(plan.report.ok).toBe(true);
+    const layout = plan.entities[0]!.layout;
+    expect(plan.report.entities[0]!.pk.source).toBe("auto-generate");
+    expect(layout.pkGenerated).toBe(true);
+    expect(layout.pkColumnIndex).toBe(3);
+    expect(layout.rowIdColumnIndex).toBe(4);
+    // The registered range covers the managed columns + generated PK + row-id.
+    expect(layout.registeredRange).toBe("A:E");
+    expect(layout.appendedColumns).toEqual([
+      { columnIndex: 3, header: "invoiceNo" },
+      { columnIndex: 4, header: "__hikoutei_row_id" },
+    ]);
+    expect(plan.entities[0]!.pkAppend).toEqual({ columnIndex: 3, header: "invoiceNo" });
+    expect(plan.entities[0]!.dataRows).toHaveLength(2);
+  });
+
+  it("blocks an identityFrom alias whose header differs from the PK property name", async () => {
+    try {
+      await planWith(
+        ["InvoiceNo", "customer", "total", "note"],
+        [["INV-1", "Acme", "100", ""]],
+        "dry-run",
+        "InvoiceNo",
+      );
+      expect.unreachable("identityFrom aliases must block (MVP)");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.status).toBe("blocked");
+      const alias = report.entities[0]!.problems.find((p) => p.code === "IDENTITY_ALIAS_UNSUPPORTED");
+      expect(alias?.severity).toBe("error");
     }
   });
 
