@@ -109,7 +109,11 @@ export interface ExistingSheetAdoptionProblem {
     | "EMPTY_IDENTITY_VALUE"
     | "NO_PK_CANDIDATE"
     | "TAB_NOT_FOUND"
-    | "EMPTY_TAB";
+    | "EMPTY_TAB"
+    | "COLUMN_SEGMENTATION"
+    | "COLUMN_OCCUPIED"
+    | "DECLARATION_ORDER_MISMATCH"
+    | "NO_BOUND_COLUMNS";
   readonly message: string;
   readonly detail?: Readonly<Record<string, string | number | readonly string[] | readonly number[]>>;
 }
@@ -458,6 +462,8 @@ export interface ExistingSheetAdoptionLayout {
   /** The PK column (existing within the span, or the appended one). */
   readonly pkColumnIndex: number;
   readonly pkGenerated: boolean;
+  /** The PK column's header (existing header text, or the PK property name when generated). */
+  readonly pkHeader: string;
   /** Registered range override for the User_Input route, e.g. `B:F`. */
   readonly registeredRange: string;
   /** Columns appended by adoption: row-id, and the PK when generated. */
@@ -472,22 +478,40 @@ export function computeExistingSheetAdoptionLayout(input: {
   readonly headers: readonly string[];
   readonly descriptor: { readonly properties: readonly { readonly name: string; readonly primary: boolean }[] };
   readonly userOwnedFields: readonly string[];
-}): ExistingSheetAdoptionLayout {
+}): { readonly layout: ExistingSheetAdoptionLayout; readonly extraProblems: readonly ExistingSheetAdoptionProblem[] } {
   const { report } = input;
+  const extraProblems: ExistingSheetAdoptionProblem[] = [];
   const managed = [...report.bindings].sort((a, b) => a.columnIndex - b.columnIndex);
   if (managed.length === 0) {
-    throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      `adoption layout for "${input.entityName}" has no bound columns.`,
-    );
+    extraProblems.push({
+      severity: "error",
+      code: "NO_BOUND_COLUMNS",
+      message: `adoption layout for "${input.entityName}" has no bound columns.`,
+    });
+    return {
+      layout: {
+        entityName: input.entityName,
+        tabName: input.tabName,
+        managedColumns: [],
+        rowIdColumnIndex: input.headers.length,
+        pkColumnIndex: input.headers.length,
+        pkGenerated: report.pk.source === "auto-generate",
+        pkHeader: input.descriptor.properties.find((property) => property.primary)!.name,
+        registeredRange: `A:${columnLetters(input.headers.length + 1)}`,
+        appendedColumns: [],
+      },
+      extraProblems,
+    };
   }
   const firstManaged = managed[0]!.columnIndex;
   const lastManaged = managed.at(-1)!.columnIndex;
   if (report.contiguity === "segmented") {
-    throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      `adoption requires the managed columns of tab "${input.tabName}" to be contiguous; ignored columns must sit left of the managed block. Move them and retry.`,
-    );
+    extraProblems.push({
+      severity: "error",
+      code: "COLUMN_SEGMENTATION",
+      message: `adoption (MVP) requires the managed columns of tab "${input.tabName}" to be contiguous; ignored columns must sit left of the managed block. Move them and retry.`,
+      detail: { segments: report.segments.map((segment) => `${columnLetters(segment.startColumnIndex + 1)}:${columnLetters(segment.endColumnIndex + 1)}`) },
+    });
   }
 
   const pkProperty = input.descriptor.properties.find((property) => property.primary)!.name;
@@ -507,10 +531,12 @@ export function computeExistingSheetAdoptionLayout(input: {
   for (const column of appendedColumns) {
     const occupant = input.headers[column.columnIndex]?.trim();
     if (occupant !== undefined && occupant !== "") {
-      throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-        `adoption column "${column.header}" (column ${columnLetters(column.columnIndex + 1)}) must be free, but tab "${input.tabName}" has "${occupant}" there.`,
-      );
+      extraProblems.push({
+        severity: "error",
+        code: "COLUMN_OCCUPIED",
+        message: `adoption column "${column.header}" (column ${columnLetters(column.columnIndex + 1)}) must be free, but tab "${input.tabName}" has "${occupant}" there.`,
+        detail: { column: column.header, occupant },
+      });
     }
   }
 
@@ -526,21 +552,27 @@ export function computeExistingSheetAdoptionLayout(input: {
     : declaredUserOwned;
   const sheetManagedOrder = managed.map((column) => column.field);
   if (sheetManagedOrder.join("\u0000") !== expectedSheetOrder.join("\u0000")) {
-    throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      `adoption requires tab "${input.tabName}" columns in the entity's declaration order. Expected [${expectedSheetOrder.join(", ")}] but found [${sheetManagedOrder.join(", ")}]. Reorder the entity properties (or the columns) and retry.`,
-    );
+    extraProblems.push({
+      severity: "error",
+      code: "DECLARATION_ORDER_MISMATCH",
+      message: `adoption (MVP) requires tab "${input.tabName}" columns in the entity's declaration order. Expected [${expectedSheetOrder.join(", ")}] but found [${sheetManagedOrder.join(", ")}]. Reorder the entity properties (or the columns) and retry.`,
+      detail: { expected: expectedSheetOrder, found: sheetManagedOrder },
+    });
   }
 
   return {
-    entityName: input.entityName,
-    tabName: input.tabName,
-    managedColumns: managed.map((column) => ({ field: column.field, columnIndex: column.columnIndex, header: column.header })),
-    rowIdColumnIndex,
-    pkColumnIndex,
-    pkGenerated,
-    registeredRange: `${columnLetters(firstManaged + 1)}:${columnLetters(rowIdColumnIndex + 1)}`,
-    appendedColumns,
+    layout: {
+      entityName: input.entityName,
+      tabName: input.tabName,
+      managedColumns: managed.map((column) => ({ field: column.field, columnIndex: column.columnIndex, header: column.header })),
+      rowIdColumnIndex,
+      pkColumnIndex,
+      pkGenerated,
+      pkHeader: pkGenerated ? pkProperty : report.pk.column ?? "",
+      registeredRange: `${columnLetters(firstManaged + 1)}:${columnLetters(rowIdColumnIndex + 1)}`,
+      appendedColumns,
+    },
+    extraProblems,
   };
 }
 
@@ -632,10 +664,8 @@ export async function planExistingSheetAdoptionStartup(input: {
       systemStateTabName: input.projections.entities[entityName]!.systemState.tabName,
       syncConflictsTabName: input.projections.entities[entityName]!.syncConflicts.tabName,
     });
-    entityReports.push(reportEntity);
-
     if (reportEntity.status === "ready") {
-      const layout = computeExistingSheetAdoptionLayout({
+      const { layout, extraProblems } = computeExistingSheetAdoptionLayout({
         entityName,
         tabName: tab.title,
         report: reportEntity,
@@ -643,6 +673,18 @@ export async function planExistingSheetAdoptionStartup(input: {
         descriptor,
         userOwnedFields: input.userOwnedFieldsByEntity[entityName] ?? [],
       });
+      if (extraProblems.some((problem) => problem.severity === "error")) {
+        // Adopt-mode layout blockers (segmentation, declaration order,
+        // occupied append columns) surface in the REPORT so dry-run and
+        // adopt agree on readiness — never "dry-run ready, adopt rejected".
+        entityReports.push({
+          ...reportEntity,
+          status: "blocked",
+          problems: [...reportEntity.problems, ...extraProblems],
+        });
+        continue;
+      }
+      entityReports.push(reportEntity);
       const pkColumnIndex = reportEntity.pk.source === "existing-column" && reportEntity.pk.column !== undefined
         ? headers.indexOf(reportEntity.pk.column)
         : layout.pkColumnIndex;
@@ -669,6 +711,7 @@ export async function planExistingSheetAdoptionStartup(input: {
         dataRows,
       });
     }
+    entityReports.push(reportEntity);
   }
 
   const report: ExistingSheetAdoptionRunReport = {

@@ -39,6 +39,12 @@ import {
   columnLetters,
   quoteA1SheetName,
 } from "../../../../adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import type {
+  GoogleSheetsApiWriteRequest,
+} from "../../../../adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
+import {
+  requireValidBatchUpdateReply,
+} from "../../../../adapter/sheets/providers/google-sheets-api/operations/shared.js";
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
@@ -98,35 +104,46 @@ export async function applyAdoptionSystemColumns(input: {
   readonly transport: GoogleSheetsApiAdoptionReader;
   readonly spreadsheetId: string;
   readonly sheetId: number;
+  /** The layout provides the row-id/PK column indices and the PK header. */
   readonly rowIdColumnIndex: number;
   /** Appended PK column; `undefined` when the PK comes from an existing column. */
   readonly pkAppend?: { readonly columnIndex: number; readonly header: string };
-  /** Data rows: 0-based sheet row index and the PK value (existing or generated). */
+  /**
+   * Data rows: 0-based sheet row index and the PK value, sorted by rowIndex.
+   * Sparse rows are grouped into contiguous runs so values never shift across
+   * blank rows.
+   */
   readonly rows: readonly { readonly rowIndex: number; readonly pkValue: string }[];
 }): Promise<void> {
-  const textRow = (value: string) => ({ values: [value] });
-  const requests: {
-    readonly sheetId: number;
-    readonly startRowIndex: number;
-    readonly startColumnIndex: number;
-    readonly rows: readonly { readonly values: readonly (string | number | null)[] }[];
-    readonly fields: string;
-  }[] = [];
+  const textRow = (value: string) => [{ userEnteredValue: { stringValue: value } }];
+  const requests: GoogleSheetsApiWriteRequest[] = [];
+
+  // The row-id system header (row 0 of the appended row-id column).
+  requests.push({
+    kind: "updateCells",
+    sheetId: input.sheetId,
+    startRowIndex: 0,
+    startColumnIndex: input.rowIdColumnIndex,
+    rows: [textRow("__hikoutei_row_id")],
+    fields: "userEnteredValue",
+  });
 
   if (input.pkAppend !== undefined) {
     requests.push({
+      kind: "updateCells",
       sheetId: input.sheetId,
       startRowIndex: 0,
       startColumnIndex: input.pkAppend.columnIndex,
       rows: [textRow(input.pkAppend.header)],
       fields: "userEnteredValue",
     });
-    if (input.rows.length > 0) {
+    for (const run of contiguousRowRuns(input.rows)) {
       requests.push({
+        kind: "updateCells",
         sheetId: input.sheetId,
-        startRowIndex: input.rows[0]!.rowIndex,
+        startRowIndex: run[0]!.rowIndex,
         startColumnIndex: input.pkAppend.columnIndex,
-        rows: input.rows.map((row) => textRow(row.pkValue)),
+        rows: run.map((row) => textRow(row.pkValue)),
         fields: "userEnteredValue",
       });
     }
@@ -135,26 +152,40 @@ export async function applyAdoptionSystemColumns(input: {
   // Deterministic anchors: `entity:<pk>` — the same value
   // `mapping.anchorForEntity(entityId)` derives, so the row binding the
   // seeding writes matches the System_State projection's anchor exactly.
-  if (input.rows.length > 0) {
+  for (const run of contiguousRowRuns(input.rows)) {
     requests.push({
+      kind: "updateCells",
       sheetId: input.sheetId,
-      startRowIndex: input.rows[0]!.rowIndex,
+      startRowIndex: run[0]!.rowIndex,
       startColumnIndex: input.rowIdColumnIndex,
-      rows: input.rows.map((row) => textRow(`entity:${row.pkValue}`)),
+      rows: run.map((row) => textRow(`entity:${row.pkValue}`)),
       fields: "userEnteredValue",
     });
   }
 
-  await input.transport.batchUpdate({
+  const response = await input.transport.batchUpdate({
     spreadsheetId: input.spreadsheetId,
-    requests: requests.map((request) => ({
-      sheetId: request.sheetId,
-      startRowIndex: request.startRowIndex,
-      startColumnIndex: request.startColumnIndex,
-      rows: request.rows.map((row) => ({ values: row.values })),
-      fields: request.fields,
-    })),
+    requests,
   });
+  requireValidBatchUpdateReply(response, requests.length);
+}
+
+/** Groups sorted rows into maximal contiguous rowIndex runs. */
+function contiguousRowRuns(
+  rows: readonly { readonly rowIndex: number; readonly pkValue: string }[],
+): readonly (readonly { readonly rowIndex: number; readonly pkValue: string }[])[] {
+  const runs: { readonly rowIndex: number; readonly pkValue: string }[][] = [];
+  let current: { readonly rowIndex: number; readonly pkValue: string }[] = [];
+  for (const row of rows) {
+    const previous = current.at(-1);
+    if (previous !== undefined && row.rowIndex !== previous.rowIndex + 1) {
+      runs.push(current);
+      current = [];
+    }
+    current.push(row);
+  }
+  if (current.length > 0) runs.push(current);
+  return runs;
 }
 
 /**
@@ -219,8 +250,20 @@ export async function seedAdoptedEntityRows(input: {
     ]),
   );
 
+  let seededCount = 0;
   await input.storage.transaction(async ({ sql }) => {
-    for (const row of input.rows) {
+    // Only rows whose anchor is NOT yet bound get seeded: re-running the
+    // verify loop must never re-bind (or conflict on) an existing row.
+    const boundAnchors = new Set(
+      (await sql.all<{ anchor_reference: string }>(
+        "SELECT anchor_reference FROM row_binding WHERE logical_sheet_id = ?",
+        [input.mapping.logicalSheetId],
+      )).map((row) => row.anchor_reference),
+    );
+    const unbound = input.rows.filter((row) => !boundAnchors.has(row.anchor));
+    if (unbound.length === 0) return { seeded: 0 };
+
+    for (const row of unbound) {
       const rowBindingId = typedSheetsEntityRowBindingId(input.mapping, row.entityId);
       await createRowBinding(sql, input.mapping, rowBindingId, row.entityId, row.anchor);
 
@@ -270,10 +313,11 @@ export async function seedAdoptedEntityRows(input: {
         1,
         observedHash,
       ]);
+      seededCount += 1;
     }
   });
 
-  return { seeded: input.rows.length };
+  return { seeded: seededCount };
 }
 
 /**
@@ -359,6 +403,7 @@ export async function completeExistingSheetAdoption(input: {
         schemaVersion: mapping.schemaVersion,
         readMode: SYNC_SNAPSHOT_READ_MODES.FULL,
       }]);
+      const observedSnapshot = observed[0]!.snapshot;
       const rows = extractAdoptedSeedRows({ mapping, observed: observed[0]! });
       const seeded = await seedAdoptedEntityRows({
         storage: input.storage,
@@ -372,6 +417,29 @@ export async function completeExistingSheetAdoption(input: {
         now: Date.now(),
       });
       seededTotal += seeded.seeded;
+
+      // Stability requires EVERY observed row (with a usable anchor) to be
+      // bound — not merely "this pass seeded nothing". An unanchored row
+      // fails closed: the library cannot bind what it cannot locate.
+      const unanchored = observedSnapshot.rows.filter(
+        (row) => row.physicalAnchor.kind !== PRESENCE_KINDS.PRESENT,
+      ).length;
+      const boundAnchors = new Set(
+        (await storageReadAll(input.storage,
+          "SELECT anchor_reference FROM row_binding WHERE logical_sheet_id = ?",
+          [mapping.logicalSheetId],
+        )).map((row) => row.anchor_reference),
+      );
+      const unboundRows = observedSnapshot.rows.filter((row) =>
+        row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT &&
+        !boundAnchors.has(row.physicalAnchor.value),
+      ).length;
+      if (unanchored > 0 || unboundRows > 0) {
+        throw new SyncServiceError(
+          SYNC_SERVICE_ERROR_CODES.STARTUP_FAILED,
+          `adoption seeding for ${entity.entityName} left rows unbound (unanchored: ${unanchored}, unbound: ${unboundRows}); the startup is refused (fail-closed).`,
+        );
+      }
       if (seeded.seeded === 0) {
         stablePasses += 1;
         if (stablePasses >= 2) break;
@@ -386,5 +454,14 @@ export async function completeExistingSheetAdoption(input: {
       );
     }
   }
+}
+
+/** Reads rows through the storage adapter's transaction executor. */
+async function storageReadAll(
+  storage: SqlStorageAdapter,
+  query: string,
+  parameters: readonly (string | number | null)[],
+): Promise<readonly { anchor_reference: string }[]> {
+  return storage.transaction(async ({ sql }) => sql.all<{ anchor_reference: string }>(query, parameters));
 }
 

@@ -75,6 +75,10 @@ import {
   HIKOUTEI_LOG_EVENTS,
 } from "../../../shared/observability/logEvents.js";
 import {
+  SYNC_SERVICE_ERROR_CODES,
+  SyncServiceError,
+} from "./errors.js";
+import {
   createWriterOptions,
   throwSyncResolutionError,
   validateServiceOptions,
@@ -173,9 +177,27 @@ export async function createInternalSyncService(
     ];
     const remote = createRemoteProvider(options, projectionDefinitions);
     if (adoptionPlan !== undefined) {
-      // Adoption's ONLY sheet mutation: appending the system columns
-      // (row-id header, generated PK column, deterministic anchors) BEFORE
-      // provisioning asserts the User_Input headers (D5 order).
+      // D7 (fail-closed): adoption requires an empty canonical state for the
+      // adopted entity — a nonempty local state would silently merge with
+      // (or collide against) the adopted rows. Checked BEFORE the first
+      // sheet mutation.
+      const adoptionEntity = adoptionPlan.entities[0]!;
+      const adoptionMapping = runtime.mappings.mappings.find(
+        (candidate) => candidate.entityName === adoptionEntity.entityName,
+      );
+      if (adoptionMapping !== undefined) {
+        const existing = await runtime.storage.transaction(async ({ sql }) =>
+          sql.all<{ entity_id: string }>(
+            "SELECT entity_id FROM entity_state WHERE entity_id IN (SELECT entity_id FROM row_binding WHERE logical_sheet_id = ?)",
+            [adoptionMapping.logicalSheetId],
+          ));
+        if (existing.length > 0) {
+          throw new SyncServiceError(
+            SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+            `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}"; found ${existing.length} existing row(s).`,
+          );
+        }
+      }
       await applyAdoptionSystemColumns({
         transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
         spreadsheetId: options.projections.spreadsheetId,
