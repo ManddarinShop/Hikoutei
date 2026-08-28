@@ -24,8 +24,11 @@ import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
   runEffectWorkerWithAdapter,
+  type DispatchRequest,
   type NewEffect,
+  type OutboxPayloadHash,
   type PendingEffect,
+  type PreparedDispatch,
 } from "@hikoutei/ikisaki";
 import {
   computeSyncVisibleHash,
@@ -36,8 +39,14 @@ import {
   type FastAppendRowsResult,
   type ReadSyncEffectPostconditionsRequest,
   type SyncEffectPostconditionResult,
+  type PreparedApplyEffects,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
+import { absentValue } from "../src/shared/state/index.js";
 import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
+import {
+  SYNC_SHEETS_ERROR_CODES,
+  SyncSheetsContractError,
+} from "../src/application/sync/sheetsContract/errors.js";
 import type { CoordinatorLaneEvent } from "../src/application/sync/sheetsContract/mutationCoordinator/laneTelemetry.js";
 import {
   CoordinatedSheetsProvider,
@@ -45,6 +54,7 @@ import {
 import {
   SheetsEffectDispatcher,
   SHEETS_SPREADSHEET_ROUTE_KEY,
+  PreparedDispatchError,
 } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import type { SqlStorageAdapter } from "../src/adapter/persistence/contracts/sql.js";
 import { FakeSyncSheetsProvider, type FakeSyncSheetInput } from "./support/FakeSyncSheetsProvider.js";
@@ -246,9 +256,7 @@ describe("effect dispatcher before-remote lease renewal", () => {
     const adapter = new MikroOrmSqliteAdapter(orm);
     await migrateSqliteSchema(adapter);
     await registerProjection(adapter, PHYSICAL_SHEET_A, "OrdersA");
-    await registerProjection(adapter, PHYSICAL_SHEET_B, "OrdersB");
-
-    const now = Date.now();
+    await registerProjection(adapter, PHYSICAL_SHEET_B, "OrdersB");    const now = Date.now();
     const fence = await claimTestFence(adapter, now);
     const effectA = createAppendEffectFor("lane-a", PHYSICAL_SHEET_A, "OrdersA");
     const effectB = createAppendEffectFor("lane-b", PHYSICAL_SHEET_B, "OrdersB");
@@ -303,10 +311,14 @@ describe("effect dispatcher before-remote lease renewal", () => {
     await holder;
 
     expect(report).toMatchObject({ selected: 2, claimed: 2, applied: 2, failed: 0 });
-    // Both effects route through ONE combined fast-append call.
+    // The two effects share one spreadsheet, so the dispatcher's
+    // spreadsheet-scoped fast-append grouping keeps them in ONE atomic call
+    // spanning both routes (never split per-route, so a later tab failure
+    // cannot leave the earlier tab's rows already committed).
     expect(inner.fastAppendCalls).toBe(1);
-    // The provider call started only after the second lane's holder finished,
-    // proving the multi-tab dispatch acquired BOTH distinct route lanes.
+    // The combined call acquires BOTH distinct route lanes: the route-B call
+    // waits out the holder on the B lane, proving every distinct route lane is
+    // acquired before the atomic multi-route write.
     expect(inner.entryAt).toBeGreaterThanOrEqual(holderEndedAt);
     await expect(readStatus(adapter, effectA.effectId)).resolves.toBe("applied");
     await expect(readStatus(adapter, effectB.effectId)).resolves.toBe("applied");
@@ -573,6 +585,9 @@ describe("effect dispatcher before-remote lease renewal", () => {
       transport,
       requestTimeoutMs: 60_000,
       rateLimitIntervalMs: 1_100,
+      // Keep the admission bound at one interval so the frozen-clock queue
+      // (two intervals ahead) is deterministically refused.
+      requestStartMaxWaitMs: 1_100,
       now: () => providerNow,
       sleep: async (ms: number) => {
         if (advanceClockOnSleep) providerNow += ms;
@@ -610,8 +625,9 @@ describe("effect dispatcher before-remote lease renewal", () => {
     // Pass 1 with the frozen clock: the worker renews the effect lease
     // INSIDE the acquired lane (it succeeds — 60s lease), then the provider
     // admission is refused because the horizon is two intervals ahead. Zero
-    // remote calls from the dispatch; the probe is refused the same way and
-    // the effect is parked as delivery_uncertain.
+    // remote calls from the dispatch; the postcondition probe is paced on the
+    // WRITE limiter (idle), so it succeeds and the effect is requeued as
+    // pending rather than parked as delivery_uncertain.
     const pass1 = await runEffectWorkerWithAdapter({
       storage: adapter,
       dispatcher,
@@ -621,24 +637,30 @@ describe("effect dispatcher before-remote lease renewal", () => {
       effectLeaseDurationMs: 60_000,
     });
     expect(pass1).toMatchObject({ selected: 1, claimed: 1, applied: 0, failed: 0 });
-    expect(transport.getSpreadsheetCalls).toBe(2); // priming reads only
+    // The dispatch's preflight reads are refused on the saturated READ
+    // limiter, so no remote write is attempted. The postcondition probe,
+    // however, is paced on the WRITE limiter (idle), so it performs its two
+    // reads and succeeds — it is no longer refused by read-side contention.
+    expect(transport.getSpreadsheetCalls).toBe(4); // 2 priming + 2 probe reads
     expect(transport.batchUpdateCalls).toBe(0); // no remote write was attempted
-    // The refused dispatch and the refused probe are both visible in lane
-    // telemetry as delivery-uncertain, never as success.
+    // The refused dispatch is visible in lane telemetry as delivery-uncertain;
+    // the postcondition probe now succeeds on the write limiter.
     expect(laneEvents.some((event) =>
       event.operation === "fastAppendRows" &&
       event.outcome === TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN)).toBe(true);
     expect(laneEvents.some((event) =>
       event.operation === "readEffectPostconditions" &&
-      event.outcome === TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN)).toBe(true);
+      event.outcome === TRANSPORT_OUTCOME_KINDS.SUCCESS)).toBe(true);
+    // The probe confirms the write never landed, so the effect is requeued
+    // as pending (retryable) instead of being parked as delivery-uncertain.
     await expect(readOutboxRow(adapter, effect.effectId)).resolves.toMatchObject({
-      status: "delivery_uncertain",
+      status: "pending",
     });
 
     // The queue drains: the clock jumps past the open horizon and pacing
-    // sleeps advance it again. Pass 2 probes (the effect was never applied,
-    // so it returns to pending), pass 3 dispatches with fresh in-lane
-    // renewals and applies.
+    // sleeps advance it again. Because the pass-1 probe already confirmed the
+    // write never landed (and requeued the effect as pending), pass 2
+    // dispatches with fresh in-lane renewals and applies directly.
     advanceClockOnSleep = true;
     providerNow = 1_002_800; // t0 + 2.5 intervals: past the open slot
     const pass2 = await runEffectWorkerWithAdapter({
@@ -649,8 +671,9 @@ describe("effect dispatcher before-remote lease renewal", () => {
       maxEffects: 1,
       effectLeaseDurationMs: 60_000,
     });
-    expect(pass2).toMatchObject({ applied: 0, failed: 0, requeued: 1, deferred: 1 });
-    await expect(readStatus(adapter, effect.effectId)).resolves.toBe("pending");
+    expect(pass2).toMatchObject({ applied: 1, failed: 0 });
+    await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
+    expect(transport.batchUpdateCalls).toBe(1);
 
     const pass3 = await runEffectWorkerWithAdapter({
       storage: adapter,
@@ -660,9 +683,438 @@ describe("effect dispatcher before-remote lease renewal", () => {
       maxEffects: 1,
       effectLeaseDurationMs: 60_000,
     });
-    expect(pass3).toMatchObject({ applied: 1, failed: 0 });
-    expect(transport.batchUpdateCalls).toBe(1);
+    expect(pass3).toMatchObject({ applied: 0, failed: 0 });
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
+  });
+
+  it("routes a DIRECT dispatcher call (no before-remote hook) through the same mutation lane", async () => {
+    // A direct dispatcher call with NO `beforeRemoteDispatch` must still be
+    // serialized through the coordinated provider's mutation lane. The
+    // provider's `applyPreparedEffects`/`fastAppendRows` forwards to the inner
+    // provider, so if the dispatcher bypassed the lane on the hookless path,
+    // a concurrent holder on the same route could interleave with the write.
+    const now = Date.now();
+    const effect = createAppendEffectFor("direct-lane", PHYSICAL_SHEET_A, "OrdersA");
+    const inner = new MultiTabProbeProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+    ]);
+    const coordinator = new CoordinatedSheetsProvider({ inner });
+    const dispatcher = new SheetsEffectDispatcher({ provider: coordinator, storage: UNUSED_STORAGE });
+
+    // Hold the mutation lane so a direct hookless call must wait for it.
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted!: () => void;
+    const holderStartedPromise = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    let holderEndedAt = 0;
+    const holder = coordinator.runSerializedControl(PHYSICAL_SHEET_A, "lane-holder", async () => {
+      holderStarted();
+      await holderGate;
+      holderEndedAt = Date.now();
+    });
+    await holderStartedPromise;
+
+    const call = dispatcher.fastAppend({
+      routeKey: "spreadsheet-scope",
+      effects: [pendingFrom(effect)],
+      // No beforeRemoteDispatch hook: a direct non-worker dispatcher call.
+    });
+
+    await delay(200);
+    releaseHolder();
+    await call;
+    await holder;
+
+    // The direct hookless call waited out the lane holder before reaching the
+    // inner provider, proving it did NOT bypass mutation serialization.
+    expect(inner.entryAt).toBeGreaterThanOrEqual(holderEndedAt);
+    expect(inner.fastAppendCalls).toBe(1);
+  });
+});
+
+describe("SheetsEffectDispatcher split apply token and capability", () => {
+  const splitRequest = (routeKey = "route-a"): DispatchRequest => ({
+    routeKey,
+    effects: [pendingFrom(createAppendEffectFor("token", PHYSICAL_SHEET_A, "OrdersA"))],
+    beforeRemoteDispatch: async () => true,
+  });
+
+  /** Fake provider that optionally exposes the split stages. */
+  class SplitProbeProvider extends FakeSyncSheetsProvider {
+    public preflightCalls = 0;
+    public applyPreparedCalls = 0;
+    public constructor(inputs: readonly FakeSyncSheetInput[]) {
+      super(inputs);
+    }
+    public async preflightApplyEffects(
+      request: ApplySyncEffectsRequest,
+    ): Promise<PreparedApplyEffects> {
+      this.preflightCalls += 1;
+      // Carry the exact request so the dispatcher's nested-state binding check
+      // (request fingerprint) can validate the token it produces.
+      return { kind: "single", request } as PreparedApplyEffects;
+    }
+    public async applyPreparedEffects(
+      _prepared: PreparedApplyEffects,
+    ): Promise<ApplySyncEffectsResult> {
+      this.applyPreparedCalls += 1;
+      return { results: [], snapshotHash: absentValue(), hasMore: false };
+    }
+  }
+
+  /** Provider exposing ONLY the preflight stage (no applyPrepared). */
+  class PreflightOnlyProvider extends FakeSyncSheetsProvider {
+    public constructor(inputs: FakeSyncSheetInput[]) {
+      super(inputs);
+    }
+    public async preflightApplyEffects(
+      request: ApplySyncEffectsRequest,
+    ): Promise<PreparedApplyEffects> {
+      return { kind: "single", request };
+    }
+  }
+
+  /** Provider whose preflight (read+plan) stage throws a fixed contract error. */
+  class PreflightContractErrorProvider extends SplitProbeProvider {
+    constructor(inputs: readonly FakeSyncSheetInput[], private readonly error: SyncSheetsContractError) {
+      super(inputs);
+    }
+    public override async preflightApplyEffects(_request: ApplySyncEffectsRequest): Promise<PreparedApplyEffects> {
+      throw this.error;
+    }
+  }
+
+  it("falls back to legacy applyEffects when the provider exposes only preflight", async () => {
+    const inner = new PreflightOnlyProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+    ]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest();
+    const token = await dispatcher.preflight(request);
+    // A provider with only one split stage must use the single applyEffects
+    // path, never fail during applyPrepared.
+    const outcome = await dispatcher.applyPrepared(request, token);
+    expect(outcome).toMatchObject({ hasMore: false });
+    expect(inner.applyEffectsCalls).toBe(1);
+  });
+
+  it("falls back to legacy applyEffects when a coordinator wraps a partial inner", async () => {
+    const inner = new PreflightOnlyProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+    ]);
+    const coordinator = new CoordinatedSheetsProvider({ inner });
+    const dispatcher = new SheetsEffectDispatcher({ provider: coordinator, storage: UNUSED_STORAGE });
+    const request = splitRequest();
+    const token = await dispatcher.preflight(request);
+    const outcome = await dispatcher.applyPrepared(request, token);
+    expect(outcome).toMatchObject({ hasMore: false });
+    expect(inner.applyEffectsCalls).toBe(1);
+  });
+
+  it("rejects sequential reuse of a legacy fallback token with no second write", async () => {
+    const inner = new PreflightOnlyProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+    ]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest();
+    const token = await dispatcher.preflight(request);
+    const first = await dispatcher.applyPrepared(request, token);
+    expect(first).toMatchObject({ hasMore: false });
+    expect(inner.applyEffectsCalls).toBe(1);
+    // Reusing the same legacy fallback token must fail closed before any
+    // remote call so a stale plan cannot replay a duplicate write.
+    await expect(dispatcher.applyPrepared(request, token)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyEffectsCalls).toBe(1);
+  });
+
+  it("rejects concurrent reuse of a legacy fallback token with exactly one write", async () => {
+    const inner = new PreflightOnlyProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+    ]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest();
+    const token = await dispatcher.preflight(request);
+    const [first, second] = await Promise.allSettled([
+      dispatcher.applyPrepared(request, token),
+      dispatcher.applyPrepared(request, token),
+    ]);
+    const fulfilled = first.status === "fulfilled" ? first : second;
+    const rejected = first.status === "rejected" ? first : second;
+    expect(fulfilled.status).toBe("fulfilled");
+    expect(rejected.status).toBe("rejected");
+    // Exactly one `applyEffects` ran; the rejected concurrent reuse performed
+    // no second remote mutation.
+    expect(inner.applyEffectsCalls).toBe(1);
+  });
+
+  it("rejects in-place mutation of a legacy fallback token request before any write", async () => {
+    const inner = new PreflightOnlyProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+    ]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest();
+    const token = await dispatcher.preflight(request);
+    // The legacy token's request is deep-frozen, so a caller cannot mutate its
+    // effects in place to dispatch a different request than the fingerprinted
+    // one: the mutation must fail closed before `applyEffects` runs.
+    const mutableEffects = (token as unknown as {
+      readonly request: { readonly effects: Array<{ payloadHash: string }> };
+    }).request.effects;
+    expect(() => {
+      mutableEffects[0]!.payloadHash = "mutated-in-place";
+    }).toThrow(TypeError);
+    expect(inner.applyEffectsCalls).toBe(0);
+    // The frozen token still applies the ORIGINAL request exactly once.
+    const outcome = await dispatcher.applyPrepared(request, token);
+    expect(outcome).toMatchObject({ hasMore: false });
+    expect(inner.applyEffectsCalls).toBe(1);
+  });
+
+  it("rejects a legacy fallback token bound to a DIFFERENT request without consuming it", async () => {
+    const inner = new PreflightOnlyProvider([
+      sheetInputFor(PHYSICAL_SHEET_A, "OrdersA"),
+    ]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const original = splitRequest("route-a");
+    const token = await dispatcher.preflight(original);
+    // A mismatched caller request (different effect payload hash on the same
+    // route) must fail closed before any write AND must not consume the token,
+    // so the same token can still be applied against its original request.
+    const effects = splitRequest("route-a").effects.slice();
+    effects[0] = {
+      ...effects[0]!,
+      payload_hash: "different-payload-hash" as OutboxPayloadHash,
+    };
+    const mismatched: DispatchRequest = { ...splitRequest("route-a"), effects };
+    await expect(dispatcher.applyPrepared(mismatched, token)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyEffectsCalls).toBe(0);
+    // The rejected mismatch did not consume the legacy token.
+    const outcome = await dispatcher.applyPrepared(original, token);
+    expect(outcome).toMatchObject({ hasMore: false });
+    expect(inner.applyEffectsCalls).toBe(1);
+  });
+
+  it("classifies an unverified remote provider state during preflight as delivery_uncertain", async () => {
+    // A malformed provider response / missing tab / receipt-schema drift during
+    // the read+plan stage is raised as `SyncSheetsContractError` with the
+    // `INVALID_PROVIDER_RESPONSE` code. It leaves the remote state unverified,
+    // so the worker must requeue (delivery_uncertain), never close the effect
+    // terminally as an explicit remote failure.
+    const inner = new PreflightContractErrorProvider(
+      [sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")],
+      new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
+        "receipt sheet contains an invalid receipt",
+      ),
+    );
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    await expect(dispatcher.preflight(splitRequest())).rejects.toMatchObject({
+      kind: "delivery_uncertain",
+    });
+  });
+
+  it("keeps a proven local invalid request during preflight as explicit_remote_failure", async () => {
+    // A proven local request/config failure (invalid effect payload) is
+    // terminal and keeps its existing explicit-remote-failure classification.
+    const inner = new PreflightContractErrorProvider(
+      [sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")],
+      new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+        "apply effects request is invalid",
+      ),
+    );
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    await expect(dispatcher.preflight(splitRequest())).rejects.toMatchObject({
+      kind: "explicit_remote_failure",
+    });
+  });
+
+  it("accepts a valid single-route prepared value and applies it", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest("route-a");
+    const token = await dispatcher.preflight(request);
+    // A valid single-route prepared value (kind "single" carrying the request
+    // it was preflighted from) is accepted and applied through the split
+    // write+verify stage, never the legacy fallback.
+    const outcome = await dispatcher.applyPrepared(request, token);
+    expect(outcome).toMatchObject({ hasMore: false });
+    expect(inner.applyPreparedCalls).toBe(1);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects a token produced by a different dispatcher instance before any remote call", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcherA = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const dispatcherB = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest();
+    const foreignToken = await dispatcherA.preflight(request);
+    await expect(dispatcherB.applyPrepared(request, foreignToken)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyPreparedCalls).toBe(0);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects a token bound to a different route before any remote call", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const token = await dispatcher.preflight(splitRequest("route-a"));
+    await expect(dispatcher.applyPrepared(splitRequest("route-b"), token)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyPreparedCalls).toBe(0);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects a token bound to a DIFFERENT request on the same dispatcher and route", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    // A token prepared for one effect must not be reusable for another effect
+    // that shares the same dispatcher instance and route (stale/cross-request
+    // replay protection) even though both effects target the same tab.
+    const original = splitRequest("route-a");
+    const token = await dispatcher.preflight(original);
+    // Force a different effect payload hash on the same route: the fingerprint
+    // must catch it and fail closed before any remote call.
+    const effects = splitRequest("route-a").effects.slice();
+    effects[0] = {
+      ...effects[0]!,
+      payload_hash: "different-payload-hash" as OutboxPayloadHash,
+    };
+    const tampered: DispatchRequest = { ...splitRequest("route-a"), effects };
+    await expect(dispatcher.applyPrepared(tampered, token)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyPreparedCalls).toBe(0);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects a token whose nested prepared plan was replaced before any remote call", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest("route-a");
+    const token = await dispatcher.preflight(request);
+    // Replace the nested provider prepared state with a forged object that
+    // carries the same dispatcher/route/request fingerprint: the private
+    // identity registry must reject the replaced nested plan before any
+    // remote call.
+    const forged = {
+      ...(token as unknown as Record<string, unknown>),
+      preparedState: { kind: "single" },
+    };
+    await expect(dispatcher.applyPrepared(request, forged as unknown as PreparedDispatch)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyPreparedCalls).toBe(0);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects a prepared token applied twice (sequential reuse) with no second write", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest("route-a");
+    const token = await dispatcher.preflight(request);
+    const first = await dispatcher.applyPrepared(request, token);
+    expect(first).toMatchObject({ hasMore: false });
+    const callsAfterFirst = inner.applyPreparedCalls;
+    // Reusing the same prepared token must fail closed before any remote call
+    // so a stale plan cannot replay a duplicate append or delete.
+    await expect(dispatcher.applyPrepared(request, token)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyPreparedCalls).toBe(callsAfterFirst);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects concurrent reuse of one prepared token with no second write", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest("route-a");
+    const token = await dispatcher.preflight(request);
+    const [first, second] = await Promise.allSettled([
+      dispatcher.applyPrepared(request, token),
+      dispatcher.applyPrepared(request, token),
+    ]);
+    const fulfilled = first.status === "fulfilled" ? first : second;
+    const rejected = first.status === "rejected" ? first : second;
+    expect(fulfilled.status).toBe("fulfilled");
+    expect(rejected.status).toBe("rejected");
+    // Exactly one write ran; the rejected concurrent reuse performed no second
+    // write.
+    expect(inner.applyPreparedCalls).toBe(1);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects a token whose nested state is bound to a different request", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    // Two preflights on the same route produce two distinct nested states, both
+    // registered with this dispatcher. Swapping the nested state of token A for
+    // token B's state (which IS in the registry) must still fail: the nested
+    // state is bound to the exact request fingerprint, not just to the
+    // dispatcher instance.
+    const requestA: DispatchRequest = {
+      routeKey: "route-a",
+      effects: [pendingFrom(createAppendEffectFor("token", PHYSICAL_SHEET_A, "OrdersA"))],
+      beforeRemoteDispatch: async () => true,
+    };
+    const requestB: DispatchRequest = {
+      routeKey: "route-a",
+      effects: [pendingFrom(createAppendEffectFor("other", PHYSICAL_SHEET_A, "OrdersA"))],
+      beforeRemoteDispatch: async () => true,
+    };
+    const tokenA = await dispatcher.preflight(requestA);
+    const tokenB = await dispatcher.preflight(requestB);
+    const forged = {
+      ...(tokenA as unknown as Record<string, unknown>),
+      preparedState: (tokenB as unknown as Record<string, unknown>).preparedState,
+    };
+    await expect(dispatcher.applyPrepared(requestA, forged as unknown as PreparedDispatch)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyPreparedCalls).toBe(0);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("rejects a malformed nested prepared state before any remote call", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest("route-a");
+    const token = await dispatcher.preflight(request);
+    // A nested state that is not a record (or carries no request) must fail
+    // closed before any remote call.
+    const forged = {
+      ...(token as unknown as Record<string, unknown>),
+      preparedState: { kind: "single" },
+    };
+    await expect(dispatcher.applyPrepared(request, forged as unknown as PreparedDispatch)).rejects.toBeInstanceOf(
+      PreparedDispatchError,
+    );
+    expect(inner.applyPreparedCalls).toBe(0);
+    expect(inner.applyEffectsCalls).toBe(0);
+  });
+
+  it("freezes the nested prepared state so in-place mutation is rejected", async () => {
+    const inner = new SplitProbeProvider([sheetInputFor(PHYSICAL_SHEET_A, "OrdersA")]);
+    const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: UNUSED_STORAGE });
+    const request = splitRequest("route-a");
+    const token = await dispatcher.preflight(request);
+    const nested = (token as unknown as Record<string, unknown>).preparedState as Record<string, unknown>;
+    // The nested state is deep-frozen at preflight time, so an in-place
+    // mutation attempt must throw (strict mode) rather than silently changing
+    // the plan the write stage will apply.
+    expect(() => {
+      (nested as { kind?: unknown }).kind = "multi";
+    }).toThrow();
   });
 });
 

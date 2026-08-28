@@ -578,9 +578,10 @@ describe("mapped typed-sheets ORM", () => {
       applied: 2,
       failed: 0,
       blockedCandidate: 0,
-      // Both deletes now share one spreadsheet-scoped route group, so the
-      // single dropped response-loss read-back recovers both effects.
-      responseLossRecovered: 2,
+      // The deletes now group per-route (system vs input), so they dispatch
+      // as separate calls; only the one call whose response was dropped gets
+      // a response-loss read-back recovery.
+      responseLossRecovered: 1,
     });
 
     const userSnapshot = await provider.readSnapshot({

@@ -17,9 +17,14 @@ import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.m
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
 // terminate quickly and deterministically (a real poll would be ~1s each).
+// Poll/settle sleeps (1000 ms) are capped to keep loops fast; the barrier
+// jitter sleep (small ms) respects the deadline so the deadline-expired path
+// (the jitter sleep ending exactly at the run deadline) stays deterministic.
 vi.mock("../scripts/ci/local-soak/timing.mjs", () => ({
-  boundedSleep: async () => {
-    await new Promise((resolve) => setTimeout(resolve, 1));
+  boundedSleep: async (ms: number, deadline?: number) => {
+    const remaining = deadline === undefined ? ms : Math.max(0, deadline - Date.now());
+    const cap = ms >= 1000 ? 5 : ms;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(ms, remaining, cap)));
   },
 }));
 
@@ -329,6 +334,35 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  it("waits for a delayed observation to land before cleanup removes the accepted row", async () => {
+    // A human multi-field write is ACCEPTED but the inbound observation lands
+    // only after a few authority reads (the async worker is slower than the
+    // race). The scenario must observe the delayed landing (not declare
+    // silent loss prematurely) and only then clean up the dedicated row, so
+    // the delete is ordered after the observation result is terminal.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The authority carries the base row for the first several reads (the
+    // observation has not landed yet), then the human fields land.
+    let reads = 0;
+    em.findOneOverride = (id) => {
+      reads += 1;
+      const row = em.store.get(id);
+      if (row === undefined) return null;
+      return reads >= 4 ? { ...row, ...plan.humanValues } : row;
+    };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    // The delayed landing is observed (never declared silent loss), so the
+    // scenario verifies the race winner.
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(0);
+    // Cleanup removed the dedicated row only after the observation settled.
+    expect(em.rows()).toEqual([]);
+  });
+
   it("classifies a non-stale human multi-field rejection as a real failure", async () => {
     // A rejected human multi-field write is an expected stale conflict ONLY
     // on exact CAS/stale evidence. A non-stale (transport) rejection is a
@@ -338,12 +372,17 @@ describe("multiFieldHumanEdit scenario", () => {
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     client.throwOnMutateCall = { index: 1, code: "google_sheets_api_timeout" };
-    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBe(1);
-    // Guaranteed cleanup still removed the dedicated row.
-    expect(em.rows()).toEqual([]);
+    expect(result.failures).toBeGreaterThanOrEqual(1);
+    // The human write STARTED and rejected with a non-stale code, so its
+    // remote outcome is uncertain (it may have mutated before rejecting). The
+    // cleanup must NOT delete the row without complete landing proof; when the
+    // proof times out the row is left in place and surfaced as a cleanup
+    // failure (the #381 race).
+    expect(em.rows().length).toBe(1);
+    expect(result.cleanupFailures).toBeGreaterThan(0);
   });
 
   it("cannot finish ok when the human multi-field write detects an identity shift", async () => {
@@ -357,12 +396,17 @@ describe("multiFieldHumanEdit scenario", () => {
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
-    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBe(1);
-    // Guaranteed cleanup still removed the dedicated row.
-    expect(em.rows()).toEqual([]);
+    expect(result.failures).toBeGreaterThanOrEqual(1);
+    // The human write STARTED and rejected with `identity_shifted`, so its
+    // remote outcome is uncertain (a value may have landed on the wrong
+    // identity). The cleanup must NOT delete the row without complete landing
+    // proof; when the proof times out the row is left in place and surfaced as
+    // a cleanup failure (the #381 race).
+    expect(em.rows().length).toBe(1);
+    expect(result.cleanupFailures).toBeGreaterThan(0);
   });
 
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
@@ -381,16 +425,21 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
-  it("guarantees cleanup removes the dedicated row even when the race fails", async () => {
+  it("leaves the accepted row in place when the settle proof times out (no tombstone race)", async () => {
     // The guaranteed finally removes the dedicated race row even when the
     // public-API update's commit rejects with a non-stale transport code
-    // (a scenario-error), so final SQLite state matches the replay.
+    // (a scenario-error). BUT an ACCEPTED human write whose observation is
+    // never confirmed must NOT be deleted when the settle proof times out:
+    // deleting would tombstone the binding under an in-flight inbound
+    // observation (the #381 race). The leftover row is surfaced as a cleanup
+    // failure instead of being silently removed.
     const plan = racePlan();
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     // The 2nd flush is the local update's commit; it rejects with a non-stale
-    // transport code -> scenario-error.
+    // transport code -> scenario-error (and makes observeHumanFields settle
+    // quickly on "not-applied").
     em.flushBehavior = (index) => {
       if (index === 2) {
         throw Object.assign(new Error("fake transport failure"), {
@@ -398,10 +447,150 @@ describe("multiFieldHumanEdit scenario", () => {
         });
       }
     };
-    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
     expect(result.status).toBe("failed");
     expect(result.failures).toBeGreaterThanOrEqual(1);
-    // Guaranteed cleanup still removed the dedicated row.
+    // The accepted human write was never confirmed landed, so the settle proof
+    // times out and the row is NOT deleted; the leftover row is surfaced as a
+    // cleanup failure.
+    expect(em.rows().length).toBe(1);
+    expect(result.cleanupFailures).toBeGreaterThan(0);
+  });
+
+  it("deletes the accepted row once the observation lands during the settle window", async () => {
+    // The observation lands only AFTER observeHumanFields gave up (during the
+    // settle window), so the cleanup delete is ordered after terminal landing
+    // evidence. The accepted row is still removed once the settle window
+    // produced durable/complete proof.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The local update's commit fails (alreadyFailed > 0), so observeHumanFields
+    // settles on "not-applied" after a couple reads; the human write is
+    // accepted but its observation lands only during the settle window.
+    em.flushBehavior = (index) => {
+      if (index === 2) {
+        throw Object.assign(new Error("fake transport failure"), {
+          code: "google_sheets_api_network_error",
+        });
+      }
+    };
+    let reads = 0;
+    em.findOneOverride = (id) => {
+      reads += 1;
+      const row = em.store.get(id);
+      if (row === undefined) return null;
+      // The observation lands only after observeHumanFields gave up (during
+      // the settle window), so the cleanup delete is ordered after terminal
+      // landing evidence.
+      return reads >= 4 ? { ...row, ...plan.humanValues } : row;
+    };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
+    // The scenario already failed (local update transport failure + silent-loss
+    // classification), but the accepted row is still deleted once the settle
+    // window produced terminal landing evidence.
+    expect(result.status).toBe("failed");
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("leaves the row in place when a STARTED human write rejects after remote mutation (no tombstone race)", async () => {
+    // A human write that STARTED but was rejected with stale/CAS evidence may
+    // still have mutated the remote Sheet before rejecting. The remote outcome
+    // is uncertain, so the cleanup must NOT delete the dedicated row without
+    // complete consecutive landing proof; when the proof times out the row is
+    // left in place and surfaced as a cleanup failure (the #381 race).
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The human write starts and rejects with EXACT stale-write/CAS evidence
+    // (an expected conflict, not a failure), but the remote outcome is
+    // uncertain: it may have mutated before rejecting.
+    client.throwOnMutateCall = { index: 1, code: "visible_guard_mismatch" };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
+    // The rejection is expected stale evidence, so the scenario itself does
+    // not fail; the winner is not verified. The cleanup failure is recorded
+    // separately (cleanupFailures) and never masks the original outcome.
+    expect(result.cleanupFailures).toBeGreaterThan(0);
+    // The started-but-rejected write's remote outcome is uncertain, so the row
+    // is NOT deleted when the settle proof times out; it is surfaced as a
+    // cleanup failure.
+    expect(em.rows().length).toBe(1);
+  });
+
+  it("leaves the row in place when a partial landing never completes (no tombstone race)", async () => {
+    // A partial inbound state can precede later field landing: some human
+    // fields landed but others have not yet. Deleting now would tombstone the
+    // binding under an in-flight observation (the #381 race). The cleanup must
+    // require complete consecutive landing proof; when the remaining fields
+    // never land the row is left in place and surfaced as a cleanup failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // Only ONE of the two human fields ever lands (a partial application that
+    // never completes).
+    em.findOneOverride = (id) => {
+      const row = em.store.get(id);
+      if (row === undefined) return null;
+      return { ...row, name: plan.humanValues.name };
+    };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
+    // A partial application is a failure.
+    expect(result.status).toBe("failed");
+    expect(result.failures).toBeGreaterThanOrEqual(1);
+    // The partial landing never completed, so the row is NOT deleted and is
+    // surfaced as a cleanup failure.
+    expect(em.rows().length).toBe(1);
+    expect(result.cleanupFailures).toBeGreaterThan(0);
+  });
+
+  it("rejects a projection read that resolves after the phase deadline (no write)", async () => {
+    // The projection readiness read can resolve after the scenario/phase
+    // deadline (a slow request that began just before it). A projection
+    // observed only after the deadline is never actionable within the active
+    // phase, so the scenario must NOT accept it and must never start the human
+    // write (a truthful projection-not-ready skip).
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The projection read is slow: it resolves only after the phase deadline
+    // with the row present.
+    const originalRead = client.readTabRows.bind(client);
+    client.readTabRows = async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return originalRead(...args);
+    };
+    const context = liveContext(plan, client, em, Date.now() + 5);
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("projection-not-ready");
+    // No human write was ever attempted against a post-deadline projection.
+    expect(client.mutateCalls).toEqual([]);
+    // The dedicated row is still removed in cleanup (the write never started).
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("reports a truthful deadline-expired skip, never silent loss, when the human write never starts", async () => {
+    // The run deadline expires during the barrier jitter, so the direct human
+    // write never starts. The scenario must NOT report silent loss for a write
+    // that never ran; it reports a truthful deadline-expired skip. The jitter
+    // is long enough that the projection readiness completes first, then the
+    // bounded jitter sleep ends exactly at the deadline.
+    const plan = racePlan({ jitterMs: 50 });
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 20) });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("deadline-expired");
+    expect(result.failures).toBe(0);
+    // No human write was ever attempted against an expired budget.
+    expect(client.mutateCalls).toEqual([]);
+    // The dedicated row is still cleaned up (the local update ran; the human
+    // write never started, so there is no in-flight observation to protect).
     expect(em.rows()).toEqual([]);
   });
 });

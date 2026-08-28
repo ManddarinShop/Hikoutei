@@ -14,6 +14,7 @@ import {
   ROW_OPERATIONS,
   CONFLICT_STATUSES,
   QUARANTINE_REASONS,
+  ROW_BINDING_STATES,
 } from "../src/domain/model/constants.js";
 import {
   QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
@@ -760,6 +761,279 @@ describe("MikroOrmSqliteAdapter", () => {
         ["row-binding-accepted"],
       );
     })).resolves.toEqual({ entity_id: "order-accepted", state: "active" });
+  });
+
+  it("routes a concurrently tombstoned binding to STALE instead of aborting as inconsistent storage", async () => {
+    // The polling snapshot captured this binding as active; scenario cleanup
+    // tombstoned it before the inbound conflict observation persisted. This
+    // is an expected lifecycle race, not corrupt storage: the observation
+    // must follow the existing STALE path (deferred/re-quarantined on a later
+    // pass) instead of aborting the whole polling pass with
+    // `observation_storage_inconsistent`.
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await adapter.transaction(({ sql }) => {
+      return sql.run(
+        "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, entity_id, state) VALUES (?, ?, ?, ?, ?)",
+        ["row-binding-tombstone", "logical-sheet", "anchor-tombstone", "order-tombstone", ROW_BINDING_STATES.TOMBSTONED],
+      );
+    });
+
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "observation_writer",
+      writerId: "writer-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+
+    const result = await persistObservedRowWithAdapter(
+      adapter,
+      {
+        role: leaseClaim.lease.role,
+        writerEpoch: leaseClaim.lease.writerEpoch,
+        fencingToken: leaseClaim.lease.fencingToken,
+        now: 1000,
+      },
+      createConflictObservationInput(),
+    );
+
+    // A conflict against a tombstoned (deleted) binding is stale, not
+    // inconsistent storage: the writer returns STALE and the polling pass
+    // continues instead of aborting.
+    expect(result).toEqual({ kind: "stale" });
+  });
+
+  it("fails closed as inconsistent storage when an ACTIVE binding has no entity reference", async () => {
+    // An ACTIVE row binding with a NULL entity reference is an impossible
+    // state (an invariant violation), never a lifecycle race: an active
+    // binding must always reference its entity. The broad stale predicate
+    // must NOT swallow this as a stale re-quarantine; it must fail closed
+    // with `observation_storage_inconsistent` so corrupt storage surfaces.
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await adapter.transaction(({ sql }) => {
+      return sql.run(
+        "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, entity_id, state) VALUES (?, ?, ?, ?, ?)",
+        ["row-binding-corrupt", "logical-sheet", "anchor-corrupt", null, ROW_BINDING_STATES.ACTIVE],
+      );
+    });
+
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "observation_writer",
+      writerId: "writer-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+
+    await expect(persistObservedRowWithAdapter(
+      adapter,
+      {
+        role: leaseClaim.lease.role,
+        writerEpoch: leaseClaim.lease.writerEpoch,
+        fencingToken: leaseClaim.lease.fencingToken,
+        now: 1000,
+      },
+      createConflictObservationInput("row-binding-corrupt"),
+    )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
+  });
+
+  it("fails closed as inconsistent storage on a TOMBSTONED binding with no entity reference", async () => {
+    // A tombstoned binding must still point at its former entity. A tombstoned
+    // binding with a NULL entity is an invariant violation the schema does not
+    // enforce (state and entity_id are independent columns), never a lifecycle
+    // race: it must fail closed as `observation_storage_inconsistent` instead
+    // of being silently re-quarantined as stale.
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await adapter.transaction(({ sql }) => {
+      return sql.run(
+        "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, entity_id, state) VALUES (?, ?, ?, ?, ?)",
+        ["row-binding-tombstone-null", "logical-sheet", "anchor-tombstone-null", null, ROW_BINDING_STATES.TOMBSTONED],
+      );
+    });
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "observation_writer",
+      writerId: "writer-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    await expect(persistObservedRowWithAdapter(
+      adapter,
+      {
+        role: leaseClaim.lease.role,
+        writerEpoch: leaseClaim.lease.writerEpoch,
+        fencingToken: leaseClaim.lease.fencingToken,
+        now: 1000,
+      },
+      createConflictObservationInput("row-binding-tombstone-null"),
+    )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
+  });
+
+  it("fails closed as inconsistent storage on a CANDIDATE binding that carries an entity", async () => {
+    // A candidate binding must have no entity (it awaits activation). A
+    // candidate with an entity is an invariant violation, never a lifecycle
+    // race: it must fail closed as `observation_storage_inconsistent`.
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await adapter.transaction(({ sql }) => {
+      return sql.run(
+        "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, entity_id, state) VALUES (?, ?, ?, ?, ?)",
+        ["row-binding-candidate-entity", "logical-sheet", "anchor-candidate-entity", "order-candidate", ROW_BINDING_STATES.CANDIDATE],
+      );
+    });
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "observation_writer",
+      writerId: "writer-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    await expect(persistObservedRowWithAdapter(
+      adapter,
+      {
+        role: leaseClaim.lease.role,
+        writerEpoch: leaseClaim.lease.writerEpoch,
+        fencingToken: leaseClaim.lease.fencingToken,
+        now: 1000,
+      },
+      createConflictObservationInput("row-binding-candidate-entity"),
+    )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
+  });
+
+  it("fails closed as inconsistent storage on an AMBIGUOUS binding that carries an entity", async () => {
+    // An ambiguous binding has no trusted identity, so it must carry no
+    // entity. An ambiguous binding with an entity is an invariant violation,
+    // never a lifecycle race: it must fail closed as
+    // `observation_storage_inconsistent`.
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await adapter.transaction(({ sql }) => {
+      return sql.run(
+        "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, entity_id, state) VALUES (?, ?, ?, ?, ?)",
+        ["row-binding-ambiguous-entity", "logical-sheet", "anchor-ambiguous-entity", "order-ambiguous", ROW_BINDING_STATES.AMBIGUOUS],
+      );
+    });
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "observation_writer",
+      writerId: "writer-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    await expect(persistObservedRowWithAdapter(
+      adapter,
+      {
+        role: leaseClaim.lease.role,
+        writerEpoch: leaseClaim.lease.writerEpoch,
+        fencingToken: leaseClaim.lease.fencingToken,
+        now: 1000,
+      },
+      createConflictObservationInput("row-binding-ambiguous-entity"),
+    )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
+  });
+
+  it("routes a CANDIDATE binding with no entity to STALE (legitimate lifecycle race)", async () => {
+    // A candidate binding awaiting activation (no entity) is an expected
+    // lifecycle race, not corrupt storage: the observed conflict has no active
+    // entity to attach to, so it follows the STALE path (deferred) instead of
+    // aborting the polling pass.
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await adapter.transaction(({ sql }) => {
+      return sql.run(
+        "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, entity_id, state) VALUES (?, ?, ?, ?, ?)",
+        ["row-binding-candidate", "logical-sheet", "anchor-candidate", null, ROW_BINDING_STATES.CANDIDATE],
+      );
+    });
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "observation_writer",
+      writerId: "writer-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    const result = await persistObservedRowWithAdapter(
+      adapter,
+      {
+        role: leaseClaim.lease.role,
+        writerEpoch: leaseClaim.lease.writerEpoch,
+        fencingToken: leaseClaim.lease.fencingToken,
+        now: 1000,
+      },
+      createConflictObservationInput("row-binding-candidate"),
+    );
+    expect(result).toEqual({ kind: "stale" });
+  });
+
+  it("routes an AMBIGUOUS binding with no entity to STALE (legitimate lifecycle race)", async () => {
+    // An ambiguous binding with no trusted identity (no entity) is an expected
+    // lifecycle race, not corrupt storage: the observed conflict has no active
+    // entity to attach to, so it follows the STALE path (deferred) instead of
+    // aborting the polling pass.
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+    await adapter.transaction(({ sql }) => {
+      return sql.run(
+        "INSERT INTO row_binding (row_binding_id, logical_sheet_id, anchor_reference, entity_id, state) VALUES (?, ?, ?, ?, ?)",
+        ["row-binding-ambiguous", "logical-sheet", "anchor-ambiguous", null, ROW_BINDING_STATES.AMBIGUOUS],
+      );
+    });
+    const leaseClaim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "observation_writer",
+      writerId: "writer-a",
+      leaseDurationMs: 100,
+      now: 1000,
+    });
+    if (leaseClaim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
+      throw new Error("Expected writer lease claim");
+    }
+    const result = await persistObservedRowWithAdapter(
+      adapter,
+      {
+        role: leaseClaim.lease.role,
+        writerEpoch: leaseClaim.lease.writerEpoch,
+        fencingToken: leaseClaim.lease.fencingToken,
+        now: 1000,
+      },
+      createConflictObservationInput("row-binding-ambiguous"),
+    );
+    expect(result).toEqual({ kind: "stale" });
   });
 
   it("renews the automatic conflict resolver lease and rejects a silent takeover", async () => {
@@ -1625,6 +1899,105 @@ function createAcceptedObservationInput(): PersistObservedRowInput {
         businessKeyChanges: [],
       },
     },
+    effects: [],
+  };
+}
+
+function createConflictObservationInput(rowBindingId = "row-binding-tombstone"): PersistObservedRowInput {
+  const userCell = { kind: "string" as const, value: "edited-by-user" };
+  const canonicalCell = { kind: "string" as const, value: "canonical-value" };
+  const afterRow = {
+    rowBindingId,
+    fields: new Map([
+      [
+        "status",
+        {
+          fieldName: "status",
+          cell: userCell,
+          baseFieldRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: 1 },
+        },
+      ],
+    ]),
+  };
+  const beforeRow = {
+    rowBindingId,
+    fields: new Map([
+      [
+        "status",
+        {
+          fieldName: "status",
+          cell: canonicalCell,
+          baseFieldRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: 1 },
+        },
+      ],
+    ]),
+  };
+  const row = {
+    rowBindingId,
+    baseVisibleRevision: 1,
+    baseEntityRevision: 1,
+    operation: ROW_OPERATIONS.UPDATE,
+    beforeRow,
+    afterRow,
+    fields: [
+      {
+        fieldName: "status",
+        previousValue: canonicalCell,
+        nextValue: userCell,
+        baseFieldRevision: 1,
+      },
+    ],
+  };
+
+  return {
+    physicalSheetId: "physical-sheet",
+    batch: {
+      batchId: "batch-conflict-tombstone",
+      source: "onEdit",
+      sheetId: "logical-sheet",
+      projection: "system_state",
+      schemaVersion: 1,
+      atomicity: "row_independent",
+      baseSnapshotHash: "snapshot-conflict",
+      ingressActorId: "provider",
+      editorActorId: { kind: PRESENCE_KINDS.ABSENT },
+      editorActorSource: "unavailable",
+      rows: [row],
+    },
+    rowIndex: 0,
+    observation: {
+      observationId: "observation-conflict-tombstone",
+      observationKey: "observation-key-conflict-tombstone",
+      payloadJson: "{\"kind\":\"conflict-tombstone\"}",
+      payloadHash: "payload-conflict-tombstone",
+      detectedAt: 1000,
+      receivedAt: 1000,
+      ingressActorId: "provider",
+      editorActorId: { kind: PRESENCE_KINDS.ABSENT },
+      editorActorSource: "unavailable",
+    },
+    event: {
+      kind: PRESENCE_KINDS.PRESENT,
+      value: {
+        eventKey: "event-key-conflict-tombstone",
+        payloadHash: "event-payload-conflict-tombstone",
+      },
+    },
+    evaluation: {
+      rowBindingId,
+      outcome: ROW_OUTCOMES.CONFLICT,
+      acceptedFields: [],
+      conflicts: [
+        {
+          fieldName: "status",
+          userValue: userCell,
+          userBaseRevision: 1,
+          canonicalValue: canonicalCell,
+          canonicalRevision: 2,
+        },
+      ],
+    },
+    canonical: { kind: PRESENCE_KINDS.ABSENT },
     effects: [],
   };
 }
