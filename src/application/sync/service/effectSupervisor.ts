@@ -22,6 +22,7 @@ import { SYNC_PROJECTIONS } from "../sheetsContract/constants.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
 import {
   createEffectWorkerSupervisor,
+  AdaptiveEffectBatchController,
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
   FAST_APPEND_BATCH_CANDIDATE_LIMIT,
   readOutboxScanReadinessWithAdapter,
@@ -260,6 +261,7 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   readonly idleIntervalMs?: number;
   readonly maxFastAppendCandidates?: number;
   readonly appendDispatchIntervalMs?: number;
+  readonly batchController?: AdaptiveEffectBatchController;
   readonly onTiming?: SyncTimingSink;
   readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
@@ -280,13 +282,22 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
     ...(options.effectLeaseDurationMs === undefined ? {} : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
     ...(outboundTimeoutMs === undefined ? {} : { requestTimeoutMs: outboundTimeoutMs }),
     ...(options.effectIdleIntervalMs === undefined ? {} : { idleIntervalMs: options.effectIdleIntervalMs }),
-    // The bulk append claim window and the append dispatch throttle belong to
-    // the real Google Sheets API provider.
+    // The bulk append claim window, the append dispatch throttle, and the
+    // adaptive regular batch controller belong to the real Google Sheets API
+    // provider. The direct provider starts its regular batch at the provider's
+    // MAX_EFFECTS_PER_REQUEST cap (1,000; live-measured quota-safe 2026-08-28)
+    // so a healthy route converges at the full body budget; the generic/fake
+    // supervisor keeps the package default initial of 100. Minimum (5) and the
+    // failure/timeout/429 backoff are unchanged.
     ...(options.googleSheetsApi === undefined
       ? {}
       : {
         maxFastAppendCandidates: FAST_APPEND_BATCH_CANDIDATE_LIMIT,
         appendDispatchIntervalMs: APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
+        batchController: new AdaptiveEffectBatchController({
+          initial: GOOGLE_SHEETS_API_DEFAULTS.MAX_EFFECTS_PER_REQUEST,
+          appendDispatchIntervalMs: APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
+        }),
       }),
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
     ...wrapEffectWorkerHooks(options),
