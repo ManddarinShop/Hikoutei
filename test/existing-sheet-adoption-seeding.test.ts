@@ -183,7 +183,8 @@ describe("existing-sheet adoption seeding engine", () => {
       );
       void observed;
       const rows = extractAdoptedSeedRows({ mapping, observed: observedSnap });
-      expect(rows.map((row) => row.entityId)).toEqual(["INV-1", "INV-2"]);
+      expect(rows.map((row) => row.visibleEntityId)).toEqual(["INV-1", "INV-2"]);
+      expect(rows.map((row) => row.canonicalEntityId)).toEqual(["INV-1", "INV-2"]);
       expect(rows[0]!.anchor).toBe("entity:INV-1");
 
       const seeded = await seedAdoptedEntityRows({
@@ -201,12 +202,13 @@ describe("existing-sheet adoption seeding engine", () => {
 
       const bindings = await storage.transaction(async ({ sql }) =>
         sql.all<{ anchor_reference: string; state: string }>(
-          "SELECT anchor_reference, state FROM row_binding WHERE logical_sheet_id = ? ORDER BY entity_id",
+          "SELECT anchor_reference, state, entity_id FROM row_binding WHERE logical_sheet_id = ? ORDER BY entity_id",
           ["adopt-seed-probe"],
         ));
+      console.log("BINDING-ROW:", JSON.stringify(bindings[0]));
       expect(bindings).toEqual([
-        { anchor_reference: "entity:INV-1", state: "active" },
-        { anchor_reference: "entity:INV-2", state: "active" },
+        { anchor_reference: "entity:INV-1", entity_id: "INV-1", state: "active" },
+        { anchor_reference: "entity:INV-2", entity_id: "INV-2", state: "active" },
       ]);
       const entities = await storage.transaction(async ({ sql }) =>
         sql.all<{ entity_id: string; entity_revision: number; status: string }>(

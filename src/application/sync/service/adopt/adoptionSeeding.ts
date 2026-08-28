@@ -214,7 +214,8 @@ export async function seedAdoptedEntityRows(input: {
   readonly physicalSheetId: string;
   /** Observed User_Input snapshot rows (anchors already assigned). */
   readonly rows: readonly {
-    readonly entityId: string;
+    readonly visibleEntityId: string;
+    readonly canonicalEntityId: string;
     readonly anchor: string;
     readonly fields: Readonly<Record<string, NormalizedCell>>;
   }[];
@@ -264,8 +265,12 @@ export async function seedAdoptedEntityRows(input: {
     if (unbound.length === 0) return { seeded: 0 };
 
     for (const row of unbound) {
-      const rowBindingId = typedSheetsEntityRowBindingId(input.mapping, row.entityId);
-      await createRowBinding(sql, input.mapping, rowBindingId, row.entityId, row.anchor);
+      // Bindings/canonical state are keyed on the CANONICAL entity identity
+      // (the normal flush INSERT converts via mapping.canonicalEntityIdFor);
+      // the visible PK stays in the application entity table and the anchor
+      // stays derived from the visible ID.
+      const rowBindingId = typedSheetsEntityRowBindingId(input.mapping, row.visibleEntityId);
+      await createRowBinding(sql, input.mapping, rowBindingId, row.canonicalEntityId, row.anchor);
 
       const fields = Object.entries(row.fields).map(([fieldName, value]) => ({
         fieldName,
@@ -276,7 +281,7 @@ export async function seedAdoptedEntityRows(input: {
       const observedHash = computeSyncVisibleHash(row.fields);
       const commit = await commitCanonicalChangesWithSql(sql, fence, {
         kind: ROW_OPERATIONS.INSERT,
-        entityId: row.entityId,
+        entityId: row.canonicalEntityId,
         acceptedSnapshotHash: presentValue(observedHash),
         fields,
         effects: [],
@@ -284,24 +289,26 @@ export async function seedAdoptedEntityRows(input: {
       if (commit.kind !== "applied") {
         throw new SyncServiceError(
           SYNC_SERVICE_ERROR_CODES.STARTUP_FAILED,
-          `adoption seeding for ${input.mapping.entityName}:${row.entityId} did not apply (${commit.kind}).`,
+          `adoption seeding for ${input.mapping.entityName}:${row.visibleEntityId} did not apply (${commit.kind}).`,
         );
       }
-      await claimBusinessKey(sql, input.mapping, row.entityId, row.fields);
+      await claimBusinessKey(sql, input.mapping, row.canonicalEntityId, row.fields);
 
       // The application-owned ORM entity table must hold the adopted row too:
-      // the polling's accepted-update path mutates it (exactly-once CAS).
+      // the polling's accepted-update path mutates it (exactly-once CAS). Its
+      // PK column carries the VISIBLE identity.
       const fieldNames = Object.keys(row.fields);
       const columns = fieldNames.map(
         (field) => columnByFieldName.get(field) ?? ormColumnNameForField(field),
       );
       const placeholders = columns.map(() => "?").join(", ");
+      const ormValues = fieldNames.map((field) => {
+        const cell = row.fields[field];
+        return cell === null || typeof cell !== "object" || !("value" in cell) ? null : cell.value;
+      });
       await sql.run(
         `INSERT INTO ${input.entityTableName} (${columns.join(", ")}) VALUES (${placeholders})`,
-        fieldNames.map((field) => {
-          const cell = row.fields[field];
-          return cell === null || typeof cell !== "object" || !("value" in cell) ? null : cell.value;
-        }),
+        ormValues,
       );
 
       await sql.run(CONFIRM_OBSERVED_VISIBLE_STATE_SQL, [
@@ -328,7 +335,12 @@ export async function seedAdoptedEntityRows(input: {
 export function extractAdoptedSeedRows(input: {
   readonly mapping: TypedSheetsEntityMapping;
   readonly observed: SyncObservedSnapshot;
-}): { readonly entityId: string; readonly anchor: string; readonly fields: Readonly<Record<string, NormalizedCell>> }[] {
+}): {
+  readonly visibleEntityId: string;
+  readonly canonicalEntityId: string;
+  readonly anchor: string;
+  readonly fields: Readonly<Record<string, NormalizedCell>>;
+}[] {
   const projection = input.mapping.projections.find(
     (candidate) => candidate.projection === SYNC_PROJECTIONS.USER_INPUT,
   );
@@ -339,22 +351,47 @@ export function extractAdoptedSeedRows(input: {
     );
   }
   const headers = typedSheetsEntityProjectionHeaders(input.mapping, SYNC_PROJECTIONS.USER_INPUT);
-  const rows: { entityId: string; anchor: string; fields: Record<string, NormalizedCell> }[] = [];
+  const rows: {
+    visibleEntityId: string;
+    canonicalEntityId: string;
+    anchor: string;
+    fields: Record<string, NormalizedCell>;
+  }[] = [];
+  const anchorsSeen = new Map<string, number>();
   for (const row of input.observed.snapshot.rows) {
     if (row.physicalAnchor.kind !== PRESENCE_KINDS.PRESENT) continue;
     const anchor = row.physicalAnchor.value;
+    // Duplicate anchors fail closed: two rows sharing one anchor cannot both
+    // be bound, so startup must refuse instead of silently dropping one.
+    const anchorSeenAt = anchorsSeen.get(anchor);
+    if (anchorSeenAt !== undefined) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.STARTUP_FAILED,
+        `adoption found rows ${anchorSeenAt} and ${row.rowNumber} sharing the anchor "${anchor}" in ${projection.tabName}; deduplicate and retry.`,
+      );
+    }
+    anchorsSeen.set(anchor, row.rowNumber);
+
     const fields: Record<string, NormalizedCell> = {};
-    let entityId: string | undefined;
+    let visibleEntityId: string | undefined;
     for (const fieldName of headers) {
       const cell = row.cells[fieldName];
       const normalized = cell?.normalizedCell ?? null;
       fields[fieldName] = normalized;
-      if (fieldName === input.mapping.primaryKey && normalized !== null && typeof normalized === "object" && "value" in normalized && typeof normalized.value === "string") {
-        entityId = normalized.value;
+      if (fieldName === input.mapping.primaryKey && normalized !== null && typeof normalized === "object" && "value" in normalized && typeof normalized.value === "string" && normalized.value !== "") {
+        visibleEntityId = normalized.value;
       }
     }
-    if (entityId === undefined || entityId === "") continue;
-    rows.push({ entityId, anchor, fields });
+    if (visibleEntityId === undefined) continue;
+    // The canonical identity conversion matches the normal flush INSERT path
+    // (planEntityId → typedSheetsCanonicalEntityId); default mappings are
+    // identity conversions, namespaced mappings must namespace here too.
+    rows.push({
+      visibleEntityId,
+      canonicalEntityId: input.mapping.canonicalEntityIdFor(visibleEntityId),
+      anchor,
+      fields,
+    });
   }
   return rows;
 }
@@ -419,25 +456,29 @@ export async function completeExistingSheetAdoption(input: {
       seededTotal += seeded.seeded;
 
       // Stability requires EVERY observed row (with a usable anchor) to be
-      // bound — not merely "this pass seeded nothing". An unanchored row
+      // bound to ITS OWN row binding (anchor AND canonical entity id both
+      // matching) — not merely "this pass seeded nothing". An unanchored row
       // fails closed: the library cannot bind what it cannot locate.
       const unanchored = observedSnapshot.rows.filter(
         (row) => row.physicalAnchor.kind !== PRESENCE_KINDS.PRESENT,
       ).length;
-      const boundAnchors = new Set(
-        (await storageReadAll(input.storage,
-          "SELECT anchor_reference FROM row_binding WHERE logical_sheet_id = ?",
-          [mapping.logicalSheetId],
-        )).map((row) => row.anchor_reference),
+      const bindings = await storageReadAll(input.storage,
+        "SELECT anchor_reference, entity_id, state FROM row_binding WHERE logical_sheet_id = ?",
+        [mapping.logicalSheetId],
       );
-      const unboundRows = observedSnapshot.rows.filter((row) =>
-        row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT &&
-        !boundAnchors.has(row.physicalAnchor.value),
-      ).length;
-      if (unanchored > 0 || unboundRows > 0) {
+      const boundByAnchor = new Map(
+        bindings.map((binding) => [binding.anchor_reference, binding]),
+      );
+      const unboundRows: number[] = [];
+      for (const row of observedSnapshot.rows) {
+        if (row.physicalAnchor.kind !== PRESENCE_KINDS.PRESENT) continue;
+        const binding = boundByAnchor.get(row.physicalAnchor.value);
+        if (binding === undefined || binding.state !== "active") unboundRows.push(row.rowNumber);
+      }
+      if (unanchored > 0 || unboundRows.length > 0) {
         throw new SyncServiceError(
           SYNC_SERVICE_ERROR_CODES.STARTUP_FAILED,
-          `adoption seeding for ${entity.entityName} left rows unbound (unanchored: ${unanchored}, unbound: ${unboundRows}); the startup is refused (fail-closed).`,
+          `adoption seeding for ${entity.entityName} left rows unbound (unanchored: ${unanchored}, unbound: ${unboundRows.length} at rows ${unboundRows.slice(0, 20).join(",")}); the startup is refused (fail-closed).`,
         );
       }
       if (seeded.seeded === 0) {
@@ -461,7 +502,6 @@ async function storageReadAll(
   storage: SqlStorageAdapter,
   query: string,
   parameters: readonly (string | number | null)[],
-): Promise<readonly { anchor_reference: string }[]> {
-  return storage.transaction(async ({ sql }) => sql.all<{ anchor_reference: string }>(query, parameters));
+): Promise<readonly { anchor_reference: string; entity_id: string; state: string }[]> {
+  return storage.transaction(async ({ sql }) => sql.all<{ anchor_reference: string; entity_id: string; state: string }>(query, parameters));
 }
-

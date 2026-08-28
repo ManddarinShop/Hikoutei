@@ -474,3 +474,73 @@ expect(dup?.detail?.columns).toEqual(["A", "B"]);
     expect(adoptionTabRange("Team's Sheet", 100)).toBe("'Team''s Sheet'!A1:CV");
   });
 });
+
+describe("review round 2 regressions", () => {
+  const projections = {
+    spreadsheetId: "adopt-spreadsheet",
+    entities: {
+      AdoptInvoice: {
+        systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Invoices", registeredRange: "A:E" },
+        userOwnedFields: USER_OWNED,
+      },
+    },
+  } as const;
+  const planWith = (headers: readonly string[], rows: readonly (readonly (string | undefined)[])[]) =>
+    planExistingSheetAdoptionStartup({
+      adopt: { mode: "dry-run", entities: { AdoptInvoice: { tabName: "Invoices", identityFrom: "auto" } } },
+      spreadsheetId: "adopt-spreadsheet",
+      transport: {
+        async getSpreadsheet() {
+          return { sheets: [{ properties: { sheetId: 7, title: "Invoices", gridProperties: { columnCount: headers.length } } }] };
+        },
+        async getValues() {
+          return { values: [headers, ...rows.map((row) => row.map((cell) => cell ?? null))] };
+        },
+        async batchUpdate() {
+          return {};
+        },
+      },
+      descriptors: [adoptDescriptor],
+      projections,
+      userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED },
+    });
+
+  it("blocks when the row-id append column has DATA below an empty header (data loss guard)", async () => {
+    try {
+      await planWith(
+        ["invoiceNo", "customer", "total", "note", "legacy"],
+        [["INV-1", "Acme", "100", "", "old data"], ["INV-2", "Beta", "200", "", "more"]],
+      );
+      expect.unreachable("occupied data column must block");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_OCCUPIED")).toBe(true);
+    }
+  });
+
+  it("blocks whitespace-padded headers (provisioning requires exact headers)", async () => {
+    try {
+      await planWith(
+        ["invoiceNo ", "customer", "total", "note"],
+        [["INV-1", "Acme", "100", ""]],
+      );
+      expect.unreachable("whitespace header must block");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.problems.some((p) => p.code === "EXACT_HEADER_MISMATCH")).toBe(true);
+    }
+  });
+
+  it("does not duplicate a single-entity ready report", async () => {
+    const plan = await planWith(
+      ["invoiceNo", "customer", "total", "note"],
+      [["INV-1", "Acme", "100", ""]],
+    ).catch((error: unknown) => {
+      if (error instanceof ExistingSheetAdoptionDryRunReportError) return error.report;
+      throw error;
+    });
+    expect(plan.entities).toHaveLength(1);
+  });
+});

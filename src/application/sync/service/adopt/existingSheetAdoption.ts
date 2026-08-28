@@ -113,7 +113,8 @@ export interface ExistingSheetAdoptionProblem {
     | "COLUMN_SEGMENTATION"
     | "COLUMN_OCCUPIED"
     | "DECLARATION_ORDER_MISMATCH"
-    | "NO_BOUND_COLUMNS";
+    | "NO_BOUND_COLUMNS"
+    | "EXACT_HEADER_MISMATCH";
   readonly message: string;
   readonly detail?: Readonly<Record<string, string | number | readonly string[] | readonly number[]>>;
 }
@@ -476,6 +477,7 @@ export function computeExistingSheetAdoptionLayout(input: {
   readonly tabName: string;
   readonly report: ExistingSheetAdoptionEntityReport;
   readonly headers: readonly string[];
+  readonly rows: readonly (readonly (string | undefined)[])[];
   readonly descriptor: { readonly properties: readonly { readonly name: string; readonly primary: boolean }[] };
   readonly userOwnedFields: readonly string[];
 }): { readonly layout: ExistingSheetAdoptionLayout; readonly extraProblems: readonly ExistingSheetAdoptionProblem[] } {
@@ -664,54 +666,71 @@ export async function planExistingSheetAdoptionStartup(input: {
       systemStateTabName: input.projections.entities[entityName]!.systemState.tabName,
       syncConflictsTabName: input.projections.entities[entityName]!.syncConflicts.tabName,
     });
+    // Adopt-mode layout blockers (segmentation, declaration order,
+    // occupied append columns) and exact-header mismatches surface in the
+    // REPORT so dry-run and adopt agree on readiness — never "dry-run
+    // ready, adopt rejected".
+    let finalEntity = reportEntity;
     if (reportEntity.status === "ready") {
       const { layout, extraProblems } = computeExistingSheetAdoptionLayout({
         entityName,
         tabName: tab.title,
         report: reportEntity,
         headers,
+        rows,
         descriptor,
         userOwnedFields: input.userOwnedFieldsByEntity[entityName] ?? [],
       });
-      if (extraProblems.some((problem) => problem.severity === "error")) {
-        // Adopt-mode layout blockers (segmentation, declaration order,
-        // occupied append columns) surface in the REPORT so dry-run and
-        // adopt agree on readiness — never "dry-run ready, adopt rejected".
-        entityReports.push({
+      const exactHeaderProblems: ExistingSheetAdoptionProblem[] = [];
+      for (const binding of reportEntity.bindings) {
+        if (binding.header !== binding.field) {
+          exactHeaderProblems.push({
+            severity: "error",
+            code: "EXACT_HEADER_MISMATCH",
+            message: `adoption (MVP) requires the header of column ${binding.columnLetter} to be exactly "${binding.field}", but tab "${tab.title}" has "${binding.header}".`,
+            detail: { column: binding.columnLetter, header: binding.header, field: binding.field },
+          });
+        }
+      }
+      const layoutErrors = [
+        ...extraProblems,
+        ...exactHeaderProblems,
+      ].filter((problem) => problem.severity === "error");
+      if (layoutErrors.length > 0) {
+        finalEntity = {
           ...reportEntity,
           status: "blocked",
-          problems: [...reportEntity.problems, ...extraProblems],
+          problems: [...reportEntity.problems, ...layoutErrors],
+        };
+      } else {
+        const pkColumnIndex = reportEntity.pk.source === "existing-column" && reportEntity.pk.column !== undefined
+          ? headers.indexOf(reportEntity.pk.column)
+          : layout.pkColumnIndex;
+        const dataRows: { rowIndex: number; pkValue: string }[] = [];
+        rows.forEach((row, index) => {
+          if (row.every((cell) => cell === undefined || cell === "")) return;
+          const existing = pkColumnIndex >= 0 ? row[pkColumnIndex]?.trim() : undefined;
+          dataRows.push({
+            rowIndex: index + 1, // 0-based sheet row (header is row 0)
+            pkValue: existing !== undefined && existing !== "" ? existing : `adopt_${randomUUID()}`,
+          });
         });
-        continue;
+        planEntities.push({
+          entityName,
+          tabName: tab.title,
+          entityTableName: descriptor.tableName,
+          sheetId: tab.sheetId,
+          tabTitle: tab.title,
+          layout,
+          rowIdColumnIndex: layout.rowIdColumnIndex,
+          ...(layout.pkGenerated
+            ? { pkAppend: { columnIndex: layout.pkColumnIndex, header: descriptor.primaryKey } }
+            : {}),
+          dataRows,
+        });
       }
-      entityReports.push(reportEntity);
-      const pkColumnIndex = reportEntity.pk.source === "existing-column" && reportEntity.pk.column !== undefined
-        ? headers.indexOf(reportEntity.pk.column)
-        : layout.pkColumnIndex;
-      const dataRows: { rowIndex: number; pkValue: string }[] = [];
-      rows.forEach((row, index) => {
-        if (row.every((cell) => cell === undefined || cell === "")) return;
-        const existing = pkColumnIndex >= 0 ? row[pkColumnIndex]?.trim() : undefined;
-        dataRows.push({
-          rowIndex: index + 1, // 0-based sheet row (header is row 0)
-          pkValue: existing !== undefined && existing !== "" ? existing : `adopt_${randomUUID()}`,
-        });
-      });
-      planEntities.push({
-        entityName,
-        tabName: tab.title,
-        entityTableName: descriptor.tableName,
-        sheetId: tab.sheetId,
-        tabTitle: tab.title,
-        layout,
-        rowIdColumnIndex: layout.rowIdColumnIndex,
-        ...(layout.pkGenerated
-          ? { pkAppend: { columnIndex: layout.pkColumnIndex, header: descriptor.primaryKey } }
-          : {}),
-        dataRows,
-      });
     }
-    entityReports.push(reportEntity);
+    entityReports.push(finalEntity);
   }
 
   const report: ExistingSheetAdoptionRunReport = {
