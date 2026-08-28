@@ -41,6 +41,10 @@ import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
 } from "../errors.js";
+import { randomUUID } from "node:crypto";
+import type {
+  InternalSyncProjectionConfig,
+} from "../contracts.js";
 
 /** Stable failures raised by the existing-sheet adoption startup path. */
 export const EXISTING_SHEET_ADOPTION_ERROR_CODES = {
@@ -437,82 +441,188 @@ export function analyzeExistingSheetAdoptionEntity(
   };
 }
 
+/** One managed column of the adopted User_Input tab. */
+export interface ExistingSheetAdoptionManagedColumn {
+  readonly field: string;
+  readonly columnIndex: number;
+  readonly header: string;
+}
+
+/** Computed layout for one adopted entity (adopt mode). */
+export interface ExistingSheetAdoptionLayout {
+  readonly entityName: string;
+  readonly tabName: string;
+  readonly managedColumns: readonly ExistingSheetAdoptionManagedColumn[];
+  /** The `__hikoutei_row_id` system column (last managed column + 1). */
+  readonly rowIdColumnIndex: number;
+  /** The PK column (existing within the span, or the appended one). */
+  readonly pkColumnIndex: number;
+  readonly pkGenerated: boolean;
+  /** Registered range override for the User_Input route, e.g. `B:F`. */
+  readonly registeredRange: string;
+  /** Columns appended by adoption: row-id, and the PK when generated. */
+  readonly appendedColumns: readonly { readonly columnIndex: number; readonly header: string }[];
+}
+
+/** Extracts the adopt-mode layout from the dry-run report + snapshot. */
+export function computeExistingSheetAdoptionLayout(input: {
+  readonly entityName: string;
+  readonly tabName: string;
+  readonly report: ExistingSheetAdoptionEntityReport;
+  readonly headers: readonly string[];
+  readonly descriptor: { readonly properties: readonly { readonly name: string; readonly primary: boolean }[] };
+  readonly userOwnedFields: readonly string[];
+}): ExistingSheetAdoptionLayout {
+  const { report } = input;
+  const managed = [...report.bindings].sort((a, b) => a.columnIndex - b.columnIndex);
+  if (managed.length === 0) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      `adoption layout for "${input.entityName}" has no bound columns.`,
+    );
+  }
+  const firstManaged = managed[0]!.columnIndex;
+  const lastManaged = managed.at(-1)!.columnIndex;
+  if (report.contiguity === "segmented") {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      `adoption requires the managed columns of tab "${input.tabName}" to be contiguous; ignored columns must sit left of the managed block. Move them and retry.`,
+    );
+  }
+
+  const pkProperty = input.descriptor.properties.find((property) => property.primary)!.name;
+  const pkGenerated = report.pk.source === "auto-generate";
+  // The generated PK column is appended right after the managed span; the
+  // row-id column follows it (or directly follows the managed span when the
+  // PK column already exists). Both appended columns must be free: an
+  // occupant would mean an ignored column gets overwritten.
+  const pkColumnIndex = pkGenerated
+    ? lastManaged + 1
+    : managed.find((column) => column.field === pkProperty)!.columnIndex;
+  const rowIdColumnIndex = pkGenerated ? pkColumnIndex + 1 : lastManaged + 1;
+  const appendedColumns = [
+    ...(pkGenerated ? [{ columnIndex: pkColumnIndex, header: pkProperty }] : []),
+    { columnIndex: rowIdColumnIndex, header: "__hikoutei_row_id" },
+  ];
+  for (const column of appendedColumns) {
+    const occupant = input.headers[column.columnIndex]?.trim();
+    if (occupant !== undefined && occupant !== "") {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        `adoption column "${column.header}" (column ${columnLetters(column.columnIndex + 1)}) must be free, but tab "${input.tabName}" has "${occupant}" there.`,
+      );
+    }
+  }
+
+  // Declaration-order check: the sheet's managed headers, read left to
+  // right, must equal the projection header order — the User_Input
+  // machinery is positional over the registered range. A generated PK is
+  // appended last, so it must be declared last among the user-owned fields.
+  const declaredUserOwned = input.descriptor.properties
+    .filter((property) => input.userOwnedFields.includes(property.name))
+    .map((property) => property.name);
+  const expectedSheetOrder = pkGenerated
+    ? [...declaredUserOwned.filter((name) => name !== pkProperty), pkProperty]
+    : declaredUserOwned;
+  const sheetManagedOrder = managed.map((column) => column.field);
+  if (sheetManagedOrder.join("\u0000") !== expectedSheetOrder.join("\u0000")) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      `adoption requires tab "${input.tabName}" columns in the entity's declaration order. Expected [${expectedSheetOrder.join(", ")}] but found [${sheetManagedOrder.join(", ")}]. Reorder the entity properties (or the columns) and retry.`,
+    );
+  }
+
+  return {
+    entityName: input.entityName,
+    tabName: input.tabName,
+    managedColumns: managed.map((column) => ({ field: column.field, columnIndex: column.columnIndex, header: column.header })),
+    rowIdColumnIndex,
+    pkColumnIndex,
+    pkGenerated,
+    registeredRange: `${columnLetters(firstManaged + 1)}:${columnLetters(rowIdColumnIndex + 1)}`,
+    appendedColumns,
+  };
+}
+
+
+export interface ExistingSheetAdoptionStartupPlanEntity {
+  readonly entityName: string;
+  readonly tabName: string;
+  readonly entityTableName: string;
+  readonly sheetId: number;
+  readonly tabTitle: string;
+  readonly layout: ExistingSheetAdoptionLayout;
+  readonly rowIdColumnIndex: number;
+  readonly pkAppend?: { readonly columnIndex: number; readonly header: string };
+  readonly dataRows: readonly { readonly rowIndex: number; readonly pkValue: string }[];
+}
+
+export interface ExistingSheetAdoptionStartupPlan {
+  readonly report: ExistingSheetAdoptionRunReport;
+  readonly entities: readonly ExistingSheetAdoptionStartupPlanEntity[];
+}
+
 /**
- * Runs the adoption startup gate (D5). Called by the service bootstrap
- * BEFORE any provisioning mutation:
+ * Plans the adoption startup (D5). Reads the foreign tab, runs the pure
+ * analysis, and computes the layout — BEFORE any provisioning mutation:
  *
- * - `dry-run`: reads the foreign tab, analyzes, and throws
- *   {@link ExistingSheetAdoptionDryRunReportError} carrying the full report.
- *   The service never reaches its running state and the sheet is untouched.
- * - `adopt`: the seeding engine arrives with the next milestone; refusing
- *   here keeps a half-implemented mutation path out of the tree.
+ * - `dry-run`: always throws {@link ExistingSheetAdoptionDryRunReportError}
+ *   carrying the full report; the spreadsheet is untouched and the service
+ *   never starts.
+ * - `adopt`: a blocked report throws the same error; a ready report returns
+ *   the startup plan (layout, appended columns, data rows) for the
+ *   bootstrap's seeding phase.
  */
-export async function runExistingSheetAdoptionStartup(input: {
+export async function planExistingSheetAdoptionStartup(input: {
   readonly adopt: ExistingSheetAdoptionSpec;
   readonly spreadsheetId: string;
   readonly transport: GoogleSheetsApiAdoptionReader;
   readonly descriptors: readonly ResolvedHikouteiEntityDescriptor[];
-  readonly projections: {
-    readonly spreadsheetId: string;
-    readonly entities: Readonly<Record<string, {
-      readonly systemState: { readonly tabName: string };
-      readonly syncConflicts: { readonly tabName: string };
-      readonly userInput?: { readonly tabName: string };
-    }>>;
-  };
+  readonly projections: InternalSyncProjectionConfig;
   readonly userOwnedFieldsByEntity: Readonly<Record<string, readonly string[]>>;
   readonly requestTimeoutMs?: number;
-}): Promise<never> {
-  if (input.adopt.mode === "adopt") {
-    throw new SyncServiceError(
-      SYNC_SERVICE_ERROR_CODES.ADOPTION_NOT_IMPLEMENTED,
-      "adopt mode is not implemented yet: the seeding engine arrives with the next milestone. Use mode \"dry-run\" first.",
-    );
-  }
-
+}): Promise<ExistingSheetAdoptionStartupPlan> {
   const descriptorByName = new Map(input.descriptors.map((descriptor) => [descriptor.name, descriptor]));
   const entityReports: ExistingSheetAdoptionEntityReport[] = [];
+  const planEntities: ExistingSheetAdoptionStartupPlanEntity[] = [];
 
   for (const [entityName, spec] of Object.entries(input.adopt.entities)) {
     const descriptor = descriptorByName.get(entityName);
     if (descriptor === undefined) {
       throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.ADOPTION_NOT_IMPLEMENTED,
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
         `adopt spec references unknown entity "${entityName}".`,
       );
     }
     const userInputRoute = input.projections.entities[entityName]?.userInput;
     if (userInputRoute === undefined) {
       throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.ADOPTION_NOT_IMPLEMENTED,
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
         `adopt spec for entity "${entityName}" requires a userInput projection route (the existing tab becomes the User_Input route).`,
       );
     }
     if (spec.tabName !== userInputRoute.tabName) {
       throw new SyncServiceError(
-        SYNC_SERVICE_ERROR_CODES.ADOPTION_NOT_IMPLEMENTED,
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
         `adopt tabName "${spec.tabName}" must equal the userInput projection tab "${userInputRoute.tabName}" for entity "${entityName}".`,
       );
     }
 
-    // Read the foreign tab. Range covers the full used area; the analyzer
-    // picks columns by header name.
     const tab = await resolveAdoptionTab(input.transport, input.spreadsheetId, spec.tabName, input.requestTimeoutMs);
     if (tab === undefined) {
       entityReports.push(blockedMissingTabReport(entityName, spec.tabName));
       continue;
     }
-    const range = adoptionTabRange(tab.title, tab.columnCount);
     const valuesResponse = await input.transport.getValues({
       spreadsheetId: input.spreadsheetId,
-      range,
+      range: adoptionTabRange(tab.title, tab.columnCount),
       ...(input.requestTimeoutMs === undefined ? {} : { timeoutMs: input.requestTimeoutMs }),
     });
     const raw = valuesResponse.values ?? [];
     const headers = (raw[0] ?? []).map((cell) => String(cell ?? ""));
     const rows = raw.slice(1).map((row) => row.map((cell) => (cell === null ? undefined : String(cell))));
 
-    entityReports.push(analyzeExistingSheetAdoptionEntity({
+    const reportEntity = analyzeExistingSheetAdoptionEntity({
       entityName,
       tabName: tab.title,
       snapshot: { headers, rows },
@@ -521,21 +631,66 @@ export async function runExistingSheetAdoptionStartup(input: {
       identityFrom: spec.identityFrom,
       systemStateTabName: input.projections.entities[entityName]!.systemState.tabName,
       syncConflictsTabName: input.projections.entities[entityName]!.syncConflicts.tabName,
-    }));
+    });
+    entityReports.push(reportEntity);
+
+    if (reportEntity.status === "ready") {
+      const layout = computeExistingSheetAdoptionLayout({
+        entityName,
+        tabName: tab.title,
+        report: reportEntity,
+        headers,
+        descriptor,
+        userOwnedFields: input.userOwnedFieldsByEntity[entityName] ?? [],
+      });
+      const pkColumnIndex = reportEntity.pk.source === "existing-column" && reportEntity.pk.column !== undefined
+        ? headers.indexOf(reportEntity.pk.column)
+        : layout.pkColumnIndex;
+      const dataRows: { rowIndex: number; pkValue: string }[] = [];
+      rows.forEach((row, index) => {
+        if (row.every((cell) => cell === undefined || cell === "")) return;
+        const existing = pkColumnIndex >= 0 ? row[pkColumnIndex]?.trim() : undefined;
+        dataRows.push({
+          rowIndex: index + 1, // 0-based sheet row (header is row 0)
+          pkValue: existing !== undefined && existing !== "" ? existing : `adopt_${randomUUID()}`,
+        });
+      });
+      planEntities.push({
+        entityName,
+        tabName: tab.title,
+        entityTableName: descriptor.tableName,
+        sheetId: tab.sheetId,
+        tabTitle: tab.title,
+        layout,
+        rowIdColumnIndex: layout.rowIdColumnIndex,
+        ...(layout.pkGenerated
+          ? { pkAppend: { columnIndex: layout.pkColumnIndex, header: descriptor.primaryKey } }
+          : {}),
+        dataRows,
+      });
+    }
   }
 
   const report: ExistingSheetAdoptionRunReport = {
     mode: "dry-run",
-    ok: entityReports.every((report) => report.status === "ready"),
+    ok: entityReports.every((entityReport) => entityReport.status === "ready"),
     entities: entityReports,
   };
-  throw new ExistingSheetAdoptionDryRunReportError(
-    report,
-    report.ok
-      ? "existing-sheet adoption dry-run passed; no supervisors were started and the spreadsheet was not mutated."
-      : "existing-sheet adoption dry-run found blocking problems; no supervisors were started and the spreadsheet was not mutated.",
-  );
+  if (!report.ok || planEntities.length === 0) {
+    throw new ExistingSheetAdoptionDryRunReportError(
+      report,
+      "existing-sheet adoption found blocking problems; nothing was mutated and no supervisor was started.",
+    );
+  }
+  if (input.adopt.mode === "dry-run") {
+    throw new ExistingSheetAdoptionDryRunReportError(
+      report,
+      "existing-sheet adoption dry-run passed; no supervisors were started and the spreadsheet was not mutated.",
+    );
+  }
+  return { report, entities: planEntities };
 }
+
 
 /** Minimal reader surface the adoption startup needs (satisfied by the real transport). */
 export interface GoogleSheetsApiAdoptionReader {
@@ -550,6 +705,10 @@ export interface GoogleSheetsApiAdoptionReader {
     readonly range: string;
     readonly timeoutMs?: number;
   }): Promise<{ readonly values?: readonly (readonly (string | number | boolean | null)[])[] }>;
+  batchUpdate(request: {
+    readonly spreadsheetId: string;
+    readonly requests: readonly unknown[];
+  }): Promise<unknown>;
 }
 
 /**
@@ -572,7 +731,7 @@ async function resolveAdoptionTab(
   spreadsheetId: string,
   tabName: string,
   timeoutMs: number | undefined,
-): Promise<{ readonly title: string; readonly columnCount: number } | undefined> {
+): Promise<{ readonly title: string; readonly sheetId: number; readonly columnCount: number } | undefined> {
   const response = await transport.getSpreadsheet({
     spreadsheetId,
     ranges: [],
@@ -580,16 +739,25 @@ async function resolveAdoptionTab(
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   }) as {
     sheets?: readonly {
-      properties?: { title?: string; gridProperties?: { columnCount?: number } }
+      properties?: {
+        sheetId?: number;
+        title?: string;
+        gridProperties?: { columnCount?: number }
+      }
     }[]
   } | undefined;
   const wanted = tabName.trim().toLowerCase();
   const match = (response?.sheets ?? [])
-    .map((sheet) => ({ title: sheet.properties?.title ?? "", columnCount: sheet.properties?.gridProperties?.columnCount }))
+    .map((sheet) => ({
+      title: sheet.properties?.title ?? "",
+      sheetId: sheet.properties?.sheetId,
+      columnCount: sheet.properties?.gridProperties?.columnCount,
+    }))
     .find((sheet) => sheet.title.trim().toLowerCase() === wanted);
-  if (match === undefined) return undefined;
+  if (match === undefined || typeof match.sheetId !== "number") return undefined;
   return {
     title: match.title,
+    sheetId: match.sheetId,
     // A foreign tab can exceed the API's grid defaults; a missing count falls
     // back to the historical 26-column window the reader previously used.
     columnCount: match.columnCount ?? 26,
@@ -648,4 +816,31 @@ export function resolveAdoptionReaderTransport(
   return new GoogleSheetsApiHttpTransport({
     requestTimeoutMs: options?.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS,
   });
+}
+
+/** Replaces the adopted entities' declared User_Input range with the derived one. */
+export function withAdoptionRegisteredRangeOverride(
+  projections: InternalSyncProjectionConfig,
+  plan: ExistingSheetAdoptionStartupPlan,
+): InternalSyncProjectionConfig {
+  const entities = { ...projections.entities };
+  for (const entity of plan.entities) {
+    const config = entities[entity.entityName];
+    if (config?.userInput === undefined) continue;
+    entities[entity.entityName] = {
+      ...config,
+      userInput: { ...config.userInput, registeredRange: entity.layout.registeredRange },
+    };
+  }
+  return { ...projections, entities };
+}
+
+interface InternalSyncProjectionConfigLike {
+  readonly spreadsheetId: string;
+  readonly entities: Readonly<Record<string, {
+    readonly systemState: { readonly tabName: string };
+    readonly syncConflicts: { readonly tabName: string };
+    readonly userInput?: { readonly tabName: string; readonly registeredRange: string };
+    readonly userOwnedFields?: readonly string[];
+  }>>;
 }

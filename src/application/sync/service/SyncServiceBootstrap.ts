@@ -50,9 +50,15 @@ import {
 } from "../inbound/autoSystemConflictResolution.js";
 import { createRemoteProvider } from "./remoteProvider.js";
 import {
+  planExistingSheetAdoptionStartup,
   resolveAdoptionReaderTransport,
-  runExistingSheetAdoptionStartup,
+  type ExistingSheetAdoptionStartupPlan,
+  withAdoptionRegisteredRangeOverride,
 } from "./adopt/existingSheetAdoption.js";
+import {
+  applyAdoptionSystemColumns,
+  completeExistingSheetAdoption,
+} from "./adopt/adoptionSeeding.js";
 import { createEffectSupervisor } from "./effectSupervisor.js";
 import { createPollingSupervisor } from "./pollingSupervisor.js";
 import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
@@ -93,7 +99,37 @@ export async function createInternalSyncService(
 ): Promise<InternalSyncService> {
   const descriptors = resolveEntityDescriptors(options.entities, throwSyncResolutionError);
   validateServiceOptions(options, descriptors);
-  const generated = createMikroOrmScalarRuntime(options.entities, options.projections);
+
+  // Existing-sheet adoption planning (D5, fail-closed): reads the foreign
+  // tab BEFORE any mutation. dry-run throws the full report; adopt computes
+  // the managed layout and the User_Input registered-range override.
+  let adoptionPlan: ExistingSheetAdoptionStartupPlan | undefined;
+  if (options.adopt !== undefined) {
+    adoptionPlan = await planExistingSheetAdoptionStartup({
+      adopt: options.adopt,
+      spreadsheetId: options.projections.spreadsheetId,
+      transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
+      descriptors: [...descriptors.values()],
+      projections: options.projections,
+      userOwnedFieldsByEntity: Object.fromEntries(
+        Object.entries(options.projections.entities).map(([name, config]) => [
+          name,
+          config.userOwnedFields ?? [],
+        ]),
+      ),
+      ...(options.googleSheetsApi?.requestTimeoutMs === undefined
+        ? {}
+        : { requestTimeoutMs: options.googleSheetsApi.requestTimeoutMs }),
+    });
+  }
+  // The adopted User_Input route's registered range is DERIVED from the
+  // foreign layout (managed span + row-id column), so the declared range is
+  // replaced rather than trusted.
+  const effectiveProjections = adoptionPlan === undefined
+    ? options.projections
+    : withAdoptionRegisteredRangeOverride(options.projections, adoptionPlan);
+
+  const generated = createMikroOrmScalarRuntime(options.entities, effectiveProjections);
   const writer = createWriterOptions(options);
   // The effect worker claims its own lease role with the same runtime identity
   // as the mapped writer unless the caller pinned an explicit worker id; one
@@ -131,35 +167,39 @@ export async function createInternalSyncService(
       ...await registerSyncConflictProjectionRoutes(
         runtime.storage,
         runtime.registrations,
-        options.projections,
+        effectiveProjections,
         writer,
       ),
     ];
     const remote = createRemoteProvider(options, projectionDefinitions);
-    if (options.adopt !== undefined) {
-      // Existing-sheet adoption gate (D5, fail-closed): runs BEFORE any
-      // provisioning mutation. dry-run reads the foreign tab, analyzes the
-      // header-name bindings, and throws the full report — the service never
-      // reaches its running state. adopt-mode seeding replaces this gate in
-      // the next milestone.
-      await runExistingSheetAdoptionStartup({
-        adopt: options.adopt,
-        spreadsheetId: options.projections.spreadsheetId,
+    if (adoptionPlan !== undefined) {
+      // Adoption's ONLY sheet mutation: appending the system columns
+      // (row-id header, generated PK column, deterministic anchors) BEFORE
+      // provisioning asserts the User_Input headers (D5 order).
+      await applyAdoptionSystemColumns({
         transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
-        descriptors: [...descriptors.values()],
-        projections: options.projections,
-        userOwnedFieldsByEntity: Object.fromEntries(
-          Object.entries(options.projections.entities).map(([name, config]) => [
-            name,
-            config.userOwnedFields ?? [],
-          ]),
-        ),
-        ...(options.googleSheetsApi?.requestTimeoutMs === undefined
+        spreadsheetId: options.projections.spreadsheetId,
+        sheetId: adoptionPlan.entities[0]!.sheetId,
+        rowIdColumnIndex: adoptionPlan.entities[0]!.rowIdColumnIndex,
+        ...(adoptionPlan.entities[0]!.pkAppend === undefined
           ? {}
-          : { requestTimeoutMs: options.googleSheetsApi.requestTimeoutMs }),
+          : { pkAppend: adoptionPlan.entities[0]!.pkAppend }),
+        rows: adoptionPlan.entities[0]!.dataRows,
       });
     }
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
+    if (adoptionPlan !== undefined) {
+      // Observe the adopted tab (anchors already in place), bind every row
+      // in one all-or-nothing transaction, then re-verify until stable —
+      // all BEFORE any supervisor can observe the tab (D5).
+      await completeExistingSheetAdoption({
+        plan: adoptionPlan,
+        provider: remote.provider,
+        storage: runtime.storage,
+        mappings: runtime.mappings.mappings,
+        writer,
+      });
+    }
 
     const effectSupervisor = createEffectSupervisor({
       storage: runtime.storage,
