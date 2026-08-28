@@ -30,7 +30,7 @@ export const DEFAULT_EFFECT_LEASE_DURATION_MS = 120_000;
  * does not turn one route into repeated partial (`hasMore`) responses and the
  * deferred/requeue churn they cause.
  */
-export const EFFECT_BATCH_LIMIT = 300;
+export const EFFECT_BATCH_LIMIT = 1_000;
 /**
  * Maximum number of effects leased before dispatch starts. Selection may use a
  * larger SQLite upper bound, but a worker pass must not lease an unbounded
@@ -52,7 +52,7 @@ export const FAST_APPEND_BATCH_CANDIDATE_LIMIT = 1_000;
  * start across supervisor passes and waits only the remaining time before the
  * next append request; regular apply calls never wait on this throttle.
  */
-export const APPEND_DISPATCH_THROTTLE_INTERVAL_MS = 1_100;
+export const APPEND_DISPATCH_THROTTLE_INTERVAL_MS = 900;
 
 /** Subset of kernel effect statuses the worker transitions between. */
 export const OUTBOX_EFFECT_STATUSES = {
