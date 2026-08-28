@@ -1,6 +1,6 @@
 # 기존 시트 연결(Adoption) 설계 — MVP
 
-상태: **설계 확정 (2026-08-28), 구현 전**
+상태: **설계 확정 (2026-08-28), Phase 1-3 구현 (PR #385 + 시딩 엔진 브랜치)**
 
 라이브러리와 연결된 적 없는 기존 Google Spreadsheet의 기존 탭을 엔티티로
 가져와(adopt), SQLite 테이블을 생성하고 기존 행 데이터를 베이스라인으로
@@ -98,7 +98,9 @@ adopt: {
 - `sheet_visible_state` / `sheet_visible_field_state` (User_Input 라우트):
   **관측 해시로 확정** → CleanupScanner가 기존 행을 재작성/삭제하지 않고,
   이후 편집 CAS가 일치
-- 앵커: `ensureRowAnchors`로 Developer Metadata 할당
+- 앵커: 어답션이 결정적 앵커(`entity:<pk>`, `mapping.anchorForEntity`)를
+  row-id 컬럼 셀에 기록 — Developer Metadata가 아닌 셀 값 기반 (코드 실체와
+  일치). `ensureRowAnchors`는 미앵커 행에만 할당하므로 어답션 행은 유지됨.
 - System_State: **시딩 없음** — 빈 탭, 신규 append 경로로 채움
   (EFFECT_BATCH_LIMIT 1,000 대량 append, 측정치 244–286 effects/s)
 
