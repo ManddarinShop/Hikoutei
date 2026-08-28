@@ -26,6 +26,9 @@ import {
   type ExistingSheetAdoptionRunReport,
 } from "../src/application/sync/service/adopt/existingSheetAdoption.js";
 import {
+  planExistingSheetAdoptionStartup,
+} from "../src/application/sync/service/adopt/existingSheetAdoption.js";
+import {
   createInternalSyncService,
 } from "../src/application/sync/service/SyncServiceBootstrap.js";
 import {
@@ -211,6 +214,80 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
   });
 });
 
+describe("review regression: adopt-mode layout blockers surface in dry-run", () => {
+  const projections = {
+    spreadsheetId: "adopt-spreadsheet",
+    entities: {
+      AdoptInvoice: {
+        systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Invoices", registeredRange: "A:E" },
+        userOwnedFields: USER_OWNED,
+      },
+    },
+  } as const;
+  const planWith = (headers: readonly string[], rows: readonly (readonly (string | undefined)[])[]) =>
+    planExistingSheetAdoptionStartup({
+      adopt: { mode: "dry-run", entities: { AdoptInvoice: { tabName: "Invoices", identityFrom: "auto" } } },
+      spreadsheetId: "adopt-spreadsheet",
+      transport: {
+        async getSpreadsheet() {
+          return { sheets: [{ properties: { sheetId: 7, title: "Invoices", gridProperties: { columnCount: headers.length } } }] };
+        },
+        async getValues() {
+          return { values: [headers, ...rows.map((row) => row.map((cell) => cell ?? null))] };
+        },
+        async batchUpdate() {
+          return {};
+        },
+      },
+      descriptors: [adoptDescriptor],
+      projections,
+      userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED },
+    });
+
+  it("blocks a segmented layout in the REPORT (never ready-then-rejected)", async () => {
+    try {
+      await planWith(
+        ["customer", "memo", "invoiceNo", "total"],
+        [["Acme", "keep", "INV-1", "100"]],
+      );
+      expect.unreachable("segmented layout must block");
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(ExistingSheetAdoptionDryRunReportError);
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.ok).toBe(false);
+      expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_SEGMENTATION")).toBe(true);
+    }
+  });
+
+  it("blocks a declaration-order mismatch in the REPORT", async () => {
+    try {
+      await planWith(
+        ["customer", "total", "invoiceNo", "note"],
+        [["Acme", "100", "INV-1", ""]],
+      );
+      expect.unreachable("declaration-order mismatch must block");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.problems.some((p) => p.code === "DECLARATION_ORDER_MISMATCH")).toBe(true);
+    }
+  });
+
+  it("blocks when the row-id append column is occupied", async () => {
+    try {
+      await planWith(
+        ["invoiceNo", "customer", "total", "note", "extra"],
+        [["INV-1", "Acme", "100", "", "keep"]],
+      );
+      expect.unreachable("occupied append column must block");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_OCCUPIED")).toBe(true);
+    }
+  });
+});
+
 describe("existing-sheet adoption bootstrap gate", () => {
   const services: { close: () => Promise<void> }[] = [];
 
@@ -292,23 +369,6 @@ describe("existing-sheet adoption bootstrap gate", () => {
       expect(report.ok).toBe(false);
       expect(report.entities[0]!.status).toBe("blocked");
       expect(report.entities[0]!.pk.duplicates).toEqual([{ value: "INV-1", rowNumbers: [2, 3] }]);
-    }
-  });
-
-  it("refuses adopt mode until the seeding engine milestone lands", async () => {
-    try {
-      await createInternalSyncService({
-        dbName: ":memory:",
-        entities: [AdoptInvoice],
-        projections,
-        googleSheetsApi: { transport: new ForeignTabTransport() as never },
-        adopt: { mode: "adopt", entities: { AdoptInvoice: { tabName: "Invoices" } } },
-      });
-      expect.unreachable("adopt mode must be refused in this milestone");
-    } catch (error: unknown) {
-      expect((error as { code?: string }).code).toBe(
-        SYNC_SERVICE_ERROR_CODES.ADOPTION_NOT_IMPLEMENTED,
-      );
     }
   });
 
@@ -412,5 +472,122 @@ expect(dup?.detail?.columns).toEqual(["A", "B"]);
   it("builds a quoted, grid-wide read range", () => {
     expect(adoptionTabRange("Invoices", 26)).toBe("'Invoices'!A1:Z");
     expect(adoptionTabRange("Team's Sheet", 100)).toBe("'Team''s Sheet'!A1:CV");
+  });
+});
+
+describe("review round 2 regressions", () => {
+  const projections = {
+    spreadsheetId: "adopt-spreadsheet",
+    entities: {
+      AdoptInvoice: {
+        systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Invoices", registeredRange: "A:E" },
+        userOwnedFields: USER_OWNED,
+      },
+    },
+  } as const;
+  const planWith = (
+    headers: readonly string[],
+    rows: readonly (readonly (string | undefined)[])[],
+    mode: "dry-run" | "adopt" = "dry-run",
+    identityFrom: string | "auto" = "auto",
+  ) =>
+    planExistingSheetAdoptionStartup({
+      adopt: { mode, entities: { AdoptInvoice: { tabName: "Invoices", identityFrom } } },
+      spreadsheetId: "adopt-spreadsheet",
+      transport: {
+        async getSpreadsheet() {
+          return { sheets: [{ properties: { sheetId: 7, title: "Invoices", gridProperties: { columnCount: headers.length } } }] };
+        },
+        async getValues() {
+          return { values: [headers, ...rows.map((row) => row.map((cell) => cell ?? null))] };
+        },
+        async batchUpdate() {
+          return {};
+        },
+      },
+      descriptors: [adoptDescriptor],
+      projections,
+      userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED },
+    });
+
+  it("blocks when the row-id append column has DATA below an EMPTY header (data loss guard)", async () => {
+    // The appended column's header is blank but live data sits below it:
+    // header-only inspection would treat the column as free and
+    // applyAdoptionSystemColumns would overwrite that data.
+    try {
+      await planWith(
+        ["invoiceNo", "customer", "total", "note", ""],
+        [["INV-1", "Acme", "100", "", "old data"], ["INV-2", "Beta", "200", "", "more"]],
+      );
+      expect.unreachable("occupied data column must block");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_OCCUPIED" && p.severity === "error")).toBe(true);
+    }
+  });
+
+  it("does NOT block generated-PK adoption: virtual PK appended last satisfies the declaration order", async () => {
+    const plan = await planWith(
+      ["customer", "total", "note"],
+      [["Acme", "100", ""], ["Beta", "200", "ok"]],
+      "adopt",
+    );
+    expect(plan.report.ok).toBe(true);
+    const layout = plan.entities[0]!.layout;
+    expect(plan.report.entities[0]!.pk.source).toBe("auto-generate");
+    expect(layout.pkGenerated).toBe(true);
+    expect(layout.pkColumnIndex).toBe(3);
+    expect(layout.rowIdColumnIndex).toBe(4);
+    // The registered range covers the managed columns + generated PK + row-id.
+    expect(layout.registeredRange).toBe("A:E");
+    expect(layout.appendedColumns).toEqual([
+      { columnIndex: 3, header: "invoiceNo" },
+      { columnIndex: 4, header: "__hikoutei_row_id" },
+    ]);
+    expect(plan.entities[0]!.pkAppend).toEqual({ columnIndex: 3, header: "invoiceNo" });
+    expect(plan.entities[0]!.dataRows).toHaveLength(2);
+  });
+
+  it("blocks an identityFrom alias whose header differs from the PK property name", async () => {
+    try {
+      await planWith(
+        ["InvoiceNo", "customer", "total", "note"],
+        [["INV-1", "Acme", "100", ""]],
+        "dry-run",
+        "InvoiceNo",
+      );
+      expect.unreachable("identityFrom aliases must block (MVP)");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.status).toBe("blocked");
+      const alias = report.entities[0]!.problems.find((p) => p.code === "IDENTITY_ALIAS_UNSUPPORTED");
+      expect(alias?.severity).toBe("error");
+    }
+  });
+
+  it("blocks whitespace-padded headers (provisioning requires exact headers)", async () => {
+    try {
+      await planWith(
+        ["invoiceNo ", "customer", "total", "note"],
+        [["INV-1", "Acme", "100", ""]],
+      );
+      expect.unreachable("whitespace header must block");
+    } catch (error: unknown) {
+      const report = (error as ExistingSheetAdoptionDryRunReportError).report;
+      expect(report.entities[0]!.problems.some((p) => p.code === "EXACT_HEADER_MISMATCH")).toBe(true);
+    }
+  });
+
+  it("does not duplicate a single-entity ready report", async () => {
+    const plan = await planWith(
+      ["invoiceNo", "customer", "total", "note"],
+      [["INV-1", "Acme", "100", ""]],
+    ).catch((error: unknown) => {
+      if (error instanceof ExistingSheetAdoptionDryRunReportError) return error.report;
+      throw error;
+    });
+    expect(plan.entities).toHaveLength(1);
   });
 });
