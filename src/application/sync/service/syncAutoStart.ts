@@ -5,9 +5,11 @@
  * sync service bootstrap: spreadsheet URL parsing, service-account credentials
  * file validation, polling interval parsing, request-start pacing override
  * parsing, projection auto-generation from entity descriptors, and fail-closed
- * startup failure classification. It is never re-exported from `src/index.ts`;
- * the public factory calls it only when `HIKOUTEI_SYNC_SPREADSHEET_URL` is
- * set, so local-only users never load the sync module graph.
+ * startup failure classification. It is re-exported to applications ONLY
+ * through the lazy public wrapper `src/api/syncRuntime.ts`, so importing the
+ * package root never loads the sync module graph; the public factory calls it
+ * only when `HIKOUTEI_SYNC_SPREADSHEET_URL` is set, so local-only users never
+ * load the sync module graph either.
  *
  * The env reader, transport, and diagnostic sink are injectable so tests can
  * exercise every startup branch with a stub transport, a fake env, and a
@@ -52,6 +54,11 @@ import {
   SYNC_CONFLICT_PROJECTION_REGISTERED_RANGE,
 } from "../sheetsContract/conflictProjection.js";
 import { SyncSheetsContractError } from "../sheetsContract/errors.js";
+import {
+  ExistingSheetAdoptionDryRunReportError,
+  type ExistingSheetAdoptionRunReport,
+  type ExistingSheetAdoptionSpec,
+} from "./adopt/existingSheetAdoption.js";
 import {
   describeErrorForInternalLog,
   logHikouteiInternalEvent,
@@ -135,6 +142,35 @@ export type SyncDiagnosticLevel = "info" | "error";
 /** Diagnostic sink; defaults to console. Receives only stable class/code summaries, never full failure messages. */
 export type SyncDiagnostic = (level: SyncDiagnosticLevel, message: string) => void;
 
+/** One entity's existing-sheet adoption request (public adopt API, design D1/D4). */
+export interface AdoptEntitySpec {
+  /** The existing tab that becomes this entity's User_Input route (D1). */
+  readonly tabName: string;
+  /**
+   * Sheet header that carries the business key. `"auto"` (or absent) prefers
+   * the column matching the entity's primary-key property and falls back to
+   * appending a generated PK column (D4). MVP: an alias whose header differs
+   * from the PK property name is blocked with IDENTITY_ALIAS_UNSUPPORTED.
+   */
+  readonly identityFrom?: string | "auto";
+  /**
+   * Tab name for the freshly provisioned System_State projection. Defaults to
+   * `<tabName>_System`.
+   */
+  readonly systemStateTabName?: string;
+  /**
+   * Tab name for the freshly provisioned Sync_Conflicts projection. Defaults
+   * to `<tabName>_Conflicts`.
+   */
+  readonly syncConflictsTabName?: string;
+}
+
+/** Public existing-sheet adoption spec (design `design/existing-sheet-adoption-design.md` §4.1). */
+export interface AdoptSpec {
+  readonly mode: "dry-run" | "adopt";
+  readonly entities: Readonly<Record<string, AdoptEntitySpec>>;
+}
+
 /** Internal auto-start options; none are part of the root application contract. */
 export interface SyncAutoStartOptions {
   readonly dbName: string;
@@ -145,6 +181,14 @@ export interface SyncAutoStartOptions {
   readonly transport?: GoogleSheetsApiTransport;
   /** Injectable diagnostic sink for tests; defaults to console. */
   readonly onDiagnostic?: SyncDiagnostic;
+  /**
+   * Existing-sheet adoption (MVP, direct mode only). In `dry-run` mode the
+   * result is `{ kind: "adopt-dry-run", report }` — the spreadsheet was not
+   * mutated and no service started. In `adopt` mode the adopted tab becomes
+   * the entity's User_Input route, every existing row is bound + seeded
+   * (fail-closed, D5), and the normal sync service starts.
+   */
+  readonly adopt?: AdoptSpec;
 }
 
 /** Local-only result: no sync service was started (env absent or blank). */
@@ -162,7 +206,16 @@ export interface RunningSyncServiceResult {
   readonly service: InternalSyncService;
 }
 
-export type TypedSheetsWithSyncResult = LocalSyncRuntimeResult | RunningSyncServiceResult;
+/**
+ * Adoption dry-run result: the read-only report was produced and the
+ * spreadsheet was NOT mutated; no sync service was started.
+ */
+export interface AdoptDryRunResult {
+  readonly kind: "adopt-dry-run";
+  readonly report: ExistingSheetAdoptionRunReport;
+}
+
+export type TypedSheetsWithSyncResult = LocalSyncRuntimeResult | RunningSyncServiceResult | AdoptDryRunResult;
 
 /** Required service-account fields validated before any remote contact. */
 const REQUIRED_CREDENTIAL_FIELDS = ["type", "client_email", "private_key"] as const;
@@ -257,7 +310,11 @@ export async function createTypedSheetsWithSync(
     const rateLimitIntervalMs = options.transport === undefined
       ? resolveSyncRateLimitIntervalMs(env)
       : undefined;
-    const projections = buildSyncProjections(options.entities, spreadsheetId);
+    const projections = withAdoptedTabOverrides(
+      buildSyncProjections(options.entities, spreadsheetId),
+      options.entities,
+      options.adopt,
+    );
     const service = await createInternalSyncService({
       dbName: options.dbName,
       entities: [...options.entities],
@@ -279,6 +336,7 @@ export async function createTypedSheetsWithSync(
           },
       pollingIntervalMs,
       pollingFullScanIntervalMs,
+      ...(options.adopt === undefined ? {} : { adopt: toInternalAdoptSpec(options.adopt) }),
     });
     logHikouteiInternalEvent({
       event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_STARTED,
@@ -288,11 +346,99 @@ export async function createTypedSheetsWithSync(
     });
     return { kind: "sync", hikoutei: service.hikoutei, service };
   } catch (error: unknown) {
+    // Adoption dry-run is a SUCCESSFUL outcome surfaced as a report, not a
+    // failure: the bridge converts the internal fail-closed startup throw
+    // into the `{ kind: "adopt-dry-run", report }` result variant — but ONLY
+    // for `mode: "dry-run"`. A BLOCKED report under `mode: "adopt"` must stay
+    // fail-closed (D5): adopt failures are loud, diagnosed startup failures
+    // with the problem codes in the message, never a silent result shape.
+    if (error instanceof ExistingSheetAdoptionDryRunReportError) {
+      if (options.adopt?.mode === "adopt") {
+        const blocked = error.report.entities
+          .flatMap((entity) => entity.problems.map((problem) => `${entity.entityName}: ${problem.code}`));
+        return raiseDiagnosed(
+          diagnostic,
+          new HikouteiError(
+            HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+            `existing-sheet adoption is blocked by the dry-run analysis (${blocked.join("; ") || "no detail"}); run mode "dry-run" for the full report.`,
+          ),
+        );
+      }
+      const result: AdoptDryRunResult = { kind: "adopt-dry-run", report: error.report };
+      return result;
+    }
     const failure = error instanceof HikouteiError
       ? error
       : classifySyncStartupFailure(error, spreadsheetId, clientEmail);
     return raiseDiagnosed(diagnostic, failure);
   }
+}
+
+/**
+ * Re-derives the auto-generated projections for the adopted entities: the
+ * adopted tab replaces the generated `<Entity>_Input` User_Input route (the
+ * adoption gate requires the adopt tab to EQUAL the userInput route), and the
+ * fresh System_State / Sync_Conflicts tabs derive from the adopted tab name
+ * (defaults `<tab>_System` / `<tab>_Conflicts`) unless explicitly overridden.
+ * Non-adopted entities keep their generated routes untouched.
+ */
+function withAdoptedTabOverrides(
+  base: InternalSyncProjectionConfig,
+  entities: readonly HikouteiEntity[],
+  adopt: AdoptSpec | undefined,
+): InternalSyncProjectionConfig {
+  if (adopt === undefined) return base;
+  const descriptorByName = new Map(entities.map((entity) => {
+    const descriptor = getEntityDescriptor(entity);
+    return [descriptor.name, descriptor];
+  }));
+  const configs = { ...base.entities };
+  for (const [entityName, spec] of Object.entries(adopt.entities)) {
+    const config = configs[entityName];
+    if (config === undefined) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+        `adopt.entities references entity "${entityName}" that is not part of this runtime (declared: ${[...descriptorByName.keys()].join(", ") || "none"}).`,
+      );
+    }
+    if (descriptorByName.get(entityName) === undefined) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+        `adopt.entities key "${entityName}" does not match a declared entity.`,
+      );
+    }
+    if (config.userInput === undefined) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+        `adopt.entities entity "${entityName}" has no generated User_Input route to replace.`,
+      );
+    }
+    configs[entityName] = {
+      ...config,
+      userInput: { ...config.userInput, tabName: spec.tabName },
+      systemState: {
+        ...config.systemState,
+        tabName: spec.systemStateTabName ?? `${spec.tabName}_System`,
+      },
+      syncConflicts: {
+        ...config.syncConflicts,
+        tabName: spec.syncConflictsTabName ?? `${spec.tabName}_Conflicts`,
+      },
+    };
+  }
+  return { spreadsheetId: base.spreadsheetId, entities: configs };
+}
+
+/** Narrows the public adopt spec to the internal bootstrap spec (same D1/D4 shape). */
+function toInternalAdoptSpec(adopt: AdoptSpec): ExistingSheetAdoptionSpec {
+  const entities: Record<string, { readonly tabName: string; readonly identityFrom?: string | "auto" }> = {};
+  for (const [entityName, spec] of Object.entries(adopt.entities)) {
+    entities[entityName] = {
+      tabName: spec.tabName,
+      ...(spec.identityFrom === undefined ? {} : { identityFrom: spec.identityFrom }),
+    };
+  }
+  return { mode: adopt.mode, entities };
 }
 
 /**

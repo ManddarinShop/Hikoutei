@@ -29,6 +29,10 @@ import type {
   GoogleSheetsApiTransport,
   GoogleSheetsApiWriteRequest,
 } from "../../src/adapter/sheets/providers/google-sheets-api/index.js";
+import type {
+  GoogleSheetsApiValuesGetRequest,
+  GoogleSheetsApiValuesGetResponse,
+} from "../../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
 } from "../../src/adapter/sheets/providers/google-sheets-api/constants.js";
@@ -264,6 +268,48 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
 
   public constructor(spreadsheet: StubSpreadsheet) {
     this.spreadsheet = spreadsheet;
+  }
+
+  /**
+   * Raw `spreadsheets.values.get` over the in-memory grid (FORMATTED_VALUE
+   * semantics). Only the existing-sheet adoption reader consumes this.
+   */
+  public async getValues(
+    request: GoogleSheetsApiValuesGetRequest,
+  ): Promise<GoogleSheetsApiValuesGetResponse> {
+    const rangeText = request.range;
+    const tabTitle = rangeText.includes("!") ? rangeText.split("!")[0]!.replace(/^'/, "").replace(/'$/, "").replace(/''/g, "'") : rangeText;
+    const sheet = this.spreadsheet.findTab(tabTitle);
+    if (sheet === undefined) {
+      throw new GoogleSheetsApiTransportError(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+        `Unable to parse range: ${rangeText}`,
+        presentValue(400),
+        presentValue("INVALID_ARGUMENT"),
+      );
+    }
+    const rows: (string | number | boolean | null)[][] = [];
+    for (let row = 0; row < 1000; row++) {
+      const rowValues: (string | number | boolean | null)[] = [];
+      let populated = false;
+      for (let col = 0; col < 50; col++) {
+        const cell = sheet.cell(row, col);
+        const raw = cell?.userEnteredValue;
+        if (raw === undefined) { rowValues.push(null); continue; }
+        populated = true;
+        if (cell?.formattedValue !== undefined) { rowValues.push(cell.formattedValue); continue; }
+        if (raw.stringValue !== undefined) rowValues.push(raw.stringValue);
+        else if (raw.numberValue !== undefined) rowValues.push(raw.numberValue);
+        else if (raw.boolValue !== undefined) rowValues.push(raw.boolValue);
+        else rowValues.push(null);
+      }
+      if (!populated) break;
+      // The real API omits trailing empty cells: trim the null padding so the
+      // adoption reader's ignored-column report matches real wire behavior.
+      while (rowValues.length > 0 && rowValues.at(-1) === null) rowValues.pop();
+      rows.push(rowValues);
+    }
+    return { values: rows };
   }
 
   public async getSpreadsheet(request: GoogleSheetsApiGetSpreadsheetRequest): Promise<unknown> {
