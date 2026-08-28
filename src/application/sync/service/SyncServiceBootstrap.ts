@@ -49,6 +49,10 @@ import {
   planMappedFlushConflictSyncWithSql,
 } from "../inbound/autoSystemConflictResolution.js";
 import { createRemoteProvider } from "./remoteProvider.js";
+import {
+  resolveAdoptionReaderTransport,
+  runExistingSheetAdoptionStartup,
+} from "./adopt/existingSheetAdoption.js";
 import { createEffectSupervisor } from "./effectSupervisor.js";
 import { createPollingSupervisor } from "./pollingSupervisor.js";
 import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
@@ -132,6 +136,29 @@ export async function createInternalSyncService(
       ),
     ];
     const remote = createRemoteProvider(options, projectionDefinitions);
+    if (options.adopt !== undefined) {
+      // Existing-sheet adoption gate (D5, fail-closed): runs BEFORE any
+      // provisioning mutation. dry-run reads the foreign tab, analyzes the
+      // header-name bindings, and throws the full report — the service never
+      // reaches its running state. adopt-mode seeding replaces this gate in
+      // the next milestone.
+      await runExistingSheetAdoptionStartup({
+        adopt: options.adopt,
+        spreadsheetId: options.projections.spreadsheetId,
+        transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
+        descriptors: [...descriptors.values()],
+        projections: options.projections,
+        userOwnedFieldsByEntity: Object.fromEntries(
+          Object.entries(options.projections.entities).map(([name, config]) => [
+            name,
+            config.userOwnedFields ?? [],
+          ]),
+        ),
+        ...(options.googleSheetsApi?.requestTimeoutMs === undefined
+          ? {}
+          : { requestTimeoutMs: options.googleSheetsApi.requestTimeoutMs }),
+      });
+    }
     await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
 
     const effectSupervisor = createEffectSupervisor({

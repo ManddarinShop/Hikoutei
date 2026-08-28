@@ -141,6 +141,25 @@ export interface GoogleSheetsApiBatchUpdateRequest {
 export interface GoogleSheetsApiTransport {
   getSpreadsheet(request: GoogleSheetsApiGetSpreadsheetRequest): Promise<unknown>;
   batchUpdate(request: GoogleSheetsApiBatchUpdateRequest): Promise<unknown>;
+  /**
+   * Raw `spreadsheets.values.get` capability. Optional so existing test
+   * stubs keep implementing the interface unchanged; only the existing-sheet
+   * adoption reader consumes it (it must read foreign tabs that carry no
+   * registered route metadata).
+   */
+  getValues?(request: GoogleSheetsApiValuesGetRequest): Promise<GoogleSheetsApiValuesGetResponse>;
+}
+
+/** Request shape of one `spreadsheets.values.get` call. */
+export interface GoogleSheetsApiValuesGetRequest {
+  readonly spreadsheetId: string;
+  readonly range: string;
+  readonly timeoutMs?: number;
+}
+
+/** Raw `spreadsheets.values.get` response body (untrusted). */
+export interface GoogleSheetsApiValuesGetResponse {
+  readonly values?: readonly (readonly (string | number | boolean | null)[])[];
 }
 
 /** Auth type accepted by the sheets factory (may resolve to a nested version). */
@@ -193,6 +212,25 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
         { timeout: request.timeoutMs ?? this.requestTimeoutMs, retry: false },
       );
       return response.data;
+    } catch (error: unknown) {
+      const mapped = classifyGoogleSheetsApiError(error);
+      logTransportFailure(mapped);
+      throw mapped;
+    }
+  }
+
+  public async getValues(
+    request: GoogleSheetsApiValuesGetRequest,
+  ): Promise<GoogleSheetsApiValuesGetResponse> {
+    try {
+      const response = await this.client.spreadsheets.values.get(
+        {
+          spreadsheetId: request.spreadsheetId,
+          range: request.range,
+        },
+        { timeout: request.timeoutMs ?? this.requestTimeoutMs, retry: false },
+      );
+      return { values: response.data.values ?? [] };
     } catch (error: unknown) {
       const mapped = classifyGoogleSheetsApiError(error);
       logTransportFailure(mapped);

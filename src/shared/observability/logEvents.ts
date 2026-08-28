@@ -116,6 +116,9 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "sync_provider_unavailable",
   "sync_service_startup_failed",
   "sync_service_closed",
+  // Existing-sheet adoption (src/application/sync/service/adopt/existingSheetAdoption.ts).
+  "existing_sheet_adoption_dry_run_report",
+  "existing_sheet_adoption_not_implemented",
 
   // Storage/schema/effect codes (src/infrastructure/storage/errors.ts).
   "invalid_writer_lease_options",
