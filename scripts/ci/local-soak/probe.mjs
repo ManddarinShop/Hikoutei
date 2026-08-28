@@ -52,8 +52,8 @@ export function evaluateInputReadiness(rows, identity, headerName) {
  * Paced User_Input readiness barrier before the probe's single write.
  *
  * System_State convergence does not prove the editable User_Input row is
- * already observable, so the probe polls the target tab until exactly one
- * intended identity is visible within the phase deadline. Missing target
+ * already observable, so the probe polls the target tab until it has the
+ * intended identity visible within the phase deadline. Missing target
  * identity is the ONLY retryable condition (bounded sleep then reread);
  * a malformed header/identity fails closed immediately, and a transient
  * Direct Sheets transport failure propagates (never retried here) to the
@@ -63,14 +63,32 @@ export function evaluateInputReadiness(rows, identity, headerName) {
  * `missing_identity` class so the outer handler records a stable redacted
  * probe failure.
  *
- * @param {object} live the live client context.
+ * A present identity is NOT a current writable baseline: the target row on
+ * the User_Input tab can be a stale projection of a canonical row the
+ * scenario cleanup already deleted (its binding is being tombstoned), so a
+ * human edit written there would never be accepted. Before returning ready
+ * the barrier therefore ALSO requires the existing canonical row to still
+ * be readable through the application authority (`findOne`) AND to be
+ * coherent with the User_Input displayed baseline (the canonical field
+ * values match the editable cells the probe is about to write against), so
+ * the probe never issues a doomed write against a deleted or stale
+ * baseline. The canonical baseline is retryable like a missing identity; if
+ * it never appears the probe fails with the stable `missing_identity` class
+ * instead of writing.
+ *
+ * @param {object} context the live probe context (provides `hikoutei` and
+ *   `tokenByEntity` for the canonical baseline read).
  * @param {{name:string}} entry the probe entity entry.
  * @param {string} identity the intended main-row identity.
  * @param {string} headerName the target field the probe will write.
+ * @param {readonly string[]} editableFields the editable string fields the
+ *   coherent baseline must match.
  * @param {number} phaseDeadline epoch deadline (same clock as Date.now()).
- * @returns {Promise<void>} resolves only when exactly one identity is ready.
+ * @returns {Promise<void>} resolves when the identity is ready AND the
+ *   canonical baseline is current and coherent.
  */
-async function waitForInputReadiness(live, entry, identity, headerName, phaseDeadline) {
+async function waitForInputReadiness(context, entry, identity, headerName, editableFields, phaseDeadline) {
+  const { live } = context;
   while (true) {
     if (Date.now() >= phaseDeadline) {
       throw new DirectSheetsError("input identity never became ready", "missing_identity");
@@ -91,9 +109,128 @@ async function waitForInputReadiness(live, entry, identity, headerName, phaseDea
     if (verdict.status === "fail") {
       throw new DirectSheetsError("input readiness invalid", verdict.statusClass);
     }
-    if (verdict.status === "ready") return;
+    if (verdict.status === "ready") {
+      // A present identity is not a current writable baseline: the target
+      // row may be a stale projection of a canonical row the scenario
+      // cleanup already deleted (or is deleting). Require the canonical
+      // SQLite row to still exist AND to be coherent with the User_Input
+      // displayed baseline before writing; otherwise the human edit lands
+      // against a tombstoned or stale binding and is never accepted. This
+      // stays retryable (`missing`) so the probe either converges to a
+      // current baseline or fails with the stable `missing_identity` class.
+      const baseline = extractInputBaseline(rows, identity);
+      if (await canonicalBaselineReady(context, entry, identity, baseline, editableFields)) return;
+    }
     await boundedSleep(PROBE_ACCEPT_POLL_MS, phaseDeadline);
   }
+}
+
+/**
+ * Extracts the target row's displayed cells keyed by header name.
+ *
+ * Returns `undefined` when the id header or the intended identity row is
+ * absent, so callers can distinguish "no baseline to compare" from a real
+ * stale baseline. Purely structural: cells are compared as displayed values
+ * and never echoed into any artifact.
+ *
+ * @param {readonly unknown[][]} rows data rows including the header row.
+ * @param {string} identity the intended main-row identity.
+ * @returns {Record<string, unknown> | undefined}
+ */
+function extractInputBaseline(rows, identity) {
+  const headers = rows[0] ?? [];
+  const idColumn = headers.indexOf("id");
+  if (idColumn < 0) return undefined;
+  const cells = rows.find((entry, index) => index > 0 && entry[idColumn] === identity);
+  if (cells === undefined) return undefined;
+  const baseline = {};
+  for (let index = 0; index < headers.length; index += 1) {
+    baseline[headers[index]] = cells[index];
+  }
+  return baseline;
+}
+
+/**
+ * True while the canonical row for the intended identity exists AND is
+ * coherent with the User_Input displayed baseline.
+ *
+ * Reads the application authority (SQLite through the public EntityManager)
+ * for the intended identity. A null row means the canonical entity was
+ * deleted (its binding tombstoned) and the User_Input row is a stale
+ * baseline, so the probe must not write. A present row whose editable field
+ * values DIFFER from the User_Input displayed cells is a stale projection
+ * (the canonical row was updated but the projection has not caught up), so
+ * the probe must not write against it either. A missing runtime/token fails
+ * closed to `false` so the probe never writes without canonical evidence.
+ *
+ * @param {object} context the live probe context.
+ * @param {{name:string}} entry the probe entity entry.
+ * @param {string} identity the intended main-row identity.
+ * @param {Record<string, unknown> | undefined} baseline the User_Input
+ *   displayed cells for the intended identity, or undefined when no
+ *   baseline could be extracted.
+ * @param {readonly string[]} editableFields the editable string fields the
+ *   coherent baseline must match.
+ * @returns {Promise<boolean>}
+ */
+async function canonicalBaselineReady(context, entry, identity, baseline, editableFields) {
+  const token = context?.tokenByEntity?.get(entry.name);
+  const runtime = context?.hikoutei;
+  if (token === undefined || runtime?.em === undefined) return false;
+  const row = await runtime.em.fork().findOne(token, { id: identity });
+  if (row === null || row === undefined) return false;
+  // Coherent baseline: the canonical row's editable field values must match
+  // the User_Input displayed cells. A mismatch means the projection is stale
+  // (the canonical row was updated but the projection has not caught up), so
+  // the probe must not write. When no baseline could be extracted, fall back
+  // to the existence check (defensive; the readiness verdict already proved
+  // the identity is present and unique).
+  if (baseline === undefined) return true;
+  for (const field of editableFields) {
+    const displayed = baseline[field];
+    const canonical = row[field];
+    if (String(canonical ?? "") !== String(displayed ?? "")) return false;
+  }
+  return true;
+}
+
+/**
+ * Re-reads the User_Input tab and re-checks the coherent canonical baseline
+ * immediately before the probe's single write.
+ *
+ * The readiness loop may have resolved a coherent baseline a moment ago, but
+ * a concurrent scenario cleanup or public update can shift the projection
+ * between that read and the write. This performs ONE fresh readiness read
+ * plus the canonical coherence check, honoring the phase deadline (a
+ * post-deadline read or a value observed only after the deadline is never
+ * accepted). Returns true only when the baseline is still ready and
+ * coherent, so the caller issues its single write against a current
+ * baseline; otherwise the caller fails with the stable `missing_identity`
+ * class and zero writes.
+ *
+ * @param {object} context the live probe context.
+ * @param {{name:string}} entry the probe entity entry.
+ * @param {string} identity the intended main-row identity.
+ * @param {string} headerName the target field the probe will write.
+ * @param {readonly string[]} editableFields the editable string fields the
+ *   coherent baseline must match.
+ * @param {number} phaseDeadline epoch deadline (same clock as Date.now()).
+ * @returns {Promise<boolean>}
+ */
+async function revalidateBaselineBeforeWrite(
+  context, entry, identity, headerName, editableFields, phaseDeadline,
+) {
+  if (Date.now() >= phaseDeadline) return false;
+  const rows = await context.live.client.readTabRows(
+    context.live.spreadsheetId,
+    `${entry.name}_Input`,
+    { deadlineAtMs: phaseDeadline },
+  );
+  if (Date.now() >= phaseDeadline) return false;
+  const verdict = evaluateInputReadiness(rows, identity, headerName);
+  if (verdict.status !== "ready") return false;
+  const baseline = extractInputBaseline(rows, identity);
+  return canonicalBaselineReady(context, entry, identity, baseline, editableFields);
 }
 
 /**
@@ -139,11 +276,47 @@ export async function runHumanEditProbe(context, tablesTouched) {
     // or duplicate identity, all BEFORE any write. Exactly one
     // `mutateInputCell` is issued below and is never retried or
     // compensated.
-    await waitForInputReadiness(live, entry, targetId, field, phaseDeadline);
+    await waitForInputReadiness(context, entry, targetId, field, editableFields, phaseDeadline);
     // The readiness read can resolve just AT the phase deadline; the write
     // must never start after it. Recheck immediately before the single
     // `mutateInputCell` and fail with the stable `missing_identity` class,
     // zero writes.
+    if (Date.now() >= phaseDeadline) {
+      return {
+        record: {
+          status: "failed",
+          reason: "probe-error",
+          statusClass: "missing_identity",
+          table: sanitizeTableName(entry.tableName),
+        },
+        applied: undefined,
+      };
+    }
+    // Revalidate the coherent baseline immediately before the single write:
+    // the canonical row or the User_Input projection may have changed between
+    // the readiness loop and now (a concurrent scenario cleanup could have
+    // deleted the row or a public update could have shifted the projection).
+    // A stale baseline must never be written to, so the probe re-reads the
+    // User_Input tab and re-checks the canonical coherence once more, still
+    // honoring the phase deadline and issuing at most one write.
+    if (!(await revalidateBaselineBeforeWrite(
+      context, entry, targetId, field, editableFields, phaseDeadline,
+    ))) {
+      return {
+        record: {
+          status: "failed",
+          reason: "probe-error",
+          statusClass: "missing_identity",
+          table: sanitizeTableName(entry.tableName),
+        },
+        applied: undefined,
+      };
+    }
+    // Final atomic deadline check: the canonical revalidation read may have
+    // resolved after the phase deadline (a slow canonical read that began just
+    // before it). The single write must never start after the deadline, so
+    // recheck immediately before `mutateInputCell` and fail with the stable
+    // `missing_identity` class, zero writes.
     if (Date.now() >= phaseDeadline) {
       return {
         record: {

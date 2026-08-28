@@ -163,22 +163,31 @@ admitted final **live** cycle may close out for at most the existing
 ## Request pacing and quota headroom
 
 Google Sheets quota is enforced per 100-second windows, so Hikoutei's direct
-provider serializes ALL request starts — reads and writes together — through
-ONE shared limiter: at most one Sheets API request can start per interval
-regardless of class. The safe default interval is **2,500 ms** (about 40
-starts per 100-second window), leaving headroom inside the default
-per-user/per-project 100-second quotas for the observation and provisioning
-reads that run beside the worker; the exact quota stays provider and
-environment dependent. Admission is BOUNDED: a request whose predicted slot
-lies more than ONE interval out is refused before any SDK call with the
-stable delivery-uncertain `google_sheets_api_request_start_refused` error,
-so a burst of concurrent lock-free polling reads can never push a later
-write's start past its effect lease — the durable worker requeues the effect
-and the limiter horizon is untouched, so the next pass is admitted again
-once the queue drains. The interval is also bounded by the effect lease: a
-worst-case dispatch (two preflight/postcondition reads plus one write, each
-paced and timed out, with up to one full interval of first-slot wait because
-the shared limiter may hold a prior reservation) must finish inside the
+provider paces request starts per CLASS through TWO independent timelines:
+ONE shared read QoS timeline serializes the read classes (lock-free polling
+reads plus preflight read-ahead — at most one read start per interval), and
+a SEPARATE write limiter serializes writes, so a read and a write may start
+CONCURRENTLY and a burst of read starts can never queue ahead of a write
+(the one exception: a postcondition read that verifies a just-written row
+is paced on the write timeline so it serializes against the write it
+verifies). The safe default interval — and the env override floor — is
+**2,000 ms** (about 50 starts per 100-second window per class), leaving
+headroom inside the default per-user/per-project 100-second quotas for the
+observation and provisioning reads that run beside the worker; the exact
+quota stays provider and environment dependent. The interval only SPACES
+request starts; admission is BOUNDED separately by an independent maximum
+admission wait (`requestStartMaxWaitMs`, default **5,000 ms**, not derived
+from the interval): a request whose PREDICTED WAIT for a slot exceeds that
+bound is refused before any SDK call with the stable delivery-uncertain
+`google_sheets_api_request_start_refused` error, so a burst of concurrent
+lock-free polling reads can never push a later read's start past its effect
+lease — and can never delay a write at all, since writes have their own
+timeline — the durable worker requeues the effect and the limiter horizon
+is untouched, so the next pass is admitted again once the queue drains. The
+interval is also bounded by the effect lease: a worst-case dispatch (two
+preflight/postcondition reads plus one write, each paced and timed out,
+with up to one full interval of first-slot wait because either timeline may
+hold a prior reservation of its own class) must finish inside the
 120-second default lease with the 30-second provider headroom —
 `120 s > 60 s + I + 2 x max(10 s, I) + 30 s` — so an unsafe override is
 rejected at startup instead of risking lease expiry and duplicate remote
@@ -191,12 +200,18 @@ limiter is fail-open for telemetry.
 
 | Env var | Default | Contract |
 | --- | --- | --- |
-| `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` | `2500` | internal override for the shared read+write request-start interval of the REAL Google Sheets provider; plain decimal integer in `1000..9999` ms (the largest default-safe interval under the default 120 s lease, 60 s write timeout, 10 s read timeout, and 30 s headroom, including the up-to-one-interval first-slot wait: `120 s > 60 s + I + 2 x max(10 s, I) + 30 s`); malformed or out-of-bounds values fail sync startup closed. The same value is the admission bound: a request whose slot is more than one interval out is refused before transport (delivery-uncertain, requeued). Injected fake transports and local-only mode are never affected by this key. Not part of the root public API. |
+| `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` | `2000` | internal override for the per-class request-start interval (shared read QoS timeline for polling+preflight reads plus a separate write limiter) of the REAL Google Sheets provider; plain decimal integer in `2000..9999` ms (the floor is the smallest interval demonstrated clean under the current shared service-account quota profile; the 9,999 ceiling is the largest default-safe interval under the default 120 s lease, 60 s write timeout, 10 s read timeout, and 30 s headroom, including the up-to-one-interval first-slot wait: `120 s > 60 s + I + 2 x max(10 s, I) + 30 s`); malformed or out-of-bounds values fail sync startup closed. This value only spaces request starts; admission is governed by the SEPARATE independent bounded admission wait (`requestStartMaxWaitMs`, default `5000` ms, not derived from this interval): a request whose predicted wait exceeds that bound is refused before transport (delivery-uncertain, requeued). Injected fake transports and local-only mode are never affected by this key. Not part of the root public API. |
 
 The soak harness itself is paced too: the direct observation client used for
 convergence reads, probe edits, and cleanup spaces every request start of
-one client through its own shared read+write gate, defaulting to the same
-2,500 ms as the library. Soak-only direct requests can therefore never fire
+one client through its own single shared read+write gate, defaulting to
+**2,500 ms**. This is deliberately NOT the provider's policy: the REAL
+direct provider paces reads and writes on two independent per-class
+timelines at a 2,000 ms default (shared read QoS timeline for
+polling+preflight reads, separate write limiter, concurrent read/write
+starts), while the harness client is a plain direct client that serializes
+its own reads and writes together through one coarser 2,500 ms gate. Soak-
+only direct requests can therefore never fire
 an unpaced burst on top of the library's worker traffic and invalidate the
 quota behavior the live run is observing. The soak workload (cycles,
 operations, probes) is unchanged; only request START times are spaced.
