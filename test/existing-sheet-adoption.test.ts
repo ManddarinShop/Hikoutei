@@ -295,23 +295,6 @@ describe("existing-sheet adoption bootstrap gate", () => {
     }
   });
 
-  it("refuses adopt mode until the seeding engine milestone lands", async () => {
-    try {
-      await createInternalSyncService({
-        dbName: ":memory:",
-        entities: [AdoptInvoice],
-        projections,
-        googleSheetsApi: { transport: new ForeignTabTransport() as never },
-        adopt: { mode: "adopt", entities: { AdoptInvoice: { tabName: "Invoices" } } },
-      });
-      expect.unreachable("adopt mode must be refused in this milestone");
-    } catch (error: unknown) {
-      expect((error as { code?: string }).code).toBe(
-        SYNC_SERVICE_ERROR_CODES.ADOPTION_NOT_IMPLEMENTED,
-      );
-    }
-  });
-
   it("rejects adoption without the direct googleSheetsApi provider", async () => {
     await expect(createInternalSyncService({
       dbName: ":memory:",
