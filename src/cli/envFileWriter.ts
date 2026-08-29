@@ -25,9 +25,11 @@ import { dirname, join } from "node:path";
 import {
   defaultSetupStateWriteFs,
   fsyncParentDirectory,
+  noFollowFlag,
+  nonBlockFlag,
   writeAllSync,
   type SetupStateWriteFs,
-} from "./checkpoint.js";
+} from "./setupPaths.js";
 import { SETUP_ERROR_CODES } from "./errors.js";
 import { errorResult, type SetupErrorResult } from "./flowResult.js";
 import { findSetupPathCollision } from "./setupPathCollision.js";
@@ -315,15 +317,13 @@ export function atomicWritePrivateFile(
   fsyncParentDirectory(dirname(outputPath), fs);
 }
 
-/** `O_NOFOLLOW` where the platform defines it, else 0. */
-export function noFollowFlag(): number {
-  return (constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
-}
-
-/** `O_NONBLOCK` where the platform defines it, else 0. */
-export function nonBlockFlag(): number {
-  return (constants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
-}
+/**
+ * `O_NOFOLLOW`/`O_NONBLOCK` where the platform defines each, else 0.
+ *
+ * Compat re-export: these flags moved to the dependency-free `setupPaths.ts`
+ * leaf; the envFileWriter module path stays stable for existing importers.
+ */
+export { noFollowFlag, nonBlockFlag } from "./setupPaths.js";
 
 /** Exclusive no-follow create flags for a private temp file. */
 function exclusivePrivateOpenFlags(): number {

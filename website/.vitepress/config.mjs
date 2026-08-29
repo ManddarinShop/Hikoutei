@@ -115,6 +115,7 @@ export default defineConfig({
           { text: "Google Sheets setup", link: "/guide/setup" },
           { text: "Architecture", link: "/guide/architecture" },
           { text: "Write and synchronization flow", link: "/guide/sync-flow" },
+          { text: "Public type reference", link: "/guide/type-reference" },
           { text: "Benchmarks", link: "/guide/benchmarks" },
           { text: "Limitations", link: "/guide/limitations" },
           { text: "Project status", link: "/guide/status" },
@@ -151,6 +152,7 @@ export default defineConfig({
           { text: "Google Sheets setup", link: "/guide/setup" },
           { text: "Architecture", link: "/guide/architecture" },
           { text: "Write and synchronization flow", link: "/guide/sync-flow" },
+          { text: "Public type reference", link: "/guide/type-reference" },
           {
             text: "Internal consistency model",
             link: "/guide/internal-consistency",
