@@ -1,0 +1,108 @@
+Unused files (8)
+src/application/sync/service/configSchemas.ts       
+src/application/sync/service/serviceOptionSchemas.ts
+src/domain/conflict/index.ts                        
+src/domain/evaluate/index.ts                        
+src/domain/model/index.ts                           
+src/shared/identity/index.ts                        
+src/shared/index.ts                                 
+src/shared/observability/index.ts                   
+Unused exports (33)
+SYNC_EFFECT_RECOVERY_ERROR_CODES                           packages/ikisaki/src/outbox.ts:69:10                         
+RECOVERABLE_EFFECT_ERROR_CODE_SQL                          packages/ikisaki/src/outbox.ts:72:3                          
+FENCE_EXISTS_SQL                                           packages/ikisaki/src/outboxSql.ts:11:10                      
+decodeSqlRows                                    function  src/adapter/persistence/contracts/sql.ts:34:17               
+initializeMikroOrmScalarStorage                  function  …ce/providers/mikro-orm/engine/MikroOrmScalarStorage.ts:19:23
+MAPPED_USER_INPUT_INVALID_REASONS                          …ders/mikro-orm/observation/MikroOrmUserInputPolling.ts:76:10
+GoogleSheetsApiHttpTransport                               src/adapter/sheets/providers/google-sheets-api/index.ts:16:3 
+RequestStartLimiter                                        src/adapter/sheets/providers/google-sheets-api/index.ts:29:10
+GOOGLE_SHEETS_API_DEFAULTS                                 src/adapter/sheets/providers/google-sheets-api/index.ts:31:3 
+GOOGLE_SHEETS_API_SCOPES                                   src/adapter/sheets/providers/google-sheets-api/index.ts:32:3 
+GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES                    src/adapter/sheets/providers/google-sheets-api/index.ts:35:3 
+GoogleSheetsApiTransportError                              src/adapter/sheets/providers/google-sheets-api/index.ts:36:3 
+typedSheetsEntityId                              function  src/application/orm/mapping/identity.ts:42:17                
+encodeTypedSheetsEntity                          function  src/application/orm/mapping/values.ts:27:17                  
+createSystemRepairEffect                         function  …n/sync/outbound/projection/ProjectionEffectFactory.ts:214:17
+createResolutionDeleteEffect                     function  …n/sync/outbound/projection/ProjectionEffectFactory.ts:245:17
+conflictProjectionSheet                          function  …sync/sheetsContract/conflictProjectionRegistration.ts:109:17
+decodeSyncSheetsPresenceString                   function  src/application/sync/sheetsContract/validation.ts:71:17      
+decodeSyncSheetsPresenceNonNegativeSafeInteger   function  src/application/sync/sheetsContract/validation.ts:81:17      
+requireSyncProtocolVersion                       function  src/application/sync/sheetsContract/validation.ts:91:17      
+KEY_FILE_MODE                                              src/cli/setupFlow.ts:154:14                                  
+shouldRebaseConflict                             function  src/domain/conflict/transitions.ts:59:17                     
+DuplicateChangedFieldError                                 src/domain/errors/index.ts:3:10                              
+POSITIVE_SAFE_INTEGER_MINIMUM                              src/infrastructure/storage/constants.ts:4:3                  
+commitCanonicalChangesWithAdapter                function  …astructure/storage/state/canonical/canonicalCommit.ts:267:23
+presenceCandidateVisibleEvidence                 function  …ructure/storage/state/resolution/candidateEvidence.ts:135:17
+PERSIST_RESOLUTION_RESULT_KINDS                            …astructure/storage/state/resolution/resolutionWriter.ts:89:3
+RESOLUTION_COMMAND_STATUSES                                …astructure/storage/state/resolution/resolutionWriter.ts:90:3
+FENCE_EXISTS_SQL                                           …ructure/storage/state/resolution/resolutionWriterSql.ts:5:10
+hasActiveUserInputCandidateWithAdapter           function  …nfrastructure/storage/sync/outbound/effectWorkerSql.ts:60:17
+readReconciliationDesiredSystemStateWithAdapter  function  …astructure/storage/sync/outbound/reconciliationSql.ts:114:17
+CELL_OBSERVATION_KINDS                                     src/shared/encoding/index.ts:5:3                             
+STABLE_ENCODING_ERROR_CODES                                src/shared/encoding/index.ts:8:3                             
+Unused exported types (62)
+AppliedEffectResultOptions           type       packages/ikisaki/src/outbox.ts:76:3                                     
+NonAppliedEffectResultOptions        type       packages/ikisaki/src/outbox.ts:80:3                                     
+EffectProjectionConfirmation         type       packages/ikisaki/src/outbox.ts:82:3                                     
+HikouteiMcpToolName                  type       packages/mcp/src/tools.ts:71:13                                         
+ToolQueryOperator                    type       packages/mcp/src/values.ts:50:13                                        
+ScalarEntityTableDefinition          interface  src/adapter/persistence/contracts/scalar.ts:33:18                       
+MappedUserInputInvalidReason         type       …tence/providers/mikro-orm/observation/MikroOrmUserInputPolling.ts:77:15
+GoogleSheetsApiEffectReason          type       src/adapter/sheets/providers/google-sheets-api/constants.ts:164:13      
+GoogleSheetsApiSyncProviderOptions   type       src/adapter/sheets/providers/google-sheets-api/index.ts:11:3            
+GoogleSheetsApiCellRow               type       src/adapter/sheets/providers/google-sheets-api/index.ts:26:3            
+GoogleSheetsApiHttpTransportOptions  type       src/adapter/sheets/providers/google-sheets-api/index.ts:27:3            
+GoogleSheetsApiTransportErrorCode    type       src/adapter/sheets/providers/google-sheets-api/index.ts:38:15           
+BatchBuildOptions                    interface  …/adapter/sheets/providers/google-sheets-api/model/batchBuilder.ts:38:18
+TypedSheetsFlushCoordinator          type       src/application/orm/persistence/support/contracts.ts:149:35             
+TypedSheetsFlushContext              type       src/application/orm/persistence/support/contracts.ts:150:31             
+RegisteredSyncProjectionDefinition   type       src/application/orm/persistence/support/contracts.ts:159:3              
+SqlStorageAdapter                    type       src/application/orm/persistence/support/contracts.ts:162:3              
+ScalarEntityFlushContext             type       src/application/orm/persistence/support/contracts.ts:167:3              
+ScalarEntityFlushCoordinator         type       src/application/orm/persistence/support/contracts.ts:168:3              
+ExistingSheetAdoptionErrorCode       type       src/application/sync/service/adopt/existingSheetAdoption.ts:60:13       
+InternalSyncProvider                 type       src/application/sync/service/SyncServiceBootstrap.ts:91:3               
+CoordinatorLaneSink                  type       …lication/sync/sheetsContract/mutationCoordinator/laneTelemetry.ts:33:13
+SyncSheetsTimingPhase                type       src/application/sync/telemetry/syncTiming.ts:44:13                      
+SetupStateStatus                     type       src/cli/checkpoint.ts:291:13                                            
+ConflictResolutionErrorCode          type       src/domain/conflict/errors.ts:5:13                                      
+ConflictTransitionKind               type       src/domain/conflict/transitions.ts:34:13                                
+CoreError                            type       src/domain/errors/index.ts:2:15                                         
+EvaluationErrorCode                  type       src/domain/errors/index.ts:8:15                                         
+CanonicalResolutionStatus            type       src/domain/model/constants.ts:58:13                                     
+CanonicalResolutionStatus            type       src/domain/model/types.ts:29:3                                          
+CandidateVisibleEvidenceStatus       type       src/domain/model/types.ts:30:3                                          
+RegisteredProjectionKind             type       src/domain/model/types.ts:35:3                                          
+RowBindingState                      type       src/domain/model/types.ts:37:3                                          
+RawObservedFieldChange               type       src/domain/model/types.ts:142:13                                        
+SheetChangeEvent                     type       src/domain/model/types.ts:284:13                                        
+TypedQuarantinePlan                  type       src/domain/model/types.ts:365:13                                        
+EffectStatus                         type       src/domain/model/types.ts:474:13                                        
+SheetEffect                          interface  src/domain/model/types.ts:477:18                                        
+ObservationAttemptInput              type       src/infrastructure/storage/state/observation/observationWriter.ts:78:3  
+EventIdentityInput                   type       src/infrastructure/storage/state/observation/observationWriter.ts:79:3  
+ObservedProjectionEvidence           type       src/infrastructure/storage/state/observation/observationWriter.ts:82:3  
+CellObservation                      type       src/shared/encoding/index.ts:11:3                                       
+CellObservationKind                  type       src/shared/encoding/index.ts:12:3                                       
+NormalizedCellKind                   type       src/shared/encoding/index.ts:14:3                                       
+DateValue                            type       src/shared/encoding/index.ts:15:3                                       
+StableValue                          type       src/shared/encoding/index.ts:16:3                                       
+JavaScriptTypeName                   type       src/shared/encoding/index.ts:19:3                                       
+StableEncodingErrorCode              type       src/shared/encoding/index.ts:20:3                                       
+HikouteiEntityId                     type       src/shared/identity/types.ts:27:13                                      
+HikouteiCanonicalEntityId            type       src/shared/identity/types.ts:28:13                                      
+HikouteiRowBindingId                 type       src/shared/identity/types.ts:29:13                                      
+HikouteiEffectId                     type       src/shared/identity/types.ts:30:13                                      
+HikouteiEffectDedupeKey              type       src/shared/identity/types.ts:31:13                                      
+HikouteiPhysicalSheetId              type       src/shared/identity/types.ts:32:13                                      
+HikouteiBusinessKeyHash              type       src/shared/identity/types.ts:34:13                                      
+HikouteiPayloadHash                  type       src/shared/identity/types.ts:35:13                                      
+HikouteiVisibleHash                  type       src/shared/identity/types.ts:36:13                                      
+HikouteiSnapshotHash                 type       src/shared/identity/types.ts:37:13                                      
+HikouteiRequestId                    type       src/shared/identity/types.ts:38:13                                      
+HikouteiClaimToken                   type       src/shared/identity/types.ts:39:13                                      
+Applicability                        type       src/shared/state/index.ts:12:15                                         
+LookupResult                         type       src/shared/state/index.ts:12:30                                         
+Duplicate exports (1)
+EFFECT_BATCH_LIMIT|MAX_IN_FLIGHT_EFFECTS  packages/ikisaki/src/worker/constants.ts

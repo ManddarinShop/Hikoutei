@@ -1,0 +1,24 @@
+{
+  "$schema": "https://unpkg.com/knip@6.33.0/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/api/index.ts",
+        "test/**/*.{ts,mts,cts}",
+        "scripts/**/*.{ts,mts,mjs}"
+      ],
+      "project": ["src/**/*.ts", "test/**/*.{ts,mts}", "scripts/**/*.{ts,mts,mjs}"]
+    },
+    "packages/ikisaki": {
+      "entry": ["test/**/*.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/mcp": {
+      "project": ["src/**/*.ts"]
+    }
+  },
+  "ignore": [],
+  "ignoreBinaries": ["mkfifo"],
+  "ignoreExportsUsedInFile": true,
+  "tags": ["-lint-ignore"]
+}
