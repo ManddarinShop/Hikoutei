@@ -18,7 +18,11 @@ import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.m
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
 // terminate quickly and deterministically (a real poll would be ~1s each).
-vi.mock("../scripts/ci/local-soak/timing.mjs", () => ({
+// Keep the real timing helpers (including the clock-slop deadline check the
+// scenarios import); only the bounded sleeps are stubbed so the poll/settle
+// loops run fast and deterministically.
+vi.mock("../scripts/ci/local-soak/timing.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../scripts/ci/local-soak/timing.mjs")>()),
   boundedSleep: async () => {
     await new Promise((resolve) => setTimeout(resolve, 1));
   },

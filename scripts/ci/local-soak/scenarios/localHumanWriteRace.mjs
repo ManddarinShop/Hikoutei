@@ -15,7 +15,7 @@ import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS } from "../constants.mjs";
-import { boundedSleep } from "../timing.mjs";
+import { boundedSleep, isDeadlineExpired } from "../timing.mjs";
 
 /** Stable scenario id recorded in redacted artifacts. */
 export const id = "local-human-write-race";
@@ -196,7 +196,10 @@ export async function execute({ plan, context }) {
     // clean the authority/oracle below. The human promise is a no-op in that
     // case so the allSettled classification never counts an unstarted human
     // write as a transport/direct-write failure.
-    const deadlineExpired = Date.now() >= deadlineAt;
+    // Clock-slop tolerant expiry check: the bounded jitter sleep can wake
+    // marginally short of the nominal deadline, so a zero-tolerance reading
+    // would flakily start the human write after the budget ended.
+    const deadlineExpired = isDeadlineExpired(deadlineAt);
     const humanPromise = deadlineExpired
       ? Promise.resolve(undefined)
       : client.mutateInputCell({

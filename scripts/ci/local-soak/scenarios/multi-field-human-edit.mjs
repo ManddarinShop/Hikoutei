@@ -16,7 +16,7 @@ import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS } from "../constants.mjs";
-import { boundedSleep } from "../timing.mjs";
+import { boundedSleep, isDeadlineExpired } from "../timing.mjs";
 
 /** Stable scenario id recorded in redacted artifacts. */
 export const id = "multi-field-human-edit";
@@ -223,7 +223,10 @@ export async function execute({ plan, context }) {
       // promise is a no-op in that case so the allSettled classification
       // never counts an unstarted human write as a transport/direct-write
       // failure.
-      const deadlineExpired = Date.now() >= deadlineAt;
+      // Clock-slop tolerant expiry check: the bounded jitter sleep can wake
+      // up to ~1-2ms short of the nominal deadline, and a zero-tolerance
+      // reading would flakily start the human write after the budget ended.
+      const deadlineExpired = isDeadlineExpired(deadlineAt);
       // Track whether the direct human write actually STARTED. A deadline
       // crossing before the write begins is a truthful skip, never a silent
       // loss: the write never started, so an unstarted no-op must not set

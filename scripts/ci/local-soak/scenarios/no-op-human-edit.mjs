@@ -16,7 +16,7 @@ import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS } from "../constants.mjs";
-import { boundedSleep } from "../timing.mjs";
+import { boundedSleep, isDeadlineExpired } from "../timing.mjs";
 
 /** Stable scenario id recorded in redacted artifacts. */
 export const id = "no-op-human-edit";
@@ -160,7 +160,10 @@ export async function execute({ plan, context }) {
       // After the bounded jitter the run deadline may have expired. Never
       // start the doomed direct write against an expired budget: settle with
       // a truthful skip and clean the authority below.
-      if (Date.now() >= deadlineAt) {
+      // Clock-slop tolerant expiry check: the bounded jitter sleep can wake
+      // marginally short of the nominal deadline, so a zero-tolerance reading
+      // would flakily start the doomed direct write after the budget ended.
+      if (isDeadlineExpired(deadlineAt)) {
         result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "deadline-expired" };
       } else {
         let writeRejected = false;
