@@ -174,7 +174,14 @@ export async function createTypedSheetsWithSync(
   const result = await bridge({
     dbName: options.dbName,
     entities: [...options.entities],
-    ...(options.env === undefined ? {} : { env: options.env }),
+    // Contract (see CreateTypedSheetsWithSyncOptions): env defaults to
+    // `process.env`, read at call time — exactly like `createTypedSheets()`
+    // in Hikoutei.ts. Omitting the forward would starve the autostart bridge
+    // (its internal default is `{}`) even when the host process env carries
+    // HIKOUTEI_SYNC_SPREADSHEET_URL / GOOGLE_APPLICATION_CREDENTIALS.
+    ...(options.env === undefined
+      ? { env: process.env as Readonly<Record<string, string | undefined>> }
+      : { env: options.env }),
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
     ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
   });
