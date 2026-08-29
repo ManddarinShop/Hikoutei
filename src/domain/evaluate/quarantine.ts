@@ -8,8 +8,7 @@
 
 import type { NormalizedCell, StableValue } from "../../shared/encoding/types.js";
 import { stableHash } from "../../shared/encoding/stableEncode.js";
-import { JAVASCRIPT_TYPE_NAMES } from "../../shared/encoding/constants.js";
-import { isJavaScriptType, isRecord } from "../../shared/encoding/typeGuards.js";
+import { isRecord } from "../../shared/encoding/typeGuards.js";
 import {
   CANONICAL_RESOLUTION_STATUSES,
   FIELD_OWNERSHIPS,
@@ -194,39 +193,39 @@ function makeQuarantineIdentityField(
 /** Converts arbitrary external values into stable, encodable audit evidence. */
 function quarantineFingerprintValue(value: unknown, seen: Set<object> = new Set()): StableValue {
   if (value === null) return value;
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
-      isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.BOOLEAN)) return value;
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER)) {
+  if (typeof value === "string" ||
+      typeof value === "boolean") return value;
+  if (typeof value === "number") {
     return Number.isFinite(value)
       ? value
       : makeInvalidFingerprint(QUARANTINE_FINGERPRINT_KEYS.INVALID_NUMBER, String(value));
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.UNDEFINED)) {
+  if (typeof value === "undefined") {
     return makeInvalidFingerprint(
       QUARANTINE_FINGERPRINT_KEYS.INVALID_TYPE,
       QUARANTINE_FINGERPRINT_MARKERS.UNDEFINED,
     );
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.BIGINT)) {
+  if (typeof value === "bigint") {
     return makeInvalidFingerprint(
       QUARANTINE_FINGERPRINT_KEYS.INVALID_BIGINT,
       value.toString(),
     );
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.SYMBOL)) {
+  if (typeof value === "symbol") {
     return makeInvalidFingerprint(
       QUARANTINE_FINGERPRINT_KEYS.INVALID_SYMBOL,
       String(value),
     );
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.FUNCTION)) {
+  if (typeof value === "function") {
     return makeInvalidFingerprint(
       QUARANTINE_FINGERPRINT_KEYS.INVALID_FUNCTION,
       value.name || QUARANTINE_FINGERPRINT_MARKERS.ANONYMOUS_FUNCTION,
     );
   }
 
-  if (!isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT)) {
+  if (typeof value !== "object") {
     return makeInvalidFingerprint(
       QUARANTINE_FINGERPRINT_KEYS.INVALID_OBJECT,
       Object.prototype.toString.call(value),

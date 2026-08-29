@@ -8,12 +8,10 @@
 
 import type { NormalizedCell } from "../../shared/encoding/types.js";
 import {
-  JAVASCRIPT_TYPE_NAMES,
   NORMALIZED_CELL_KINDS,
 } from "../../shared/encoding/constants.js";
 import { APPLICABILITY_KINDS } from "../../shared/state/constants.js";
 import {
-  isJavaScriptType,
   isNormalizedCell,
   isRecord,
 } from "../../shared/encoding/index.js";
@@ -212,7 +210,7 @@ function parseRawObservedRow(input: unknown): RawObservedRowParseResult {
     return invalidRawObservedRowResult();
   }
   if (
-    !isJavaScriptType(input.rowBindingId, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    typeof input.rowBindingId !== "string" ||
     !isValidRevision(input.baseVisibleRevision) ||
     !Array.isArray(input.fields)
   ) {
@@ -413,33 +411,33 @@ function invalidRawObservedRowResult(): RawObservedRowParseResult {
 
 function isRawInsertFieldChange(value: unknown): value is RawObservedInsertFieldChange {
   return isRecord(value) &&
-    isJavaScriptType(value.fieldName, JAVASCRIPT_TYPE_NAMES.STRING) &&
+    typeof value.fieldName === "string" &&
     !hasOwn(value, "baseFieldRevision");
 }
 
 function isRawVersionedFieldChange(value: unknown): value is RawObservedVersionedFieldChange {
   return isRecord(value) &&
-    isJavaScriptType(value.fieldName, JAVASCRIPT_TYPE_NAMES.STRING) &&
+    typeof value.fieldName === "string" &&
     hasOwn(value, "baseFieldRevision") &&
-    isJavaScriptType(value.baseFieldRevision, JAVASCRIPT_TYPE_NAMES.NUMBER);
+    typeof value.baseFieldRevision === "number";
 }
 
 function isPresentNormalizedRow(value: unknown): value is NormalizedRow {
   if (
     !isRecord(value) ||
-    !isJavaScriptType(value.rowBindingId, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    typeof value.rowBindingId !== "string" ||
     !(value.fields instanceof Map)
   ) {
     return false;
   }
   return [...value.fields.entries()].every(
-    ([fieldName, field]) => isJavaScriptType(fieldName, JAVASCRIPT_TYPE_NAMES.STRING) &&
+    ([fieldName, field]) => typeof fieldName === "string" &&
       isNormalizedRowField(field),
   );
 }
 
 function isNormalizedRowField(value: unknown): value is NormalizedRowField {
-  if (!isRecord(value) || !isJavaScriptType(value.fieldName, JAVASCRIPT_TYPE_NAMES.STRING)) {
+  if (!isRecord(value) || typeof value.fieldName !== "string") {
     return false;
   }
   if (!isNormalizedCell(value.cell)) return false;

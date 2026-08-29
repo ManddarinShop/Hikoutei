@@ -1,12 +1,10 @@
-import { JAVASCRIPT_TYPE_NAMES } from "../../../shared/encoding/constants.js";
+
 import {
   absentValue,
   presentValue,
 } from "../../../shared/state/index.js";
 import type { Presence } from "../../../shared/state/types.js";
-import { isJavaScriptType } from "../../../shared/encoding/typeGuards.js";
-import {
-  isNonEmptyList,
+import { isNonEmptyList,
   isNonEmptyString,
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
@@ -94,7 +92,7 @@ export function requireSyncProtocolVersion(
   errorCode: SyncSheetsErrorCode,
 ): SyncProtocolVersion {
   if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    typeof value !== "string" ||
     value !== SYNC_PROTOCOL_VERSIONS.V1
   ) {
     throw new SyncSheetsContractError(
@@ -112,7 +110,7 @@ export function requireSyncProjectionKind(
   errorCode: SyncSheetsErrorCode,
 ): SyncProjectionKind {
   if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    typeof value !== "string" ||
     !isSyncProjectionKind(value)
   ) {
     throw new SyncSheetsContractError(
@@ -130,7 +128,7 @@ export function requireSyncSnapshotReadMode(
   errorCode: SyncSheetsErrorCode,
 ): SyncSnapshotReadMode {
   if (
-    !isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
+    typeof value !== "string" ||
     !isSyncSnapshotReadMode(value)
   ) {
     throw new SyncSheetsContractError(

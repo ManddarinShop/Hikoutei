@@ -9,9 +9,7 @@ import { computeRowHash } from "../../../../domain/evaluate/identity.js";
 import { stableHash } from "../../../../shared/encoding/stableEncode.js";
 import type { NormalizedRow } from "../../../../domain/model/types.js";
 import {
-  isJavaScriptType,
   isRecord,
-  JAVASCRIPT_TYPE_NAMES,
 } from "../../../../shared/encoding/index.js";
 import { QUARANTINE_FINGERPRINT_MARKERS } from "../../../../domain/evaluate/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
@@ -48,26 +46,26 @@ type AuditValue = null | boolean | number | string | readonly AuditValue[] | {
 
 function toAuditValue(value: unknown, seen: Set<object>): AuditValue {
   if (value === null ||
-      isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.STRING) ||
-      isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.BOOLEAN)) return value;
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.NUMBER)) {
+      typeof value === "string" ||
+      typeof value === "boolean") return value;
+  if (typeof value === "number") {
     return Number.isFinite(value) ? value : { $invalidNumber: String(value) };
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.UNDEFINED)) {
+  if (typeof value === "undefined") {
     return { $invalidType: QUARANTINE_FINGERPRINT_MARKERS.UNDEFINED };
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.BIGINT)) {
+  if (typeof value === "bigint") {
     return { $invalidBigInt: value.toString() };
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.SYMBOL)) {
+  if (typeof value === "symbol") {
     return { $invalidSymbol: String(value) };
   }
-  if (isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.FUNCTION)) {
+  if (typeof value === "function") {
     return {
       $invalidFunction: value.name || QUARANTINE_FINGERPRINT_MARKERS.ANONYMOUS_FUNCTION,
     };
   }
-  if (!isJavaScriptType(value, JAVASCRIPT_TYPE_NAMES.OBJECT)) {
+  if (typeof value !== "object") {
     return { $invalidObject: Object.prototype.toString.call(value) };
   }
 
