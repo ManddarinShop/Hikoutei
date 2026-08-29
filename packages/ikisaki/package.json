@@ -2,6 +2,10 @@
   "name": "@hikoutei/ikisaki",
   "version": "0.1.4",
   "description": "Hikoutei consistency queue: a durable, ordered, idempotent delivery queue bound to the business transaction.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
