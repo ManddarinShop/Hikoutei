@@ -81,6 +81,10 @@ import {
   createInternalSyncService,
   type InternalSyncService,
 } from "./SyncServiceBootstrap.js";
+import {
+  SYNC_FULL_SCAN_INTERVAL_MS,
+  SYNC_POLLING_INTERVAL_MS,
+} from "./cadence.js";
 
 /** Env keys consumed by the sync auto-start bridge. */
 export const SYNC_ENV_KEYS = {
@@ -100,10 +104,14 @@ export const SYNC_ENV_KEYS = {
   RATE_LIMIT_INTERVAL_MS: "HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS",
 } as const;
 
-/** Default polling cadence applied when the interval env vars are absent. */
-export const DEFAULT_SYNC_POLLING_INTERVAL_MS = 60_000;
-/** Default safety full-scan cadence applied when the interval env vars are absent. */
-export const DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS = 60_000;
+/**
+ * Default cadences applied when the interval env vars are absent; the single
+ * source of these values is `./cadence.js`.
+ */
+export {
+  SYNC_FULL_SCAN_INTERVAL_MS as DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS,
+  SYNC_POLLING_INTERVAL_MS as DEFAULT_SYNC_POLLING_INTERVAL_MS,
+} from "./cadence.js";
 /** Lower bound for the sync request-start pacing env override (2 seconds). */
 export const MIN_SYNC_RATE_LIMIT_INTERVAL_MS = 2_000;
 /**
@@ -306,12 +314,12 @@ export async function createTypedSheetsWithSync(
     const pollingIntervalMs = parseIntervalEnv(
       env,
       SYNC_ENV_KEYS.POLLING_INTERVAL_MS,
-      DEFAULT_SYNC_POLLING_INTERVAL_MS,
+      SYNC_POLLING_INTERVAL_MS,
     );
     const pollingFullScanIntervalMs = parseIntervalEnv(
       env,
       SYNC_ENV_KEYS.FULL_SCAN_INTERVAL_MS,
-      DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS,
+      SYNC_FULL_SCAN_INTERVAL_MS,
     );
     // The pacing env override applies ONLY to the real Google Sheets
     // provider: it is resolved and validated only when no fake transport is
