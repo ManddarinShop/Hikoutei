@@ -15,6 +15,7 @@ import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/en
 import { SeededRandom, deriveSeed } from "../scripts/ci/local-soak/prng.mjs";
 import { generateRow } from "../scripts/ci/local-soak/operations.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { FakeEm, projectPersistedRow } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
 // terminate quickly and deterministically (a real poll would be ~1s each).
@@ -60,44 +61,6 @@ interface PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-  findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {}
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
-    if (this.findOneOverride !== undefined) {
-      const overridden = this.findOneOverride(filter.id);
-      if (overridden !== null && overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? null : row;
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** A fake direct-Sheet client backed by in-memory tab state. */
 class FakeClient {
@@ -167,26 +130,6 @@ function liveContext(
   };
 }
 
-/**
- * Mirrors the invalidHumanInput test's authoritative-value pattern: hook the
- * fake EntityManager's `persist` so the dedicated no-op row's field is
- * projected into the fake _Input tab at the exact cell-string the row will
- * carry once the sync worker projects it. `awaitInputProjection` resolves on
- * the first poll, so the no-op write proceeds deterministically.
- */
-function projectPersistedRow(em: FakeEm, client: FakeClient, plan: PlanLike): void {
-  const originalPersist = em.persist.bind(em);
-  em.persist = (entity: Record<string, unknown>) => {
-    const value = entity[plan.target.field];
-    const projected = value === null || value === undefined ? "" : String(value);
-    client.ensureTab(`${plan.target.entityName}_Input`, ["id", plan.target.field]);
-    client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, {
-      id: plan.target.targetId,
-      [plan.target.field]: projected,
-    });
-    originalPersist(entity);
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Tests.

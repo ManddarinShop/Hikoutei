@@ -78,13 +78,13 @@ import {
   StubSheetsTransport,
   type StubCell,
 } from "./support/StubSheetsTransport.js";
+import { SYSTEM_HEADERS } from "./support/googleSheetsFixtures.js";
 
 const SPREADSHEET_ID = "stub-spreadsheet";
 const SYSTEM_SHEET_ID = "entity:users:system_state";
 const USER_INPUT_SHEET_ID = "entity:users:user_input";
 const CONFLICT_SHEET_ID = "entity:users:sync_conflicts";
 
-const SYSTEM_HEADERS = ["id", "status", "__typed_sheets_deleted"];
 const USER_INPUT_HEADERS = ["id", "status"];
 const CONFLICT_HEADERS = [
   "Conflict_ID",
