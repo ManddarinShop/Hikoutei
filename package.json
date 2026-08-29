@@ -38,7 +38,10 @@
     "typecheck": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.json --noEmit",
     "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
     "test": "npm run build -w @hikoutei/ikisaki && vitest run",
-    "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs"
+    "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
+    "audit:knip": "knip",
+    "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
+    "audit:markers": "node scripts/maintenance/audit-markers.mjs"
   },
   "keywords": [
     "google-sheets",
@@ -67,6 +70,7 @@
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",
     "@types/node": "^20.14.10",
+    "knip": "6.33.0",
     "typescript": "^5.5.3",
     "vitest": "^1.6.0"
   },
