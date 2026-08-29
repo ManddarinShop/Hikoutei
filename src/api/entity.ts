@@ -349,10 +349,13 @@ function isHikouteiScalarType(value: unknown): value is HikouteiScalarType {
 const SQL_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Names owned by Hikoutei's SQLite sync schema and SQLite itself. */
-const RESERVED_TABLE_NAMES = new Set([
+export const RESERVED_TABLE_NAMES = new Set([
   "sheet_registry",
   "physical_sheet_registry",
   "row_binding",
+  // Retired by the v7 cleanup migration (the orphan table is dropped); kept
+  // reserved so the dropped-table verification in migrateSchema.ts stays
+  // meaningful forever — a user entity must never re-create this name.
   "projection_row_binding",
   "entity_state",
   "entity_field_state",

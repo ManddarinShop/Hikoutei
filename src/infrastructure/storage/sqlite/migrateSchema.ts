@@ -11,10 +11,13 @@ import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistenc
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 import {
   CURRENT_SCHEMA_VERSION,
+  DROPPED_V7_COLUMNS,
+  DROPPED_V7_TABLES,
   REQUIRED_V2_COLUMNS,
   REQUIRED_V3_COLUMNS,
   REQUIRED_V5_COLUMNS,
   REQUIRED_V6_COLUMNS,
+  REQUIRED_V7_COLUMNS,
   SQLITE_CONNECTION_PRAGMAS,
   syncSchemaIndexesDdl,
   syncSchemaTablesDdl,
@@ -106,6 +109,18 @@ export async function migrateSqliteSchema(
       await writeSchemaVersion(sql, 6);
       appliedVersions.push(6);
     }
+    if (fromVersion < 7) {
+      // Drop the orphan projection_row_binding table (with its two partial
+      // unique indexes) and the dead columns. Of the dead columns, the five
+      // "write-never" ones are lossless to drop; the three quarantine repair
+      // columns did receive writes and their discard is an owner-approved
+      // intentional deletion (see the step body below). Each step tolerates
+      // already-clean databases so the step stays idempotent wherever a fresh
+      // v7 DDL already applied.
+      await applyVersion7CleanupMigration(sql);
+      await writeSchemaVersion(sql, 7);
+      appliedVersions.push(7);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
     // v5-only indexes are created after every migration so an upgraded v4
@@ -177,8 +192,36 @@ async function applyVersion6CandidateEvidenceMigration(sql: SqlExecutor): Promis
   await addColumnIfMissing(sql, "sync_conflict", "candidate_visible_hash", "TEXT");
 }
 
+async function applyVersion7CleanupMigration(sql: SqlExecutor): Promise<void> {
+  // The orphan table and its partial unique indexes: the indexes are dropped
+  // by the table drop, but explicit IF EXISTS statements also cover renamed
+  // legacy tables that may have left the index names behind (v5-style).
+  await sql.run("DROP TABLE IF EXISTS projection_row_binding");
+  await sql.run("DROP INDEX IF EXISTS projection_row_binding_entity_uq");
+  await sql.run("DROP INDEX IF EXISTS projection_row_binding_conflict_uq");
+
+  // Dead columns. The five write-never columns (sheet_registry.locale,
+  // sheet_registry.timezone, sheet_registry.stable_encode_version,
+  // event_observation.redacted_at, observation_receipt.redacted_at) never
+  // received a single write, so dropping them is lossless. The three
+  // quarantine repair columns DID receive writes, but were never read by any
+  // executor: discarding them is an OWNER-APPROVED INTENTIONAL DELETION of
+  // unused data, not a lossless cleanup.
+  // Skip-if-absent keeps the step idempotent against any database whose
+  // columns are already gone (including one created by fresh v7 DDL).
+  await dropColumnIfPresent(sql, "sheet_registry", "locale");
+  await dropColumnIfPresent(sql, "sheet_registry", "timezone");
+  await dropColumnIfPresent(sql, "sheet_registry", "stable_encode_version");
+  await dropColumnIfPresent(sql, "event_observation", "redacted_at");
+  await dropColumnIfPresent(sql, "observation_receipt", "redacted_at");
+  await dropColumnIfPresent(sql, "quarantine_record", "repair_state");
+  await dropColumnIfPresent(sql, "quarantine_record", "repair_fields_json");
+  await dropColumnIfPresent(sql, "quarantine_record", "candidate_payload_json");
+}
+
 async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
   await verifyRequiredColumns(sql);
+  await verifyDroppedColumns(sql);
   if (!(await indexExists(sql, "sync_conflict_candidate_attempt_uq"))) {
     throw new StorageError(
       STORAGE_ERROR_CODES.SCHEMA_INDEX_MISSING,
@@ -216,6 +259,45 @@ async function verifyRequiredColumns(sql: SqlExecutor): Promise<void> {
   for (const tableName of ["sync_conflict"] as const) {
     await verifyTableColumns(sql, tableName, REQUIRED_V6_COLUMNS[tableName]);
   }
+  for (const tableName of ["quarantine_record"] as const) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V7_COLUMNS[tableName]);
+  }
+}
+
+/**
+ * Final-version expectations beyond required columns: the v7 cleanup tables
+ * and columns must be gone. Fresh installs satisfy this from the DDL;
+ * upgraded databases only after the v7 step has run.
+ *
+ * The TABLE-absence check on `projection_row_binding` is protected by that
+ * name remaining in `RESERVED_TABLE_NAMES` (src/api/entity.ts): a user entity
+ * can never re-create the table, so the check can never misfire on user data.
+ * Do NOT un-reserve the name to match the DDL removal — the reservation is
+ * the durable contract that keeps this verification sound.
+ * The COLUMN-absence checks target only still-reserved system tables
+ * (sheet_registry, event_observation, observation_receipt, quarantine_record
+ * are all in RESERVED_TABLE_NAMES), so they can never collide with a user
+ * entity's descriptor either.
+ */
+async function verifyDroppedColumns(sql: SqlExecutor): Promise<void> {
+  for (const tableName of DROPPED_V7_TABLES) {
+    if (await tableExists(sql, tableName)) {
+      throw new StorageError(
+        STORAGE_ERROR_CODES.SCHEMA_VERSION_INVALID,
+        `SQLite schema still contains dropped table ${tableName}; refusing a v7 marker.`,
+      );
+    }
+  }
+  for (const [tableName, columns] of Object.entries(DROPPED_V7_COLUMNS)) {
+    for (const columnName of columns) {
+      if (await columnExists(sql, tableName, columnName)) {
+        throw new StorageError(
+          STORAGE_ERROR_CODES.SCHEMA_VERSION_INVALID,
+          `SQLite schema still contains ${tableName}.${columnName}; refusing a v7 marker.`,
+        );
+      }
+    }
+  }
 }
 
 async function verifyTableColumns(
@@ -247,6 +329,15 @@ async function addColumnIfMissing(
 ): Promise<void> {
   if (await columnExists(sql, tableName, columnName)) return;
   await sql.run(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+}
+
+async function dropColumnIfPresent(
+  sql: SqlExecutor,
+  tableName: string,
+  columnName: string,
+): Promise<void> {
+  if (!(await columnExists(sql, tableName, columnName))) return;
+  await sql.run(`ALTER TABLE ${tableName} DROP COLUMN ${columnName}`);
 }
 
 async function readSchemaVersion(sql: SqlExecutor): Promise<number> {

@@ -230,12 +230,12 @@ describe("MikroOrmSqliteAdapter", () => {
     try {
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
         fromVersion: 0,
-        toVersion: 6,
-        appliedVersions: [6],
+        toVersion: 7,
+        appliedVersions: [7],
       });
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-        fromVersion: 6,
-        toVersion: 6,
+        fromVersion: 7,
+        toVersion: 7,
         appliedVersions: [],
       });
       await expect(adapter.read(({ sql }) => {
@@ -354,12 +354,12 @@ describe("MikroOrmSqliteAdapter", () => {
 
     expect(firstMigration).toEqual({
       fromVersion: 0,
-      toVersion: 6,
-      appliedVersions: [6],
+      toVersion: 7,
+      appliedVersions: [7],
     });
     expect(secondMigration).toEqual({
-      fromVersion: 6,
-      toVersion: 6,
+      fromVersion: 7,
+      toVersion: 7,
       appliedVersions: [],
     });
 
@@ -368,11 +368,11 @@ describe("MikroOrmSqliteAdapter", () => {
     });
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 3,
-      toVersion: 6,
-      appliedVersions: [4, 5, 6],
+      toVersion: 7,
+      appliedVersions: [4, 5, 6, 7],
     });
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 6 });
+      .resolves.toEqual({ user_version: 7 });
 
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
     expect(tables.map((table) => table.name)).toContain("sheet_effect_outbox");

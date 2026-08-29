@@ -23,7 +23,7 @@ export { REQUIRED_V3_COLUMNS } from "@hikoutei/ikisaki";
 export { syncSchemaV5IndexesDdl } from "@hikoutei/ikisaki";
 
 /** Current durable schema version managed by the provider migration. */
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
@@ -113,6 +113,45 @@ export const REQUIRED_V6_COLUMNS: Readonly<
   sync_conflict: ["candidate_visible_revision", "candidate_visible_hash"],
 };
 
+/**
+ * Columns that must exist in the v7-cleaned quarantine table. The repair
+ * columns (repair_state, repair_fields_json, candidate_payload_json) were
+ * dead — never read by the repair executor — and are removed by the v7
+ * migration; only the surviving evidence columns are required.
+ */
+export const REQUIRED_V7_COLUMNS: Readonly<
+  Record<"quarantine_record", readonly string[]>
+> = {
+  quarantine_record: [
+    "quarantine_id",
+    "event_id",
+    "observation_id",
+    "logical_sheet_id",
+    "row_binding_id",
+    "reason",
+    "before_row_json",
+    "after_row_json",
+    "fields_json",
+    "created_at",
+    "updated_at",
+  ],
+};
+
+/**
+ * Columns and tables removed from the durable schema by the v7 cleanup
+ * migration. Present in pre-v7 databases; verified absent at version 7.
+ */
+export const DROPPED_V7_TABLES: readonly string[] = ["projection_row_binding"];
+
+export const DROPPED_V7_COLUMNS: Readonly<
+  Record<"sheet_registry" | "event_observation" | "observation_receipt" | "quarantine_record", readonly string[]>
+> = {
+  sheet_registry: ["locale", "timezone", "stable_encode_version"],
+  event_observation: ["redacted_at"],
+  observation_receipt: ["redacted_at"],
+  quarantine_record: ["repair_fields_json", "repair_state", "candidate_payload_json"],
+};
+
 /** Returns table DDL only, so migration transactions never change connection pragmas. */
 export function syncSchemaTablesDdl(): string {
   return [
@@ -145,10 +184,7 @@ const REGISTRY_TABLES_DDL = `
     schema_version INTEGER NOT NULL,
     ownership_manifest_json TEXT NOT NULL,
     business_key_field TEXT NOT NULL,
-    locale TEXT,
-    timezone TEXT,
     anchor_mode TEXT NOT NULL DEFAULT 'business_key',
-    stable_encode_version TEXT NOT NULL DEFAULT 'stable_encode_v1',
     enabled INTEGER NOT NULL DEFAULT 1
   );
 
@@ -186,25 +222,6 @@ const IDENTITY_TABLES_DDL = `
     UNIQUE(logical_sheet_id, anchor_reference)
   );
 
-  CREATE TABLE IF NOT EXISTS projection_row_binding (
-    projection_row_id TEXT PRIMARY KEY,
-    physical_sheet_id TEXT NOT NULL REFERENCES physical_sheet_registry(physical_sheet_id),
-    row_binding_id TEXT REFERENCES row_binding(row_binding_id),
-    conflict_id TEXT,
-    anchor_reference TEXT NOT NULL,
-    physical_row_locator INTEGER NOT NULL,
-    state TEXT NOT NULL DEFAULT 'active',
-    CHECK ((row_binding_id IS NOT NULL) != (conflict_id IS NOT NULL)),
-    UNIQUE(physical_sheet_id, anchor_reference)
-  );
-
-  CREATE UNIQUE INDEX IF NOT EXISTS projection_row_binding_entity_uq
-    ON projection_row_binding(physical_sheet_id, row_binding_id)
-    WHERE row_binding_id IS NOT NULL;
-
-  CREATE UNIQUE INDEX IF NOT EXISTS projection_row_binding_conflict_uq
-    ON projection_row_binding(physical_sheet_id, conflict_id)
-    WHERE conflict_id IS NOT NULL;
 `;
 
 const CANONICAL_STATE_TABLES_DDL = `
@@ -262,7 +279,6 @@ const EVENT_LEDGER_TABLES_DDL = `
     payload_hash TEXT NOT NULL,
     detected_at INTEGER NOT NULL,
     received_at INTEGER NOT NULL,
-    redacted_at INTEGER,
     ingress_actor_id TEXT NOT NULL,
     editor_actor_id TEXT,
     editor_actor_source TEXT NOT NULL DEFAULT 'unavailable'
@@ -278,7 +294,6 @@ const EVENT_LEDGER_TABLES_DDL = `
     state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'evaluated', 'duplicate', 'quarantined')),
     first_seen_at INTEGER NOT NULL,
     last_seen_at INTEGER NOT NULL,
-    redacted_at INTEGER,
     PRIMARY KEY(logical_sheet_id, observation_key)
   );
 
@@ -336,9 +351,6 @@ const CONFLICT_AND_QUARANTINE_TABLES_DDL = `
     before_row_json TEXT,
     after_row_json TEXT,
     fields_json TEXT NOT NULL,
-    repair_fields_json TEXT NOT NULL DEFAULT '[]',
-    repair_state TEXT,
-    candidate_payload_json TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
