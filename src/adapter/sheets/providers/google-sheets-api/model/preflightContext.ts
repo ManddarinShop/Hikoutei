@@ -115,6 +115,8 @@ export interface PreflightRouteOptions {
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly headers: readonly string[];
+  /** §12 columnMap: adopted-route physical headers (see the definition type). */
+  readonly physicalHeaders?: readonly string[];
   readonly identityField: Presence<string>;
   readonly checkboxHeaders: readonly string[];
   /** Registered projection kind; user_input routes carry the system row-id column. */
@@ -273,6 +275,7 @@ export function buildRouteContext(
     parsedRange,
     route.headers,
     anchorColumn === undefined ? undefined : GOOGLE_SHEETS_API_ROW_ID_HEADER,
+    route.physicalHeaders,
   );
   const positions = new Map<string, number>();
   headers.forEach((header, index) => positions.set(header, index));

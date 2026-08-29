@@ -207,6 +207,33 @@ function validateProvisionRegistrations(
         `headers must contain non-empty names for ${registration.sheetName}`,
       );
     }
+    // §12 columnMap: physical headers must align with the canonical headers
+    // (same count) and satisfy the same hygiene rules.
+    if (registration.physicalHeaders !== undefined) {
+      const physical = registration.physicalHeaders;
+      if (physical.length !== registration.headers.length ||
+          physical.some((header) => header.trim() === "")) {
+        invalidProviderRequest(
+          "provisioning",
+          `physical headers must align with the canonical headers for ${registration.sheetName}`,
+        );
+      }
+      if (new Set(physical).size !== physical.length) {
+        invalidProviderRequest(
+          "provisioning",
+          `physical headers must not contain duplicates for ${registration.sheetName}`,
+        );
+      }
+      if (
+        registration.projection === SYNC_PROJECTIONS.USER_INPUT &&
+        physical.includes(GOOGLE_SHEETS_API_ROW_ID_HEADER)
+      ) {
+        invalidProviderRequest(
+          "provisioning",
+          `physical header ${GOOGLE_SHEETS_API_ROW_ID_HEADER} collides with the system row-id column for ${registration.sheetName}`,
+        );
+      }
+    }
     if (new Set(registration.headers).size !== registration.headers.length) {
       invalidProviderRequest(
         "provisioning",
@@ -336,11 +363,14 @@ function assertProvisioningHeaders(
   const systemColumn = registration.projection === SYNC_PROJECTIONS.USER_INPUT
     ? GOOGLE_SHEETS_API_ROW_ID_HEADER
     : undefined;
-  const expectedCount = registration.headers.length + (systemColumn === undefined ? 0 : 1);
+  // §12 columnMap: an adopted route's physical header row carries the LEGACY
+  // headers; compare against them when provided.
+  const expectedUserHeaders = registration.physicalHeaders ?? registration.headers;
+  const expectedCount = expectedUserHeaders.length + (systemColumn === undefined ? 0 : 1);
   const actual: string[] = [];
   for (let index = 0; index < headerValues.length; index += 1) {
     const isSystemPosition = systemColumn !== undefined &&
-      index === registration.headers.length;
+      index === expectedUserHeaders.length;
     const raw = provisioningHeaderString(headerValues[index]);
     if (raw === null) {
       if (isSystemPosition) {
@@ -356,7 +386,7 @@ function assertProvisioningHeaders(
     }
     actual.push(raw);
   }
-  const userHeaders = actual.slice(0, registration.headers.length);
+  const userHeaders = actual.slice(0, expectedUserHeaders.length);
   if (new Set(userHeaders).size !== userHeaders.length) {
     invalidProviderState(
       `operational provisioning header mismatch: ${registration.sheetName} (duplicate header)`,
@@ -364,13 +394,13 @@ function assertProvisioningHeaders(
   }
   if (
     actual.length !== expectedCount ||
-    userHeaders.some((header, index) => header !== registration.headers[index]) ||
-    (systemColumn !== undefined && actual[registration.headers.length] !== systemColumn)
+    userHeaders.some((header, index) => header !== expectedUserHeaders[index]) ||
+    (systemColumn !== undefined && actual[expectedUserHeaders.length] !== systemColumn)
   ) {
     if (
       systemColumn !== undefined &&
       (actual.length !== expectedCount ||
-        actual[registration.headers.length] !== systemColumn)
+        actual[expectedUserHeaders.length] !== systemColumn)
     ) {
       invalidProviderState(
         `operational provisioning header mismatch: ${registration.sheetName}` +

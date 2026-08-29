@@ -492,6 +492,14 @@ export async function createTypedSheets(
     entities: [...entities],
     env: process.env,
   });
+  // This factory never passes `adopt`, so the `adopt-dry-run` variant is
+  // unreachable here; narrow for the type system only.
+  if (result.kind === "adopt-dry-run") {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      "createTypedSheets() cannot produce an adoption dry-run result.",
+    );
+  }
   return result.hikoutei;
 }
 

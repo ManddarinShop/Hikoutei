@@ -33,6 +33,9 @@ describe("root public export allowlist", () => {
       "HIKOUTEI_SCALAR_TYPES",
       "HikouteiError",
       "createTypedSheets",
+      // Sync auto-start with existing-sheet adoption support; the sync module
+      // graph stays lazy-loaded behind the api/syncRuntime.ts wrapper.
+      "createTypedSheetsWithSync",
       "defineTypedSheetsEntity",
     ]);
   });

@@ -355,7 +355,12 @@ export function isModuleMainEntry(entryArg: string | undefined, moduleUrl: strin
  * release and is safe on every outcome — TTY, piped, never-read, or already
  * ended. Guarded and idempotent so it never throws or double-releases.
  */
-function createStdinFinalizer(): () => void {
+/**
+ * Destroys the process stdin exactly once so the CLI process can exit after
+ * a single-chunk confirmation read leaves the shared async iterator open.
+ * Exported for the adopt CLI, which prompts over the same shared stdin.
+ */
+export function createStdinFinalizer(): () => void {
   let finalized = false;
   return () => {
     if (finalized) {
@@ -371,8 +376,8 @@ function createStdinFinalizer(): () => void {
   };
 }
 
-async function main(): Promise<number> {
-  const parsed = parseSetupArgs(process.argv.slice(2));
+async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
+  const parsed = parseSetupArgs(argv);
 
   if (parsed.status === "help") {
     process.stdout.write(`${parsed.helpText}\n`);
@@ -432,6 +437,15 @@ async function main(): Promise<number> {
     progress,
     finalizeStdin: createStdinFinalizer(),
   });
+}
+
+/**
+ * Runs the `hikoutei setup` CLI with the given argument vector. Exported for
+ * the bin router (src/cli/index.ts) and tests; the argv has already had a
+ * leading "setup" subcommand stripped when routed through the router.
+ */
+export async function runSetupMain(argv: readonly string[]): Promise<number> {
+  return main(argv);
 }
 
 // ESM entrypoint guard: run main() only when this file is the process entry

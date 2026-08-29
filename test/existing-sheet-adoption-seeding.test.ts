@@ -211,6 +211,21 @@ async function createStorage() {
 }
 
 describe("existing-sheet adoption seeding engine", () => {
+  it("blocks seeding when an observed cell kind would be quarantined by polling (fail-closed)", () => {
+    // The live-incident shape: a numeric sheet cell bound to a string-declared
+    // property. Seeding must refuse with the stable code BEFORE any SQLite
+    // state is written — otherwise the first poll quarantines every row.
+    const snapshot = handBuiltObservedSnapshot();
+    const totalCell = snapshot.snapshot.rows[0]!.cells.total!;
+    (totalCell.normalizedCell as { kind: string; value: number }) = { kind: "number", value: 100 };
+    expect(() => extractAdoptedSeedRows({ mapping, observed: snapshot })).toThrowError(
+      expect.objectContaining({
+        code: SYNC_SERVICE_ERROR_CODES.ADOPTION_CELL_KIND_MISMATCH,
+        message: expect.stringContaining('row 2 field "total" (declared string, sheet number)'),
+      }),
+    );
+  });
+
   it("binds every observed row: binding, canonical INSERT, business key, observed visible state", async () => {
     const { orm, storage } = await createStorage();
     try {

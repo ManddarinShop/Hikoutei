@@ -329,7 +329,14 @@ function normalizeExistingRow(
   };
 }
 
-function validateSnapshotCell(
+/**
+ * Validates one observed snapshot cell against the mapping's declared field
+ * contract — the EXACT gate the polling pipeline applies (a violation becomes
+ * an `invalid_cell` quarantine there). Exported so the adoption seeding can
+ * apply the same gate fail-closed at startup instead of letting the first
+ * poll quarantine every adopted row.
+ */
+export function validateSnapshotCell(
   field: TypedSheetsEntityFieldMapping,
   cell: SyncSnapshotCell | undefined,
 ): MappedUserInputInvalidReason | undefined {

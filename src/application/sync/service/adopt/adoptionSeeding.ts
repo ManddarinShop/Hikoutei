@@ -84,6 +84,9 @@ import { DEFAULT_EFFECT_LEASE_DURATION_MS } from "@hikoutei/ikisaki";
 import { typedSheetsEntityRowBindingId } from "../../../orm/mapping/identity.js";
 import { typedSheetsEntityProjectionHeaders } from "../../../orm/mapping/projection.js";
 import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import {
+  validateSnapshotCell,
+} from "../../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
 import type {
   ExistingSheetAdoptionEntityReport,
   ExistingSheetAdoptionLayout,
@@ -358,6 +361,22 @@ export function extractAdoptedSeedRows(input: {
     fields: Record<string, NormalizedCell>;
   }[] = [];
   const anchorsSeen = new Map<string, number>();
+  // Fail-closed cell validation (design §11 finding; Terra-promoted): the
+  // polling pipeline would quarantine every adopted row whose observed cell
+  // kind violates the mapping's declared field contract, so the seeding
+  // applies the EXACT same gate (validateSnapshotCell) BEFORE any SQLite
+  // state is written. A mismatch becomes a stable startup failure instead of
+  // a dead-on-arrival adoption.
+  const fieldByHeader = new Map(
+    input.mapping.fields.map((field) => [field.fieldName, field]),
+  );
+  const cellKindFailures: {
+    readonly rowNumber: number;
+    readonly field: string;
+    readonly reason: string;
+    readonly expected?: string;
+    readonly observed?: string;
+  }[] = [];
   for (const row of input.observed.snapshot.rows) {
     if (row.physicalAnchor.kind !== PRESENCE_KINDS.PRESENT) continue;
     const anchor = row.physicalAnchor.value;
@@ -383,6 +402,20 @@ export function extractAdoptedSeedRows(input: {
       }
     }
     if (visibleEntityId === undefined) continue;
+    for (const fieldName of headers) {
+      const field = fieldByHeader.get(fieldName);
+      if (field === undefined) continue;
+      const reason = validateSnapshotCell(field, row.cells[fieldName]);
+      if (reason === undefined) continue;
+      const observed = row.cells[fieldName]?.normalizedCell;
+      cellKindFailures.push({
+        rowNumber: row.rowNumber,
+        field: fieldName,
+        reason,
+        expected: field.cellKind,
+        ...(observed == null ? {} : { observed: observed.kind }),
+      });
+    }
     // The canonical identity conversion matches the normal flush INSERT path
     // (planEntityId → typedSheetsCanonicalEntityId); default mappings are
     // identity conversions, namespaced mappings must namespace here too.
@@ -392,6 +425,23 @@ export function extractAdoptedSeedRows(input: {
       anchor,
       fields,
     });
+  }
+  if (cellKindFailures.length > 0) {
+    const describe = (failure: (typeof cellKindFailures)[number]): string => {
+      const kinds = failure.expected === undefined
+        ? ""
+        : ` (declared ${failure.expected}${failure.observed === undefined ? ", sheet blank" : `, sheet ${failure.observed}`})`;
+      return `row ${failure.rowNumber} field "${failure.field}"${kinds}: ${failure.reason}`;
+    };
+    const examples = cellKindFailures.slice(0, 5).map(describe).join("; ");
+    const overflow = cellKindFailures.length > 5
+      ? `; (+${cellKindFailures.length - 5} more)`
+      : "";
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.ADOPTION_CELL_KIND_MISMATCH,
+      `existing-sheet adoption seeding blocked: ${cellKindFailures.length} cell(s) on tab "${projection.tabName}" would be quarantined as invalid_cell by the first polling pass — ${examples}${overflow}. ` +
+        `The adopted tab's cell kinds must match the entity's declared property types; fix the entity declaration or the sheet before adopting.`,
+    );
   }
   return rows;
 }

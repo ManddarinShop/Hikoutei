@@ -221,11 +221,13 @@ export function validateServiceOptions(
 }
 
 /**
- * Existing-sheet adoption MVP constraints (D1/D7 of
+ * Existing-sheet adoption constraints (D1/D7 of
  * `design/existing-sheet-adoption-design.md`): direct Google Sheets API mode
- * only (the foreign-tab reader needs the raw transport), one entity per
- * service, and the adopt tab must equal that entity's configured User_Input
- * route so the existing tab becomes the human input surface.
+ * only (the foreign-tab reader needs the raw transport), and each adopted
+ * entity's adopt tab must equal that entity's configured User_Input
+ * route so the existing tab becomes the human input surface. Multiple
+ * entities may be adopted by one service; every entry is validated
+ * independently.
  */
 function validateExistingSheetAdoptionOptions(options: InternalSyncServiceOptions): void {
   const adopt = options.adopt!;
@@ -235,11 +237,16 @@ function validateExistingSheetAdoptionOptions(options: InternalSyncServiceOption
       "existing-sheet adoption requires the direct googleSheetsApi provider (no injected provider).",
     );
   }
+  // D7 (Phase A): the single-entity MVP gate is gone — any number of
+  // entities may be adopted by one service. Each entry is still validated
+  // independently below.
   const adoptEntityNames = Object.keys(adopt.entities);
-  if (adoptEntityNames.length !== 1) {
+  // D7 (F4): an empty adopt.entities record would produce an `ok: true` empty
+  // dry-run report while adopt fails generically later — reject it up front.
+  if (adoptEntityNames.length === 0) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      `existing-sheet adoption MVP supports exactly one entity; received ${adoptEntityNames.length}.`,
+      "existing-sheet adoption requires at least one adopted entity.",
     );
   }
   for (const entityName of adoptEntityNames) {
