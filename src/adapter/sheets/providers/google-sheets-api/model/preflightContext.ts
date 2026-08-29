@@ -23,6 +23,9 @@ import {
 } from "./preflightFields.js";
 import { invalidProviderState } from "../errors.js";
 import type {
+  SyncMissingTabOperation,
+} from "../../../../../application/sync/sheetsContract/errors.js";
+import type {
   GoogleSheetsApiTransport,
   GoogleSheetsApiGetSpreadsheetRequest,
 } from "../transport/googleSheetsApiTransport.js";
@@ -112,6 +115,8 @@ export interface PreflightRouteOptions {
   readonly sheetName: string;
   readonly registeredRange: string;
   readonly headers: readonly string[];
+  /** §12 columnMap: adopted-route physical headers (see the definition type). */
+  readonly physicalHeaders?: readonly string[];
   readonly identityField: Presence<string>;
   readonly checkboxHeaders: readonly string[];
   /** Registered projection kind; user_input routes carry the system row-id column. */
@@ -173,7 +178,37 @@ export async function enumerateSheetProperties(
   return parseSheetPropertiesDocument(enumerationRaw, "sheet enumeration");
 }
 
-/** Reads and validates the target and receipt tabs for one route. */
+/**
+ * Builds the preflight ranges for one or more routes, deduplicating target
+ * tabs and adding the shared receipt tab once. The multi-route call reads
+ * ALL needed tabs in a single ranged `getSpreadsheet`, so the enumerations
+ * and ranged reads are shared across the routes of one spreadsheet.
+ */
+export function buildPreflightRanges(
+  routes: readonly PreflightRouteOptions[],
+  receiptSheet: ParsedSheet | undefined,
+): readonly string[] {
+  const seen = new Set<string>();
+  const ranges: string[] = [];
+  for (const route of routes) {
+    const parsedRange = parseRegisteredRange(route.registeredRange);
+    const endColumnLetters = columnLetters(
+      parsedRange.startColumn + parsedRange.columnCount - 1,
+    );
+    const target = `${quoteA1SheetName(route.sheetName)}!A1:${endColumnLetters}1048576`;
+    if (seen.has(target)) continue;
+    seen.add(target);
+    ranges.push(target);
+  }
+  if (receiptSheet !== undefined) {
+    ranges.push(
+      `${quoteA1SheetName(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)}!A1:F1048576`,
+    );
+  }
+  return ranges;
+}
+
+/** Builds one preflight context for a single route from an enumerated doc. */
 export async function readPreflightData(
   transport: GoogleSheetsApiTransport,
   route: PreflightRouteOptions,
@@ -182,42 +217,65 @@ export async function readPreflightData(
 ): Promise<PreflightContext> {
   const targetSheet = requireSheetByTitle(sheets, route.sheetName);
   const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
-  // Call 2: the bounded data read, covering exactly the tabs that exist.
-  // The target range starts at A1 and extends to the registered range's end
-  // column (whole-column ranges can legitimately exceed ZZ), keeping the
-  // 1,048,576-row limit of the grid. The receipt range is requested only
-  // when the enumeration found the receipt tab.
-  const parsedRange = parseRegisteredRange(route.registeredRange);
-  const endColumnLetters = columnLetters(
-    parsedRange.startColumn + parsedRange.columnCount - 1,
-  );
-  const ranges = [
-    `${quoteA1SheetName(route.sheetName)}!A1:${endColumnLetters}1048576`,
-  ];
-  if (receiptSheet !== undefined) {
-    ranges.push(
-      `${quoteA1SheetName(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)}!A1:F1048576`,
-    );
-  }
   const dataRequest: GoogleSheetsApiGetSpreadsheetRequest = {
     spreadsheetId: route.spreadsheetId,
-    ranges,
+    ranges: buildPreflightRanges([route], receiptSheet),
     fields: GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
   const dataRaw = await transport.getSpreadsheet(dataRequest);
   const dataDocument = parseSpreadsheetDocument(dataRaw, "grid data");
-  const targetData = requireGridDataForSheet(dataDocument, targetSheet.sheetId);
+  return buildRouteContext(dataDocument, sheets, route);
+}
 
-  // user_input tabs carry the row anchor as the LAST column cell value; the
-  // system column is validated as part of the header row (fail-closed on
-  // legacy tabs provisioned without it).
+/**
+ * Reads one ranged getSpreadsheet across ALL needed tabs and builds a
+ * PreflightContext for each route (keyed by its sheetName), sharing the
+ * read across the routes of one spreadsheet. `operation` classifies an
+ * invalid provider state (e.g. a missing tab) detected while building a
+ * route context.
+ */
+export async function readPreflightDataForRoutes(
+  transport: GoogleSheetsApiTransport,
+  routes: readonly PreflightRouteOptions[],
+  sheets: readonly ParsedSheet[],
+  timeoutMs?: number,
+  operation?: SyncMissingTabOperation,
+): Promise<ReadonlyMap<string, PreflightContext>> {
+  const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
+  const dataRequest: GoogleSheetsApiGetSpreadsheetRequest = {
+    spreadsheetId: routes[0]?.spreadsheetId ?? "",
+    ranges: buildPreflightRanges(routes, receiptSheet),
+    fields: GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  };
+  const dataRaw = await transport.getSpreadsheet(dataRequest);
+  const dataDocument = parseSpreadsheetDocument(dataRaw, "grid data");
+  const contexts = new Map<string, PreflightContext>();
+  for (const route of routes) {
+    contexts.set(route.sheetName, buildRouteContext(dataDocument, sheets, route, operation));
+  }
+  return contexts;
+}
+
+/** Builds one route's preflight context from an already-fetched document. */
+export function buildRouteContext(
+  dataDocument: ParsedSpreadsheetDocument,
+  sheets: readonly ParsedSheet[],
+  route: PreflightRouteOptions,
+  operation?: SyncMissingTabOperation,
+): PreflightContext {
+  const targetSheet = requireSheetByTitle(sheets, route.sheetName, operation);
+  const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
+  const parsedRange = parseRegisteredRange(route.registeredRange);
+  const targetData = requireGridDataForSheet(dataDocument, targetSheet.sheetId);
   const anchorColumn = anchorColumnFor(route.registeredRange, route.projection);
   const headers = readRegisteredHeaders(
     targetData,
     parsedRange,
     route.headers,
     anchorColumn === undefined ? undefined : GOOGLE_SHEETS_API_ROW_ID_HEADER,
+    route.physicalHeaders,
   );
   const positions = new Map<string, number>();
   headers.forEach((header, index) => positions.set(header, index));

@@ -21,13 +21,20 @@ import type {
   SyncProjectionEffect,
 } from "../src/application/sync/sheetsContract/syncSheets.js";
 import { SYNC_POSTCONDITION_MODES } from "../src/application/sync/sheetsContract/constants.js";
-import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
-import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "../src/application/sync/sheetsContract/transportOutcome.js";
+import { GoogleSheetsApiSyncProvider, classifyGoogleSheetsApiError, isRetryableTransportStatus } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+import type {
+  GoogleSheetsApiTransport,
+  GoogleSheetsApiGetSpreadsheetRequest,
+  GoogleSheetsApiBatchUpdateRequest,
+  GoogleSheetsApiWriteRequest,
+} from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import { serializeBatchUpdateRequests } from "../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
+import { parseRawErrorRecord } from "../src/adapter/sheets/providers/google-sheets-api/transport/rawErrorSchemas.js";
 import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "../src/adapter/sheets/providers/google-sheets-api/model/preflightFields.js";
-import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
+import { GOOGLE_SHEETS_API_RECEIPT_HEADERS, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
+import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { classifyGoogleSheetsApiError } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
 import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
 import {
@@ -118,7 +125,7 @@ const CONFLICT_DEFINITION = definition({
 });
 
 function buildProvider(
-  transport: StubSheetsTransport,
+  transport: GoogleSheetsApiTransport,
   options: {
     readonly maxBatchBytes?: number;
     readonly rateLimitIntervalMs?: number;
@@ -132,8 +139,11 @@ function buildProvider(
     definitions: [SYSTEM_DEFINITION, USER_INPUT_DEFINITION, CONFLICT_DEFINITION],
     transport,
     requestTimeoutMs: 60_000,
+    // Zero interval unless a test pins the interval: pacing itself is covered
+    // by the dedicated pacing tests, so the default here must never make
+    // unrelated tests wait on — or be refused by — the request-start limiter.
+    rateLimitIntervalMs: options.rateLimitIntervalMs ?? 0,
     ...(options.maxBatchBytes === undefined ? {} : { maxBatchBytes: options.maxBatchBytes }),
-    ...(options.rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs: options.rateLimitIntervalMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     ...(options.onRequest === undefined ? {} : { onRequest: options.onRequest as never }),
@@ -292,6 +302,65 @@ const cell = {
   bool: (value: boolean): NormalizedCell => ({ kind: "boolean", value }),
   date: (value: string): NormalizedCell => ({ kind: "date", value }),
 };
+
+/** Mirrors the enumerable fields carried by a real GaxiosError instance. */
+class GaxiosLikeError extends Error {
+  public constructor(
+    message: string,
+    fields: {
+      readonly code?: string | number;
+      readonly status?: number | string;
+      readonly response?: unknown;
+    } = {},
+  ) {
+    super(message);
+    this.name = "GaxiosError";
+    Object.assign(this, fields);
+  }
+}
+
+/**
+ * Test-local transport wrapper that delays every read/write call so two
+ * concurrent `applyPreparedEffects` stages genuinely interleave inside their
+ * refresh+write work instead of running strictly back to back (a sequential
+ * run would pass even without the receipt-init lock). It delegates the
+ * provider transport contract to the inner stub and mirrors the stub's
+ * write/read counters for assertions.
+ */
+class DelayingTransport implements GoogleSheetsApiTransport {
+  public readonly appliedBatchUpdates: GoogleSheetsApiWriteRequest[][] = [];
+  public readonly getSpreadsheetRequests: GoogleSheetsApiGetSpreadsheetRequest[] = [];
+  public batchUpdateCalls = 0;
+  public getSpreadsheetCalls = 0;
+
+  public constructor(
+    private readonly inner: StubSheetsTransport,
+    private readonly options: { readonly delayMs: number },
+  ) {}
+
+  private async delay(): Promise<void> {
+    if (this.options.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.options.delayMs));
+    }
+  }
+
+  public async getSpreadsheet(request: GoogleSheetsApiGetSpreadsheetRequest): Promise<unknown> {
+    await this.delay();
+    const result = await this.inner.getSpreadsheet(request);
+    this.getSpreadsheetRequests.push(request);
+    this.getSpreadsheetCalls = this.inner.getSpreadsheetCalls;
+    return result;
+  }
+
+  public async batchUpdate(request: GoogleSheetsApiBatchUpdateRequest): Promise<unknown> {
+    await this.delay();
+    const result = await this.inner.batchUpdate(request);
+    this.batchUpdateCalls = this.inner.batchUpdateCalls;
+    const last = this.inner.appliedBatchUpdates[this.inner.appliedBatchUpdates.length - 1];
+    if (last !== undefined) this.appliedBatchUpdates.push(last);
+    return result;
+  }
+}
 
 describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
   it("rejects a request whose route does not match the registered definition", async () => {
@@ -506,6 +575,95 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
 });
 
 describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => {
+  it("batches effects spanning MULTIPLE tabs into ONE batchUpdate targeting different sheetIds", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    // Seed two tabs that belong to one spreadsheet; the provider groups a
+    // spreadsheet-scoped request across all of them.
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    const systemEffect = effect({
+      effectId: "multi-system",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-system",
+      createIfMissing: true,
+      fields: { id: cell.string("u-system"), status: cell.string("pending") },
+    });
+    const inputEffect = effect({
+      effectId: "multi-input",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      targetAnchor: "anchor-input",
+      createIfMissing: true,
+      fields: { id: cell.string("u-input"), status: cell.string("pending") },
+    });
+
+    const result = await applyRequest(provider, [systemEffect, inputEffect]);
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
+
+    // ONE atomic batchUpdate whose requests target the different tabs' sheetIds.
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0];
+    expect(batch).toBeDefined();
+    if (batch === undefined) return;
+    const systemTab = spreadsheet.findTab("Users_System");
+    const inputTab = spreadsheet.findTab("Users_Input");
+    expect(systemTab).toBeDefined();
+    expect(inputTab).toBeDefined();
+    if (systemTab === undefined || inputTab === undefined) return;
+    const sheetIds = new Set(batch.map((request) => request.sheetId));
+    expect(sheetIds).toContain(systemTab.sheetId);
+    expect(sheetIds).toContain(inputTab.sheetId);
+    expect(sheetIds.size).toBeGreaterThan(1);
+    // Each tab's own effect landed in its own tab.
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("u-system"),
+      status: cell.string("pending"),
+    });
+    expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS)).toMatchObject({
+      id: cell.string("u-input"),
+      status: cell.string("pending"),
+    });
+  });
+
+  it("rejects a multi-route apply in inline postcondition mode before any mutation", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const systemEffect = effect({
+      effectId: "inline-system",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-a",
+      createIfMissing: true,
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const inputEffect = effect({
+      effectId: "inline-input",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      targetAnchor: "anchor-b",
+      createIfMissing: true,
+      fields: { id: cell.string("u2"), status: cell.string("pending") },
+    });
+    // Multi-route inline cannot verify written rows or persist receipts, so
+    // it must reject BEFORE any read or mutation instead of acknowledging
+    // unverified writes.
+    await expect(applyRequest(provider, [systemEffect, inputEffect], "inline"))
+      .rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    expect(transport.getSpreadsheetRequests).toHaveLength(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
   it("plans multiple creates into one target+receipt batch", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -809,6 +967,60 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     const systemTab = spreadsheet.findTab("Users_System");
     if (systemTab === undefined) throw new Error("system tab missing");
     expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).status).toEqual(cell.string("pending"));
+  });
+
+  it("applies an update whose guard hash contains a drifted date serial", async () => {
+    // Regression for the direct-live soak `visible_guard_mismatch`: the sheet
+    // row was written with `dateSerialFromIso(iso)`, and the unrounded
+    // read-back conversion truncated the serial a hair below the exact
+    // millisecond, so the re-hashed row differed from the canonical
+    // expectedVisibleHash by one millisecond. Rounding the read-back to the
+    // nearest millisecond makes the guard match the canonical fields again.
+    const driftedIso = "2024-03-15T00:00:00.002Z";
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, [
+      {
+        anchor: "anchor-1",
+        fields: {
+          id: cell.string("u1"),
+          status: cell.date(driftedIso),
+          __typed_sheets_deleted: cell.bool(false),
+        },
+      },
+    ]);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const updated = effect({
+      effectId: "update-drift",
+      targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
+      expectedVisibleRevision: 1,
+      // The guard hash comes from the canonical fields (the SQLite
+      // authority), exactly as the sync worker computes it for a conflict
+      // effect on the pre-delete row.
+      expectedVisibleHash: computeSyncVisibleHash({
+        id: cell.string("u1"),
+        status: cell.date(driftedIso),
+        __typed_sheets_deleted: cell.bool(false),
+      }),
+      fields: {
+        id: cell.string("u1"),
+        status: cell.date(driftedIso),
+        __typed_sheets_deleted: cell.bool(true),
+      },
+    });
+    const result = await applyRequest(provider, [updated]);
+    expect(result.results[0]?.status).toBe("applied");
+    const systemTab = spreadsheet.findTab("Users_System");
+    if (systemTab === undefined) throw new Error("system tab missing");
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("u1"),
+      status: cell.date(driftedIso),
+      __typed_sheets_deleted: cell.bool(true),
+    });
+    // The stored serial is still the exact wire value from the canonical ISO.
+    const statusCell = systemTab.cell(1, 1);
+    expect(statusCell?.userEnteredValue?.numberValue).toBe(dateSerialFromIso(driftedIso));
   });
 
   it("rejects a candidate reconcile whose expected candidate hash does not match", async () => {
@@ -1184,7 +1396,726 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
   });
 });
 
+describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", () => {
+  it("serializes shared receipt-tab creation across two stale prepared writes", async () => {
+    // Two routes on the SAME spreadsheet, both preflighted when the shared
+    // receipt tab was still absent. Both prepared states carry a stale
+    // absent-receipt context. When their write+verify stages run concurrently
+    // through the direct provider, the receipt-init lock must let the first
+    // create the tab and force the second to refresh (seeing it present) and
+    // append instead — never two duplicate `addSheet` requests.
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    // Delay reads and writes so the two applyPrepared stages genuinely
+    // interleave inside their refresh/plan work instead of running strictly
+    // back to back (a sequential run would pass even without the lock).
+    const interleaved = new DelayingTransport(transport, { delayMs: 2 });
+    const provider = buildProvider(interleaved);
+
+    const systemRequest: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "race-a",
+        targetAnchor: "anchor-race-a",
+        createIfMissing: true,
+        fields: { id: cell.string("ra"), status: cell.string("pending") },
+      })],
+    };
+    const userRequest: ApplySyncEffectsRequest = {
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "Users_Input",
+      registeredRange: "A:C",
+      projection: "user_input",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "race-b",
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        projection: "user_input",
+        targetAnchor: "anchor-race-b",
+        createIfMissing: true,
+        fields: { id: cell.string("rb"), status: cell.string("active") },
+      })],
+    };
+
+    // Both preflights observe the receipt tab absent (stale).
+    const preparedA = await provider.preflightApplyEffects(systemRequest);
+    const preparedB = await provider.preflightApplyEffects(userRequest);
+    expect(preparedA.kind).toBe("single");
+    expect(preparedB.kind).toBe("single");
+
+    // Fire both writes together so their refresh+write stages overlap.
+    const [outcomeA, outcomeB] = await Promise.all([
+      provider.applyPreparedEffects(preparedA),
+      provider.applyPreparedEffects(preparedB),
+    ]);
+
+    expect(outcomeA.results.map((r) => r.status)).toEqual(["applied"]);
+    expect(outcomeB.results.map((r) => r.status)).toEqual(["applied"]);
+    // Exactly one addSheet across all writes (the first creates the tab; the
+    // second appends to it).
+    const addSheets = interleaved.appliedBatchUpdates.filter((batch) =>
+      batch.some((request) => request.kind === "addSheet"));
+    expect(addSheets).toHaveLength(1);
+    // Exactly one receipt tab exists in the model.
+    expect(spreadsheet.sheets.filter((sheet) =>
+      sheet.title === GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toHaveLength(1);
+    // Both target rows were written.
+    const systemTab = spreadsheet.findTab("Users_System");
+    const inputTab = spreadsheet.findTab("Users_Input");
+    if (systemTab === undefined || inputTab === undefined) throw new Error("tabs missing");
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("ra"),
+      status: cell.string("pending"),
+    });
+    expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS)).toMatchObject({
+      id: cell.string("rb"),
+      status: cell.string("active"),
+    });
+  });
+
+  it("refreshes a stale absent-receipt preflight with ONE write-lane ranged read before appending", async () => {
+    // Regression: the stale-receipt refresh used to run a range-less
+    // enumeration AND a ranged data read on the write lane. With defaults that
+    // made the complete fast-append/legacy stale branch (two preflight reads +
+    // enumeration + data read + write + five bounded admission waits = 125 s)
+    // outlive the 120 s default effect lease. The refresh must be exactly ONE
+    // paced write-lane ranged read that both discovers the tab and reads its
+    // receipts, so the counted three-reads/one-write/four-waits bound holds.
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const request: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "stale-refresh-1",
+        targetAnchor: "anchor-stale-refresh",
+        createIfMissing: true,
+        fields: { id: cell.string("sr"), status: cell.string("pending") },
+      })],
+    };
+    // The read-ahead preflight observes the receipt tab absent (stale).
+    const prepared = await provider.preflightApplyEffects(request);
+    expect(prepared.kind).toBe("single");
+    // A concurrent write creates the receipt tab (with one receipt) between
+    // the preflight and this write stage.
+    seedReceiptTab(spreadsheet, [{
+      effectId: "concurrent-1",
+      payloadHash: "payload-concurrent-1",
+      visibleHash: computeSyncVisibleHash({
+        id: cell.string("c"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      }),
+      visibleRevision: 1,
+    }]);
+    const readsAfterPreflight = transport.getSpreadsheetRequests.length;
+    const result = await provider.applyPreparedEffects(prepared);
+
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied"]);
+    // Exactly ONE write-stage read, ranged to the receipt tab by title; the
+    // write lane ran NO range-less enumeration.
+    const writeStageReads = transport.getSpreadsheetRequests.slice(readsAfterPreflight);
+    expect(writeStageReads).toHaveLength(1);
+    expect(writeStageReads[0]?.ranges).toEqual([
+      `'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A1:F1048576`,
+    ]);
+    expect(transport.batchUpdateCalls).toBe(1);
+    // Exactly one receipt tab exists, and the refreshed receipt landed AFTER
+    // the concurrent writer's receipt (a stale receiptLastRow would have
+    // overwritten the header or the concurrent row instead).
+    const receiptTab = spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
+    if (receiptTab === undefined) throw new Error("receipt tab missing");
+    expect(stubRowFields(receiptTab, 1, [...GOOGLE_SHEETS_API_RECEIPT_HEADERS]).effectId)
+      .toEqual(cell.string("effectId"));
+    expect(stubRowFields(receiptTab, 2, [...GOOGLE_SHEETS_API_RECEIPT_HEADERS]).effectId)
+      .toEqual(cell.string("concurrent-1"));
+    expect(stubRowFields(receiptTab, 3, [...GOOGLE_SHEETS_API_RECEIPT_HEADERS]).effectId)
+      .toEqual(cell.string("stale-refresh-1"));
+  });
+
+  it("treats the API's missing-range rejection of the receipt refresh as still-absent", async () => {
+    // The real API answers a range that names a missing tab with a proven
+    // pre-mutation 400. The single ranged refresh read relies on that
+    // rejection to prove the receipt tab is still absent, so the caller
+    // creates it atomically; only that exact proven 400 is classified as
+    // still-absent, and every other transport failure must propagate.
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    const inner = new StubSheetsTransport(spreadsheet);
+    const receiptRange = `'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!`;
+    const rejecting: GoogleSheetsApiTransport = {
+      getSpreadsheet: async (request) => {
+        if (request.ranges.some((range) => range.startsWith(receiptRange.slice(0, receiptRange.indexOf("!"))))) {
+          throw classifyGoogleSheetsApiError(new GaxiosLikeError("Unable to parse range", {
+            status: 400,
+            response: { status: 400, data: { error: { status: "INVALID_ARGUMENT" } } },
+          }));
+        }
+        return inner.getSpreadsheet(request);
+      },
+      batchUpdate: (request) => inner.batchUpdate(request),
+    };
+    const provider = buildProvider(rejecting);
+    const result = await applyRequest(provider, [effect({
+      effectId: "first-write-1",
+      targetAnchor: "anchor-first",
+      createIfMissing: true,
+      fields: { id: cell.string("u1"), status: cell.string("pending") },
+    })]);
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied"]);
+    expect(inner.batchUpdateCalls).toBe(1);
+    expect(spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toBeDefined();
+
+    // Any other transport failure (here a 5xx on the same read) keeps its own
+    // delivery-uncertain classification instead of being read as still-absent.
+    const faulting: GoogleSheetsApiTransport = {
+      getSpreadsheet: async (request) => {
+        if (request.ranges.some((range) => range.startsWith(receiptRange.slice(0, receiptRange.indexOf("!"))))) {
+          throw new GoogleSheetsApiTransportError(
+            GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+            "backend error",
+            presentValue(500),
+            presentValue("INTERNAL"),
+          );
+        }
+        return inner.getSpreadsheet(request);
+      },
+      batchUpdate: (request) => inner.batchUpdate(request),
+    };
+    const faultProvider = buildProvider(faulting);
+    await expect(applyRequest(faultProvider, [effect({
+      effectId: "first-write-2",
+      targetAnchor: "anchor-2",
+      createIfMissing: true,
+      fields: { id: cell.string("u2"), status: cell.string("pending") },
+    })])).rejects.toMatchObject({ code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR });
+
+    // A 400 with a DIFFERENT remote status is not proof the receipt tab is
+    // absent: it must fail closed and propagate, never be read as still-absent.
+    const wrongCode: GoogleSheetsApiTransport = {
+      getSpreadsheet: async (request) => {
+        if (request.ranges.some((range) => range.startsWith(receiptRange.slice(0, receiptRange.indexOf("!"))))) {
+          throw new GoogleSheetsApiTransportError(
+            GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+            "bad request",
+            presentValue(400),
+            presentValue("FAILED_PRECONDITION"),
+          );
+        }
+        return inner.getSpreadsheet(request);
+      },
+      batchUpdate: (request) => inner.batchUpdate(request),
+    };
+    const wrongCodeProvider = buildProvider(wrongCode);
+    await expect(applyRequest(wrongCodeProvider, [effect({
+      effectId: "first-write-3",
+      targetAnchor: "anchor-3",
+      createIfMissing: true,
+      fields: { id: cell.string("u3"), status: cell.string("pending") },
+    })])).rejects.toMatchObject({ code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR });
+
+    // A 400 with NO remote status is equally not proof of absence: fail closed.
+    const noCode: GoogleSheetsApiTransport = {
+      getSpreadsheet: async (request) => {
+        if (request.ranges.some((range) => range.startsWith(receiptRange.slice(0, receiptRange.indexOf("!"))))) {
+          throw new GoogleSheetsApiTransportError(
+            GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+            "bad request",
+            presentValue(400),
+          );
+        }
+        return inner.getSpreadsheet(request);
+      },
+      batchUpdate: (request) => inner.batchUpdate(request),
+    };
+    const noCodeProvider = buildProvider(noCode);
+    await expect(applyRequest(noCodeProvider, [effect({
+      effectId: "first-write-4",
+      targetAnchor: "anchor-4",
+      createIfMissing: true,
+      fields: { id: cell.string("u4"), status: cell.string("pending") },
+    })])).rejects.toMatchObject({ code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR });
+  });
+
+  it("produces the same result and write as the single applyEffects wrapper", async () => {
+    const effects = [
+      effect({
+        effectId: "split-1",
+        targetAnchor: "anchor-split-1",
+        createIfMissing: true,
+        fields: { id: cell.string("s1"), status: cell.string("pending") },
+      }),
+      effect({
+        effectId: "split-2",
+        targetAnchor: "anchor-split-2",
+        createIfMissing: true,
+        fields: { id: cell.string("s2"), status: cell.string("active") },
+      }),
+    ];
+    const request: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects,
+    };
+
+    // Wrapper path: applyEffects does preflight then applyPrepared internally.
+    const wrapperSpreadsheet = new StubSpreadsheet();
+    seedSystemTab(wrapperSpreadsheet, []);
+    const wrapperTransport = new StubSheetsTransport(wrapperSpreadsheet);
+    const wrapperProvider = buildProvider(wrapperTransport);
+    const wrapped = await wrapperProvider.applyEffects(request);
+
+    // Split path: preflight then applyPrepared across the same request.
+    const splitSpreadsheet = new StubSpreadsheet();
+    seedSystemTab(splitSpreadsheet, []);
+    const splitTransport = new StubSheetsTransport(splitSpreadsheet);
+    const splitProvider = buildProvider(splitTransport);
+    const prepared = await splitProvider.preflightApplyEffects(request);
+    expect(prepared.kind).toBe("single");
+    const split = await splitProvider.applyPreparedEffects(prepared);
+
+    expect(split.results).toEqual(wrapped.results);
+    expect(split.hasMore).toBe(wrapped.hasMore);
+    expect(splitTransport.batchUpdateCalls).toBe(wrapperTransport.batchUpdateCalls);
+    const systemTab = splitSpreadsheet.findTab("Users_System");
+    if (systemTab === undefined) throw new Error("system tab missing");
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("s1"),
+      status: cell.string("pending"),
+    });
+    expect(stubRowFields(systemTab, 3, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("s2"),
+      status: cell.string("active"),
+    });
+  });
+
+  it("rejects a prepared state produced by a different provider instance before any write", async () => {
+    const request: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "foreign-provider",
+        targetAnchor: "anchor-foreign-provider",
+        createIfMissing: true,
+        fields: { id: cell.string("fp"), status: cell.string("pending") },
+      })],
+    };
+    // Two provider instances over the SAME spreadsheet: a prepared state from
+    // one instance must fail closed on the other (per-instance nonce) before
+    // any remote write, even though the spreadsheetId matches.
+    const spreadsheetA = new StubSpreadsheet();
+    seedSystemTab(spreadsheetA, []);
+    const providerA = buildProvider(new StubSheetsTransport(spreadsheetA));
+    const spreadsheetB = new StubSpreadsheet();
+    seedSystemTab(spreadsheetB, []);
+    const providerB = buildProvider(new StubSheetsTransport(spreadsheetB));
+    const prepared = await providerA.preflightApplyEffects(request);
+    await expect(providerB.applyPreparedEffects(prepared)).rejects.toThrow(
+      /different provider instance/,
+    );
+    expect(spreadsheetB.sheets.filter((sheet) =>
+      sheet.title === GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toHaveLength(0);
+  });
+
+  it("rejects a prepared state applied twice (sequential reuse) with no second mutation", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const request: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "reuse-seq",
+        targetAnchor: "anchor-reuse-seq",
+        createIfMissing: true,
+        fields: { id: cell.string("rs"), status: cell.string("pending") },
+      })],
+    };
+    const prepared = await provider.preflightApplyEffects(request);
+    const first = await provider.applyPreparedEffects(prepared);
+    expect(first.results.map((r) => r.status)).toEqual(["applied"]);
+    const callsAfterFirst = transport.batchUpdateCalls;
+    // Reusing the same prepared state must fail closed before any write so a
+    // stale plan cannot replay a duplicate append or delete the next row.
+    await expect(provider.applyPreparedEffects(prepared)).rejects.toThrow(
+      /was not produced by this provider/,
+    );
+    expect(transport.batchUpdateCalls).toBe(callsAfterFirst);
+  });
+
+  it("rejects concurrent reuse of one prepared state with no second mutation", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const request: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "reuse-conc",
+        targetAnchor: "anchor-reuse-conc",
+        createIfMissing: true,
+        fields: { id: cell.string("rc"), status: cell.string("pending") },
+      })],
+    };
+    const prepared = await provider.preflightApplyEffects(request);
+    const [first, second] = await Promise.allSettled([
+      provider.applyPreparedEffects(prepared),
+      provider.applyPreparedEffects(prepared),
+    ]);
+    const fulfilled = first.status === "fulfilled" ? first : second;
+    const rejected = first.status === "rejected" ? first : second;
+    expect(fulfilled.status).toBe("fulfilled");
+    expect(rejected.status).toBe("rejected");
+    // Exactly one write ran; the rejected concurrent reuse performed no second
+    // mutation.
+    expect(transport.batchUpdateCalls).toBe(1);
+  });
+
+  it("appends receipts without loss when two stale same-spreadsheet writes race with the receipt tab PRESENT", async () => {
+    // Cross-route read-ahead overlap invariant: two routes on the same
+    // spreadsheet preflight while the shared receipt tab is present, then a
+    // different-route write lands between their preflights and writes (the
+    // exact read-ahead overlap window). Both writes planned receipt rows from
+    // the SAME stale receiptLastRow. Receipt appends reserve rows with
+    // insertDimension (shift, not overwrite), so both batches' receipts must
+    // survive side by side — never overwritten or lost — and each write must
+    // land only on its own tab (provisioning forbids two definitions on one
+    // tab, so cross-route target rows are disjoint).
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    seedReceiptTab(spreadsheet, [{
+      effectId: "seeded-1",
+      payloadHash: "payload-seeded-1",
+      visibleHash: computeSyncVisibleHash({
+        id: cell.string("seed"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      }),
+      visibleRevision: 1,
+    }]);
+    const interleaved = new DelayingTransport(new StubSheetsTransport(spreadsheet), { delayMs: 2 });
+    const provider = buildProvider(interleaved);
+    const systemRequest: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "race-present-a",
+        targetAnchor: "anchor-race-present-a",
+        createIfMissing: true,
+        fields: { id: cell.string("pa"), status: cell.string("pending") },
+      })],
+    };
+    const userRequest: ApplySyncEffectsRequest = {
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      sheetName: "Users_Input",
+      registeredRange: "A:C",
+      projection: "user_input",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "race-present-b",
+        physicalSheetId: USER_INPUT_SHEET_ID,
+        projection: "user_input",
+        targetAnchor: "anchor-race-present-b",
+        createIfMissing: true,
+        fields: { id: cell.string("pb"), status: cell.string("active") },
+      })],
+    };
+    const preparedA = await provider.preflightApplyEffects(systemRequest);
+    const preparedB = await provider.preflightApplyEffects(userRequest);
+    expect(preparedA.kind).toBe("single");
+    expect(preparedB.kind).toBe("single");
+
+    await Promise.all([
+      provider.applyPreparedEffects(preparedA),
+      provider.applyPreparedEffects(preparedB),
+    ]);
+
+    // No addSheet: the tab was present at both preflights.
+    expect(interleaved.appliedBatchUpdates.filter((batch) =>
+      batch.some((request) => request.kind === "addSheet"))).toHaveLength(0);
+    // All three receipts (the seeded one plus both writes) are present exactly
+    // once, even though both batches computed the same stale start row: the
+    // second insertDimension shifted the first batch's receipt down instead of
+    // overwriting it.
+    const receiptTab = spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
+    if (receiptTab === undefined) throw new Error("receipt tab missing");
+    const receiptHeaders = [...GOOGLE_SHEETS_API_RECEIPT_HEADERS];
+    const effectIdAt = (rowNumber: number): string => {
+      const value: NormalizedCell | undefined =
+        stubRowFields(receiptTab, rowNumber, receiptHeaders).effectId;
+      return value?.kind === "string" ? value.value : "";
+    };
+    expect([effectIdAt(2), effectIdAt(3), effectIdAt(4)].sort())
+      .toEqual(["race-present-a", "race-present-b", "seeded-1"]);
+    // Each write landed on its OWN tab only.
+    const systemTab = spreadsheet.findTab("Users_System");
+    const inputTab = spreadsheet.findTab("Users_Input");
+    if (systemTab === undefined || inputTab === undefined) throw new Error("tabs missing");
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: cell.string("pa"),
+      status: cell.string("pending"),
+    });
+    expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS)).toMatchObject({
+      id: cell.string("pb"),
+      status: cell.string("active"),
+    });
+  });
+
+  it("preserves both appended rows when two same-route prepared appends run out of order", async () => {
+    // Two prepared states for the SAME route (only reachable by a caller that
+    // bypasses the worker's same-route sequencing and the coordinator lane).
+    // Both plans reserve the same stale next-append row; the second batch's
+    // insertDimension must shift the first batch's row down instead of
+    // overwriting it, so neither business identity is lost or duplicated. This
+    // shift-safety is what makes the same-route serialization invariant
+    // (coordinator lane + worker sequencing) sufficient without a fresh
+    // in-lane re-read per write.
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const requestA: ApplySyncEffectsRequest = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
+      effects: [effect({
+        effectId: "same-route-a",
+        targetAnchor: "anchor-same-route-a",
+        createIfMissing: true,
+        fields: { id: cell.string("sa1"), status: cell.string("pending") },
+      })],
+    };
+    const requestB: ApplySyncEffectsRequest = {
+      ...requestA,
+      effects: [effect({
+        effectId: "same-route-b",
+        targetAnchor: "anchor-same-route-b",
+        createIfMissing: true,
+        fields: { id: cell.string("sa2"), status: cell.string("pending") },
+      })],
+    };
+    const preparedA = await provider.preflightApplyEffects(requestA);
+    const preparedB = await provider.preflightApplyEffects(requestB);
+    await Promise.all([
+      provider.applyPreparedEffects(preparedA),
+      provider.applyPreparedEffects(preparedB),
+    ]);
+    const systemTab = spreadsheet.findTab("Users_System");
+    if (systemTab === undefined) throw new Error("system tab missing");
+    const idAt = (rowNumber: number): string => {
+      const value: NormalizedCell | undefined = stubRowFields(systemTab, rowNumber, SYSTEM_HEADERS).id;
+      return value?.kind === "string" ? value.value : "";
+    };
+    expect([idAt(2), idAt(3)].sort()).toEqual(["sa1", "sa2"]);
+    // Both receipts were persisted (the receipt-init lock let the first write
+    // create the tab and the second refresh to append).
+    const receiptTab = spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
+    if (receiptTab === undefined) throw new Error("receipt tab missing");
+    const receiptHeaders = [...GOOGLE_SHEETS_API_RECEIPT_HEADERS];
+    const receiptIdAt = (rowNumber: number): string => {
+      const value: NormalizedCell | undefined =
+        stubRowFields(receiptTab, rowNumber, receiptHeaders).effectId;
+      return value?.kind === "string" ? value.value : "";
+    };
+    expect([receiptIdAt(2), receiptIdAt(3)].sort()).toEqual(["same-route-a", "same-route-b"]);
+    expect(transport.batchUpdateCalls).toBe(2);
+  });
+});
+
 describe("GoogleSheetsApiSyncProvider fast append", () => {
+  it("appends rows spanning MULTIPLE tabs in ONE batchUpdate targeting different sheetIds", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Orders_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [
+        SYSTEM_DEFINITION,
+        definition({
+          physicalSheetId: "orders:system_state",
+          tabName: "Orders_System",
+          projection: "system_state",
+          headers: SYSTEM_HEADERS,
+        }),
+      ],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 0,
+    });
+
+    const usersRow: FastAppendRow = {
+      effectId: "fast-users",
+      payloadHash: "payload-users",
+      fields: {
+        id: cell.string("u-fast"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    const ordersRow: FastAppendRow = {
+      effectId: "fast-orders",
+      payloadHash: "payload-orders",
+      fields: {
+        id: { kind: "string" as const, value: "order-fast" },
+        status: { kind: "string" as const, value: "pending" },
+        __typed_sheets_deleted: { kind: "boolean" as const, value: false },
+      },
+      physicalSheetId: "orders:system_state",
+      projection: "system_state",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+
+    const result = await provider.fastAppendRows({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      rows: [usersRow, ordersRow],
+    });
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
+
+    // ONE atomic batchUpdate whose requests target the different tabs' sheetIds.
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0];
+    expect(batch).toBeDefined();
+    if (batch === undefined) return;
+    const usersTab = spreadsheet.findTab("Users_System");
+    const ordersTab = spreadsheet.findTab("Orders_System");
+    expect(usersTab).toBeDefined();
+    expect(ordersTab).toBeDefined();
+    if (usersTab === undefined || ordersTab === undefined) return;
+    const sheetIds = new Set(batch.map((request) => request.sheetId));
+    expect(sheetIds).toContain(usersTab.sheetId);
+    expect(sheetIds).toContain(ordersTab.sheetId);
+    expect(sheetIds.size).toBeGreaterThan(1);
+    // Each row landed in its own tab.
+    expect(stubRowFields(usersTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: { kind: "string", value: "u-fast" },
+    });
+    expect(stubRowFields(ordersTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: { kind: "string", value: "order-fast" },
+    });
+  });
+
+  it("serializes shared receipt-tab creation across two concurrent fast appends", async () => {
+    // Two fast appends on the SAME spreadsheet, both preflighting the shared
+    // receipt tab absent. When their target+receipt batches run concurrently
+    // through the direct provider, the per-spreadsheet receipt-init lock must
+    // let the first create the tab and force the second to refresh (seeing it
+    // present) and append instead — never two duplicate `addSheet` requests
+    // (the second would otherwise fail with a 400).
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    // Delay reads and writes so the two fast-append preflights both observe the
+    // tab absent before either write creates it, making the race real instead of
+    // a sequential run that would pass even without the lock.
+    const interleaved = new DelayingTransport(transport, { delayMs: 2 });
+    const provider = buildProvider(interleaved);
+
+    const rowA: FastAppendRow = {
+      effectId: "fast-race-a",
+      payloadHash: "payload-race-a",
+      fields: {
+        id: cell.string("ra"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    };
+    const rowB: FastAppendRow = {
+      effectId: "fast-race-b",
+      payloadHash: "payload-race-b",
+      fields: {
+        id: cell.string("rb"),
+        status: cell.string("active"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    };
+    const request = {
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state" as const,
+      schemaVersion: 1,
+    };
+
+    const [resultA, resultB] = await Promise.all([
+      provider.fastAppendRows({ ...request, rows: [rowA] }),
+      provider.fastAppendRows({ ...request, rows: [rowB] }),
+    ]);
+
+    expect(resultA.results.map((entry) => entry.status)).toEqual(["applied"]);
+    expect(resultB.results.map((entry) => entry.status)).toEqual(["applied"]);
+    // Exactly one addSheet across all appends (the first creates the tab; the
+    // second appends to it), and never a swallowed duplicate-add 400.
+    const addSheets = interleaved.appliedBatchUpdates.filter((batch) =>
+      batch.some((req) => req.kind === "addSheet"));
+    expect(addSheets).toHaveLength(1);
+    // Exactly one receipt tab exists in the model.
+    expect(spreadsheet.sheets.filter((sheet) =>
+      sheet.title === GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toHaveLength(1);
+    // Both rows landed in the target tab. The two concurrent appends race to
+    // create the shared receipt tab, so either row may win the lane and land
+    // first; assert both rows are present (order is not guaranteed).
+    const systemTab = spreadsheet.findTab("Users_System");
+    if (systemTab === undefined) throw new Error("system tab missing");
+    const identities = [
+      stubRowFields(systemTab, 2, SYSTEM_HEADERS).id,
+      stubRowFields(systemTab, 3, SYSTEM_HEADERS).id,
+    ];
+    expect(identities.map((value) => value?.value).sort()).toEqual(["ra", "rb"].sort());
+  });
+
   it("appends up to 1,000 rows per request and defers the suffix", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -1270,7 +2201,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
-  it("requires an identity field for the route", async () => {
+  it("requires an identity field for the route before any preflight read", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedUserInputTab(spreadsheet, []);
     const transport = new StubSheetsTransport(spreadsheet);
@@ -1283,6 +2214,116 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
       schemaVersion: 1,
       rows: appendRows(1),
     })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    // Fail-fast: an identity-less route is rejected before any enumeration or
+    // ranged preflight read is burned, and before any mutation.
+    expect(transport.getSpreadsheetRequests).toHaveLength(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("rejects a multi-route request with an identity-less route before any preflight read", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const systemRow: FastAppendRow = {
+      effectId: "fast-system",
+      payloadHash: "payload-system",
+      fields: {
+        id: cell.string("u-fast"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    const inputRow: FastAppendRow = {
+      effectId: "fast-input",
+      payloadHash: "payload-input",
+      fields: {
+        id: cell.string("i-fast"),
+        status: cell.string("pending"),
+      },
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      sheetName: "Users_Input",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    await expect(provider.fastAppendRows({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      rows: [systemRow, inputRow],
+    })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD });
+    // Fail-fast: the identity-less route is rejected before the shared
+    // enumeration/ranged preflight read, and before any mutation.
+    expect(transport.getSpreadsheetRequests).toHaveLength(0);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("appends a single-route request whose row overrides point to another tab on the overridden tab", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Orders_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: SPREADSHEET_ID,
+      definitions: [
+        SYSTEM_DEFINITION,
+        definition({
+          physicalSheetId: "orders:system_state",
+          tabName: "Orders_System",
+          projection: "system_state",
+          headers: SYSTEM_HEADERS,
+        }),
+      ],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 0,
+    });
+    // The request-level route is the top-level Users_System tab, but the row
+    // carries per-row route overrides pointing at Orders_System. The request
+    // collapses to ONE effective route, so it must append to the overridden
+    // tab, not the top-level one.
+    const ordersRow: FastAppendRow = {
+      effectId: "fast-orders",
+      payloadHash: "payload-orders",
+      fields: {
+        id: cell.string("order-fast"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+      physicalSheetId: "orders:system_state",
+      projection: "system_state",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      schemaVersion: 1,
+    };
+    const result = await provider.fastAppendRows({
+      physicalSheetId: SYSTEM_SHEET_ID,
+      sheetName: "Users_System",
+      registeredRange: "A:C",
+      projection: "system_state",
+      schemaVersion: 1,
+      rows: [ordersRow],
+    });
+    expect(result.results.map((entry) => entry.status)).toEqual(["applied"]);
+    const ordersTab = spreadsheet.findTab("Orders_System");
+    const systemTab = spreadsheet.findTab("Users_System");
+    expect(ordersTab).toBeDefined();
+    expect(systemTab).toBeDefined();
+    if (ordersTab === undefined || systemTab === undefined) return;
+    // The row landed in the overridden Orders_System tab, not Users_System.
+    expect(stubRowFields(ordersTab, 2, SYSTEM_HEADERS)).toMatchObject({
+      id: { kind: "string", value: "order-fast" },
+    });
+    expect(systemTab.lastContentRow()).toBe(0);
   });
 
   it("fails closed when an append row omits payloadHash", async () => {
@@ -1498,6 +2539,229 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     if (systemTab === undefined) throw new Error("system tab missing");
     expect(systemTab.lastContentRow()).toBe(1);
     expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).id).toEqual(cell.string("small"));
+  });
+
+  it("skips an oversize effect in a multi-tab group and applies the following valid effects without row gaps", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    seedUserInputTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const events: Array<Record<string, unknown>> = [];
+    const provider = buildProvider(transport, {
+      maxBatchBytes: 6_000,
+      onRequest: (event) => events.push(event as Record<string, unknown>),
+    });
+
+    // One oversized effect FIRST in the system tab's group, followed by a
+    // valid effect in the SAME group and a valid effect in another tab. The
+    // prefix search must respect the start offset so the valid effects that
+    // come after the oversized one are still included, and the included
+    // effects must be re-planned against the tab so the skipped slot does
+    // not leave a row gap.
+    const oversize = effect({
+      effectId: "multi-oversize",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-big",
+      createIfMissing: true,
+      fields: {
+        id: cell.string("big"),
+        status: cell.string("x".repeat(20_000)),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const systemSmall = effect({
+      effectId: "multi-system-small",
+      physicalSheetId: SYSTEM_SHEET_ID,
+      projection: "system_state",
+      targetAnchor: "anchor-small",
+      createIfMissing: true,
+      fields: {
+        id: cell.string("small"),
+        status: cell.string("ok"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const inputSmall = effect({
+      effectId: "multi-input-small",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      projection: "user_input",
+      targetAnchor: "anchor-input",
+      createIfMissing: true,
+      fields: { id: cell.string("u-input"), status: cell.string("ok") },
+    });
+
+    const result = await applyRequest(provider, [oversize, systemSmall, inputSmall]);
+    // Only the oversized effect is schema_error; the valid effects in the
+    // SAME system tab group still apply after it.
+    expect(result.results.map((entry) => entry.status)).toEqual(["schema_error", "applied", "applied"]);
+    expect(result.results[0]?.reason).toEqual({
+      kind: "present",
+      value: "effect_payload_too_large",
+    });
+    expect(result.hasMore).toBe(false);
+
+    // ONE atomic batch carried the two valid effects; the oversized one was
+    // excluded, so its skipped slot must NOT leave a row gap in the tab.
+    expect(transport.batchUpdateCalls).toBe(1);
+    // Multi-route telemetry reports the ORIGINAL requested effect count (3)
+    // while `includedEffects` stays the actual included prefix (2 valid
+    // effects; the oversized one was excluded as a schema error).
+    const writeEvent = events.find((event) => event.operation === "batchUpdate");
+    expect(writeEvent).toBeDefined();
+    expect(writeEvent?.requestedEffects).toBe(3);
+    expect(writeEvent?.includedEffects).toBe(2);
+    const systemTab = spreadsheet.findTab("Users_System");
+    if (systemTab === undefined) throw new Error("system tab missing");
+    expect(systemTab.lastContentRow()).toBe(1);
+    expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).id).toEqual(cell.string("small"));
+    const inputTab = spreadsheet.findTab("Users_Input");
+    if (inputTab === undefined) throw new Error("input tab missing");
+    expect(inputTab.lastContentRow()).toBe(1);
+    expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS).id).toEqual(cell.string("u-input"));
+  });
+
+  it("skips receipt refresh and write when every bounded effect is a schema error and the receipt tab is absent", async () => {
+    // With NO included plan able to write (an oversized effect with a tight
+    // batch budget yields an empty `included` set) and the receipt tab absent
+    // at preflight, apply must NOT take the write-side receipt-init refresh or
+    // its lock: there is no receipt-producing write to protect. It should
+    // return the per-effect schema-error result with no refresh read and no
+    // batch write.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport, { maxBatchBytes: 2_000 });
+    const oversized = effect({
+      effectId: "all-oversize",
+      targetAnchor: "anchor-big",
+      createIfMissing: true,
+      fields: {
+        id: cell.string("big"),
+        status: cell.string("x".repeat(5_000)),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const readsBefore = transport.getSpreadsheetCalls;
+    const result = await applyRequest(provider, [oversized]);
+    expect(result.results.map((entry) => entry.status)).toEqual(["schema_error"]);
+    expect(result.results[0]?.reason).toEqual({
+      kind: "present",
+      value: "effect_payload_too_large",
+    });
+    expect(result.hasMore).toBe(false);
+    // Only the two preflight reads (enumeration + ranged data) ran; the
+    // write-side receipt-init refresh/lock was skipped entirely, and no batch
+    // write was sent.
+    expect(transport.getSpreadsheetCalls).toBe(readsBefore + 2);
+    expect(transport.batchUpdateCalls).toBe(0);
+    // The receipt tab was never created by a write-side refresh/init.
+    expect(spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toBeUndefined();
+  });
+
+  it("skips the receipt refresh for a guard-mismatch no-op batch when the receipt tab is absent", async () => {
+    // A guard-mismatch/repair-reobserve plan set is a deterministic no-op: no
+    // mutation and no receipt. The receipt-init refresh (whose write-lane
+    // admission can be REFUSED under saturation) must not run for it, so the
+    // refusal cannot turn the no-op into a delivery-uncertain requeue.
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, [{
+      anchor: "anchor-1",
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    }]);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const stale = effect({
+      effectId: "stale-noop-1",
+      targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: computeSyncVisibleHash({
+        id: cell.string("u1"),
+        status: cell.string("other"),
+        __typed_sheets_deleted: cell.bool(false),
+      }),
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("new-value"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const readsBefore = transport.getSpreadsheetCalls;
+    const result = await applyRequest(provider, [stale]);
+    expect(result.results.map((entry) => entry.status)).toEqual(["guard_mismatch"]);
+    expect(result.results[0]?.reason).toEqual({
+      kind: "present",
+      value: "visible_guard_mismatch",
+    });
+    // Only the two preflight reads ran; no write-lane refresh read and no
+    // batch write, and the receipt tab was never created.
+    expect(transport.getSpreadsheetCalls).toBe(readsBefore + 2);
+    expect(transport.batchUpdateCalls).toBe(0);
+    expect(spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toBeUndefined();
+  });
+
+  it("skips the multi-route receipt refresh when every included plan is a deterministic no-op", async () => {
+    // Same guard on the combined multi-tab path: two routes whose plans are
+    // all guard mismatches carry no mutation and no receipt, so the write
+    // stage must not take the receipt-init refresh/lock at all.
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, [{
+      anchor: "anchor-sys",
+      fields: {
+        id: cell.string("s1"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    }]);
+    seedUserInputTab(spreadsheet, [{
+      anchor: "anchor-input",
+      fields: { id: cell.string("i1"), status: cell.string("pending") },
+    }]);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const staleSystem = effect({
+      effectId: "stale-multi-sys",
+      targetAnchor: "anchor-sys",
+      targetId: "entity:users:s1",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: computeSyncVisibleHash({
+        id: cell.string("s1"),
+        status: cell.string("other"),
+        __typed_sheets_deleted: cell.bool(false),
+      }),
+      fields: {
+        id: cell.string("s1"),
+        status: cell.string("new-sys"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const staleInput = effect({
+      effectId: "stale-multi-input",
+      projection: "user_input",
+      physicalSheetId: USER_INPUT_SHEET_ID,
+      targetAnchor: "anchor-input",
+      targetId: "entity:users:i1",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: computeSyncVisibleHash({
+        id: cell.string("i1"),
+        status: cell.string("other"),
+      }),
+      fields: { id: cell.string("i1"), status: cell.string("new-input") },
+    });
+    const readsBefore = transport.getSpreadsheetCalls;
+    const result = await applyRequest(provider, [staleSystem, staleInput]);
+    expect([...result.results].sort((a, b) => a.effectId.localeCompare(b.effectId))
+      .map((entry) => entry.status)).toEqual(["guard_mismatch", "guard_mismatch"]);
+    // ONE shared preflight enumeration + ONE shared ranged read across both
+    // routes; no write-lane refresh read and no batch write.
+    expect(transport.getSpreadsheetCalls).toBe(readsBefore + 2);
+    expect(transport.batchUpdateCalls).toBe(0);
+    expect(spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toBeUndefined();
   });
 
   it("measures the SDK-wrapped wire body, so wrapper overhead trims the batch", async () => {
@@ -1886,25 +3150,87 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(classifyTransportOutcome(invalid).kind).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
   });
 
-  it("maps gaxios-shaped failures in classifyGoogleSheetsApiError", () => {
-    const http = classifyGoogleSheetsApiError({
+  it("maps plain and class-like gaxios failures without weakening the raw boundary", () => {
+    // Keep the existing plain shaped fixture contract intact.
+    const plain = classifyGoogleSheetsApiError({
       code: 400,
       response: { status: 400, data: { error: { status: "INVALID_ARGUMENT" } } },
     });
-    expect(http).toMatchObject({
+    expect(plain).toMatchObject({
       status: { kind: "present", value: 400 },
       remoteCode: { kind: "present", value: "INVALID_ARGUMENT" },
     });
-    expect(http.code).toBe(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR);
-    const network = classifyGoogleSheetsApiError({ code: "ECONNRESET", message: "socket hang up" });
+    expect(plain.code).toBe(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR);
+
+    // Real GaxiosError instances expose status at the top level; their
+    // response status and nested API status must remain available too.
+    const topLevelHttp = classifyGoogleSheetsApiError(new GaxiosLikeError("bad request", {
+      status: 400,
+      response: { data: { error: { status: "INVALID_ARGUMENT" } } },
+    }));
+    expect(topLevelHttp).toMatchObject({
+      code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+      status: { kind: "present", value: 400 },
+      remoteCode: { kind: "present", value: "INVALID_ARGUMENT" },
+    });
+
+    // Also preserve the nested response.status form when no top-level status
+    // is present.
+    const nestedHttp = classifyGoogleSheetsApiError(new GaxiosLikeError("not found", {
+      response: { status: 404, data: { error: { status: "NOT_FOUND" } } },
+    }));
+    expect(nestedHttp).toMatchObject({
+      code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+      status: { kind: "present", value: 404 },
+      remoteCode: { kind: "present", value: "NOT_FOUND" },
+    });
+
+    expect(parseRawErrorRecord(new GaxiosLikeError("class instance"))).toBeDefined();
+    expect(parseRawErrorRecord(null)).toBeUndefined();
+    expect(parseRawErrorRecord([])).toBeUndefined();
+    expect(parseRawErrorRecord("not an object")).toBeUndefined();
+
+    const network = classifyGoogleSheetsApiError(new GaxiosLikeError("socket hang up", {
+      code: "ECONNRESET",
+    }));
     expect(network.code).toBe(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR);
-    const timeout = classifyGoogleSheetsApiError({ code: "ETIMEDOUT", message: "timeout of 60000ms exceeded" });
+    const timeout = classifyGoogleSheetsApiError(new GaxiosLikeError("timeout of 60000ms exceeded", {
+      code: "ETIMEDOUT",
+    }));
     expect(timeout.code).toBe(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT);
   });
 
-  it("enforces request-start intervals separately for reads and writes", async () => {
+  it("classifies HTTP 408 as retryable exactly like the shared transport boundary", () => {
+    // The shared classifier treats 408 as delivery-uncertain (the request
+    // may have committed before the timeout); the transport's own telemetry
+    // bucket must agree so log consumers never see a proven retryable
+    // timeout as a non-retryable rejection.
+    expect(isRetryableTransportStatus(408)).toBe(true);
+    expect(isRetryableTransportStatus(429)).toBe(true);
+    expect(isRetryableTransportStatus(500)).toBe(true);
+    expect(isRetryableTransportStatus(503)).toBe(true);
+    expect(isRetryableTransportStatus(undefined)).toBe(true);
+    // Proven pre-mutation rejections are never retryable.
+    expect(isRetryableTransportStatus(400)).toBe(false);
+    expect(isRetryableTransportStatus(401)).toBe(false);
+    expect(isRetryableTransportStatus(403)).toBe(false);
+    expect(isRetryableTransportStatus(404)).toBe(false);
+    // A 408 HTTP error still maps through the shared boundary as
+    // delivery-uncertain, and the transport never re-drives the mutating
+    // call itself (gaxios retry stays disabled; the durable worker owns
+    // retries).
+    const error = new GoogleSheetsApiTransportError(
+      GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+      "stub 408",
+      presentValue(408),
+      presentValue("DEADLINE"),
+    );
+    expect(classifyTransportOutcome(error).kind).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
+  });
+
+  it("paces reads against reads and writes against writes through independent limiters", async () => {
     let now = 1_000_000;
-    const started: number[] = [];
+    const events: Array<{ readonly pacing: "preflight" | "write"; readonly at: number }> = [];
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
     const transport = new StubSheetsTransport(spreadsheet);
@@ -1914,6 +3240,10 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
       now: () => now,
       sleep: async (ms: number) => {
         now += ms;
+      },
+      onRequest: (event) => {
+        const record = event as { readonly pacing: "preflight" | "write"; readonly startedAt: number };
+        events.push({ pacing: record.pacing, at: record.startedAt });
       },
     });
     const first = await applyRequest(provider, [
@@ -1934,15 +3264,102 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
       }),
     ]);
     expect(second.results[0]?.status).toBe("applied");
-    // Each applyEffects run performs one write; the second write must start at
-    // least 1,100 ms after the first write's start.
-    const writeStarts = transport.requestStarts
-      .filter((entry) => entry.kind === "write")
+    // Reads and writes each pace on their OWN lane. The preflight-paced calls are
+    // the two preflight reads per apply (the receipt-refresh reads after a
+    // stale preflight are part of the write/initialization critical section and
+    // pace on the WRITE lane, so they must NOT be counted as read-lane reads).
+    // Preflight-lane starts stay >=1,100 ms apart among themselves, write-lane
+    // starts (receipt refresh + batchUpdate) stay >=1,100 ms apart among
+    // themselves, and a write-lane call runs beside its run's last
+    // preflight-lane call, so cross-lane boundaries are allowed closer than
+    // one interval.
+    const readStarts = events
+      .filter((entry) => entry.pacing === "preflight")
       .map((entry) => entry.at);
-    expect(writeStarts).toHaveLength(2);
-    const gap = (writeStarts[1] ?? 0) - (writeStarts[0] ?? 0);
-    expect(gap).toBeGreaterThanOrEqual(1_100);
-    void started;
+    const writeStarts = events
+      .filter((entry) => entry.pacing === "write")
+      .map((entry) => entry.at);
+    // Two preflight reads per apply (2 applies); the receipt-refresh read is
+    // write-paced so it is excluded from the read lane.
+    expect(readStarts.length).toBe(4);
+    // One receipt-refresh read (apply 1, receipt absent) plus two batchUpdates.
+    // Apply 2's preflight observes the receipt tab created by apply 1, so it
+    // skips the refresh read and only writes.
+    expect(writeStarts.length).toBe(3);
+    for (let index = 1; index < readStarts.length; index += 1) {
+      expect((readStarts[index] ?? 0) - (readStarts[index - 1] ?? 0)).toBeGreaterThanOrEqual(1_100);
+    }
+    for (let index = 1; index < writeStarts.length; index += 1) {
+      expect((writeStarts[index] ?? 0) - (writeStarts[index - 1] ?? 0)).toBeGreaterThanOrEqual(1_100);
+    }
+    // The first write-lane call (the receipt refresh) runs on its own limiter
+    // beside the read lane's last preflight read: it must NOT wait out the read
+    // interval, proving the lanes are independent.
+    expect((writeStarts[0] ?? 0) - (readStarts[1] ?? 0)).toBeLessThan(1_100);
+  });
+
+  it("reports the limiter's own pacing wait on read and write request events", async () => {
+    let now = 1_000_000;
+    const events: Array<{
+      readonly operation: string;
+      readonly pacing: string;
+      readonly pacingWaitMs: number;
+    }> = [];
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    transport.now = () => now;
+    const provider = buildProvider(transport, {
+      rateLimitIntervalMs: 1_100,
+      now: () => now,
+      sleep: async (ms: number) => {
+        now += ms;
+      },
+      onRequest: (event) => {
+        const record = event as {
+          readonly operation: string;
+          readonly pacing: string;
+          readonly pacingWaitMs: number;
+        };
+        events.push({
+          operation: record.operation,
+          pacing: record.pacing,
+          pacingWaitMs: record.pacingWaitMs,
+        });
+      },
+    });
+    await applyRequest(provider, [
+      effect({
+        effectId: "wait-1",
+        targetAnchor: "anchor-1",
+        createIfMissing: true,
+        fields: { id: cell.string("u1"), status: cell.string("x") },
+      }),
+    ]);
+    await applyRequest(provider, [
+      effect({
+        effectId: "wait-2",
+        targetAnchor: "anchor-2",
+        createIfMissing: true,
+        fields: { id: cell.string("u2"), status: cell.string("x") },
+      }),
+    ]);
+    // Every read request event carries a redacted pacing wait (0 when the
+    // slot was already available), not just write events.
+    const readEvents = events.filter((entry) => entry.operation === "getSpreadsheet");
+    expect(readEvents.length).toBeGreaterThan(0);
+    for (const read of readEvents) {
+      expect(typeof read.pacingWaitMs).toBe("number");
+      expect(read.pacingWaitMs).toBeGreaterThanOrEqual(0);
+    }
+    // The second apply's batchUpdate waits out the write-lane interval since
+    // the first apply's receipt refresh; its pacingWaitMs is the limiter's own
+    // measured wait (the interval), not a clock delta.
+    const writeEvents = events.filter((entry) => entry.operation === "batchUpdate");
+    expect(writeEvents.length).toBeGreaterThan(0);
+    const waitedWrite = writeEvents.find((entry) => entry.pacingWaitMs > 0);
+    expect(waitedWrite).toBeDefined();
+    expect(waitedWrite?.pacingWaitMs).toBe(1_100);
   });
 
   it("emits redacted request telemetry without payload or identity material", async () => {
@@ -1977,6 +3394,53 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     const writeEvent = events.find((event) =>
       (event as Record<string, unknown>).operation === "batchUpdate");
     expect(writeEvent).toBeDefined();
+    // The write event carries the redacted batch diagnostics: request count,
+    // body-size estimate, requested/included effect counts, and pacing wait.
+    const write = writeEvent as Record<string, unknown>;
+    expect(typeof write.requestCount).toBe("number");
+    expect(typeof write.bodyBytes).toBe("number");
+    expect(typeof write.requestedEffects).toBe("number");
+    expect(typeof write.includedEffects).toBe("number");
+    expect(typeof write.pacingWaitMs).toBe("number");
+  });
+
+  it("never forwards an arbitrary remote code into onRequest telemetry", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const events: unknown[] = [];
+    const provider = buildProvider(transport, {
+      onRequest: (event) => events.push(event),
+    });
+    // A hostile API error body echoes a secret-like string instead of a
+    // canonical Google status name; it must collapse to the fixed safe
+    // category before it can reach the telemetry sink.
+    transport.fault = {
+      kind: "http",
+      status: 400,
+      apiErrorStatus: "ya29.jwt-abcdefghijklmnop",
+    };
+    await applyRequest(provider, [
+      effect({
+        effectId: "hostile-telemetry-1",
+        targetAnchor: "anchor-1",
+        createIfMissing: true,
+        fields: { id: cell.string("u1"), status: cell.string("x") },
+      }),
+    ]).then(
+      () => { throw new Error("expected the hostile rejection to fail the apply"); },
+      () => undefined,
+    );
+    const failureEvents = events.filter((event) =>
+      (event as Record<string, unknown>).ok === false);
+    expect(failureEvents.length).toBeGreaterThan(0);
+    for (const event of failureEvents) {
+      const record = event as Record<string, unknown>;
+      // The raw hostile string never reaches the sink; the code is either
+      // the fixed safe category or absent.
+      expect(JSON.stringify(event)).not.toContain("ya29");
+      expect(record.code).toEqual({ kind: "present", value: TRANSPORT_OUTCOME_UNKNOWN_CODE });
+    }
   });
 });
 

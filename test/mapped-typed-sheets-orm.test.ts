@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
 import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "../src/domain/model/constants.js";
 import { claimWriterLeaseWithAdapter } from "@hikoutei/ikisaki";
+import { EFFECT_STATUSES } from "@hikoutei/ikisaki";
 import {
   NORMALIZED_CELL_KINDS,
 } from "../src/shared/encoding/constants.js";
@@ -24,6 +25,8 @@ import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import { typedSheetsEntityRowBindingId } from "../src/application/orm/mapping/identity.js";
 import { planMappedObservationEntityMutation } from "../src/application/orm/mapping/observationMapping.js";
+import { projectionBaseline } from "../src/application/orm/persistence/projection/projectionEffects.js";
+import { projectionRowTargetId } from "../src/application/orm/persistence/support/helpers.js";
 import {
   createMappedTypedSheetsFlushCoordinator,
   registerTypedSheetsEntityMappings,
@@ -575,6 +578,9 @@ describe("mapped typed-sheets ORM", () => {
       applied: 2,
       failed: 0,
       blockedCandidate: 0,
+      // The deletes now group per-route (system vs input), so they dispatch
+      // as separate calls; only the one call whose response was dropped gets
+      // a response-loss read-back recovery.
       responseLossRecovered: 1,
     });
 
@@ -668,6 +674,372 @@ describe("mapped typed-sheets ORM", () => {
       effect_kind: "user_input_delete",
       status: "blocked_candidate",
     });
+  });
+
+  it("reactivates a same-PK create after a pending delete with monotonic revisions", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteStorageSchema(storage);
+    const writer = deterministicWriter("mapped-recreate-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const em = createMappedManager(storage, writer);
+
+    const order = em.create(OrderToken, { id: "order-recreate", status: "pending" });
+    em.persist(order);
+    await em.flush();
+    em.remove(order);
+    await em.flush();
+
+    // The delete is still pending; a same-PK create must immediately reuse
+    // the exact tombstoned binding and advance every revision without reset.
+    const reopened = em.create(OrderToken, { id: "order-recreate", status: "reopened" });
+    em.persist(reopened);
+    await em.flush();
+
+    await expect(storage.read(({ sql }) => sql.get<CanonicalEntityRow>(
+      "SELECT entity_revision, status FROM entity_state WHERE entity_id = ?",
+      ["order-recreate"],
+    ))).resolves.toEqual({ entity_revision: 3, status: "active" });
+    await expect(storage.read(({ sql }) => sql.all<CanonicalFieldRow>(
+      "SELECT field_name, field_revision FROM entity_field_state WHERE entity_id = ? ORDER BY field_name",
+      ["order-recreate"],
+    ))).resolves.toEqual([
+      { field_name: "id", field_revision: 2 },
+      { field_name: "status", field_revision: 2 },
+    ]);
+    await expect(storage.read(({ sql }) => sql.get<RowBindingRow>(
+      "SELECT entity_id, state FROM row_binding WHERE logical_sheet_id = ?",
+      ["orders"],
+    ))).resolves.toEqual({ entity_id: "order-recreate", state: "active" });
+
+    const effects = await readOutbox(storage);
+    const systemEffects = effects.filter((effect) => effect.physical_sheet_id === "orders-system");
+    const userEffects = effects.filter((effect) => effect.physical_sheet_id === "orders-input");
+    expect(systemEffects.map((effect) => effect.stream_sequence)).toEqual([1, 2, 3]);
+    expect(userEffects.map((effect) => effect.stream_sequence)).toEqual([1, 2, 3]);
+
+    const recreateSystem = requireEffect(systemEffects, 2);
+    const recreateSystemPayload = parseSyncProjectionEffectPayload(recreateSystem.payload_json);
+    expect(recreateSystemPayload.fields.__typed_sheets_deleted).toEqual({
+      kind: NORMALIZED_CELL_KINDS.BOOLEAN,
+      value: false,
+    });
+
+    const recreateUser = requireEffect(userEffects, 2);
+    expect(recreateUser.effect_kind).toBe("candidate_reconcile");
+    // The delete is the newest User_Input effect: the follower recreates
+    // from an empty baseline (revision 0 / empty hash, create-if-missing).
+    expect(recreateUser.expected_visible_revision).toBe(0);
+    expect(recreateUser.expected_visible_hash).toBe("");
+    const recreateUserPayload = parseSyncProjectionEffectPayload(recreateUser.payload_json);
+    expect(recreateUserPayload.fields.status).toEqual({
+      kind: NORMALIZED_CELL_KINDS.STRING,
+      value: "reopened",
+    });
+  });
+
+  it("recreates one User_Input row and clears the tombstone after a delivered delete then same-PK create", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteStorageSchema(storage);
+    const writer = deterministicWriter("mapped-recreate-delivered-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const em = createMappedManager(storage, writer);
+    const provider = new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: "orders-system",
+        sheetName: "Orders_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: "orders-input",
+        sheetName: "Orders_Input",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+    ]);
+    const order = em.create(OrderToken, { id: "order-recreate-delivered", status: "pending" });
+    em.persist(order);
+    await em.flush();
+    await expect(runEffectWorkerWithAdapter({
+      storage,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+      workerId: "mapped-recreate-delivered-worker",
+      now: 1_000,
+      maxEffects: 8,
+    })).resolves.toMatchObject({ applied: 2, failed: 0 });
+
+    em.remove(order);
+    await em.flush();
+    await expect(runEffectWorkerWithAdapter({
+      storage,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+      workerId: "mapped-recreate-delivered-worker",
+      now: 1_001,
+      maxEffects: 8,
+    })).resolves.toMatchObject({ applied: 2, failed: 0 });
+    await expect(provider.readSnapshot({
+      physicalSheetId: "orders-input",
+      sheetName: "Orders_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+    })).resolves.toMatchObject({ rows: [] });
+
+    em.create(OrderToken, { id: "order-recreate-delivered", status: "reopened" });
+    await em.flush();
+    await expect(runEffectWorkerWithAdapter({
+      storage,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+      workerId: "mapped-recreate-delivered-worker",
+      now: 1_002,
+      maxEffects: 8,
+    })).resolves.toMatchObject({ applied: 2, failed: 0 });
+
+    const userSnapshot = await provider.readSnapshot({
+      physicalSheetId: "orders-input",
+      sheetName: "Orders_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+    });
+    expect(userSnapshot.rows).toHaveLength(1);
+    expect(userSnapshot.rows[0]?.cells.status?.normalizedCell).toEqual({
+      kind: NORMALIZED_CELL_KINDS.STRING,
+      value: "reopened",
+    });
+    const systemSnapshot = await provider.readSnapshot({
+      physicalSheetId: "orders-system",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    expect(systemSnapshot.rows[0]?.cells.__typed_sheets_deleted?.normalizedCell).toEqual({
+      kind: NORMALIZED_CELL_KINDS.BOOLEAN,
+      value: false,
+    });
+  });
+
+  it("drains queued same-ID delete/recreate cycles in order with monotonic revisions", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteStorageSchema(storage);
+    const writer = deterministicWriter("mapped-delete-recreate-cycles-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const em = createMappedManager(storage, writer);
+    const provider = new FakeSyncSheetsProvider([
+      {
+        physicalSheetId: "orders-system",
+        sheetName: "Orders_System",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+        schemaVersion: 1,
+        headers: ["id", "status", "__typed_sheets_deleted"],
+      },
+      {
+        physicalSheetId: "orders-input",
+        sheetName: "Orders_Input",
+        registeredRange: "A:C",
+        projection: SYNC_PROJECTIONS.USER_INPUT,
+        schemaVersion: 1,
+        headers: ["id", "status"],
+      },
+    ]);
+
+    const id = "order-delete-recreate-cycles";
+    // Queue delete/create/delete/create on ONE id without delivering between
+    // the flushes, so the outbox holds the whole lifecycle ahead of the drain.
+    let order = em.create(OrderToken, { id, status: "pending" });
+    em.persist(order);
+    await em.flush();
+    em.remove(order);
+    await em.flush();
+    order = em.create(OrderToken, { id, status: "reopened" });
+    em.persist(order);
+    await em.flush();
+    em.remove(order);
+    await em.flush();
+
+    const STUCK: readonly string[] = [EFFECT_STATUSES.PENDING, EFFECT_STATUSES.PROCESSING,
+      EFFECT_STATUSES.BLOCKED_CANDIDATE, EFFECT_STATUSES.FAILED,
+      EFFECT_STATUSES.DELIVERY_UNCERTAIN];
+    const activeStatuses = () => storage.read(({ sql }) => sql.all<{ status: string }>(
+      "SELECT status FROM sheet_effect_outbox",
+    ));
+
+    // Drain the whole queued sequence in order. Bounded passes mirror the live
+    // worker, which may split a queued lifecycle across claim passes.
+    let report = await runEffectWorkerWithAdapter({
+      storage,
+      dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+      workerId: "mapped-delete-recreate-cycles-worker",
+      now: 1_000,
+      maxEffects: 16,
+    });
+    expect(report.failed).toBe(0);
+    for (let pass = 0; pass < 10; pass += 1) {
+      const residue = (await activeStatuses()).filter((row) => STUCK.includes(row.status));
+      if (residue.length === 0) break;
+      report = await runEffectWorkerWithAdapter({
+        storage,
+        dispatcher: new SheetsEffectDispatcher({ provider, storage }),
+        workerId: "mapped-delete-recreate-cycles-worker",
+        now: 1_000 + pass + 1,
+        maxEffects: 16,
+      });
+      expect(report.failed).toBe(0);
+    }
+
+    // No blocked, stuck, or unapplied residue after the drain.
+    const statuses = await activeStatuses();
+    for (const row of statuses) {
+      expect(STUCK).not.toContain(row.status);
+    }
+
+    // The final flush was a delete, so the User_Input projection must converge
+    // to no row and the System_State projection to a tombstoned row.
+    await expect(provider.readSnapshot({
+      physicalSheetId: "orders-input",
+      sheetName: "Orders_Input",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.USER_INPUT,
+      schemaVersion: 1,
+    })).resolves.toMatchObject({ rows: [] });
+    const systemSnapshot = await provider.readSnapshot({
+      physicalSheetId: "orders-system",
+      sheetName: "Orders_System",
+      registeredRange: "A:C",
+      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+      schemaVersion: 1,
+    });
+    expect(systemSnapshot.rows[0]?.cells.__typed_sheets_deleted?.normalizedCell).toEqual({
+      kind: NORMALIZED_CELL_KINDS.BOOLEAN,
+      value: true,
+    });
+
+    // Monotonic stream sequence across every physical sheet.
+    const effects = await readOutbox(storage);
+    for (const sheet of ["orders-system", "orders-input"]) {
+      const sequences = effects
+        .filter((effect) => effect.physical_sheet_id === sheet)
+        .map((effect) => effect.stream_sequence);
+      expect(sequences).toEqual([1, 2, 3, 4]);
+    }
+
+    // Stable binding with monotonic durable visible revisions, unchanged anchor
+    // and candidate epoch (no candidate interference across the cycle).
+    await expect(storage.read(({ sql }) => sql.all<{
+      row_binding_id: string;
+      anchor_reference: string;
+      entity_id: string | null;
+      candidate_epoch: number;
+    }>(
+      "SELECT row_binding_id, anchor_reference, entity_id, candidate_epoch FROM row_binding WHERE logical_sheet_id = ?",
+      ["orders"],
+    ))).resolves.toEqual([{
+      row_binding_id: typedSheetsEntityRowBindingId(orderMapping, id),
+      anchor_reference: `entity:${id}`,
+      entity_id: id,
+      candidate_epoch: 0,
+    }]);
+
+    const visible = await storage.read(({ sql }) => sql.get<{
+      confirmed_visible_revision: number;
+      confirmed_entity_revision: number | null;
+    }>(
+      "SELECT confirmed_visible_revision, confirmed_entity_revision FROM sheet_visible_state WHERE physical_sheet_id = 'orders-input'",
+    ));
+    expect(visible?.confirmed_visible_revision).toBeGreaterThanOrEqual(1);
+    const candidateEpochs = await storage.read(({ sql }) => sql.all<{ candidate_epoch: number }>(
+      "SELECT candidate_epoch FROM sheet_visible_field_state",
+    ));
+    expect(candidateEpochs.every((row) => row.candidate_epoch === 0)).toBe(true);
+  });
+
+  it("recreates User_Input only across safe delete predecessor statuses", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const storage = createMikroOrmSqliteAdapter(orm);
+    await migrateMikroOrmSqliteStorageSchema(storage);
+    const writer = deterministicWriter("mapped-recreate-baseline-writer");
+    await registerTypedSheetsEntityMappings(storage, [orderMapping], writer);
+    const em = createMappedManager(storage, writer);
+
+    const order = em.create(OrderToken, { id: "order-recreate-baseline", status: "pending" });
+    em.persist(order);
+    await em.flush();
+    em.remove(order);
+    await em.flush();
+
+    const userProjection = orderMapping.projections.find(
+      (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
+    );
+    if (userProjection === undefined) throw new Error("Missing user_input projection.");
+    const rowBindingId = typedSheetsEntityRowBindingId(orderMapping, "order-recreate-baseline");
+    const targetId = projectionRowTargetId(userProjection.physicalSheetId, rowBindingId);
+    const baselineFor = () => storage.read(({ sql }) => projectionBaseline(
+      sql,
+      orderMapping,
+      userProjection,
+      rowBindingId,
+      "projection_row",
+      targetId,
+    ));
+
+    const safe = [
+      EFFECT_STATUSES.PENDING,
+      EFFECT_STATUSES.PROCESSING,
+      EFFECT_STATUSES.DELIVERY_UNCERTAIN,
+      EFFECT_STATUSES.APPLIED,
+    ];
+    for (const status of safe) {
+      await storage.transaction(({ sql }) => sql.run(
+        "UPDATE sheet_effect_outbox SET status = ?, last_error_code = NULL WHERE effect_kind = 'user_input_delete'",
+        [status],
+      ));
+      await expect(baselineFor()).resolves.toEqual({
+        expectedVisibleRevision: 0,
+        expectedVisibleHash: "",
+        createIfMissing: true,
+        streamSequence: 3,
+      });
+    }
+
+    // A recoverable failed delete still allows recreation.
+    await storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = ?, last_error_code = ? WHERE effect_kind = 'user_input_delete'",
+      [EFFECT_STATUSES.FAILED, "provider_retryable_error"],
+    ));
+    await expect(baselineFor()).resolves.toMatchObject({
+      expectedVisibleRevision: 0,
+      createIfMissing: true,
+    });
+
+    // Terminal candidate, conflict, and non-recoverable failed stay fail-closed.
+    await storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = ?, last_error_code = NULL WHERE effect_kind = 'user_input_delete'",
+      [EFFECT_STATUSES.BLOCKED_CANDIDATE],
+    ));
+    await expect(baselineFor()).rejects.toThrow(/blocked/);
+    await storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = ?, last_error_code = NULL WHERE effect_kind = 'user_input_delete'",
+      [EFFECT_STATUSES.CONFLICT],
+    ));
+    await expect(baselineFor()).rejects.toThrow(/blocked/);
+    await storage.transaction(({ sql }) => sql.run(
+      "UPDATE sheet_effect_outbox SET status = ?, last_error_code = ? WHERE effect_kind = 'user_input_delete'",
+      [EFFECT_STATUSES.FAILED, "delivery_uncertain_timeout"],
+    ));
+    await expect(baselineFor()).rejects.toThrow(/blocked/);
   });
 
   it("applies an accepted canonical observation to the MikroORM entity table without an outbound loop", async () => {

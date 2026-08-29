@@ -12,6 +12,7 @@ import type {
 import { stableHash } from "../../../../../shared/encoding/stableEncode.js";
 import {
   APPLICABILITY_KINDS,
+  PRESENCE_KINDS,
 } from "../../../../../shared/state/constants.js";
 import type {
   SyncSheetsSnapshot,
@@ -56,6 +57,7 @@ export const MAPPED_USER_INPUT_INVALID_REASONS = {
   MISSING_CELL: "missing_cell",
   INVALID_CELL: "invalid_cell",
   MISSING_CANONICAL_STATE: "missing_canonical_state",
+  MISSING_VISIBLE_STATE: "missing_visible_state",
   PRIMARY_KEY_MUTATION: "primary_key_mutation",
 } as const;
 
@@ -301,6 +303,17 @@ function normalizeExistingRow(
     });
   }
   if (!changed) return { kind: "unchanged" };
+  // A changed row whose evidence can only be synthetic (the provider snapshot
+  // carries no visible revision) needs a confirmed SQLite baseline to produce
+  // valid observation evidence. Without one the row cannot enter the evaluator,
+  // so it is quarantined instead of aborting the whole polling pass.
+  const baselineVisibleHash = visibleState === undefined ? undefined : visibleState.confirmedVisibleHash;
+  if (
+    snapshotRow.visibleRevision.kind === PRESENCE_KINDS.ABSENT &&
+    (baselineVisibleHash === undefined || baselineVisibleHash.length === 0)
+  ) {
+    return { kind: "invalid", reason: MAPPED_USER_INPUT_INVALID_REASONS.MISSING_VISIBLE_STATE };
+  }
   return {
     kind: "changed",
     row: {
@@ -316,7 +329,14 @@ function normalizeExistingRow(
   };
 }
 
-function validateSnapshotCell(
+/**
+ * Validates one observed snapshot cell against the mapping's declared field
+ * contract — the EXACT gate the polling pipeline applies (a violation becomes
+ * an `invalid_cell` quarantine there). Exported so the adoption seeding can
+ * apply the same gate fail-closed at startup instead of letting the first
+ * poll quarantine every adopted row.
+ */
+export function validateSnapshotCell(
   field: TypedSheetsEntityFieldMapping,
   cell: SyncSnapshotCell | undefined,
 ): MappedUserInputInvalidReason | undefined {

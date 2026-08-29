@@ -15,10 +15,18 @@ import type { Presence } from "../../../../../shared/state/index.js";
 import { presentValue, absentValue } from "../../../../../shared/state/index.js";
 import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
 import {
+  SYNC_INVALID_PROVIDER_OPERATIONS,
+  missingTabClassification,
+  type SyncMissingTabOperation,
+} from "../../../../../application/sync/sheetsContract/errors.js";
+import {
   GOOGLE_SHEETS_API_ROW_ID_HEADER,
 } from "../constants.js";
-import { invalidProviderState } from "../errors.js";
-import { apiStringValue } from "./preflightParsing.js";
+import {
+  invalidProviderState,
+  GET_REPLY_MALFORMED,
+} from "../errors.js";
+import { apiStringValue, requireApiContainer } from "./preflightParsing.js";
 import {
   identityFromNormalizedCell,
   isBlankApiCell,
@@ -33,10 +41,23 @@ import type {
   PreflightRow,
 } from "./preflightContext.js";
 
-export function requireSheetByTitle(sheets: readonly ParsedSheet[], title: string): ParsedSheet {
+/**
+ * Resolves a tab by title or fails closed when it is absent from an
+ * enumeration. `operation` classifies the missing-tab invalid state so the
+ * caller's step (preflight vs postcondition recovery) is reported; it
+ * defaults to the preflight step.
+ */
+export function requireSheetByTitle(
+  sheets: readonly ParsedSheet[],
+  title: string,
+  operation?: SyncMissingTabOperation,
+): ParsedSheet {
   const sheet = findSheetByTitle(sheets, title);
   if (sheet === undefined) {
-    invalidProviderState(`Registered sync sheet does not exist: ${title}`);
+    invalidProviderState(
+      `Registered sync sheet does not exist: ${title}`,
+      missingTabClassification(operation ?? SYNC_INVALID_PROVIDER_OPERATIONS.PREFLIGHT),
+    );
   }
   return sheet;
 }
@@ -54,7 +75,7 @@ export function requireGridDataForSheet(
 ): ParsedGridData {
   const grid = document.grids.get(sheetId);
   if (grid === undefined) {
-    invalidProviderState(`grid data is missing for sheet ${sheetId}`);
+    invalidProviderState(`grid data is missing for sheet ${sheetId}`, GET_REPLY_MALFORMED);
   }
   return grid;
 }
@@ -247,43 +268,43 @@ export function gridRowCells(
  * Extracts the number format of one API cell, if any.
  *
  * The REST API models `CellFormat.numberFormat` as a `{ type, pattern }`
- * object, never a bare string; the user-entered format wins over the
- * effective format when both are present.
+ * object, never a bare string. Every present wrapper (`userEnteredFormat`,
+ * `effectiveFormat`, and their nested `numberFormat` containers) is
+ * validated before preference, so a valid entered format can never hide a
+ * malformed effective format; the user-entered format wins over the
+ * effective format only when both are well-formed.
  */
 export function apiCellNumberFormat(value: unknown): ParsedCellNumberFormat | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const cell = value as Record<string, unknown>;
-  const entered = cell.userEnteredFormat;
-  if (entered !== null && typeof entered === "object") {
-    const format = parseCellNumberFormat(
-      (entered as Record<string, unknown>).numberFormat,
-    );
-    if (format !== undefined) return format;
-  }
-  const effective = cell.effectiveFormat;
-  if (effective !== null && typeof effective === "object") {
-    const format = parseCellNumberFormat(
-      (effective as Record<string, unknown>).numberFormat,
-    );
-    if (format !== undefined) return format;
-  }
-  return undefined;
+  // Validate BOTH present format containers and BOTH present nested
+  // numberFormat containers up front so a malformed lower-priority effective
+  // format/numberFormat can never be hidden by a valid entered format.
+  const entered = requireApiContainer(cell.userEnteredFormat, "cell userEnteredFormat must be an object");
+  const effective = requireApiContainer(cell.effectiveFormat, "cell effectiveFormat must be an object");
+  const enteredFormat = entered === undefined
+    ? undefined
+    : parseCellNumberFormat(entered.numberFormat);
+  const effectiveFormat = effective === undefined
+    ? undefined
+    : parseCellNumberFormat(effective.numberFormat);
+  if (enteredFormat !== undefined) return enteredFormat;
+  return effectiveFormat;
 }
 
 /** Validates one SDK `numberFormat` object (type plus optional pattern). */
 function parseCellNumberFormat(value: unknown): ParsedCellNumberFormat | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    invalidProviderState("cell numberFormat must be an object");
-  }
-  const record = value as Record<string, unknown>;
+  // An omitted numberFormat is legitimate; a present null/primitive wrapper is
+  // malformed and must fail closed instead of silently becoming absent.
+  if (value === undefined) return undefined;
+  const record = requireApiContainer(value, "cell numberFormat must be an object")!;
   const type = record.type;
   if (typeof type !== "string" || type.length === 0) {
-    invalidProviderState("cell numberFormat.type is invalid");
+    invalidProviderState("cell numberFormat.type is invalid", GET_REPLY_MALFORMED);
   }
   const pattern = record.pattern;
   if (pattern !== undefined && typeof pattern !== "string") {
-    invalidProviderState("cell numberFormat.pattern is invalid");
+    invalidProviderState("cell numberFormat.pattern is invalid", GET_REPLY_MALFORMED);
   }
   return { type, pattern };
 }

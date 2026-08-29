@@ -21,8 +21,10 @@ import {
 } from "@hikoutei/ikisaki";
 import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
 import { computeSyncVisibleHash } from "../../sheetsContract/syncSheets.js";
+import type { SyncSnapshotRow } from "../../sheetsContract/syncSheets.js";
 import { SYNC_PROJECTIONS } from "../../sheetsContract/constants.js";
 import { createSystemProjectionEffect } from "../projection/ProjectionEffectFactory.js";
+import { computeObservedHash } from "./diff.js";
 import {
   READ_FAILED_HEAD_SQL,
   READ_LATEST_EFFECT_SQL,
@@ -44,7 +46,7 @@ export async function buildCorrectionEffects(
   const commitId = "reconciliation:" + context.createId();
 
   for (const drift of drifts) {
-    const baseline = await resolveCorrectionBaseline(context, drift.desired);
+    const baseline = await resolveCorrectionBaseline(context, drift.desired, drift.observed);
     if (baseline.skip) {
       // An equivalent correction is already in flight behind a terminal
       // failed head that blocks the stream. No new effect is appended; the
@@ -72,37 +74,13 @@ export async function buildCorrectionEffects(
     const expectedVisibleHash = drift.kind === "missing"
       ? ""
       : baseline.expectedVisibleHash;
-    const effect = createSystemProjectionEffect({
-      effectId: "effect:" + context.createId(),
-      commitId,
-      logicalSheetId: context.logicalSheetId,
-      physicalSheetId: context.physicalSheetId,
-      sheetName: sheet.tabName,
-      registeredRange: sheet.registeredRange,
-      projection: SYNC_PROJECTIONS.SYSTEM_STATE,
-      schemaVersion: context.schemaVersion,
-      targetKind: "entity",
-      targetId: drift.desired.entityId,
-      rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: drift.desired.rowBindingId },
-      conflictId: { kind: PRESENCE_KINDS.ABSENT },
-      targetAnchor: drift.desired.anchorReference,
-      fields: drift.desired.fields,
-      createIfMissing,
-      expectedVisibleRevision,
-      expectedVisibleHash,
-      targetEntityRevision: {
-        kind: APPLICABILITY_KINDS.APPLICABLE,
-        value: drift.desired.entityRevision,
-      },
-      targetFieldRevisionHash: {
-        kind: APPLICABILITY_KINDS.APPLICABLE,
-        value: drift.desired.fieldRevisionHash,
-      },
-      targetCanonicalCommitId: { kind: APPLICABILITY_KINDS.APPLICABLE, value: commitId },
-      streamSequence: baseline.streamSequence,
-    });
     effects.push({
-      effect,
+      effect: createRepairEffect(context, sheet, drift.desired, commitId, {
+        ...baseline,
+        createIfMissing,
+        expectedVisibleRevision,
+        expectedVisibleHash,
+      }),
       // When the stream head is a terminal failed effect, the repair must
       // supersede that head so it can become the new claimable stream head;
       // otherwise the durable predecessor guard would block it forever.
@@ -111,6 +89,94 @@ export async function buildCorrectionEffects(
     });
   }
   return effects;
+}
+
+/**
+ * One desired row awaiting a failed-head repair plus its observed snapshot
+ * evidence (a clean row whose Sheet state already matches canonical).
+ */
+export interface FailedHeadRepairTarget {
+  readonly desired: DesiredRow;
+  /**
+   * The observed snapshot row for a clean (already matching) row, so the
+   * repair plan can guard on the row's current visible hash even when no
+   * confirmed visible evidence exists. `undefined` when the row was not
+   * observable in the snapshot.
+   */
+  readonly observed: SyncSnapshotRow | undefined;
+}
+
+/**
+ * Plans the stream repair for one desired row whose Sheet state already
+ * matches canonical but whose stream is wedged behind a terminal failed head.
+ *
+ * The failed head blocks every follower through the durable predecessor
+ * guard while the drift path never plans a repair for a row that already
+ * matches, so this replans the same correction contract without a drift: an
+ * equivalent correction already in flight behind the head produces a
+ * supersede-only plan; otherwise a fresh correction effect is returned that
+ * supersedes the head when it is appended. Returns null when a concurrent
+ * pass already superseded the head.
+ */
+export async function buildFailedHeadRepairPlan(
+  context: ScanContext,
+  sheet: { readonly tabName: string; readonly registeredRange: string },
+  target: FailedHeadRepairTarget,
+  commitId: string,
+): Promise<CorrectionPlan | null> {
+  const baseline = await resolveCorrectionBaseline(context, target.desired, target.observed);
+  if (baseline.supersedeFailedEffectId === null) return null;
+  if (baseline.skip) {
+    return {
+      effect: null,
+      supersedeFailedEffectId: baseline.supersedeFailedEffectId,
+      supersedeByEffectId: baseline.supersedeByEffectId,
+    };
+  }
+  return {
+    effect: createRepairEffect(context, sheet, target.desired, commitId, baseline),
+    supersedeFailedEffectId: baseline.supersedeFailedEffectId,
+    supersedeByEffectId: baseline.supersedeByEffectId,
+  };
+}
+
+/** Builds one system_projection correction effect from a resolved baseline. */
+function createRepairEffect(
+  context: ScanContext,
+  sheet: { readonly tabName: string; readonly registeredRange: string },
+  desired: DesiredRow,
+  commitId: string,
+  baseline: CorrectionBaseline,
+): NewEffect {
+  return createSystemProjectionEffect({
+    effectId: "effect:" + context.createId(),
+    commitId,
+    logicalSheetId: context.logicalSheetId,
+    physicalSheetId: context.physicalSheetId,
+    sheetName: sheet.tabName,
+    registeredRange: sheet.registeredRange,
+    projection: SYNC_PROJECTIONS.SYSTEM_STATE,
+    schemaVersion: context.schemaVersion,
+    targetKind: "entity",
+    targetId: desired.entityId,
+    rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: desired.rowBindingId },
+    conflictId: { kind: PRESENCE_KINDS.ABSENT },
+    targetAnchor: desired.anchorReference,
+    fields: desired.fields,
+    createIfMissing: baseline.createIfMissing,
+    expectedVisibleRevision: baseline.expectedVisibleRevision,
+    expectedVisibleHash: baseline.expectedVisibleHash,
+    targetEntityRevision: {
+      kind: APPLICABILITY_KINDS.APPLICABLE,
+      value: desired.entityRevision,
+    },
+    targetFieldRevisionHash: {
+      kind: APPLICABILITY_KINDS.APPLICABLE,
+      value: desired.fieldRevisionHash,
+    },
+    targetCanonicalCommitId: { kind: APPLICABILITY_KINDS.APPLICABLE, value: commitId },
+    streamSequence: baseline.streamSequence,
+  });
 }
 
 /**
@@ -160,9 +226,10 @@ export interface CorrectionBaseline {
 export async function resolveCorrectionBaseline(
   context: ScanContext,
   desired: DesiredRow,
+  observed: SyncSnapshotRow | undefined,
 ): Promise<CorrectionBaseline> {
   return context.storage.read(({ sql }) =>
-    resolveCorrectionBaselineWithSql(sql, context, desired),
+    resolveCorrectionBaselineWithSql(sql, context, desired, observed),
   );
 }
 
@@ -170,6 +237,7 @@ export async function resolveCorrectionBaselineWithSql(
   sql: SqlExecutor,
   context: ScanContext,
   desired: DesiredRow,
+  observed: SyncSnapshotRow | undefined,
 ): Promise<CorrectionBaseline> {
   const latestEffect = await sql.get<LatestEffectSqlShape>(READ_LATEST_EFFECT_SQL, [
     context.logicalSheetId,
@@ -245,14 +313,20 @@ export async function resolveCorrectionBaselineWithSql(
       context.physicalSheetId,
       desired.rowBindingId,
     ]);
-    return withSupersede(baselineFromVisible(visible, streamSequence), failedHead);
+    return withSupersede(
+      baselineFromVisible(visible, streamSequence, observed, context.systemFields),
+      failedHead,
+    );
   }
 
   const visible = await sql.get<LatestVisibleSqlShape>(READ_LATEST_VISIBLE_STATE_SQL, [
     context.physicalSheetId,
     desired.rowBindingId,
   ]);
-  return withSupersede(baselineFromVisible(visible, POSITIVE_SAFE_INTEGER_MINIMUM), failedHead);
+  return withSupersede(
+    baselineFromVisible(visible, POSITIVE_SAFE_INTEGER_MINIMUM, observed, context.systemFields),
+    failedHead,
+  );
 }
 
 /**
@@ -284,28 +358,66 @@ function withSupersede(
 export function baselineFromVisible(
   visible: LatestVisibleSqlShape | undefined,
   streamSequence: number,
+  observed: SyncSnapshotRow | undefined,
+  systemFields: readonly string[] | undefined,
 ): CorrectionBaseline {
   if (
-    visible === undefined ||
-    visible.confirmed_visible_revision === null ||
-    visible.confirmed_snapshot_hash === null ||
-    visible.confirmed_snapshot_hash.length === 0
+    visible !== undefined &&
+    visible.confirmed_visible_revision !== null &&
+    visible.confirmed_snapshot_hash !== null &&
+    visible.confirmed_snapshot_hash.length > 0
   ) {
+    // The confirmed revision is the receipt baseline so the confirmation
+    // upsert never regresses. The expected hash, however, comes from the
+    // FRESH observed row whenever one is available: the provider write CAS
+    // is hash-only, so only the row's CURRENT visible hash can pass the
+    // guard. Using the stale confirmed hash as the guard would make a repair
+    // of an edited/drifted row fail on `visible_guard_mismatch` forever.
+    const observedHash = observed !== undefined && systemFields !== undefined
+      ? computeObservedHash(observed, systemFields)
+      : undefined;
     return {
       skip: false,
-      expectedVisibleRevision: 0,
-      expectedVisibleHash: "",
-      createIfMissing: true,
+      expectedVisibleRevision: visible.confirmed_visible_revision,
+      expectedVisibleHash:
+        observedHash !== undefined && observedHash.length > 0
+          ? observedHash
+          : visible.confirmed_snapshot_hash,
+      createIfMissing: false,
       streamSequence,
       supersedeFailedEffectId: null,
       supersedeByEffectId: null,
     };
   }
+  // No confirmed visible evidence exists (for example a response-loss
+  // restart where the local confirmation was never recorded). If the row is
+  // observable in the snapshot, build a guarded regular repair from its
+  // CURRENT visible hash instead of the old insert baseline: the row already
+  // exists, so a createIfMissing repair would be rejected as an identity/insert
+  // failure and repeat forever. Revision 0 is the receipt baseline only — the
+  // provider write CAS is hash-only, so the observed hash is the guard that
+  // prevents an unguarded overwrite.
+  if (observed !== undefined && systemFields !== undefined) {
+    const observedHash = computeObservedHash(observed, systemFields);
+    if (observedHash.length > 0) {
+      return {
+        skip: false,
+        expectedVisibleRevision: 0,
+        expectedVisibleHash: observedHash,
+        createIfMissing: false,
+        streamSequence,
+        supersedeFailedEffectId: null,
+        supersedeByEffectId: null,
+      };
+    }
+  }
+  // The safe missing-row path: no observed row and no confirmed evidence, so
+  // the repair must create the row from the empty visible baseline.
   return {
     skip: false,
-    expectedVisibleRevision: visible.confirmed_visible_revision,
-    expectedVisibleHash: visible.confirmed_snapshot_hash,
-    createIfMissing: false,
+    expectedVisibleRevision: 0,
+    expectedVisibleHash: "",
+    createIfMissing: true,
     streamSequence,
     supersedeFailedEffectId: null,
     supersedeByEffectId: null,

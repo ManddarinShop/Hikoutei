@@ -32,6 +32,8 @@ import {
 export interface TableReadTarget {
   readonly registeredRange: string;
   readonly headers: readonly string[];
+  /** §12 columnMap: adopted-route physical headers (see the definition type). */
+  readonly physicalHeaders?: readonly string[];
   readonly checkboxHeaders: readonly string[];
   /** 1-based system row-id column; undefined for projections without one. */
   readonly anchorColumn: number | undefined;
@@ -53,6 +55,7 @@ export function buildTableRowsFromGrid(
     range,
     target.headers,
     target.anchorColumn === undefined ? undefined : GOOGLE_SHEETS_API_ROW_ID_HEADER,
+    target.physicalHeaders,
   );
   const checkboxIndexes = checkboxColumnIndexes(headers, target.checkboxHeaders);
   const userFieldCount = target.anchorColumn === undefined

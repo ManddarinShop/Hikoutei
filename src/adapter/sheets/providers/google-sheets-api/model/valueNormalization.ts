@@ -11,7 +11,8 @@ import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT,
 } from "../constants.js";
-import { invalidProviderState } from "../errors.js";
+import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
+import { requireApiContainer } from "./preflightParsing.js";
 
 /** A validated whole-column registered range with 1-based column positions. */
 export interface ParsedRegisteredRange {
@@ -72,9 +73,21 @@ export function dateSerialFromIso(iso: string): number {
   return (Date.parse(iso) - Date.UTC(1899, 11, 30)) / 86_400_000;
 }
 
-/** Converts a date serial back to the canonical UTC ISO timestamp. */
+/**
+ * Converts a date serial back to the canonical UTC ISO timestamp.
+ *
+ * The epoch milliseconds are rounded to the nearest integer millisecond so
+ * floating-point noise in the serial (or in the serial-to-milliseconds
+ * product) cannot shift the rendered millisecond and break field-level
+ * compare-and-set hashes; canonical ISO timestamps are always integral
+ * milliseconds, so rounding recovers the exact value the serial was derived
+ * from. Invalid serials (NaN or non-finite) still fail exactly like the
+ * unrounded conversion: `new Date(...).toISOString()` throws a RangeError.
+ */
 export function isoFromDateSerial(serial: number): string {
-  return new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000).toISOString();
+  return new Date(
+    Math.round(Date.UTC(1899, 11, 30) + serial * 86_400_000),
+  ).toISOString();
 }
 
 /**
@@ -114,29 +127,26 @@ export function normalizedCellFromApiValue(
   value: unknown,
   numberFormat: unknown,
 ): NormalizedCell {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "object") {
-    invalidProviderState("Sheet cell value is not an object");
-  }
-  const record = value as Record<string, unknown>;
+  if (value === undefined) return null;
+  const record = requireApiContainer(value, "Sheet cell value must be an object")!;
   if (record.formulaValue !== undefined || record.errorValue !== undefined) {
-    invalidProviderState("Sheet cell contains a formula or error value");
+    invalidProviderState("Sheet cell contains a formula or error value", GET_REPLY_MALFORMED);
   }
   if (record.stringValue !== undefined) {
     if (typeof record.stringValue !== "string") {
-      invalidProviderState("Sheet cell stringValue is not a string");
+      invalidProviderState("Sheet cell stringValue is not a string", GET_REPLY_MALFORMED);
     }
     return { kind: "string", value: record.stringValue.normalize("NFC") };
   }
   if (record.boolValue !== undefined) {
     if (typeof record.boolValue !== "boolean") {
-      invalidProviderState("Sheet cell boolValue is not a boolean");
+      invalidProviderState("Sheet cell boolValue is not a boolean", GET_REPLY_MALFORMED);
     }
     return { kind: "boolean", value: record.boolValue };
   }
   if (record.numberValue !== undefined) {
     if (typeof record.numberValue !== "number" || !Number.isFinite(record.numberValue)) {
-      invalidProviderState("Sheet cell numberValue is not a finite number");
+      invalidProviderState("Sheet cell numberValue is not a finite number", GET_REPLY_MALFORMED);
     }
     if (isCanonicalDateNumberFormat(numberFormat)) {
       return { kind: "date", value: isoFromDateSerial(record.numberValue) };
@@ -146,7 +156,7 @@ export function normalizedCellFromApiValue(
   // An empty value object (or an unknown value shape) is treated as blank;
   // the API omits empty cells, so a missing value is the common blank form.
   if (Object.keys(record).length === 0) return null;
-  invalidProviderState("Sheet cell cannot be normalized");
+  invalidProviderState("Sheet cell cannot be normalized", GET_REPLY_MALFORMED);
 }
 
 /**
@@ -162,12 +172,11 @@ export function observationLiteralFromApiValue(
   value: unknown,
   numberFormat: unknown,
 ): NormalizedCell | undefined {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
+  if (value === undefined) return null;
+  const record = requireApiContainer(value, "Sheet cell value must be an object")!;
   if (record.stringValue !== undefined) {
     if (typeof record.stringValue !== "string") {
-      invalidProviderState("Sheet cell stringValue is not a string");
+      invalidProviderState("Sheet cell stringValue is not a string", GET_REPLY_MALFORMED);
     }
     return record.stringValue.length === 0
       ? null
@@ -175,13 +184,13 @@ export function observationLiteralFromApiValue(
   }
   if (record.boolValue !== undefined) {
     if (typeof record.boolValue !== "boolean") {
-      invalidProviderState("Sheet cell boolValue is not a boolean");
+      invalidProviderState("Sheet cell boolValue is not a boolean", GET_REPLY_MALFORMED);
     }
     return { kind: "boolean", value: record.boolValue };
   }
   if (record.numberValue !== undefined) {
     if (typeof record.numberValue !== "number" || !Number.isFinite(record.numberValue)) {
-      invalidProviderState("Sheet cell numberValue is not a finite number");
+      invalidProviderState("Sheet cell numberValue is not a finite number", GET_REPLY_MALFORMED);
     }
     if (isCanonicalDateNumberFormat(numberFormat)) {
       return { kind: "date", value: isoFromDateSerial(record.numberValue) };
@@ -208,20 +217,28 @@ export function computedValueFromApiCell(
   numberFormat: unknown,
 ): NormalizedCell {
   if (value === null || value === undefined) return null;
-  if (typeof value !== "object") {
-    invalidProviderState("Sheet cell value is not an object");
+  if (typeof value !== "object" || Array.isArray(value)) {
+    invalidProviderState("Sheet cell value is not an object", GET_REPLY_MALFORMED);
   }
   const record = value as Record<string, unknown>;
-  const entered = record.userEnteredValue;
-  const enteredRecord = recordLike(entered);
+  // Validate every present container before branch selection: a present
+  // effectiveValue must be a record even for literal/non-formula cells, and a
+  // present userEnteredValue likewise, so a malformed lower-priority wrapper
+  // can never fall through to the literal/blank path.
+  const enteredRecord = requireApiContainer(
+    record.userEnteredValue,
+    "Sheet cell userEnteredValue",
+  );
+  const effectiveRecord = requireApiContainer(
+    record.effectiveValue,
+    "Sheet cell effectiveValue",
+  );
   if (enteredRecord !== undefined && enteredRecord.formulaValue !== undefined) {
     if (typeof enteredRecord.formulaValue !== "string") {
-      invalidProviderState("Sheet cell formulaValue is not a string");
+      invalidProviderState("Sheet cell formulaValue is not a string", GET_REPLY_MALFORMED);
     }
-    const effective = record.effectiveValue;
-    const effectiveRecord = recordLike(effective);
     if (effectiveRecord === undefined) {
-      invalidProviderState("Sheet formula cell has no effective value");
+      invalidProviderState("Sheet formula cell has no effective value", GET_REPLY_MALFORMED);
     }
     if (effectiveRecord.errorValue !== undefined) {
       return {
@@ -231,34 +248,34 @@ export function computedValueFromApiCell(
     }
     if (effectiveRecord.stringValue !== undefined) {
       if (typeof effectiveRecord.stringValue !== "string") {
-        invalidProviderState("Sheet cell effective stringValue is not a string");
+        invalidProviderState("Sheet cell effective stringValue is not a string", GET_REPLY_MALFORMED);
       }
       return { kind: "string", value: effectiveRecord.stringValue.normalize("NFC") };
     }
     if (effectiveRecord.boolValue !== undefined) {
       if (typeof effectiveRecord.boolValue !== "boolean") {
-        invalidProviderState("Sheet cell effective boolValue is not a boolean");
+        invalidProviderState("Sheet cell effective boolValue is not a boolean", GET_REPLY_MALFORMED);
       }
       return { kind: "boolean", value: effectiveRecord.boolValue };
     }
     if (effectiveRecord.numberValue !== undefined) {
       if (typeof effectiveRecord.numberValue !== "number" ||
           !Number.isFinite(effectiveRecord.numberValue)) {
-        invalidProviderState("Sheet cell effective numberValue is not a finite number");
+        invalidProviderState("Sheet cell effective numberValue is not a finite number", GET_REPLY_MALFORMED);
       }
       if (isCanonicalDateNumberFormat(numberFormat)) {
         return { kind: "date", value: isoFromDateSerial(effectiveRecord.numberValue) };
       }
       return { kind: "number", value: effectiveRecord.numberValue };
     }
-    invalidProviderState("Sheet formula cell effective value is unsupported");
+    invalidProviderState("Sheet formula cell effective value is unsupported", GET_REPLY_MALFORMED);
   }
   if (enteredRecord !== undefined && enteredRecord.errorValue !== undefined) {
     return { kind: "string", value: errorDisplayString(record, enteredRecord) };
   }
-  const literal = observationLiteralFromApiValue(entered, numberFormat);
+  const literal = observationLiteralFromApiValue(enteredRecord, numberFormat);
   if (literal === undefined) {
-    invalidProviderState("Sheet cell value is unsupported");
+    invalidProviderState("Sheet cell value is unsupported", GET_REPLY_MALFORMED);
   }
   return literal;
 }
@@ -276,25 +293,32 @@ export function isComputedBlankCell(value: unknown, checkboxColumn: boolean): bo
   if (typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).length === 0) return true;
-  const entered = record.userEnteredValue;
-  const enteredRecord = recordLike(entered);
+  // Validate every present relevant container before the blank decision so a
+  // malformed userEnteredValue/effectiveValue wrapper fails closed instead of
+  // being treated as blank.
+  const enteredRecord = requireApiContainer(
+    record.userEnteredValue,
+    "Sheet cell userEnteredValue",
+  );
+  const effectiveRecord = requireApiContainer(
+    record.effectiveValue,
+    "Sheet cell effectiveValue",
+  );
   if (enteredRecord === undefined) {
     // Formatting-only or effective-only cells carry no user value.
     return true;
   }
   if (enteredRecord.formulaValue !== undefined) {
-    const effective = record.effectiveValue;
-    const effectiveRecord = recordLike(effective);
     if (effectiveRecord === undefined) return false;
     if (effectiveRecord.stringValue !== undefined) {
       if (typeof effectiveRecord.stringValue !== "string") {
-        invalidProviderState("Sheet cell effective stringValue is not a string");
+        invalidProviderState("Sheet cell effective stringValue is not a string", GET_REPLY_MALFORMED);
       }
       return effectiveRecord.stringValue.length === 0;
     }
     if (effectiveRecord.boolValue !== undefined) {
       if (typeof effectiveRecord.boolValue !== "boolean") {
-        invalidProviderState("Sheet cell effective boolValue is not a boolean");
+        invalidProviderState("Sheet cell effective boolValue is not a boolean", GET_REPLY_MALFORMED);
       }
       return checkboxColumn && effectiveRecord.boolValue === false;
     }
@@ -303,20 +327,20 @@ export function isComputedBlankCell(value: unknown, checkboxColumn: boolean): bo
   if (enteredRecord.errorValue !== undefined) return false;
   if (enteredRecord.stringValue !== undefined) {
     if (typeof enteredRecord.stringValue !== "string") {
-      invalidProviderState("Sheet cell stringValue is not a string");
+      invalidProviderState("Sheet cell stringValue is not a string", GET_REPLY_MALFORMED);
     }
     return enteredRecord.stringValue.length === 0;
   }
   if (enteredRecord.numberValue !== undefined) {
     if (typeof enteredRecord.numberValue !== "number" ||
         !Number.isFinite(enteredRecord.numberValue)) {
-      invalidProviderState("Sheet cell numberValue is not a finite number");
+      invalidProviderState("Sheet cell numberValue is not a finite number", GET_REPLY_MALFORMED);
     }
     return false;
   }
   if (enteredRecord.boolValue !== undefined) {
     if (typeof enteredRecord.boolValue !== "boolean") {
-      invalidProviderState("Sheet cell boolValue is not a boolean");
+      invalidProviderState("Sheet cell boolValue is not a boolean", GET_REPLY_MALFORMED);
     }
     return checkboxColumn && enteredRecord.boolValue === false;
   }
@@ -346,7 +370,7 @@ function errorDisplayString(
   const errorRecord = recordLike(error);
   const message = errorRecord?.message;
   if (typeof message === "string" && message.length > 0) return message;
-  invalidProviderState("Sheet error cell has no display string");
+  invalidProviderState("Sheet error cell has no display string", GET_REPLY_MALFORMED);
 }
 
 /**
@@ -394,5 +418,8 @@ export function isBlankApiCell(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   if (typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return Object.keys(record).length === 0 || record.userEnteredValue === undefined;
+  if (Object.keys(record).length === 0) return true;
+  const entered = requireApiContainer(record.userEnteredValue, "Sheet cell userEnteredValue must be an object");
+  requireApiContainer(record.effectiveValue, "Sheet cell effectiveValue must be an object");
+  return entered === undefined;
 }

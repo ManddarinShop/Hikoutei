@@ -2,8 +2,8 @@
  * Full sync provider over the Google Sheets REST API.
  *
  * Implements every provider capability the sync runtime needs with ONE
- * provider instance (one transport, one read limiter, one write limiter, one
- * telemetry sink): the outbound effect worker (fast append, applyEffects,
+ * provider instance (one transport, separate read and write request-start
+ * limiters, one telemetry sink): the outbound effect worker (fast append, applyEffects,
  * postcondition recovery), projection provisioning, values-only table reads,
  * row-anchor assignment, and full metadata snapshots. The service-account
  * bootstrap mode uses this provider exclusively and needs no Apps Script.
@@ -20,10 +20,21 @@
  *
  * Request pacing is per transport call: every `getSpreadsheet` (preflight
  * enumeration, preflight data, observation reads, post-reads, table reads,
- * provisioning reads) and every `batchUpdate` acquires its class limiter and
- * emits one redacted telemetry event.
+ * provisioning reads) and every `batchUpdate` acquires a request-start limiter
+ * and emits one redacted telemetry event. Reads serialize only against reads;
+ * writes only against writes, so a read and a write can start concurrently
+ * (an idempotent get + a committed batchUpdate are safe to overlap) while
+ * same-class bursts can never outpace the interval. Admission is bounded
+ * SEPARATELY by an independent maximum admission wait
+ * (`requestStartMaxWaitMs`, default 5,000 ms — not derived from the
+ * interval): a request whose PREDICTED WAIT for a slot exceeds that bound
+ * is refused before any SDK call with the stable delivery-uncertain
+ * `google_sheets_api_request_start_refused` error, so an arbitrarily long
+ * limiter queue can never make a request wait past its effect lease — the
+ * durable worker requeues instead.
  */
 
+import { randomUUID } from "node:crypto";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
@@ -34,6 +45,7 @@ import type {
   ReadSyncEffectPostconditionsRequest,
   ReadSyncSnapshotRequest,
   ReadSyncTableRowsRequest,
+  PreparedApplyEffects,
   SyncEffectPostcondition,
   SyncEffectPostconditionResult,
   SyncEffectResult,
@@ -64,13 +76,16 @@ import {
   GoogleSheetsApiHttpTransport,
   type GoogleSheetsApiTransport,
 } from "./transport/googleSheetsApiTransport.js";
-import { RequestStartLimiter } from "./transport/rateLimiter.js";
+import { RequestStartLimiter, ReadQoSScheduler } from "./transport/rateLimiter.js";
 import type { GoogleSheetsApiProviderDeps } from "./operations/shared.js";
+import { PromiseTailLock } from "./operations/shared.js";
 import {
   fastAppendRows,
 } from "./operations/fastAppend.js";
 import {
   applyEffects,
+  applyPreparedEffects as applyPreparedEffectsOp,
+  preflightApplyEffects as preflightApplyEffectsOp,
   readEffectPostcondition,
   readEffectPostconditions,
 } from "./operations/applyEffects.js";
@@ -91,12 +106,24 @@ import {
 /** Redacted telemetry event emitted for every transport request. */
 export interface GoogleSheetsApiRequestEvent {
   readonly operation: "getSpreadsheet" | "batchUpdate";
+  /** Pacing lane the request-start wait used (`polling`, `preflight`, or `write`). */
+  readonly pacing: "polling" | "preflight" | "write";
   readonly operationCount: number;
   readonly startedAt: number;
   readonly durationMs: number;
   readonly ok: boolean;
   readonly httpStatus: Presence<number>;
   readonly code: Presence<string>;
+  /** Pacing wait before the request-start slot was granted (0 when none). */
+  readonly pacingWaitMs?: number;
+  /** Number of batchUpdate requests in the written batch. */
+  readonly requestCount?: number;
+  /** Serialized batchUpdate body-size estimate in bytes. */
+  readonly bodyBytes?: number;
+  /** Effects requested for this write batch. */
+  readonly requestedEffects?: number;
+  /** Effects included in the written batch (the budget-fitting prefix). */
+  readonly includedEffects?: number;
 }
 
 /** Provider options without the bootstrap-supplied spreadsheet and routes. */
@@ -112,8 +139,21 @@ export interface GoogleSheetsApiProviderOptions {
    * lease.
    */
   readonly readTimeoutMs?: number;
-  /** Minimum interval between request starts per class; defaults to 1,100 ms. */
+  /**
+   * Minimum interval between request starts per class; defaults to 2,000 ms.
+   * This only SPACES request starts; admission is governed by the separate
+   * independent bound `requestStartMaxWaitMs`, which refuses a request whose
+   * predicted wait exceeds it before any SDK call (delivery-uncertain,
+   * requeued durably).
+   */
   readonly rateLimitIntervalMs?: number;
+  /**
+   * Maximum admitted wait for one request-start slot before refusal;
+   * defaults to `REQUEST_START_MAX_ADMISSION_WAIT_MS` (5 s), independent of
+   * the pacing interval. Lets a postcondition read wait a few intervals for
+   * the shared write limiter instead of being refused by the read burst.
+   */
+  readonly requestStartMaxWaitMs?: number;
   /** Serialized batchUpdate byte budget; defaults to ~2 MB. */
   readonly maxBatchBytes?: number;
   /** Injectable clock for limiters and telemetry. */
@@ -134,11 +174,14 @@ export interface GoogleSheetsApiSyncProviderOptions extends GoogleSheetsApiProvi
  * Full sync provider over the Sheets REST API: outbound effects, provisioning,
  * table reads, anchors, and snapshots behind the shared provider contracts.
  *
- * All reads share one read limiter; all writes share one write limiter; the
- * worker-level append throttle stays enabled on top in service mode via the
- * bootstrap's bulk worker options. Provisioning runs at startup before the
- * worker, and observation anchors are the only metadata mutations outside
- * effect batches.
+ * All reads share ONE request-start timeline (a read QoS scheduler with
+ * weighted polling/preflight fairness) and all writes share ONE write
+ * request-start limiter, so reads serialize only against reads and writes
+ * only against writes (an idempotent read and a committed write may start
+ * concurrently); the worker-level append throttle stays enabled on
+ * top in service mode via the bootstrap's bulk worker options. Provisioning
+ * runs at startup before the worker, and observation anchors are the only
+ * metadata mutations outside effect batches.
  *
  * The class is a thin facade: every method body lives in an operation module
  * under `operations/` and receives the immutable wiring from `this.deps`.
@@ -156,8 +199,11 @@ export class GoogleSheetsApiSyncProvider
   private readonly transportTimeoutMs: number;
   private readonly readTimeoutMs: number;
   private readonly maxBatchBytes: number;
-  private readonly readLimiter: RequestStartLimiter;
+  private readonly readScheduler: ReadQoSScheduler;
   private readonly writeLimiter: RequestStartLimiter;
+  /** Bounded admission: independent max request-start wait (default 5,000
+   * ms), separate from the pacing interval. */
+  private readonly maxRequestStartWaitMs: number;
   private readonly now: () => number;
   private readonly onRequest: ((event: GoogleSheetsApiRequestEvent) => void) | undefined;
   private readonly deps: GoogleSheetsApiProviderDeps;
@@ -204,6 +250,8 @@ export class GoogleSheetsApiSyncProvider
       invalidProviderRequest("Google Sheets API sync provider", "maxBatchBytes is invalid");
     }
     const intervalMs = options.rateLimitIntervalMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS;
+    const maxAdmissionWaitMs = options.requestStartMaxWaitMs
+      ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_MAX_ADMISSION_WAIT_MS;
     this.spreadsheetId = options.spreadsheetId;
     this.definitions = options.definitions;
     this.transport = options.transport ?? new GoogleSheetsApiHttpTransport({ requestTimeoutMs });
@@ -211,7 +259,7 @@ export class GoogleSheetsApiSyncProvider
     this.readTimeoutMs = readTimeoutMs;
     this.maxBatchBytes = maxBatchBytes;
     this.now = options.now ?? Date.now;
-    this.readLimiter = new RequestStartLimiter({
+    this.readScheduler = new ReadQoSScheduler({
       intervalMs,
       now: this.now,
       ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
@@ -221,15 +269,26 @@ export class GoogleSheetsApiSyncProvider
       now: this.now,
       ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     });
+    // Admission bound is independent of the pacing interval: a postcondition
+    // read (paced on the WRITE limiter) is allowed to wait a few intervals for
+    // the write slot, while the interval still spaces request STARTS for quota
+    // safety. Deeper reservations than the bound are refused before any SDK
+    // call (delivery-uncertain, requeued by the durable worker) instead of
+    // waiting out an unbounded queue.
+    this.maxRequestStartWaitMs = maxAdmissionWaitMs;
     this.onRequest = options.onRequest;
     this.deps = {
       spreadsheetId: this.spreadsheetId,
+      providerNonce: "provider:" + randomUUID(),
+      preparedStateRegistry: new WeakSet<object>(),
+      receiptInitLock: new PromiseTailLock(),
       definitions: this.definitions,
       transport: this.transport,
       readTimeoutMs: this.readTimeoutMs,
       maxBatchBytes: this.maxBatchBytes,
-      readLimiter: this.readLimiter,
+      readScheduler: this.readScheduler,
       writeLimiter: this.writeLimiter,
+      maxRequestStartWaitMs: this.maxRequestStartWaitMs,
       now: this.now,
       onRequest: this.onRequest,
     };
@@ -252,6 +311,20 @@ export class GoogleSheetsApiSyncProvider
   /** Applies regular update/delete/create effects through one atomic batch. */
   public async applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
     return applyEffects(this.deps, request);
+  }
+
+  /** Read+plan stage of one apply request; never mutates the sheet. */
+  public async preflightApplyEffects(
+    request: ApplySyncEffectsRequest,
+  ): Promise<PreparedApplyEffects> {
+    return preflightApplyEffectsOp(this.deps, request);
+  }
+
+  /** Write+verify stage that consumes preflight prepared state. */
+  public async applyPreparedEffects(
+    prepared: PreparedApplyEffects,
+  ): Promise<ApplySyncEffectsResult> {
+    return applyPreparedEffectsOp(this.deps, prepared);
   }
 
   /** Classifies one response-loss effect through a fresh target+receipt read. */

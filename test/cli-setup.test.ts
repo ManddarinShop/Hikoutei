@@ -9158,12 +9158,21 @@ describe("isModuleMainEntry", () => {
 });
 
 describe("package and entry regression", () => {
-  it("maps the bin to dist/cli/setup.js with a node shebang", () => {
+  it("maps the bin to the subcommand router (dist/cli/index.js) with a node shebang", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
       bin: Record<string, string>;
     };
-    expect(pkg.bin.hikoutei).toBe("./dist/cli/setup.js");
+    // The bin moved to the router so `hikoutei adopt` coexists with the
+    // legacy bare-flag setup spelling (routed back to the setup flow).
+    expect(pkg.bin.hikoutei).toBe("./dist/cli/index.js");
 
+    const router = readFileSync(new URL("../src/cli/index.ts", import.meta.url), "utf8");
+    expect(router.split("\n")[0]).toBe("#!/usr/bin/env node");
+    expect(router).toContain('head === "adopt"');
+    expect(router).toContain('head === "setup"');
+
+    // The setup entry keeps its shebang for direct `node dist/cli/setup.js`
+    // invocations (back-compat when the bin WAS the setup CLI).
     const entry = readFileSync(new URL("../src/cli/setup.ts", import.meta.url), "utf8");
     expect(entry.split("\n")[0]).toBe("#!/usr/bin/env node");
   });

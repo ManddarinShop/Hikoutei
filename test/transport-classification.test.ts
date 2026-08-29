@@ -5,8 +5,10 @@ import {
 } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
 import {
   TRANSPORT_OUTCOME_KINDS,
+  TRANSPORT_OUTCOME_UNKNOWN_CODE,
   classifyTransportOutcome,
   isDeliveryUncertainOutcome,
+  sanitizeTransportRemoteCode,
 } from "../src/application/sync/sheetsContract/transportOutcome.js";
 import { absentValue, presentValue } from "../src/shared/state/index.js";
 
@@ -85,5 +87,83 @@ describe("transport classification", () => {
     expect(isDeliveryUncertainOutcome(classifyTransportOutcome(
       transportError(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR, 403, "PERMISSION_DENIED"),
     ))).toBe(false);
+  });
+});
+
+describe("transport remote-code sanitization", () => {
+  it("preserves allowlisted Google API status codes", () => {
+    for (const code of [
+      "INVALID_ARGUMENT",
+      "RESOURCE_EXHAUSTED",
+      "PERMISSION_DENIED",
+      "NOT_FOUND",
+      "DEADLINE_EXCEEDED",
+      "UNAUTHENTICATED",
+      "FAILED_PRECONDITION",
+      "ABORTED",
+      "INTERNAL",
+      "UNAVAILABLE",
+    ]) {
+      expect(sanitizeTransportRemoteCode(code)).toBe(code);
+      expect(classifyTransportOutcome(
+        transportError(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR, 403, code),
+      ).code).toEqual({ kind: "present", value: code });
+    }
+  });
+
+  it("preserves known Node network codes", () => {
+    for (const code of ["ECONNRESET", "ENOTFOUND", "ETIMEDOUT", "EAI_AGAIN", "ECONNREFUSED"]) {
+      expect(sanitizeTransportRemoteCode(code)).toBe(code);
+      expect(classifyTransportOutcome(
+        transportError(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR, undefined, code),
+      ).code).toEqual({ kind: "present", value: code });
+    }
+  });
+
+  it("maps hostile, malformed, and secret-like remote codes to the fixed safe category", () => {
+    const hostile = [
+      "ya29.jwt-abcdefghijklmnop",
+      "service@project.iam.gserviceaccount.com",
+      "https://docs.google.com/spreadsheets/d/1AbC/edit",
+      "/Users/me/.config/gcloud/application_default_credentials.json",
+      "INVALID_ARGUMENT extra junk",
+      "RATE_LIMIT_EXCEEDED quota project 12345",
+      "400",
+      "DEADLINE",
+      "",
+    ];
+    for (const code of hostile) {
+      expect(sanitizeTransportRemoteCode(code), code).toBe(TRANSPORT_OUTCOME_UNKNOWN_CODE);
+    }
+    // Non-string input is never emitted either.
+    expect(sanitizeTransportRemoteCode(undefined)).toBe(TRANSPORT_OUTCOME_UNKNOWN_CODE);
+    expect(sanitizeTransportRemoteCode(42)).toBe(TRANSPORT_OUTCOME_UNKNOWN_CODE);
+    expect(sanitizeTransportRemoteCode(null)).toBe(TRANSPORT_OUTCOME_UNKNOWN_CODE);
+  });
+
+  it("never forwards a hostile remote code into the classified outcome", () => {
+    const outcome = classifyTransportOutcome(
+      transportError(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR, 400, "ya29.jwt-secret"),
+    );
+    // Kind semantics are untouched: the proven pre-mutation rejection stays
+    // explicit; only the untrusted code collapses to the safe category.
+    expect(outcome.kind).toBe(TRANSPORT_OUTCOME_KINDS.EXPLICIT_REMOTE_FAILURE);
+    expect(outcome.httpStatus).toEqual({ kind: "present", value: 400 });
+    expect(outcome.code).toEqual({ kind: "present", value: TRANSPORT_OUTCOME_UNKNOWN_CODE });
+
+    const network = classifyTransportOutcome(
+      transportError(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR, undefined, "https://evil.example/x"),
+    );
+    expect(network.kind).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
+    expect(network.code).toEqual({ kind: "present", value: TRANSPORT_OUTCOME_UNKNOWN_CODE });
+  });
+
+  it("keeps an absent remote code absent and allowlisted local codes intact", () => {
+    expect(classifyTransportOutcome(
+      transportError(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT),
+    ).code).toEqual({ kind: "absent" });
+    for (const code of Object.values(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES)) {
+      expect(sanitizeTransportRemoteCode(code)).toBe(code);
+    }
   });
 });

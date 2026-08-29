@@ -24,15 +24,36 @@ import {
   createEffectWorkerSupervisor,
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
   FAST_APPEND_BATCH_CANDIDATE_LIMIT,
-  safeErrorMessage,
+  readOutboxScanReadinessWithAdapter,
   type EffectWorkerSupervisor,
   type WorkerReport,
 } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../outbound/SheetsEffectDispatcher.js";
 import type { SyncTimingSink } from "../telemetry/syncTiming.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+  stableConsoleErrorTag,
+} from "../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../../../shared/observability/logEvents.js";
 
 /** Minimum delay between System_State reconciliation scans attached to the loop. */
 const DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS = 60_000;
+
+/**
+ * Delay before the FIRST reconciliation scan for the real Google provider.
+ *
+ * A cold-start service opens with the whole initial backlog already in the
+ * outbox; an immediate scan would compete with the System_State drain on the
+ * shared request-start limiter. Delaying the first scan by one cadence (and
+ * additionally gating it on outbox drain readiness, see below) keeps the
+ * scanner out of the critical convergence path. Injected test providers keep
+ * the generic supervisor default of 0 (immediate first scan).
+ */
+const DEFAULT_INITIAL_RECONCILIATION_DELAY_MS = 60_000;
 
 /** Inputs shared with the composition root's runtime and remote provider. */
 export interface CreateEffectSupervisorInput {
@@ -114,6 +135,24 @@ export function createEffectSupervisor(
     workerId: effectWorkerId,
     reconciliation: {
       intervalMs: options.reconciliationIntervalMs ?? DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS,
+      // Only the real Google Sheets provider starts with a large initial
+      // backlog; delay its first scan by one cadence so it cannot compete
+      // with the System_State drain on the shared limiter. Injected test
+      // providers keep the generic default (first scan immediately).
+      ...(options.googleSheetsApi === undefined
+        ? {}
+        : { initialReconciliationDelayMs: DEFAULT_INITIAL_RECONCILIATION_DELAY_MS }),
+      // First-scan gate: defer ONLY while normal claimable drain work is
+      // pending/processing/delivery_uncertain. A terminal failed head
+      // (repair-needed) must NEVER defer the scanner — the scanner is the
+      // repair net that supersedes the failed head, and deferring would
+      // wedge the stream forever. After the first scan the gate is no longer
+      // consulted, so busy-outbox scans keep the legacy lazy-repair
+      // behavior (isOutboxIdle stays omitted by design).
+      isFirstScanReady: async () => {
+        const readiness = await readOutboxScanReadinessWithAdapter(storage);
+        return readiness.status !== "busy";
+      },
       // isOutboxIdle is optional on the supervisor contract and the scanner
       // already defers while corrections are in flight, so it is omitted.
       run: runSystemStateReconciliation,
@@ -121,16 +160,96 @@ export function createEffectSupervisor(
         ? {}
         : { onReport: (report: { readonly effectsEnqueued: number }) =>
           options.onReconciliationReport!(report) }),
-      onError: options.onReconciliationError ??
-        ((error: unknown) => {
-          // A scan failure must never stop the effect loop; classify and log
-          // it exactly like the graceful-shutdown lease warnings.
-          console.warn(
-            `[sync-service] system state reconciliation scan failed: ${safeErrorMessage(error)}`,
-          );
-        }),
+      onError: (error: unknown) => {
+        // A scan failure must never stop the effect loop; record it in the
+        // internal log first (fail-open), then keep the existing console
+        // warning / custom-hook behavior unchanged.
+        logHikouteiInternalEvent({
+          event: HIKOUTEI_LOG_EVENTS.RECONCILIATION_SCAN_FAILED,
+          level: "warn",
+          component: HIKOUTEI_LOG_COMPONENTS.RECONCILIATION,
+          ...describeErrorForInternalLog(error),
+          retryable: true,
+        });
+        if (options.onReconciliationError !== undefined) {
+          options.onReconciliationError(error);
+          return;
+        }
+        // Default console diagnostics emit only the stable allowlisted
+        // class/code tag — never the raw message, which can embed provider
+        // payload fragments, spreadsheet IDs, emails, or paths. Injected
+        // hooks keep receiving the full error unchanged.
+        console.warn(
+          `[sync-service] system state reconciliation scan failed: ${stableConsoleErrorTag(error)}`,
+        );
+      },
     },
   });
+}
+
+/**
+ * Wraps the effect-worker pass hooks with redacted boundary logging.
+ *
+ * The summary fires only for non-idle passes (claimed work, failures,
+ * conflicts, or recoveries) so an idle loop adds no log noise. Custom hooks
+ * keep running unchanged after the log write; logging is fail-open and can
+ * never alter worker results.
+ */
+function wrapEffectWorkerHooks(options: InternalSyncServiceOptions): {
+  readonly onReport: (report: WorkerReport) => void;
+  readonly onError: (error: unknown) => void;
+} {
+  return {
+    onReport: (report: WorkerReport) => {
+      if (isNonIdleWorkerReport(report)) {
+        logHikouteiInternalEvent({
+          event: HIKOUTEI_LOG_EVENTS.OUTBOX_PASS_SUMMARY,
+          level: "info",
+          component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
+          counts: {
+            selected: report.selected,
+            claimed: report.claimed,
+            applied: report.applied,
+            blockedCandidate: report.blockedCandidate,
+            superseded: report.superseded,
+            conflicted: report.conflicted,
+            failed: report.failed,
+            deferred: report.deferred,
+            requeued: report.requeued,
+            replanned: report.replanned,
+            responseLossRecovered: report.responseLossRecovered,
+            expiredLeasesRecovered: report.expiredLeasesRecovered,
+          },
+        });
+      }
+      options.onEffectReport?.(report);
+    },
+    onError: (error: unknown) => {
+      logHikouteiInternalEvent({
+        event: HIKOUTEI_LOG_EVENTS.OUTBOX_PASS_FAILED,
+        level: "error",
+        component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
+        ...describeErrorForInternalLog(error),
+      });
+      options.onEffectError?.(error);
+    },
+  };
+}
+
+/** True when a pass did work worth one summary line (idling is silent). */
+function isNonIdleWorkerReport(report: WorkerReport): boolean {
+  return report.selected > 0 ||
+    report.claimed > 0 ||
+    report.applied > 0 ||
+    report.blockedCandidate > 0 ||
+    report.superseded > 0 ||
+    report.conflicted > 0 ||
+    report.failed > 0 ||
+    report.deferred > 0 ||
+    report.requeued > 0 ||
+    report.replanned > 0 ||
+    report.responseLossRecovered > 0 ||
+    report.expiredLeasesRecovered > 0;
 }
 
 function optionalWorkerOptions(options: InternalSyncServiceOptions): {
@@ -150,7 +269,7 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   // timeout bounds the WHOLE sequential dispatch (two preflight reads plus
   // one write), so it sums the write timeout and two read timeouts instead
   // of the single write timeout. Injected test providers carry no transport
-  // timeouts and keep the bounded 20-item window with no bulk throttle.
+  // timeouts and keep the bounded 100-item window with no bulk throttle.
   const outboundTimeoutMs = options.googleSheetsApi === undefined
     ? undefined
     : (options.googleSheetsApi.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS) +
@@ -170,7 +289,6 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
         appendDispatchIntervalMs: APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
       }),
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
-    ...(options.onEffectReport === undefined ? {} : { onReport: options.onEffectReport }),
-    ...(options.onEffectError === undefined ? {} : { onError: options.onEffectError }),
+    ...wrapEffectWorkerHooks(options),
   };
 }

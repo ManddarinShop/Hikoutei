@@ -118,6 +118,8 @@ export default defineConfig({
           { text: "Benchmarks", link: "/guide/benchmarks" },
           { text: "Limitations", link: "/guide/limitations" },
           { text: "Project status", link: "/guide/status" },
+          { text: "Runtime boundary validation", link: "/guide/internal-validation" },
+          { text: "Soak testing", link: "/guide/soak-testing" },
         ],
       },
       {
@@ -164,6 +166,8 @@ export default defineConfig({
           { text: "Benchmarks", link: "/guide/benchmarks" },
           { text: "Limitations", link: "/guide/limitations" },
           { text: "Project status", link: "/guide/status" },
+          { text: "Runtime boundary validation", link: "/guide/internal-validation" },
+          { text: "Soak testing", link: "/guide/soak-testing" },
         ],
       },
       {

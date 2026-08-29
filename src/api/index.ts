@@ -3,9 +3,10 @@
  *
  * This barrel is the only application-facing entrypoint. It exposes the stable
  * entity-lifecycle API — `defineTypedSheetsEntity`, `createTypedSheets`, the
- * `Hikoutei` runtime, the `EntityManager`, and the typed errors — and nothing
- * else. Sheet synchronization, storage, provider, ORM, and protocol types are
- * internal service implementation details.
+ * `Hikoutei` runtime, the `EntityManager`, and the typed errors — plus the
+ * sync auto-start entrypoint `createTypedSheetsWithSync()` with existing-sheet
+ * adoption support (result union + read-only adoption report types; the sync
+ * service graph itself stays lazy-loaded and internal).
  */
 
 export {
@@ -24,6 +25,20 @@ export type {
 } from "./entity.js";
 export { createTypedSheets } from "./Hikoutei.js";
 export type { CreateTypedSheetsOptions, Hikoutei } from "./Hikoutei.js";
+export { createTypedSheetsWithSync } from "./syncRuntime.js";
+export type {
+  CreateTypedSheetsWithSyncOptions,
+  AdoptSpec,
+  AdoptEntitySpec,
+  AdoptionRunReport,
+  AdoptionEntityReport,
+  AdoptionColumnBinding,
+  AdoptionProblem,
+  LocalSyncRuntimeResult,
+  RunningSyncServiceResult,
+  AdoptDryRunResult,
+  TypedSheetsWithSyncResult,
+} from "./syncRuntime.js";
 export type {
   EntityManager,
   HikouteiFilter,

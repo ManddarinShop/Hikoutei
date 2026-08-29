@@ -425,12 +425,14 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
   public async applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
     this.applyEffectsCallCount += 1;
     this.lastApplyPostconditionMode = request.postconditionMode;
-    const sheet = this.requireMatchingSheet(request);
     const limit = this.maxEffectsPerApply.kind === PRESENCE_KINDS.PRESENT
       ? this.maxEffectsPerApply.value
       : request.effects.length;
     const selected = request.effects.slice(0, limit);
+    // Effects may span multiple tabs after spreadsheet-level route grouping;
+    // route each effect to its own registered sheet.
     const results = selected.map((effect) => {
+      const sheet = this.requireMatchingSheetForEffect(effect);
       const result = this.applyOne(sheet, effect);
       if (
         request.postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED &&
@@ -444,14 +446,13 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
       }
       return result;
     });
-    const snapshotHash = this.sheetSnapshotHash(sheet);
     if (this.dropResponse) {
       this.dropResponse = false;
       throw new FakeSyncResponseLossError();
     }
     return {
       results,
-      snapshotHash: presentValue(snapshotHash),
+      snapshotHash: absentValue(),
       hasMore: selected.length < request.effects.length,
     };
   }
@@ -459,27 +460,35 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
   /** Appends rows without CAS, metadata, or retry deduplication. */
   public async fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult> {
     this.fastAppendCallCount += 1;
-    const sheet = this.requireMatchingSheet(request);
-    // Mirror the real provider's fail-closed contract: the built-in append
-    // path never materializes anchor metadata, so a sheet without a
-    // registered identity field cannot locate or guard its rows on replay.
-    const identityField = sheet.identityField;
-    if (identityField === undefined) {
-      throw new SyncSheetsContractError(
-        SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-        `fake fast append requires a registered identityField for sheet ${sheet.physicalSheetId}`,
-      );
-    }
     const limit = this.maxEffectsPerApply.kind === PRESENCE_KINDS.PRESENT
       ? this.maxEffectsPerApply.value
       : request.rows.length;
     const selected = request.rows.slice(0, limit);
-    // Mirror the built-in append preflight: identity uniqueness is verified
-    // for the whole batch before any row is written, so a duplicated identity
-    // fails closed without mutating the sheet. Replay entries (already
-    // receipted effects) are exempt exactly like the real provider.
-    this.assertAppendIdentityAvailability(sheet, identityField, selected);
-    const results = selected.map((row) => this.fastAppendOne(sheet, row));
+    // Rows may span multiple tabs after dashboard phase route grouping; the
+    // route is derived from each row (falling back to the request route).
+    const bySheet = new Map<string, { readonly sheet: FakeSheet; readonly rows: FastAppendRow[] }>();
+    for (const row of selected) {
+      const sheet = this.requireMatchingSheetForRow(request, row);
+      const bucket = bySheet.get(sheet.physicalSheetId) ?? { sheet, rows: [] };
+      bucket.rows.push(row);
+      bySheet.set(sheet.physicalSheetId, bucket);
+    }
+    const results: FastAppendRowResult[] = [];
+    for (const { sheet, rows } of bySheet.values()) {
+      const identityField = sheet.identityField;
+      if (identityField === undefined) {
+        throw new SyncSheetsContractError(
+          SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+          `fake fast append requires a registered identityField for sheet ${sheet.physicalSheetId}`,
+        );
+      }
+      // Mirror the built-in append preflight: identity uniqueness is verified
+      // for the whole batch before any row is written, so a duplicated identity
+      // fails closed without mutating the sheet. Replay entries (already
+      // receipted effects) are exempt exactly like the real provider.
+      this.assertAppendIdentityAvailability(sheet, identityField, rows);
+      results.push(...rows.map((row) => this.fastAppendOne(sheet, row)));
+    }
     if (this.dropResponse) {
       this.dropResponse = false;
       throw new FakeSyncResponseLossError();
@@ -1271,6 +1280,41 @@ export class FakeSyncSheetsProvider implements SyncSheetsProvider {
       throw new SyncSheetsContractError(
         SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
         "fake provider request does not match registered sheet",
+      );
+    }
+    return sheet;
+  }
+
+  /** Routes one effect to its own registered sheet (multi-tab apply). */
+  private requireMatchingSheetForEffect(effect: SyncProjectionEffect): FakeSheet {
+    const sheet = this.requireSheet(effect.physicalSheetId);
+    if (
+      sheet.sheetName !== effect.payload.sheetName ||
+      sheet.registeredRange !== effect.payload.registeredRange ||
+      sheet.projection !== effect.projection ||
+      sheet.schemaVersion !== effect.payload.schemaVersion
+    ) {
+      throw new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
+        "fake provider effect does not match registered sheet",
+      );
+    }
+    return sheet;
+  }
+
+  /** Routes one append row to its own sheet (multi-tab fast append). */
+  private requireMatchingSheetForRow(request: FastAppendRowsRequest, row: FastAppendRow): FakeSheet {
+    const physicalSheetId = row.physicalSheetId ?? request.physicalSheetId;
+    const sheet = this.requireSheet(physicalSheetId);
+    if (
+      sheet.sheetName !== (row.sheetName ?? request.sheetName) ||
+      sheet.registeredRange !== (row.registeredRange ?? request.registeredRange) ||
+      sheet.projection !== (row.projection ?? request.projection) ||
+      sheet.schemaVersion !== (row.schemaVersion ?? request.schemaVersion)
+    ) {
+      throw new SyncSheetsContractError(
+        SYNC_SHEETS_ERROR_CODES.INVALID_FAKE_PROVIDER_INPUT,
+        "fake provider row does not match registered sheet",
       );
     }
     return sheet;

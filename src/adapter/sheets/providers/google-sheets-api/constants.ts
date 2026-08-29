@@ -34,12 +34,43 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
   /** Upper bound for read timeouts; reads must stay well under the lease. */
   MAX_READ_TIMEOUT_MS: 60_000,
   /**
-   * Minimum interval between request starts of one class (reads or writes).
-   * Google Sheets quota is enforced per 100-second windows; the provider
-   * spaces request starts so a burst cannot exhaust the read or write budget
-   * before the worker's own backoff reacts.
+   * Minimum interval between request starts of the WHOLE provider: reads
+   * and writes use independent request-start limiters, so reads serialize
+   * only against reads and writes only against writes, and a read and a
+   * write can start concurrently. Google Sheets quota is enforced per
+   * 100-second windows; the 2,500 ms default paces each class to about 40
+   * starts per 100 s, leaving headroom inside the default per-user/
+   * per-project 100-second quotas for the observation and provisioning
+   * reads that run beside the worker. The exact quota stays provider and
+   * environment dependent, so operators can override the interval through
+   * the internal sync env key
+   * (HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS) or the internal provider option;
+   * the safe default is intentionally conservative. The interval is part of
+   * the effect-lease headroom contract: a worst-case dispatch (two
+   * preflight/postcondition reads plus one write, each paced and timed out,
+   * with up to one full interval of first-slot wait) must finish inside the
+   * lease with the 30-second provider headroom, and the internal service
+   * validation rejects an override that would let pacing outlive the lease
+   * (the env override is bounded to the largest default-safe interval,
+   * ~10 s). Admission is BOUNDED to one interval per request start: a call
+   * whose slot lies more than one interval out is refused before any SDK
+   * call with the stable delivery-uncertain
+   * `google_sheets_api_request_start_refused` error (the durable worker
+   * requeues), so an arbitrarily long queue of concurrent lock-free polling
+   * reads can never make a write wait past its lease.
    */
-  REQUEST_START_INTERVAL_MS: 1_100,
+  REQUEST_START_INTERVAL_MS: 800,
+  /**
+   * Maximum admitted wait for ONE request-start slot before the bounded
+   * admission refuses it (delivery-uncertain, requeued durably). This is
+   * intentionally larger than the pacing interval: a postcondition read
+   * that verifies a just-written row shares the write limiter, and it must
+   * be allowed to wait a few intervals for the write slot instead of being
+   * refused by the read burst. The interval still spaces request STARTS
+   * (quota safety); this bound only caps how long a call queued behind a
+   * saturated limiter will wait before refusing rather than firing unpaced.
+   */
+  REQUEST_START_MAX_ADMISSION_WAIT_MS: 5_000,
   /**
    * The provider stops adding effects to one batchUpdate once the serialized
    * body would exceed this budget and returns `hasMore` for the suffix. The
@@ -48,12 +79,21 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
    */
   MAX_BATCH_REQUEST_BYTES: 2 * 1024 * 1024,
   /** Regular effect batch cap, matching the Apps Script MAX_EFFECTS boundary. */
-  MAX_EFFECTS_PER_REQUEST: 20,
+  MAX_EFFECTS_PER_REQUEST: 300,
   /** Append row cap per request, matching the worker's bulk claim window. */
   MAX_APPEND_ROWS_PER_REQUEST: 1_000,
 } as const;
 
 /** Hidden receipt tab shared with the Apps Script effect operations. */
+/**
+ * Canonical Google API remote status that proves a range names a missing
+ * tab. The refresh's fixed receipt-tab range is only treated as still-absent
+ * when the API rejects it with this exact status; any other 400 (or a 400
+ * without a remote status) must fail closed instead of being read as proof
+ * the receipt tab is absent.
+ */
+export const GOOGLE_SHEETS_API_MISSING_RANGE_REMOTE_CODE = "INVALID_ARGUMENT";
+
 export const GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME =
   "__typed_sheets_internal_effect_receipts";
 

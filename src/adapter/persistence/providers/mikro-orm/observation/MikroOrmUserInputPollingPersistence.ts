@@ -448,6 +448,7 @@ function toQuarantineReason(
     case "invalid_cell":
       return QUARANTINE_REASONS.INVALID_CELL;
     case "missing_canonical_state":
+    case "missing_visible_state":
       return QUARANTINE_REASONS.INVALID_SNAPSHOT_METADATA;
     case "primary_key_mutation":
       return QUARANTINE_REASONS.IDENTITY_TAMPERING;

@@ -3,11 +3,13 @@
  *
  * This internal module owns the mapping from environment variables to the
  * sync service bootstrap: spreadsheet URL parsing, service-account credentials
- * file validation, polling interval parsing, projection auto-generation from
- * entity descriptors, and fail-closed startup failure classification. It is
- * never re-exported from `src/index.ts`; the public factory calls it only when
- * `HIKOUTEI_SYNC_SPREADSHEET_URL` is set, so local-only users never load the
- * sync module graph.
+ * file validation, polling interval parsing, request-start pacing override
+ * parsing, projection auto-generation from entity descriptors, and fail-closed
+ * startup failure classification. It is re-exported to applications ONLY
+ * through the lazy public wrapper `src/api/syncRuntime.ts`, so importing the
+ * package root never loads the sync module graph; the public factory calls it
+ * only when `HIKOUTEI_SYNC_SPREADSHEET_URL` is set, so local-only users never
+ * load the sync module graph either.
  *
  * The env reader, transport, and diagnostic sink are injectable so tests can
  * exercise every startup branch with a stub transport, a fake env, and a
@@ -40,11 +42,37 @@ import {
   GoogleSheetsApiTransportError,
 } from "../../../adapter/sheets/providers/google-sheets-api/errors.js";
 import { columnLetters } from "../../../adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import {
+  GOOGLE_SHEETS_API_DEFAULTS,
+} from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
 import { PRESENCE_KINDS } from "../../../shared/state/index.js";
+import {
+  DEFAULT_EFFECT_LEASE_DURATION_MS,
+  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
+} from "@hikoutei/ikisaki";
 import {
   SYNC_CONFLICT_PROJECTION_REGISTERED_RANGE,
 } from "../sheetsContract/conflictProjection.js";
 import { SyncSheetsContractError } from "../sheetsContract/errors.js";
+import {
+  ExistingSheetAdoptionDryRunReportError,
+  type ExistingSheetAdoptionRunReport,
+  type ExistingSheetAdoptionSpec,
+} from "./adopt/existingSheetAdoption.js";
+import {
+  SYNC_SERVICE_ERROR_CODES,
+  SyncServiceError,
+} from "./errors.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+} from "../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+  HIKOUTEI_LOG_STABLE_CLASSES,
+  HIKOUTEI_LOG_STABLE_CODES,
+} from "../../../shared/observability/logEvents.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,
@@ -64,18 +92,94 @@ export const SYNC_ENV_KEYS = {
   POLLING_INTERVAL_MS: "HIKOUTEI_SYNC_POLLING_INTERVAL_MS",
   /** Optional metadata safety full-scan cadence in ms; defaults to 60 seconds. */
   FULL_SCAN_INTERVAL_MS: "HIKOUTEI_SYNC_FULL_SCAN_INTERVAL_MS",
+  /**
+   * Optional request-start pacing in ms for the direct provider's
+   * independent read and write request-start limiters; absent uses the safe
+   * default (2,000 ms). Internal only — never part of the root public API.
+   */
+  RATE_LIMIT_INTERVAL_MS: "HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS",
 } as const;
 
 /** Default polling cadence applied when the interval env vars are absent. */
 export const DEFAULT_SYNC_POLLING_INTERVAL_MS = 60_000;
 /** Default safety full-scan cadence applied when the interval env vars are absent. */
 export const DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS = 60_000;
+/** Lower bound for the sync request-start pacing env override (2 seconds). */
+export const MIN_SYNC_RATE_LIMIT_INTERVAL_MS = 2_000;
+/**
+ * Upper bound for the sync request-start pacing env override.
+ *
+ * A worst-case effect dispatch performs THREE sequential paced transport
+ * calls (two preflight/postcondition reads plus one batch write). The effect
+ * lease must still cover the whole sequence with the 30-second provider
+ * headroom, and a dispatch can wait up to one FULL interval for its first
+ * slot because the request's own read or write class limiter may hold a prior
+ * reservation — admission
+ * is BOUNDED to one interval, so a request whose slot lies further out is
+ * refused before any SDK call (delivery-uncertain, requeued durably)
+ * instead of waiting past the lease. With the DEFAULT lease, write timeout,
+ * and read timeout the interval must satisfy
+ * `120s > 60s + I + 2 * max(10s, I) + 30s`, i.e. `I < 10s`. Below
+ * the 10 s read timeout the two read slots cost 2 x 10 s and the interval
+ * adds once, so the bound is `I < 120 - 60 - 2x10 - 30 = 10 s`; at or
+ * above the read timeout the interval dominates (`3I < 30s` has no
+ * solution at or above 10 s), so the below-read-slot branch is binding.
+ * The ceiling below is derived from those defaults (10,000 - 1 = 9,999 ms)
+ * and the service-level lease-headroom validation applies the same math to
+ * the ACTIVE lease and timeouts, so an override that could let pacing push
+ * a dispatch past the lease is rejected with a stable startup failure
+ * instead of risking lease expiry and duplicate remote delivery.
+ */
+export const MAX_SYNC_RATE_LIMIT_INTERVAL_MS = Math.max(
+  MIN_SYNC_RATE_LIMIT_INTERVAL_MS,
+  Math.floor(
+    DEFAULT_EFFECT_LEASE_DURATION_MS -
+      GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS -
+      EFFECT_LEASE_PROVIDER_HEADROOM_MS -
+      2 * GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS,
+  ) - 1,
+);
 
 /** Diagnostic log levels emitted by the auto-start bridge. */
 export type SyncDiagnosticLevel = "info" | "error";
 
-/** Diagnostic sink; defaults to console. Never receives secrets or full URLs. */
+/** Diagnostic sink; defaults to console. Receives only stable class/code summaries, never full failure messages. */
 export type SyncDiagnostic = (level: SyncDiagnosticLevel, message: string) => void;
+
+/** One entity's existing-sheet adoption request (public adopt API, design D1/D4). */
+export interface AdoptEntitySpec {
+  /** The existing tab that becomes this entity's User_Input route (D1). */
+  readonly tabName: string;
+  /**
+   * Sheet header that carries the business key. `"auto"` (or absent) prefers
+   * the column matching the entity's primary-key property and falls back to
+   * appending a generated PK column (D4). MVP: an alias whose header differs
+   * from the PK property name is blocked with IDENTITY_ALIAS_UNSUPPORTED.
+   */
+  readonly identityFrom?: string | "auto";
+  /**
+   * Tab name for the freshly provisioned System_State projection. Defaults to
+   * `<tabName>_System`.
+   */
+  readonly systemStateTabName?: string;
+  /**
+   * Tab name for the freshly provisioned Sync_Conflicts projection. Defaults
+   * to `<tabName>_Conflicts`.
+   */
+  readonly syncConflictsTabName?: string;
+  /**
+   * §12: explicit header → property bindings for sheets whose headers differ
+   * from the property names (adoption-only). Mapped headers take precedence
+   * over name matching; a mapped PK header absorbs the identityFrom alias.
+   */
+  readonly columnMap?: Readonly<Record<string, string>>;
+}
+
+/** Public existing-sheet adoption spec (design `design/existing-sheet-adoption-design.md` §4.1). */
+export interface AdoptSpec {
+  readonly mode: "dry-run" | "adopt";
+  readonly entities: Readonly<Record<string, AdoptEntitySpec>>;
+}
 
 /** Internal auto-start options; none are part of the root application contract. */
 export interface SyncAutoStartOptions {
@@ -87,6 +191,14 @@ export interface SyncAutoStartOptions {
   readonly transport?: GoogleSheetsApiTransport;
   /** Injectable diagnostic sink for tests; defaults to console. */
   readonly onDiagnostic?: SyncDiagnostic;
+  /**
+   * Existing-sheet adoption (MVP, direct mode only). In `dry-run` mode the
+   * result is `{ kind: "adopt-dry-run", report }` — the spreadsheet was not
+   * mutated and no service started. In `adopt` mode the adopted tab becomes
+   * the entity's User_Input route, every existing row is bound + seeded
+   * (fail-closed, D5), and the normal sync service starts.
+   */
+  readonly adopt?: AdoptSpec;
 }
 
 /** Local-only result: no sync service was started (env absent or blank). */
@@ -104,7 +216,16 @@ export interface RunningSyncServiceResult {
   readonly service: InternalSyncService;
 }
 
-export type TypedSheetsWithSyncResult = LocalSyncRuntimeResult | RunningSyncServiceResult;
+/**
+ * Adoption dry-run result: the read-only report was produced and the
+ * spreadsheet was NOT mutated; no sync service was started.
+ */
+export interface AdoptDryRunResult {
+  readonly kind: "adopt-dry-run";
+  readonly report: ExistingSheetAdoptionRunReport;
+}
+
+export type TypedSheetsWithSyncResult = LocalSyncRuntimeResult | RunningSyncServiceResult | AdoptDryRunResult;
 
 /** Required service-account fields validated before any remote contact. */
 const REQUIRED_CREDENTIAL_FIELDS = ["type", "client_email", "private_key"] as const;
@@ -192,27 +313,158 @@ export async function createTypedSheetsWithSync(
       SYNC_ENV_KEYS.FULL_SCAN_INTERVAL_MS,
       DEFAULT_SYNC_FULL_SCAN_INTERVAL_MS,
     );
-    const projections = buildSyncProjections(options.entities, spreadsheetId);
+    // The pacing env override applies ONLY to the real Google Sheets
+    // provider: it is resolved and validated only when no fake transport is
+    // injected, so local/fake suites stay immune to a misconfigured or
+    // invalid override in the host env.
+    const rateLimitIntervalMs = options.transport === undefined
+      ? resolveSyncRateLimitIntervalMs(env)
+      : undefined;
+    const projections = withAdoptedTabOverrides(
+      buildSyncProjections(options.entities, spreadsheetId),
+      options.entities,
+      options.adopt,
+    );
     const service = await createInternalSyncService({
       dbName: options.dbName,
       entities: [...options.entities],
       projections,
-      // Injected transports are a test-only affordance; the fast pacing keeps
-      // stub-based suites wall-clock cheap. Production builds the real
-      // ADC-backed transport with its default pacing.
+      // Injected transports are a test-only affordance; ZERO pacing keeps
+      // stub-based suites wall-clock cheap AND immune to the bounded
+      // admission (interval 0 never waits and never refuses). The pacing env
+      // override applies ONLY to the real Google Sheets provider (no injected
+      // transport): a valid override is plumbed through, and the production
+      // path builds the real ADC-backed transport with the provider's safe
+      // default (2,000 ms) when the override is absent. Fake transports never
+      // consult HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS, so local/fake suites
+      // stay immune to a misconfigured or invalid override in the host env.
       googleSheetsApi: options.transport === undefined
-        ? {}
-        : { transport: options.transport, rateLimitIntervalMs: 1 },
+        ? (rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs })
+        : {
+            transport: options.transport,
+            rateLimitIntervalMs: 0,
+          },
       pollingIntervalMs,
       pollingFullScanIntervalMs,
+      ...(options.adopt === undefined ? {} : { adopt: toInternalAdoptSpec(options.adopt) }),
+    });
+    logHikouteiInternalEvent({
+      event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_STARTED,
+      level: "info",
+      component: HIKOUTEI_LOG_COMPONENTS.SYNC_AUTOSTART,
+      counts: { entities: options.entities.length },
     });
     return { kind: "sync", hikoutei: service.hikoutei, service };
   } catch (error: unknown) {
+    // Adoption dry-run is a SUCCESSFUL outcome surfaced as a report, not a
+    // failure: the bridge converts the internal fail-closed startup throw
+    // into the `{ kind: "adopt-dry-run", report }` result variant — but ONLY
+    // for `mode: "dry-run"`. A BLOCKED report under `mode: "adopt"` must stay
+    // fail-closed (D5): adopt failures are loud, diagnosed startup failures
+    // with the problem codes in the message, never a silent result shape.
+    if (error instanceof ExistingSheetAdoptionDryRunReportError) {
+      if (options.adopt?.mode === "adopt") {
+        const blocked = error.report.entities
+          .flatMap((entity) => entity.problems.map((problem) => `${entity.entityName}: ${problem.code}`));
+        // The report rides on the error as an untyped `adoptionReport`
+        // property: typing it here would pull the internal adoption types
+        // into api/errors.ts and leak the SDK packages into the public
+        // declaration graph (public-surface audit rule). Terra N1.
+        const failure = new HikouteiError(
+          HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+          `existing-sheet adoption is blocked by the dry-run analysis (${blocked.join("; ") || "no detail"}); run mode "dry-run" for the full report.`,
+        );
+        Object.assign(failure, { adoptionReport: error.report });
+        return raiseDiagnosed(diagnostic, failure);
+      }
+      const result: AdoptDryRunResult = { kind: "adopt-dry-run", report: error.report };
+      return result;
+    }
+    // The cell-kind-mismatch startup failure carries the precise diagnosis
+    // (rows, fields, declared vs observed kinds); re-raise it with the full
+    // message instead of the generic "Sync start failed" wrapper so the
+    // public path is actionable (internal callers keep the stable
+    // SyncServiceError code).
+    if (error instanceof SyncServiceError
+      && error.code === SYNC_SERVICE_ERROR_CODES.ADOPTION_CELL_KIND_MISMATCH) {
+      return raiseDiagnosed(
+        diagnostic,
+        new HikouteiError(HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED, error.message),
+      );
+    }
     const failure = error instanceof HikouteiError
       ? error
       : classifySyncStartupFailure(error, spreadsheetId, clientEmail);
     return raiseDiagnosed(diagnostic, failure);
   }
+}
+
+/**
+ * Re-derives the auto-generated projections for the adopted entities: the
+ * adopted tab replaces the generated `<Entity>_Input` User_Input route (the
+ * adoption gate requires the adopt tab to EQUAL the userInput route), and the
+ * fresh System_State / Sync_Conflicts tabs derive from the adopted tab name
+ * (defaults `<tab>_System` / `<tab>_Conflicts`) unless explicitly overridden.
+ * Non-adopted entities keep their generated routes untouched.
+ */
+function withAdoptedTabOverrides(
+  base: InternalSyncProjectionConfig,
+  entities: readonly HikouteiEntity[],
+  adopt: AdoptSpec | undefined,
+): InternalSyncProjectionConfig {
+  if (adopt === undefined) return base;
+  const descriptorByName = new Map(entities.map((entity) => {
+    const descriptor = getEntityDescriptor(entity);
+    return [descriptor.name, descriptor];
+  }));
+  const configs = { ...base.entities };
+  for (const [entityName, spec] of Object.entries(adopt.entities)) {
+    const config = configs[entityName];
+    if (config === undefined) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+        `adopt.entities references entity "${entityName}" that is not part of this runtime (declared: ${[...descriptorByName.keys()].join(", ") || "none"}).`,
+      );
+    }
+    // NOTE: configs is derived from buildSyncProjections(options.entities),
+    // so a config existing implies its descriptor exists — no second check.
+    if (config.userInput === undefined) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+        `adopt.entities entity "${entityName}" has no generated User_Input route to replace.`,
+      );
+    }
+    configs[entityName] = {
+      ...config,
+      userInput: { ...config.userInput, tabName: spec.tabName },
+      systemState: {
+        ...config.systemState,
+        tabName: spec.systemStateTabName ?? `${spec.tabName}_System`,
+      },
+      syncConflicts: {
+        ...config.syncConflicts,
+        tabName: spec.syncConflictsTabName ?? `${spec.tabName}_Conflicts`,
+      },
+    };
+  }
+  return { spreadsheetId: base.spreadsheetId, entities: configs };
+}
+
+/** Narrows the public adopt spec to the internal bootstrap spec (same D1/D4 shape). */
+function toInternalAdoptSpec(adopt: AdoptSpec): ExistingSheetAdoptionSpec {
+  const entities: Record<string, {
+    readonly tabName: string;
+    readonly identityFrom?: string | "auto";
+    readonly columnMap?: Readonly<Record<string, string>>;
+  }> = {};
+  for (const [entityName, spec] of Object.entries(adopt.entities)) {
+    entities[entityName] = {
+      tabName: spec.tabName,
+      ...(spec.identityFrom === undefined ? {} : { identityFrom: spec.identityFrom }),
+      ...(spec.columnMap === undefined ? {} : { columnMap: spec.columnMap }),
+    };
+  }
+  return { mode: adopt.mode, entities };
 }
 
 /**
@@ -402,16 +654,132 @@ function parseIntervalEnv(
   return value;
 }
 
+/**
+ * Resolves the sync request-start pacing env override, or undefined.
+ *
+ * `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` is the internal override for the
+ * direct provider's independent read and write request-start limiters. Absent or
+ * blank means the provider's safe default (2,000 ms) applies; a present
+ * value must be a plain decimal integer between 2,000 ms and
+ * `MAX_SYNC_RATE_LIMIT_INTERVAL_MS` (~10 s). The ceiling is the largest
+ * interval whose worst-case three-request paced dispatch still finishes
+ * inside the default effect lease (120 s) with the default write timeout
+ * (60 s), read timeout (10 s), and provider headroom (30 s): a dispatch
+ * can wait up to one full interval for its first slot because the
+ * request's own class limiter may hold a prior reservation, so the strict
+ * default-safe bound
+ * is `120s > 60s + I + 2 * max(10s, I) + 30s` and a larger interval could
+ * let pacing push the dispatch past the lease and risk duplicate remote
+ * delivery. Values outside those bounds (including hex,
+ * exponent, signed, padded, fractional, and non-numeric forms) fail closed
+ * with the stable startup code so a mistyped override can never silently
+ * drop pacing to a burst or outlive the effect lease. The key stays internal
+ * and is never part of the root public API.
+ */
+export function resolveSyncRateLimitIntervalMs(
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  const raw = env[SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  if (!/^\d+$/.test(raw)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      `Sync start failed: ${SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS} must be an integer between ` +
+        `${MIN_SYNC_RATE_LIMIT_INTERVAL_MS} and ${MAX_SYNC_RATE_LIMIT_INTERVAL_MS} ms — current value: ${raw}`,
+    );
+  }
+  const value = Number(raw);
+  if (
+    !Number.isSafeInteger(value) ||
+    value < MIN_SYNC_RATE_LIMIT_INTERVAL_MS ||
+    value > MAX_SYNC_RATE_LIMIT_INTERVAL_MS
+  ) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      `Sync start failed: ${SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS} must be an integer between ` +
+        `${MIN_SYNC_RATE_LIMIT_INTERVAL_MS} and ${MAX_SYNC_RATE_LIMIT_INTERVAL_MS} ms — current value: ${raw}`,
+    );
+  }
+  return value;
+}
+
 function raiseDiagnosed(diagnostic: SyncDiagnostic, failure: HikouteiError): never {
-  diagnostic("error", failure.message);
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_FAILED,
+    level: "error",
+    component: HIKOUTEI_LOG_COMPONENTS.SYNC_AUTOSTART,
+    ...describeErrorForInternalLog(failure),
+  });
+  // EVERY diagnostic sink — injected or default — receives only the
+  // stable class/code summary. Full failure messages can embed the
+  // service-account email, spreadsheet ID, credential path, or raw
+  // provider text and must never reach a sink; the thrown HikouteiError
+  // always carries the full public message regardless of the sink.
+  try {
+    diagnostic("error", stableStartupDiagnostic(failure));
+  } catch {
+    // Fail-open: a throwing diagnostic sink (injected or default) can
+    // never replace the classified startup failure. The original
+    // HikouteiError — with its stable class and machine-readable code —
+    // is preserved and rethrown unchanged, exactly as if the sink had
+    // succeeded.
+  }
   throw failure;
 }
 
+/** Stable error-class allowlist backing sink diagnostics (see logEvents.ts). */
+const STABLE_CLASS_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CLASSES);
+/** Stable error-code allowlist backing sink diagnostics (see logEvents.ts). */
+const STABLE_CODE_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CODES);
+
+/**
+ * Stable redacted startup summary for diagnostic sinks: class and code
+ * only, each checked against the shared stable allowlists.
+ *
+ * `failure.name` and `failure.code` are runtime strings that could carry
+ * secret-like text (paths, emails, tokens) if an unexpected error shape
+ * ever reached the sink path, so unknown or malformed values collapse to
+ * the fixed `unknown` class/code. The full public message is carried by
+ * the thrown HikouteiError alone and never reaches any sink.
+ */
+export function stableStartupDiagnostic(failure: HikouteiError): string {
+  const described = describeErrorForInternalLog(failure);
+  const errorClass = STABLE_CLASS_ALLOWLIST.has(described.errorClass)
+    ? described.errorClass
+    : "unknown";
+  const code = described.code !== undefined && STABLE_CODE_ALLOWLIST.has(described.code)
+    ? described.code
+    : "unknown";
+  return `Hikoutei sync autostart failed (class=${errorClass}, code=${code})`;
+}
+
+/**
+ * Shape gate for the default sink's error line (defense in depth).
+ *
+ * The error path receives only the stable class/code summary built by
+ * `stableStartupDiagnostic`, but the gate re-validates the exact summary
+ * shape before printing: an unexpected raw message (which could embed a
+ * path, email, spreadsheet ID, or provider text) collapses to the
+ * level-only fallback and never reaches the console.
+ */
+const STABLE_SUMMARY_SHAPE =
+  /^Hikoutei sync autostart failed \(class=(unknown|[A-Za-z][A-Za-z0-9]*), code=(unknown|[A-Za-z][A-Za-z0-9_]*)\)$/;
+
 function defaultDiagnostic(level: SyncDiagnosticLevel, message: string): void {
   if (level === "info") {
+    // The info path emits only the static local-mode notice.
     console.info(message);
-  } else {
+    return;
+  }
+  // The error path emits the already-redacted stable class/code summary
+  // (never the full failure message — that stays on the thrown
+  // HikouteiError). The shape gate above keeps the defense in depth:
+  // anything that is not the exact stable summary shape falls back to the
+  // level-only notice.
+  if (STABLE_SUMMARY_SHAPE.test(message)) {
     console.error(message);
+  } else {
+    console.error(`[hikoutei] sync autostart failed (level=${level})`);
   }
 }
 

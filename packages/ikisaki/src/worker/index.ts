@@ -51,11 +51,13 @@ export type {
   CandidateGateResult,
   Dispatcher,
   DispatchRequest,
+  EffectLeaseRenewal,
   FastAppendEffectResult,
   FastAppendOutcome,
   Postcondition,
   PostconditionOutcome,
   PostconditionResult,
+  PreparedDispatch,
   RepairReplanFactory,
   RepairReplanRequest,
 } from "./dispatcher.js";

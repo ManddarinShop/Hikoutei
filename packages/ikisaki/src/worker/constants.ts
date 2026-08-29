@@ -30,7 +30,7 @@ export const DEFAULT_EFFECT_LEASE_DURATION_MS = 120_000;
  * does not turn one route into repeated partial (`hasMore`) responses and the
  * deferred/requeue churn they cause.
  */
-export const EFFECT_BATCH_LIMIT = 20;
+export const EFFECT_BATCH_LIMIT = 300;
 /**
  * Maximum number of effects leased before dispatch starts. Selection may use a
  * larger SQLite upper bound, but a worker pass must not lease an unbounded
@@ -42,7 +42,7 @@ export const MAX_IN_FLIGHT_EFFECTS = EFFECT_BATCH_LIMIT;
  * real provider runtime. The bulk append operation writes the whole reserved
  * target range in one `spreadsheets.batchUpdate` request (an atomic
  * target-plus-receipt batch), so a bulk pass can claim this many append
- * candidates while regular and recovery effects keep the bounded 20-effect
+ * candidates while regular and recovery effects keep the bounded 100-effect
  * window below.
  */
 export const FAST_APPEND_BATCH_CANDIDATE_LIMIT = 1_000;

@@ -20,6 +20,71 @@ export interface EffectRouteGroup {
   readonly items: readonly ClaimedEffect[];
 }
 
+/**
+ * Declared dispatch priority of one route group.
+ *
+ * The group takes the MINIMUM priority over its items, so a mixed-content
+ * route (possible only with a host route key that does not encode the
+ * projection) is never delayed by a lower-priority sibling. An absent or
+ * throwing declaration degrades to priority 0 (the legacy neutral order).
+ */
+export function dispatchPriorityForGroup(
+  group: EffectRouteGroup,
+  dispatcher: Dispatcher,
+): number {
+  let priority: number | undefined;
+  for (const item of group.items) {
+    try {
+      const declared = dispatcher.dispatchPriorityFor?.(item.pending) ?? 0;
+      if (priority === undefined || declared < priority) priority = declared;
+    } catch {
+      // The predicate is declared never to throw; a violating dispatcher
+      // keeps the neutral priority for the affected group instead of
+      // aborting the pass.
+    }
+  }
+  return priority ?? 0;
+}
+
+/** One dispatch unit: a route group plus the bucket that dispatches it. */
+export interface EffectDispatchUnit {
+  readonly bucket: "fast-append" | "regular";
+  readonly group: EffectRouteGroup;
+}
+
+/**
+ * Orders all dispatch units by ascending declared priority.
+ *
+ * The sort is stable: units with equal priority keep their ready-selection
+ * order. Without any declared priority every group is 0, so the legacy
+ * order (all fast-append groups before all regular groups) is preserved
+ * exactly. Only the dispatch SEQUENCE changes; claim windows, leases,
+ * fencing, per-target predecessor ordering, the limiter, and the bounded
+ * selection window are untouched.
+ */
+export function orderDispatchUnits(
+  fastAppendGroups: readonly EffectRouteGroup[],
+  regularGroups: readonly EffectRouteGroup[],
+  dispatcher: Dispatcher,
+): readonly EffectDispatchUnit[] {
+  const units: EffectDispatchUnit[] = [
+    ...fastAppendGroups.map((group) => ({ bucket: "fast-append" as const, group })),
+    ...regularGroups.map((group) => ({ bucket: "regular" as const, group })),
+  ];
+  units.sort((left, right) => {
+    const leftPriority = dispatchPriorityForGroup(left.group, dispatcher);
+    const rightPriority = dispatchPriorityForGroup(right.group, dispatcher);
+    if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+    if (left.bucket !== right.bucket) {
+      // Legacy tie-break: the append path keeps its place ahead of the
+      // regular path when the host declares no distinguishing priority.
+      return left.bucket === "fast-append" ? -1 : 1;
+    }
+    return 0;
+  });
+  return units;
+}
+
 /** Groups claimed effects by the dispatcher-declared route key. */
 export function groupEffectsByRoute(
   items: readonly ClaimedEffect[],

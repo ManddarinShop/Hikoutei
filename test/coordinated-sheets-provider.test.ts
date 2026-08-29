@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CoordinatedLanePreconditionError,
   CoordinatedSheetsProvider,
   type CoordinatedSheetsInner,
 } from "../src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
@@ -8,6 +9,7 @@ import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
+  PreparedApplyEffects,
   EnsureSyncRowAnchorsRequest,
   EnsureSyncRowAnchorsResult,
   FastAppendRowsRequest,
@@ -94,6 +96,18 @@ class MockProvider
 
   public async applyEffects(_request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult> {
     return this.runMutation("applyEffects", 10, () => ({ results: [], snapshotHash: absentValue(), hasMore: false }));
+  }
+
+  public async preflightApplyEffects(_request: ApplySyncEffectsRequest): Promise<PreparedApplyEffects> {
+    return this.runRead("preflight", 5, () => makePreparedToken([SAMPLE_PHYSICAL_SHEET]));
+  }
+
+  public async applyPreparedEffects(_prepared: PreparedApplyEffects): Promise<ApplySyncEffectsResult> {
+    return this.runMutation("applyPreparedEffects", 10, () => ({
+      results: [],
+      snapshotHash: absentValue(),
+      hasMore: false,
+    }));
   }
 
   public async readEffectPostcondition(_effect: SyncProjectionEffect): Promise<SyncEffectPostcondition> {
@@ -226,6 +240,49 @@ function sheetRequest(): ReadSyncSnapshotRequest {
     registeredRange: "A:Z",
     projection: "user_input",
     schemaVersion: 1,
+  };
+}
+
+/** Builds an opaque prepared token carrying the given per-effect routes. */
+function makePreparedToken(physicalSheetIds: readonly string[]): PreparedApplyEffects {
+  return {
+    kind: "single",
+    request: {
+      physicalSheetId: physicalSheetIds[0]!,
+      sheetName: "System_State",
+      registeredRange: "A:Z",
+      projection: "system_state",
+      schemaVersion: 1,
+      effects: physicalSheetIds.map((id) => ({ ...sampleEffect(), physicalSheetId: id, effectId: "effect-" + id })),
+    },
+  };
+}
+
+/** Builds a minimal apply request for one effect on the sample route. */
+function applyEffectsRequest(): ApplySyncEffectsRequest {
+  return {
+    physicalSheetId: SAMPLE_PHYSICAL_SHEET,
+    sheetName: "System_State",
+    registeredRange: "A:Z",
+    projection: "system_state",
+    schemaVersion: 1,
+    effects: [sampleEffect()],
+  };
+}
+
+/** Builds a minimal fast-append request for the sample route. */
+function fastAppendRequest(): Parameters<Inner["fastAppendRows"]>[0] {
+  return {
+    physicalSheetId: SAMPLE_PHYSICAL_SHEET,
+    sheetName: "System_State",
+    registeredRange: "A:Z",
+    projection: "system_state",
+    schemaVersion: 1,
+    rows: [{
+      effectId: "append-1",
+      payloadHash: "hash-append-1",
+      fields: { id: { kind: "string", value: "row-1" } },
+    }],
   };
 }
 
@@ -405,6 +462,169 @@ describe("CoordinatedSheetsProvider", () => {
 
     const metrics = coordinator.laneMetrics();
     expect(metrics.get("default")?.completed).toBe(1);
+  });
+
+  it("runs the in-lane precondition after the queue wait and before the inner call", async () => {
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    const order: string[] = [];
+
+    let releaseHolder!: () => void;
+    const holderGate = new Promise<void>((resolve) => {
+      releaseHolder = resolve;
+    });
+    let holderStarted!: () => void;
+    const holderStartedPromise = new Promise<void>((resolve) => {
+      holderStarted = resolve;
+    });
+    const holder = coordinator.runSerializedControl(SAMPLE_PHYSICAL_SHEET, "holder", async () => {
+      holderStarted();
+      await holderGate;
+      order.push("holder-end");
+    });
+    await holderStartedPromise;
+
+    const dispatched = coordinator.runSerializedInner(
+      SAMPLE_PHYSICAL_SHEET,
+      "applyEffects",
+      (provider) => {
+        order.push("inner");
+        return provider.applyEffects({ ...sheetRequest(), effects: [] });
+      },
+      async () => {
+        order.push("renew");
+        return true;
+      },
+    );
+
+    // Give the queued dispatch time to reach the lane: the renewal must NOT
+    // run while the holder still owns the lane.
+    await delay(30);
+    expect(order).toEqual([]);
+
+    releaseHolder();
+    await Promise.all([holder, dispatched]);
+
+    // Renewal runs strictly after the lane queue wait and strictly before the
+    // inner provider call.
+    expect(order).toEqual(["holder-end", "renew", "inner"]);
+  });
+
+  it("aborts before the inner call when the precondition rejects and releases the lane", async () => {
+    const inner = new MockProvider();
+    const events: CoordinatorLaneEvent[] = [];
+    const coordinator = new CoordinatedSheetsProvider<Inner>({
+      inner,
+      onLaneEvent: (event) => events.push(event),
+    });
+    let renewalCalls = 0;
+
+    await expect(coordinator.runSerializedInner(
+      SAMPLE_PHYSICAL_SHEET,
+      "applyEffects",
+      (provider) => provider.applyEffects({ ...sheetRequest(), effects: [] }),
+      async () => {
+        renewalCalls += 1;
+        return false;
+      },
+    )).rejects.toBeInstanceOf(CoordinatedLanePreconditionError);
+
+    // The remote never ran and the failure is a stable redacted message with
+    // no effect IDs, payloads, or raw provider errors.
+    expect(renewalCalls).toBe(1);
+    expect(inner.mutationCalls).toBe(0);
+    expect(events[0]?.operation).toBe("applyEffects");
+    expect(events[0]?.outcome).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
+
+    // The lane was released: the next mutation proceeds without deadlock.
+    await coordinator.fastAppendRows({ ...sheetRequest(), rows: [] });
+    expect(inner.mutationCalls).toBe(1);
+  });
+
+  it("passes the inner provider to the remote closure without re-entering the lane", async () => {
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+
+    const result = await coordinator.runSerializedInner(
+      SAMPLE_PHYSICAL_SHEET,
+      "fastAppendRows",
+      (provider) => provider.fastAppendRows({ ...sheetRequest(), rows: [] }),
+      async () => true,
+    );
+
+    expect(result).toEqual({ results: [], hasMore: false });
+    expect(inner.mutationCalls).toBe(1);
+    // The remote ran inside the held lane: no concurrent mutation slipped in.
+    expect(inner.mutationMaxConcurrent).toBe(1);
+  });
+
+  it("serializes direct applyPreparedEffects calls through the mutation lane", async () => {
+    // Regression: the coordinator's `applyPreparedEffects` used to forward to
+    // the inner provider WITHOUT acquiring a mutation lane. The dispatcher
+    // avoided the bypass only because it wraps its own calls in
+    // `runSerializedInner`; a direct consumer of the internal provider contract
+    // could concurrently issue two prepared writes (or a prepared write and a
+    // legacy apply) for the same spreadsheet and interleave remote mutations.
+    // The write stage now acquires the lanes derived from the prepared state's
+    // own effect routes, exactly like `applyEffects` does.
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    const prepared = makePreparedToken([SAMPLE_PHYSICAL_SHEET]);
+    await Promise.all([
+      coordinator.applyPreparedEffects(prepared),
+      coordinator.applyPreparedEffects(prepared),
+      coordinator.applyEffects(applyEffectsRequest()),
+    ]);
+    const stats = inner.stats();
+    expect(stats.mutationMaxConcurrent).toBe(1);
+    // Every write stage ran strictly inside the lane, one at a time.
+    expect(stats.callOrder.filter((entry) => entry === "start:applyPreparedEffects").length).toBe(2);
+  });
+
+  it("serializes a direct applyPreparedEffects against a concurrent fastAppendRows on the same lane", async () => {
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    await Promise.all([
+      coordinator.applyPreparedEffects(makePreparedToken([SAMPLE_PHYSICAL_SHEET])),
+      coordinator.fastAppendRows(fastAppendRequest()),
+    ]);
+    // Same-route/effect serialization invariant: a prepared write and a fast
+    // append on the same spreadsheet can never be in flight together, so a
+    // second writer can never race a stale pendingRows plan for the same
+    // business identity (the fast-append preflight itself runs inside the lane
+    // and sees the prepared write's receipts/identities).
+    expect(inner.stats().mutationMaxConcurrent).toBe(1);
+  });
+
+  it("acquires every involved lane for a multi-route prepared apply", async () => {
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({
+      inner,
+      mutationKeyForPhysicalSheet: (id) => id,
+    });
+    // Hold the SECOND route's lane; a multi-tab prepared write must wait for
+    // EVERY involved lane (stable sorted order) before reaching the inner,
+    // matching the dispatcher's `runSerializedInnerForRoutes` multi-tab path.
+    void coordinator.runSerializedControl("sheet-B", "lane-holder", async () => {
+      await delay(20);
+      return true;
+    });
+    const applied = coordinator.applyPreparedEffects(makePreparedToken(["sheet-B", "sheet-A"]));
+    await delay(5);
+    expect(inner.mutationCalls).toBe(0);
+    await applied;
+    expect(inner.mutationCalls).toBe(1);
+  });
+
+  it("fails closed when a prepared token carries no effect routes", async () => {
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    const malformed = {
+      kind: "single",
+      request: { physicalSheetId: SAMPLE_PHYSICAL_SHEET, effects: [] },
+    } as unknown as PreparedApplyEffects;
+    await expect(coordinator.applyPreparedEffects(malformed)).rejects.toThrow(/effect routes/);
+    expect(inner.mutationCalls).toBe(0);
   });
 });
 

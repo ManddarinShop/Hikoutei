@@ -29,6 +29,10 @@ import type {
   GoogleSheetsApiTransport,
   GoogleSheetsApiWriteRequest,
 } from "../../src/adapter/sheets/providers/google-sheets-api/index.js";
+import type {
+  GoogleSheetsApiValuesGetRequest,
+  GoogleSheetsApiValuesGetResponse,
+} from "../../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
 } from "../../src/adapter/sheets/providers/google-sheets-api/constants.js";
@@ -39,7 +43,7 @@ import {
 import { presentValue, absentValue } from "../../src/shared/state/index.js";
 import { computeSyncVisibleHash } from "../../src/application/sync/sheetsContract/syncSheets.js";
 import type { NormalizedCell } from "../../src/shared/encoding/types.js";
-import { dateSerialFromIso, isCanonicalDateNumberFormat } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import { dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
 /** One stored cell in the in-memory grid (real REST wire shapes). */
 export interface StubCell {
@@ -85,7 +89,8 @@ export type StubTransportFault =
   | { readonly kind: "timeout" }
   | { readonly kind: "network" }
   | { readonly kind: "malformedBatchUpdateReply" }
-  | { readonly kind: "malformedGetResponse" };
+  | { readonly kind: "malformedGetResponse" }
+  | { readonly kind: "malformedGetField" };
 
 /** One tab of the in-memory spreadsheet. */
 export class StubSheet {
@@ -218,7 +223,10 @@ export function stubCellToNormalized(cell: StubCell | undefined): NormalizedCell
     if (format !== undefined && isCanonicalDateNumberFormat(format)) {
       return {
         kind: "date",
-        value: new Date(Date.UTC(1899, 11, 30) + value.numberValue * 86_400_000).toISOString(),
+        // Delegate to the provider conversion so the stub read-back (and
+        // the visible hashes derived from it) can never drift from the
+        // production serial-to-ISO rounding.
+        value: isoFromDateSerial(value.numberValue),
       };
     }
     return { kind: "number", value: value.numberValue };
@@ -262,6 +270,48 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
     this.spreadsheet = spreadsheet;
   }
 
+  /**
+   * Raw `spreadsheets.values.get` over the in-memory grid (FORMATTED_VALUE
+   * semantics). Only the existing-sheet adoption reader consumes this.
+   */
+  public async getValues(
+    request: GoogleSheetsApiValuesGetRequest,
+  ): Promise<GoogleSheetsApiValuesGetResponse> {
+    const rangeText = request.range;
+    const tabTitle = rangeText.includes("!") ? rangeText.split("!")[0]!.replace(/^'/, "").replace(/'$/, "").replace(/''/g, "'") : rangeText;
+    const sheet = this.spreadsheet.findTab(tabTitle);
+    if (sheet === undefined) {
+      throw new GoogleSheetsApiTransportError(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+        `Unable to parse range: ${rangeText}`,
+        presentValue(400),
+        presentValue("INVALID_ARGUMENT"),
+      );
+    }
+    const rows: (string | number | boolean | null)[][] = [];
+    for (let row = 0; row < 1000; row++) {
+      const rowValues: (string | number | boolean | null)[] = [];
+      let populated = false;
+      for (let col = 0; col < 50; col++) {
+        const cell = sheet.cell(row, col);
+        const raw = cell?.userEnteredValue;
+        if (raw === undefined) { rowValues.push(null); continue; }
+        populated = true;
+        if (cell?.formattedValue !== undefined) { rowValues.push(cell.formattedValue); continue; }
+        if (raw.stringValue !== undefined) rowValues.push(raw.stringValue);
+        else if (raw.numberValue !== undefined) rowValues.push(raw.numberValue);
+        else if (raw.boolValue !== undefined) rowValues.push(raw.boolValue);
+        else rowValues.push(null);
+      }
+      if (!populated) break;
+      // The real API omits trailing empty cells: trim the null padding so the
+      // adoption reader's ignored-column report matches real wire behavior.
+      while (rowValues.length > 0 && rowValues.at(-1) === null) rowValues.pop();
+      rows.push(rowValues);
+    }
+    return { values: rows };
+  }
+
   public async getSpreadsheet(request: GoogleSheetsApiGetSpreadsheetRequest): Promise<unknown> {
     this.requestStarts.push({ kind: "read", at: this.now() });
     this.getSpreadsheetCalls += 1;
@@ -271,6 +321,15 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
       this.fault = undefined;
       if (fault.kind === "malformedGetResponse") {
         return { unexpected: true };
+      }
+      if (fault.kind === "malformedGetField") {
+        // A structurally valid `spreadsheets.get` body whose field-level shape
+        // is malformed: the top-level shape guard passes but a field-level
+        // parser guard (here, a non-string tab title) must fail closed.
+        return {
+          spreadsheetId: this.spreadsheet.spreadsheetId,
+          sheets: [{ properties: { sheetId: 1, title: 42 } }],
+        };
       }
       throw transportFaultError(fault);
     }
@@ -330,8 +389,8 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
     if (this.fault !== undefined) {
       const fault = this.fault;
       this.fault = undefined;
-      if (fault.kind === "malformedGetResponse") {
-        throw new Error("stub fault misuse: malformedGetResponse only applies to getSpreadsheet");
+      if (fault.kind === "malformedGetResponse" || fault.kind === "malformedGetField") {
+        throw new Error("stub fault misuse: malformed get faults only apply to getSpreadsheet");
       }
       throw transportFaultError(fault);
     }

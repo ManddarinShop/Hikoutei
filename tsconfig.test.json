@@ -2,7 +2,15 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": ".",
+    "paths": {
+      // Mirrors the vitest `hikoutei` alias (vitest.config.ts): the soak
+      // executor tests import the public entrypoint by package name, and
+      // in the test typecheck that resolves to the current source tree so
+      // it never depends on a stale ./dist build.
+      "hikoutei": ["./src/index.ts"],
+      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
+    }
   },
   "include": [
     "src/**/*.ts",

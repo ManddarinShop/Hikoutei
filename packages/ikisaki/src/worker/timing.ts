@@ -57,6 +57,12 @@ export interface TimingEvent {
   readonly routeKey?: string;
   readonly batchLimit?: number;
   readonly responseSucceeded?: boolean;
+  /** True when the provider deferred a suffix past this batch (body budget). */
+  readonly hasMore?: boolean;
+  /** Effects requested for this dispatch batch. */
+  readonly requestedEffects?: number;
+  /** Effects acknowledged by the provider result for this dispatch batch. */
+  readonly acknowledgedEffects?: number;
 }
 
 /** Optional observer used by servers and benchmarks to collect timings. */

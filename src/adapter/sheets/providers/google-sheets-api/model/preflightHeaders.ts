@@ -27,12 +27,19 @@ export const SYSTEM_COLUMN_REPROVISION_MESSAGE =
  * provided the LAST column of the range must carry exactly that header
  * (fail-closed on legacy tabs and on a user property named like the system
  * column).
+ *
+ * §12 columnMap: when `physicalHeaders` is present (adopted routes), the
+ * grid's header row is validated against THEM positionally while the
+ * CANONICAL `expectedHeaders` (field names) are returned — so every
+ * downstream consumer keys cells by field name and no legacy header text
+ * leaks into the pipeline.
  */
 export function readRegisteredHeaders(
   data: ParsedGridData,
   range: { readonly startColumn: number; readonly columnCount: number },
   expectedHeaders: readonly string[],
   systemColumnHeader?: string,
+  physicalHeaders?: readonly string[],
 ): readonly string[] {
   if (
     systemColumnHeader !== undefined &&
@@ -64,10 +71,13 @@ export function readRegisteredHeaders(
   if (new Set(userHeaders).size !== userHeaders.length) {
     invalidProviderState("registered headers contain a duplicate");
   }
+  // §12: with physicalHeaders (adopted routes) the physical row is compared
+  // against THEM; the canonical field names are the keying contract.
+  const validationHeaders = physicalHeaders ?? expectedHeaders;
   const expectedCount = userFieldCount + (systemColumnHeader === undefined ? 0 : 1);
   if (
     actual.length !== expectedCount ||
-    userHeaders.some((header, index) => header !== expectedHeaders[index])
+    userHeaders.some((header, index) => header !== validationHeaders[index])
   ) {
     invalidProviderState("registered headers do not match the projected schema");
   }
@@ -77,7 +87,7 @@ export function readRegisteredHeaders(
       invalidProviderState(SYSTEM_COLUMN_REPROVISION_MESSAGE);
     }
   }
-  return userHeaders;
+  return physicalHeaders === undefined ? userHeaders : expectedHeaders;
 }
 
 /** Returns the header cells of one grid as raw API values (no validation). */

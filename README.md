@@ -290,12 +290,18 @@ entity API.
   durable outbox, idempotent delivery, and conflict-aware updates.
 - [Contributing](website/guide/contributing.md) — local development and test
   commands.
+- [Soak testing](website/guide/soak-testing.md) — the long-duration soak
+  runner: source build, six scalar tables, 6h preflight and 24h direct-live
+  runs, log envs, redaction contract, resume/cleanup, and acceptance
+  criteria.
 - [Benchmark notes](website/guide/benchmarks.md) — dated measurements and
   their limitations.
 
 ## Limitations
 
-- Google Sheets has quota, latency, and API rate limits.
+- Google Sheets has quota, latency, and API rate limits. The outbound sync
+  worker batches effects to the spreadsheet scope, so remote request volume
+  does not grow with the number of tabs a dispatch touches.
 - Sheet updates are asynchronous; the application should read its local state.
 - SQLite is local to the service and is not a distributed coordination layer.
 - Schema changes, manual edits, and conflicting updates still need an

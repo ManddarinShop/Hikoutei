@@ -15,25 +15,31 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTypedSheets,
   defineTypedSheetsEntity,
   HIKOUTEI_ERROR_CODES,
+  HikouteiError,
 } from "../src/index.js";
-import type { HikouteiEntity, HikouteiPropertyOptions } from "../src/index.js";
+import type { HikouteiEntity, HikouteiErrorCode, HikouteiPropertyOptions } from "../src/index.js";
 import { initializeMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import {
   buildSyncProjections,
   createTypedSheetsWithSync,
+  MAX_SYNC_RATE_LIMIT_INTERVAL_MS,
+  MIN_SYNC_RATE_LIMIT_INTERVAL_MS,
   parseSpreadsheetIdFromUrl,
+  resolveSyncRateLimitIntervalMs,
+  stableStartupDiagnostic,
   SYNC_ENV_KEYS,
   validateSyncCredentialsFile,
   type SyncDiagnosticLevel,
   type TypedSheetsWithSyncResult,
 } from "../src/application/sync/service/syncAutoStart.js";
 import type { InternalSyncService } from "../src/application/sync/service/SyncServiceBootstrap.js";
+import { GOOGLE_SHEETS_API_DEFAULTS } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,
@@ -300,7 +306,12 @@ describe("env-driven sync auto-start", () => {
     expect(transport.getSpreadsheetCalls).toBe(0);
     expect(transport.batchUpdateCalls).toBe(0);
     expect(diagnostics[0]?.level).toBe("error");
-    expect(diagnostics[0]?.message).toContain("Unable to extract a spreadsheet ID");
+    // The injected sink receives ONLY the stable class/code summary — the
+    // full classified message is carried by the thrown error alone.
+    expect(diagnostics[0]?.message).toBe(
+      `Hikoutei sync autostart failed (class=HikouteiError, code=${HIKOUTEI_ERROR_CODES.SYNC_SPREADSHEET_URL_INVALID})`,
+    );
+    expect(diagnostics[0]?.message).not.toContain("Unable to extract");
   });
 
   it("classifies a missing credentials file before any remote contact", async () => {
@@ -449,6 +460,179 @@ describe("env-driven sync auto-start", () => {
     }
   });
 
+  it("never passes secret-like paths, emails, or messages to injected diagnostic sinks", async () => {
+    // Regression (Luna review): injected diagnostic sinks must receive
+    // sanitized stable class/code data only — full failure messages can
+    // embed the service-account email, spreadsheet ID, or credential path.
+    // The thrown HikouteiError keeps its full public message regardless.
+    const secretPath = join(
+      credentialsDir(),
+      "secrets",
+      "gcloud",
+      "application_default_credentials.json",
+    );
+    const diagnostics: CapturedDiagnostic[] = [];
+    const { transport } = newTransport();
+
+    // Missing credentials file: the classified message embeds the path.
+    await expect(createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: syncEnv(secretPath),
+      transport,
+      onDiagnostic: (level, message) => diagnostics.push({ level, message }),
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
+      message: `Credentials file not found: ${secretPath}`,
+    });
+    expect(diagnostics[0]?.level).toBe("error");
+    expect(diagnostics[0]?.message).toBe(
+      `Hikoutei sync autostart failed (class=HikouteiError, code=${HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING})`,
+    );
+    expect(diagnostics[0]?.message).not.toContain(secretPath);
+    expect(diagnostics[0]?.message).not.toContain("Credentials file");
+
+    // HTTP 403 access-denied: the classified message embeds the
+    // service-account email — the sink must never see it.
+    diagnostics.length = 0;
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    transport.fault = { kind: "http", status: 403, apiErrorStatus: "PERMISSION_DENIED" };
+    await expect(createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: syncEnv(credentialsPath),
+      transport,
+      onDiagnostic: (level, message) => diagnostics.push({ level, message }),
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.SYNC_SPREADSHEET_ACCESS_DENIED,
+      message: expect.stringContaining("sync-test@example.com"),
+    });
+    expect(diagnostics[0]?.level).toBe("error");
+    expect(diagnostics[0]?.message).toBe(
+      `Hikoutei sync autostart failed (class=HikouteiError, code=${HIKOUTEI_ERROR_CODES.SYNC_SPREADSHEET_ACCESS_DENIED})`,
+    );
+    expect(diagnostics[0]?.message).not.toContain("sync-test@example.com");
+    expect(diagnostics[0]?.message).not.toContain("@");
+  });
+
+  it("emits the stable redacted class/code summary through the default console sink", async () => {
+    // Luna: the DEFAULT diagnostic sink (console) must emit the
+    // already-redacted stable class/code summary on startup failure — not
+    // merely the error level — while the thrown HikouteiError keeps its
+    // full public message and no secret value (path, email, ID) ever
+    // reaches the console.
+    const secretPath = join(
+      credentialsDir(),
+      "secrets",
+      "gcloud",
+      "application_default_credentials.json",
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const { transport } = newTransport();
+      await expect(createTypedSheetsWithSync({
+        dbName: ":memory:",
+        entities: [User],
+        env: syncEnv(secretPath),
+        transport,
+      })).rejects.toMatchObject({
+        code: HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
+        message: `Credentials file not found: ${secretPath}`,
+      });
+      // The default sink prints the stable sanitized summary, never the
+      // level-only fallback and never the raw failure message.
+      const expected =
+        `Hikoutei sync autostart failed (class=HikouteiError, code=${HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING})`;
+      expect(errorSpy.mock.calls.some((call) => call[0] === expected)).toBe(true);
+      const output = errorSpy.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("class=HikouteiError");
+      expect(output).toContain(HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING);
+      // The stable summary never carries the secret path, the raw
+      // message, or any email-like text.
+      expect(output).not.toContain(secretPath);
+      expect(output).not.toContain("Credentials file");
+      expect(output).not.toContain("@");
+      expect(output).not.toContain("level=error");
+    } finally {
+      errorSpy.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("collapses injected failure name/code into fixed safe classes/codes in sink text", () => {
+    // Regression (Luna review): the diagnostic sink summary interpolates
+    // failure.name and failure.code, which are runtime strings. They must be
+    // checked against the stable allowlists — a malformed or arbitrary value
+    // (a path, email, or secret) must collapse to the fixed `unknown` class
+    // and code instead of reaching the injected sink text.
+    const injected = [
+      "secret/Users/me/.ssh/id_rsa@example.com",
+      "ya29.jwt-token/private_key",
+      "docs.google.com/spreadsheets/d/1AbC",
+    ];
+    for (const value of injected) {
+      const failure = new HikouteiError(
+        value as HikouteiErrorCode,
+        "full public message stays on the thrown error",
+      );
+      // Both fields are writable runtime properties (CoreErrorException sets
+      // them directly), so a hostile/odd error shape can carry anything.
+      failure.name = value;
+      const summary = stableStartupDiagnostic(failure);
+      expect(summary).toBe(
+        "Hikoutei sync autostart failed (class=unknown, code=unknown)",
+      );
+      expect(summary).not.toContain(value);
+      expect(summary).not.toMatch(/@|\.ssh|ya29|private_key|docs\.google\.com/);
+    }
+    // Allowlisted values keep their stable class/code verbatim.
+    const clean = new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
+      "x",
+    );
+    expect(stableStartupDiagnostic(clean)).toBe(
+      `Hikoutei sync autostart failed (class=HikouteiError, code=${HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING})`,
+    );
+  });
+
+  it("preserves the classified HikouteiError unchanged when the diagnostic sink throws", async () => {
+    // Luna: the diagnostic sink is fail-open — a throwing injected (or
+    // default) sink must never replace the original classified startup
+    // failure, whose stable class and machine-readable code the caller
+    // depends on. The sink's own error is swallowed; the original
+    // HikouteiError is rethrown unchanged.
+    const secretPath = join(
+      credentialsDir(),
+      "secrets",
+      "gcloud",
+      "application_default_credentials.json",
+    );
+    const { transport } = newTransport();
+    const thrown = await createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: syncEnv(secretPath),
+      transport,
+      onDiagnostic: () => {
+        throw new Error("diagnostic sink exploded");
+      },
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    // The original classified failure survives the throwing sink: same
+    // stable class, same code, same full public message.
+    expect(thrown).toBeInstanceOf(HikouteiError);
+    expect((thrown as HikouteiError).code).toBe(
+      HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
+    );
+    expect((thrown as HikouteiError).message).toBe(
+      `Credentials file not found: ${secretPath}`,
+    );
+    expect((thrown as Error).message).not.toBe("diagnostic sink exploded");
+  });
+
   it("fails closed on malformed interval env values before any remote contact", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
@@ -508,6 +692,127 @@ describe("env-driven sync auto-start", () => {
       });
       expect(failingTransport.getSpreadsheetCalls).toBe(0);
       expect(failingTransport.batchUpdateCalls).toBe(0);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Sync request-start pacing override
+  // -------------------------------------------------------------------------
+
+  it("resolves the pacing env override to undefined when absent or blank", () => {
+    expect(resolveSyncRateLimitIntervalMs({})).toBeUndefined();
+    expect(resolveSyncRateLimitIntervalMs({
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "",
+    })).toBeUndefined();
+    expect(resolveSyncRateLimitIntervalMs({
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "   ",
+    })).toBeUndefined();
+  });
+
+  it("accepts a plain decimal integer within the 2,000..9,999 ms bounds", () => {
+    // The env floor (2,000 ms) and the provider's default interval (800 ms,
+    // internal-only tuning target) are asserted independently here.
+    expect(GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS).toBe(800);
+    expect(MIN_SYNC_RATE_LIMIT_INTERVAL_MS).toBe(2_000);
+    expect(resolveSyncRateLimitIntervalMs({
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "2500",
+    })).toBe(2_500);
+    // 2,000 ms is the quota-safe floor: the smallest interval demonstrated
+    // clean under the current shared service-account quota profile, so the
+    // exact floor value must be accepted.
+    expect(resolveSyncRateLimitIntervalMs({
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "2000",
+    })).toBe(2_000);
+    expect(resolveSyncRateLimitIntervalMs({
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: String(MIN_SYNC_RATE_LIMIT_INTERVAL_MS),
+    })).toBe(MIN_SYNC_RATE_LIMIT_INTERVAL_MS);
+    expect(resolveSyncRateLimitIntervalMs({
+      [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: String(MAX_SYNC_RATE_LIMIT_INTERVAL_MS),
+    })).toBe(MAX_SYNC_RATE_LIMIT_INTERVAL_MS);
+    expect(MAX_SYNC_RATE_LIMIT_INTERVAL_MS).toBe(9_999);
+  });
+
+  it("rejects non-decimal, out-of-bounds, and malformed pacing values", () => {
+    // Number() would coerce several of these (0x10 -> 16, 1e3 -> 1000,
+    // -1 -> -1, " 2500" -> 2500); the decimal-only bounded contract must
+    // reject every one of them with the stable startup code. 899 sits just
+    // below the 900 ms quota-safe floor (the 800-899 ms band is untested at
+    // the 1,000-effect cap), so it is rejected; 10000 is the first interval
+    // whose worst-case paced dispatch (60 s write + 10 s
+    // first-slot wait + 2 x 10 s paced slots + 30 s headroom) exactly
+    // exhausts the 120 s default effect lease, so it is unsafe and must be
+    // rejected too.
+    for (const invalid of ["abc", "0", "899", "10000", "15000", "70000", "0x10", "1e3", "-1", " 2500", "2500.5"]) {
+      expect(() => resolveSyncRateLimitIntervalMs({
+        [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: invalid,
+      })).toThrowError(expect.objectContaining({
+        code: HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+        message: expect.stringContaining("HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS"),
+      }));
+    }
+  });
+
+  it("rejects an unsafe pacing override before any remote contact when the real provider is used", async () => {
+    // No transport is injected, so the real Google Sheets provider path is
+    // active: an override whose paced dispatch could outlive the default
+    // effect lease must fail closed with the stable startup code BEFORE any
+    // provider or transport is built (the resolver runs before the service
+    // bootstrap, so there is no remote contact to observe).
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    for (const unsafe of ["10000", "15000", "60000"]) {
+      await expect(createTypedSheetsWithSync({
+        dbName: ":memory:",
+        entities: [User],
+        env: syncEnv(credentialsPath, {
+          [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: unsafe,
+        }),
+      })).rejects.toMatchObject({
+        code: HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+        message: expect.stringContaining("HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS"),
+      });
+    }
+  });
+
+  it("ignores the pacing env override when a fake transport is injected", async () => {
+    // The internal override applies ONLY to the real Google Sheets provider:
+    // injected fake transports keep ZERO test pacing, so the provisioning
+    // request starts stay ~0 ms apart instead of being spaced at the
+    // override's 1,999 ms (a value below the 2,000 ms env floor, which is
+    // only legal here because a fake transport never consults the key).
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const { transport } = newTransport();
+    const service = await openSync(
+      transport,
+      credentialsPath,
+      ":memory:",
+      [],
+      { [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: "1999" },
+    );
+    expect(service).toBeDefined();
+    const starts = transport.requestStarts.map((entry) => entry.at);
+    expect(starts.length).toBeGreaterThanOrEqual(2);
+    const gap = (starts[1] ?? 0) - (starts[0] ?? 0);
+    // The zero test pacing (plus stub overhead) must be far below the
+    // override's 1,999 ms; wide margins keep the wall-clock assertion robust.
+    expect(gap).toBeLessThan(500);
+  });
+
+  it("ignores an invalid pacing env override when a fake transport is injected", async () => {
+    // A malformed or unsafe override must never break local/fake mode: with
+    // an injected fake transport the env key is not consulted at all, so the
+    // service starts normally.
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    for (const invalid of ["abc", "999", "1999", "10000", "15000", "0x10"]) {
+      const { transport } = newTransport();
+      const service = await openSync(
+        transport,
+        credentialsPath,
+        ":memory:",
+        [],
+        { [SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS]: invalid },
+      );
+      expect(service).toBeDefined();
+      expect(transport.getSpreadsheetCalls).toBeGreaterThan(0);
     }
   });
 

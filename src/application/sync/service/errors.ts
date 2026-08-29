@@ -7,6 +7,20 @@ export const SYNC_SERVICE_ERROR_CODES = {
   PROVIDER_UNAVAILABLE: "sync_provider_unavailable",
   STARTUP_FAILED: "sync_service_startup_failed",
   CLOSED: "sync_service_closed",
+  /** Existing-sheet adoption dry-run finished; the full report rides on the error. */
+  ADOPTION_DRY_RUN_REPORT: "existing_sheet_adoption_dry_run_report",
+  /**
+   * Adopt-mode requested before the seeding engine milestone lands.
+   * @deprecated unused since the seeding engine; retained for code stability.
+   */
+  ADOPTION_NOT_IMPLEMENTED: "existing_sheet_adoption_not_implemented",
+  /**
+   * Adoption seeding refused: observed cell kinds would be quarantined by the
+   * first polling pass (e.g. a numeric sheet column bound to a string
+   * property). Fail-closed BEFORE any SQLite state is written (design §11
+   * finding; Terra-promoted follow-up).
+   */
+  ADOPTION_CELL_KIND_MISMATCH: "existing_sheet_adoption_cell_kind_mismatch",
 } as const;
 
 export type SyncServiceErrorCode =

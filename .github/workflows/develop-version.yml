@@ -6,6 +6,10 @@ on:
   push:
     branches:
       - develop
+    paths-ignore:
+      - '.github/**'
+      - 'docs/**'
+      - 'README.md'
 
 concurrency:
   group: release-develop
@@ -73,8 +77,29 @@ jobs:
         run: |
           set -euo pipefail
           base_version="$(node -p "require('./package.json').version")"
+          # Never let the develop patch line trail the published npm `latest`
+          # dist-tag. A per-PR recovery publish (hikoutei-tag-publish) can
+          # advance `latest` independently of the develop version counter, which
+          # would otherwise make a develop release that is numerically below the
+          # already-published latest fail its monotonic `latest` check. Base the
+          # next patch on whichever of the local manifest and the published
+          # latest is newer so a develop merge always moves the channel forward.
+          published_latest="$(node scripts/ci/read-npm-dist-tag.mjs \
+            --package=hikoutei --tag=latest 2>/dev/null || true)"
+          effective_base="$base_version"
+          if [[ -n "$published_latest" ]] && node -e '
+            const a = process.argv[1].split(".").map(Number);
+            const b = process.argv[2].split(".").map(Number);
+            for (let i = 0; i < 3; i++) {
+              if (a[i] > b[i]) process.exit(0);
+              if (a[i] < b[i]) process.exit(1);
+            }
+            process.exit(1);
+          ' "$published_latest" "$base_version"; then
+            effective_base="$published_latest"
+          fi
           next_version="$(node scripts/ci/release-version.mjs \
-            --base-version="$base_version" \
+            --base-version="$effective_base" \
             --bump=patch)"
           npm version "$next_version" --no-git-tag-version
           # Bump the @hikoutei/ikisaki kernel patch version only when its

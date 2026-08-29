@@ -25,7 +25,12 @@ import {
 import { SYNC_POSTCONDITION_DISPOSITIONS } from "../src/application/sync/sheetsContract/constants.js";
 import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
+import {
+  StubSpreadsheet,
+  StubSheetsTransport,
+} from "./support/StubSheetsTransport.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
@@ -612,6 +617,107 @@ describe("sync effect recovery", () => {
     expect(provider.fastAppendCalls).toBe(1);
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
+
+  it("recovers a committed append whose reply was reported invalid through the real provider, then drains its same-stream follower", async () => {
+    const orm = await createOrm();
+    openOrms.push(orm);
+    const adapter = new MikroOrmSqliteAdapter(orm);
+    await migrateSqliteSchema(adapter);
+    await registerProjection(adapter);
+
+    const claim = await claimWriterLeaseWithAdapter(adapter, {
+      role: "sync-effect-worker",
+      writerId: "invalid-reply-worker",
+      leaseDurationMs: 10_000,
+      now: 6_000,
+    });
+    if (claim.kind !== "claimed") throw new Error("Expected a writer lease");
+    const fence = {
+      role: claim.lease.role,
+      writerEpoch: claim.lease.writerEpoch,
+      fencingToken: claim.lease.fencingToken,
+      now: 6_000,
+    };
+    // A fast-append head plus a same-stream regular follower: the follower is
+    // not claimable until the head leaves the `applied`/`superseded` gate.
+    const head = createEffect("stream", 1, { includeId: true });
+    const follower = createFollower("stream");
+    await expect(appendPendingEffectsWithAdapter(adapter, fence, [head, follower])).resolves.toBe(true);
+
+    // The real provider over the stub transport. The one-shot transport fault
+    // commits the append batch (target row AND receipt) but returns an empty
+    // reply list, so the actual `requireValidBatchUpdateReply` boundary raises
+    // the classified `batch_update_reply`/`malformed_reply` invalid state
+    // error instead of a hand-built throw from a fake fixture.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Orders", { headers: ["id", "status"] });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = new GoogleSheetsApiSyncProvider({
+      spreadsheetId: "stub-spreadsheet",
+      definitions: [{
+        sheet: {
+          logicalSheetId: "logical-recovery",
+          physicalSheetId: "physical-recovery",
+          spreadsheetId: "stub-spreadsheet",
+          tabName: "Orders",
+          registeredRange: "A:B",
+          projection: "system_state",
+          schemaVersion: 1,
+          ownershipManifestJson: "{}",
+          businessKeyField: "id",
+          anchorMode: "business_key",
+        },
+        headers: ["id", "status"],
+      }],
+      transport,
+      requestTimeoutMs: 60_000,
+      rateLimitIntervalMs: 0,
+    });
+    transport.fault = { kind: "malformedBatchUpdateReply" };
+    const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
+
+    // First pass: the head fast-append commits remotely but its reply is
+    // malformed, so the dispatcher classifies it delivery-uncertain and
+    // recovers the committed write through the real postcondition probe.
+    const first = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "invalid-reply-worker",
+      now: 6_001,
+      maxEffects: 1,
+    });
+    expect(first).toMatchObject({
+      claimed: 1,
+      applied: 1,
+      failed: 0,
+      responseLossRecovered: 1,
+    });
+    // Not wedged in the uncertain state.
+    await expect(readStatus(adapter, head.effectId)).resolves.toBe("applied");
+
+    // A later pass claims and applies the same-stream follower now that its
+    // head is applied; it is not left blocked behind the stream.
+    const second = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "invalid-reply-worker",
+      now: 6_002,
+      maxEffects: 1,
+    });
+    expect(second).toMatchObject({ claimed: 1, applied: 1, failed: 0 });
+    await expect(readStatus(adapter, follower.effectId)).resolves.toBe("applied");
+
+    // Final pass finds nothing left to do: neither the head nor the follower
+    // lingers in delivery_uncertain/blocked.
+    const third = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "invalid-reply-worker",
+      now: 6_003,
+      maxEffects: 1,
+    });
+    expect(third).toMatchObject({ selected: 0, applied: 0, failed: 0 });
+  });
 });
 
 async function createOrm() {
@@ -863,4 +969,54 @@ async function readStatus(adapter: MikroOrmSqliteAdapter, effectId: string): Pro
     [effectId],
   ));
   return row?.status;
+}
+
+/**
+ * Builds the same-stream regular follower for an applied fast-append head on
+ * the same target (streamSequence 2 after the head's 1). The follower updates
+ * the head-committed row through the regular CAS path and is only claimable
+ * once the head is `applied`/`superseded`.
+ */
+function createFollower(suffix = "stream"): NewEffect {
+  const targetId = `order-${suffix}`;
+  const committed = {
+    id: { kind: "string" as const, value: targetId },
+    status: { kind: "string" as const, value: "paid" },
+  };
+  const next = {
+    id: { kind: "string" as const, value: targetId },
+    status: { kind: "string" as const, value: "shipped" },
+  };
+  return {
+    effectId: `effect-${suffix}-follower`,
+    effectKind: "system_projection",
+    commitId: `commit-${suffix}-follower`,
+    logicalSheetId: "logical-recovery",
+    physicalSheetId: "physical-recovery",
+    projection: "system_state",
+    rowBindingId: { kind: PRESENCE_KINDS.ABSENT },
+    conflictId: { kind: PRESENCE_KINDS.ABSENT },
+    targetKind: "entity",
+    targetId,
+    targetEntityRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: 1 },
+    targetFieldRevisionHash: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+    targetCanonicalCommitId: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+    expectedVisibleRevision: 1,
+    expectedVisibleHash: computeSyncVisibleHash(committed),
+    repairGuardHash: { kind: PRESENCE_KINDS.ABSENT },
+    sourceQuarantineId: { kind: PRESENCE_KINDS.ABSENT },
+    payloadJson: serializeSyncProjectionEffectPayload({
+      sheetName: "Orders",
+      registeredRange: "A:B",
+      schemaVersion: 1,
+      targetAnchor: `${suffix}-anchor`,
+      fields: next,
+      targetVisibleHash: computeSyncVisibleHash(next),
+      createIfMissing: false,
+      expectedCandidateHash: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+    }),
+    payloadHash: `payload-${suffix}-follower`,
+    effectDedupeKey: `dedupe-${suffix}-follower`,
+    streamSequence: 2,
+  };
 }

@@ -22,6 +22,14 @@ import {
   normalizeEntityQuery,
 } from "./queryNormalization.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+} from "../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../shared/observability/logEvents.js";
 import type {
   ScalarEntityCountQuery,
   ScalarEntityPersistenceProvider,
@@ -68,11 +76,16 @@ class EntityManagerImpl implements EntityManager {
     data: Readonly<Partial<Entity>>,
   ): Entity {
     const descriptor = this.requireDescriptor(entity);
-    const instance = promoteManagedEntity<Entity>(buildEntityInstance(descriptor, data));
-    this.entityDescriptors.set(instance, descriptor);
-    this.unitOfWork.manageNew(descriptor, instance);
-    this.rememberIdentity(descriptor, instance);
-    return instance;
+    try {
+      const instance = promoteManagedEntity<Entity>(buildEntityInstance(descriptor, data));
+      this.entityDescriptors.set(instance, descriptor);
+      this.unitOfWork.manageNew(descriptor, instance);
+      this.rememberIdentity(descriptor, instance);
+      return instance;
+    } catch (error: unknown) {
+      logLifecycleFailure(descriptor.tableName, error);
+      throw error;
+    }
   }
 
   /** Reads every entity matching one validated local query. */
@@ -82,10 +95,15 @@ class EntityManagerImpl implements EntityManager {
     options?: HikouteiFindOptions<Entity>,
   ): Promise<readonly Entity[]> {
     const descriptor = this.requireDescriptor(entity);
-    const query = normalizeEntityQuery(descriptor, effectiveFilter(where), options);
-    const reader = this.activeTransaction ?? this.provider;
-    const rows = await reader.read(query);
-    return this.materializeRows<Entity>(descriptor, rows);
+    try {
+      const query = normalizeEntityQuery(descriptor, effectiveFilter(where), options);
+      const reader = this.activeTransaction ?? this.provider;
+      const rows = await reader.read(query);
+      return this.materializeRows<Entity>(descriptor, rows);
+    } catch (error: unknown) {
+      logQueryFailure(descriptor.tableName, error);
+      throw error;
+    }
   }
 
   /** Reads one entity matching a validated query, or null when none match. */
@@ -95,13 +113,18 @@ class EntityManagerImpl implements EntityManager {
     options?: HikouteiFindOneOptions<Entity>,
   ): Promise<Entity | null> {
     const descriptor = this.requireDescriptor(entity);
-    const query = normalizeEntityFindOneQuery(descriptor, where, options);
-    const reader = this.activeTransaction ?? this.provider;
-    const rows = await reader.read(query);
-    const row = rows[0];
-    return row === undefined
-      ? null
-      : promoteManagedEntity<Entity>(this.materialize(descriptor, row));
+    try {
+      const query = normalizeEntityFindOneQuery(descriptor, where, options);
+      const reader = this.activeTransaction ?? this.provider;
+      const rows = await reader.read(query);
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : promoteManagedEntity<Entity>(this.materialize(descriptor, row));
+    } catch (error: unknown) {
+      logQueryFailure(descriptor.tableName, error);
+      throw error;
+    }
   }
 
   /** Counts all rows matching a validated filter without changing the identity map. */
@@ -110,9 +133,14 @@ class EntityManagerImpl implements EntityManager {
     where?: HikouteiFilter<Entity>,
   ): Promise<number> {
     const descriptor = this.requireDescriptor(entity);
-    const query = countQuery(normalizeEntityQuery(descriptor, effectiveFilter(where), undefined));
-    const reader = this.activeTransaction ?? this.provider;
-    return reader.count(query);
+    try {
+      const query = countQuery(normalizeEntityQuery(descriptor, effectiveFilter(where), undefined));
+      const reader = this.activeTransaction ?? this.provider;
+      return await reader.count(query);
+    } catch (error: unknown) {
+      logQueryFailure(descriptor.tableName, error);
+      throw error;
+    }
   }
 
   /** Reads one page and its unpaged total from the same SQLite snapshot. */
@@ -122,38 +150,55 @@ class EntityManagerImpl implements EntityManager {
     options?: HikouteiFindOptions<Entity>,
   ): Promise<readonly [readonly Entity[], number]> {
     const descriptor = this.requireDescriptor(entity);
-    const query = normalizeEntityQuery(descriptor, effectiveFilter(where), options);
-    const operation = async (
-      reader: ScalarEntityReader,
-    ): Promise<readonly [readonly ScalarEntityRow[], number]> => {
-      const rows = await reader.read(query);
-      const total = await reader.count(countQuery(query));
-      return [rows, total];
-    };
-    const [rows, total] = this.activeTransaction === undefined
-      ? await this.provider.readSnapshot(operation)
-      : await operation(this.activeTransaction);
-    return [this.materializeRows<Entity>(descriptor, rows), total];
+    try {
+      const query = normalizeEntityQuery(descriptor, effectiveFilter(where), options);
+      const operation = async (
+        reader: ScalarEntityReader,
+      ): Promise<readonly [readonly ScalarEntityRow[], number]> => {
+        const rows = await reader.read(query);
+        const total = await reader.count(countQuery(query));
+        return [rows, total];
+      };
+      const [rows, total] = this.activeTransaction === undefined
+        ? await this.provider.readSnapshot(operation)
+        : await operation(this.activeTransaction);
+      return [this.materializeRows<Entity>(descriptor, rows), total];
+    } catch (error: unknown) {
+      logQueryFailure(descriptor.tableName, error);
+      throw error;
+    }
   }
 
   /** Marks one entity or iterable of entities for insertion or update at flush. */
   persist<Entity extends object>(input: Entity | Iterable<Entity>): this {
-    for (const entity of toEntities(input)) {
-      const descriptor = this.resolveDescriptorFor(entity);
-      this.entityDescriptors.set(entity, descriptor);
-      this.unitOfWork.persist(descriptor, entity);
-      this.rememberIdentity(descriptor, entity);
+    try {
+      for (const entity of toEntities(input)) {
+        const descriptor = this.resolveDescriptorFor(entity);
+        this.entityDescriptors.set(entity, descriptor);
+        this.unitOfWork.persist(descriptor, entity);
+        this.rememberIdentity(descriptor, entity);
+      }
+      return this;
+    } catch (error: unknown) {
+      logLifecycleFailure(undefined, error);
+      throw error;
     }
-    return this;
   }
 
   /** Marks one entity or iterable of entities for removal at the next flush. */
   remove<Entity extends object>(input: Entity | Iterable<Entity>): this {
-    for (const entity of toEntities(input)) {
-      const canceledInsert = this.unitOfWork.remove(entity);
-      if (canceledInsert) this.forgetIdentity(entity);
+    try {
+      for (const entity of toEntities(input)) {
+        const canceledInsert = this.unitOfWork.remove(entity);
+        if (canceledInsert) this.forgetIdentity(entity);
+      }
+      return this;
+    } catch (error: unknown) {
+      // Removal can reject for unmanaged/unknown entities; the public error
+      // is rethrown unchanged after the redacted boundary record.
+      logLifecycleFailure(undefined, error);
+      throw error;
     }
-    return this;
   }
 
   /**
@@ -165,21 +210,49 @@ class EntityManagerImpl implements EntityManager {
    * outbox failure leaves the Unit of Work retryable.
    */
   async flush(): Promise<void> {
-    const plan = this.unitOfWork.collectFlushPlan();
-    if (plan.changes.length === 0) return;
+    const startedAt = Date.now();
+    // Inside transactional() an explicit flush joins the active transaction;
+    // only the transactional boundary logs so a joined-flush failure is never
+    // reported twice.
+    const joinsActiveTransaction = this.activeTransaction !== undefined;
+    let plan: ScalarEntityFlushPlan | undefined;
+    let changedTableCount = 0;
+    try {
+      // Flush-plan collection validates every pending change (primary keys,
+      // identity conflicts, unmanaged entities); failures are boundary
+      // records here, rethrown unchanged.
+      plan = this.unitOfWork.collectFlushPlan();
+      if (plan.changes.length === 0) return;
+      changedTableCount = new Set(
+        plan.changes.map((change) => change.row.tableName),
+      ).size;
+      const flushPlan = plan;
 
-    if (this.activeTransaction !== undefined) {
-      await applyFlushPlan(this.activeTransaction, plan);
-      await this.activeTransaction.flush();
-      this.completeFlush(plan);
-      return;
+      if (this.activeTransaction !== undefined) {
+        await applyFlushPlan(this.activeTransaction, flushPlan);
+        await this.activeTransaction.flush();
+        this.completeFlush(flushPlan);
+        return;
+      }
+
+      await this.provider.beginTransaction(async (transaction) => {
+        await applyFlushPlan(transaction, flushPlan);
+        await transaction.flush();
+      });
+      this.completeFlush(flushPlan);
+    } catch (error: unknown) {
+      if (!joinsActiveTransaction) {
+        logHikouteiInternalEvent({
+          event: HIKOUTEI_LOG_EVENTS.EM_FLUSH_FAILED,
+          level: "error",
+          component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
+          ...describeErrorForInternalLog(error),
+          durationMs: Date.now() - startedAt,
+          counts: { changes: plan?.changes.length ?? 0, tables: changedTableCount },
+        });
+      }
+      throw error;
     }
-
-    await this.provider.beginTransaction(async (transaction) => {
-      await applyFlushPlan(transaction, plan);
-      await transaction.flush();
-    });
-    this.completeFlush(plan);
   }
 
   /**
@@ -216,6 +289,12 @@ class EntityManagerImpl implements EntityManager {
       // A provider can reject after an explicit inner flush (for example when
       // the outer callback throws). Restore snapshots, values, and identity
       // keys so entities loaded inside the failed callback remain retryable.
+      logHikouteiInternalEvent({
+        event: HIKOUTEI_LOG_EVENTS.EM_TRANSACTIONAL_FAILED,
+        level: "error",
+        component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
+        ...describeErrorForInternalLog(error),
+      });
       this.unitOfWork.restore(checkpoint);
       this.identityMap.clear();
       for (const [key, entity] of identityCheckpoint) this.identityMap.set(key, entity);
@@ -328,6 +407,28 @@ export function createEntityManager(
   descriptors: ReadonlyMap<string, ResolvedHikouteiEntityDescriptor>,
 ): EntityManager {
   return new EntityManagerImpl(provider, descriptors);
+}
+
+/** Logs one read-path failure with a sanitized table scope (fail-open). */
+function logQueryFailure(tableName: string, error: unknown): void {
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.EM_QUERY_FAILED,
+    level: "warn",
+    component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
+    table: tableName,
+    ...describeErrorForInternalLog(error),
+  });
+}
+
+/** Logs one lifecycle validation failure (create/persist) (fail-open). */
+function logLifecycleFailure(tableName: string | undefined, error: unknown): void {
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.EM_LIFECYCLE_INVALID,
+    level: "warn",
+    component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
+    ...(tableName === undefined ? {} : { table: tableName }),
+    ...describeErrorForInternalLog(error),
+  });
 }
 
 function buildEntityInstance(

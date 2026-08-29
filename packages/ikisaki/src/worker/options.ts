@@ -21,8 +21,8 @@ export interface EffectWorkerBaseOptions {
    * set, a pass claims up to this many append candidates through a dedicated
    * ready fast-append selection (so a regular/recovery backlog ahead of them
    * cannot starve appends), and keeps the regular/recovery claim window at
-   * the bounded 20-effect limit. Direct workers and fake dispatchers omit it
-   * and keep the 20-item window.
+   * the bounded 100-effect limit. Direct workers and fake dispatchers omit it
+   * and keep the 100-item window.
    */
   readonly maxFastAppendCandidates?: number;
   /**
@@ -51,6 +51,13 @@ export interface AdaptiveEffectBatchControllerLike {
     readonly responseSucceeded: boolean;
     readonly responseLoss: boolean;
   }): void;
+  /** Records one read-ahead preflight outcome so slow/failed reads back off. */
+  observePreflight?(routeKey: string, observation: {
+    readonly durationMs: number;
+    readonly succeeded: boolean;
+  }): void;
+  /** Drops a route's buffered preflight latency when its prepared unit is abandoned. */
+  abandonPreflight?(routeKey: string): void;
   waitForCoalescing(now?: number): Promise<number>;
   beginAppendDispatch(now?: number): void;
   waitForAppendThrottle(now?: number): Promise<number>;

@@ -17,11 +17,38 @@ import type { Presence } from "../state.js";
 import type { ClaimedEffect } from "./contracts.js";
 import type { ProviderTiming } from "./timing.js";
 
+/**
+ * Renews the effect leases of one claimed batch.
+ *
+ * Returns true only when every effect in the batch is still claimed and its
+ * lease was extended. A false result means at least one effect could not be
+ * renewed (expired or taken over); the caller must abort before any remote
+ * request and requeue/recover the batch through the durable outbox.
+ */
+export type EffectLeaseRenewal = (items: readonly ClaimedEffect[]) => Promise<boolean>;
+
 /** One route-bound batch of pending effects handed to the dispatcher. */
 export interface DispatchRequest {
   /** Opaque route identity produced by `Dispatcher.routeKeyFor`. */
   readonly routeKey: string;
   readonly effects: readonly PendingEffect[];
+  /**
+   * Optional lease-renewal hook the HOST dispatcher must invoke immediately
+   * before the provider remote call, after every internal serialization lane
+   * and limiter wait the host applies.
+   *
+   * The worker supplies the hook so the effect lease is renewed as late as
+   * possible: queue time on the physical-sheet mutation lane plus shared
+   * limiter waits can otherwise outlive a lease refreshed before dispatch
+   * starts. The hook is already bound to the request's claimed effects (the
+   * host only sees `PendingEffect` rows and cannot renew claims itself). When
+   * the hook is present, the host dispatcher must never issue a remote
+   * request without first invoking it, and must abort the whole batch with a
+   * classified delivery-uncertain/requeue-safe error when it resolves false
+   * or throws. Dispatchers that do not perform remote work (fakes, tests)
+   * must simply ignore the hook.
+   */
+  readonly beforeRemoteDispatch?: () => Promise<boolean>;
 }
 
 /** Receipt-backed per-effect fast-append outcome. */
@@ -124,6 +151,19 @@ export interface ApplyOutcome {
   readonly timing?: ProviderTiming;
 }
 
+/**
+ * Opaque prepared-apply state returned by `preflight` and consumed by
+ * `applyPrepared`.
+ *
+ * The worker never inspects the value; the host dispatcher owns its concrete
+ * shape and narrows it back with its own runtime guard at the
+ * `applyPrepared` boundary. Marked nominal so the worker cannot fabricate or
+ * cast an unrelated value through the pipeline.
+ */
+export interface PreparedDispatch {
+  readonly __preparedDispatch: "hikoutei/dispatcher/prepared";
+}
+
 /** Read-back classification of one response-loss effect after a probe. */
 export type Postcondition =
   | {
@@ -200,8 +240,43 @@ export interface FastAppendDispatcher {
    * value.
    */
   isFastAppendCandidate(effect: PendingEffect): boolean;
+  /**
+   * Builds the worker-visible grouping key for fast-append effects.
+   *
+   * Unlike `routeKeyFor` (which distinguishes every physical route so the
+   * regular read-ahead pipeline can overlap one route's preflight with another
+   * route's write), the fast-append grouping key must keep effects that the
+   * provider commits in ONE atomic batch together. A host whose provider
+   * appends multiple tabs/spreadsheets atomically (one batchUpdate) returns a
+   * spreadsheet-scoped key here so the worker sends the whole multi-route
+   * batch in a single `fastAppend` call instead of splitting it per route. An
+   * absent declaration falls back to `routeKeyFor`, preserving legacy
+   * per-route append grouping for providers that cannot combine routes.
+   *
+   * No-throw contract, exactly like `routeKeyFor`.
+   */
+  fastAppendRouteKeyFor?(effect: PendingEffect): string;
   /** Dispatches append-only rows through the idempotent bulk operation. */
   fastAppend(request: DispatchRequest): Promise<FastAppendOutcome>;
+  /**
+   * Declares the dispatch-priority class of one pending effect.
+   *
+   * The worker runs READY effects in ascending priority order across both
+   * dispatch buckets (fast-append and regular), so a host can keep its
+   * critical projection ahead of unrelated work without touching claim
+   * windows, leases, fencing, predecessor ordering, the limiter, or bounded
+   * fairness. The method is optional: an absent declaration means every
+   * effect has priority 0 and the worker keeps the legacy order (all fast
+   * append groups before all regular groups).
+   *
+   * The priority is a payload-derived decision owned by the dispatcher; the
+   * worker never interprets effect payloads. Lower numbers run earlier;
+   * ties keep the ready-selection order (the sort is stable). No-throw
+   * contract: the predicate must never throw and must always return a
+   * number as a value; the worker guards the call defensively and degrades
+   * a throwing declaration to priority 0 for the affected group.
+   */
+  dispatchPriorityFor?(effect: PendingEffect): number;
 }
 
 /** Route, validation, apply, and postcondition-probe role of the dispatcher. */
@@ -231,6 +306,29 @@ export interface EffectDispatcher {
   payloadValidationError(effect: PendingEffect): Presence<string>;
   /** Dispatches one regular effect batch. */
   apply(request: DispatchRequest): Promise<ApplyOutcome>;
+  /**
+   * Optional split-dispatch preflight: read+plan stage for one regular batch.
+   *
+   * Returns an opaque `PreparedDispatch` token that `applyPrepared` later
+   * consumes for the write+verify stage. A dispatcher implementing BOTH
+   * `preflight` and `applyPrepared` lets the worker overlap one route's
+   * preflight (a read) with another route's applyPrepared (write+verify). A
+   * dispatcher implementing neither keeps the single legacy `apply` path;
+   * implementing only one of the two is invalid and the worker treats it as
+   * legacy `apply`. The preflight must NOT perform any remote mutation or
+   * effect-lease renewal (renewal stays in `applyPrepared`'s before-remote
+   * hook), so it is safe to run while another route writes.
+   */
+  preflight?(request: DispatchRequest): Promise<PreparedDispatch>;
+  /**
+   * Optional split-dispatch write+verify stage, consuming `preflight` state.
+   *
+   * Must honor `DispatchRequest.beforeRemoteDispatch` exactly like `apply`:
+   * renew the effect lease immediately before the remote call and abort the
+   * whole batch with a classified delivery-uncertain error when the renewal
+   * fails. Only present together with `preflight`.
+   */
+  applyPrepared?(request: DispatchRequest, prepared: PreparedDispatch): Promise<ApplyOutcome>;
   /** Reads back response-loss effects so the worker can settle them safely. */
   readPostconditions(request: DispatchRequest): Promise<PostconditionOutcome>;
 }
@@ -262,10 +360,24 @@ export interface AuthorityDispatcher {
  * The dispatcher boundary implemented by the host application.
  *
  * The dispatcher owns every payload-derived decision: route keys, fast-append
- * candidacy, payload validation, the User_Input candidate gate, remote
- * evidence validation against effect targets, and transport-outcome
- * classification. The worker owns selection, claiming, grouping, lease
- * refresh, transitions, and recovery.
+ * candidacy, dispatch priority, payload validation, the User_Input candidate
+ * gate, remote evidence validation against effect targets, and transport-outcome
+ * classification. The worker owns selection, claiming, grouping, fence
+ * preparation, transitions, and recovery.
+ *
+ * The worker supplies `DispatchRequest.beforeRemoteDispatch` so the host can
+ * renew effect leases after its own serialization/limiter waits but before
+ * the provider remote call. A host dispatcher that performs remote work MUST
+ * invoke that hook (when present) immediately before the remote call and
+ * abort with a classified delivery-uncertain error when it fails; remote-less
+ * dispatchers ignore it.
+ *
+ * Ready effects run in ascending `dispatchPriorityFor` order across both
+ * dispatch buckets (see `FastAppendDispatcher.dispatchPriorityFor`); a
+ * dispatcher that omits the declaration keeps the legacy order. The ordering
+ * never forces unready predecessors: claiming still enforces the durable
+ * per-target predecessor guard, and every claimed group is dispatched in the
+ * same pass, so non-priority work cannot starve.
  */
 export type Dispatcher =
   FastAppendDispatcher & EffectDispatcher & CandidateGateDispatcher & AuthorityDispatcher;

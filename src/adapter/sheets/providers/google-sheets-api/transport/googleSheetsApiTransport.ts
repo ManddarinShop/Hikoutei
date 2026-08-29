@@ -11,12 +11,25 @@
 
 import { GoogleAuth } from "google-auth-library";
 import { sheets, type sheets_v4 } from "@googleapis/sheets";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
+import { presentValue, absentValue, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+} from "../../../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../../../../../shared/observability/logEvents.js";
 import { GOOGLE_SHEETS_API_SCOPES } from "../constants.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
 } from "../errors.js";
+import {
+  parseRawErrorRecord,
+  parseRawErrorText,
+  parseRawHttpStatus,
+} from "./rawErrorSchemas.js";
 
 /** REST `CellFormat.numberFormat` object written by the provider. */
 export interface GoogleSheetsApiNumberFormat {
@@ -128,6 +141,25 @@ export interface GoogleSheetsApiBatchUpdateRequest {
 export interface GoogleSheetsApiTransport {
   getSpreadsheet(request: GoogleSheetsApiGetSpreadsheetRequest): Promise<unknown>;
   batchUpdate(request: GoogleSheetsApiBatchUpdateRequest): Promise<unknown>;
+  /**
+   * Raw `spreadsheets.values.get` capability. Optional so existing test
+   * stubs keep implementing the interface unchanged; only the existing-sheet
+   * adoption reader consumes it (it must read foreign tabs that carry no
+   * registered route metadata).
+   */
+  getValues?(request: GoogleSheetsApiValuesGetRequest): Promise<GoogleSheetsApiValuesGetResponse>;
+}
+
+/** Request shape of one `spreadsheets.values.get` call. */
+export interface GoogleSheetsApiValuesGetRequest {
+  readonly spreadsheetId: string;
+  readonly range: string;
+  readonly timeoutMs?: number;
+}
+
+/** Raw `spreadsheets.values.get` response body (untrusted). */
+export interface GoogleSheetsApiValuesGetResponse {
+  readonly values?: readonly (readonly (string | number | boolean | null)[])[];
 }
 
 /** Auth type accepted by the sheets factory (may resolve to a nested version). */
@@ -181,7 +213,28 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
       );
       return response.data;
     } catch (error: unknown) {
-      throw classifyGoogleSheetsApiError(error);
+      const mapped = classifyGoogleSheetsApiError(error);
+      logTransportFailure(mapped);
+      throw mapped;
+    }
+  }
+
+  public async getValues(
+    request: GoogleSheetsApiValuesGetRequest,
+  ): Promise<GoogleSheetsApiValuesGetResponse> {
+    try {
+      const response = await this.client.spreadsheets.values.get(
+        {
+          spreadsheetId: request.spreadsheetId,
+          range: request.range,
+        },
+        { timeout: request.timeoutMs ?? this.requestTimeoutMs, retry: false },
+      );
+      return { values: response.data.values ?? [] };
+    } catch (error: unknown) {
+      const mapped = classifyGoogleSheetsApiError(error);
+      logTransportFailure(mapped);
+      throw mapped;
     }
   }
 
@@ -201,7 +254,9 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
       );
       return response.data;
     } catch (error: unknown) {
-      throw classifyGoogleSheetsApiError(error);
+      const mapped = classifyGoogleSheetsApiError(error);
+      logTransportFailure(mapped);
+      throw mapped;
     }
   }
 }
@@ -248,6 +303,48 @@ export function classifyGoogleSheetsApiError(error: unknown): GoogleSheetsApiTra
   );
 }
 
+/**
+ * Emits one redacted transport-failure event (fail-open, no message text).
+ *
+ * Timeout, network, 429, 408, and 5xx failures are classified retryable so
+ * log consumers can bucket transient Sheets quota/pacing pressure; proven
+ * pre-mutation 4xx status codes (400/401/403/404) are not. The HTTP status
+ * is carried as a numeric count only; the spreadsheet ID, URL, and response
+ * body never reach the log.
+ */
+function logTransportFailure(error: GoogleSheetsApiTransportError): void {
+  const status = error.status.kind === PRESENCE_KINDS.PRESENT
+    ? error.status.value
+    : undefined;
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.TRANSPORT_REQUEST_FAILED,
+    level: "warn",
+    component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
+    code: error.code,
+    errorClass: "GoogleSheetsApiTransportError",
+    retryable: isRetryableTransportStatus(status),
+    ...(status === undefined ? {} : { counts: { status } }),
+  });
+}
+
+/**
+ * True when the status kind marks a transient remote condition.
+ *
+ * Mirrors the shared `isGoogleSheetsApiDeliveryUncertain` boundary: an
+ * absent status (timeout/network), HTTP 408 (request timeout — the proxy or
+ * API may still have committed the write), HTTP 429, and every 5xx are
+ * retryable/uncertain; the proven pre-mutation 4xx rejections (400, 401,
+ * 403, 404) are not. This only buckets telemetry — gaxios auto-retry stays
+ * disabled (`retry: false`), so a mutating call is never blindly retried
+ * here; the durable worker owns retries through the shared outcome
+ * classifier.
+ */
+export function isRetryableTransportStatus(status: number | undefined): boolean {
+  if (status === undefined) return true;
+  if (status === 408 || status === 429) return true;
+  return status >= 500;
+}
+
 interface GaxiosErrorShape {
   readonly code: string | undefined;
   readonly status: number | undefined;
@@ -255,34 +352,17 @@ interface GaxiosErrorShape {
 }
 
 function extractGaxiosErrorShape(error: unknown): GaxiosErrorShape {
-  if (error === null || typeof error !== "object") {
+  const record = parseRawErrorRecord(error);
+  if (record === undefined) {
     return { code: undefined, status: undefined, apiErrorStatus: undefined };
   }
-  const record = error as Record<string, unknown>;
-  const code = typeof record.code === "string" ? record.code : undefined;
-  const response = record.response;
-  const responseRecord = response !== null && typeof response === "object"
-    ? response as Record<string, unknown>
-    : undefined;
-  const rawStatus = responseRecord?.status;
-  const status = typeof rawStatus === "number" && Number.isInteger(rawStatus)
-    ? rawStatus
-    : typeof rawStatus === "string" && /^\d{3}$/.test(rawStatus)
-      ? Number(rawStatus)
-      : undefined;
-  let apiErrorStatus: string | undefined;
-  const data = responseRecord?.data;
-  const dataRecord = data !== null && typeof data === "object"
-    ? data as Record<string, unknown>
-    : undefined;
-  const errorBody = dataRecord?.error;
-  const errorRecord = errorBody !== null && typeof errorBody === "object"
-    ? errorBody as Record<string, unknown>
-    : undefined;
-  const rawApiStatus = errorRecord?.status;
-  if (typeof rawApiStatus === "string" && rawApiStatus.length > 0) {
-    apiErrorStatus = rawApiStatus;
-  }
+  const code = parseRawErrorText(record.code);
+  const responseRecord = parseRawErrorRecord(record.response);
+  const status = parseRawHttpStatus(record.status) ??
+    parseRawHttpStatus(responseRecord?.status);
+  const dataRecord = parseRawErrorRecord(responseRecord?.data);
+  const errorRecord = parseRawErrorRecord(dataRecord?.error);
+  const apiErrorStatus = parseRawErrorText(errorRecord?.status);
   return { code, status, apiErrorStatus };
 }
 

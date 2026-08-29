@@ -71,9 +71,10 @@ const ROUTE_BETA: RouteSpec = {
 
 describe("outbound effect dispatch batching", () => {
   describe("route grouping and predecessor order", () => {
-    it("groups effects by physical route and preserves selection order", () => {
-      // Input order intentionally interleaves two routes; grouping must keep
-      // each route together and preserve the per-route predecessor order.
+    it("groups effects by physical route and preserves selection order within each route", () => {
+      // Route grouping is per physical-sheet route (physical sheet + projection
+      // + tab + range + schema), so distinct routes group SEPARATELY and the
+      // worker can overlap one route's preflight with another route's write.
       const items = [
         makeItem(ROUTE_ALPHA, "a-1"),
         makeItem(ROUTE_BETA, "b-1"),
@@ -86,12 +87,13 @@ describe("outbound effect dispatch batching", () => {
 
       expect(groups).toHaveLength(2);
       const alpha = groups.find((group) => group.items[0]!.pending.effect_id === "a-1")!;
-      const beta = groups.find((group) => group.items[0]!.pending.effect_id === "b-1")!;
       expect(ids(alpha)).toEqual(["a-1", "a-2", "a-3"]);
+      const beta = groups.find((group) => group.items[0]!.pending.effect_id === "b-1")!;
       expect(ids(beta)).toEqual(["b-1", "b-2"]);
-      // Each route keeps one dispatcher route key carrying all of its effects.
+      // Each route shares its own dispatcher route key.
       expect(alpha.routeKey).toBe(sheetsRouteKeyFor(alpha.items[0]!.pending));
       expect(beta.routeKey).toBe(sheetsRouteKeyFor(beta.items[0]!.pending));
+      // Distinct routes never share one key.
       expect(alpha.routeKey).not.toBe(beta.routeKey);
     });
 
@@ -129,7 +131,10 @@ describe("outbound effect dispatch batching", () => {
       expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
     });
 
-    it("preserves physical-route grouping across distinct routes when chunking", () => {
+    it("chunks each distinct route at the Apps Script bounded effect batch", () => {
+      // Distinct tabs group SEPARATELY by route, so the oversized alpha route
+      // chunks at the bounded batch into [100, 3] and the small beta route
+      // stays one group.
       const items = [
         ...Array.from({ length: EFFECT_BATCH_LIMIT + 3 }, (_, index) =>
           makeItem(ROUTE_ALPHA, `a-${index}`),
@@ -157,7 +162,7 @@ describe("outbound effect dispatch batching", () => {
     });
 
     it("drains an oversized route in bounded passes without partial-response churn", async () => {
-      const count = EFFECT_BATCH_LIMIT * 2 + 5; // 45 effects on one route
+      const count = EFFECT_BATCH_LIMIT * 2 + 5; // 205 effects on one route
       const orm = await createOrm();
       openOrms.push(orm);
       const adapter = new MikroOrmSqliteAdapter(orm);
@@ -256,7 +261,9 @@ describe("outbound effect dispatch batching", () => {
     });
 
     it("converges a backlog across passes while preserving route order", async () => {
-      const count = EFFECT_BATCH_LIMIT + 7; // 27 effects, two chunks + remainder
+      // A fixed backlog larger than the worker's maxEffects (10): converges
+      // across three passes (10 + 10 + 7) independent of EFFECT_BATCH_LIMIT.
+      const count = 27;
       const orm = await createOrm();
       openOrms.push(orm);
       const adapter = new MikroOrmSqliteAdapter(orm);

@@ -25,6 +25,8 @@ import {
   listReadyFastAppendEffectsWithSql,
   markDeliveryUncertainWithAdapter,
   markDeliveryUncertainWithSql,
+  readOutboxScanReadinessWithAdapter,
+  readSystemStateDrainReadinessWithAdapter,
   readWriterLeaseWithAdapter,
   recoverExpiredLeasesWithSql,
   releaseWriterLeaseWithAdapter,
@@ -39,7 +41,7 @@ import {
   type PendingEffect,
   type SqlExecutor,
 } from "../src/index.js";
-import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS, WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/index.js";
+import { APPLICABILITY_KINDS, EFFECT_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS, WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/index.js";
 import {
   claimTestFence,
   createKernelStore,
@@ -607,6 +609,152 @@ describe("consistency-queue kernel", () => {
       });
     });
 
+    it("retains the durable revision for a lower-revision delete confirmation and still rejects the same lower non-delete", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+
+      // First a delivered create confirms durable revision 3.
+      const first = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [first]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: first.effectId,
+        claimToken: "claim-1",
+        leaseDurationMs: 30_000,
+      });
+      const baseConfirmation: EffectProjectionConfirmation = {
+        physicalSheetId: "physical-1",
+        projection: "system_state",
+        rowBindingId: "binding-1",
+        visibleRevision: 3,
+        visibleHash: "visible-hash-3",
+        entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+        fieldHashes: { name: "field-hash-3" },
+      };
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: first.effectId,
+          claimToken: "claim-1",
+          status: "applied",
+          projectionConfirmation: baseConfirmation,
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      // A same-ID recreate restarts the provider revision at 1 and advances
+      // the durable confirmed revision past 3 to 4 (the create rebase).
+      const second = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [second]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: second.effectId,
+        claimToken: "claim-2",
+        leaseDurationMs: 30_000,
+      });
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: second.effectId,
+          claimToken: "claim-2",
+          status: "applied",
+          projectionConfirmation: {
+            ...baseConfirmation,
+            visibleRevision: 1,
+            visibleHash: "visible-hash-1",
+            fieldHashes: { name: "field-hash-1" },
+            allowCreateRebaseline: true,
+          },
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      // A same-ID delete read back the pre-delete revision 1, below the durable
+      // 4. It must apply by retaining the durable revision (not rejecting and
+      // not incrementing), and its fields must apply at the same retained
+      // revision.
+      const third = newEffect({
+        effectKind: EFFECT_KINDS.USER_INPUT_DELETE,
+        rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" },
+      });
+      await appendPendingEffectsWithAdapter(adapter, fence, [third]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: third.effectId,
+        claimToken: "claim-3",
+        leaseDurationMs: 30_000,
+      });
+      expect(await withSql(adapter, (sql) =>
+        applyEffectResultWithSql(sql, {
+          ...fence,
+          effectId: third.effectId,
+          claimToken: "claim-3",
+          status: "applied",
+          projectionConfirmation: {
+            ...baseConfirmation,
+            visibleRevision: 1,
+            visibleHash: "visible-hash-delete",
+            fieldHashes: { name: "field-hash-delete" },
+          },
+          lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+          lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+        }))).toBe(true);
+
+      const visible = await adapter.read(({ sql }) =>
+        sql.get(
+          `SELECT confirmed_snapshot_hash, confirmed_visible_revision
+           FROM sheet_visible_state
+           WHERE physical_sheet_id = 'physical-1' AND projection = 'system_state' AND row_binding_id = 'binding-1'`,
+        ));
+      expect(visible).toMatchObject({
+        confirmed_snapshot_hash: "visible-hash-delete",
+        confirmed_visible_revision: 4,
+      });
+      const field = await adapter.read(({ sql }) =>
+        sql.get(
+          `SELECT confirmed_field_hash, confirmed_visible_revision, candidate_epoch
+           FROM sheet_visible_field_state
+           WHERE physical_sheet_id = 'physical-1' AND projection = 'system_state'
+             AND row_binding_id = 'binding-1' AND field_name = 'name'`,
+        ));
+      expect(field).toMatchObject({
+        confirmed_field_hash: "field-hash-delete",
+        confirmed_visible_revision: 4,
+        candidate_epoch: 0,
+      });
+
+      // An identical lower-revision confirmation that is NOT a delete must still
+      // fail closed as a regression, leaving the effect in processing.
+      const fourth = newEffect({ rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" } });
+      await appendPendingEffectsWithAdapter(adapter, fence, [fourth]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: fourth.effectId,
+        claimToken: "claim-4",
+        leaseDurationMs: 30_000,
+      });
+      await expect(
+        withSql(adapter, (sql) =>
+          applyEffectResultWithSql(sql, {
+            ...fence,
+            effectId: fourth.effectId,
+            claimToken: "claim-4",
+            status: "applied",
+            projectionConfirmation: {
+              ...baseConfirmation,
+              visibleRevision: 1,
+              visibleHash: "visible-hash-1",
+              fieldHashes: { name: "field-hash-1" },
+            },
+            lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
+            lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
+          })),
+      ).rejects.toMatchObject({
+        code: STORAGE_ERROR_CODES.PROJECTION_CONFIRMATION_REGRESSION,
+      });
+      expect((await readOutboxRow(adapter, fourth.effectId))?.status).toBe("processing");
+    });
+
     it("rejects confirmation evidence that does not belong to the claimed effect", async () => {
       const adapter = createKernelStore();
       const fence = await claimTestFence(adapter);
@@ -1068,4 +1216,235 @@ describe("consistency-queue kernel", () => {
       })).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
     });
   });
+});
+
+describe("outbox readiness classifications", () => {
+  /** Marks one effect terminal-failed with a NON-recoverable error code. */
+  async function failTerminal(adapter: NodeSqliteTestAdapter, effectId: string): Promise<void> {
+    await adapter.transaction(async ({ sql }) => {
+      await sql.run(
+        "UPDATE sheet_effect_outbox SET status = 'failed', last_error_code = ? WHERE effect_id = ?",
+        ["delivery_uncertain_timeout", effectId],
+      );
+    });
+  }
+
+  it("classifies normal claimable work as busy and a clean outbox as idle", async () => {
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    await expect(readOutboxScanReadinessWithAdapter(adapter)).resolves.toEqual({ status: "idle" });
+
+    await appendPendingEffectsWithAdapter(adapter, fence, [regularEffect("busy-1")]);
+    await expect(readOutboxScanReadinessWithAdapter(adapter)).resolves.toEqual({ status: "busy" });
+  });
+
+  it("classifies a terminal failed head with a pending follower as repair-needed, not busy", async () => {
+    // The first-scan busy gate must NEVER defer the reconciliation scanner
+    // behind a terminal failed head: the scanner is the repair net that
+    // supersedes the head, so deferring would wedge the stream forever. A
+    // pending follower behind such a head must therefore classify as
+    // repair-needed (allowed), never busy.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const head = regularEffect("repair-head");
+    const follower = newEffect({
+      effectId: "repair-follower",
+      targetId: "entity-repair-head",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: "baseline-1",
+    });
+    await appendPendingEffectsWithAdapter(adapter, fence, [head, follower]);
+    await failTerminal(adapter, head.effectId);
+
+    await expect(readOutboxScanReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "repair-needed",
+    });
+  });
+
+  it("classifies a recoverable failed head as idle, not repair-needed or busy", async () => {
+    // A failed head whose error code stays on the worker's own retry path is
+    // NOT a terminal wedge: the worker keeps claiming it, so it is neither
+    // claimable busy work nor a repair-needed terminal head — the scanner
+    // gate allows it either way.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const head = regularEffect("recoverable-head");
+    await appendPendingEffectsWithAdapter(adapter, fence, [head]);
+    await adapter.transaction(async ({ sql }) => {
+      await sql.run(
+        "UPDATE sheet_effect_outbox SET status = 'failed', last_error_code = ? WHERE effect_id = ?",
+        [SYNC_EFFECT_RECOVERY_ERROR_CODES.POSTCONDITION_READ_FAILED, head.effectId],
+      );
+    });
+
+    await expect(readOutboxScanReadinessWithAdapter(adapter)).resolves.toEqual({ status: "idle" });
+  });
+
+  it("classifies a pending follower behind a conflict or blocked_candidate head as idle, not busy", async () => {
+    // A conflict/blocked_candidate row is a candidate-pipeline lifecycle
+    // state, not claimable drain work, and the pending follower behind it is
+    // not claimable either: counting that follower as busy would defer the
+    // first reconciliation scan forever and suppress the repair that
+    // supersedes the lifecycle head. The readiness must be idle so the
+    // first scan is allowed without anyone manually releasing the follower.
+    for (const status of ["conflict", "blocked_candidate"] as const) {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      const head = newEffect({ effectId: `lifecycle-head-${status}`, targetId: "entity-lifecycle-head" });
+      const follower = newEffect({
+        effectId: `lifecycle-follower-${status}`,
+        targetId: "entity-lifecycle-head",
+        expectedVisibleRevision: 1,
+        expectedVisibleHash: "baseline-1",
+      });
+      await appendPendingEffectsWithAdapter(adapter, fence, [head, follower]);
+      await adapter.transaction(async ({ sql }) => {
+        await sql.run(
+          "UPDATE sheet_effect_outbox SET status = ? WHERE effect_id = ?",
+          [status, head.effectId],
+        );
+      });
+
+      await expect(readOutboxScanReadinessWithAdapter(adapter)).resolves.toEqual({ status: "idle" });
+      // The follower is still pending but not claimable while its lifecycle
+      // predecessor is open — only a scanner repair can advance the stream.
+      await expect(
+        withSql(adapter, (sql) => listReadyEffectsWithSql(sql, 10, TEST_NOW)),
+      ).resolves.toEqual([]);
+    }
+  });
+
+  it("classifies a failed row with a NULL error code as repair-needed, not busy or idle", async () => {
+    // A `failed` row whose last_error_code is NULL must be treated as a
+    // terminal failed head: SQL three-valued logic would hide it from
+    // `NOT IN`, silently classifying a wedged stream as idle and letting
+    // the first-scan gate defer recovery. The scanner must be allowed to
+    // supersede the head so the pending follower drains without a manual
+    // release.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const head = regularEffect("null-code-head");
+    const follower = newEffect({
+      effectId: "null-code-follower",
+      targetId: "entity-null-code-head",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: "baseline-1",
+    });
+    await appendPendingEffectsWithAdapter(adapter, fence, [head, follower]);
+    await adapter.transaction(async ({ sql }) => {
+      await sql.run(
+        "UPDATE sheet_effect_outbox SET status = 'failed', last_error_code = NULL WHERE effect_id = ?",
+        [head.effectId],
+      );
+    });
+
+    await expect(readOutboxScanReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "repair-needed",
+    });
+  });
+
+  it("classifies System_State drain readiness as draining while nonterminal work exists", async () => {
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    await expect(readSystemStateDrainReadinessWithAdapter(adapter)).resolves.toEqual({ status: "ready" });
+
+    await appendPendingEffectsWithAdapter(adapter, fence, [
+      newEffect({ effectId: "sys-drain-1", targetId: "entity-sys-drain-1" }),
+      newEffect({ effectId: "sys-drain-2", targetId: "entity-sys-drain-2" }),
+    ]);
+    await expect(readSystemStateDrainReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "draining",
+    });
+
+    // Terminal lifecycle states never defer the gate: a failed System_State
+    // head and an open conflict must not stall the first polling pass.
+    await failTerminal(adapter, "sys-drain-1");
+    await adapter.transaction(async ({ sql }) => {
+      await sql.run(
+        "UPDATE sheet_effect_outbox SET status = 'conflict' WHERE effect_id = ?",
+        ["sys-drain-2"],
+      );
+    });
+    await expect(readSystemStateDrainReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "ready",
+    });
+  });
+
+  it("classifies a pending follower behind a conflict predecessor as ready, not draining", async () => {
+    // The System_State drain gate must never defer the first polling pass (or
+    // an external convergence barrier) behind a terminal conflict head: the
+    // blocked follower is not claimable drain work, so the barrier must be
+    // ready even though no worker can claim the stream until a later effect
+    // supersedes it. Releasing the head makes the follower claimable again,
+    // which flips the classification back to draining.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const head = newEffect({ effectId: "sys-conflict-head", targetId: "entity-sys-conflict" });
+    const follower = newEffect({
+      effectId: "sys-conflict-follower",
+      targetId: "entity-sys-conflict",
+    });
+    await appendPendingEffectsWithAdapter(adapter, fence, [head, follower]);
+    // Both are pending in one stream: the lower stream row is a claimable
+    // head, so the gate is draining.
+    await expect(readSystemStateDrainReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "draining",
+    });
+    // Wedge the stream: the head becomes a terminal conflict, leaving the
+    // follower pending and blocked behind it. It is not claimable drain work,
+    // so readiness must be ready — never draining.
+    await adapter.transaction(({ sql }) =>
+      sql.run("UPDATE sheet_effect_outbox SET status = 'conflict' WHERE effect_id = ?", [head.effectId]),
+    );
+    await expect(readSystemStateDrainReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "ready",
+    });
+    // Releasing the head makes the follower claimable again: draining.
+    await adapter.transaction(({ sql }) =>
+      sql.run("UPDATE sheet_effect_outbox SET status = 'superseded' WHERE effect_id = ?", [head.effectId]),
+    );
+    await expect(readSystemStateDrainReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "draining",
+    });
+  });
+
+  it("ignores non-System_State effects in the System_State drain classification", async () => {
+    // The drain gate is scoped to the System_State projection only: pending
+    // work on other projections (User_Input, Sync_Conflicts) must not defer
+    // the first polling pass, and pending System_State work must not be
+    // masked by the whole-outbox view.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    await appendPendingEffectsWithAdapter(adapter, fence, [
+      newEffect({
+        effectId: "other-projection-1",
+        projection: "user_input",
+        targetKind: "row_binding",
+        targetId: "row-binding-1",
+        expectedVisibleRevision: 1,
+        expectedVisibleHash: "baseline-1",
+      }),
+      newEffect({
+        effectId: "other-projection-2",
+        projection: "sync_conflicts",
+        targetKind: "conflict",
+        targetId: "conflict-1",
+        expectedVisibleRevision: 0,
+        expectedVisibleHash: "",
+      }),
+    ]);
+    await expect(readSystemStateDrainReadinessWithAdapter(adapter)).resolves.toEqual({
+      status: "ready",
+    });
+    await expect(readOutboxScanReadinessWithAdapter(adapter)).resolves.toEqual({ status: "busy" });
+  });
+
+  function regularEffect(effectId: string): ReturnType<typeof newEffect> {
+    return newEffect({
+      effectId,
+      targetId: "entity-" + effectId,
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: "baseline-1",
+    });
+  }
 });

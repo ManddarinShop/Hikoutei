@@ -31,7 +31,7 @@ import {
 } from "../model/preflightFields.js";
 import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
 import type { ParsedGridData } from "../model/preflightContext.js";
-import { invalidProviderState } from "../errors.js";
+import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import {
   buildSnapshotFromTab,
@@ -108,15 +108,20 @@ export async function readRowsBatch(
   for (const { request, definition } of routes) {
     const sheet = document.sheets.find((candidate) => candidate.title === request.sheetName);
     if (sheet === undefined) {
+      // A structurally valid GET can simply lack the requested tab; a generic
+      // table read has no missing-tab taxonomy pair, so it keeps the safe
+      // unclassified default.
       invalidProviderState(`Registered sync sheet does not exist: ${request.sheetName}`);
     }
     const grid = document.grids.get(sheet.sheetId);
     if (grid === undefined) {
-      invalidProviderState(`grid data is missing for sheet ${sheet.sheetId}`);
+      // The request explicitly required grid data for a present tab.
+      invalidProviderState(`grid data is missing for sheet ${sheet.sheetId}`, GET_REPLY_MALFORMED);
     }
     const rows = buildTableRowsFromGrid(grid, {
       registeredRange: request.registeredRange,
       headers: definition.headers,
+      ...(definition.physicalHeaders === undefined ? {} : { physicalHeaders: definition.physicalHeaders }),
       checkboxHeaders: definition.checkboxHeaders ?? [],
       anchorColumn: anchorColumnFor(request.registeredRange, request.projection),
     });
@@ -139,6 +144,8 @@ export async function readSnapshot(
   const tabs = await readObservedTabs(deps, [request]);
   const tab = tabs.get(request.sheetName);
   if (tab === undefined) {
+    // A valid GET lacking the tab is a missing tab in generic observation
+    // context, not a malformed reply: keep the unclassified default.
     invalidProviderState(`Registered sync sheet does not exist: ${request.sheetName}`);
   }
   return buildSnapshotFromTab(tab, target);
@@ -190,6 +197,7 @@ export async function observeSnapshots(
     const anchors = planRowAnchors(tab, {
       registeredRange: request.registeredRange,
       headers: target.headers,
+      ...(target.physicalHeaders === undefined ? {} : { physicalHeaders: target.physicalHeaders }),
       checkboxHeaders: target.checkboxHeaders,
       anchorColumn: target.anchorColumn,
     });

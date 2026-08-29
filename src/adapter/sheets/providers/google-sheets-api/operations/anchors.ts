@@ -46,12 +46,15 @@ export async function ensureRowAnchors(
   const tabs = await readObservedTabs(deps, [request]);
   const tab = tabs.get(request.sheetName);
   if (tab === undefined) {
+    // A valid GET lacking the tab is a missing tab in anchor context, not a
+    // malformed reply: keep the safe unclassified default.
     invalidProviderState(`Registered sync sheet does not exist: ${request.sheetName}`);
   }
   const anchorColumn = anchorColumnFor(request.registeredRange, request.projection);
   const plan = planRowAnchors(tab, {
     registeredRange: request.registeredRange,
     headers: definition.headers,
+    ...(definition.physicalHeaders === undefined ? {} : { physicalHeaders: definition.physicalHeaders }),
     checkboxHeaders: definition.checkboxHeaders ?? [],
     anchorColumn,
   });

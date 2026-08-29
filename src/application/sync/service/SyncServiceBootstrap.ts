@@ -19,6 +19,7 @@
 
 import {
   createInternalHikoutei,
+  type Hikoutei,
 } from "../../../api/Hikoutei.js";
 import {
   resolveEntityDescriptors,
@@ -48,9 +49,36 @@ import {
   planMappedFlushConflictSyncWithSql,
 } from "../inbound/autoSystemConflictResolution.js";
 import { createRemoteProvider } from "./remoteProvider.js";
+import {
+  planExistingSheetAdoptionStartup,
+  resolveAdoptionReaderTransport,
+  type ExistingSheetAdoptionStartupPlan,
+  withAdoptionRegisteredRangeOverride,
+  withAdoptedPhysicalHeaders,
+} from "./adopt/existingSheetAdoption.js";
+import {
+  applyAdoptionSystemColumns,
+  completeExistingSheetAdoption,
+} from "./adopt/adoptionSeeding.js";
 import { createEffectSupervisor } from "./effectSupervisor.js";
 import { createPollingSupervisor } from "./pollingSupervisor.js";
 import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
+import {
+  registerSystemStateReadiness,
+  unregisterSystemStateReadiness,
+} from "./systemStateReadiness.js";
+import {
+  describeErrorForInternalLog,
+  logHikouteiInternalEvent,
+} from "../../../shared/observability/internalLog.js";
+import {
+  HIKOUTEI_LOG_COMPONENTS,
+  HIKOUTEI_LOG_EVENTS,
+} from "../../../shared/observability/logEvents.js";
+import {
+  SYNC_SERVICE_ERROR_CODES,
+  SyncServiceError,
+} from "./errors.js";
 import {
   createWriterOptions,
   throwSyncResolutionError,
@@ -76,7 +104,37 @@ export async function createInternalSyncService(
 ): Promise<InternalSyncService> {
   const descriptors = resolveEntityDescriptors(options.entities, throwSyncResolutionError);
   validateServiceOptions(options, descriptors);
-  const generated = createMikroOrmScalarRuntime(options.entities, options.projections);
+
+  // Existing-sheet adoption planning (D5, fail-closed): reads the foreign
+  // tab BEFORE any mutation. dry-run throws the full report; adopt computes
+  // the managed layout and the User_Input registered-range override.
+  let adoptionPlan: ExistingSheetAdoptionStartupPlan | undefined;
+  if (options.adopt !== undefined) {
+    adoptionPlan = await planExistingSheetAdoptionStartup({
+      adopt: options.adopt,
+      spreadsheetId: options.projections.spreadsheetId,
+      transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
+      descriptors: [...descriptors.values()],
+      projections: options.projections,
+      userOwnedFieldsByEntity: Object.fromEntries(
+        Object.entries(options.projections.entities).map(([name, config]) => [
+          name,
+          config.userOwnedFields ?? [],
+        ]),
+      ),
+      ...(options.googleSheetsApi?.requestTimeoutMs === undefined
+        ? {}
+        : { requestTimeoutMs: options.googleSheetsApi.requestTimeoutMs }),
+    });
+  }
+  // The adopted User_Input route's registered range is DERIVED from the
+  // foreign layout (managed span + row-id column), so the declared range is
+  // replaced rather than trusted.
+  const effectiveProjections = adoptionPlan === undefined
+    ? options.projections
+    : withAdoptionRegisteredRangeOverride(options.projections, adoptionPlan);
+
+  const generated = createMikroOrmScalarRuntime(options.entities, effectiveProjections);
   const writer = createWriterOptions(options);
   // The effect worker claims its own lease role with the same runtime identity
   // as the mapped writer unless the caller pinned an explicit worker id; one
@@ -114,12 +172,105 @@ export async function createInternalSyncService(
       ...await registerSyncConflictProjectionRoutes(
         runtime.storage,
         runtime.registrations,
-        options.projections,
+        effectiveProjections,
         writer,
       ),
     ];
-    const remote = createRemoteProvider(options, projectionDefinitions);
-    await provisionRegisteredSyncSheets(remote.provisioner, projectionDefinitions);
+    // §12 columnMap: the ADOPTED User_Input route's physical header row
+    // carries the legacy headers (positionally parallel to the canonical
+    // field-name headers, guaranteed by the C4 declaration-order gate plus
+    // the appended-PK-last rule). Attach the physical headers to exactly
+    // that one definition — provisioning, observation, and the writer all
+    // read the translation from this single source. A name-bound route
+    // (no columnMap) derives identical physical headers, so attaching them
+    // unconditionally for adopted routes is a no-op there.
+    const definitionsForRemote = adoptionPlan === undefined
+      ? projectionDefinitions
+      : withAdoptedPhysicalHeaders(projectionDefinitions, adoptionPlan);
+    const remote = createRemoteProvider(options, definitionsForRemote);
+    if (adoptionPlan !== undefined) {
+      // D7 (F3): adoption resolves tab names case-insensitively, so two
+      // entities adopting `Invoices` and `invoices` collapse onto ONE sheet
+      // id. Applying system columns twice to the same tab (or provisioning it
+      // twice) corrupts it, so reject duplicate resolved sheet ids BEFORE the
+      // first mutation.
+      const seenAdoptionSheetIds = new Set<number>();
+      for (const adoptionEntity of adoptionPlan.entities) {
+        if (seenAdoptionSheetIds.has(adoptionEntity.sheetId)) {
+          throw new SyncServiceError(
+            SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+            `existing-sheet adoption resolves multiple entities to the same tab (sheet id ${adoptionEntity.sheetId}); adopt tab names must be distinct.`,
+          );
+        }
+        seenAdoptionSheetIds.add(adoptionEntity.sheetId);
+      }
+      // D7 (fail-closed): adoption requires an empty canonical state for EACH
+      // adopted entity — a nonempty local state would silently merge with (or
+      // collide against) the adopted rows. Validate EVERY adopted entity before
+      // the first sheet mutation so a later entity can never leave an earlier
+      // one's system columns already written (multi-entity adoption).
+      for (const adoptionEntity of adoptionPlan.entities) {
+        const adoptionMapping = runtime.mappings.mappings.find(
+          (candidate) => candidate.entityName === adoptionEntity.entityName,
+        );
+        if (adoptionMapping !== undefined) {
+          const existing = await runtime.storage.transaction(async ({ sql }) =>
+            sql.all<{ entity_id: string }>(
+              "SELECT entity_id FROM entity_state WHERE entity_id IN (SELECT entity_id FROM row_binding WHERE logical_sheet_id = ?)",
+              [adoptionMapping.logicalSheetId],
+            ));
+          if (existing.length > 0) {
+            throw new SyncServiceError(
+              SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+              `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}"; found ${existing.length} existing row(s).`,
+            );
+          }
+        }
+        // D7 also covers the application-owned ORM entity table: seeding INSERTs
+        // into it, so any pre-existing row would collide (or silently merge)
+        // with the adopted rows. Fail closed BEFORE the first sheet mutation.
+        const ormRowCount = await runtime.storage.transaction(async ({ sql }) =>
+          sql.get<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM ${adoptionEntity.entityTableName}`,
+            [],
+          ));
+        if ((ormRowCount?.count ?? 0) > 0) {
+          throw new SyncServiceError(
+            SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+            `existing-sheet adoption requires an empty SQLite state for entity "${adoptionEntity.entityName}": table "${adoptionEntity.entityTableName}" already holds ${ormRowCount?.count ?? 0} row(s).`,
+          );
+        }
+      }
+      // D7 (fail-closed, second pass): ONLY once every adopted entity's local
+      // state is proven empty do we write system columns. This second loop has
+      // no throw points before/among its writes, so no entity is ever mutated
+      // when the adoption as a whole must reject.
+      for (const adoptionEntity of adoptionPlan.entities) {
+        await applyAdoptionSystemColumns({
+          transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
+          spreadsheetId: options.projections.spreadsheetId,
+          sheetId: adoptionEntity.sheetId,
+          rowIdColumnIndex: adoptionEntity.rowIdColumnIndex,
+          ...(adoptionEntity.pkAppend === undefined
+            ? {}
+            : { pkAppend: adoptionEntity.pkAppend }),
+          rows: adoptionEntity.dataRows,
+        });
+      }
+    }
+    await provisionRegisteredSyncSheets(remote.provisioner, definitionsForRemote);
+    if (adoptionPlan !== undefined) {
+      // Observe the adopted tab (anchors already in place), bind every row
+      // in one all-or-nothing transaction, then re-verify until stable —
+      // all BEFORE any supervisor can observe the tab (D5).
+      await completeExistingSheetAdoption({
+        plan: adoptionPlan,
+        provider: remote.provider,
+        storage: runtime.storage,
+        mappings: runtime.mappings.mappings,
+        writer,
+      });
+    }
 
     const effectSupervisor = createEffectSupervisor({
       storage: runtime.storage,
@@ -154,7 +305,23 @@ export async function createInternalSyncService(
       generated.bindings,
       runtime.flushCoordinator,
     );
-    const hikoutei = createInternalHikoutei(provider, descriptors, stop);
+    // The runtime object is the readiness key: the beforeClose hook runs
+    // only after this assignment, so the captured reference is always the
+    // fully constructed runtime. Unregistering happens BEFORE the stop
+    // handler runs, so a closing runtime reports ready (no outbox to drain)
+    // the moment its close begins.
+    let hikoutei: Hikoutei;
+    const hikouteiClose = async (): Promise<void> => {
+      unregisterSystemStateReadiness(hikoutei);
+      await stop();
+    };
+    hikoutei = createInternalHikoutei(provider, descriptors, hikouteiClose);
+    // Phase 4: register the runtime's System_State readiness right after
+    // bootstrap so external convergence barriers can wait on the drain;
+    // unregistered on close (see hikouteiClose). Never part of the public
+    // API — the registration is keyed to the internal/public runtime object
+    // and read only through this internal module.
+    registerSystemStateReadiness(hikoutei, runtime.storage);
     effectSupervisor.start();
     pollingSupervisor.start();
 
@@ -169,6 +336,12 @@ export async function createInternalSyncService(
       close: () => hikoutei.close(),
     };
   } catch (error: unknown) {
+    logHikouteiInternalEvent({
+      event: HIKOUTEI_LOG_EVENTS.SYNC_SERVICE_START_FAILED,
+      level: "error",
+      component: HIKOUTEI_LOG_COMPONENTS.SYNC_SERVICE,
+      ...describeErrorForInternalLog(error),
+    });
     // Conflict-route registration claims this runtime's mapped-role writer
     // lease before remote provisioning runs; a provisioning failure would
     // otherwise leave the claim valid for the full lease window and every

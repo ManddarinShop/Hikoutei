@@ -32,6 +32,12 @@ export interface MappedCanonicalEntitySqlRow {
   readonly entity_revision: number;
 }
 
+/** Raw canonical entity revision and lifecycle returned by SQLite. */
+export interface MappedCanonicalEntityStateSqlRow {
+  readonly entity_revision: number;
+  readonly status: string;
+}
+
 /** Raw canonical field revision returned by SQLite. */
 export interface MappedCanonicalFieldRevisionSqlRow {
   readonly field_name: string;
@@ -67,10 +73,12 @@ export interface MappedLatestProjectionEffectSqlRow {
   readonly physical_sheet_id: string;
   readonly projection: string;
   readonly status: EffectStatus;
+  readonly effect_kind: string;
   readonly payload_json: string;
   readonly expected_visible_revision: number;
   readonly expected_visible_hash: string;
   readonly stream_sequence: number;
+  readonly last_error_code: string | null;
 }
 
 /** One raw unresolved active-candidate row (any owned field). */
@@ -97,6 +105,19 @@ const TOMBSTONE_ACTIVE_ROW_BINDING_SQL = `
   SET state = '${ROW_BINDING_STATES.TOMBSTONED}'
   WHERE row_binding_id = ? AND logical_sheet_id = ? AND entity_id = ?
     AND state = '${ROW_BINDING_STATES.ACTIVE}'
+`;
+
+const REACTIVATE_TOMBSTONED_ROW_BINDING_SQL = `
+  UPDATE row_binding
+  SET state = '${ROW_BINDING_STATES.ACTIVE}'
+  WHERE row_binding_id = ? AND logical_sheet_id = ? AND anchor_reference = ?
+    AND entity_id = ? AND state = '${ROW_BINDING_STATES.TOMBSTONED}'
+`;
+
+const READ_CANONICAL_ENTITY_SQL = `
+  SELECT entity_revision, status
+  FROM entity_state
+  WHERE entity_id = ?
 `;
 
 const READ_ACTIVE_CANONICAL_ENTITY_SQL = `
@@ -155,8 +176,8 @@ const READ_VISIBLE_PROJECTION_STATE_SQL = `
 `;
 
 const READ_LATEST_PROJECTION_EFFECT_SQL = `
-  SELECT effect_id, physical_sheet_id, projection, status, payload_json,
-         expected_visible_revision, expected_visible_hash, stream_sequence
+  SELECT effect_id, physical_sheet_id, projection, status, effect_kind, payload_json,
+         expected_visible_revision, expected_visible_hash, stream_sequence, last_error_code
   FROM sheet_effect_outbox
   WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
   ORDER BY stream_sequence DESC
@@ -164,8 +185,8 @@ const READ_LATEST_PROJECTION_EFFECT_SQL = `
 `;
 
 const READ_LATEST_APPLIED_PROJECTION_EFFECT_SQL = `
-  SELECT effect_id, physical_sheet_id, projection, status, payload_json,
-         expected_visible_revision, expected_visible_hash, stream_sequence
+  SELECT effect_id, physical_sheet_id, projection, status, effect_kind, payload_json,
+         expected_visible_revision, expected_visible_hash, stream_sequence, last_error_code
   FROM sheet_effect_outbox
   WHERE logical_sheet_id = ? AND target_kind = ? AND target_id = ?
     AND status = 'applied'
@@ -222,6 +243,33 @@ export function tombstoneMappedActiveRowBindingWithSql(
     logicalSheetId,
     entityId,
   ]);
+}
+
+/**
+ * Reactivates an exactly-matching tombstoned row binding during a mapped
+ * recreate, preserving its candidate epoch and physical row identity.
+ */
+export function reactivateMappedTombstonedRowBindingWithSql(
+  sql: SqlExecutor,
+  rowBindingId: string,
+  logicalSheetId: string,
+  anchorReference: string,
+  entityId: string,
+): Promise<SqlMutationResult> {
+  return sql.run(REACTIVATE_TOMBSTONED_ROW_BINDING_SQL, [
+    rowBindingId,
+    logicalSheetId,
+    anchorReference,
+    entityId,
+  ]);
+}
+
+/** Reads the current canonical entity revision and lifecycle for one entity. */
+export function readMappedCanonicalEntityStateWithSql(
+  sql: SqlExecutor,
+  entityId: string,
+): Promise<MappedCanonicalEntityStateSqlRow | undefined> {
+  return sql.get<MappedCanonicalEntityStateSqlRow>(READ_CANONICAL_ENTITY_SQL, [entityId]);
 }
 
 /** Reads the active canonical entity revision used by mapped flush validation. */

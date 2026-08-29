@@ -11,10 +11,14 @@
  * - `delivery_uncertain`: the transport gave no usable answer (timeout,
  *   network error, non-JSON/404 response, lost connection). The remote may or
  *   may not have committed the write, so the effect must be recovered through
- *   a postcondition probe rather than immediately redriven. Per-effect
- *   guard/schema/identity rejections are not transport errors at all: they
- *   arrive as per-effect result statuses in a successful envelope and keep
- *   their existing terminal handling.
+ *   a postcondition probe rather than immediately redriven. A locally REFUSED
+ *   request start (the shared pacing limiter queue exceeds its bound) is also
+ *   delivery-uncertain: no remote call ran, but the durable worker still
+ *   requeues through the same probe/redrive path rather than trusting an
+ *   unverified "nothing happened". Per-effect guard/schema/identity
+ *   rejections are not transport errors at all: they arrive as per-effect
+ *   result statuses in a successful envelope and keep their existing terminal
+ *   handling.
  *
  * This boundary lets future durable `delivery_uncertain` state and recovery
  * barriers classify a thrown transport error without re-deriving the rules at
@@ -24,7 +28,7 @@
  */
 
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../../../adapter/sheets/providers/google-sheets-api/errors.js";
-import { PRESENCE_KINDS } from "../../../shared/state/index.js";
+import { PRESENCE_KINDS, presentValue } from "../../../shared/state/index.js";
 import type { Presence } from "../../../shared/state/types.js";
 
 export const TRANSPORT_OUTCOME_KINDS = {
@@ -40,9 +44,104 @@ export type TransportOutcomeKind =
 export interface TransportOutcome {
   readonly kind: TransportOutcomeKind;
   readonly httpStatus: Presence<number>;
-  /** Stable client/remote code without payload or secret material. */
+  /**
+   * Remote/network code after runtime sanitization: either an allowlisted
+   * stable value or the fixed `unknown` category, never an arbitrary
+   * remote string.
+   */
   readonly code: Presence<string>;
   readonly message: string;
+}
+
+/**
+ * Fixed safe category that replaces any remote code not on the allowlist.
+ *
+ * Remote API error bodies are untrusted input: their `status` field could
+ * carry an arbitrary string (an id, URL, or secret) instead of a canonical
+ * Google API status name. Telemetry consumers must never see raw remote
+ * text, so anything that is not an explicitly allowlisted stable code
+ * collapses to this category.
+ */
+export const TRANSPORT_OUTCOME_UNKNOWN_CODE = "unknown";
+
+/**
+ * Allowlisted remote/network codes that may reach telemetry.
+ *
+ * Covers the canonical Google API status names (`error.status` of API
+ * error bodies), well-known Node/gaxios network error codes, and the
+ * provider's own stable transport codes (defensive: a locally produced
+ * code is never treated as unknown). Anything else — a malformed,
+ * secret-like, or novel remote string — is replaced by
+ * `TRANSPORT_OUTCOME_UNKNOWN_CODE`.
+ */
+const SAFE_TRANSPORT_REMOTE_CODES: ReadonlySet<string> = new Set([
+  // Canonical google.rpc.Code status names.
+  "OK",
+  "CANCELLED",
+  "UNKNOWN",
+  "INVALID_ARGUMENT",
+  "DEADLINE_EXCEEDED",
+  "NOT_FOUND",
+  "ALREADY_EXISTS",
+  "PERMISSION_DENIED",
+  "UNAUTHENTICATED",
+  "RESOURCE_EXHAUSTED",
+  "FAILED_PRECONDITION",
+  "ABORTED",
+  "OUT_OF_RANGE",
+  "UNIMPLEMENTED",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "DATA_LOSS",
+  // Well-known Node/gaxios network and timeout error codes.
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "ENETRESET",
+  "EPIPE",
+  "EADDRINUSE",
+  "EADDRNOTAVAIL",
+  "ENOBUFS",
+  "ESHUTDOWN",
+  "EPROTO",
+  "ERR_SOCKET_CLOSED",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_ABORTED",
+  "UND_ERR_DESTROYED",
+  "UND_ERR_TIMEOUT",
+  // Local provider stable codes (defensive; never emitted as unknown).
+  ...Object.values(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES),
+]);
+
+/**
+ * Sanitizes one untrusted remote code before it can reach telemetry.
+ *
+ * Returns the candidate unchanged only when it is an allowlisted stable
+ * code; every other value — including non-string input and secret-like or
+ * malformed remote text — maps to the fixed `unknown` category. Never
+ * returns the raw candidate for unallowlisted input.
+ */
+export function sanitizeTransportRemoteCode(candidate: unknown): string {
+  return typeof candidate === "string" && SAFE_TRANSPORT_REMOTE_CODES.has(candidate)
+    ? candidate
+    : TRANSPORT_OUTCOME_UNKNOWN_CODE;
+}
+
+/** Sanitizes a presence-wrapped remote code, preserving absence. */
+function sanitizeRemoteCodePresence(presence: Presence<string>): Presence<string> {
+  return presence.kind === PRESENCE_KINDS.PRESENT
+    ? presentValue(sanitizeTransportRemoteCode(presence.value))
+    : presence;
 }
 
 /**
@@ -69,7 +168,9 @@ export function classifyTransportOutcome(error: unknown): TransportOutcome {
     return {
       kind,
       httpStatus: error.status,
-      code: error.remoteCode,
+      // The remote code is untrusted input (it can echo arbitrary API
+      // error-body text); only allowlisted stable codes may pass through.
+      code: sanitizeRemoteCodePresence(error.remoteCode),
       message: error.message,
     };
   }
@@ -103,7 +204,8 @@ export function isGoogleSheetsApiDeliveryUncertain(
   if (
     error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT ||
     error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR ||
-    error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.INVALID_RESPONSE
+    error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.INVALID_RESPONSE ||
+    error.code === GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED
   ) {
     return true;
   }

@@ -42,7 +42,7 @@ import type {
 import type { PendingEffect } from "./contracts.js";
 
 const READ_CLAIMED_EFFECT_TARGET_SQL = `
-  SELECT physical_sheet_id, projection, row_binding_id
+  SELECT effect_kind, physical_sheet_id, projection, row_binding_id
   FROM sheet_effect_outbox
   WHERE effect_id = ? AND claim_token = ? AND status = 'processing'
 `;
@@ -267,13 +267,20 @@ function isTerminalEffectStatus(value: unknown): value is Exclude<EffectStatus, 
     value === EFFECT_STATUSES.FAILED;
 }
 
-/** Verifies that read-back evidence belongs to the effect currently being applied. */
+/**
+ * Verifies that read-back evidence belongs to the effect currently being applied
+ * and returns the claimed effect's durable operation kind.
+ *
+ * The operation kind comes from the durable outbox row, never from the
+ * untrusted provider receipt or payload, so confirmation semantics (for example
+ * the delete monotonic rule) are always derived from the claimed effect.
+ */
 export async function assertProjectionConfirmationTargetWithSql(
   sql: SqlExecutor,
   effectId: string,
   claimToken: string,
   confirmation: EffectProjectionConfirmation,
-): Promise<void> {
+): Promise<EffectKind> {
   const row = await sql.get<SqlRow>(READ_CLAIMED_EFFECT_TARGET_SQL, [effectId, claimToken]);
   if (
     row === undefined ||
@@ -285,6 +292,7 @@ export async function assertProjectionConfirmationTargetWithSql(
       "projection confirmation does not belong to the claimed effect",
     );
   }
+  return requireEffectKind(row.effect_kind, "claimed effect kind");
 }
 
 export function validateEffectLeaseDuration(leaseDurationMs: number): void {
@@ -305,12 +313,19 @@ export function validateReadyEffectLimit(limit: number): void {
   }
 }
 
-/** Writes confirmed row and field state through the active async SQL context. */
+/**
+ * Writes confirmed row and field state through the active async SQL context.
+ *
+ * The durable `effectKind` of the claimed effect selects the visible-revision
+ * resolution rule (delete monotonic retention, create-if-missing rebase, or
+ * strict backwards rejection).
+ */
 export async function writeProjectionConfirmationWithSql(
   sql: SqlExecutor,
   confirmation: EffectProjectionConfirmation,
+  effectKind: EffectKind,
 ): Promise<void> {
-  const visibleRevision = await resolveConfirmationVisibleRevisionWithSql(sql, confirmation);
+  const visibleRevision = await resolveConfirmationVisibleRevisionWithSql(sql, confirmation, effectKind);
   const row = await sql.run(UPSERT_VISIBLE_STATE_SQL, [
     confirmation.physicalSheetId,
     confirmation.projection,
@@ -349,21 +364,32 @@ export async function writeProjectionConfirmationWithSql(
 /**
  * Resolves the durable revision a confirmation may write.
  *
- * A create-if-missing repair applies against an empty visible baseline, so
- * its provider receipt restarts at revision 1 even when the binding already
- * has a higher confirmed revision (the row was deleted and re-created). The
- * confirmation must then advance the durable revision past the confirmed
- * value (confirmed + 1) instead of being rejected as a regression, which
- * would wedge the applied effect in the delivery_uncertain recovery loop
- * forever. Confirmations that are not create-if-missing repairs keep their
- * receipt revision unchanged, so genuinely stale read-backs still fail
- * closed through the upsert guard.
+ * - Delete effects (derived from the durable `effectKind`, never the receipt)
+ *   read back the pre-delete provider revision, which can be lower than the
+ *   current durable confirmed revision when a same-ID row was deleted and
+ *   re-created: the create rebase advances the durable counter, so the next
+ *   delete's receipt legitimately lags it. A delete confirmation therefore
+ *   RETAINS the higher current durable revision (monotonic, not incremented)
+ *   so the delete is not misread as a stale regression that would wedge its
+ *   stream. Row and field state both write at the retained revision.
+ * - A create-if-missing repair applies against an empty visible baseline, so
+ *   its provider receipt restarts at revision 1 even when the binding already
+ *   holds a higher confirmed revision (the row was deleted and re-created).
+ *   The confirmation must then advance the durable revision past the confirmed
+ *   value (confirmed + 1) instead of being rejected as a regression, which
+ *   would wedge the applied effect in the delivery_uncertain recovery loop
+ *   forever.
+ * - All other confirmations keep their receipt revision unchanged, so genuinely
+ *   stale read-backs still fail closed through the upsert guard.
  */
 async function resolveConfirmationVisibleRevisionWithSql(
   sql: SqlExecutor,
   confirmation: EffectProjectionConfirmation,
+  effectKind: EffectKind,
 ): Promise<number> {
-  if (confirmation.allowCreateRebaseline !== true) {
+  const isDelete = isDeleteEffectKind(effectKind);
+  const isCreateRebase = confirmation.allowCreateRebaseline === true;
+  if (!isDelete && !isCreateRebase) {
     return confirmation.visibleRevision;
   }
   const current = await sql.get<{ readonly confirmed_visible_revision: number | null }>(
@@ -371,10 +397,21 @@ async function resolveConfirmationVisibleRevisionWithSql(
     [confirmation.physicalSheetId, confirmation.projection, confirmation.rowBindingId],
   );
   const confirmed = current?.confirmed_visible_revision;
+  if (isDelete) {
+    if (confirmed !== undefined && confirmed !== null && confirmed > confirmation.visibleRevision) {
+      return confirmed;
+    }
+    return confirmation.visibleRevision;
+  }
   if (confirmed === undefined || confirmed === null || confirmed < confirmation.visibleRevision) {
     return confirmation.visibleRevision;
   }
   return confirmed + 1;
+}
+
+/** True when the durable effect kind is a projection-row delete. */
+function isDeleteEffectKind(kind: EffectKind): boolean {
+  return kind === EFFECT_KINDS.USER_INPUT_DELETE || kind === EFFECT_KINDS.RESOLUTION_DELETE;
 }
 
 export async function requireCurrentFenceWithSql(

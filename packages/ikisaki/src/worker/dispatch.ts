@@ -1,7 +1,7 @@
 /** Fast-append dispatch and transport-failure handling for the effect worker. */
 
 import type { ClaimedEffect } from "./contracts.js";
-import type { FastAppendOutcome } from "./dispatcher.js";
+import type { EffectLeaseRenewal, FastAppendOutcome } from "./dispatcher.js";
 import type { EffectWorkerBaseOptions } from "./options.js";
 import type { MutableReport } from "./report.js";
 import type { EffectWorkerStorage } from "./storage.js";
@@ -49,6 +49,7 @@ export async function handleProviderDispatchError(
   report: MutableReport,
   error: unknown,
   beforeRecovery?: () => Promise<boolean>,
+  renewEffectLeases?: EffectLeaseRenewal,
 ): Promise<void> {
   const outcome = isDispatchTransportError(error)
     ? error
@@ -67,7 +68,7 @@ export async function handleProviderDispatchError(
     return;
   }
   if (beforeRecovery === undefined || await beforeRecovery()) {
-    await recoverUnknownResults(options, storage, fence, items, report);
+    await recoverUnknownResults(options, storage, fence, items, report, renewEffectLeases);
   }
 }
 
@@ -91,6 +92,7 @@ export async function dispatchFastAppendGroup(
   },
   report: MutableReport,
   beforeRecovery?: () => Promise<boolean>,
+  renewEffectLeases?: EffectLeaseRenewal,
 ): Promise<void> {
   const throttleStartedAt = Date.now();
   const throttledMs = await options.batchController?.waitForAppendThrottle(throttleStartedAt) ?? 0;
@@ -110,9 +112,13 @@ export async function dispatchFastAppendGroup(
   const batchLimit = options.batchController?.beginDispatch(requestRouteKey, providerStartedAt)
     ?? group.items.length;
   try {
+    const renewGroupLeases = renewEffectLeases;
     outcome = await options.dispatcher.fastAppend({
       routeKey: requestRouteKey,
       effects: group.items.map((item) => item.pending),
+      ...(renewGroupLeases === undefined ? {} : {
+        beforeRemoteDispatch: () => renewGroupLeases(group.items),
+      }),
     });
   } catch (error: unknown) {
     const uncertain = !isDispatchTransportError(error) ||
@@ -132,6 +138,7 @@ export async function dispatchFastAppendGroup(
       routeKey: requestRouteKey,
       batchLimit,
       responseSucceeded: false,
+      requestedEffects: group.items.length,
     });
     const resultFence = {
       ...fence,
@@ -145,6 +152,7 @@ export async function dispatchFastAppendGroup(
       report,
       error,
       beforeRecovery,
+      renewEffectLeases,
     );
     return;
   }
@@ -153,10 +161,18 @@ export async function dispatchFastAppendGroup(
     ...fence,
     now: options.clock?.() ?? fence.now + Math.max(0, Date.now() - providerStartedAt),
   };
+  // A hasMore=true reply with a valid returned prefix is a healthy partial
+  // application whose suffix is deferred to the next pass (the provider
+  // stopped at its body budget), so it must not back the route off. Only a
+  // hasMore=false reply that is missing results (a lost response) keeps the
+  // delivery-uncertain recovery backoff.
+  const fastAppendHealthy =
+    (outcome.results.length === group.items.length && !outcome.hasMore) ||
+    (outcome.hasMore && outcome.results.length > 0);
   options.batchController?.observe(requestRouteKey, {
     durationMs,
-    responseSucceeded: outcome.results.length === group.items.length && !outcome.hasMore,
-    responseLoss: outcome.results.length !== group.items.length || outcome.hasMore,
+    responseSucceeded: fastAppendHealthy,
+    responseLoss: !outcome.hasMore && outcome.results.length !== group.items.length,
   });
   emitProviderTiming(options, outcome.timing);
   emitWorkerTiming(options, {
@@ -167,7 +183,10 @@ export async function dispatchFastAppendGroup(
     operationCounts: { append: group.items.length, update: 0, delete: 0 },
     routeKey: requestRouteKey,
     batchLimit,
-    responseSucceeded: outcome.results.length === group.items.length && !outcome.hasMore,
+    responseSucceeded: fastAppendHealthy,
+    hasMore: outcome.hasMore,
+    requestedEffects: group.items.length,
+    acknowledgedEffects: outcome.results.length,
   });
 
   const resultPersistenceStartedAt = Date.now();
@@ -175,6 +194,9 @@ export async function dispatchFastAppendGroup(
   const deferredEffectIds = new Set<string>();
   const recoveryItems: ClaimedEffect[] = [];
   for (const item of group.items) {
+    // A suffix the provider intentionally deferred (`hasMore: true`) is
+    // released for the next pass; `hasMore: false` means the envelope is
+    // complete, so every expected effect id must appear in the results.
     if (byEffectId.has(item.pending.effect_id) || !outcome.hasMore) continue;
     if (await storage.releaseUnprocessedEffect({
       ...resultFence,
@@ -190,7 +212,13 @@ export async function dispatchFastAppendGroup(
     if (deferredEffectIds.has(item.pending.effect_id)) continue;
     const result = lookupResult(byEffectId.get(item.pending.effect_id));
     if (result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND) {
-      await requeueFastAppendItems(storage, resultFence, [item], report);
+      // A `hasMore: false` response missing an expected effect id is a
+      // malformed or partial provider envelope, never proof the row was not
+      // applied. Requeuing would redrive the append without receipt or
+      // postcondition evidence; route the item through delivery-uncertain
+      // recovery so the pass probes receipts and settles from durable
+      // remote evidence instead.
+      recoveryItems.push(item);
       continue;
     }
     if (isPresent(item.invalidPayloadError)) {
@@ -237,6 +265,7 @@ export async function dispatchFastAppendGroup(
         recoveryFence,
         recoveryItems,
         report,
+        renewEffectLeases,
       );
     }
   }

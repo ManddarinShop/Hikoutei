@@ -16,12 +16,7 @@ import type {
   EffectKind,
   EffectTargetKind,
 } from "../../../domain/model/constants.js";
-import { JAVASCRIPT_TYPE_NAMES } from "../../../shared/encoding/constants.js";
-import {
-  isJavaScriptType,
-  isNormalizedCell,
-  isRecord,
-} from "../../../shared/encoding/index.js";
+import { formatZodBoundaryIssues } from "../../../shared/validation/zodBoundary.js";
 import { APPLICABILITY_KINDS } from "../../../shared/state/constants.js";
 import {
   applicableValue,
@@ -29,10 +24,6 @@ import {
 } from "../../../shared/state/index.js";
 import type { Applicability, Presence } from "../../../shared/state/types.js";
 import type { RegisteredProjection } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import {
-  EMPTY_ARRAY_LENGTH_ZERO,
-  EMPTY_STRING_LENGTH_ZERO,
-} from "../../../shared/constants.js";
 import {
   type SyncEffectResultStatus,
   type SyncFastAppendStatus,
@@ -46,10 +37,8 @@ import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "./errors.js";
-import {
-  requireSyncSheetsPositiveSafeInteger,
-  requireSyncSheetsText,
-} from "./validation.js";
+import { syncProjectionEffectPayloadSchema } from "./payloadSchemas.js";
+import { requireSyncSheetsText } from "./validation.js";
 import type { SyncSheetsTiming } from "../telemetry/syncTiming.js";
 
 /** Projections supported by the v1 sync provider. */
@@ -272,6 +261,16 @@ export interface FastAppendRow {
   /** Developer-metadata row anchor written in the same Sheets batch. */
   readonly anchor?: string;
   readonly fields: Readonly<Record<string, NormalizedCell>>;
+  /**
+   * Optional per-row route so one fast-append request can span multiple tabs.
+   * When absent the provider falls back to the request-level route (single
+   * tab, the legacy shape). The dispatcher populates these from each effect.
+   */
+  readonly physicalSheetId?: string;
+  readonly projection?: SyncProjection;
+  readonly sheetName?: string;
+  readonly registeredRange?: string;
+  readonly schemaVersion?: number;
 }
 
 /** Per-effect result for one fast-append row. */
@@ -314,12 +313,41 @@ export interface ReadSyncEffectPostconditionsRequest {
 }
 
 /**
+ * Prepared-apply state carried from `preflightApplyEffects` to
+ * `applyPreparedEffects`.
+ *
+ * The worker treats the value as an opaque token and never inspects it; the
+ * provider owns its concrete shape and narrows it back with a runtime `kind`
+ * guard at the `applyPreparedEffects` boundary. Only the shared discriminant
+ * and the request the state was preflighted from are declared here so
+ * unrelated providers cannot invent a conflicting shape across the interface
+ * and so the dispatcher can bind the prepared state to the exact request it
+ * was created for.
+ */
+export interface PreparedApplyEffects {
+  readonly kind: "single" | "multi";
+  /** The exact request this prepared state was preflighted from. */
+  readonly request: ApplySyncEffectsRequest;
+}
+
+/**
  * Full effect capability required for fast append, regular updates, deletes,
  * and recovery.
+ *
+ * `preflightApplyEffects` / `applyPreparedEffects` are an OPTIONAL split of
+ * `applyEffects`: a preflight does the read+plan stage (no remote mutation)
+ * and returns an opaque `PreparedApplyEffects`, which a later
+ * `applyPreparedEffects` consumes for the write+verify stage. Providers that
+ * implement neither optional method keep the single legacy `applyEffects`
+ * path. The worker and dispatcher feature-detect the pair before using it.
  */
 export interface SyncEffectWorkerProvider {
   fastAppendRows(request: FastAppendRowsRequest): Promise<FastAppendRowsResult>;
   applyEffects(request: ApplySyncEffectsRequest): Promise<ApplySyncEffectsResult>;
+  /** Optional read+plan stage that produces opaque prepared state. */
+  preflightApplyEffects?(request: ApplySyncEffectsRequest): Promise<PreparedApplyEffects>;
+  /** Optional write+verify stage that consumes the prepared state. */
+  applyPreparedEffects?(prepared: PreparedApplyEffects): Promise<ApplySyncEffectsResult>;
   readEffectPostcondition(effect: SyncProjectionEffect): Promise<SyncEffectPostcondition>;
   readEffectPostconditions(
     request: ReadSyncEffectPostconditionsRequest,
@@ -394,75 +422,35 @@ export function computeSyncVisibleHash(fields: Readonly<Record<string, Normalize
 
 /** Validates and decodes the projection payload stored in a durable outbox row. */
 export function parseSyncProjectionEffectPayload(value: string): SyncProjectionEffectPayload {
-  let parsed: unknown;
+  let raw: unknown;
   try {
-    parsed = JSON.parse(value);
+    raw = JSON.parse(value);
   } catch {
     throw new SyncSheetsContractError(
       SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       "effect payload is not valid JSON",
     );
   }
-  if (!isRecord(parsed)) {
+
+  const parsed = syncProjectionEffectPayloadSchema.safeParse(raw);
+  if (!parsed.success) {
     throw new SyncSheetsContractError(
       SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload must be an object",
+      `effect payload has an invalid shape: ${formatZodBoundaryIssues(parsed.error)}`,
     );
   }
 
-  const sheetName = requireSyncSheetsText(
-    parsed.sheetName,
-    "effect payload sheetName",
-    SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const registeredRange = requireSyncSheetsText(
-    parsed.registeredRange,
-    "effect payload registeredRange",
-    SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const targetAnchor = requireSyncSheetsText(
-    parsed.targetAnchor,
-    "effect payload targetAnchor",
-    SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const targetVisibleHash = requireSyncSheetsText(
-    parsed.targetVisibleHash,
-    "effect payload targetVisibleHash",
-    SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  const schemaVersion = requireSyncSheetsPositiveSafeInteger(
-    parsed.schemaVersion,
-    "effect payload schemaVersion",
-    SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-  );
-  if (!isJavaScriptType(parsed.createIfMissing, JAVASCRIPT_TYPE_NAMES.BOOLEAN)) {
-    throw new SyncSheetsContractError(
-      SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload createIfMissing must be boolean",
-    );
-  }
-  const expectedCandidateHash = parseNullableCandidateHash(parsed.expectedCandidateHash);
-  if (!isRecord(parsed.fields)) {
-    throw new SyncSheetsContractError(
-      SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-      "effect payload fields must be an object",
-    );
-  }
-
-  const fields: Record<string, NormalizedCell> = {};
-  for (const [fieldName, cell] of Object.entries(parsed.fields)) {
-    if (
-      fieldName.length === EMPTY_STRING_LENGTH_ZERO ||
-      !isNormalizedCell(cell)
-    ) {
-      throw new SyncSheetsContractError(
-        SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-        "effect payload contains an invalid normalized field",
-      );
-    }
-    fields[fieldName] = cell;
-  }
-  if (Object.keys(fields).length === EMPTY_ARRAY_LENGTH_ZERO) {
+  const {
+    sheetName,
+    registeredRange,
+    schemaVersion,
+    targetAnchor,
+    fields,
+    targetVisibleHash,
+    createIfMissing,
+    expectedCandidateHash: wireCandidateHash,
+  } = parsed.data;
+  if (Object.keys(fields).length === 0) {
     throw new SyncSheetsContractError(
       SYNC_SHEETS_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
       "effect payload must contain a field",
@@ -482,8 +470,8 @@ export function parseSyncProjectionEffectPayload(value: string): SyncProjectionE
     targetAnchor,
     fields,
     targetVisibleHash,
-    createIfMissing: parsed.createIfMissing,
-    expectedCandidateHash,
+    createIfMissing,
+    expectedCandidateHash: parseNullableCandidateHash(wireCandidateHash),
   };
 }
 

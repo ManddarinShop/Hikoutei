@@ -10,6 +10,9 @@
  */
 
 import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import {
+  isRecoverableEffectErrorCode,
+} from "@hikoutei/ikisaki";
 import type { NormalizedCell } from "../../../../shared/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
 import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
@@ -111,6 +114,48 @@ export const READ_FAILED_HEAD_SQL = `
 export interface FailedHeadSqlShape {
   readonly effect_id: string;
   readonly last_error_code: string | null;
+}
+
+/**
+ * Reads every active `failed` effect of one logical sheet, newest stream
+ * first, so the scanner can detect terminal heads on streams whose Sheet row
+ * already matches canonical (drift-free rows never reach per-drift repair
+ * planning).
+ */
+export const READ_FAILED_HEADS_SQL = `
+  SELECT effect_id, target_id, last_error_code
+  FROM sheet_effect_outbox
+  WHERE logical_sheet_id = ? AND target_kind = 'entity' AND status = 'failed'
+  ORDER BY stream_sequence DESC
+`;
+
+export interface FailedHeadsSqlShape {
+  readonly effect_id: string;
+  readonly target_id: string;
+  readonly last_error_code: string | null;
+}
+
+/**
+ * Returns the terminal (non-recoverable) failed head effect id per target
+ * stream for one logical sheet.
+ *
+ * Recoverable failed heads stay on the worker retry path and are never
+ * superseded by reconciliation, mirroring `readTerminalFailedHeadWithSql`.
+ */
+export async function readTerminalFailedHeads(
+  context: ScanContext,
+): Promise<ReadonlyMap<string, string>> {
+  return context.storage.read(async ({ sql }) => {
+    const rows = await sql.all<FailedHeadsSqlShape>(READ_FAILED_HEADS_SQL, [
+      context.logicalSheetId,
+    ]);
+    const byTarget = new Map<string, string>();
+    for (const row of rows) {
+      if (isRecoverableEffectErrorCode(row.last_error_code)) continue;
+      if (!byTarget.has(row.target_id)) byTarget.set(row.target_id, row.effect_id);
+    }
+    return byTarget;
+  });
 }
 
 export interface ScanContext {

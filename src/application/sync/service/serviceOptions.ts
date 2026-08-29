@@ -29,6 +29,7 @@ import type {
 import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheetsContract/syncSheets.js";
 import type { CoordinatorLaneEvent } from "../sheetsContract/mutationCoordinator/laneTelemetry.js";
 import type { GoogleSheetsApiProviderOptions } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
+import type { ExistingSheetAdoptionSpec } from "./adopt/existingSheetAdoption.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
@@ -69,6 +70,15 @@ export interface InternalSyncServiceOptions {
    * account shared on the spreadsheet). Never part of the root API.
    */
   readonly googleSheetsApi?: GoogleSheetsApiProviderOptions;
+  /**
+   * Existing-sheet adoption (MVP, direct mode only). In `dry-run` mode the
+   * service reads the foreign tab, analyzes header-name bindings, and throws
+   * `ExistingSheetAdoptionDryRunReportError` carrying the full report before
+   * any provisioning mutation or supervisor start. In `adopt` mode the
+   * seeding engine (next milestone) binds every existing row before the
+   * CleanupScanner can ever observe the tab (fail-closed ordering, D5).
+   */
+  readonly adopt?: ExistingSheetAdoptionSpec;
   readonly writerId?: string;
   readonly workerId?: string;
   readonly maxEffects?: number;
@@ -190,6 +200,9 @@ export function validateServiceOptions(
       "sync service cannot supply both an injected provider and googleSheetsApi client settings.",
     );
   }
+  if (options.adopt !== undefined) {
+    validateExistingSheetAdoptionOptions(options);
+  }
   if (options.provisioner !== undefined && options.provider === undefined) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
@@ -201,6 +214,61 @@ export function validateServiceOptions(
       SYNC_SERVICE_ERROR_CODES.PROVIDER_UNAVAILABLE,
       "sync service requires an injected provider or googleSheetsApi client settings.",
     );
+  }
+  if (options.adopt !== undefined) {
+    validateExistingSheetAdoptionOptions(options);
+  }
+}
+
+/**
+ * Existing-sheet adoption constraints (D1/D7 of
+ * `design/existing-sheet-adoption-design.md`): direct Google Sheets API mode
+ * only (the foreign-tab reader needs the raw transport), and each adopted
+ * entity's adopt tab must equal that entity's configured User_Input
+ * route so the existing tab becomes the human input surface. Multiple
+ * entities may be adopted by one service; every entry is validated
+ * independently.
+ */
+function validateExistingSheetAdoptionOptions(options: InternalSyncServiceOptions): void {
+  const adopt = options.adopt!;
+  if (options.googleSheetsApi === undefined || options.provider !== undefined) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "existing-sheet adoption requires the direct googleSheetsApi provider (no injected provider).",
+    );
+  }
+  // D7 (Phase A): the single-entity MVP gate is gone — any number of
+  // entities may be adopted by one service. Each entry is still validated
+  // independently below.
+  const adoptEntityNames = Object.keys(adopt.entities);
+  // D7 (F4): an empty adopt.entities record would produce an `ok: true` empty
+  // dry-run report while adopt fails generically later — reject it up front.
+  if (adoptEntityNames.length === 0) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "existing-sheet adoption requires at least one adopted entity.",
+    );
+  }
+  for (const entityName of adoptEntityNames) {
+    const entityConfig = options.projections.entities[entityName];
+    if (entityConfig === undefined) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        `existing-sheet adoption references entity "${entityName}" that is absent from the projections config.`,
+      );
+    }
+    if (entityConfig.userInput === undefined) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        `existing-sheet adoption requires entity "${entityName}" to declare a userInput route (the adopted tab becomes the User_Input surface).`,
+      );
+    }
+    if (adopt.entities[entityName]!.tabName !== entityConfig.userInput.tabName) {
+      throw new SyncServiceError(
+        SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        `existing-sheet adoption tabName "${adopt.entities[entityName]!.tabName}" must equal the userInput route tab "${entityConfig.userInput.tabName}" for entity "${entityName}".`,
+      );
+    }
   }
 }
 
@@ -239,11 +307,11 @@ function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void 
       "sync service googleSheetsApi requestTimeoutMs must be between 1 second and 120 seconds.",
     );
   }
-  // A direct-mode dispatch performs up to THREE sequential paced transport
-  // calls (two preflight reads plus one write), each with its own timeout;
-  // the lease must cover the whole sequence, so the headroom check sums
-  // the write timeout and two read timeouts. Defaults: 60 + 2x10 + 30 =
-  // 110 s, inside the 120 s default effect lease.
+  // Preserve the existing provider-headroom bound for the ordinary deferred
+  // three-request worker shape. The complete fast-append/legacy path, which
+  // may add receipt initialization and uses the actual bounded admission wait,
+  // is checked explicitly below. Defaults with the 2,000 ms interval:
+  // 60 + 2 + 2x10 + 30 = 112 s, inside the 120 s default effect lease.
   const readTimeoutMs = options.googleSheetsApi.readTimeoutMs
     ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS;
   if (
@@ -256,13 +324,68 @@ function validateEffectLeaseHeadroom(options: InternalSyncServiceOptions): void 
       "sync service googleSheetsApi readTimeoutMs must be between 1 second and 60 seconds.",
     );
   }
+  const intervalMs = options.googleSheetsApi.rateLimitIntervalMs
+    ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS;
+  if (!Number.isSafeInteger(intervalMs) || intervalMs < 0) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service googleSheetsApi rateLimitIntervalMs must be a non-negative safe integer.",
+    );
+  }
   if (
-    effectLeaseDurationMs <= requestTimeoutMs + 2 * readTimeoutMs +
+    effectLeaseDurationMs <= requestTimeoutMs +
+      intervalMs +
+      2 * Math.max(readTimeoutMs, intervalMs) +
       EFFECT_LEASE_PROVIDER_HEADROOM_MS
   ) {
     throw new SyncServiceError(
       SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
-      "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus two read timeouts by 30 seconds before supervisors start.",
+      "sync service effectLeaseDurationMs must exceed Google Sheets API requestTimeoutMs plus the request-start interval and two paced request slots (the larger of readTimeoutMs and the request-start interval) by 30 seconds before supervisors start.",
+    );
+  }
+  // The provider's first fast-append/legacy apply can add one receipt-init
+  // read after its two preflight reads. Count that complete leased path
+  // explicitly: three timed reads, one timed write, and one bounded admission
+  // wait for each request start. The receipt-init read is a single write-lane
+  // ranged `spreadsheets.get` of the receipt tab (refreshReceiptForWrite), so
+  // the stale branch — a concurrent write creating the tab between preflight
+  // and write — is covered by the same count instead of adding a separate
+  // enumeration read that could push the branch past the default lease. The
+  // read-ahead preflight is read-only and happens before the in-lane renewal;
+  // the service worker also forces deferred postconditions, so inline
+  // verify/follow-up writes are not part of this worker lease window.
+  const requestStartMaxWaitMs = options.googleSheetsApi.requestStartMaxWaitMs
+    ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_MAX_ADMISSION_WAIT_MS;
+  if (
+    !Number.isSafeInteger(requestStartMaxWaitMs) ||
+    requestStartMaxWaitMs < 0
+  ) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service googleSheetsApi requestStartMaxWaitMs must be a non-negative safe integer.",
+    );
+  }
+  const maxFastOrLegacyDispatchMs = requestTimeoutMs +
+    3 * readTimeoutMs +
+    4 * requestStartMaxWaitMs;
+  if (effectLeaseDurationMs <= maxFastOrLegacyDispatchMs) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs must cover the complete paced Google Sheets fast-append or legacy apply path, including receipt initialization, before the effect lease can expire.",
+    );
+  }
+  // The writer lease is renewed in-lane immediately before the remote call,
+  // at the same instant as the effect lease. A request-start limiter wait
+  // (up to `requestStartMaxWaitMs`) happens INSIDE the remote call, so the
+  // writer lease must outlive the effect lease by at least that wait; a
+  // limiter wait that outlives writer authority would let a stale mutation
+  // run after a takeover. The writer lease is fixed at the 180-second default
+  // in the service, so the effect lease plus the admission wait must stay
+  // inside it.
+  if (effectLeaseDurationMs + requestStartMaxWaitMs >= DEFAULT_WRITER_LEASE_DURATION_MS) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      "sync service effectLeaseDurationMs plus the Google Sheets API request-start admission wait must stay inside the 180-second writer lease so a limiter wait cannot outlive writer authority.",
     );
   }
 }
