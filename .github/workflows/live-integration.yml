@@ -60,7 +60,6 @@ jobs:
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
           node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs \
             --backend=live \
-            --outbound=direct \
             --output="$RUNNER_TEMP/hikoutei-live-result.json" \
             --manifest="$RUNNER_TEMP/hikoutei-live-manifest.json" \
             --summary="$GITHUB_STEP_SUMMARY"
@@ -86,7 +85,6 @@ jobs:
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/gcp-sa-key.json"
           node --loader ./scripts/ci/source-ts-loader.mjs scripts/ci/run-api-scenario.mjs \
             --backend=live \
-            --outbound=direct \
             --cleanup-only \
             --manifest="$manifest"
           rm -f "$RUNNER_TEMP/gcp-sa-key.json"
