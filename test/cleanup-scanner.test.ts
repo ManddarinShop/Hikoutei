@@ -764,7 +764,7 @@ async function seedRegistry(
     }
     for (const quarantine of args.quarantines ?? []) {
       await sql.run(
-        "INSERT INTO quarantine_record (quarantine_id, event_id, observation_id, logical_sheet_id, row_binding_id, reason, before_row_json, after_row_json, fields_json, repair_fields_json, repair_state, candidate_payload_json, created_at, updated_at) VALUES (?, NULL, NULL, ?, ?, 'duplicate', NULL, NULL, '{}', '[]', NULL, NULL, 1_000, 1_000)",
+        "INSERT INTO quarantine_record (quarantine_id, event_id, observation_id, logical_sheet_id, row_binding_id, reason, before_row_json, after_row_json, fields_json, created_at, updated_at) VALUES (?, NULL, NULL, ?, ?, 'duplicate', NULL, NULL, '{}', 1_000, 1_000)",
         [quarantine.quarantineId, "logical-clean", quarantine.bindingId],
       );
     }

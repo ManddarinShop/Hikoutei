@@ -9,8 +9,6 @@ import type { Presence } from "../../../../shared/state/types.js";
 import type { QuarantineReason } from "../../../../domain/model/constants.js";
 import {
   QUARANTINE_ID_PREFIX,
-  QUARANTINE_REPAIR_STATUSES,
-  ROW_OUTCOMES,
 } from "../../../../domain/evaluate/constants.js";
 import { QUARANTINE_REASONS, ROW_OPERATIONS } from "../../../../domain/model/constants.js";
 import { toSqlNullable } from "../../sqlite/sqlState.js";
@@ -28,18 +26,16 @@ import type { PersistObservedRowInput } from "./observationTypes.js";
 const INSERT_QUARANTINE_RECORD_SQL = `
   INSERT INTO quarantine_record (
     quarantine_id, event_id, observation_id, logical_sheet_id, row_binding_id,
-    reason, before_row_json, after_row_json, fields_json, repair_fields_json,
-    repair_state, candidate_payload_json, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    reason, before_row_json, after_row_json, fields_json, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(quarantine_id) DO NOTHING
 `;
 
 const INSERT_POLLING_QUARANTINE_RECORD_SQL = `
   INSERT INTO quarantine_record (
     quarantine_id, event_id, observation_id, logical_sheet_id, row_binding_id,
-    reason, before_row_json, after_row_json, fields_json, repair_fields_json,
-    repair_state, candidate_payload_json, created_at, updated_at
-  ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    reason, before_row_json, after_row_json, fields_json, created_at, updated_at
+  ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
   WHERE EXISTS (${FENCE_EXISTS_SQL})
   ON CONFLICT(quarantine_id) DO NOTHING
 `;
@@ -80,10 +76,6 @@ export async function persistQuarantineWithSql(
   const afterRow = quarantine.operation === ROW_OPERATIONS.DELETE
     ? null
     : quarantine.afterRow;
-  const repairState = input.evaluation.outcome === ROW_OUTCOMES.QUARANTINE &&
-      input.evaluation.repair.status === QUARANTINE_REPAIR_STATUSES.PLANNED
-    ? "pending"
-    : null;
   await sql.run(INSERT_QUARANTINE_RECORD_SQL, [
     quarantine.quarantineId,
     toSqlNullable(eventId),
@@ -94,9 +86,6 @@ export async function persistQuarantineWithSql(
     auditJson(beforeRow),
     auditJson(afterRow),
     auditJson(quarantine.fields),
-    auditJson(quarantine.repairFields),
-    repairState,
-    input.observation.payloadJson,
     input.observation.receivedAt,
     input.observation.receivedAt,
   ]);
@@ -148,9 +137,6 @@ export async function persistPollingQuarantineWithSql(
     input.beforeRowJson,
     input.afterRowJson,
     input.fieldsJson,
-    "[]",
-    null,
-    input.payloadJson,
     input.detectedAt,
     input.detectedAt,
     ...fenceParameters(fence),
