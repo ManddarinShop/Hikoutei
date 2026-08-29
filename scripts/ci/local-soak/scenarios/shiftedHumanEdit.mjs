@@ -26,7 +26,7 @@ import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
-import { boundedSleep } from "../timing.mjs";
+import { boundedSleep, isDeadlineExpired } from "../timing.mjs";
 import { classifyDirectError } from "../sheetsDirect.mjs";
 
 /** Stable scenario id recorded in redacted artifacts. */
@@ -200,10 +200,14 @@ export async function execute({ plan, context }) {
       // Deterministic jitter so the race lands while the worker/actors are
       // mid-flight, bounded by the run deadline (never an unconstrained
       // sleep).
-      await boundedSleep(plan.jitterMs ?? 0, context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER);
-      if (Date.now() >= (context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER)) {
-        // Never start the race against an expired budget: a truthful skip
-        // instead of a doomed write.
+      const deadlineAt = context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER;
+      await boundedSleep(plan.jitterMs ?? 0, deadlineAt);
+      // Clock-slop tolerant expiry check: the deadline-bounded jitter sleep
+      // can wake up to ~1-2ms short of the nominal deadline, and a
+      // zero-tolerance reading would flakily launch the doomed race writes
+      // after the budget ended. Never start the race against an expired
+      // budget: a truthful skip instead of a doomed write.
+      if (isDeadlineExpired(deadlineAt)) {
         result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "deadline-expired" };
       } else {
         // THE RACE: the human edit and the row-delete shifter run

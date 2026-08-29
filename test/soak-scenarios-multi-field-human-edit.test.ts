@@ -20,7 +20,10 @@ import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.m
 // Poll/settle sleeps (1000 ms) are capped to keep loops fast; the barrier
 // jitter sleep (small ms) respects the deadline so the deadline-expired path
 // (the jitter sleep ending exactly at the run deadline) stays deterministic.
-vi.mock("../scripts/ci/local-soak/timing.mjs", () => ({
+// The real timing helpers (including the clock-slop deadline check the
+// scenario imports) are preserved; only boundedSleep is stubbed.
+vi.mock("../scripts/ci/local-soak/timing.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../scripts/ci/local-soak/timing.mjs")>()),
   boundedSleep: async (ms: number, deadline?: number) => {
     const remaining = deadline === undefined ? ms : Math.max(0, deadline - Date.now());
     const cap = ms >= 1000 ? 5 : ms;

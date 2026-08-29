@@ -18,8 +18,11 @@ import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
 
 // Shorten the scenario's bounded sleeps so the projection polls terminate
-// quickly and deterministically (a real poll would be ~1s each).
-vi.mock("../scripts/ci/local-soak/timing.mjs", () => ({
+// quickly and deterministically (a real poll would be ~1s each). The real
+// module's `isDeadlineExpired` (and constants) flow through so the scenario's
+// post-jitter expiry check uses the genuine clock-slop semantics.
+vi.mock("../scripts/ci/local-soak/timing.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../scripts/ci/local-soak/timing.mjs")>()),
   boundedSleep: async () => {
     await new Promise((resolve) => setTimeout(resolve, 1));
   },
