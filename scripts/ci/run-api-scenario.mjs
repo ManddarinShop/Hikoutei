@@ -500,7 +500,6 @@ async function main() {
   const manifest = {
     version: SCENARIO_VERSION,
     backend: options.backend,
-    outbound: "direct",
     prefix,
     sheetNames,
     createdAt: startedAt,
@@ -870,7 +869,6 @@ async function main() {
 
   const report = createReport({
     backend: options.backend,
-    outbound: "direct",
     sheetMatched: backend.sheetMatched,
     prefix,
     startedAt,
@@ -1078,7 +1076,6 @@ async function cleanupFromManifest(options) {
 
 function createReport({
   backend,
-  outbound,
   sheetMatched,
   prefix,
   startedAt,
@@ -1097,7 +1094,6 @@ function createReport({
     scenario: "internal-sync-provider-e2e-lifecycle-and-polling",
     scenarioVersion: SCENARIO_VERSION,
     backend,
-    outbound,
     ...(sheetMatched === undefined ? {} : { sheetMatched }),
     status,
     prefix,
@@ -1135,7 +1131,6 @@ async function writeSummary(summaryPath, report) {
 function parseOptions(arguments_) {
   const options = {
     backend: undefined,
-    outbound: "direct",
     cleanupOnly: false,
     manifest: process.env.HIKOUTEI_CI_MANIFEST,
     output: process.env.HIKOUTEI_CI_OUTPUT,
@@ -1151,15 +1146,11 @@ function parseOptions(arguments_) {
     const [key, inlineValue] = argument.split("=", 2);
     const value = inlineValue ?? arguments_[++index];
     if (key === "--backend") options.backend = value;
-    else if (key === "--outbound") options.outbound = value;
     else if (key === "--manifest") options.manifest = value;
     else if (key === "--output") options.output = value;
     else if (key === "--summary") options.summary = value;
     else if (key === "--prefix") options.prefix = value;
     else throw new Error(`unknown option: ${argument}`);
-  }
-  if (options.outbound !== "direct") {
-    throw new Error("--outbound must be direct (the Apps Script gateway mode was removed)");
   }
   if (options.output === undefined) options.output = path.join(os.tmpdir(), "hikoutei-ci-result.json");
   if (options.manifest === undefined) options.manifest = path.join(os.tmpdir(), "hikoutei-ci-manifest.json");
