@@ -40,7 +40,7 @@ export type MikroOrmSqliteConfiguration = Omit<
 
 /** Inputs for creating the SQLite ORM instance that typed-sheets will use. */
 export interface InitializeMikroOrmSqliteAdapterOptions {
-  /** SQLite database path, URI, or `:memory:` database name. */
+  /** SQLite file path, exact `:memory:`, or a `:memory:`-prefixed value (normalized to in-memory). */
   readonly dbName: string;
   /** Application entities managed by the dedicated Sheets-side MikroORM instance. */
   readonly entities: readonly MikroOrmSqliteEntity[];
@@ -149,11 +149,18 @@ export function createMikroOrmSqliteAdapter(orm: MikroOrmSqlite): MikroOrmSqlite
 export async function initializeMikroOrmSqliteAdapter(
   options: InitializeMikroOrmSqliteAdapterOptions,
 ): Promise<MikroOrmSqliteAdapter> {
+  // `node:sqlite` treats ONLY the exact string ":memory:" as an in-memory
+  // database. A suffixed name like ":memory:<uuid>" is opened as a real
+  // file in the current working directory, so normalize any ":memory:*"
+  // spelling (but not "file::memory:" URIs) down to the exact marker.
+  const dbName = options.dbName.startsWith(":memory:") && !options.dbName.startsWith("file::memory:")
+    ? ":memory:"
+    : options.dbName;
   const orm = await MikroORM.init({
     ...options.configuration,
     driver: SqliteDriver,
-    dbName: options.dbName,
-    driverOptions: new NodeSqliteDialect(options.dbName),
+    dbName,
+    driverOptions: new NodeSqliteDialect(dbName),
     entities: [...options.entities],
   });
   return new MikroOrmSqliteAdapter(orm);

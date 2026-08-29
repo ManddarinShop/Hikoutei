@@ -66,7 +66,6 @@ import {
 
 import {
   SYMLINK_SUPPORTED,
-  describeLongSoak,
   SHORT_DURATION_HOURS,
   soakTestBeforeAll,
   soakTestBeforeEach,

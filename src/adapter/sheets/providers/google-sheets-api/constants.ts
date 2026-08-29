@@ -38,7 +38,7 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
    * and writes use independent request-start limiters, so reads serialize
    * only against reads and writes only against writes, and a read and a
    * write can start concurrently. Google Sheets quota is enforced per
-   * 100-second windows; the 2,500 ms default paces each class to about 40
+   * 100-second windows; the 800 ms default paces each class to at most 125
    * starts per 100 s, leaving headroom inside the default per-user/
    * per-project 100-second quotas for the observation and provisioning
    * reads that run beside the worker. The exact quota stays provider and
@@ -84,7 +84,6 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
   MAX_APPEND_ROWS_PER_REQUEST: 1_000,
 } as const;
 
-/** Hidden receipt tab shared with the Apps Script effect operations. */
 /**
  * Canonical Google API remote status that proves a range names a missing
  * tab. The refresh's fixed receipt-tab range is only treated as still-absent
@@ -94,6 +93,7 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
  */
 export const GOOGLE_SHEETS_API_MISSING_RANGE_REMOTE_CODE = "INVALID_ARGUMENT";
 
+/** Hidden receipt tab shared with the Apps Script effect operations. */
 export const GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME =
   "__typed_sheets_internal_effect_receipts";
 

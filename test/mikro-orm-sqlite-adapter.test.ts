@@ -249,6 +249,35 @@ describe("MikroOrmSqliteAdapter", () => {
     }
   });
 
+  it("normalizes a suffixed :memory: dbName to the exact in-memory marker (no CWD file)", async () => {
+    // node:sqlite treats ONLY the exact string ":memory:" as in-memory; a
+    // suffixed name like ":memory:<uuid>" silently becomes a real file in the
+    // current working directory (225 stray files proved it).
+    const { existsSync, readdirSync } = await import("node:fs");
+    const before = readdirSync(process.cwd()).filter((name) => name.startsWith(":memory:"));
+    const dbName = ":memory:3f2d1c9a-regression";
+    if (existsSync(dbName)) throw new Error(`stray file already exists: ${dbName}`);
+
+    const adapter = await initializeMikroOrmSqliteAdapter({
+      dbName,
+      entities: [Order],
+    });
+    try {
+      await migrateMikroOrmSqliteStorageSchema(adapter);
+      await expect(adapter.read(({ sql }) => {
+        return sql.get<{ readonly name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+          ["mikro_orm_adapter_order"],
+        );
+      })).resolves.toEqual({ name: "mikro_orm_adapter_order" });
+    } finally {
+      await adapter.close(true);
+    }
+
+    expect(existsSync(dbName)).toBe(false);
+    expect(readdirSync(process.cwd()).filter((name) => name.startsWith(":memory:"))).toEqual(before);
+  });
+
   it("rolls the entity and raw outbox SQL back together when the transaction fails", async () => {
     const orm = await createOrm();
     openOrms.push(orm);

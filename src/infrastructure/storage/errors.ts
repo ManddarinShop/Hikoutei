@@ -20,8 +20,6 @@ export const STORAGE_ERROR_CODES = {
   INVALID_OBSERVATION_INPUT: "invalid_observation_input",
   OBSERVATION_STORAGE_INCONSISTENT: "observation_storage_inconsistent",
   OBSERVATION_AUDIT_SERIALIZATION_FAILED: "observation_audit_serialization_failed",
-  /** Compatibility code for the still-supported internal observation path. */
-  INVALID_READ_ONLY_OBSERVATION: "invalid_read_only_observation",
   INVALID_EFFECT_OPTIONS: "invalid_effect_options",
   INVALID_PENDING_EFFECT: "invalid_pending_effect",
   EFFECT_WRITE_FAILED: "effect_write_failed",
