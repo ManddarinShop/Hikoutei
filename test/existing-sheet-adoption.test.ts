@@ -6,8 +6,15 @@
  * refuses to start any supervisor (the spreadsheet is never mutated).
  * `design/existing-sheet-adoption-design.md` D1–D7 are the source of truth.
  */
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  createTypedSheets,
+} from "../src/api/index.js";
 import {
   defineTypedSheetsEntity,
 } from "../src/api/entity.js";
@@ -926,5 +933,196 @@ describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)"
     expect(report.ok).toBe(true);
     expect(report.entities).toHaveLength(2);
     expect(report.entities.every((entity) => entity.status === "ready")).toBe(true);
+  });
+});
+
+describe("D7 F3/F4 regressions: case-variant tabs and empty adopt.entities", () => {
+  const AdoptB = defineTypedSheetsEntity({
+    name: "AdoptB",
+    tableName: "adopt_b",
+    // Schema intentionally mirrors AdoptInvoice: both entities adopt the SAME
+    // physical "Invoices" sheet (resolved case-insensitively), so both must
+    // be READY in adopt mode for the bootstrap duplicate-sheet-id gate to run.
+    properties: {
+      invoiceNo: { type: "string", primary: true },
+      customer: { type: "string" },
+      total: { type: "number" },
+      note: { type: "string", nullable: true },
+    },
+  });
+  const B_OWNED = ["invoiceNo", "customer", "total", "note"];
+
+  // Two entities whose User_Input routes differ only by TAB-NAME CASE
+  // (`Invoices` vs `invoices`). Adoption resolves tabs case-insensitively, so
+  // both would collapse onto ONE sheet id and be mutated twice (F3).
+  const caseVariantProjections = {
+    spreadsheetId: "adopt-spreadsheet",
+    entities: {
+      AdoptInvoice: {
+        systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Invoices", registeredRange: "A:E" },
+        userOwnedFields: USER_OWNED,
+      },
+      AdoptB: {
+        systemState: { tabName: "invoices_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "invoices_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "invoices", registeredRange: "A:E" },
+        userOwnedFields: B_OWNED,
+      },
+    },
+  } as const;
+
+  class CaseVariantTransport {
+    public async getSpreadsheet(): Promise<unknown> {
+      return { sheets: [{ properties: { sheetId: 7, title: "Invoices", gridProperties: { columnCount: 4 } } }] };
+    }
+    public async getValues(): Promise<{ values?: readonly (readonly (string | number | boolean | null)[])[] }> {
+      return { values: [["invoiceNo", "customer", "total", "note"], ["INV-1", "Acme", 100, null]] };
+    }
+    public async batchUpdate(): Promise<unknown> {
+      return {};
+    }
+  }
+
+  it("rejects two entities whose adopt tabNames differ only by case BEFORE mutation (INVALID_OPTIONS)", async () => {
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [AdoptInvoice, AdoptB],
+      projections: caseVariantProjections,
+      googleSheetsApi: { transport: new CaseVariantTransport() as never },
+      adopt: {
+        mode: "adopt",
+        entities: {
+          AdoptInvoice: { tabName: "Invoices" },
+          AdoptB: { tabName: "invoices" },
+        },
+      },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: expect.stringContaining("same tab"),
+    });
+  });
+
+  it("rejects an empty adopt.entities record (INVALID_OPTIONS, F4)", async () => {
+    // Single-entity projections (AdoptB absent) so the adopt validation is
+    // what fires, not the unknown-projection check.
+    const singleProjections = {
+      spreadsheetId: "adopt-spreadsheet",
+      entities: {
+        AdoptInvoice: {
+          systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+          syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+          userInput: { tabName: "Invoices", registeredRange: "A:E" },
+          userOwnedFields: USER_OWNED,
+        },
+      },
+    } as const;
+    await expect(createInternalSyncService({
+      dbName: ":memory:",
+      entities: [AdoptInvoice],
+      projections: singleProjections,
+      googleSheetsApi: { transport: new CaseVariantTransport() as never },
+      adopt: { mode: "dry-run", entities: {} },
+    })).rejects.toMatchObject({
+      code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+      message: expect.stringContaining("at least one adopted entity"),
+    });
+  });
+});
+
+describe("D7 correction round 2: fail-closed validates ALL entities before ANY sheet write", () => {
+  const AdoptMember = defineTypedSheetsEntity({
+    name: "AdoptMember",
+    tableName: "adopt_members",
+    properties: {
+      memberNo: { type: "string", primary: true },
+      displayName: { type: "string" },
+    },
+  });
+  const MEMBER_OWNED = ["memberNo", "displayName"];
+
+  const twoProjections = {
+    spreadsheetId: "adopt-spreadsheet",
+    entities: {
+      AdoptInvoice: {
+        systemState: { tabName: "Invoices_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Invoices_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Invoices", registeredRange: "A:E" },
+        userOwnedFields: USER_OWNED,
+      },
+      AdoptMember: {
+        systemState: { tabName: "Members_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "Members_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "Members", registeredRange: "A:D" },
+        userOwnedFields: MEMBER_OWNED,
+      },
+    },
+  } as const;
+
+  // Tracks the Sheet-write surface (batchUpdate) so the test can prove the
+  // adoption rejected before ANY system-column write for ANY entity.
+  class CountingTransport {
+    public batchUpdates = 0;
+    public async getSpreadsheet(): Promise<unknown> {
+      return {
+        sheets: [
+          { properties: { sheetId: 7, title: "Invoices", gridProperties: { columnCount: 4 } } },
+          { properties: { sheetId: 8, title: "Members", gridProperties: { columnCount: 2 } } },
+        ],
+      };
+    }
+    public async getValues(input: { range: string }): Promise<{ values?: readonly (readonly (string | number | boolean | null)[])[] }> {
+      if (input.range.startsWith("'Members'")) {
+        return { values: [["memberNo", "displayName"], ["M-1", "Ann"], ["M-2", "Bob"]] };
+      }
+      return { values: [["invoiceNo", "customer", "total", "note"], ["INV-1", "Acme", 100, null]] };
+    }
+    public async batchUpdate(): Promise<unknown> {
+      this.batchUpdates += 1;
+      return {};
+    }
+  }
+
+  it("rejects a multi-entity adoption when entity 2 is preseeded, writing ZERO sheet columns", async () => {
+    // Entity 2 (AdoptMember) is preseeded through the public local-only
+    // runtime so its ORM entity table already holds a row when the bootstrap
+    // runs its fail-closed empty-state gate. Entity 1 (AdoptInvoice) is empty
+    // and valid — it comes FIRST in the plan, so in the buggy single-loop code
+    // its system columns would be written before entity 2 throws.
+    const dbFile = join(tmpdir(), `hikoutei-adopt-failclosed-${randomUUID()}.sqlite`);
+    try {
+      const seeded = await createTypedSheets({
+        dbName: dbFile,
+        entities: [AdoptInvoice, AdoptMember],
+      });
+      const em = seeded.em.fork();
+      em.persist(em.create(AdoptMember, { memberNo: "M-9", displayName: "Preseed" }));
+      await em.flush();
+      await seeded.close();
+
+      const transport = new CountingTransport();
+      await expect(createInternalSyncService({
+        dbName: dbFile,
+        entities: [AdoptInvoice, AdoptMember],
+        projections: twoProjections,
+        googleSheetsApi: { transport: transport as never },
+        adopt: {
+          mode: "adopt",
+          entities: {
+            AdoptInvoice: { tabName: "Invoices" },
+            AdoptMember: { tabName: "Members" },
+          },
+        },
+      })).rejects.toMatchObject({
+        code: SYNC_SERVICE_ERROR_CODES.INVALID_OPTIONS,
+        message: expect.stringContaining('adoption requires an empty SQLite state for entity "AdoptMember"'),
+      });
+      // Entity 1 must not have been mutated either: the whole adoption rejects
+      // before ANY applyAdoptionSystemColumns / batchUpdate write.
+      expect(transport.batchUpdates).toBe(0);
+    } finally {
+      await rm(dbFile, { force: true });
+    }
   });
 });

@@ -117,6 +117,64 @@ describe("parseAdoptArgs", () => {
     expect(dryRun.status).toBe("valid");
   });
 
+  it("parses repeated --adopt flags into N entity specs", () => {
+    const parsed = parseAdoptArgs([
+      "--adopt", "Invoice=Invoices;Invoice No=invoiceNo",
+      "--adopt", "Customer=Customers",
+    ]);
+    expect(parsed.status).toBe("valid");
+    if (parsed.status !== "valid") return;
+    expect(parsed.options.adopts).toEqual([
+      { entityName: "Invoice", tabName: "Invoices", columnMap: { "Invoice No": "invoiceNo" } },
+      { entityName: "Customer", tabName: "Customers" },
+    ]);
+    // The legacy single-entity fields are absent in the multi path.
+    expect(parsed.options.entityName).toBeUndefined();
+    expect(parsed.options.tabName).toBeUndefined();
+  });
+
+  it("rejects malformed --adopt values", () => {
+    for (const bad of [
+      "Invoice",            // no '='
+      "Invoice=",           // empty tab
+      "=Invoices",          // empty entity
+      "Invoice=Invoices;NoMap", // map segment without '='
+      "Invoice=Invoices;=prop", // empty map header
+    ]) {
+      const parsed = parseAdoptArgs(["--adopt", bad]);
+      expect(parsed.status).toBe("invalid");
+      if (parsed.status === "invalid") expect(parsed.failure.code).toBe("invalid_args");
+    }
+  });
+
+  it("rejects mixing --adopt with the legacy --entity/--tab flags (exit 2)", () => {
+    const parsed = parseAdoptArgs([
+      "--entity", "Invoice", "--tab", "Invoices",
+      "--adopt", "Customer=Customers",
+    ]);
+    expect(parsed.status).toBe("invalid");
+    if (parsed.status !== "invalid") return;
+    expect(parsed.failure.code).toBe("invalid_args");
+  });
+
+  it("rejects per-run flags when several --adopt entries are given", () => {
+    const parsed = parseAdoptArgs([
+      "--adopt", "Invoice=Invoices", "--adopt", "Customer=Customers",
+      "--system-tab", "Ledger_State",
+    ]);
+    expect(parsed.status).toBe("invalid");
+    if (parsed.status !== "invalid") return;
+    expect(parsed.failure.code).toBe("invalid_args");
+  });
+
+  it("carries the --map columnMap through a SINGLE --adopt entry (F2)", () => {
+    const parsed = parseAdoptArgs(["--adopt", "Invoice=Invoices", "--map", "H=p"]);
+    expect(parsed.status).toBe("valid");
+    if (parsed.status !== "valid") return;
+    expect(parsed.options.adopts).toEqual([{ entityName: "Invoice", tabName: "Invoices" }]);
+    expect(parsed.options.columnMap).toEqual({ H: "p" });
+  });
+
   it("shows help on -h/--help", () => {
     for (const flag of ["-h", "--help"]) {
       const parsed = parseAdoptArgs([flag]);
@@ -370,5 +428,129 @@ describe("runAdoptCli", () => {
     });
     expect(code).toBe(ADOPT_RUNTIME_ERROR_EXIT_CODE);
     expect(stderr.join("")).toContain("hikoutei-adopt:sync_startup_failed: blocked by dry-run analysis");
+  });
+});
+
+describe("runAdoptCli (multi --adopt)", () => {
+  const multiOptions = {
+    adopts: [
+      { entityName: "Invoice", tabName: "Invoices" },
+      { entityName: "Customer", tabName: "Customers" },
+    ],
+    identityFrom: "auto" as const,
+    mode: "dry-run" as const,
+    db: "./hikoutei.sqlite",
+    yes: true,
+    json: false,
+  };
+
+  it("passes ALL entity specs to the runner as one adopt.entities record", async () => {
+    const stdout: string[] = [];
+    const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
+    const code = await runAdoptCli({
+      options: multiOptions,
+      entities: [CliProbe],
+      runner,
+      ...sinks(stdout),
+    });
+    expect(code).toBe(ADOPT_SUCCESS_EXIT_CODE);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.spec).toEqual({
+      mode: "dry-run",
+      entities: {
+        Invoice: { tabName: "Invoices" },
+        Customer: { tabName: "Customers" },
+      },
+    });
+  });
+
+  it("renders a dry-run report for BOTH entities", async () => {
+    const customer = { ...readyEntityReport(), entityName: "Customer", tabName: "Customers" };
+    const result: TypedSheetsWithSyncResult = {
+      kind: "adopt-dry-run",
+      report: { mode: "dry-run", ok: true, entities: [readyEntityReport(), customer] },
+    };
+    const stdout: string[] = [];
+    const code = await runAdoptCli({
+      options: multiOptions,
+      entities: [CliProbe],
+      runner: runnerReturning(result).runner,
+      ...sinks(stdout),
+    });
+    expect(code).toBe(ADOPT_SUCCESS_EXIT_CODE);
+    const text = stdout.join("");
+    expect(text).toContain('entity "Invoice"');
+    expect(text).toContain('entity "Customer"');
+    expect(text).toContain('tab "Invoices"');
+    expect(text).toContain('tab "Customers"');
+  });
+
+  it("a single --adopt entry applies the legacy per-run flags to that one entity", async () => {
+    const stdout: string[] = [];
+    const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
+    const code = await runAdoptCli({
+      options: {
+        ...multiOptions,
+        adopts: [{ entityName: "Invoice", tabName: "Invoices" }],
+        systemTabName: "Ledger_State",
+        identityFrom: "InvoiceNo",
+      },
+      entities: [CliProbe],
+      runner,
+      ...sinks(stdout),
+    });
+    expect(code).toBe(ADOPT_SUCCESS_EXIT_CODE);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.spec).toEqual({
+      mode: "dry-run",
+      entities: {
+        Invoice: { tabName: "Invoices", identityFrom: "InvoiceNo", systemStateTabName: "Ledger_State" },
+      },
+    });
+  });
+
+  it("single --adopt + --map: the flow merges the --map columnMap into the entity spec (F2)", async () => {
+    const stdout: string[] = [];
+    const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
+    const code = await runAdoptCli({
+      options: {
+        ...multiOptions,
+        adopts: [{ entityName: "Invoice", tabName: "Invoices" }],
+        columnMap: { "H": "p" },
+      },
+      entities: [CliProbe],
+      runner,
+      ...sinks(stdout),
+    });
+    expect(code).toBe(ADOPT_SUCCESS_EXIT_CODE);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.spec).toEqual({
+      mode: "dry-run",
+      entities: {
+        Invoice: { tabName: "Invoices", identityFrom: "auto", columnMap: { H: "p" } },
+      },
+    });
+  });
+
+  it("single --adopt: the INLINE map wins over the flow-level --map on a conflict (F2)", async () => {
+    const stdout: string[] = [];
+    const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
+    const code = await runAdoptCli({
+      options: {
+        ...multiOptions,
+        adopts: [{ entityName: "Invoice", tabName: "Invoices", columnMap: { H: "inline" } }],
+        columnMap: { H: "legacy" },
+      },
+      entities: [CliProbe],
+      runner,
+      ...sinks(stdout),
+    });
+    expect(code).toBe(ADOPT_SUCCESS_EXIT_CODE);
+    expect(calls[0]!.spec).toEqual({
+      mode: "dry-run",
+      entities: {
+        Invoice: { tabName: "Invoices", identityFrom: "auto", columnMap: { H: "inline" } },
+      },
+    });
   });
 });

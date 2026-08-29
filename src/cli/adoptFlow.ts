@@ -16,6 +16,7 @@ import type { AdoptOptions } from "./adoptArgs.js";
 import { confirmAdopt } from "./confirm.js";
 import type { HikouteiEntity } from "../api/entity.js";
 import type {
+  AdoptEntitySpec,
   AdoptSpec,
   AdoptionEntityReport,
   TypedSheetsWithSyncResult,
@@ -77,6 +78,10 @@ export async function runAdoptCli(input: RunAdoptCliInput): Promise<number> {
 async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
   const { options } = input;
 
+  // Build the adoption spec + confirmation summary from either the legacy
+  // single-entity flags or the repeatable multi `--adopt` entries.
+  const adoption = buildAdoption(options);
+
   // Adopt mode mutates the spreadsheet and the local database: confirm unless
   // --yes. The prompt and the cancellation line go to STDERR so `--json`
   // consumers always get a clean stdout payload (Terra S3).
@@ -85,7 +90,7 @@ async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
       yes: options.yes,
       input: input.input,
       output: input.error,
-      summary: `adopt tab "${options.tabName}" as entity "${options.entityName}" into ${options.db}`,
+      summary: adoption.summary,
     });
     if (confirmation.status === "declined") {
       // Exit 1, not 0: an automation run that forgot --yes must not read as
@@ -95,23 +100,10 @@ async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
     }
   }
 
-  const spec: AdoptSpec = {
-    mode: options.mode,
-    entities: {
-      [options.entityName]: {
-        tabName: options.tabName,
-        identityFrom: options.identityFrom,
-        ...(options.systemTabName === undefined ? {} : { systemStateTabName: options.systemTabName }),
-        ...(options.conflictsTabName === undefined ? {} : { syncConflictsTabName: options.conflictsTabName }),
-        ...(options.columnMap === undefined ? {} : { columnMap: options.columnMap }),
-      },
-    },
-  };
-
   let result: TypedSheetsWithSyncResult;
   try {
     result = await input.runner({
-      spec,
+      spec: adoption.spec,
       dbName: options.db,
       env: adoptEnv(input.options),
       entities: input.entities,
@@ -126,7 +118,10 @@ async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
       input.output.write(`${JSON.stringify(report, null, 2)}\n`);
       return report.ok ? ADOPT_SUCCESS_EXIT_CODE : ADOPT_RUNTIME_ERROR_EXIT_CODE;
     }
-    input.output.write(renderReport(report.entities[0]!, report.ok));
+    // Render a per-entity block for EVERY adopted entity (N-entity report).
+    input.output.write(report.entities
+      .map((entity) => renderAdoptionReport(entity, entity.status === "ready"))
+      .join("\n"));
     return report.ok ? ADOPT_SUCCESS_EXIT_CODE : ADOPT_RUNTIME_ERROR_EXIT_CODE;
   }
 
@@ -143,11 +138,7 @@ async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
   if (options.json) {
     input.output.write(`${JSON.stringify({ ok: true, kind: "sync" }, null, 2)}\n`);
   } else {
-    input.output.write(
-      `Adoption complete: tab "${options.tabName}" is now entity "${options.entityName}"'s ` +
-      `User_Input surface; the local state was seeded and the System_State projection ` +
-      `will backfill automatically. Human edits on the tab are absorbed from now on.\n`,
-    );
+    input.output.write(adoptCompleteMessage(options));
   }
   return ADOPT_SUCCESS_EXIT_CODE;
 }
@@ -203,7 +194,69 @@ export function renderAdoptionReport(entity: AdoptionEntityReport, ok: boolean):
   return lines.join("\n");
 }
 
-/** Thin wrapper kept for tests that want the renderer without the flow. */
-function renderReport(entity: AdoptionEntityReport, ok: boolean): string {
-  return renderAdoptionReport(entity, ok);
+/**
+ * Builds the adopt spec (and a human confirmation summary) from the parsed
+ * options. The multi `--adopt` path maps each entry to one entity spec; the
+ * legacy per-run flags (`--identity-from`/`--system-tab`/`--conflicts-tab`)
+ * apply only when exactly ONE `--adopt` entry is present (the parser already
+ * rejects them for several).
+ */
+function buildAdoption(options: AdoptOptions): { spec: AdoptSpec; summary: string } {
+  if (options.adopts !== undefined) {
+    const single = options.adopts.length === 1;
+    const entities: Record<string, AdoptEntitySpec> = {};
+    for (const entry of options.adopts) {
+      const spec: AdoptEntitySpec = single
+        ? {
+            tabName: entry.tabName,
+            identityFrom: options.identityFrom,
+            ...(options.systemTabName === undefined ? {} : { systemStateTabName: options.systemTabName }),
+            ...(options.conflictsTabName === undefined ? {} : { syncConflictsTabName: options.conflictsTabName }),
+            // F2: with a single --adopt the flow-level --map columnMap is
+            // scoped to this entity. Merge it with any inline map, giving the
+            // inline `;Header=prop` pairs precedence on a conflict.
+            ...(entry.columnMap === undefined && options.columnMap === undefined
+              ? {}
+              : { columnMap: { ...(options.columnMap ?? {}), ...(entry.columnMap ?? {}) } }),
+          }
+        : {
+            tabName: entry.tabName,
+            ...(entry.columnMap === undefined ? {} : { columnMap: entry.columnMap }),
+          };
+      entities[entry.entityName] = spec;
+    }
+    const names = options.adopts.map((entry) => entry.entityName).join(", ");
+    return {
+      spec: { mode: options.mode, entities },
+      summary: `adopt ${options.adopts.length} tab(s) as entities (${names}) into ${options.db}`,
+    };
+  }
+  return {
+    spec: {
+      mode: options.mode,
+      entities: {
+        [options.entityName!]: {
+          tabName: options.tabName!,
+          identityFrom: options.identityFrom,
+          ...(options.systemTabName === undefined ? {} : { systemStateTabName: options.systemTabName }),
+          ...(options.conflictsTabName === undefined ? {} : { syncConflictsTabName: options.conflictsTabName }),
+          ...(options.columnMap === undefined ? {} : { columnMap: options.columnMap }),
+        },
+      },
+    },
+    summary: `adopt tab "${options.tabName}" as entity "${options.entityName}" into ${options.db}`,
+  };
+}
+
+/** Human-readable adopt-mode success line for one or several entities. */
+function adoptCompleteMessage(options: AdoptOptions): string {
+  if (options.adopts !== undefined) {
+    const names = options.adopts.map((entry) => entry.entityName).join(", ");
+    return `Adoption complete: tabs for ${options.adopts.length} entities (${names}) are now ` +
+      `Hikoutei-managed; local state was seeded and each System_State projection will ` +
+      `backfill automatically. Human edits are absorbed from now on.\n`;
+  }
+  return `Adoption complete: tab "${options.tabName}" is now entity "${options.entityName}"'s ` +
+    `User_Input surface; the local state was seeded and the System_State projection ` +
+    `will backfill automatically. Human edits on the tab are absorbed from now on.\n`;
 }

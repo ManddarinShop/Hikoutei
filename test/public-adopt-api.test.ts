@@ -47,6 +47,15 @@ const AdoptApiInvoice = defineTypedSheetsEntity({
   },
 });
 
+const AdoptApiCustomer = defineTypedSheetsEntity({
+  name: "AdoptApiCustomer",
+  tableName: "adopt_api_customers",
+  properties: {
+    customerId: { type: "string", primary: true },
+    company: { type: "string" },
+  },
+});
+
 
   /** Foreign tab exactly as the MVP smoke fixture: memo | invoiceNo | customer | total. */
 function foreignSpreadsheet(
@@ -59,6 +68,26 @@ function foreignSpreadsheet(
   spreadsheet.addTab("Invoices", {
     headers: ["memo", "invoiceNo", "customer", "total"],
     rows,
+  });
+  return spreadsheet;
+}
+
+/** Two-entity adoption fixture: one tab per entity, each header-matched. */
+function twoEntitySpreadsheet(): StubSpreadsheet {
+  const spreadsheet = new StubSpreadsheet();
+  spreadsheet.addTab("Invoices", {
+    headers: ["memo", "invoiceNo", "customer", "total"],
+    rows: [
+      ["", "INV-1", "Acme", 100],
+      ["legacy note", "INV-2", "Beta", 200],
+    ],
+  });
+  spreadsheet.addTab("Customers", {
+    headers: ["customerId", "company"],
+    rows: [
+      ["C-1", "Acme Corp"],
+      ["C-2", "Beta Inc"],
+    ],
   });
   return spreadsheet;
 }
@@ -419,6 +448,135 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
       expect(invoices.cell(2, 4)?.userEnteredValue?.stringValue).toBe("entity:INV-2");
       expect(invoices.cell(1, 1)?.userEnteredValue?.stringValue).toBe("INV-1");
       expect(invoices.cell(2, 2)?.userEnteredValue?.stringValue).toBe("Beta");
+    } finally {
+      await runtime.close().catch(() => undefined);
+    }
+  });
+
+  it("B1: dry-run reports BOTH entities ready in one runtime (two-entity adopt)", async () => {
+    const spreadsheet = twoEntitySpreadsheet();
+    const result = await createTypedSheetsWithSyncInternal({
+      dbName: `:memory:${randomUUID()}`,
+      entities: [AdoptApiInvoice, AdoptApiCustomer],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]: "https://docs.google.com/spreadsheets/d/adopt-api-test-1/edit",
+        [SYNC_ENV_KEYS.CREDENTIALS_FILE]: credentialsPath(),
+        [SYNC_ENV_KEYS.POLLING_INTERVAL_MS]: "3600000",
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+      adopt: {
+        mode: "dry-run",
+        entities: {
+          AdoptApiInvoice: { tabName: "Invoices" },
+          AdoptApiCustomer: { tabName: "Customers" },
+        },
+      },
+    });
+
+    const { report } = expectAdoptDryRun(result);
+    expect(report.ok).toBe(true);
+    expect(report.entities).toHaveLength(2);
+    const byEntity = Object.fromEntries(report.entities.map((entity) => [entity.entityName, entity]));
+    expect(byEntity.AdoptApiInvoice!.status).toBe("ready");
+    expect(byEntity.AdoptApiCustomer!.status).toBe("ready");
+    // Distinct derived System/Conflicts tabs per entity.
+    expect(byEntity.AdoptApiInvoice!.tabsToProvision).toEqual(["Invoices_System", "Invoices_Conflicts"]);
+    expect(byEntity.AdoptApiCustomer!.tabsToProvision).toEqual(["Customers_System", "Customers_Conflicts"]);
+    // Dry-run never mutates.
+    expect(spreadsheet.sheets.map((sheet) => sheet.title)).toEqual(["Invoices", "Customers"]);
+  });
+
+  it("B1: adopts TWO entities; a human edit on one leaves the other's projection untouched", async () => {
+    const spreadsheet = twoEntitySpreadsheet();
+    const result = await createTypedSheetsWithSyncInternal({
+      dbName: join(tmpdir(), `hikoutei-adopt-2entity-${randomUUID()}.sqlite`),
+      entities: [AdoptApiInvoice, AdoptApiCustomer],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]: "https://docs.google.com/spreadsheets/d/adopt-api-test-1/edit",
+        [SYNC_ENV_KEYS.CREDENTIALS_FILE]: credentialsPath(),
+        [SYNC_ENV_KEYS.POLLING_INTERVAL_MS]: "3600000",
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+      adopt: {
+        mode: "adopt",
+        entities: {
+          AdoptApiInvoice: { tabName: "Invoices", identityFrom: "auto" },
+          AdoptApiCustomer: { tabName: "Customers", identityFrom: "auto" },
+        },
+      },
+    });
+
+    expect(result.kind).toBe("sync");
+    const runtime = (result as { kind: "sync"; hikoutei: { close(): Promise<void> } }).hikoutei;
+    try {
+      // Each entity got its own System_State + Sync_Conflicts projection.
+      const titles = spreadsheet.sheets.map((sheet) => sheet.title);
+      expect(titles).toContain("Invoices_System");
+      expect(titles).toContain("Invoices_Conflicts");
+      expect(titles).toContain("Customers_System");
+      expect(titles).toContain("Customers_Conflicts");
+
+      // Both adopted tabs gained the row-id system column with anchors.
+      const invoices = spreadsheet.findTab("Invoices")!;
+      expect(invoices.cell(0, 4)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
+      expect(invoices.cell(1, 4)?.userEnteredValue?.stringValue).toBe("entity:INV-1");
+      const customers = spreadsheet.findTab("Customers")!;
+      expect(customers.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
+      expect(customers.cell(1, 2)?.userEnteredValue?.stringValue).toBe("entity:C-1");
+
+      const service = (result as { kind: "sync"; service: import("../src/application/sync/service/SyncServiceBootstrap.js").InternalSyncService }).service;
+
+      // D6 absorption on ONE entity only: edit the Invoices tab's customer cell.
+      invoices.cells.set("1,2", { userEnteredValue: { stringValue: "EditedAcme" } });
+      await service.pollingSupervisor.runOnce();
+
+      const invoiceCustomer = await service.storage.read(({ sql }) =>
+        sql.get<{ normalized_value: string }>(
+          "SELECT normalized_value FROM entity_field_state WHERE field_name = 'customer' AND entity_id LIKE '%INV-1'"));
+      expect(JSON.parse(invoiceCustomer!.normalized_value).value).toBe("EditedAcme");
+
+      // The OTHER entity's seeded state is untouched.
+      const customerCompany = await service.storage.read(({ sql }) =>
+        sql.get<{ normalized_value: string }>(
+          "SELECT normalized_value FROM entity_field_state WHERE field_name = 'company' AND entity_id LIKE '%C-1'"));
+      expect(JSON.parse(customerCompany!.normalized_value).value).toBe("Acme Corp");
+
+      // Drain the outbox; only Invoices_System reflects the edit. (Adopted
+      // rows materialize their System_State projection on change; the
+      // unedited entity is left untouched here and backfilled separately
+      // below.)
+      const drain = async () => {
+        for (let pass = 0; pass < 6; pass += 1) {
+          await service.effectSupervisor.runOnce();
+          const pending = await service.storage.read(({ sql }) =>
+            sql.get<{ count: number }>("SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE status = 'pending'"));
+          if ((pending?.count ?? 0) === 0) break;
+        }
+      };
+      await drain();
+
+      const invoiceSystem = spreadsheet.findTab("Invoices_System")!;
+      expect([1, 2].map((row) => [0, 1].map((col) => invoiceSystem.cell(row, col)?.userEnteredValue?.stringValue)))
+        .toContainEqual(["INV-1", "EditedAcme"]);
+
+      // The OTHER entity is unaffected by the Invoices edit: its System_State
+      // carries no Invoices data and its adopted tab is untouched.
+      const customerSystem = spreadsheet.findTab("Customers_System")!;
+      expect([1, 2].map((row) => [0, 1].map((col) => customerSystem.cell(row, col)?.userEnteredValue?.stringValue)))
+        .not.toContainEqual(["INV-1", "EditedAcme"]);
+      expect(customers.cell(1, 0)?.userEnteredValue?.stringValue).toBe("C-1");
+      expect(customers.cell(1, 1)?.userEnteredValue?.stringValue).toBe("Acme Corp");
+
+      // Backfill the OTHER entity's System_State with its own edit: a human
+      // edit on the Customers tab flows to Customers_System only.
+      customers.cells.set("1,1", { userEnteredValue: { stringValue: "EditedCorp" } });
+      await service.pollingSupervisor.runOnce();
+      await drain();
+      expect([1, 2].map((row) => [0, 1].map((col) => customerSystem.cell(row, col)?.userEnteredValue?.stringValue)))
+        .toContainEqual(["C-1", "EditedCorp"]);
+      // Invoices_System still holds only its own row — no cross-entity leak.
+      expect([1, 2].map((row) => [0, 1].map((col) => invoiceSystem.cell(row, col)?.userEnteredValue?.stringValue)))
+        .not.toContainEqual(["C-1", "EditedCorp"]);
     } finally {
       await runtime.close().catch(() => undefined);
     }

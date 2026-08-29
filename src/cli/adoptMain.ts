@@ -16,7 +16,7 @@ import { createTypedSheetsWithSync } from "../api/syncRuntime.js";
 import type { HikouteiEntity } from "../api/entity.js";
 import { getEntityDescriptor, getRegisteredEntityTokens } from "../api/entity.js";
 import { HikouteiError } from "../api/errors.js";
-import { parseAdoptArgs } from "./adoptArgs.js";
+import { parseAdoptArgs, type AdoptOptions } from "./adoptArgs.js";
 import {
   ADOPT_ERROR_PREFIX,
   runAdoptCli,
@@ -34,22 +34,36 @@ import { createStdinFinalizer, isModuleMainEntry } from "./setup.js";
 const HIKOUTEI_ERROR_CODES_ADOPT_ENTITY_UNKNOWN = "sync_startup_failed" as const;
 
 /**
- * Loads the entities module and returns the token matching the requested
- * entity name. The import side effect must call `defineTypedSheetsEntity()`.
+ * Resolves every requested entity token. Loads the `--entities` module once
+ * (whose import side effect registers the descriptors), then resolves each
+ * requested entity name. Without a module, falls back to entities already
+ * registered in this process. Returns the tokens in the order requested.
  */
-async function loadAdoptEntity(entitiesModule: string, entityName: string): Promise<HikouteiEntity> {
-  await import(pathToFileURL(entitiesModule).href);
-  const token = getRegisteredEntityTokens().find(
-    (candidate) => getEntityDescriptor(candidate).name === entityName,
-  );
-  if (token === undefined) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES_ADOPT_ENTITY_UNKNOWN,
-      `entity "${entityName}" was not registered by module "${entitiesModule}" — the module must call defineTypedSheetsEntity() at import time (registered: ` +
-        `${getRegisteredEntityTokens().map((candidate) => getEntityDescriptor(candidate).name).join(", ") || "none"}).`,
-    );
+async function loadAdoptEntities(options: AdoptOptions): Promise<readonly HikouteiEntity[]> {
+  const names = options.adopts !== undefined
+    ? options.adopts.map((entry) => entry.entityName)
+    : [options.entityName!];
+
+  const registered: readonly HikouteiEntity[] = options.entitiesModule !== undefined
+    ? (await import(pathToFileURL(options.entitiesModule).href), getRegisteredEntityTokens())
+    : getRegisteredEntityTokens();
+
+  const tokens: HikouteiEntity[] = [];
+  for (const name of names) {
+    const token = registered.find((candidate) => getEntityDescriptor(candidate).name === name);
+    if (token === undefined) {
+      const scope = options.entitiesModule !== undefined
+        ? `module "${options.entitiesModule}"`
+        : "this process";
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES_ADOPT_ENTITY_UNKNOWN,
+        `entity "${name}" was not registered by ${scope} — pass --entities <module> (a module that calls defineTypedSheetsEntity() at import time; registered: ` +
+          `${registered.map((candidate) => getEntityDescriptor(candidate).name).join(", ") || "none"}).`,
+      );
+    }
+    tokens.push(token);
   }
-  return token;
+  return tokens;
 }
 
 /** The production runner: public factory + close-after-adopt lifecycle. */
@@ -90,25 +104,7 @@ export async function runAdoptMain(argv: readonly string[]): Promise<number> {
 
   const options = parsed.options;
   try {
-    let entities: readonly HikouteiEntity[];
-    if (options.entitiesModule !== undefined) {
-      entities = [await loadAdoptEntity(options.entitiesModule, options.entityName)];
-    } else {
-      // No --entities module: fall back to entities registered by an
-      // application module already loaded into this process (e.g. via
-      // `node --import`). The registry is empty in a bare CLI process, which
-      // the flow surfaces as the unknown-entity failure of the public API.
-      const token = getRegisteredEntityTokens().find(
-        (candidate) => getEntityDescriptor(candidate).name === options.entityName,
-      );
-      if (token === undefined) {
-        throw new HikouteiError(
-          HIKOUTEI_ERROR_CODES_ADOPT_ENTITY_UNKNOWN,
-          `entity "${options.entityName}" is not registered in this process — pass --entities <module> (a module that calls defineTypedSheetsEntity() on import)`,
-        );
-      }
-      entities = [token];
-    }
+    const entities = await loadAdoptEntities(options);
     return await runAdoptCli({
       options,
       entities,
