@@ -75,7 +75,7 @@ export interface InternalSyncServiceOptions {
    * service reads the foreign tab, analyzes header-name bindings, and throws
    * `ExistingSheetAdoptionDryRunReportError` carrying the full report before
    * any provisioning mutation or supervisor start. In `adopt` mode the
-   * seeding engine (next milestone) binds every existing row before the
+   * seeding engine (`adopt/adoptionSeeding.ts`) binds every existing row before the
    * CleanupScanner can ever observe the tab (fail-closed ordering, D5).
    */
   readonly adopt?: ExistingSheetAdoptionSpec;
@@ -214,9 +214,6 @@ export function validateServiceOptions(
       SYNC_SERVICE_ERROR_CODES.PROVIDER_UNAVAILABLE,
       "sync service requires an injected provider or googleSheetsApi client settings.",
     );
-  }
-  if (options.adopt !== undefined) {
-    validateExistingSheetAdoptionOptions(options);
   }
 }
 

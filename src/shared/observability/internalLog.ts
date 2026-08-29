@@ -51,9 +51,9 @@ export const HIKOUTEI_LOG_ENV_KEYS = {
   LOG_FILE: "HIKOUTEI_LOG_FILE",
   /** Minimum level written: debug, info, warn, or error. Defaults to info. */
   LOG_LEVEL: "HIKOUTEI_LOG_LEVEL",
-  /** Rotation threshold in bytes. Defaults to 5 MiB; minimum 4 KiB. */
+  /** Rotation threshold in bytes. Defaults to 10 MiB; minimum 4 KiB. */
   LOG_MAX_BYTES: "HIKOUTEI_LOG_MAX_BYTES",
-  /** Rotated backup files kept. Defaults to 3; minimum 0 (truncate). */
+  /** Rotated backup files kept. Defaults to 5; minimum 0 (truncate). */
   LOG_BACKUPS: "HIKOUTEI_LOG_BACKUPS",
 } as const;
 

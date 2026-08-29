@@ -140,7 +140,7 @@ export interface GoogleSheetsApiProviderOptions {
    */
   readonly readTimeoutMs?: number;
   /**
-   * Minimum interval between request starts per class; defaults to 2,000 ms.
+   * Minimum interval between request starts per class; defaults to 800 ms.
    * This only SPACES request starts; admission is governed by the separate
    * independent bound `requestStartMaxWaitMs`, which refuses a request whose
    * predicted wait exceeds it before any SDK call (delivery-uncertain,

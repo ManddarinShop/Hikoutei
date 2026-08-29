@@ -95,7 +95,7 @@ export const SYNC_ENV_KEYS = {
   /**
    * Optional request-start pacing in ms for the direct provider's
    * independent read and write request-start limiters; absent uses the safe
-   * default (2,000 ms). Internal only — never part of the root public API.
+   * default (800 ms). Internal only — never part of the root public API.
    */
   RATE_LIMIT_INTERVAL_MS: "HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS",
 } as const;
@@ -335,7 +335,7 @@ export async function createTypedSheetsWithSync(
       // override applies ONLY to the real Google Sheets provider (no injected
       // transport): a valid override is plumbed through, and the production
       // path builds the real ADC-backed transport with the provider's safe
-      // default (2,000 ms) when the override is absent. Fake transports never
+      // default (800 ms) when the override is absent. Fake transports never
       // consult HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS, so local/fake suites
       // stay immune to a misconfigured or invalid override in the host env.
       googleSheetsApi: options.transport === undefined
@@ -659,7 +659,7 @@ function parseIntervalEnv(
  *
  * `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` is the internal override for the
  * direct provider's independent read and write request-start limiters. Absent or
- * blank means the provider's safe default (2,000 ms) applies; a present
+ * blank means the provider's safe default (800 ms) applies; a present
  * value must be a plain decimal integer between 2,000 ms and
  * `MAX_SYNC_RATE_LIMIT_INTERVAL_MS` (~10 s). The ceiling is the largest
  * interval whose worst-case three-request paced dispatch still finishes

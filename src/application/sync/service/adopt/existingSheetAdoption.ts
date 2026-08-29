@@ -53,8 +53,6 @@ import type {
 export const EXISTING_SHEET_ADOPTION_ERROR_CODES = {
   /** dry-run finished; the full report rides on the error (service not started). */
   DRY_RUN_REPORT: "existing_sheet_adoption_dry_run_report",
-  /** adopt-mode seeding is a later milestone; refusing early keeps D5 intact. */
-  NOT_IMPLEMENTED: "existing_sheet_adoption_not_implemented",
 } as const;
 
 export type ExistingSheetAdoptionErrorCode =

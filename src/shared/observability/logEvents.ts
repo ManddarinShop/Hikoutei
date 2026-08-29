@@ -115,10 +115,8 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "invalid_sync_projection_config",
   "sync_provider_unavailable",
   "sync_service_startup_failed",
-  "sync_service_closed",
   // Existing-sheet adoption (src/application/sync/service/adopt/existingSheetAdoption.ts).
   "existing_sheet_adoption_dry_run_report",
-  "existing_sheet_adoption_not_implemented",
   // Adoption seeding fail-closed cell validation (adopt/adoptionSeeding.ts).
   "existing_sheet_adoption_cell_kind_mismatch",
 
@@ -131,7 +129,6 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "invalid_observation_input",
   "observation_storage_inconsistent",
   "observation_audit_serialization_failed",
-  "invalid_read_only_observation",
   "invalid_effect_options",
   "invalid_pending_effect",
   "effect_write_failed",

@@ -74,6 +74,7 @@ export const LOGGED_COMPONENT_NAMES = Object.freeze([
 
 /**
  * Stable error codes the logger may write (mirror of HIKOUTEI_LOG_STABLE_CODES).
+ * Kept in sync with the source table; Phase-1 deletions removed stale codes.
  */
 export const LOGGED_STABLE_CODES = Object.freeze([
   // Public Hikoutei API lifecycle/sync codes.
@@ -113,10 +114,8 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "invalid_sync_projection_config",
   "sync_provider_unavailable",
   "sync_service_startup_failed",
-  "sync_service_closed",
   // Existing-sheet adoption codes.
   "existing_sheet_adoption_dry_run_report",
-  "existing_sheet_adoption_not_implemented",
   "existing_sheet_adoption_cell_kind_mismatch",
   // Storage/schema/effect codes.
   "invalid_writer_lease_options",
@@ -127,7 +126,6 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "invalid_observation_input",
   "observation_storage_inconsistent",
   "observation_audit_serialization_failed",
-  "invalid_read_only_observation",
   "invalid_effect_options",
   "invalid_pending_effect",
   "effect_write_failed",
