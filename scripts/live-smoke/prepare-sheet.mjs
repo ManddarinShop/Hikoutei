@@ -19,6 +19,12 @@
 // State file (tab name + baseline rows) defaults to
 // .local/adopt-smoke-sheet.private.json; override with
 // HIKOUTEI_ADOPT_SMOKE_STATE=<path>.
+//
+// §13: HIKOUTEI_ADOPT_SMOKE_MULTI=1 prepares TWO tabs in the SAME
+// spreadsheet (AdoptSmoke_Invoices_* + AdoptSmoke_Customers_*) and records
+// BOTH entities' specs + baseline rows in the state file under `tabs` (with
+// the first tab ALSO mirroring the single-entity top-level fields so the
+// runner's single-flow guards still resolve).
 import { GoogleAuth } from "google-auth-library";
 import { sheets } from "@googleapis/sheets";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -35,55 +41,92 @@ const client = sheets({ version: "v4", auth });
 const opt = { retry: false, timeout: 30_000 };
 
 const suffix = randomUUID().slice(0, 8);
-const tabName = `AdoptSmoke_Invoices_${suffix}`;
 
 const ROWS = 20;
 const customers = ["Acme", "Beta", "Gamma", "Delta", "Epsilon"];
+const tiers = ["gold", "silver", "bronze", "platinum"];
 const pad = (n) => String(n).padStart(3, "0");
+
+// Creates + populates one fresh tab (header row + ROWS data rows) and returns
+// its full written rows (header + data) for the baseline comparison.
+async function createTab(tabTitle, headers, rowBuilder) {
+  await client.spreadsheets.batchUpdate({
+    spreadsheetId,
+    resource: { requests: [{ addSheet: { properties: { title: tabTitle } } }] },
+  }, opt);
+  const rows = [headers, ...Array.from({ length: ROWS }, (_, i) => rowBuilder(i + 1))];
+  await client.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${tabTitle}!A1`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: rows },
+  }, opt);
+  const check = await client.spreadsheets.values.get({ spreadsheetId, range: `${tabTitle}!A1:D${ROWS + 1}` }, opt);
+  if (check.data.values?.length !== ROWS + 1) throw new Error(`populate failed: ${check.data.values?.length} rows`);
+  return { tabName: tabTitle, rows };
+}
+
 // §12: HIKOUTEI_ADOPT_SMOKE_LEGACY=1 prepares a LEGACY-header variant
 // (memo | Invoice No | Customer Name | Total (USD)) and records the
 // columnMap in the state file — positionally identical to the canonical
 // layout, so the smoke's positional checks work for both.
 const legacy = process.env.HIKOUTEI_ADOPT_SMOKE_LEGACY === "1";
-const headers = legacy
+const invoiceHeaders = legacy
   ? ["memo", "Invoice No", "Customer Name", "Total (USD)"]
   : ["memo", "invoiceNo", "customer", "total"];
-const columnMap = legacy
+const invoiceColumnMap = legacy
   ? { "Invoice No": "invoiceNo", "Customer Name": "customer", "Total (USD)": "total" }
   : undefined;
-const rows = [headers];
-for (let i = 1; i <= ROWS; i++) {
-  rows.push([
-    i % 3 === 0 ? `legacy note ${i}` : "",
-    `INV-${pad(i)}`,
-    customers[i % customers.length],
-    String(i * 100),
-  ]);
+const invoiceRow = (i) => [
+  i % 3 === 0 ? `legacy note ${i}` : "",
+  `INV-${pad(i)}`,
+  customers[i % customers.length],
+  String(i * 100),
+];
+const customerHeaders = ["memo", "customerId", "name", "tier"];
+const customerRow = (i) => [
+  i % 3 === 0 ? `legacy note ${i}` : "",
+  `CUS-${pad(i)}`,
+  customers[i % customers.length],
+  tiers[i % tiers.length],
+];
+
+// §13: multi-entity mode — TWO tabs in the SAME spreadsheet.
+const multi = process.env.HIKOUTEI_ADOPT_SMOKE_MULTI === "1";
+
+let state;
+if (multi) {
+  const inv = await createTab(`AdoptSmoke_Invoices_${suffix}`, invoiceHeaders, invoiceRow);
+  const cust = await createTab(`AdoptSmoke_Customers_${suffix}`, customerHeaders, customerRow);
+  state = {
+    spreadsheetId,
+    spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+    multi: true,
+    // First tab ALSO mirrors the single-entity top-level fields so the runner's
+    // module-scope guards (baseline/ROWS) still resolve before it branches.
+    tabName: inv.tabName,
+    rows: ROWS,
+    baselineRows: inv.rows,
+    tabs: [
+      { entity: "AdoptSmokeInvoice", tabName: inv.tabName, rows: ROWS, baselineRows: inv.rows, ...(invoiceColumnMap === undefined ? {} : { columnMap: invoiceColumnMap }) },
+      { entity: "AdoptSmokeCustomer", tabName: cust.tabName, rows: ROWS, baselineRows: cust.rows },
+    ],
+    marker: randomUUID(),
+  };
+} else {
+  const tabName = `AdoptSmoke_Invoices_${suffix}`;
+  const created = await createTab(tabName, invoiceHeaders, invoiceRow);
+  state = {
+    spreadsheetId,
+    spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+    tabName,
+    rows: ROWS,
+    baselineRows: created.rows,
+    ...(invoiceColumnMap === undefined ? {} : { columnMap: invoiceColumnMap }),
+    marker: randomUUID(),
+  };
 }
 
-await client.spreadsheets.batchUpdate({
-  spreadsheetId,
-  resource: { requests: [{ addSheet: { properties: { title: tabName } } }] },
-}, opt);
-
-await client.spreadsheets.values.update({
-  spreadsheetId,
-  range: `${tabName}!A1`,
-  valueInputOption: "USER_ENTERED",
-  requestBody: { values: rows },
-}, opt);
-
-const check = await client.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:D${ROWS + 1}` }, opt);
-if (check.data.values?.length !== ROWS + 1) throw new Error(`populate failed: ${check.data.values?.length} rows`);
-
 mkdirSync(statePath.replace(/\/[^/]+$/, ""), { recursive: true });
-writeFileSync(statePath, JSON.stringify({
-  spreadsheetId,
-  spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
-  tabName,
-  rows: ROWS,
-  baselineRows: rows,
-  ...(columnMap === undefined ? {} : { columnMap }),
-  marker: randomUUID(),
-}, null, 2), { mode: 0o600 });
-console.log(JSON.stringify({ created: true, spreadsheetId, tabName, populatedRows: ROWS, legacy, statePath }));
+writeFileSync(statePath, JSON.stringify(state, null, 2), { mode: 0o600 });
+console.log(JSON.stringify({ created: true, spreadsheetId, multi, tabs: multi ? state.tabs.map((t) => t.tabName) : state.tabName, populatedRows: ROWS, legacy, statePath }));

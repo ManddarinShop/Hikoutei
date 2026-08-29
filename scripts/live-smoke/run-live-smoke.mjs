@@ -87,6 +87,16 @@ const AdoptSmokeInvoice = defineTypedSheetsEntity({
   },
 });
 
+const AdoptSmokeCustomer = defineTypedSheetsEntity({
+  name: "AdoptSmokeCustomer",
+  tableName: "adopt_smoke_customer",
+  properties: {
+    customerId: { type: "string", primary: true },
+    name: { type: "string" },
+    tier: { type: "string" },
+  },
+});
+
 const projections = {
   spreadsheetId,
   entities: {
@@ -143,7 +153,186 @@ function check(name, ok, detail) {
 }
 const assert = (cond, message) => { if (!cond) throw new Error(message); };
 
-try {
+// §13: multi-entity flow (HIKOUTEI_ADOPT_SMOKE_MULTI=1, two tabs from the
+// state file's `tabs` array). Covers the D7 multi-entity milestone: BOTH
+// entities dry-run ready, BOTH adopt (system/conflicts tabs + rowid header +
+// deterministic anchors + existing-cell preservation), BOTH seeded (SQLite
+// counts + anchor↔canonical-id pairs), BOTH System_State backfilled. Edit
+// absorption + cleanup are exercised per-entity in the public E2E, so this
+// live path re-checks the multi-entity core rather than duplicating D6/D5.
+async function runMultiFlow() {
+  const inv = sheet.tabs[0];
+  const cust = sheet.tabs[1];
+  const invSystem = `${inv.tabName}_System`;
+  const invConflicts = `${inv.tabName}_Conflicts`;
+  const custSystem = `${cust.tabName}_System`;
+  const custConflicts = `${cust.tabName}_Conflicts`;
+  const tiers = ["gold", "silver", "bronze", "platinum"];
+
+  const projections = {
+    spreadsheetId,
+    entities: {
+      AdoptSmokeInvoice: {
+        systemState: { tabName: invSystem, registeredRange: "A:D" },
+        syncConflicts: { tabName: invConflicts, registeredRange: "A:O" },
+        userInput: { tabName: inv.tabName, registeredRange: "A:D" },
+        userOwnedFields: ["invoiceNo", "customer", "total"],
+      },
+      AdoptSmokeCustomer: {
+        systemState: { tabName: custSystem, registeredRange: "A:D" },
+        syncConflicts: { tabName: custConflicts, registeredRange: "A:O" },
+        userInput: { tabName: cust.tabName, registeredRange: "A:D" },
+        userOwnedFields: ["customerId", "name", "tier"],
+      },
+    },
+  };
+
+  const multiOpts = (mode) => ({
+    dbName: DB_PATH,
+    entities: [AdoptSmokeInvoice, AdoptSmokeCustomer],
+    projections,
+    writerId: `adopt-multi-writer-${RUN_ID}`,
+    workerId: `adopt-multi-worker-${RUN_ID}`,
+    maxEffects: 200,
+    pollingIntervalMs: 30_000,
+    pollingFullScanIntervalMs: 3_600_000,
+    reconciliationIntervalMs: 10_000,
+    effectIdleIntervalMs: 1_000,
+    googleSheetsApi: {},
+    adopt: {
+      mode,
+      entities: {
+        AdoptSmokeInvoice: { tabName: inv.tabName, identityFrom: "auto" },
+        AdoptSmokeCustomer: { tabName: cust.tabName, identityFrom: "auto" },
+      },
+    },
+    onPollingReport: (r) => events.polling.push({ t: Date.now(), rowsScanned: r.rowsScanned, changedRows: r.changedRows, appliedRows: r.appliedRows, quarantinedRows: r.quarantinedRows, unknownBusinessKeyRows: r.unknownBusinessKeyRows, duplicateBusinessKeyRows: r.duplicateBusinessKeyRows }),
+    onReconciliationReport: (r) => events.reconciliation.push({ t: Date.now(), effectsEnqueued: r.effectsEnqueued }),
+    onEffectError: (e) => events.effectErrors.push(String(e?.message ?? e)),
+  });
+
+  const readTab = (tab, range) => withRetry(async () => (await api.spreadsheets.values.get({ spreadsheetId, range: `${tab}!${range}` }, opt)).data.values ?? [], `readTab ${tab} ${range}`);
+  const readSystem = (tab) => withRetry(async () => (await api.spreadsheets.values.get({ spreadsheetId, range: `${tab}!A1:Z` }, opt)).data.values ?? [], `readSystem ${tab}`);
+
+  // ---- step 1: dry-run — BOTH entities ready
+  let report = null;
+  try {
+    await createInternalSyncService(multiOpts("dry-run"));
+    throw new Error("dry-run must not start the service");
+  } catch (error) {
+    assert(error instanceof ExistingSheetAdoptionDryRunReportError, `dry-run threw unexpected error: ${error?.constructor?.name}: ${error?.message}`);
+    report = error.report;
+  }
+  const byName = Object.fromEntries(report.entities.map((e) => [e.entityName, e]));
+  const invReport = byName.AdoptSmokeInvoice;
+  const custReport = byName.AdoptSmokeCustomer;
+  const bindingsOf = (r) => Object.fromEntries(r.bindings.map((b) => [b.field, b.columnLetter]));
+  const invBind = bindingsOf(invReport);
+  const custBind = bindingsOf(custReport);
+  const s1 = [
+    check("multi.dry-run.ok", report.ok === true && report.entities.length === 2, { ok: report.ok, entities: report.entities.length }),
+    check("multi.dry-run.invoice-ready", invReport.status === "ready", { status: invReport.status }),
+    check("multi.dry-run.customer-ready", custReport.status === "ready", { status: custReport.status }),
+    check("multi.dry-run.invoice-bindings", invBind.invoiceNo === "B" && invBind.customer === "C" && invBind.total === "D", invBind),
+    check("multi.dry-run.customer-bindings", custBind.customerId === "B" && custBind.name === "C" && custBind.tier === "D", custBind),
+    check("multi.dry-run.invoice-rows", invReport.totalRows === ROWS && invReport.emptyRows === 0, { totalRows: invReport.totalRows, emptyRows: invReport.emptyRows }),
+    check("multi.dry-run.customer-rows", custReport.totalRows === ROWS && custReport.emptyRows === 0, { totalRows: custReport.totalRows, emptyRows: custReport.emptyRows }),
+    check("multi.dry-run.no-error-problems", ![...invReport.problems, ...custReport.problems].some((p) => p.severity === "error"), { invoice: invReport.problems.map((p) => p.code), customer: custReport.problems.map((p) => p.code) }),
+  ];
+  RUN.steps["1-dry-run"] = { pass: s1.every((c) => c.ok), checks: s1, entities: report.entities.map((e) => ({ entityName: e.entityName, status: e.status })) };
+
+  // ---- step 2: adopt — BOTH provision + seed anchors
+  const before = await withRetry(() => api.spreadsheets.get({ spreadsheetId, fields: "sheets.properties(title,sheetId)" }, opt), "get-before-multi");
+  const tabsBefore = before.data.sheets.map((s) => s.properties.title);
+  assert(!tabsBefore.some((t) => [invSystem, invConflicts, custSystem, custConflicts].includes(t)), "system tabs must not pre-exist");
+
+  service = await createInternalSyncService(multiOpts("adopt"));
+  await sleep(2_000);
+
+  const after = await withRetry(() => api.spreadsheets.get({ spreadsheetId, fields: "sheets.properties(title)" }, opt), "get-after-multi");
+  const tabsAfter = after.data.sheets.map((s) => s.properties.title);
+
+  const invAdopted = await readTab(inv.tabName, "A1:E21");
+  const custAdopted = await readTab(cust.tabName, "A1:E21");
+  const invAnchors = invAdopted.slice(1).map((r) => r[4]);
+  const custAnchors = custAdopted.slice(1).map((r) => r[4]);
+  const invExpectedAnchors = Array.from({ length: ROWS }, (_, i) => `entity:INV-${pad(i + 1)}`);
+  const custExpectedAnchors = Array.from({ length: ROWS }, (_, i) => `entity:CUS-${pad(i + 1)}`);
+  const invCellsPreserved = JSON.stringify(invAdopted.map((r) => r.slice(0, 4))) === JSON.stringify(inv.baselineRows);
+  const custCellsPreserved = JSON.stringify(custAdopted.map((r) => r.slice(0, 4))) === JSON.stringify(cust.baselineRows);
+  const s2 = [
+    check("multi.adopt.invoice-system-tabs", tabsAfter.includes(invSystem) && tabsAfter.includes(invConflicts), { systemTab: tabsAfter.includes(invSystem), conflictsTab: tabsAfter.includes(invConflicts) }),
+    check("multi.adopt.customer-system-tabs", tabsAfter.includes(custSystem) && tabsAfter.includes(custConflicts), { systemTab: tabsAfter.includes(custSystem), conflictsTab: tabsAfter.includes(custConflicts) }),
+    check("multi.adopt.invoice-rowid-header", invAdopted[0]?.[4] === "__hikoutei_row_id", invAdopted[0]),
+    check("multi.adopt.customer-rowid-header", custAdopted[0]?.[4] === "__hikoutei_row_id", custAdopted[0]),
+    check("multi.adopt.invoice-anchors", JSON.stringify(invAnchors) === JSON.stringify(invExpectedAnchors), { first: invAnchors[0], last: invAnchors.at(-1) }),
+    check("multi.adopt.customer-anchors", JSON.stringify(custAnchors) === JSON.stringify(custExpectedAnchors), { first: custAnchors[0], last: custAnchors.at(-1) }),
+    check("multi.adopt.invoice-cells-preserved", invCellsPreserved, invCellsPreserved ? undefined : "invoice tab diverged from baseline"),
+    check("multi.adopt.customer-cells-preserved", custCellsPreserved, custCellsPreserved ? undefined : "customer tab diverged from baseline"),
+  ];
+  RUN.steps["2-adopt"] = { pass: s2.every((c) => c.ok), checks: s2 };
+
+  // ---- step 3: seeding — BOTH entities' SQLite state
+  const db = new DatabaseSync(DB_PATH);
+  const count = (sql, ...params) => db.prepare(sql).get(...params).n;
+  const invBindingsRows = db.prepare("SELECT anchor_reference, entity_id, state FROM row_binding WHERE anchor_reference LIKE 'entity:INV-%' ORDER BY entity_id").all();
+  const custBindingsRows = db.prepare("SELECT anchor_reference, entity_id, state FROM row_binding WHERE anchor_reference LIKE 'entity:CUS-%' ORDER BY entity_id").all();
+  const invPairsOk = invBindingsRows.length === ROWS && invBindingsRows.every((b, i) => b.anchor_reference === `entity:INV-${pad(i + 1)}` && b.entity_id.endsWith(`INV-${pad(i + 1)}`) && b.state === "active");
+  const custPairsOk = custBindingsRows.length === ROWS && custBindingsRows.every((b, i) => b.anchor_reference === `entity:CUS-${pad(i + 1)}` && b.entity_id.endsWith(`CUS-${pad(i + 1)}`) && b.state === "active");
+  const s3 = [
+    check("multi.seed.invoice-row-binding-20", count("SELECT COUNT(*) AS n FROM row_binding WHERE state='active' AND anchor_reference LIKE 'entity:INV-%'") === ROWS),
+    check("multi.seed.customer-row-binding-20", count("SELECT COUNT(*) AS n FROM row_binding WHERE state='active' AND anchor_reference LIKE 'entity:CUS-%'") === ROWS),
+    check("multi.seed.entity-state-40", count("SELECT COUNT(*) AS n FROM entity_state WHERE status='active'") === ROWS * 2, { total: ROWS * 2 }),
+    check("multi.seed.business-key-index-40", count("SELECT COUNT(*) AS n FROM business_key_index WHERE state='active'") === ROWS * 2),
+    check("multi.seed.visible-state-hashes-40", count("SELECT COUNT(*) AS n FROM sheet_visible_state WHERE projection='user_input' AND confirmed_snapshot_hash IS NOT NULL") === ROWS * 2),
+    check("multi.seed.no-quarantine", count("SELECT COUNT(*) AS n FROM quarantine_record") === 0),
+    check("multi.seed.invoice-anchor-pairs-1to1", invPairsOk, invPairsOk ? undefined : invBindingsRows.slice(0, 3)),
+    check("multi.seed.customer-anchor-pairs-1to1", custPairsOk, custPairsOk ? undefined : custBindingsRows.slice(0, 3)),
+  ];
+  RUN.steps["3-seeding"] = { pass: s3.every((c) => c.ok), checks: s3 };
+
+  // ---- step 4: System_State backfill — BOTH entities
+  const backfillStart = Date.now();
+  let invSystemRows = [];
+  let custSystemRows = [];
+  while (Date.now() - backfillStart < 180_000) {
+    if (invSystemRows.length < ROWS + 1) invSystemRows = await readSystem(invSystem);
+    if (custSystemRows.length < ROWS + 1) custSystemRows = await readSystem(custSystem);
+    if (invSystemRows.length >= ROWS + 1 && custSystemRows.length >= ROWS + 1) break;
+    await sleep(5_000);
+  }
+  const dataRows = (rows) => rows.slice(1).filter((r) => r.some((c) => (c ?? "") !== ""));
+  const invData = dataRows(invSystemRows);
+  const custData = dataRows(custSystemRows);
+  const invByPk = new Map(invData.map((r) => [r[0], r]));
+  const custByPk = new Map(custData.map((r) => [r[0], r]));
+  const invPks = new Set(invByPk.keys());
+  const custPks = new Set(custByPk.keys());
+  const invContentOk = Array.from({ length: ROWS }, (_, idx) => {
+    const n = idx + 1;
+    const row = invByPk.get(`INV-${pad(n)}`);
+    return row !== undefined && row[1] === customers[n % customers.length] && String(row[2]) === String(n * 100);
+  }).every(Boolean);
+  const custContentOk = Array.from({ length: ROWS }, (_, idx) => {
+    const n = idx + 1;
+    const row = custByPk.get(`CUS-${pad(n)}`);
+    return row !== undefined && row[1] === customers[n % customers.length] && row[2] === tiers[n % tiers.length];
+  }).every(Boolean);
+  const s4 = [
+    check("multi.backfill.invoice-20-rows", invData.length === ROWS, { rows: invData.length }),
+    check("multi.backfill.customer-20-rows", custData.length === ROWS, { rows: custData.length }),
+    check("multi.backfill.invoice-all-pks", invPks.size === ROWS && Array.from({ length: ROWS }, (_, i) => `INV-${pad(i + 1)}`).every((pk) => invPks.has(pk))),
+    check("multi.backfill.customer-all-pks", custPks.size === ROWS && Array.from({ length: ROWS }, (_, i) => `CUS-${pad(i + 1)}`).every((pk) => custPks.has(pk))),
+    check("multi.backfill.invoice-fields-match", invContentOk, invContentOk ? undefined : "invoice system projection diverges from seeded data"),
+    check("multi.backfill.customer-fields-match", custContentOk, custContentOk ? undefined : "customer system projection diverges from seeded data"),
+  ];
+  RUN.steps["4-backfill"] = { pass: s4.every((c) => c.ok), checks: s4, reconciliationEvents: events.reconciliation.length };
+
+  db.close();
+  RUN.pass = Object.values(RUN.steps).every((s) => s.pass);
+}
+
+async function runSingleFlow() {
   // ============================================================ step 1: dry-run
   let report = null;
   try {
@@ -324,6 +513,16 @@ try {
 
   db.close();
   RUN.pass = Object.values(RUN.steps).every((s) => s.pass);
+}
+
+try {
+  if (sheet.multi === true) {
+    // §13: multi-entity live path (both entities). The finally block closes
+    // the service + writes the artifact + exits regardless of branch.
+    await runMultiFlow();
+  } else {
+    await runSingleFlow();
+  }
 } catch (error) {
   RUN.pass = false;
   RUN.error = { message: String(error?.message ?? error), stack: error?.stack?.split("\n").slice(0, 6) };
