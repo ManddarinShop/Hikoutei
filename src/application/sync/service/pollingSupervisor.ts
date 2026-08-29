@@ -22,6 +22,7 @@ import {
   type MappedUserInputPollingReport,
 } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
+import { POLLING_FULL_SCAN_INTERVAL_MS } from "./cadence.js";
 import { readSystemStateDrainReadinessWithAdapter } from "@hikoutei/ikisaki";
 import {
   describeErrorForInternalLog,
@@ -31,8 +32,6 @@ import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
 } from "../../../shared/observability/logEvents.js";
-
-const DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS = 60_000;
 
 /**
  * SQLite poll cadence for the first-pass System_State drain gate.
@@ -57,7 +56,7 @@ export function createPollingSupervisor(
 ): SyncPollingSupervisor<MappedUserInputPollingReport> {
   const { storage, provider, mappings, writer, options } = input;
   const pollingFullScanIntervalMs = options.pollingFullScanIntervalMs
-    ?? DEFAULT_POLLING_FULL_SCAN_INTERVAL_MS;
+    ?? POLLING_FULL_SCAN_INTERVAL_MS;
   const clock = options.now ?? Date.now;
   let lastSuccessfulFullScanAt: number | undefined;
   const runPollingPass = async (): Promise<MappedUserInputPollingReport> => {

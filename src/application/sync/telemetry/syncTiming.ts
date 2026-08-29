@@ -15,7 +15,6 @@ import {
   TIMING_SCOPES,
   emptyOperationCounts,
   type ProviderTiming,
-  type ProviderTimingPhase,
   type TimingEvent,
   type TimingOperationCounts,
   type TimingOperationKind,
@@ -39,9 +38,6 @@ export type SyncTimingOperationKind = TimingOperationKind;
 
 /** Count of lifecycle operations represented by one timing event. */
 export type SyncTimingOperationCounts = TimingOperationCounts;
-
-/** One measured implementation phase inside a remote provider operation. */
-export type SyncSheetsTimingPhase = ProviderTimingPhase;
 
 /** Timing returned by one remote provider operation. */
 export type SyncSheetsTiming = ProviderTiming;

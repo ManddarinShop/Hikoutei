@@ -1,6 +1,7 @@
 /** Internal liveness loop for User_Input polling. */
 
-const DEFAULT_POLL_INTERVAL_MS = 30_000;
+import { SYNC_POLLING_INTERVAL_MS } from "./cadence.js";
+
 const DEFAULT_ERROR_BACKOFF_INITIAL_MS = 1_000;
 const DEFAULT_ERROR_BACKOFF_MAX_MS = 30_000;
 
@@ -52,7 +53,7 @@ export class SyncPollingSupervisor<Report = unknown> {
 
   public constructor(options: SyncPollingSupervisorOptions<Report>) {
     this.runPass = options.runPass;
-    this.intervalMs = requirePositive(options.intervalMs ?? DEFAULT_POLL_INTERVAL_MS, "poll interval");
+    this.intervalMs = requirePositive(options.intervalMs ?? SYNC_POLLING_INTERVAL_MS, "poll interval");
     this.errorBackoffInitialMs = requirePositive(
       options.errorBackoffInitialMs ?? DEFAULT_ERROR_BACKOFF_INITIAL_MS,
       "poll error backoff",

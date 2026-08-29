@@ -39,21 +39,24 @@ import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
 } from "../../../shared/observability/logEvents.js";
-
-/** Minimum delay between System_State reconciliation scans attached to the loop. */
-const DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS = 60_000;
+import {
+  RECONCILIATION_INITIAL_DELAY_MS,
+  RECONCILIATION_SCAN_INTERVAL_MS,
+} from "./cadence.js";
 
 /**
- * Delay before the FIRST reconciliation scan for the real Google provider.
+ * RECONCILIATION_SCAN_INTERVAL_MS — cadence between System_State reconciliation scans
+ * attached to the loop — and RECONCILIATION_INITIAL_DELAY_MS — delay before the FIRST
+ * reconciliation scan for the real Google provider — come from `./cadence.js`
+ * (single source of application-layer cadence; env-less by design).
  *
- * A cold-start service opens with the whole initial backlog already in the
- * outbox; an immediate scan would compete with the System_State drain on the
- * shared request-start limiter. Delaying the first scan by one cadence (and
- * additionally gating it on outbox drain readiness, see below) keeps the
- * scanner out of the critical convergence path. Injected test providers keep
- * the generic supervisor default of 0 (immediate first scan).
+ * Why the initial delay exists: a cold-start service opens with the whole initial
+ * backlog already in the outbox; an immediate scan would compete with the
+ * System_State drain on the shared request-start limiter. Delaying the first scan
+ * by one cadence (and additionally gating it on outbox drain readiness, see below)
+ * keeps the scanner out of the critical convergence path. Injected test providers
+ * keep the generic supervisor default of 0 (immediate first scan).
  */
-const DEFAULT_INITIAL_RECONCILIATION_DELAY_MS = 60_000;
 
 /** Inputs shared with the composition root's runtime and remote provider. */
 export interface CreateEffectSupervisorInput {
@@ -134,14 +137,14 @@ export function createEffectSupervisor(
     ...optionalWorkerOptions(options),
     workerId: effectWorkerId,
     reconciliation: {
-      intervalMs: options.reconciliationIntervalMs ?? DEFAULT_RECONCILIATION_SCAN_INTERVAL_MS,
+      intervalMs: options.reconciliationIntervalMs ?? RECONCILIATION_SCAN_INTERVAL_MS,
       // Only the real Google Sheets provider starts with a large initial
       // backlog; delay its first scan by one cadence so it cannot compete
       // with the System_State drain on the shared limiter. Injected test
       // providers keep the generic default (first scan immediately).
       ...(options.googleSheetsApi === undefined
         ? {}
-        : { initialReconciliationDelayMs: DEFAULT_INITIAL_RECONCILIATION_DELAY_MS }),
+        : { initialReconciliationDelayMs: RECONCILIATION_INITIAL_DELAY_MS }),
       // First-scan gate: defer ONLY while normal claimable drain work is
       // pending/processing/delivery_uncertain. A terminal failed head
       // (repair-needed) must NEVER defer the scanner — the scanner is the
