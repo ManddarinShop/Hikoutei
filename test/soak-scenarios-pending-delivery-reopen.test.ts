@@ -21,6 +21,7 @@ import * as pendingDeliveryReopen from "../scripts/ci/local-soak/scenarios/pendi
 import { SOAK_ENTITY_ORDER } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { FakeEm } from "./support/soakScenarioFixtures.js";
 
 /** The one scenario module under test. */
 const scenario = pendingDeliveryReopen;
@@ -63,45 +64,6 @@ interface PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-  #flushCount = 0;
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {
-    this.#flushCount += 1;
-  }
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? null : row;
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-  flushCount(): number {
-    return this.#flushCount;
-  }
-}
 
 /** A fake direct-Sheet client that records every mutation attempt. */
 class FakeClient {

@@ -16,6 +16,7 @@ import * as shiftedHumanEdit from "../scripts/ci/local-soak/scenarios/shiftedHum
 import { SOAK_ENTITY_ORDER } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { FakeEm, liveContext } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded sleeps so the projection polls terminate
 // quickly and deterministically (a real poll would be ~1s each). The real
@@ -69,35 +70,6 @@ function racePlan(overrides: Partial<PlanLike> = {}): PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {}
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** The stable fail-closed guard error the direct client throws. */
 function shiftedError(): Error {
@@ -185,18 +157,6 @@ class FakeClient {
   }
 }
 
-/** Builds a live execution context wired to the fake seams. */
-function liveContext(plan: PlanLike, client: FakeClient, em: FakeEm, deadlineAtMs?: number): Record<string, unknown> {
-  return {
-    seed: 1,
-    cycle: 1,
-    activeEntities: SOAK_ENTITY_ORDER,
-    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
-    em,
-    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
-    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
-  };
-}
 
 /**
  * Projects every entity the fake EM persists into the fake _Input tab

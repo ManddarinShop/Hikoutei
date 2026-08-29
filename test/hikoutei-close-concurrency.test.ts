@@ -22,6 +22,7 @@ import { defineTypedSheetsEntity } from "../src/index.js";
 import { getEntityDescriptor } from "../src/api/entity.js";
 import { createInternalHikoutei } from "../src/api/Hikoutei.js";
 import type { ScalarEntityPersistenceProvider } from "../src/adapter/persistence/contracts/scalar.js";
+import { ScriptedCloseProvider } from "./support/scriptedCloseProvider.js";
 
 /**
  * Test-only controls for the mocked process logger drain: `holdDrain`
@@ -110,32 +111,6 @@ class GatedCloseProvider implements ScalarEntityPersistenceProvider {
  * Provider with scripted close behavior: `close()` fails the first
  * `failuresBeforeSuccess` calls with the recorded original error, then
  * succeeds.
- */
-class ScriptedCloseProvider implements ScalarEntityPersistenceProvider {
-  closeCalls = 0;
-  readonly originalCloseError = new Error("scripted-provider-close-failure");
-  constructor(private readonly failuresBeforeSuccess: number) {}
-
-  async close(): Promise<void> {
-    this.closeCalls += 1;
-    if (this.closeCalls <= this.failuresBeforeSuccess) {
-      throw this.originalCloseError;
-    }
-  }
-
-  async beginTransaction(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-  async read(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-  async count(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-  async readSnapshot(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-}
 
 /** Builds a runtime over a scripted provider with an optional beforeClose. */
 function openRuntime(provider: ScalarEntityPersistenceProvider, beforeClose?: () => Promise<void>) {

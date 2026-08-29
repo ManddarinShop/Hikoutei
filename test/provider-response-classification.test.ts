@@ -39,10 +39,10 @@ import {
   StubSheetsTransport,
 } from "./support/StubSheetsTransport.js";
 import type { NormalizedCell } from "../src/shared/encoding/types.js";
+import { SYSTEM_HEADERS } from "./support/googleSheetsFixtures.js";
 
 const SPREADSHEET_ID = "stub-spreadsheet";
 const SYSTEM_SHEET_ID = "entity:users:system_state";
-const SYSTEM_HEADERS = ["id", "status", "__typed_sheets_deleted"] as const;
 
 /** Builds one system_state projection definition against the stub spreadsheet. */
 function systemDefinition(tabName: string = "Users_System"): RegisteredSyncProjectionDefinition {

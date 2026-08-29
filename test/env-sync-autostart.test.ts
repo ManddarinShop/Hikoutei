@@ -45,6 +45,7 @@ import {
   StubSpreadsheet,
   stubRowFields,
 } from "./support/StubSheetsTransport.js";
+import { SYSTEM_HEADERS } from "./support/googleSheetsFixtures.js";
 
 const User = defineTypedSheetsEntity({
   name: "SyncAutoUser",
@@ -95,7 +96,6 @@ const InspectionSchema = defineEntity({
 const SYSTEM_TAB = "SyncAutoUser_System";
 const INPUT_TAB = "SyncAutoUser_Input";
 const CONFLICTS_TAB = "SyncAutoUser_Conflicts";
-const SYSTEM_HEADERS = ["id", "status", "__typed_sheets_deleted"] as const;
 const INPUT_HEADERS = ["id", "status"] as const;
 
 interface CapturedDiagnostic {
@@ -1189,7 +1189,6 @@ describe("env-driven sync auto-start", () => {
     expect(conflictsTab?.cell(1, 0)?.userEnteredValue?.stringValue).toBeTypeOf("string");
     await session2.hikoutei.close();
   });
-
 
 
   // -------------------------------------------------------------------------

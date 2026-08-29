@@ -16,6 +16,7 @@ import * as deleteRecreateRace from "../scripts/ci/local-soak/scenarios/deleteRe
 import { SOAK_ENTITY_ORDER } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { FakeEm } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's deterministic inter-iteration `sleep` so the
 // delete/recreate loops terminate quickly (a real pause is up to ~50ms each).
@@ -63,55 +64,6 @@ function racePlan(overrides: Partial<PlanLike> = {}): PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-  findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
-  findResultsOverride: ((id: string) => Record<string, unknown>[] | undefined) | undefined;
-  /** Throws on the flush whose 1-based call index matches. */
-  flushBehavior: ((flushIndex: number) => void) | undefined;
-  #flushIndex = 0;
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {
-    this.#flushIndex += 1;
-    if (this.flushBehavior !== undefined) this.flushBehavior(this.#flushIndex);
-  }
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    if (this.findResultsOverride !== undefined) {
-      const overridden = this.findResultsOverride(filter.id);
-      if (overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
-    if (this.findOneOverride !== undefined) {
-      const overridden = this.findOneOverride(filter.id);
-      if (overridden !== null && overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? null : row;
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** Builds a live execution context wired to the fake seams. */
 function liveContext(plan: PlanLike, em: FakeEm): Record<string, unknown> {
