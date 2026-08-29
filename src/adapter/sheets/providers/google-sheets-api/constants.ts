@@ -78,8 +78,13 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
    * safety valve so a pathological payload cannot monopolize a request.
    */
   MAX_BATCH_REQUEST_BYTES: 2 * 1024 * 1024,
-  /** Regular effect batch cap, matching the Apps Script MAX_EFFECTS boundary. */
-  MAX_EFFECTS_PER_REQUEST: 300,
+  /**
+   * Effect cap per batchUpdate, aligned with MAX_APPEND_ROWS_PER_REQUEST (the
+   * worker's bulk claim window); the byte budget (MAX_BATCH_REQUEST_BYTES)
+   * remains the primary request-size valve. Previously the cap of the removed
+   * Apps Script gateway (`MAX_EFFECTS`).
+   */
+  MAX_EFFECTS_PER_REQUEST: 1_000,
   /** Append row cap per request, matching the worker's bulk claim window. */
   MAX_APPEND_ROWS_PER_REQUEST: 1_000,
 } as const;
