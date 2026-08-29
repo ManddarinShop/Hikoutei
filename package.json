@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.8.95",
+  "version": "0.8.96",
   "description": "Typed repository and safe write layer for Google Sheets-backed MVPs. SQLite-authoritative entity lifecycle with asynchronous Google Sheets projection.",
   "repository": {
     "type": "git",
@@ -58,7 +58,7 @@
   "dependencies": {
     "@googleapis/drive": "^21.0.0",
     "@googleapis/sheets": "^14.0.0",
-    "@hikoutei/ikisaki": "0.1.4",
+    "@hikoutei/ikisaki": "0.1.5",
     "@hikoutei/kohkai": "0.1.0",
     "google-auth-library": "^11.0.0",
     "zod": "^4.4.3"
