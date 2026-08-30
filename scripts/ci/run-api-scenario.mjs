@@ -41,9 +41,9 @@ const [entityApi, entityManagerApi, scalarProviderApi, mappedFlushApi, mapping, 
     import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", sourceRoot).href),
     import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", sourceRoot).href),
     import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", sourceRoot).href),
-    import(new URL("./application/sync/sheetsContract/sheetsProvisioning.js", sourceRoot).href),
+    import(new URL("../../packages/hikoutei-contracts/src/sheets/sheetsProvisioning.js", import.meta.url).href),
     import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", sourceRoot).href),
-    import(new URL("./shared/encoding/index.js", sourceRoot).href),
+    import(new URL("../../packages/hikoutei-contracts/src/encoding/index.js", import.meta.url).href),
     import("@hikoutei/ikisaki"),
   ]);
 const { defineTypedSheetsEntity } = entityApi;
