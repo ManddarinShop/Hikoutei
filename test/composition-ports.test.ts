@@ -1,8 +1,8 @@
 /**
  * Focused tests for the sync-engine composition ports registry (P8-C).
  *
- * Contract under test (`packages/hikoutei-sync-engine/src/sync/service/compositionPorts.ts` +
- * `packages/hikoutei-composition/src/index.ts`):
+ * Contract under test (`packages/sync-engine/src/sync/service/compositionPorts.ts` +
+ * `packages/composition/src/index.ts`):
  *
  * 1. Importing the composition-root module registers only a lazy LOADER
  *    THUNK: the sync-engine module graph (MikroORM / Google SDK adapters)

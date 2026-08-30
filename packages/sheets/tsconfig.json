@@ -13,9 +13,9 @@
     "outDir": "dist",
     "baseUrl": "../..",
     "paths": {
-      "@hikoutei/sync-engine/*": ["packages/hikoutei-sync-engine/src/*"],
-      "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"]
+      "@hikoutei/sync-engine/*": ["packages/sync-engine/src/*"],
+      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/sheets/src/*"]
     },
     "declaration": true,
     "declarationMap": true,

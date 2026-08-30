@@ -15,7 +15,7 @@
  * Direction: `composition` imports the engine (application/sync,
  * application/orm) and the concrete adapters. NOTHING in application imports
  * composition; the public API layer (`src/api/Hikoutei.ts`) loads this
- * composition root through `packages/hikoutei-composition/src/index.ts`, which registers the
+ * composition root through `packages/composition/src/index.ts`, which registers the
  * engine ports lazily so importing the root package alone still never loads
  * MikroORM or the Google SDK module graph.
  */
@@ -134,7 +134,7 @@ function createSyncEnginePorts(): SyncEngineCompositionPorts {
 /**
  * Resolves the lazy concrete composition for the engine ports registry.
  * Constructing the ports is synchronous; the adapter module graphs load the
- * first time `packages/hikoutei-composition/src/index.ts` dynamically imports this module.
+ * first time `packages/composition/src/index.ts` dynamically imports this module.
  */
 export function syncEngineCompositionPorts(): Promise<SyncEngineCompositionPorts> {
   return Promise.resolve(createSyncEnginePorts());

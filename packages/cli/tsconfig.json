@@ -18,11 +18,11 @@
     "baseUrl": "../..",
     "paths": {
       "hikoutei": ["src/index.ts"],
-      "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"],
-      "@hikoutei/sync-engine/*": ["packages/hikoutei-sync-engine/src/*"],
-      "@hikoutei/composition/*": ["packages/hikoutei-composition/src/*"],
-      "@hikoutei/contracts/*": ["packages/hikoutei-contracts/src/*"]
+      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["packages/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["packages/composition/src/*"],
+      "@hikoutei/contracts/*": ["packages/contracts/src/*"]
     },
     "declaration": true,
     "declarationMap": true,

@@ -168,7 +168,7 @@ export async function createTypedSheetsWithSync(
   options: CreateTypedSheetsWithSyncOptions,
 ): Promise<TypedSheetsWithSyncResult> {
   // Lazy import: the sync module graph loads only when sync actually starts.
-  // P8-C: routed through the composition root (see packages/hikoutei-composition/src/index.ts).
+  // P8-C: routed through the composition root (see packages/composition/src/index.ts).
   const { createTypedSheetsWithSync: bridge } = await import(
     "@hikoutei/composition/syncAutoStart.js"
   );

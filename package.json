@@ -41,7 +41,7 @@
     "test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run build -w @hikoutei/storage && npm run build -w @hikoutei/sheets && npm run build -w @hikoutei/sync-engine && npm run build -w @hikoutei/composition && vitest run",
     "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
     "audit:knip": "knip",
-    "audit:deps": "npx depcruise src packages/hikoutei-contracts packages/hikoutei-storage packages/hikoutei-sheets packages/hikoutei-sync-engine packages/hikoutei-composition packages/hikoutei-cli --config .dependency-cruiser.cjs --output-type err",
+    "audit:deps": "npx depcruise src packages/contracts packages/storage packages/sheets packages/sync-engine packages/composition packages/cli --config .dependency-cruiser.cjs --output-type err",
     "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "audit:markers": "node scripts/maintenance/audit-markers.mjs"
   },

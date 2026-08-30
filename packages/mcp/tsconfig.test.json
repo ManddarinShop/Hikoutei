@@ -17,11 +17,11 @@
       "hikoutei/internal/sync-status": ["../../src/internal/syncStatus.ts"],
       // P8-D2: root src imports the moved leaves by package specifier; map
       // every package to source so this program stays hermetic.
-      "@hikoutei/storage/*": ["../../packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["../../packages/hikoutei-sheets/src/*"],
-      "@hikoutei/sync-engine/*": ["../../packages/hikoutei-sync-engine/src/*"],
-      "@hikoutei/composition/*": ["../../packages/hikoutei-composition/src/*"],
-      "@hikoutei/cli/*": ["../../packages/hikoutei-cli/src/*"]
+      "@hikoutei/storage/*": ["../../packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["../../packages/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["../../packages/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["../../packages/composition/src/*"],
+      "@hikoutei/cli/*": ["../../packages/cli/src/*"]
     }
   },
   "include": [

@@ -11,14 +11,14 @@
     // @hikoutei/storage state/SQL primitives plus the storage-hosted mapped
     // persistence glue (src/orm + src/sync); mapping the storage package to
     // SOURCE removes any build-order dependency. The transient
-    // dist/packages/hikoutei-storage/src/** emission is a reached-in mirror
+    // dist/packages/storage/src/** emission is a reached-in mirror
     // that is never bundled or shipped.
     "rootDir": "../..",
     "outDir": "dist",
     "baseUrl": "../..",
     "paths": {
-      "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"]
+      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/sheets/src/*"]
     },
     "declaration": true,
     "declarationMap": true,

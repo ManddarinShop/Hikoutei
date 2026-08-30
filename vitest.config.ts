@@ -6,26 +6,26 @@ const ikisakiSource = fileURLToPath(
 );
 
 const contractsSource = fileURLToPath(
-  new URL("./packages/hikoutei-contracts/src/", import.meta.url),
+  new URL("./packages/contracts/src/", import.meta.url),
 );
 
 // P8-D2 phase 1 leaves resolve to source so suites never depend on a stale
 // dist build (same convention as @hikoutei/contracts above).
 const storageSource = fileURLToPath(
-  new URL("./packages/hikoutei-storage/src/", import.meta.url),
+  new URL("./packages/storage/src/", import.meta.url),
 );
 const sheetsSource = fileURLToPath(
-  new URL("./packages/hikoutei-sheets/src/", import.meta.url),
+  new URL("./packages/sheets/src/", import.meta.url),
 );
 // P8-D2 phase 2 packages resolve to source for the same reason.
 const syncEngineSource = fileURLToPath(
-  new URL("./packages/hikoutei-sync-engine/src/", import.meta.url),
+  new URL("./packages/sync-engine/src/", import.meta.url),
 );
 const compositionSource = fileURLToPath(
-  new URL("./packages/hikoutei-composition/src/", import.meta.url),
+  new URL("./packages/composition/src/", import.meta.url),
 );
 const cliSource = fileURLToPath(
-  new URL("./packages/hikoutei-cli/src/", import.meta.url),
+  new URL("./packages/cli/src/", import.meta.url),
 );
 
 export default defineConfig({

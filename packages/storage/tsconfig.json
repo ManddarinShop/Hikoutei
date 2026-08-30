@@ -10,7 +10,7 @@
     // is gone with the storage->engine imports. The mapped flush/observation/
     // projection/conflict persistence glue now lives in this package under
     // src/orm + src/sync, so the emission layout is
-    // dist/packages/hikoutei-storage/src/**.
+    // dist/packages/storage/src/**.
     "rootDir": "../..",
     "outDir": "dist",
     "baseUrl": "../..",
@@ -18,8 +18,8 @@
       // Hermetic self/cross maps: the reached-in root-src files import the
       // moved packages back by name; mapping both to source (never dist)
       // removes any build-order dependency between the two packages.
-      "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"]
+      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/sheets/src/*"]
     },
     "declaration": true,
     "declarationMap": true,
