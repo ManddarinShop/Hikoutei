@@ -7,8 +7,16 @@
  * and resolves the provisioner boundary used at startup. Provider options,
  * lane hooks, and provisioning failure classification are unchanged from the
  * single-module bootstrap.
+ *
+ * P8-C: the direct-mode provider is a concrete adapter — its construction
+ * moved to the composition root (`src/composition/syncEngine.ts`) and is
+ * received here through the `SyncEngineCompositionPorts` closures; this
+ * module names only contract types.
  */
 
+import type {
+  SyncEngineCompositionPorts,
+} from "./compositionPorts.js";
 import type {
   InternalSyncProvider,
   InternalSyncServiceOptions,
@@ -21,9 +29,6 @@ import {
   CoordinatedSheetsProvider,
 } from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
 import {
-  GoogleSheetsApiSyncProvider,
-} from "../../../adapter/sheets/providers/google-sheets-api/index.js";
-import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
 } from "./errors.js";
@@ -31,6 +36,7 @@ import {
 export function createRemoteProvider(
   options: InternalSyncServiceOptions,
   definitions: readonly RegisteredSyncProjectionDefinition[],
+  ports: SyncEngineCompositionPorts,
 ): {
   readonly provider: InternalSyncProvider;
   readonly provisioner: SyncSheetsProvisioner;
@@ -65,13 +71,13 @@ export function createRemoteProvider(
   // object is constructed and no router is needed. The coordinator wraps
   // the provider so writes and anchor observation share one mutation lane;
   // provisioning runs at startup on the provider itself.
-  const provider = new GoogleSheetsApiSyncProvider({
-    ...options.googleSheetsApi,
+  const remoteProvider = ports.createDirectRemoteProvider({
+    providerOptions: { ...options.googleSheetsApi },
     spreadsheetId: options.projections.spreadsheetId,
     definitions,
-  });
+  }).provider;
   const coordinated = new CoordinatedSheetsProvider({
-    inner: provider,
+    inner: remoteProvider,
     ...(options.coordinatorLaneKeyForPhysicalSheet === undefined
       ? {}
       : { mutationKeyForPhysicalSheet: options.coordinatorLaneKeyForPhysicalSheet }),
@@ -81,7 +87,7 @@ export function createRemoteProvider(
   });
   return {
     provider: coordinated,
-    provisioner: provider,
+    provisioner: remoteProvider,
   };
 }
 

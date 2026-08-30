@@ -9,18 +9,17 @@
  * single-module bootstrap.
  */
 
-import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import type { SyncServiceStorage } from "./compositionPorts.js";
 import type { TypedSheetsEntityMappingRegistry } from "../../orm/mapping/contracts.js";
 import type { TypedSheetsEntityWriterOptions } from "../../orm/persistence/support/contracts.js";
 import type {
   InternalSyncProvider,
   InternalSyncServiceOptions,
 } from "./serviceOptions.js";
-import {
-  MAPPED_USER_INPUT_POLL_MODES,
-  pollMappedUserInputWithMikroOrm,
-  type MappedUserInputPollingReport,
-} from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type {
+  SyncEngineCompositionPorts,
+} from "./compositionPorts.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/contracts/sheets/userInputPolling.js";
 import { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
 import { POLLING_FULL_SCAN_INTERVAL_MS } from "./cadence.js";
 import { readSystemStateDrainReadinessWithAdapter } from "@hikoutei/ikisaki";
@@ -44,11 +43,16 @@ const FIRST_POLLING_PASS_READINESS_POLL_MS = 250;
 
 /** Inputs shared with the composition root's runtime and remote provider. */
 export interface CreatePollingSupervisorInput {
-  readonly storage: MikroOrmSqliteAdapter;
+  readonly storage: SyncServiceStorage;
   readonly provider: InternalSyncProvider;
   readonly mappings: TypedSheetsEntityMappingRegistry;
   readonly writer: TypedSheetsEntityWriterOptions;
   readonly options: InternalSyncServiceOptions;
+  /**
+   * P8-C: the concrete MikroORM polling pass is composition-owned wiring;
+   * the supervisor invokes it through this port (behavior byte-identical).
+   */
+  readonly pollMappedUserInput: SyncEngineCompositionPorts["pollMappedUserInput"];
 }
 
 export function createPollingSupervisor(
@@ -69,12 +73,11 @@ export function createPollingSupervisor(
     const safetyScanLagMs = safetyFullScan && lastSuccessfulFullScanAt !== undefined
       ? Math.max(0, now - lastSuccessfulFullScanAt - pollingFullScanIntervalMs)
       : 0;
-    const report = await pollMappedUserInputWithMikroOrm({
+    const report = await input.pollMappedUserInput({
       storage,
       provider,
       mappings,
       writer,
-      mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
       forceFull: safetyFullScan,
       safetyScanLagMs,
       ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
@@ -161,7 +164,7 @@ export function createPollingSupervisor(
  * cannot stall the first polling pass forever.
  */
 export async function waitForSystemStateDrainReadiness(options: {
-  readonly storage: MikroOrmSqliteAdapter;
+  readonly storage: SyncServiceStorage;
   readonly isStopping: () => boolean;
   readonly pollIntervalMs?: number;
 }): Promise<void> {

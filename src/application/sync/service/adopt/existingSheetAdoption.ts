@@ -23,17 +23,11 @@
 import {
   columnLetters,
   quoteA1SheetName,
-} from "../../../../adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
-import {
-  GOOGLE_SHEETS_API_DEFAULTS,
-} from "../../../../adapter/sheets/providers/google-sheets-api/constants.js";
-import {
-  GoogleSheetsApiHttpTransport,
-  type GoogleSheetsApiTransport,
-} from "../../../../adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
+import type { GoogleSheetsApiTransport } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import type {
   GoogleSheetsApiProviderOptions,
-} from "../../../../adapter/sheets/providers/google-sheets-api/index.js";
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import type {
   ResolvedHikouteiEntityDescriptor,
 } from "../../../../api/entity.js";
@@ -1039,12 +1033,20 @@ function blockedMissingTabReport(
 /**
  * Resolves the transport the adoption reader uses. Prefers the injected
  * transport when it exposes the raw `getValues` capability; otherwise builds
- * the real ADC-backed HTTP transport (dry-run reads a genuinely foreign tab,
- * so no route registration exists yet). Injected transports without the
- * capability fail closed with a stable message instead of guessing.
+ * the real ADC-backed HTTP transport via the composition root (dry-run reads
+ * a genuinely foreign tab, so no route registration exists yet). Injected
+ * transports without the capability fail closed with a stable message
+ * instead of guessing.
+ *
+ * P8-C: the concrete `GoogleSheetsApiHttpTransport` construction is
+ * composition-owned wiring (`ports.createAdoptionReaderTransport`); the
+ * capability validation stays engine-owned exactly as before.
  */
 export function resolveAdoptionReaderTransport(
   options: GoogleSheetsApiProviderOptions | undefined,
+  createTransport: (
+    providerOptions: GoogleSheetsApiProviderOptions | undefined,
+  ) => GoogleSheetsApiAdoptionReader,
 ): GoogleSheetsApiAdoptionReader {
   const injected = options?.transport;
   if (injected !== undefined) {
@@ -1057,9 +1059,7 @@ export function resolveAdoptionReaderTransport(
     }
     return candidate as unknown as GoogleSheetsApiAdoptionReader;
   }
-  return new GoogleSheetsApiHttpTransport({
-    requestTimeoutMs: options?.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS,
-  });
+  return createTransport(options);
 }
 
 /** Replaces the adopted entities' declared User_Input range with the derived one. */

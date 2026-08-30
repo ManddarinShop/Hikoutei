@@ -27,15 +27,19 @@ import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
 } from "@hikoutei/contracts/sheets/constants.js";
-import type {
+import {
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingRegistry,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
+
 import {
-  createTypedSheetsEntityMappingRegistry,
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/projection.js";
+import {
+  createTypedSheetsEntityMappingRegistry,
+} from "@hikoutei/contracts/sync-orm/mapping/registry.js";
+
 import { resolveTypedSheetsEntityWriterOptions } from "../../../../../application/orm/persistence/flush/flushCoordinator.js";
 import type {
   ResolvedWriterOptions,
@@ -50,7 +54,11 @@ import type { PersistObservedRowInput } from "../../../../../infrastructure/stor
 import type {
   SqlStorageAdapter,
 } from "@hikoutei/contracts/storage/sql.js";
-import { TypedSheetsOrmError, TYPED_SHEETS_ORM_ERROR_CODES } from "../../../../../application/orm/errors.js";
+import {
+  TypedSheetsOrmError,
+  TYPED_SHEETS_ORM_ERROR_CODES,
+} from "@hikoutei/contracts/sync-orm/errors.js";
+
 import type { MikroOrmSqliteAdapter } from "../storage/MikroOrmSqliteAdapter.js";
 import {
   readMappedPollingRows,
@@ -73,63 +81,26 @@ import {
 import {
   retryOpenMappedConflictsWithAdapter,
 } from "../../../../../application/sync/inbound/autoSystemConflictResolution.js";
-export { MAPPED_USER_INPUT_INVALID_REASONS } from "./MikroOrmUserInputPollingInspection.js";
-export type { MappedUserInputInvalidReason } from "./MikroOrmUserInputPollingInspection.js";
-
-/** Runtime modes for the inbound polling coordinator. */
-export const MAPPED_USER_INPUT_POLL_MODES = {
-  FULL: "full",
-  ADAPTIVE: "adaptive",
-} as const;
-
-/** Closed set of inbound polling modes. */
-export type MappedUserInputPollingMode =
-  (typeof MAPPED_USER_INPUT_POLL_MODES)[keyof typeof MAPPED_USER_INPUT_POLL_MODES];
-
-/** Per-projection result of one polling pass. */
-export interface MappedUserInputPollingSheetReport {
-  readonly physicalSheetId: string;
-  readonly logicalSheetId: string;
-  readonly rowsScanned: number;
-  readonly changedRows: number;
-  readonly appliedRows: number;
-  readonly conflictRows: number;
-  readonly quarantinedRows: number;
-  readonly duplicateRows: number;
-  readonly staleRows: number;
-  readonly fencedRows: number;
-  readonly invalidRows: number;
-  readonly unknownBusinessKeyRows: number;
-  readonly duplicateBusinessKeyRows: number;
-}
-
-/** Aggregate result for one inbound polling pass. */
-export interface MappedUserInputPollingReport {
-  readonly elapsedMs: number;
-  readonly mode: MappedUserInputPollingMode;
-  readonly safetyFullScan: boolean;
-  /**
-   * How far past the configured full-scan deadline this safety scan started, in
-   * milliseconds. Zero before the first completed scan, on adaptive passes, and
-   * for direct calls without coordinator cadence state. Diagnostic only.
-   */
-  readonly safetyScanLagMs: number;
-  readonly fullMetadataTables: number;
-  readonly fastPathRowsScanned: number;
-  readonly fastPathChangedRows: number;
-  readonly sheets: readonly MappedUserInputPollingSheetReport[];
-  readonly rowsScanned: number;
-  readonly changedRows: number;
-  readonly appliedRows: number;
-  readonly conflictRows: number;
-  readonly quarantinedRows: number;
-  readonly duplicateRows: number;
-  readonly staleRows: number;
-  readonly fencedRows: number;
-  readonly invalidRows: number;
-  readonly unknownBusinessKeyRows: number;
-  readonly duplicateBusinessKeyRows: number;
-}
+// P8-C sole-source: all re-exports below (invalid reasons, poll modes,
+// report shapes) live in the contracts leaf (userInputPolling.ts); this
+// module only re-exports them so existing adapter-internal and test import
+// paths stay valid (contracts → adapter is the allowed direction).
+export {
+  MAPPED_USER_INPUT_POLL_MODES,
+  MAPPED_USER_INPUT_INVALID_REASONS,
+} from "@hikoutei/contracts/sheets/userInputPolling.js";
+export type {
+  MappedUserInputPollingMode,
+  MappedUserInputPollingSheetReport,
+  MappedUserInputPollingReport,
+  MappedUserInputInvalidReason,
+} from "@hikoutei/contracts/sheets/userInputPolling.js";
+import type {
+  MappedUserInputPollingMode,
+  MappedUserInputPollingSheetReport,
+  MappedUserInputPollingReport,
+} from "@hikoutei/contracts/sheets/userInputPolling.js";
+import { MAPPED_USER_INPUT_POLL_MODES } from "@hikoutei/contracts/sheets/userInputPolling.js";
 
 /** Options for the provider-specific first inbound worker slice. */
 export interface PollMappedUserInputWithMikroOrmOptions {

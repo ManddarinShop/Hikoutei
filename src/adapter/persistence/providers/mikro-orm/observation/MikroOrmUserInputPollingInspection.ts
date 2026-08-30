@@ -17,52 +17,47 @@ import {
 import type {
   SyncSheetsSnapshot,
   SyncObservedSnapshot,
-  SyncSnapshotCell,
   SyncSnapshotRow,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_PROTOCOL_VERSIONS,
 } from "@hikoutei/contracts/sheets/constants.js";
+import type {
+  TypedSheetsEntityFieldMapping,
+  TypedSheetsEntityMapping,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,
-  type TypedSheetsEntityFieldMapping,
-  type TypedSheetsEntityMapping,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/projection.js";
+
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../../../../application/orm/errors.js";
-import { isCanonicalUtcIsoDate } from "@hikoutei/contracts/validation.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
+
+import type {
+  MappedUserInputInvalidReason,
+} from "@hikoutei/contracts/sheets/userInputPolling.js";
+import {
+  MAPPED_USER_INPUT_INVALID_REASONS,
+  validateSnapshotCell,
+} from "@hikoutei/contracts/sheets/userInputPolling.js";
 import {
   type EntityStateRecord,
   type MappedPollingState,
   type RowBindingStateRecord,
   type VisibleProjectionState,
 } from "./MikroOrmUserInputPollingState.js";
-import {
-  CELL_OBSERVATION_KINDS,
-  NORMALIZED_CELL_KINDS,
-} from "@hikoutei/contracts/encoding/constants.js";
-
-/** Stable reasons for a User_Input row that cannot enter the evaluator. */
-export const MAPPED_USER_INPUT_INVALID_REASONS = {
-  UNKNOWN_BUSINESS_KEY: "unknown_business_key",
-  DUPLICATE_BUSINESS_KEY: "duplicate_business_key",
-  NON_LITERAL_CELL: "non_literal_cell",
-  FORMULA_CELL: "formula_cell",
-  MERGED_CELL: "merged_cell",
-  ERROR_CELL: "error_cell",
-  MISSING_CELL: "missing_cell",
-  INVALID_CELL: "invalid_cell",
-  MISSING_CANONICAL_STATE: "missing_canonical_state",
-  MISSING_VISIBLE_STATE: "missing_visible_state",
-  PRIMARY_KEY_MUTATION: "primary_key_mutation",
-} as const;
-
-export type MappedUserInputInvalidReason =
-  (typeof MAPPED_USER_INPUT_INVALID_REASONS)[keyof typeof MAPPED_USER_INPUT_INVALID_REASONS];
+// P8-C sole-source: the invalid reasons live in the contracts leaf
+// (userInputPolling.ts); re-exported so existing adapter-internal and test
+// import paths stay valid (contracts → adapter is the allowed direction).
+export {
+  MAPPED_USER_INPUT_INVALID_REASONS,
+  validateSnapshotCell,
+} from "@hikoutei/contracts/sheets/userInputPolling.js";
+export type { MappedUserInputInvalidReason } from "@hikoutei/contracts/sheets/userInputPolling.js";
 
 export interface PreparedRow {
   readonly mapping: TypedSheetsEntityMapping;
@@ -327,52 +322,6 @@ function normalizeExistingRow(
       fields: changes,
     },
   };
-}
-
-/**
- * Validates one observed snapshot cell against the mapping's declared field
- * contract — the EXACT gate the polling pipeline applies (a violation becomes
- * an `invalid_cell` quarantine there). Exported so the adoption seeding can
- * apply the same gate fail-closed at startup instead of letting the first
- * poll quarantine every adopted row.
- */
-export function validateSnapshotCell(
-  field: TypedSheetsEntityFieldMapping,
-  cell: SyncSnapshotCell | undefined,
-): MappedUserInputInvalidReason | undefined {
-  if (cell === undefined) return MAPPED_USER_INPUT_INVALID_REASONS.MISSING_CELL;
-  if (cell.cellKind === CELL_OBSERVATION_KINDS.FORMULA) {
-    return MAPPED_USER_INPUT_INVALID_REASONS.FORMULA_CELL;
-  }
-  if (cell.cellKind === CELL_OBSERVATION_KINDS.MERGED) {
-    return MAPPED_USER_INPUT_INVALID_REASONS.MERGED_CELL;
-  }
-  if (cell.cellKind === CELL_OBSERVATION_KINDS.ERROR) {
-    return MAPPED_USER_INPUT_INVALID_REASONS.ERROR_CELL;
-  }
-  if (cell.cellKind !== CELL_OBSERVATION_KINDS.LITERAL && cell.cellKind !== CELL_OBSERVATION_KINDS.BLANK) {
-    return MAPPED_USER_INPUT_INVALID_REASONS.NON_LITERAL_CELL;
-  }
-  if (cell.cellKind === CELL_OBSERVATION_KINDS.BLANK && cell.normalizedCell !== null) {
-    return MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL;
-  }
-  const value = cell.normalizedCell;
-  if (value === null) {
-    return field.required ? MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL : undefined;
-  }
-  if (value.kind !== field.cellKind) return MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL;
-  switch (value.kind) {
-    case NORMALIZED_CELL_KINDS.STRING:
-      return field.required && value.value.length === 0
-        ? MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL
-        : undefined;
-    case NORMALIZED_CELL_KINDS.NUMBER:
-      return Number.isFinite(value.value) ? undefined : MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL;
-    case NORMALIZED_CELL_KINDS.BOOLEAN:
-      return undefined;
-    case NORMALIZED_CELL_KINDS.DATE:
-      return isCanonicalUtcIsoDate(value.value) ? undefined : MAPPED_USER_INPUT_INVALID_REASONS.INVALID_CELL;
-  }
 }
 
 function validateSnapshotRoute(

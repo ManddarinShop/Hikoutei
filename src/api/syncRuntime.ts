@@ -168,8 +168,9 @@ export async function createTypedSheetsWithSync(
   options: CreateTypedSheetsWithSyncOptions,
 ): Promise<TypedSheetsWithSyncResult> {
   // Lazy import: the sync module graph loads only when sync actually starts.
+  // P8-C: routed through the composition root (see src/composition/index.ts).
   const { createTypedSheetsWithSync: bridge } = await import(
-    "../application/sync/service/syncAutoStart.js"
+    "../composition/syncAutoStart.js"
   );
   const result = await bridge({
     dbName: options.dbName,

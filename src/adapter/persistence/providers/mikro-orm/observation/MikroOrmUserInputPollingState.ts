@@ -16,7 +16,8 @@ import { promoteCandidateVisibleEvidence } from "../../../../../infrastructure/s
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../../../../application/orm/errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
+
 import type {
   BusinessKeySqlRow,
   ConflictSqlRow,

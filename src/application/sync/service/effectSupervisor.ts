@@ -9,7 +9,7 @@
  * bootstrap.
  */
 
-import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import type { SyncServiceStorage } from "./compositionPorts.js";
 import type { TypedSheetsEntityMapping } from "../../orm/mapping/contracts.js";
 import type { TypedSheetsEntityWriterOptions } from "../../orm/persistence/support/contracts.js";
 import type { InternalSyncServiceOptions } from "./serviceOptions.js";
@@ -19,7 +19,7 @@ import {
 } from "../outbound/reconciliation/ReconciliationScanner.js";
 import { runUserInputCleanupScan } from "../outbound/reconciliation/CleanupScanner.js";
 import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
-import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
+import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import {
   createEffectWorkerSupervisor,
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
@@ -60,7 +60,7 @@ import {
 
 /** Inputs shared with the composition root's runtime and remote provider. */
 export interface CreateEffectSupervisorInput {
-  readonly storage: MikroOrmSqliteAdapter;
+  readonly storage: SyncServiceStorage;
   readonly mappings: readonly TypedSheetsEntityMapping[];
   readonly provider: SyncSheetsProvider;
   readonly writer: TypedSheetsEntityWriterOptions;

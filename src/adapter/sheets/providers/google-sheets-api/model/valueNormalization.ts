@@ -38,31 +38,15 @@ export function parseRegisteredRange(value: string): ParsedRegisteredRange {
   return { startColumn, columnCount: endColumn - startColumn + 1 };
 }
 
-/** Converts A1 column letters to a 1-based column number. */
-export function columnNumber(letters: string): number {
-  let result = 0;
-  for (const letter of letters) {
-    result = result * 26 + letter.charCodeAt(0) - 64;
-  }
-  return result;
-}
-
-/** Converts a 1-based column number to A1 column letters (1 -> "A", 28 -> "AB"). */
-export function columnLetters(column: number): string {
-  let letters = "";
-  let value = column;
-  while (value > 0) {
-    const remainder = (value - 1) % 26;
-    letters = String.fromCharCode(65 + remainder) + letters;
-    value = Math.floor((value - 1) / 26);
-  }
-  return letters;
-}
-
-/** Quotes a sheet tab name for A1 notation, doubling embedded single quotes. */
-export function quoteA1SheetName(sheetName: string): string {
-  return `'${sheetName.replace(/'/g, "''")}'`;
-}
+// P8-C sole-source: the A1-notation helpers live in the contracts leaf;
+// re-exported here (with a local binding for in-module use) so existing
+// adapter-internal and test import paths stay valid.
+import {
+  columnNumber,
+  columnLetters,
+  quoteA1SheetName,
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
+export { columnNumber, columnLetters, quoteA1SheetName };
 
 /**
  * Excel/Sheets 1900-system serial: whole days since 1899-12-30 UTC. Canonical

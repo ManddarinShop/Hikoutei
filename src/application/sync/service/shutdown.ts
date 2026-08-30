@@ -11,7 +11,7 @@ import {
   DEFAULT_MAPPED_WRITER_ROLE,
   type TypedSheetsEntityWriterOptions,
 } from "../../orm/persistence/support/contracts.js";
-import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import type { SyncServiceStorage } from "./compositionPorts.js";
 import {
   DEFAULT_WORKER_ROLE,
   LOOKUP_RESULT_KINDS,
@@ -21,7 +21,7 @@ import {
 } from "@hikoutei/ikisaki";
 import { RECONCILIATION_DEFAULTS } from "../outbound/reconciliation/ReconciliationScanner.js";
 import { stableConsoleErrorTag } from "../../../shared/observability/internalLog.js";
-import type { MappedUserInputPollingReport } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/contracts/sheets/userInputPolling.js";
 import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
 
 /**
@@ -35,7 +35,7 @@ import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
  * A failing release only logs a classified warning and never aborts stop().
  */
 export async function expireRuntimeWriterLeases(
-  storage: MikroOrmSqliteAdapter,
+  storage: SyncServiceStorage,
   writer: TypedSheetsEntityWriterOptions,
   effectWorkerId: string,
 ): Promise<void> {
@@ -90,7 +90,7 @@ export async function expireRuntimeWriterLeases(
 
 /** Inputs shared with the composition root's supervisors. */
 export interface CreateStopHandlerInput {
-  readonly storage: MikroOrmSqliteAdapter;
+  readonly storage: SyncServiceStorage;
   readonly writer: TypedSheetsEntityWriterOptions;
   readonly effectWorkerId: string;
   readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;

@@ -6,10 +6,13 @@ import {
 import {
   SYNC_PROJECTIONS,
 } from "@hikoutei/contracts/sheets/constants.js";
+import type {
+  TypedSheetsEntityMapping,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
 import {
   requireTypedSheetsEntityProjection,
-  type TypedSheetsEntityMapping,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/projection.js";
+
 import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 
 export interface RowBindingSqlRow {

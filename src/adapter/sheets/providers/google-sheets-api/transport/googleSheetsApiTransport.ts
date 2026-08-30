@@ -31,136 +31,32 @@ import {
   parseRawHttpStatus,
 } from "./rawErrorSchemas.js";
 
-/** REST `CellFormat.numberFormat` object written by the provider. */
-export interface GoogleSheetsApiNumberFormat {
-  readonly type: "DATE_TIME";
-  readonly pattern: string;
-}
-
-/** One cell value/format pair written through an updateCells request. */
-export interface GoogleSheetsApiCell {
-  readonly userEnteredValue?: {
-    readonly stringValue?: string;
-    readonly numberValue?: number;
-    readonly boolValue?: boolean;
-  };
-  readonly userEnteredFormat?: {
-    readonly numberFormat?: GoogleSheetsApiNumberFormat;
-  };
-}
-
-/**
- * Row of an updateCells request; index `j` addresses the column
- * `startColumnIndex + j`. A `null` entry is never produced by the provider
- * (an included cell is always written), but the type keeps the boundary
- * explicit for test fixtures.
- */
-export type GoogleSheetsApiCellRow = readonly (GoogleSheetsApiCell | null)[];
-
-/** Write requests the direct provider emits; the SDK mapping is contained here. */
-export type GoogleSheetsApiWriteRequest =
-  | {
-    readonly kind: "addSheet";
-    readonly title: string;
-    readonly sheetId: number;
-  }
-  | {
-    readonly kind: "updateSheetProperties";
-    readonly sheetId: number;
-    readonly hidden: boolean;
-  }
-  | {
-    readonly kind: "updateCells";
-    readonly sheetId: number;
-    readonly startRowIndex: number;
-    readonly startColumnIndex: number;
-    readonly rows: readonly GoogleSheetsApiCellRow[];
-    /** Field mask such as "userEnteredValue" or "userEnteredFormat.numberFormat". */
-    readonly fields: string;
-  }
-  | {
-    readonly kind: "insertDimension";
-    readonly sheetId: number;
-    readonly dimension: "ROWS";
-    readonly startIndex: number;
-    /** Exclusive end index; `endIndex - startIndex` rows are inserted. */
-    readonly endIndex: number;
-    readonly inheritFromBefore: boolean;
-  }
-  | {
-    readonly kind: "deleteDimension";
-    readonly sheetId: number;
-    readonly dimension: "ROWS";
-    readonly startIndex: number;
-    /** Exclusive end index; exactly one row is deleted by the provider. */
-    readonly endIndex: number;
-  }
-  | {
-    readonly kind: "setDataValidation";
-    readonly sheetId: number;
-    readonly startRowIndex: number;
-    readonly endRowIndex: number;
-    readonly startColumnIndex: number;
-    readonly endColumnIndex: number;
-    readonly strict: boolean;
-  }
-  | {
-    /**
-     * Harness/cleanup-only request kind: the provider itself never emits
-     * deleteSheet. Live scenario cleanup uses it to remove fixture tabs;
-     * keeping the SDK mapping and the stub behavior inside the transport
-     * boundary lets that cleanup reuse the provider's narrow contract.
-     */
-    readonly kind: "deleteSheet";
-    readonly sheetId: number;
-  };
-
-/** Request shape of one `spreadsheets.get` call. */
-export interface GoogleSheetsApiGetSpreadsheetRequest {
-  readonly spreadsheetId: string;
-  readonly ranges: readonly string[];
-  readonly fields: string;
-  /**
-   * Per-call timeout override. The provider gives READS a shorter internal
-   * timeout than writes; omitted falls back to the transport's configured
-   * timeout.
-   */
-  readonly timeoutMs?: number;
-}
-
-/** Request shape of one `spreadsheets.batchUpdate` call. */
-export interface GoogleSheetsApiBatchUpdateRequest {
-  readonly spreadsheetId: string;
-  readonly requests: readonly GoogleSheetsApiWriteRequest[];
-}
-
-/**
- * Internal transport boundary; every method returns the raw (untrusted)
- * response body. The provider never forwards SDK objects beyond this module.
- */
-export interface GoogleSheetsApiTransport {
-  getSpreadsheet(request: GoogleSheetsApiGetSpreadsheetRequest): Promise<unknown>;
-  batchUpdate(request: GoogleSheetsApiBatchUpdateRequest): Promise<unknown>;
-  /**
-   * Raw `spreadsheets.values.get` capability. Optional so existing test
-   * stubs keep implementing the interface unchanged; only the existing-sheet
-   * adoption reader consumes it (it must read foreign tabs that carry no
-   * registered route metadata).
-   */
-  getValues?(request: GoogleSheetsApiValuesGetRequest): Promise<GoogleSheetsApiValuesGetResponse>;
-}
-
-/** Request shape of one `spreadsheets.values.get` call. */
-export interface GoogleSheetsApiValuesGetRequest {
-  readonly spreadsheetId: string;
-  readonly range: string;
-  readonly timeoutMs?: number;
-}
-
-/** Raw `spreadsheets.values.get` response body (untrusted). */
-export interface GoogleSheetsApiValuesGetResponse {
-  readonly values?: readonly (readonly (string | number | boolean | null)[])[];
-}
+// P8-C sole-source: the wire contract types (write requests, transport
+// boundary, values.get shapes) live in the contracts leaf; this module only
+// re-exports them so existing adapter-internal and test import paths stay
+// valid (contracts → adapter is the allowed direction).
+import type {
+  GoogleSheetsApiBatchUpdateRequest,
+  GoogleSheetsApiCell,
+  GoogleSheetsApiCellRow,
+  GoogleSheetsApiGetSpreadsheetRequest,
+  GoogleSheetsApiNumberFormat,
+  GoogleSheetsApiTransport,
+  GoogleSheetsApiValuesGetRequest,
+  GoogleSheetsApiValuesGetResponse,
+  GoogleSheetsApiWriteRequest,
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
+export type {
+  GoogleSheetsApiBatchUpdateRequest,
+  GoogleSheetsApiCell,
+  GoogleSheetsApiCellRow,
+  GoogleSheetsApiGetSpreadsheetRequest,
+  GoogleSheetsApiNumberFormat,
+  GoogleSheetsApiTransport,
+  GoogleSheetsApiValuesGetRequest,
+  GoogleSheetsApiValuesGetResponse,
+  GoogleSheetsApiWriteRequest,
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 
 /** Auth type accepted by the sheets factory (may resolve to a nested version). */
 type SheetsAuth = NonNullable<Parameters<typeof sheets>[0]["auth"]>;

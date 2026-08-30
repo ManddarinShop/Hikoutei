@@ -11,11 +11,14 @@ import {
   registerTypedSheetsEntityMappings,
   createMappedTypedSheetsFlushCoordinator,
 } from "../../../../../application/orm/persistence/flush/flushCoordinator.js";
+import type {
+  TypedSheetsEntityMapping,
+  TypedSheetsEntityMappingRegistry,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
 import {
   createTypedSheetsEntityMappingRegistry,
-  type TypedSheetsEntityMapping,
-  type TypedSheetsEntityMappingRegistry,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/registry.js";
+
 import type {
   MappedFlushSyncHook,
   RegisteredTypedSheetsMappedProjection,
