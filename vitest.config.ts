@@ -17,10 +17,16 @@ const storageSource = fileURLToPath(
 const sheetsSource = fileURLToPath(
   new URL("./packages/hikoutei-sheets/src/", import.meta.url),
 );
-// P8-D2 phase 1 transitional bridge: the moved leaves import root src through
-// this specifier; tests compile everything from source so it maps to the
-// root src tree (P8-D2 phase 2 removes the specifier and the alias).
-const appSrc = fileURLToPath(new URL("./src/", import.meta.url));
+// P8-D2 phase 2 packages resolve to source for the same reason.
+const syncEngineSource = fileURLToPath(
+  new URL("./packages/hikoutei-sync-engine/src/", import.meta.url),
+);
+const compositionSource = fileURLToPath(
+  new URL("./packages/hikoutei-composition/src/", import.meta.url),
+);
+const cliSource = fileURLToPath(
+  new URL("./packages/hikoutei-cli/src/", import.meta.url),
+);
 
 export default defineConfig({
   resolve: {
@@ -33,7 +39,9 @@ export default defineConfig({
       "@hikoutei/contracts": contractsSource,
       "@hikoutei/storage": storageSource,
       "@hikoutei/sheets": sheetsSource,
-      "@hikoutei-app-src": appSrc,
+      "@hikoutei/sync-engine": syncEngineSource,
+      "@hikoutei/composition": compositionSource,
+      "@hikoutei/cli": cliSource,
       // Soak runner helpers import the public entrypoint through the package
       // self-reference; in tests that resolves to the current source tree so
       // runner coverage never depends on a stale ./dist build.

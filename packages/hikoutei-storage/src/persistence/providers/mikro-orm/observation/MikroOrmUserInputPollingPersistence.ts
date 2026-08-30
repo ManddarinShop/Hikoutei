@@ -40,9 +40,9 @@ import {
   requireTypedSheetsEntityProjection,
 } from "@hikoutei/contracts/sync-orm/mapping/projection.js";
 
-import { projectionEffects } from "@hikoutei-app-src/application/orm/persistence/projection/projectionEffects.js";
-import { identifiedValue } from "@hikoutei-app-src/application/orm/persistence/support/helpers.js";
-import type { ResolvedWriterOptions } from "@hikoutei-app-src/application/orm/persistence/support/contracts.js";
+import { projectionEffects } from "@hikoutei/storage/orm/persistence/projection/projectionEffects.js";
+import { identifiedValue } from "@hikoutei/storage/orm/persistence/support/helpers.js";
+import type { ResolvedWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
 import {
   persistPollingQuarantineWithSql,
   POLLING_QUARANTINE_WRITE_RESULT_KINDS,

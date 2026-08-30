@@ -39,7 +39,7 @@ import {
 import { SoakOracle } from "../../scripts/ci/local-soak/oracle.mjs";
 import type { OracleFieldSpec } from "../../scripts/ci/local-soak/oracle.d.mts";
 import { createTypedSheets, type HikouteiEntity } from "../../src/index.js";
-import { resetHikouteiInternalLoggerForTests } from "../../src/shared/observability/internalLog.js";
+import { resetHikouteiInternalLoggerForTests } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 
 /**
  * True when the platform can create symlinks (used to skip the symlink

@@ -4,25 +4,17 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
-    // P8-D2 phase 1 transitional: the moved storage/persistence trees keep
-    // imports into the root src tree (application/*, api/*,
-    // shared/observability/*) via the "@hikoutei-app-src/*" specifier until
-    // P8-D2 phase 2 severs them. The paths targets are root-src SOURCES, so
-    // those files join this program and rootDir must cover the repo root
-    // (emitted layout dist/packages/hikoutei-storage/src/**).
-    // Emitted layout is therefore dist/packages/hikoutei-storage/src/** (the
-    // useful subtree, referenced by `exports`), with a transient
-    // dist/src/** emission of reached-in root-src modules that is never
-    // shipped (private package; the root dist bundle is the only consumer).
+    // P8-D2 phase 2 cycle break: storage sits BELOW the sync engine in the
+    // DAG and imports contracts/ikisaki plus its own trees only — the former
+    // "@hikoutei/sync-engine/*" source cross-map (the transitional bridge)
+    // is gone with the storage->engine imports. The mapped flush/observation/
+    // projection/conflict persistence glue now lives in this package under
+    // src/orm + src/sync, so the emission layout is
+    // dist/packages/hikoutei-storage/src/**.
     "rootDir": "../..",
     "outDir": "dist",
     "baseUrl": "../..",
     "paths": {
-      // Transitional bridge (P8-D2 phase 2 removes): the moved files keep
-      // imports into root src as a package specifier that every tsconfig in
-      // the repo maps back onto the root src tree (single type identity —
-      // a d.ts copy would clash with the compiling sources).
-      "@hikoutei-app-src/*": ["src/*"],
       // Hermetic self/cross maps: the reached-in root-src files import the
       // moved packages back by name; mapping both to source (never dist)
       // removes any build-order dependency between the two packages.

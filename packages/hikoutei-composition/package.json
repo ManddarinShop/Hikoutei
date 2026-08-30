@@ -1,0 +1,46 @@
+{
+  "name": "@hikoutei/composition",
+  "version": "0.1.0",
+  "description": "Composition root for the Hikoutei typed repository: registers the sync-engine ports, wires the concrete MikroORM/Google-Sheets adapters, and owns the local-runtime and sync-auto-start factories (P8-D2 phase 2).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/hikoutei-composition"
+  },
+  "bugs": {
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/packages/hikoutei-composition/src/*.d.ts",
+      "import": "./dist/packages/hikoutei-composition/src/*.js"
+    },
+    "./*": {
+      "types": "./dist/packages/hikoutei-composition/src/*.d.ts",
+      "import": "./dist/packages/hikoutei-composition/src/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/sheets": "0.1.0",
+    "@hikoutei/storage": "0.1.0",
+    "@hikoutei/sync-engine": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

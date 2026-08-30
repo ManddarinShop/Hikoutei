@@ -29,7 +29,7 @@ import {
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import {
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -43,13 +43,13 @@ import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
   SYNC_CONFLICT_RESOLUTIONS,
-} from "../src/application/sync/sheetsContract/conflictProjection.js";
+} from "@hikoutei/storage/sync/sheetsContract/conflictProjection.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
-import { createCandidateReconcileEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
-import { runUserInputCleanupScan } from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
+import { createCandidateReconcileEffect } from "@hikoutei/storage/sync/outbound/projection/ProjectionEffectFactory.js";
+import { runUserInputCleanupScan } from "@hikoutei/sync-engine/sync/outbound/reconciliation/CleanupScanner.js";
 import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 import {
   advanceCandidateVisibleEvidence,

@@ -15,11 +15,11 @@ import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/s
 import {
   describeErrorForInternalLog,
   logHikouteiInternalEvent,
-} from "@hikoutei-app-src/shared/observability/internalLog.js";
+} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
-} from "@hikoutei-app-src/shared/observability/logEvents.js";
+} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
 import { GOOGLE_SHEETS_API_SCOPES } from "../constants.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,

@@ -17,10 +17,10 @@ import {
 } from "../src/api/index.js";
 import {
   defineTypedSheetsEntity,
-} from "../src/api/entity.js";
+} from "@hikoutei/sync-engine/api/entity.js";
 import {
   resolveEntityDescriptors,
-} from "../src/api/internalEntityRegistry.js";
+} from "@hikoutei/sync-engine/api/internalEntityRegistry.js";
 import {
   columnLetters,
   quoteA1SheetName,
@@ -31,16 +31,16 @@ import {
   EXISTING_SHEET_ADOPTION_ERROR_CODES,
   ExistingSheetAdoptionDryRunReportError,
   type ExistingSheetAdoptionRunReport,
-} from "../src/application/sync/service/adopt/existingSheetAdoption.js";
+} from "@hikoutei/sync-engine/sync/service/adopt/existingSheetAdoption.js";
 import {
   planExistingSheetAdoptionStartup,
-} from "../src/application/sync/service/adopt/existingSheetAdoption.js";
+} from "@hikoutei/sync-engine/sync/service/adopt/existingSheetAdoption.js";
 import {
   createInternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
-} from "../src/application/sync/service/errors.js";
+} from "@hikoutei/sync-engine/sync/service/errors.js";
 
 const AdoptInvoice = defineTypedSheetsEntity({
   name: "AdoptInvoice",

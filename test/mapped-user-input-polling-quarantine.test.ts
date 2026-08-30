@@ -15,7 +15,7 @@ import {
   isAuthoritativeObservationResult,
 } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingPersistence.js";
 import type { PersistObservedRowResult } from "@hikoutei/storage/storage/state/observation/observationTypes.js";
-import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
+import { defineTypedSheetsEntityMapping } from "@hikoutei/sync-engine/orm/mapping/entityMapping.js";
 import {
   MAPPED_USER_INPUT_INVALID_REASONS,
   inspectSnapshot,

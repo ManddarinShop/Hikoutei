@@ -17,12 +17,12 @@ import { createTypedSheets, defineTypedSheetsEntity } from "../src/index.js";
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import {
   readRuntimeSystemStateReadiness,
   registerSystemStateReadiness,
   unregisterSystemStateReadiness,
-} from "../src/application/sync/service/systemStateReadiness.js";
+} from "@hikoutei/sync-engine/sync/service/systemStateReadiness.js";
 import { readSystemStateDrainReadinessWithAdapter } from "@hikoutei/ikisaki";
 import {
   StubSpreadsheet,

@@ -15,10 +15,10 @@ import {
 import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
-import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
+import { defineTypedSheetsEntityMapping } from "@hikoutei/sync-engine/orm/mapping/entityMapping.js";
 import {
   registerTypedSheetsEntityMappings,
-} from "../src/application/orm/persistence/flush/flushCoordinator.js";
+} from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";
 import {
   MAPPED_USER_INPUT_INVALID_REASONS,
   inspectSnapshot,

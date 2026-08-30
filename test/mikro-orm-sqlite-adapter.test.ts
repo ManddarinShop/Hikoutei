@@ -44,7 +44,7 @@ import {
   requireRegisteredSyncSheetWithAdapter,
 } from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
 import { persistResolutionCommandWithAdapter } from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
-import { renewAutomaticConflictResolutionLeaseWithSql } from "../src/application/sync/inbound/autoSystemConflictResolution.js";
+import { renewAutomaticConflictResolutionLeaseWithSql } from "@hikoutei/storage/sync/inbound/autoSystemConflictResolution.js";
 import type {
   NewEffect,
 } from "@hikoutei/ikisaki";
@@ -66,7 +66,7 @@ import {
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import type { SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const OrderSchema = defineEntity({

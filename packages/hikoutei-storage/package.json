@@ -1,7 +1,7 @@
 {
   "name": "@hikoutei/storage",
   "version": "0.1.0",
-  "description": "Storage + persistence adapter leaves for the Hikoutei typed repository: SQLite storage plumbing and the MikroORM-backed persistence adapter (P8-D2 phase 1).",
+  "description": "Storage + persistence leaves for the Hikoutei typed repository: SQLite storage plumbing, the MikroORM-backed persistence adapter, the mapped flush/observation/projection/conflict persistence bridge, and shared sync timing (P8-D2 phase 2 cycle break; imports contracts/ikisaki only — never the sync engine).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",

@@ -21,11 +21,11 @@ import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "@hikoutei
 import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
 import {
   logHikouteiInternalEvent,
-} from "@hikoutei-app-src/shared/observability/internalLog.js";
+} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
-} from "@hikoutei-app-src/shared/observability/logEvents.js";
+} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
 import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "../transport/rateLimiter.js";

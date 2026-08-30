@@ -35,7 +35,7 @@ import {
 import {
   MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS,
   planMappedObservationEntityMutation,
-} from "@hikoutei-app-src/application/orm/mapping/observationMapping.js";
+} from "@hikoutei/storage/orm/mapping/observationMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -43,8 +43,8 @@ import {
 
 import {
   planOpenConflictAuditEffectsWithSql,
-} from "@hikoutei-app-src/application/sync/inbound/autoSystemConflictResolution.js";
-import type { ResolvedWriterOptions } from "@hikoutei-app-src/application/orm/persistence/support/contracts.js";
+} from "@hikoutei/storage/sync/inbound/autoSystemConflictResolution.js";
+import type { ResolvedWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
 import type {
   MikroOrmNativeEntityWriter,
   MikroOrmSqliteAdapter,

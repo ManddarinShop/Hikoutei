@@ -1,129 +1,123 @@
 /**
- * dependency-cruiser layer rules — P8-C blocking gate.
+ * dependency-cruiser layer rules — P8-D2 phase 2 final package-space DAG.
  *
  * This config encodes the INTENDED architecture as `forbidden` rules with
  * severity "error". Since P8-C the `audit:deps` script is CI-BLOCKING:
  * depcruiser exits nonzero on any violation and nothing swallows it.
  * Do NOT weaken these rules to force-pass; fix the graph instead.
  *
- * P8-C remediation ledger:
- * - `composition-concrete-adapters` (info) is REPLACED by the real rule
- *   `application-not-into-composition`: composition wiring lives in
- *   `src/composition/` (composition owns all concrete-adapter wiring) and
- *   application code must never name it or the concrete adapters directly.
- * - `adapter-not-into-application` now carries one explicitly enumerated
- *   pathNot list (the P8-C boundary decision): the MikroORM persistence
- *   adapter implements the typed-sheets sync-ORM engine's
- *   observation/persistence bridge, so seven exact engine-glue modules —
- *   flushCoordinator, support contracts/helpers, projectionEffects,
- *   observationMapping, autoSystemConflictResolution, syncTiming — stay
- *   reachable from the mikro-orm bridge (exactly 7 modules / 12 edges,
- *   verified against the residual audit report, enumerated as exact file
- *   paths with a near-name companion rule). Everything else
- *   adapter→application stays an error. Proper break-up (engine extraction or callback inversion
- *   through composition) is P8-D scope.
+ * Final DAG (P8-D2 phase 2 + cycle break — the transitional
+ * "@hikoutei-app-src" bridge is removed, `src/application|composition|cli`
+ * no longer exist, and the former storage<->sync-engine workspace cycle is
+ * severed by moving the mapped persistence glue DOWN into storage):
  *
- * P8-D2 phase 1 (`packages/hikoutei-storage`, `packages/hikoutei-sheets`):
- * the persistence adapter (`src/adapter/persistence` →
- * `packages/hikoutei-storage/src/persistence`) hosts the same P8-C bridge —
- * the `from` side of the exact-allowlist rule now matches the new location
- * too (the pathNot list keeps naming the seven application modules, which
- * have NOT moved). The moved trees keep TRANSITIONAL relative imports into
- * root src until P8-D2 phase 2; rule
- * `transitional-packages-into-root-src` enumerates exactly which root-src
- * modules are reachable that way (additions are a violation) and phase 2
- * deletes the whole rule.
+ *   ikisaki  contracts (pure leaves; contracts also owns the api
+ *     ^       ^         descriptor/error pair after the cycle break)
+ *     |       |__________________  storage (state/SQL + the mapped
+ *     |        \\                 flush/observation/projection/conflict
+ *     |                           persistence glue — imports contracts,
+ *     |                           ikisaki, and itself; NEVER the engine)
+ *     |                                  ^   ^
+ *     |                                  |   |
+ *     +-----------------------  sync-engine (orm + sync services + internal
+ *                                 api core + shared observability; imports
+ *                                 contracts, ikisaki, and storage — engine
+ *                                 -> storage is the declared allowed
+ *                                 direction; NEVER sheets, composition,
+ *                                 cli, or root src)
+ *                              ^          ^
+ *                              |           \_____  composition (may name every
+ *                              |                       leaf: it owns the
+ *                              |                       concrete-adapter wiring)
+ *                              \____  cli (public entry via the root `hikoutei`
+ *                                        barrel + engine registry internals)
+ *   root src (api entry shims + internal/syncStatus + types) -> engine,
+ *   composition (the public API layer is the composition carrier).
  *
- * Baseline ledger: docs/maintenance/0.9-cleanup-baseline.md (§v P8-A 실행 기록, §vi P8-B, P8-C)
+ * Resolution note: package specifiers resolve through tsconfig.depcruise.json
+ * (source `paths` mirroring tsconfig.test.json), so every cross-package edge
+ * lands on the SAME (src) tree the scan walks and the rules below police it
+ * — NOT on a could-not-resolve pseudo-edge that silently bypasses the gate.
+ * Leaf-path regexes still accept `(src|dist)` layouts for defense in depth.
+ *
+ * Baseline ledger: docs/maintenance/0.9-cleanup-baseline.md (§v P8-A 실행 기록, §vi P8-B, P8-C, P8-D ADR)
  * Full violation list: docs/maintenance/baseline/depcruise-2026-08-29.txt (local-only)
  *
  * `tsPreCompilationDeps` is mandatory: without it `import type` edges
  * disappear from the graph and the infra rule silently reports 0.
  */
 
+/** Leaf-tree alternation shared by the package-space rules. */
+const ENGINE = "packages/hikoutei-sync-engine/(?:src|dist)";
+const STORAGE = "packages/hikoutei-storage/(?:src|dist)";
+
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
   forbidden: [
     {
-      name: "adapter-not-into-application",
+      name: "engine-not-into-upper-trees",
       comment:
-        "Adapter code must not reach into application-layer modules (contracts live in @hikoutei/contracts). The pathNot list is the P8-C boundary decision, enumerated as an EXACT module list (verified against the residual 12-edge audit report): the mikro-orm observation/persistence bridge implements the sync-ORM engine's flush coordinator, writer contracts, projection-effect builders, observation mapping, and conflict planners — seven exact files, never whole trees. A new or near-named application file inherits nothing (each allowance is anchored to one real module path). Contract-type flow continues through @hikoutei/contracts; the companion rule `adapter-into-application-allowlist-trees` reports anything else percolating into the seven allowlisted trees.",
+        "The sync engine is composition-free and provider-free: it must never import @hikoutei/sheets, @hikoutei/composition, @hikoutei/cli, or root src (the public API layer/composition imports the engine, never the reverse). Contract types flow through @hikoutei/contracts; concrete-adapter wiring arrives via the registered composition ports (sync/service/compositionPorts.ts).",
       severity: "error",
-      from: { path: "^(src/adapter|packages/hikoutei-storage/src/persistence)/" },
+      from: { path: "^packages/hikoutei-sync-engine/src/" },
       to: {
-        path: "^src/application/",
+        path:
+          "^packages/hikoutei-(sheets|composition|cli)/(?:src|dist)/|^src/",
+      },
+    },
+    {
+      name: "storage-not-into-engine",
+      comment:
+        "P8-D2 cycle break: the former storage->engine P8-C exact-bridge allowlist is GONE. The mapped flush/observation/projection/conflict glue the persistence adapter consumes was moved DOWN into this package (src/orm, src/sync), and the api descriptor/error pair moved DOWN into @hikoutei/contracts. Storage is below the engine: any @hikoutei/sync-engine import from storage re-creates the workspace cycle and fails `pnpm install`'s no-cycle invariant.",
+      severity: "error",
+      from: { path: `^${STORAGE}/` },
+      to: { path: `^${ENGINE}/|^@hikoutei/sync-engine` },
+    },
+    {
+      name: "sheets-into-engine-observability-only",
+      comment:
+        "The Google Sheets provider may reuse ONLY the engine's shared/observability log modules (internalLog/logEvents). Any other sheets->engine edge is an error: the provider belongs below the engine, and the engine must never import @hikoutei/sheets.",
+      severity: "error",
+      from: { path: "^packages/hikoutei-sheets/src/" },
+      to: {
+        path: `^${ENGINE}/`,
         pathNot: [
-          "^src/application/orm/mapping/observationMapping\\.ts$",
-          "^src/application/orm/persistence/flush/flushCoordinator\\.ts$",
-          "^src/application/orm/persistence/projection/projectionEffects\\.ts$",
-          "^src/application/orm/persistence/support/contracts\\.ts$",
-          "^src/application/orm/persistence/support/helpers\\.ts$",
-          "^src/application/sync/inbound/autoSystemConflictResolution\\.ts$",
-          "^src/application/sync/telemetry/syncTiming\\.ts$",
+          `^${ENGINE}/shared/observability/internalLog\\.(ts|js)$`,
+          `^${ENGINE}/shared/observability/logEvents\\.(ts|js)$`,
         ],
       },
     },
     {
-      name: "adapter-into-application-allowlist-trees",
+      name: "storage-layer-not-into-upper-trees",
       comment:
-        "Near-name guard for the exact-allowlist rule above: inside the application trees that host the seven P8-C bridge modules, adapter→application is allowed for NOTHING but those seven exact files. A new similar file (flushCoordinatorV2, support/extraHelpers, …) is flagged here immediately instead of silently inheriting a prefix allowance.",
-      severity: "error",
-      from: { path: "^(src/adapter|packages/hikoutei-storage/src/persistence)/" },
-      to: {
-        path: "^src/application/(orm/mapping/|orm/persistence/(flush/|projection/|support/)|sync/inbound/|sync/telemetry/)",
-        pathNot: [
-          "^src/application/orm/mapping/observationMapping\\.ts$",
-          "^src/application/orm/persistence/flush/flushCoordinator\\.ts$",
-          "^src/application/orm/persistence/projection/projectionEffects\\.ts$",
-          "^src/application/orm/persistence/support/contracts\\.ts$",
-          "^src/application/orm/persistence/support/helpers\\.ts$",
-          "^src/application/sync/inbound/autoSystemConflictResolution\\.ts$",
-          "^src/application/sync/telemetry/syncTiming\\.ts$",
-        ],
-      },
-    },
-    {
-      name: "infrastructure-upward",
-      comment:
-        "P8-D2 phase 1: infrastructure/storage moved to @hikoutei/storage (packages/hikoutei-storage/src/storage) and must not depend on adapter or application modules.",
+        "packages/hikoutei-storage/src/storage is the SQLite storage technology layer: it may depend on contracts/ikisaki and itself only — never the engine, composition, cli, the src/orm + src/sync persistence glue, the adapter bridge, or root src.",
       severity: "error",
       from: { path: "^packages/hikoutei-storage/src/storage/" },
-      to: { path: "^src/(adapter|application)/" },
+      to: {
+        path:
+          `^packages/hikoutei-(sync-engine|composition|cli)/(?:src|dist)/|^src/|^packages/hikoutei-storage/src/(persistence|orm|sync)/`,
+      },
     },
     {
       name: "api-not-into-adapter",
-      comment: "The public API layer stays adapter-free (composition root owns wiring). P8-D2 phase 1: the concrete adapters moved to @hikoutei/storage/@hikoutei/sheets — those package paths are equally forbidden from src/api.",
+      comment:
+        "The public API layer stays adapter-free (composition root owns wiring): src/api may consume @hikoutei/sync-engine and @hikoutei/composition but must never import @hikoutei/storage or @hikoutei/sheets.",
       severity: "error",
       from: { path: "^src/api/" },
-      to: { path: "^src/adapter/|^packages/hikoutei-(storage|sheets)/src/" },
+      to: { path: "^src/adapter/|^packages/hikoutei-(storage|sheets)/(?:src|dist)/" },
     },
     {
-      name: "transitional-packages-into-root-src",
+      name: "cli-not-into-adapter-leaves",
       comment:
-        "P8-D2 phase 2 REMOVES THIS RULE. Transitional allowance for the moved leaves: packages/hikoutei-storage + packages/hikoutei-sheets keep RELATIVE imports into root src (the sync-ORM engine glue + the public api types/descriptor + shared observability) until phase 2 severs them. The list is EXACT (no wildcards): every module reachable from the packages through root src is named below; a new root-src module pulled in by the packages is a violation that must be fixed, not allowlisted silently.",
+        "The setup/adoption cli talks to the public root entrypoint (`hikoutei` barrel — the api-bridge) and the engine's registry internals only; concrete adapter leaves (@hikoutei/storage, @hikoutei/sheets) are the composition root's business and are never named from cli code.",
       severity: "error",
-      from: { path: "^packages/hikoutei-(storage|sheets)/src/" },
-      to: {
-        path: "^src/(api|application|shared)/",
-        pathNot: [
-          "^src/api/entity\\.ts$",
-          "^src/api/errors\\.ts$",
-          "^src/application/orm/mapping/observationMapping\\.ts$",
-          "^src/application/orm/persistence/flush/flushCoordinator\\.ts$",
-          "^src/application/orm/persistence/projection/projectionEffects\\.ts$",
-          "^src/application/orm/persistence/support/contracts\\.ts$",
-          "^src/application/orm/persistence/support/helpers\\.ts$",
-          "^src/application/sync/inbound/autoSystemConflictResolution\\.ts$",
-          "^src/application/sync/telemetry/syncTiming\\.ts$",
-          "^src/shared/observability/internalLog\\.ts$",
-          "^src/shared/observability/logEvents\\.ts$",
-        ],
-      },
+      from: { path: "^packages/hikoutei-cli/src/" },
+      to: { path: "^packages/hikoutei-(storage|sheets)/(?:src|dist)/" },
     },
     {
       name: "domain-shared-leaf",
       comment:
-        "Domain and shared contracts are leaves: they may only use builtins, external packages, kernel (@hikoutei/ikisaki) and each other.",
+        "Domain and shared contracts are leaves: they may only use builtins, external packages, kernel (@hikoutei/kohkai) and each other.",
       severity: "error",
       from: { path: "^src/(domain|shared)/" },
       to: { path: "^src/", pathNot: "^src/(domain|shared)/" },
@@ -131,26 +125,18 @@ module.exports = {
     {
       name: "contracts-leaf",
       comment:
-        "@hikoutei/contracts is a pure leaf: only node builtins, @hikoutei/kohkai, zod and itself.",
+        "@hikoutei/contracts is a pure leaf: only node builtins, @hikoutei/kohkai, zod and itself. Workspace/undeclared specifiers that fail to resolve stay flagged (could-not-resolved edges carry the bare specifier, not a node_modules path).",
       severity: "error",
       from: { path: "^packages/hikoutei-contracts/src/" },
       to: {
         pathNot:
-          "^packages/hikoutei-contracts/src/|^(node:)?(crypto|zod|@hikoutei/kohkai|@hikoutei/contracts)($|/)",
+          "^packages/hikoutei-contracts/src/|^(node:)?(crypto|zod|@hikoutei/kohkai|@hikoutei/contracts)($|/)|(^|/)node_modules/",
       },
-    },
-    {
-      name: "application-not-into-composition",
-      comment:
-        "P8-C: the composition root (src/composition, loaded from the public api layer) owns ALL concrete-adapter wiring; application code must not name composition modules or concrete adapters. Contract types flow through @hikoutei/contracts.",
-      severity: "error",
-      from: { path: "^src/application/" },
-      to: { path: "^src/(composition|adapter)/", pathNot: "^src/adapter/(contracts|index)" },
     },
     {
       name: "no-cycles",
       comment:
-        "INFO remnant (does not gate): measured circular families are #1 the cli plan/setup graph, #2 the application/sync service<->api composition chain (the public API layer is the composition carrier, a deliberate P8-C shape), and #3 the google-sheets-api provider internals. P8-D candidate.",
+        "INFO remnant (does not gate): the storage<->sync-engine workspace cycle was severed by the P8-D2 phase 2 cycle break (the mapped persistence glue moved down into storage; the api descriptor/error pair moved down into contracts). The remaining circular family is the google-sheets-api provider internals; the former application<->api knot was severed by P8-D2 phase 2 (the runtime core moved into the engine package).",
       severity: "info",
       from: {},
       to: { circular: true },
@@ -158,7 +144,11 @@ module.exports = {
   ],
   options: {
     doNotFollow: { path: "node_modules|(^|/)dist($|/)|(^|/)node_modules($|/)" },
-    tsConfig: { fileName: "tsconfig.json" },
+    // Resolution-only audit config with the private workspace source `paths`
+    // (root tsconfig.json has none, which previously made every
+    // @hikoutei/* edge could-not-resolve and silently bypassed every
+    // package-boundary rule above). See tsconfig.depcruise.json.
+    tsConfig: { fileName: "./tsconfig.depcruise.json" },
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {
       exportsFields: ["exports"],

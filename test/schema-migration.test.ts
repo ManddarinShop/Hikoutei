@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineEntity, p } from "@mikro-orm/sql";
 
 import { defineTypedSheetsEntity } from "../src/index.js";
-import { HikouteiError, HIKOUTEI_ERROR_CODES } from "../src/api/errors.js";
+import { HikouteiError, HIKOUTEI_ERROR_CODES } from "@hikoutei/sync-engine/api/errors.js";
 import {
   initializeMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
@@ -32,7 +32,7 @@ import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistenc
 import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
-import { RESERVED_TABLE_NAMES } from "../src/api/entity.js";
+import { RESERVED_TABLE_NAMES } from "@hikoutei/sync-engine/api/entity.js";
 
 const MigrationOrderSchema = defineEntity({
   name: "SchemaMigrationOrder",

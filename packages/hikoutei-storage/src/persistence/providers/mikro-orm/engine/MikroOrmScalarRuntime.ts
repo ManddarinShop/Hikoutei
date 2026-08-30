@@ -7,12 +7,12 @@
  * configuration.
  */
 
-import { getEntityDescriptor } from "@hikoutei-app-src/api/entity.js";
+import { getEntityDescriptor } from "@hikoutei/contracts/api/entity.js";
 import type {
   HikouteiEntity,
   ResolvedHikouteiEntityDescriptor,
   ResolvedHikouteiProperty,
-} from "@hikoutei-app-src/api/entity.js";
+} from "@hikoutei/contracts/api/entity.js";
 import type {
   MappedEntityReference,
 } from "@hikoutei/contracts/sync-orm/mapping/contracts.js";

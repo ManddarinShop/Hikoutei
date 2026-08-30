@@ -7,8 +7,8 @@
  * entity statements in the same SQLite transaction.
  */
 
-import type { ResolvedHikouteiEntityDescriptor } from "@hikoutei-app-src/api/entity.js";
-import { HIKOUTEI_ERROR_CODES, HikouteiError } from "@hikoutei-app-src/api/errors.js";
+import type { ResolvedHikouteiEntityDescriptor } from "@hikoutei/contracts/api/entity.js";
+import { HIKOUTEI_ERROR_CODES, HikouteiError } from "@hikoutei/contracts/api/errors.js";
 import type {
   ScalarEntityCountQuery,
   ScalarEntityDelete,

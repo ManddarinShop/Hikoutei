@@ -1,0 +1,45 @@
+{
+  "name": "@hikoutei/sync-engine",
+  "version": "0.1.0",
+  "description": "Sync-ORM engine leaf for the Hikoutei typed repository: sync services (outbound worker, supervisors, reconciliation, adoption), the scalar flush unit-of-work, the internal runtime core, and shared observability (P8-D2 phase 2 + cycle break; the mapped persistence glue lives in @hikoutei/storage, which this package imports one-directionally).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/hikoutei-sync-engine"
+  },
+  "bugs": {
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/packages/hikoutei-sync-engine/src/*.d.ts",
+      "import": "./dist/packages/hikoutei-sync-engine/src/*.js"
+    },
+    "./*": {
+      "types": "./dist/packages/hikoutei-sync-engine/src/*.d.ts",
+      "import": "./dist/packages/hikoutei-sync-engine/src/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/ikisaki": "0.1.5",
+    "@hikoutei/storage": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

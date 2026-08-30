@@ -53,12 +53,12 @@ import {
   waitForRuntimeSystemStateReadiness,
 } from "../scripts/ci/local-soak/runner.mjs";
 import { describeSoakFailure } from "../scripts/ci/run-local-multitable-soak.mjs";
-import { resetHikouteiInternalLoggerForTests } from "../src/shared/observability/internalLog.js";
+import { resetHikouteiInternalLoggerForTests } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
-import { readRuntimeSystemStateReadiness } from "../src/application/sync/service/systemStateReadiness.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
+import { readRuntimeSystemStateReadiness } from "@hikoutei/sync-engine/sync/service/systemStateReadiness.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,

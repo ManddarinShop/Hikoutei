@@ -26,14 +26,14 @@ import {
   rotatedLogPath,
   stableConsoleErrorTag,
   type HikouteiInternalLogger,
-} from "../src/shared/observability/internalLog.js";
+} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "../src/shared/observability/logEvents.js";
-import { HIKOUTEI_ERROR_CODES } from "../src/api/errors.js";
+} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+import { HIKOUTEI_ERROR_CODES } from "@hikoutei/sync-engine/api/errors.js";
 import { createTypedSheets } from "../src/api/Hikoutei.js";
-import { defineTypedSheetsEntity } from "../src/api/entity.js";
+import { defineTypedSheetsEntity } from "@hikoutei/sync-engine/api/entity.js";
 
 /** Reads a log file and parses every JSONL line. */
 async function readLogLines(filePath: string): Promise<Record<string, unknown>[]> {

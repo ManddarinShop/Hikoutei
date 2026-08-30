@@ -10,18 +10,22 @@
 import { access, readFile } from "node:fs/promises";
 import ts from "typescript";
 
-// P8-D2 phase 1: the storage/sheets adapter trees live in workspace packages
-// now; root-src modules import them by package specifier. During the
-// transitional phase these resolve to the packages' TypeScript sources (same
-// source-based model as the "./adapter/..." harness imports).
+// P8-D2: every moved tree lives in a workspace package now; source harnesses
+// import them by package specifier, and these entries resolve the specifiers
+// to the packages' TypeScript sources (same source-based model as the
+// relative "./..." harness imports).
 const PACKAGE_SRC = {
   // (Dir values are relative to this loader file in scripts/ci/; the loader
-  // appends `/src/<sub>.ts` itself, so they name the PACKAGE dir — same
-  // pattern as the `@hikoutei-app-src` repo-root entry below.)
+  // appends `/src/<sub>.ts` itself, so they name the PACKAGE dir.)
+  // P8-D2 cycle break: contracts must be source-mapped too — the api
+  // entity-descriptor registry moved into @hikoutei/contracts, and a src
+  // engine/storage graph reaching it through node_modules (its dist) would
+  // split the WeakMap/registry identity from the source-loaded harness.
+  "@hikoutei/contracts": "../../packages/hikoutei-contracts",
   "@hikoutei/storage": "../../packages/hikoutei-storage",
   "@hikoutei/sheets": "../../packages/hikoutei-sheets",
-  // P8-D2 phase 2 removes this transitional bridge.
-  "@hikoutei-app-src": "../..",
+  "@hikoutei/sync-engine": "../../packages/hikoutei-sync-engine",
+  "@hikoutei/composition": "../../packages/hikoutei-composition",
 };
 
 export async function resolve(specifier, context, nextResolve) {

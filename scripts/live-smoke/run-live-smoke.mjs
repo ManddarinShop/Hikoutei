@@ -22,8 +22,8 @@
 //   # HIKOUTEI_ADOPT_SMOKE_STATE (default .local/adopt-smoke-sheet.private.json)
 //   # artifact dir override: HIKOUTEI_ADOPT_SMOKE_ARTIFACT_DIR (default .local)
 import { defineTypedSheetsEntity } from "../../dist/index.js";
-import { createInternalSyncService } from "../../dist/application/sync/service/SyncServiceBootstrap.js";
-import { ExistingSheetAdoptionDryRunReportError } from "../../dist/application/sync/service/adopt/existingSheetAdoption.js";
+import { createInternalSyncService } from "../../dist/sync-engine/sync/service/SyncServiceBootstrap.js";
+import { ExistingSheetAdoptionDryRunReportError } from "../../dist/sync-engine/sync/service/adopt/existingSheetAdoption.js";
 import { GoogleAuth } from "google-auth-library";
 import { sheets } from "@googleapis/sheets";
 import { DatabaseSync } from "node:sqlite";

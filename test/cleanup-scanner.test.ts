@@ -37,12 +37,12 @@ import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSch
 import {
   runUserInputCleanupScan,
   type CleanupScanReport,
-} from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
+} from "@hikoutei/sync-engine/sync/outbound/reconciliation/CleanupScanner.js";
 import {
   listReadyEffectsWithAdapter,
   runEffectWorkerWithAdapter,
 } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 
 const EntitySchema = defineEntity({
   name: "CleanupEntity",

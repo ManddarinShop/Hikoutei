@@ -10,7 +10,7 @@ import {
   registeredTypedSheetsProjectionDefinitions,
   registerTypedSheetsEntityMappings,
   createMappedTypedSheetsFlushCoordinator,
-} from "@hikoutei-app-src/application/orm/persistence/flush/flushCoordinator.js";
+} from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";
 import type {
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingRegistry,
@@ -23,7 +23,7 @@ import type {
   MappedFlushSyncHook,
   RegisteredTypedSheetsMappedProjection,
   TypedSheetsEntityWriterOptions,
-} from "@hikoutei-app-src/application/orm/persistence/support/contracts.js";
+} from "@hikoutei/storage/orm/persistence/support/contracts.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   initializeMikroOrmSqliteAdapter,

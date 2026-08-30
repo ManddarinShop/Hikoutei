@@ -3,7 +3,7 @@ import { defineTypedSheetsEntity } from "../src/index.ts";
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.ts";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,

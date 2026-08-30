@@ -55,7 +55,7 @@ import {
   SheetsEffectDispatcher,
   SHEETS_SPREADSHEET_ROUTE_KEY,
   PreparedDispatchError,
-} from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+} from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import { FakeSyncSheetsProvider, type FakeSyncSheetInput } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";

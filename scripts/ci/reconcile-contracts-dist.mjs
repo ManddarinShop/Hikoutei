@@ -1,61 +1,57 @@
 #!/usr/bin/env node
 /**
  * Reconcile the root `hikoutei` dist with the bundled private leaf packages
- * (P8-B publishing fix, generalized for P8-D2 phase 1).
+ * (P8-B publishing fix, generalized for P8-D2 phases 1 + 2).
  *
  * Publishing model (owner-approved): exactly ONE npm package is published,
- * `hikoutei`. `@hikoutei/contracts`, `@hikoutei/storage` and
- * `@hikoutei/sheets` stay `private: true` (never published) and are NOT
- * runtime dependencies of `hikoutei`. Their compiled output is therefore
- * BUNDLED into the root artifact:
+ * `hikoutei`. `@hikoutei/contracts`, `@hikoutei/storage`, `@hikoutei/sheets`,
+ * `@hikoutei/sync-engine`, `@hikoutei/composition`, and `@hikoutei/cli` stay
+ * `private: true` (never published) and are NOT runtime dependencies of
+ * `hikoutei`. Their compiled output is therefore BUNDLED into the root
+ * artifact:
  *
  *   1. Each leaf's dist subtree is copied into `dist/<destDir>` so the leaves
  *      ship inside the root package (`files: ["dist"]`):
  *        - packages/hikoutei-contracts/dist          -> dist/contracts/**
- *        - packages/hikoutei-storage/dist/…/src/{storage,persistence}
- *              -> dist/{storage,persistence}/**  (the subpaths the
+ *        - packages/hikoutei-storage/dist/…/src/{storage,persistence,orm,sync}
+ *              -> dist/{storage,persistence,orm,sync}/**  (the subpaths the
  *                 `@hikoutei/storage/<sub>` specifiers name; the package's
- *                 transient dist/src/** emission of reached-in root-src
- *                 modules is NOT copied)
+ *                 transient dist mirror of reached-in sibling-package sources
+ *                 is NOT copied)
  *        - packages/hikoutei-sheets/dist/…/src/sheets -> dist/sheets/**
- *   2. Every `"@hikoutei/{contracts,storage,sheets}/xxx.js"` specifier inside
- *      root dist is rewritten to the correct RELATIVE specifier, computed
- *      per-file with `path.posix.relative` from the file's own
- *      dist-directory depth. Rewrites apply to both `.js` (runtime) and
- *      `.d.ts` (published types).
- *   3. P8-D2 PHASE 2 TRANSITIONAL: the moved storage/sheets sources import
- *      root src through the `@hikoutei-app-src` pseudo-package specifier.
- *      Inside the bundled copies those become relative specifiers onto the
- *      root dist mirror of their `<sub>` target (dist mirrors src 1:1).
- *      Phase 2 severs those imports and this mapping can be deleted.
- *   4. P8-D2 PHASE 1 LEAF SELF-CONSISTENCY (Terra fix): the LEAF packages'
- *      own dists must RUNTIME-load standalone too (workspace consumers
- *      import `@hikoutei/{storage,sheets}/<sub>` directly, outside the root
- *      bundle). Every `@hikoutei-app-src/<sub>` specifier inside leaf-dist
- *      `.js` files is rewritten — same depth-exact mechanism as (2) — onto
- *      the leaf's own transient `dist/src/<sub>` mirror (the reached-in
- *      root-src emission the leaf's transitional
- *      `rootDir: "../.."` tsconfig already produces).
- *      Deliberately NOT rewritten: leaf-dist `.d.ts` files. Their alias
- *      imports are the single-type-identity mechanism every tsconfig in the
- *      repo maps back onto the root src tree (a healed relative pointer
- *      would make the mirror d.ts copies distinct declarations and clash
- *      with the compiling sources — ts2345 in the public-surface audit).
- *      Phase 2 severs the alias in sources and deletes this pass with it.
+ *        - packages/hikoutei-sync-engine/dist/…/src   -> dist/sync-engine/**
+ *        - packages/hikoutei-composition/dist/…/src  -> dist/composition/**
+ *        - packages/hikoutei-cli/dist/…/src            -> dist/cli/**
+ *          (the published `bin` entry: dist/cli/index.js must exist here)
+ *   2. Every `@hikoutei/{contracts,storage,sheets,sync-engine,composition,cli}/…`
+ *      specifier inside root dist is rewritten to the correct RELATIVE
+ *      specifier, computed per-file with `path.posix.relative` from the
+ *      file's own dist-directory depth. Rewrites apply to both `.js` (runtime)
+ *      and `.d.ts` (published types).
+ *   3. P8-D2 PHASE 2: the transitional `@hikoutei-app-src` bridge is GONE.
+ *      No source tree may emit that specifier; if any dist file still
+ *      contains the literal, the guards below fail the build (tripwire).
+ *   4. LEAF SELF-CONSISTENCY: the leaf packages' own dists must RUNTIME-load
+ *      standalone too (workspace consumers import `@hikoutei/<pkg>/<sub>`
+ *      directly, outside the root bundle). Cross-package specifiers stay BARE
+ *      in leaf dists and resolve through the workspace links in node_modules;
+ *      every RELATIVE specifier inside a leaf dist (including the transient
+ *      reached-in-source mirrors the cross-mapped tsconfigs emit) must
+ *      resolve inside that same leaf dist.
  *
  * Guards (script fails the build when violated):
  *   - After rewriting, NO `.js`/`.d.ts` file anywhere inside root `dist/`
- *     may still contain an `@hikoutei/{contracts,storage,sheets}` or
- *     `@hikoutei-app-src` literal.
+ *     may still contain a bundled-leaf or `@hikoutei-app-src` literal.
  *   - Mirror check: every module-internal (relative) import/export specifier
  *     in any root-dist file must resolve to an existing file inside root
- *     `dist/` — this subsumes the old leaf-internal mirror check and rejects
- *     any surviving pointer into root src (nothing outside dist ships).
+ *     `dist/` — this subsumes the leaf-internal mirror checks and rejects
+ *     any surviving pointer into a source tree (nothing outside dist ships).
  *
  * Externals: bare specifiers of packages the ROOT declares
  * (`@hikoutei/ikisaki`, `@hikoutei/kohkai`, `zod`, `@mikro-orm/*`,
  * `@googleapis/*`, `google-auth-library`) keep resolving from the root
- * `node_modules` at consumer-install time.
+ * `node_modules` at consumer-install time. The bundled cli's `hikoutei`
+ * self-reference resolves through the published package's own `exports`.
  *
  * Usage: node scripts/ci/reconcile-contracts-dist.mjs   (run right after
  * `tsc -p tsconfig.build.json` in the root `build` script)
@@ -70,10 +66,10 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const rootDist = path.join(repoRoot, "dist");
 
-// Leaf bundle table: [specifierPrefix, source dist subtree (repo-relative,
-// null = no copy), destination dir (dist-relative; "" = bundle onto the dist
-// root, preserving the src-relative layout the `@hikoutei/<pkg>/<sub>`
-// specifiers name), the subtrees of that src emission to copy].
+// Leaf bundle table: [specifierPrefix, source dist subtree (repo-relative),
+// destination dir (dist-relative; "" = bundle onto the dist root, preserving
+// the src-relative layout the `@hikoutei/<pkg>/<sub>` specifiers name), the
+// subtrees of that src emission to copy].
 const BUNDLES = [
   {
     prefix: "@hikoutei/contracts",
@@ -84,11 +80,12 @@ const BUNDLES = [
   {
     prefix: "@hikoutei/storage",
     // The storage package tsconfig emits relative to the repo root (see the
-    // package's tsconfig.json — transitional rootDir "../.."); the useful
-    // subtrees are the package's own src emissions.
+    // package's tsconfig.json — cross-map rootDir "../.."); the useful
+    // subtrees are the package's own src emissions. P8-D2 phase 2 cycle
+    // break adds the storage-hosted persistence glue (orm/**, sync/**).
     distSrc: "packages/hikoutei-storage/dist/packages/hikoutei-storage/src",
     destDir: "",
-    copySubtrees: ["storage", "persistence"],
+    copySubtrees: ["storage", "persistence", "orm", "sync"],
   },
   {
     prefix: "@hikoutei/sheets",
@@ -97,29 +94,54 @@ const BUNDLES = [
     copySubtrees: ["sheets"],
   },
   {
-    // P8-D2 phase 2 transitional bridge specifier (no dist of its own; its
-    // specifiers are remapped onto the root dist mirror of the target).
-    prefix: "@hikoutei-app-src",
-    destDir: "",
-    copySubtrees: [],
+    // P8-D2 phase 2: the engine, composition, and cli dists bundle under
+    // their own destDir so the published bin (dist/cli/index.js) and the
+    // `@hikoutei/sync-engine/<sub>` specifier subpaths each land exactly
+    // where the rewritten specifiers point.
+    prefix: "@hikoutei/sync-engine",
+    distSrc: "packages/hikoutei-sync-engine/dist/packages/hikoutei-sync-engine/src",
+    destDir: "sync-engine",
+    copySubtrees: [""],
+  },
+  {
+    prefix: "@hikoutei/composition",
+    // Composition cross-maps the leaf sources (transient mirrors are NOT
+    // bundled), so its own emission lives under the repo-root-relative
+    // packages/…/src subtree like the other cross-mapped leaves.
+    distSrc: "packages/hikoutei-composition/dist/packages/hikoutei-composition/src",
+    destDir: "composition",
+    copySubtrees: [""],
+  },
+  {
+    prefix: "@hikoutei/cli",
+    // The cli tsconfig spans the repo root for its `hikoutei` source map;
+    // only the package's own emission subtree is bundled (onto dist/cli/** —
+    // the published bin path).
+    distSrc: "packages/hikoutei-cli/dist/packages/hikoutei-cli/src",
+    destDir: "cli",
+    copySubtrees: [""],
   },
 ];
 
-const LEAF_SPECIFIER_RE =
-  /(['"])(@hikoutei\/(?:contracts|storage|sheets)|@hikoutei-app-src)(?:\/([^'"]+))?\1/;
+// All bundled private-package specifiers rewritten to relative paths inside
+// the root dist (and checked by the dist guards below).
+const LEAF_PREFIXES = "contracts|storage|sheets|sync-engine|composition|cli";
+const LEAF_SPECIFIER_RE = new RegExp(
+  `(['"])(@hikoutei\\/(?:${LEAF_PREFIXES}))(?:\\/([^'"]+))?\\1`,
+);
 
-// Leaf packages whose own dist must be self-consistent (loadable standalone
-// via the workspace `@hikoutei/<name>` specifier). Their transitional
-// `@hikoutei-app-src/*` imports are rewritten onto the leaf's own
-// `dist/src/**` mirror — the reached-in root-src modules their transitional
-// rootDir-spanning tsconfig already emits.
+// Tripwire only: the removed phase-1/phase-2 transitional bridge specifier
+// must not appear in any dist file (no rewrite path uses it).
+const BRIDGE_LITERAL_RE = /@hikoutei-app-src/;
+
+// Leaf packages whose own dist must stay standalone-loadable (relative
+// specifiers resolve inside it; the removed bridge literal never appears).
 const LEAF_PACKAGES = [
   { name: "@hikoutei/storage", distDir: "packages/hikoutei-storage/dist" },
   { name: "@hikoutei/sheets", distDir: "packages/hikoutei-sheets/dist" },
+  { name: "@hikoutei/sync-engine", distDir: "packages/hikoutei-sync-engine/dist" },
+  { name: "@hikoutei/composition", distDir: "packages/hikoutei-composition/dist" },
 ];
-
-const APP_SRC_RE = /(['\"])(@hikoutei-app-src)(?:\/([^'\"]+))?\1/g;
-const APP_SRC_LITERAL_RE = /@hikoutei-app-src/;
 
 /** Recursively collect file paths (absolute) under `dir`. */
 async function walkFiles(dir) {
@@ -179,24 +201,13 @@ function extractRelativeSpecifiers(source) {
   return [...specs];
 }
 
-/** P8-D2 PHASE 1 LEAF SELF-CONSISTENCY PASS (Terra fix): rewrite every
- * `@hikoutei-app-src/<sub>` specifier inside the LEAF's own dist `.js` files
- * (runtime loads fail ERR_MODULE_NOT_FOUND on the unresolvable alias) to the
- * relative specifier into the leaf's `dist/src/<sub>` mirror, computed
- * per-file with `path.posix.relative` (never blind prefixing).
- * `.d.ts` files deliberately KEEP the alias: every tsconfig paths-maps
- * `@hikoutei-app-src/*` back onto the root src tree, preserving single type
- * identity — healing the d.ts mirror copies would create distinct
- * declarations that clash with the compiling sources (ts2345).
- * Guards: no alias literal may survive in the runtime emission, every alias
- * target must exist in the leaf's emission, and every relative specifier
- * inside the healed leaf dist must resolve inside it (the standalone-
- * loadability proof).
- *
- * NOTE: runs on the leaf dist IN PLACE, AFTER the root bundling pass —
- * healing beforehand would corrupt the copied subtrees' depths in root
- * dist, which recomputes them from the root-dist-relative position. */
-async function healLeafDist(leaf) {
+/** LEAF SELF-CONSISTENCY PASS: verify each bundled leaf's own dist loads
+ * standalone. The removed `@hikoutei-app-src` bridge literal must appear
+ * nowhere, and every relative specifier (including inside the transient
+ * reached-in-source mirrors the cross-mapped tsconfigs emit) must resolve
+ * inside the leaf dist. Cross-package specifiers stay bare and resolve
+ * through the workspace links in node_modules at runtime. */
+async function checkLeafDist(leaf) {
   const leafDist = path.join(repoRoot, leaf.distDir);
   const ok = await stat(leafDist).then((s) => s.isDirectory()).catch(() => false);
   if (!ok) {
@@ -206,58 +217,25 @@ async function healLeafDist(leaf) {
   const rels = (await walkFiles(leafDist)).map(
     (abs) => path.relative(leafDist, abs).split(path.sep).join(path.posix.sep),
   );
-  const leafSet = new Set(rels);
-  // Runtime files only: the `.d.ts` emission keeps the transitional
-  // `@hikoutei-app-src/*` alias by design (single type identity, see header).
-  const emitFiles = rels.filter((rel) => rel.endsWith(".js"));
 
-  // 1. Rewrite each `@hikoutei-app-src/<sub>` onto the leaf's dist/src mirror.
-  let rewrittenFiles = 0, rewrittenSpecifiers = 0;
-  for (const rel of emitFiles) {
-    const abs = path.join(leafDist, rel);
-    let source = await readFile(abs, "utf8");
-    if (!APP_SRC_LITERAL_RE.test(source)) continue;
-    APP_SRC_LITERAL_RE.lastIndex = 0;
-    const fileDirPosix = path.posix.dirname(rel);
-    source = source.replace(APP_SRC_RE, (_match, quote, _alias, subpath) => {
-      // Transitional emit layout: reached-in root-src modules land at
-      // `<leafDist>/src/<sub>` (the mirror of the root src tree).
-      const target = subpath ? `src/${subpath}` : "src/index.js";
-      if (!leafSet.has(target)) {
-        console.error(
-          `[reconcile] FAIL: ${leaf.name} ${rel} imports @hikoutei-app-src/` +
-            `${subpath ?? "index.js"} but ${leaf.distDir}/${target} was not emitted — the leaf runtime dist cannot be made self-consistent.`,
-        );
-        process.exit(1);
-      }
-      let newSpec = path.posix.relative(fileDirPosix, target);
-      if (!newSpec.startsWith(".")) newSpec = `./${newSpec}`;
-      rewrittenSpecifiers += 1;
-      return `${quote}${newSpec}${quote}`;
-    });
-    rewrittenFiles += 1;
-    await writeFile(abs, source, "utf8");
-  }
-
-  // 2. Guard: no `@hikoutei-app-src` literal may remain in the leaf's
-  //    RUNTIME dist (.js; the `.d.ts` emission intentionally keeps the
-  //    alias until P8-D2 phase 2 — see the pass doc above).
-  const unresolved = [];
-  for (const rel of emitFiles) {
+  // 1. Tripwire: the removed bridge must be gone from the leaf entirely.
+  const bridgeOffenders = [];
+  for (const rel of rels) {
+    if (!(rel.endsWith(".js") || rel.endsWith(".d.ts"))) continue;
     const source = await readFile(path.join(leafDist, rel), "utf8");
-    if (APP_SRC_LITERAL_RE.test(source)) unresolved.push(rel);
+    if (BRIDGE_LITERAL_RE.test(source)) bridgeOffenders.push(rel);
   }
-  if (unresolved.length > 0) {
+  if (bridgeOffenders.length > 0) {
     console.error(
-      `[reconcile] FAIL: unresolved @hikoutei-app-src literals remain in ${leaf.distDir} runtime files (${unresolved.length} file(s)):`,
+      `[reconcile] FAIL: @hikoutei-app-src literals remain in ${leaf.distDir} (${bridgeOffenders.length} file(s)):`,
     );
-    for (const f of unresolved) console.error(`  - ${f}`);
+    for (const f of bridgeOffenders) console.error(`  - ${f}`);
     process.exit(1);
   }
 
-  // 3. Mirror check: every relative specifier inside the healed leaf dist
-  //    must resolve to an existing file inside the leaf dist (checked across
-  //    .js AND .d.ts so type resolution stays structurally valid too).
+  // 2. Mirror check: every relative specifier inside the leaf dist must
+  //    resolve to an existing file inside it (checked across .js AND .d.ts
+  //    so type resolution stays structurally valid too).
   const resolveInLeaf = makeResolver(rels);
   const broken = [];
   for (const rel of rels.filter((r) => r.endsWith(".js") || r.endsWith(".d.ts"))) {
@@ -276,7 +254,6 @@ async function healLeafDist(leaf) {
     if (broken.length > 50) console.error(`  … and ${broken.length - 50} more`);
     process.exit(1);
   }
-  return { rewrittenFiles, rewrittenSpecifiers };
 }
 
 async function main() {
@@ -314,7 +291,7 @@ async function main() {
     const abs = path.join(rootDist, rel);
     let source = await readFile(abs, "utf8");
     const occurrences = source.match(
-      /['"](?:@hikoutei\/(?:contracts|storage|sheets)|@hikoutei-app-src)(?:\/[^'"]+)?['"]/g,
+      new RegExp(`['"]@hikoutei\\/(?:${LEAF_PREFIXES})(?:\\/[^'"]+)?['"]`, "g"),
     );
     if (occurrences) {
       source = rewriteSpecifiers(source, rel);
@@ -341,21 +318,26 @@ async function main() {
     await writeFile(abs, source, "utf8");
   }
 
-  // 3. Guard A: no UNRESOLVED LEAF SPECIFIER may remain anywhere in root
-  //    dist (.js + .d.ts, including the bundled copies). Only the
-  //    quoted-specifier form is flagged — bare @hikoutei/... mentions in
-  //    comments (e.g. logEvents.ts provenance notes) are not imports.
+  // 3. Guard A: no UNRESOLVED LEAF SPECIFIER and no removed-bridge literal
+  //    may remain anywhere in root dist (.js + .d.ts, including the bundled
+  //    copies). Only the quoted-specifier form is flagged for leaf prefixes —
+  //    bare @hikoutei/... mentions in comments (e.g. logEvents.ts provenance
+  //    notes) are not imports. The bridge literal has NO legitimate dist
+  //    appearance at all, so it is a plain literal tripwire.
   const offenders = [];
   for (const rel of allDistFiles) {
     if (!(rel.endsWith(".js") || rel.endsWith(".d.ts"))) continue;
     const source = await readFile(path.join(rootDist, rel), "utf8");
-    if (/(['\"])(?:@hikoutei\/(?:contracts|storage|sheets)|@hikoutei-app-src)(?:\/[^'\"]+)?\1/.test(source)) {
+    if (
+      new RegExp(`(['"])@hikoutei\\/(?:${LEAF_PREFIXES})(?:\\/[^'"]+)?\\1`).test(source) ||
+      BRIDGE_LITERAL_RE.test(source)
+    ) {
       offenders.push(rel);
     }
   }
   if (offenders.length > 0) {
     console.error(
-      `[reconcile] FAIL: unresolved @hikoutei/{contracts,storage,sheets}/app-src literals remain in root dist (${offenders.length} file(s)):`,
+      `[reconcile] FAIL: unresolved @hikoutei/{${LEAF_PREFIXES}} or removed-bridge literals remain in root dist (${offenders.length} file(s)):`,
     );
     for (const f of offenders) console.error(`  - ${f}`);
     process.exit(1);
@@ -384,21 +366,17 @@ async function main() {
     process.exit(1);
   }
 
-  // 5. Leaf self-consistency (P8-D2 phase 1): heal the leaves' own dists in
-  //    place, AFTER the root bundling pass (the copied subtrees were already
-  //    depth-rewritten in step 2; healing them early would corrupt depths).
-  const leafStats = [];
+  // 5. Leaf self-consistency (standalone-loadability + bridge tripwire per
+  //    bundled leaf; runs after root bundling so nothing mutates depths).
   for (const leaf of LEAF_PACKAGES) {
-    const s = await healLeafDist(leaf);
-    leafStats.push(
-      `${leaf.name}: ${s.rewrittenSpecifiers} alias specifier(s) across ${s.rewrittenFiles} file(s)`,
-    );
+    await checkLeafDist(leaf);
   }
 
   console.log(
-    `[reconcile] OK: self-consistent leaf dists {${leafStats.join("; ")}}; bundled leaf dists into dist {${BUNDLES.filter((b) => b.distSrc)
-      .map((b) => `${b.prefix}=>${b.copySubtrees.map((s) => `dist/${s || b.destDir}`).join(",")}`)
-      .join("; ")}}; ` +
+    `[reconcile] OK: leaf dists self-consistent (${LEAF_PACKAGES.map((l) => l.name).join(", ")}); ` +
+      `bundled leaf dists into dist {${BUNDLES.filter((b) => b.distSrc)
+        .map((b) => `${b.prefix}=>${b.copySubtrees.map((s) => `dist/${[b.destDir, s].filter(Boolean).join("/")}`).join(",")}`)
+        .join("; ")}}; ` +
       `rewrote ${rewrittenSpecifiers} package specifier(s) across ${rewrittenFiles} file(s); ` +
       `remapped ${remappedSpecifiers} transitional /src/ pointer(s); ` +
       `0 remaining leaf literals; all relative imports resolve inside dist.`,

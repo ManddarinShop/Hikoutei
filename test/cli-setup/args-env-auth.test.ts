@@ -52,7 +52,7 @@ import {
   DEFAULT_SA_NAME,
   parseSetupArgs,
   SETUP_HELP_TEXT,
-} from "../../src/cli/args.js";
+} from "@hikoutei/cli/args.js";
 import {
   acquireSetupLock,
   checkStateCompatibility,
@@ -81,17 +81,17 @@ import {
   type SetupState,
   type SetupStateLoadFs,
   type SetupStateWriteFs,
-} from "../../src/cli/checkpoint.js";
+} from "@hikoutei/cli/checkpoint.js";
 import {
   confirmSetup,
-} from "../../src/cli/confirm.js";
+} from "@hikoutei/cli/confirm.js";
 import {
   SETUP_ERROR_CODES,
-} from "../../src/cli/errors.js";
+} from "@hikoutei/cli/errors.js";
 import {
   GcloudRunner,
   GcloudRunResult,
-} from "../../src/cli/gcloudRunner.js";
+} from "@hikoutei/cli/gcloudRunner.js";
 import {
   checkHumanDriveAccess,
   createTokeninfoValidator,
@@ -105,7 +105,7 @@ import {
   TOKENINFO_URL,
   type TokenInfo,
   type TokenValidator,
-} from "../../src/cli/humanAuth.js";
+} from "@hikoutei/cli/humanAuth.js";
 import {
   createSaAccessVerifier,
   isRetryableVerifyError,
@@ -114,7 +114,7 @@ import {
   type SaAccessCredentials,
   type Sleeper,
   type SpreadsheetGetClient,
-} from "../../src/cli/saVerify.js";
+} from "@hikoutei/cli/saVerify.js";
 import {
   buildDriveFileCreateRequest,
   ensureSaWriterPermission,
@@ -133,10 +133,10 @@ import {
   spreadsheetEditUrl,
   type DriveFileListApi,
   type DrivePermissionApi,
-} from "../../src/cli/sheetsFactory.js";
+} from "@hikoutei/cli/sheetsFactory.js";
 import {
   KEY_STAGE_PLACEHOLDER,
-} from "../../src/cli/keyProvision.js";
+} from "@hikoutei/cli/keyProvision.js";
 import {
   atomicWritePrivateFile,
   formatPlan,
@@ -145,7 +145,7 @@ import {
   SETUP_ENV_KEYS,
   writeSetupEnvFile,
   type RunSetupOptions,
-} from "../../src/cli/setupFlow.js";
+} from "@hikoutei/cli/setupFlow.js";
 
 import {
   makeTempDir,

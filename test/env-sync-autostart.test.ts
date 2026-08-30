@@ -37,8 +37,8 @@ import {
   validateSyncCredentialsFile,
   type SyncDiagnosticLevel,
   type TypedSheetsWithSyncResult,
-} from "../src/application/sync/service/syncAutoStart.js";
-import type { InternalSyncService } from "../src/application/sync/service/SyncServiceBootstrap.js";
+} from "@hikoutei/composition/syncAutoStart.js";
+import type { InternalSyncService } from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {
   StubSheetsTransport,

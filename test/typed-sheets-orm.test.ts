@@ -8,8 +8,8 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineTypedSheetsEntity } from "../src/index.js";
-import { getEntityDescriptor } from "../src/api/entity.js";
-import { createEntityManager } from "../src/api/internalEntityManager.js";
+import { getEntityDescriptor } from "@hikoutei/sync-engine/api/entity.js";
+import { createEntityManager } from "@hikoutei/sync-engine/api/internalEntityManager.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushCoordinator,

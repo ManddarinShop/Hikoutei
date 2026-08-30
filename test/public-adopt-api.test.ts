@@ -31,7 +31,7 @@ import type {
 import {
   createTypedSheetsWithSync as createTypedSheetsWithSyncInternal,
   SYNC_ENV_KEYS,
-} from "../src/application/sync/service/syncAutoStart.js";
+} from "@hikoutei/composition/syncAutoStart.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,
@@ -389,7 +389,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
 
       // D6 absorption through the translated route: a human edit on the
       // LEGACY header column flows sheet → SQLite → System_State.
-      const service = (result as { kind: "sync"; service: import("../src/application/sync/service/SyncServiceBootstrap.js").InternalSyncService }).service;
+      const service = (result as { kind: "sync"; service: import("@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js").InternalSyncService }).service;
       invoices.cell(1, 2)?.userEnteredValue?.stringValue;
       spreadsheet.findTab("Invoices")!.cells.set("1,2", { userEnteredValue: { stringValue: "EditedLive" } });
       await service.pollingSupervisor.runOnce();
@@ -524,7 +524,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
       expect(customers.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
       expect(customers.cell(1, 2)?.userEnteredValue?.stringValue).toBe("entity:C-1");
 
-      const service = (result as { kind: "sync"; service: import("../src/application/sync/service/SyncServiceBootstrap.js").InternalSyncService }).service;
+      const service = (result as { kind: "sync"; service: import("@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js").InternalSyncService }).service;
 
       // D6 absorption on ONE entity only: edit the Invoices tab's customer cell.
       invoices.cells.set("1,2", { userEnteredValue: { stringValue: "EditedAcme" } });

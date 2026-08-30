@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SyncPollingSupervisor } from "../src/application/sync/service/SyncPollingSupervisor.js";
+import { SyncPollingSupervisor } from "@hikoutei/sync-engine/sync/service/SyncPollingSupervisor.js";
 
 describe("SyncPollingSupervisor", () => {
   it("drains an externally triggered pass before stop resolves", async () => {

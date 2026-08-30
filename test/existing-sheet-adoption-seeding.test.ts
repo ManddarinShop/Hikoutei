@@ -29,10 +29,10 @@ import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { presentValue } from "@hikoutei/contracts/state/constructors.js";
 import type { Presence } from "@hikoutei/contracts/state/types.js";
-import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
+import { defineTypedSheetsEntityMapping } from "@hikoutei/sync-engine/orm/mapping/entityMapping.js";
 import {
   registerTypedSheetsEntityMappings,
-} from "../src/application/orm/persistence/flush/flushCoordinator.js";
+} from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";
 import { pollMappedUserInputWithMikroOrm } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import { createMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
@@ -44,7 +44,7 @@ import {
 import {
   CELL_OBSERVATION_KINDS,
 } from "@hikoutei/contracts/encoding/constants.js";
-import type { InternalSyncProvider } from "../src/application/sync/service/serviceOptions.js";
+import type { InternalSyncProvider } from "@hikoutei/sync-engine/sync/service/serviceOptions.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshots,
@@ -55,10 +55,10 @@ import {
   completeExistingSheetAdoption,
   extractAdoptedSeedRows,
   seedAdoptedEntityRows,
-} from "../src/application/sync/service/adopt/adoptionSeeding.js";
+} from "@hikoutei/sync-engine/sync/service/adopt/adoptionSeeding.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
-} from "../src/application/sync/service/errors.js";
+} from "@hikoutei/sync-engine/sync/service/errors.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const AdoptProbeSchema = defineEntity({

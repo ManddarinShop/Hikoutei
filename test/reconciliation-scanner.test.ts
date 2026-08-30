@@ -13,7 +13,7 @@ import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSch
 import {
   runReconciliationScan,
   RECONCILIATION_DEFAULTS,
-} from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
+} from "@hikoutei/sync-engine/sync/outbound/reconciliation/ReconciliationScanner.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -26,8 +26,8 @@ import {
 import {
   readReconciliationCorrectionStateWithAdapter,
 } from "@hikoutei/storage/storage/sync/outbound/reconciliationSql.js";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
-import { createSystemProjectionEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
+import { createSystemProjectionEffect } from "@hikoutei/storage/sync/outbound/projection/ProjectionEffectFactory.js";
 import { computeSyncVisibleHash, parseSyncProjectionEffectPayload } from "@hikoutei/contracts/sheets/syncSheets.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 

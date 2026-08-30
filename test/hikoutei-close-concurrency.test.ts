@@ -19,7 +19,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineTypedSheetsEntity } from "../src/index.js";
-import { getEntityDescriptor } from "../src/api/entity.js";
+import { getEntityDescriptor } from "@hikoutei/sync-engine/api/entity.js";
 import { createInternalHikoutei } from "../src/api/Hikoutei.js";
 import type { ScalarEntityPersistenceProvider } from "@hikoutei/contracts/storage/scalar.js";
 import { ScriptedCloseProvider } from "./support/scriptedCloseProvider.js";
@@ -36,8 +36,11 @@ const loggerHooks = vi.hoisted(() => ({
   drainCalls: 0,
 }));
 
-vi.mock("../src/shared/observability/internalLog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/shared/observability/internalLog.js")>();
+// Mock the ENGINE module path directly: since P8-D2 the runtime core lives
+// in `@hikoutei/sync-engine` and imports its sibling observability module
+// relatively, so mocking the root re-export shim would not reach it.
+vi.mock("@hikoutei/sync-engine/shared/observability/internalLog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@hikoutei/sync-engine/shared/observability/internalLog.js")>();
   return {
     ...actual,
     getHikouteiInternalLogger: () => ({

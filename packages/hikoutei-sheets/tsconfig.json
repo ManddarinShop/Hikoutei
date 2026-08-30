@@ -4,15 +4,16 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
-    // P8-D2 phase 1 transitional: same story as packages/hikoutei-storage/
-    // tsconfig.json — the moved google-sheets-api provider keeps transitional
-    // imports into root src via "@hikoutei-app-src/*" until P8-D2 phase 2; the
-    // paths targets are root-src sources, so rootDir must cover the repo root.
+    // P8-D2 phase 2: the provider keeps two internal-log imports against the
+    // sync engine's shared/observability modules, mapped to SOURCE like the
+    // storage package's engine map (no build-order dependency). rootDir
+    // spans the repo for that reached-in source emission, which is never
+    // bundled or shipped.
     "rootDir": "../..",
     "outDir": "dist",
     "baseUrl": "../..",
     "paths": {
-      "@hikoutei-app-src/*": ["src/*"],
+      "@hikoutei/sync-engine/*": ["packages/hikoutei-sync-engine/src/*"],
       "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
       "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"]
     },

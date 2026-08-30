@@ -29,29 +29,29 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   serviceAccountEmail,
-} from "../../src/cli/checkpoint.js";
+} from "@hikoutei/cli/checkpoint.js";
 import {
   confirmSetup,
   promptLoginHandoff,
-} from "../../src/cli/confirm.js";
+} from "@hikoutei/cli/confirm.js";
 import {
   SETUP_ARG_ERROR_EXIT_CODE,
   SETUP_ERROR_CODES,
   type SetupErrorCode,
-} from "../../src/cli/errors.js";
+} from "@hikoutei/cli/errors.js";
 import {
   createInteractiveLoginRunner,
   LOGIN_ARGS,
   type GcloudLoginResult,
   type GcloudLoginRunner,
   type LoginSpawner,
-} from "../../src/cli/gcloudRunner.js";
+} from "@hikoutei/cli/gcloudRunner.js";
 import {
   DEFAULT_KEY_FILE_NAME,
   runSetup,
   type SetupResult,
   type SetupSummary,
-} from "../../src/cli/setupFlow.js";
+} from "@hikoutei/cli/setupFlow.js";
 import {
   isModuleMainEntry,
   runSetupCli,
@@ -60,7 +60,7 @@ import {
   type CliStdout,
   type RunSetupCallable,
   type RunSetupCliContext,
-} from "../../src/cli/setup.js";
+} from "@hikoutei/cli/setup.js";
 
 import {
   makeTempDir,
@@ -182,7 +182,7 @@ describe("createInteractiveLoginRunner", () => {
             exitListeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
           }
         },
-      } as unknown as import("../../src/cli/gcloudRunner.js").LoginChildProcess;
+      } as unknown as import("@hikoutei/cli/gcloudRunner.js").LoginChildProcess;
     };
     return {
       spawner,
@@ -362,7 +362,7 @@ describe("runSetupCli — interactive login handoff", () => {
     },
   };
 
-  function baseOptions(overrides: Partial<{ yes: boolean; dryRun: boolean }> = {}): import("../../src/cli/args.js").SetupOptions {
+  function baseOptions(overrides: Partial<{ yes: boolean; dryRun: boolean }> = {}): import("@hikoutei/cli/args.js").SetupOptions {
     return {
       saName: "hikoutei-sa",
       output: ".env",
@@ -801,7 +801,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     return { runner, calls: () => calls };
   }
 
-  function baseOptions(overrides: Partial<{ yes: boolean; dryRun: boolean; output: string }> = {}): import("../../src/cli/args.js").SetupOptions {
+  function baseOptions(overrides: Partial<{ yes: boolean; dryRun: boolean; output: string }> = {}): import("@hikoutei/cli/args.js").SetupOptions {
     return {
       saName: "hikoutei-sa",
       output: ".env",
@@ -1154,14 +1154,14 @@ describe("package and entry regression", () => {
     // legacy bare-flag setup spelling (routed back to the setup flow).
     expect(pkg.bin.hikoutei).toBe("./dist/cli/index.js");
 
-    const router = readFileSync(new URL("../../src/cli/index.ts", import.meta.url), "utf8");
+    const router = readFileSync(new URL("../../packages/hikoutei-cli/src/index.ts", import.meta.url), "utf8");
     expect(router.split("\n")[0]).toBe("#!/usr/bin/env node");
     expect(router).toContain('head === "adopt"');
     expect(router).toContain('head === "setup"');
 
     // The setup entry keeps its shebang for direct `node dist/cli/setup.js`
     // invocations (back-compat when the bin WAS the setup CLI).
-    const entry = readFileSync(new URL("../../src/cli/setup.ts", import.meta.url), "utf8");
+    const entry = readFileSync(new URL("../../packages/hikoutei-cli/src/setup.ts", import.meta.url), "utf8");
     expect(entry.split("\n")[0]).toBe("#!/usr/bin/env node");
   });
 });

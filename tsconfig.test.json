@@ -11,13 +11,14 @@
       "hikoutei": ["./src/index.ts"],
       "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
       "@hikoutei/contracts/*": ["./packages/hikoutei-contracts/src/*"],
-      "@hikoutei-app-src/*": ["./src/*"],
-      // P8-D2 phase 1: the moved storage/sheets leaves compile from source in
-      // the test program. The leaves' transitional "@hikoutei-app-src/*"
-      // imports resolve via the root tsconfig paths mapping; rootDir "." covers
-      // both trees, so the transitional type flow typechecks hermetically.
+      // P8-D2 phase 2: every moved leaf compiles from SOURCE in the test
+      // program (rootDir "." covers all trees), so typecheck/test never
+      // depend on a stale package dist (P8-D2 phase 2 bridge removal).
       "@hikoutei/storage/*": ["./packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["./packages/hikoutei-sheets/src/*"]
+      "@hikoutei/sheets/*": ["./packages/hikoutei-sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["./packages/hikoutei-sync-engine/src/*"],
+      "@hikoutei/composition/*": ["./packages/hikoutei-composition/src/*"],
+      "@hikoutei/cli/*": ["./packages/hikoutei-cli/src/*"]
     }
   },
   "include": [
@@ -25,7 +26,10 @@
     "test/**/*.ts",
     "packages/hikoutei-contracts/src/**/*.ts",
     "packages/hikoutei-storage/src/**/*.ts",
-    "packages/hikoutei-sheets/src/**/*.ts"
+    "packages/hikoutei-sheets/src/**/*.ts",
+    "packages/hikoutei-sync-engine/src/**/*.ts",
+    "packages/hikoutei-composition/src/**/*.ts",
+    "packages/hikoutei-cli/src/**/*.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

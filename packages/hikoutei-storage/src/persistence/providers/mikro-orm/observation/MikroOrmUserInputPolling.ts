@@ -18,7 +18,7 @@ import {
   emptySyncTimingOperationCounts,
   SYNC_TIMING_SCOPES,
   type SyncTimingSink,
-} from "@hikoutei-app-src/application/sync/telemetry/syncTiming.js";
+} from "@hikoutei/storage/sync/telemetry/syncTiming.js";
 import {
   isSyncSheetsTableReader,
   observeSyncSnapshots,
@@ -40,11 +40,11 @@ import {
   createTypedSheetsEntityMappingRegistry,
 } from "@hikoutei/contracts/sync-orm/mapping/registry.js";
 
-import { resolveTypedSheetsEntityWriterOptions } from "@hikoutei-app-src/application/orm/persistence/flush/flushCoordinator.js";
+import { resolveTypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";
 import type {
   ResolvedWriterOptions,
   TypedSheetsEntityWriterOptions,
-} from "@hikoutei-app-src/application/orm/persistence/support/contracts.js";
+} from "@hikoutei/storage/orm/persistence/support/contracts.js";
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
@@ -80,7 +80,7 @@ import {
 } from "./MikroOrmUserInputPollingPersistence.js";
 import {
   retryOpenMappedConflictsWithAdapter,
-} from "@hikoutei-app-src/application/sync/inbound/autoSystemConflictResolution.js";
+} from "@hikoutei/storage/sync/inbound/autoSystemConflictResolution.js";
 // P8-C sole-source: all re-exports below (invalid reasons, poll modes,
 // report shapes) live in the contracts leaf (userInputPolling.ts); this
 // module only re-exports them so existing adapter-internal and test import

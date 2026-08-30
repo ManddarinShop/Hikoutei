@@ -6,7 +6,7 @@ import {
   HIKOUTEI_SCALAR_TYPES,
   type HikouteiEntity,
 } from "../src/index.js";
-import { getEntityDescriptor, resolveEntityDescriptor } from "../src/api/entity.js";
+import { getEntityDescriptor, resolveEntityDescriptor } from "@hikoutei/sync-engine/api/entity.js";
 
 function expectDescriptorError(input: {
   name: string;

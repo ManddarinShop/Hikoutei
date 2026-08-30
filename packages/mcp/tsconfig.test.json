@@ -15,11 +15,13 @@
     "paths": {
       "hikoutei": ["../../src/index.ts"],
       "hikoutei/internal/sync-status": ["../../src/internal/syncStatus.ts"],
-      "@hikoutei-app-src/*": ["../../src/*"],
-      // P8-D2 phase 1: root src now imports the moved storage/sheets leaves by
-      // package specifier; map them to source so this program stays hermetic.
+      // P8-D2: root src imports the moved leaves by package specifier; map
+      // every package to source so this program stays hermetic.
       "@hikoutei/storage/*": ["../../packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["../../packages/hikoutei-sheets/src/*"]
+      "@hikoutei/sheets/*": ["../../packages/hikoutei-sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["../../packages/hikoutei-sync-engine/src/*"],
+      "@hikoutei/composition/*": ["../../packages/hikoutei-composition/src/*"],
+      "@hikoutei/cli/*": ["../../packages/hikoutei-cli/src/*"]
     }
   },
   "include": [
