@@ -27,7 +27,7 @@ import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
 } from "@hikoutei/contracts/sheets/constants.js";
-import {
+import type {
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingRegistry,
 } from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
