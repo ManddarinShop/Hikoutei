@@ -40,6 +40,7 @@
     "test": "npm run build -w @hikoutei/ikisaki && vitest run",
     "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
     "audit:knip": "knip",
+    "audit:deps": "depcruise src --config .dependency-cruiser.cjs --output-type err || node -e \"console.error('[audit:deps] report-only: P8-A baseline phase — violations are recorded, not gated (see .dependency-cruiser.cjs header); hard-fail arrives in P8-C.')\"",
     "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "audit:markers": "node scripts/maintenance/audit-markers.mjs"
   },
@@ -70,6 +71,7 @@
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",
     "@types/node": "^20.14.10",
+    "dependency-cruiser": "18.2.0",
     "knip": "6.33.0",
     "typescript": "^5.5.3",
     "vitest": "^1.6.0"
