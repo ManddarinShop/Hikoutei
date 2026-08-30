@@ -18,11 +18,11 @@
  * - `plannerReceipt` — receipt construction and result encoding
  */
 
-import { computeSyncVisibleHash, type SyncProjectionEffect, type ApplySyncEffectsRequest } from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
-import { isNormalizedCell } from "../../../../../shared/encoding/index.js";
+import { computeSyncVisibleHash, type SyncProjectionEffect, type ApplySyncEffectsRequest } from "@hikoutei/contracts/sheets/syncSheets.js";
+import { EFFECT_KINDS } from "@hikoutei/contracts/domain/model/constants.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest } from "../errors.js";
 import type { PreflightContext } from "./preflightContext.js";

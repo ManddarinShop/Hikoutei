@@ -8,9 +8,6 @@
  * reading raw SDK error objects.
  */
 
-import { CoreErrorException } from "../../../../domain/errors/index.js";
-import { PRESENCE_KINDS } from "../../../../shared/state/index.js";
-import type { Presence } from "../../../../shared/state/index.js";
 import {
   DEFAULT_INVALID_PROVIDER_CLASSIFICATION,
   SYNC_INVALID_PROVIDER_OPERATIONS,
@@ -18,61 +15,22 @@ import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
   type SyncInvalidProviderClassification,
-} from "../../../../application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import { logHikouteiInternalEvent } from "../../../../shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
 } from "../../../../shared/observability/logEvents.js";
 
-/** Stable transport error categories emitted by the direct provider. */
-export const GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES = {
-  /** The request exceeded its timeout; the remote may still have committed. */
-  TIMEOUT: "google_sheets_api_timeout",
-  /** No usable HTTP response (DNS/socket/fetch failure). */
-  NETWORK_ERROR: "google_sheets_api_network_error",
-  /** The API returned a non-2xx HTTP status. */
-  HTTP_ERROR: "google_sheets_api_http_error",
-  /** A 2xx response whose structure cannot prove what was applied. */
-  INVALID_RESPONSE: "google_sheets_api_invalid_response",
-  /**
-   * The shared request-start limiter refused the admission BEFORE any SDK
-   * call: the predicted wait exceeded the bounded queue horizon. No remote
-   * request was sent, and the limiter horizon was not advanced, so the
-   * durable worker requeues through the CAS/recovery path and a later pass
-   * can be admitted again.
-   */
-  REQUEST_START_REFUSED: "google_sheets_api_request_start_refused",
-} as const;
-
-export type GoogleSheetsApiTransportErrorCode =
-  (typeof GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES)[keyof typeof GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES];
-
-/**
- * Provider-neutral transport error with explicit status/code presence.
- *
- * `status` is the HTTP status when one was observed; `code` carries a stable
- * remote/network code (API error status such as INVALID_ARGUMENT, or a Node
- * error code such as ECONNRESET) — never a URL, credential, or payload.
- */
-export class GoogleSheetsApiTransportError extends CoreErrorException<
-  "adapter.google_sheets_api",
-  GoogleSheetsApiTransportErrorCode
-> {
-  readonly status: Presence<number>;
-  readonly remoteCode: Presence<string>;
-
-  public constructor(
-    code: GoogleSheetsApiTransportErrorCode,
-    message: string,
-    status: Presence<number>,
-    remoteCode: Presence<string> = { kind: PRESENCE_KINDS.ABSENT },
-  ) {
-    super("adapter.google_sheets_api", code, message);
-    this.status = status;
-    this.remoteCode = remoteCode;
-  }
-}
+// P8-B: the transport error contract moved to the contracts leaf (the shared
+// `classifyTransportOutcome` boundary needs the class identity). The adapter
+// module re-exports it so existing adapter-internal and public import paths
+// stay valid.
+export {
+  GoogleSheetsApiTransportError,
+  GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
+} from "@hikoutei/contracts/sheets/transportError.js";
+export type { GoogleSheetsApiTransportErrorCode } from "@hikoutei/contracts/sheets/transportError.js";
 
 /**
  * Classification shared by every `spreadsheets.get` validation guard: a raw

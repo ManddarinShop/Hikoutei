@@ -5,8 +5,8 @@
  * storage commit helper mutates canonical state and appends projection effects.
  */
 
-import { ROW_BINDING_STATES } from "../../../../domain/model/constants.js";
-import { isPositiveSafeInteger } from "../../../../shared/validation.js";
+import { ROW_BINDING_STATES } from "@hikoutei/contracts/domain/model/constants.js";
+import { isPositiveSafeInteger } from "@hikoutei/contracts/validation.js";
 
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
@@ -23,7 +23,7 @@ import {
   tombstoneMappedActiveRowBindingWithSql,
 } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import type { FencingContext } from "@hikoutei/ikisaki";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

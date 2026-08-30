@@ -5,8 +5,8 @@
  * identical normalized input must always produce the same identity.
  */
 
-import type { NormalizedCell, StableValue } from "../../shared/encoding/types.js";
-import { stableHash } from "../../shared/encoding/stableEncode.js";
+import type { NormalizedCell, StableValue } from "../../encoding/types.js";
+import { stableHash } from "../../encoding/stableEncode.js";
 import { DuplicateChangedFieldError } from "../errors/identity.js";
 import type { EventKeyField, EventKeyInput } from "./contracts.js";
 

@@ -23,12 +23,12 @@ import {
 import {
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
-} from "../src/domain/model/constants.js";
-import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
-import { stableHash } from "../src/shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { presentValue } from "../src/shared/state/constructors.js";
-import type { Presence } from "../src/shared/state/types.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { presentValue } from "@hikoutei/contracts/state/constructors.js";
+import type { Presence } from "@hikoutei/contracts/state/types.js";
 import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
 import {
   registerTypedSheetsEntityMappings,
@@ -40,17 +40,17 @@ import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
   SYNC_PROTOCOL_VERSIONS,
-} from "../src/application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   CELL_OBSERVATION_KINDS,
-} from "../src/shared/encoding/constants.js";
+} from "@hikoutei/contracts/encoding/constants.js";
 import type { InternalSyncProvider } from "../src/application/sync/service/serviceOptions.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshots,
   type ReadSyncSnapshotRequest,
   type SyncObservedSnapshot,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   completeExistingSheetAdoption,
   extractAdoptedSeedRows,

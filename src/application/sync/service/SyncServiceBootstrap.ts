@@ -40,7 +40,7 @@ import {
 import type { MappedFlushSyncHook } from "../../orm/persistence/support/contracts.js";
 import {
   provisionRegisteredSyncSheets,
-} from "../sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   registerSyncConflictProjectionRoutes,
 } from "../sheetsContract/conflictProjectionRegistration.js";

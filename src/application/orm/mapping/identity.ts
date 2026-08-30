@@ -7,8 +7,8 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
-} from "../../../shared/constants.js";
-import { stableHash } from "../../../shared/encoding/stableEncode.js";
+} from "@hikoutei/contracts/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,

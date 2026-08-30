@@ -40,9 +40,9 @@ import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
 } from "../../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { presentValue, absentValue } from "../../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../../src/application/sync/sheetsContract/syncSheets.js";
-import type { NormalizedCell } from "../../src/shared/encoding/types.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
 /** One stored cell in the in-memory grid (real REST wire shapes). */

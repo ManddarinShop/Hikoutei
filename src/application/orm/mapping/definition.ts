@@ -7,16 +7,16 @@
 
 import {
   FIELD_OWNERSHIPS,
-} from "../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   EMPTY_STRING_LENGTH_ZERO,
-} from "../../../shared/constants.js";
+} from "@hikoutei/contracts/constants.js";
 import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
-} from "../../../shared/encoding/constants.js";
-import { isRecord } from "../../../shared/encoding/typeGuards.js";
-import { SYNC_PROJECTIONS } from "../../sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/encoding/constants.js";
+import { isRecord } from "@hikoutei/contracts/encoding/typeGuards.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import type {
   TypedSheetsEntityFieldCodec,
   TypedSheetsEntityFieldMapping,

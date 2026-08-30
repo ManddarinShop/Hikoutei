@@ -7,15 +7,15 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
-import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "../src/domain/model/constants.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
+import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
 import { claimWriterLeaseWithAdapter } from "@hikoutei/ikisaki";
 import { EFFECT_STATUSES } from "@hikoutei/ikisaki";
 import {
   NORMALIZED_CELL_KINDS,
-} from "../src/shared/encoding/constants.js";
-import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/encoding/constants.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
 import { defineTypedSheetsEntity } from "../src/index.js";
 import { getEntityDescriptor } from "../src/api/entity.js";
@@ -38,7 +38,7 @@ import {
 import { MikroOrmScalarPersistenceProvider } from "../src/adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
 import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { persistMappedObservedRowWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
-import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
+import { parseSyncProjectionEffectPayload } from "@hikoutei/contracts/sheets/syncSheets.js";
 import type { PersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationWriter.js";
 
 const OrderSchema = defineEntity({

@@ -45,7 +45,7 @@ import { columnLetters } from "../../../adapter/sheets/providers/google-sheets-a
 import {
   GOOGLE_SHEETS_API_DEFAULTS,
 } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
-import { PRESENCE_KINDS } from "../../../shared/state/index.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   EFFECT_LEASE_PROVIDER_HEADROOM_MS,
@@ -53,7 +53,7 @@ import {
 import {
   SYNC_CONFLICT_PROJECTION_REGISTERED_RANGE,
 } from "../sheetsContract/conflictProjection.js";
-import { SyncSheetsContractError } from "../sheetsContract/errors.js";
+import { SyncSheetsContractError } from "@hikoutei/contracts/sheets/errors.js";
 import {
   ExistingSheetAdoptionDryRunReportError,
   type ExistingSheetAdoptionRunReport,

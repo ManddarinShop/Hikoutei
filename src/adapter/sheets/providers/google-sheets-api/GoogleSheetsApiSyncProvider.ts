@@ -57,17 +57,17 @@ import type {
   SyncSheetsTableReader,
   SyncProjectionEffect,
   SyncTableRowsResult,
-} from "../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import type {
   RegisteredSyncProjectionDefinition,
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../../../../application/sync/sheetsContract/sheetsProvisioning.js";
-import type { Presence } from "../../../../shared/state/index.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
 import {
   GOOGLE_SHEETS_API_DEFAULTS,
 } from "./constants.js";

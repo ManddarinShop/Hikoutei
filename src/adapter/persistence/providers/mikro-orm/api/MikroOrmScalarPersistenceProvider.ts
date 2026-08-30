@@ -23,13 +23,13 @@ import type {
   ScalarEntityTransaction,
   ScalarEntityUpdate,
   ScalarEntityValue,
-} from "../../../contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import type {
   MikroOrmSqliteAdapter,
   MikroOrmSqliteEntityManager,
 } from "../storage/MikroOrmSqliteAdapter.js";
-import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";
-import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
+import { isCanonicalUtcIsoDate } from "@hikoutei/contracts/validation.js";
+import { isRecord } from "@hikoutei/contracts/encoding/typeGuards.js";
 import type { MappedEntityReference } from "../../../../../application/orm/mapping/contracts.js";
 
 /** Internal mapping from a public descriptor to its generated MikroORM entity. */

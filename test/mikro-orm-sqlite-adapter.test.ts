@@ -7,20 +7,20 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "../src/shared/state/index.js";
-import { stableHash } from "../src/shared/encoding/index.js";
+import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
+import { stableHash } from "@hikoutei/contracts/encoding/index.js";
 import {
   FIELD_OWNERSHIPS,
   ROW_OPERATIONS,
   CONFLICT_STATUSES,
   QUARANTINE_REASONS,
   ROW_BINDING_STATES,
-} from "../src/domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
   QUARANTINE_REPAIR_STATUSES,
   ROW_OUTCOMES,
-} from "../src/domain/evaluate/constants.js";
+} from "@hikoutei/contracts/domain/evaluate/constants.js";
 import {
   applyEffectResultWithAdapter,
   appendPendingEffectsWithSql,
@@ -63,8 +63,8 @@ import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrat
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { SyncProjectionEffect } from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";

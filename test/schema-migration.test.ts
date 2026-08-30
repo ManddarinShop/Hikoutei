@@ -31,7 +31,7 @@ import {
 import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
-import type { SqlExecutor } from "../src/adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import { RESERVED_TABLE_NAMES } from "../src/api/entity.js";
 
 const MigrationOrderSchema = defineEntity({

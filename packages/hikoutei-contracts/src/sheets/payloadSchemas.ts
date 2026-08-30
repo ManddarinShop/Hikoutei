@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   isNormalizedCell,
   type NormalizedCell,
-} from "../../../shared/encoding/index.js";
+} from "../encoding/index.js";
 
 const positiveSafeIntegerSchema = z.number().refine(
   (value) => Number.isSafeInteger(value) && value >= 1,

@@ -8,7 +8,7 @@
  * facing contract stays unchanged either way.
  */
 
-import type { ScalarEntityPersistenceProvider } from "../adapter/persistence/contracts/scalar.js";
+import type { ScalarEntityPersistenceProvider } from "@hikoutei/contracts/storage/scalar.js";
 import type { EntityManager } from "./EntityManager.js";
 import { createEntityManager } from "./internalEntityManager.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";

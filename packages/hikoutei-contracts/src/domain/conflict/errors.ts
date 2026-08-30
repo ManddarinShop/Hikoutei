@@ -1,5 +1,5 @@
 import type { CoreError } from "../errors/types.js";
-import type { Presence } from "../../shared/state/types.js";
+import type { Presence } from "../../state/types.js";
 
 /** Stable rejection codes returned by conflict-resolution CAS decisions. */
 export type ConflictResolutionErrorCode =

@@ -5,7 +5,7 @@
  * provider transport, and any repository implementation.
  */
 
-import type { NormalizedCell } from "../../shared/encoding/types.js";
+import type { NormalizedCell } from "../../encoding/types.js";
 import type {
   CanonicalResolution,
   OwnershipManifest,

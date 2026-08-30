@@ -5,19 +5,19 @@
  * adapter input never creates a partial receipt or event occurrence.
  */
 
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
-import type { ObservedEditBatch } from "../../../../domain/model/types.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { ObservedEditBatch } from "@hikoutei/contracts/domain/model/types.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../../shared/state/constants.js";
-import type { Applicability } from "../../../../shared/state/types.js";
-import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
-import { ROW_OPERATIONS } from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
+import type { Applicability } from "@hikoutei/contracts/state/types.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
+import { ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
 import { EMPTY_STRING_LENGTH_ZERO } from "../../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import {
   OBSERVED_PROJECTION_EVIDENCE_SOURCES,
   type CanonicalRowMutation,

@@ -6,7 +6,7 @@
  * safely continue.
  */
 
-import { CoreErrorException } from "../../domain/errors/index.js";
+import { CoreErrorException } from "@hikoutei/contracts/domain/errors/index.js";
 
 /** Stable codes emitted by entity mapping and mapped lifecycle helpers. */
 export const TYPED_SHEETS_ORM_ERROR_CODES = {

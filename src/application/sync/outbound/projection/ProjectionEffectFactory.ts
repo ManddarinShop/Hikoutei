@@ -12,31 +12,31 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../../shared/constants.js";
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
-import type { EffectTargetKind } from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { EffectTargetKind } from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   Applicability,
   Presence,
-} from "../../../../shared/state/types.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/state/types.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
   absentValue,
   applicableValue,
   notApplicableValue,
-} from "../../../../shared/state/index.js";
+} from "@hikoutei/contracts/state/index.js";
 import {
   SYNC_DELETE_EFFECT_KINDS,
   SYNC_PROJECTIONS,
-} from "../../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncEffectKind,
   type SyncProjection,
-} from "../../sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,

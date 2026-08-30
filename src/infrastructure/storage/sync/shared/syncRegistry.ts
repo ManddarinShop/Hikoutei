@@ -7,12 +7,24 @@
  */
 
 import { STORAGE_ERROR_CODES, StorageError, type StorageErrorCode } from "../../errors.js";
-import {
-  REGISTERED_PROJECTION_KINDS,
-  type RegisteredProjectionKind,
-} from "../../../../domain/model/constants.js";
+import { REGISTERED_PROJECTION_KINDS } from "@hikoutei/contracts/domain/model/constants.js";
+import type {
+  RegisterSyncSheetInput,
+  RegisterSyncSheetResult,
+  RegisteredProjection,
+  RegisteredSyncSheet,
+} from "@hikoutei/contracts/storage/syncRegistry.js";
+// Re-exported registry contract types: the runtime module stays the import
+// site engine code already uses, while the contracts leaf owns the
+// declarations (P8-B type extraction).
+export type {
+  RegisterSyncSheetInput,
+  RegisterSyncSheetResult,
+  RegisteredProjection,
+  RegisteredSyncSheet,
+} from "@hikoutei/contracts/storage/syncRegistry.js";
 import { withSqlSavepoint } from "../../sqlite/sqlTransaction.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   isFencingValidWithSql,
   type FencingContext,
@@ -63,48 +75,6 @@ const READ_REGISTERED_SYNC_SHEET_SQL = `
   JOIN sheet_registry AS logical ON logical.sheet_id = physical.logical_sheet_id
   WHERE physical.physical_sheet_id = ?
 `;
-
-/** The only projection labels accepted by the v1 runtime registry. */
-export type RegisteredProjection = RegisteredProjectionKind;
-
-/** Immutable logical/physical registration supplied by deployment setup. */
-export interface RegisterSyncSheetInput {
-  readonly logicalSheetId: string;
-  readonly physicalSheetId: string;
-  readonly spreadsheetId: string;
-  readonly tabName: string;
-  readonly registeredRange: string;
-  readonly projection: RegisteredProjection;
-  readonly schemaVersion: number;
-  readonly ownershipManifestJson: string;
-  readonly businessKeyField: string;
-  /**
-   * Legacy column retained in SQLite; only the business-key identity mode is
-   * accepted (everything else fails validation, including the pre-foundation
-   * `developer_metadata` fixture path).
-   */
-  readonly anchorMode?: "business_key";
-}
-
-/** Registry row used for all provider requests. */
-export interface RegisteredSyncSheet {
-  readonly logicalSheetId: string;
-  readonly physicalSheetId: string;
-  readonly spreadsheetId: string;
-  readonly tabName: string;
-  readonly registeredRange: string;
-  readonly projection: RegisteredProjection;
-  readonly schemaVersion: number;
-  readonly ownershipManifestJson: string;
-  readonly businessKeyField: string;
-  /** Legacy column retained in SQLite; the only accepted value is business_key. */
-  readonly anchorMode: "business_key";
-}
-
-/** Records whether a fenced registry request won the writer ownership check. */
-export type RegisterSyncSheetResult =
-  | { readonly kind: "registered"; readonly sheet: RegisteredSyncSheet }
-  | { readonly kind: "fenced_out" };
 
 /**
  * Registers one logical sheet/projection pair through an active async SQL context.

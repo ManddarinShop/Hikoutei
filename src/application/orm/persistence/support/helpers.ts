@@ -8,16 +8,16 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
-} from "../../../../shared/constants.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushChange,
-} from "../../../../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import {
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
-} from "../../../../shared/validation.js";
+} from "@hikoutei/contracts/validation.js";
 import {
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,

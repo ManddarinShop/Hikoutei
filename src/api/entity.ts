@@ -10,8 +10,8 @@
  * phantom entity type so `em.create(User, { ... })` infers the entity shape.
  */
 
-import { EMPTY_STRING_LENGTH_ZERO } from "../shared/constants.js";
-import { isRecord } from "../shared/encoding/typeGuards.js";
+import { EMPTY_STRING_LENGTH_ZERO } from "@hikoutei/contracts/constants.js";
+import { isRecord } from "@hikoutei/contracts/encoding/typeGuards.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 
 /** Runtime tags for the scalar property types supported in v1. */

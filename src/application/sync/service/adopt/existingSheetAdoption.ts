@@ -47,7 +47,7 @@ import type {
 } from "../contracts.js";
 import type {
   RegisteredSyncProjectionDefinition,
-} from "../../sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 
 /** Stable failures raised by the existing-sheet adoption startup path. */
 export const EXISTING_SHEET_ADOPTION_ERROR_CODES = {

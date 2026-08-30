@@ -25,9 +25,9 @@ import type {
 import type {
   RegisteredSyncProjectionDefinition,
   SyncSheetsProvisioner,
-} from "../sheetsContract/sheetsProvisioning.js";
-import type { SyncSheetsProvider, SyncSheetsTableReader } from "../sheetsContract/syncSheets.js";
-import type { CoordinatorLaneEvent } from "../sheetsContract/mutationCoordinator/laneTelemetry.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import type { SyncSheetsProvider, SyncSheetsTableReader } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { CoordinatorLaneEvent } from "@hikoutei/contracts/sheets/mutationCoordinator/laneTelemetry.js";
 import type { GoogleSheetsApiProviderOptions } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
 import type { ExistingSheetAdoptionSpec } from "./adopt/existingSheetAdoption.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";

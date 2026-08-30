@@ -34,14 +34,15 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json && npm run build -w spreadsheet-db-mcp",
-    "typecheck": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
-    "test": "npm run build -w @hikoutei/ikisaki && vitest run",
+    "build": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run clean && tsc -p tsconfig.build.json && node scripts/ci/reconcile-contracts-dist.mjs && npm run build -w spreadsheet-db-mcp",
+    "typecheck": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json",
+    "typecheck:test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
+    "test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && vitest run",
     "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
     "audit:knip": "knip",
     "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
-    "audit:markers": "node scripts/maintenance/audit-markers.mjs"
+    "audit:markers": "node scripts/maintenance/audit-markers.mjs",
+    "audit:deps": "npx depcruise src packages/hikoutei-contracts --config .dependency-cruiser.cjs --output-type err || node -e \"console.error('[audit:deps] report-only: violations above are the P8-A/P8-B baseline; hard gate lands in P8-C')\""
   },
   "keywords": [
     "google-sheets",
@@ -70,6 +71,7 @@
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",
     "@types/node": "^20.14.10",
+    "dependency-cruiser": "18.2.0",
     "knip": "6.33.0",
     "typescript": "^5.5.3",
     "vitest": "^1.6.0"

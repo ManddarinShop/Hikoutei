@@ -17,16 +17,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { stableHash } from "../src/shared/encoding/index.js";
-import type { StableValue } from "../src/shared/encoding/types.js";
-import { presentValue, absentValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { stableHash } from "@hikoutei/contracts/encoding/index.js";
+import type { StableValue } from "@hikoutei/contracts/encoding/types.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../src/application/sync/sheetsContract/constants.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/constants.js";
+import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
 import {
   getHikouteiInternalLogger,
   HIKOUTEI_LOG_ENV_KEYS,
@@ -38,8 +38,8 @@ import type {
   ReadSyncSnapshotRequest,
   SyncSheetsSnapshot,
   SyncProjectionEffect,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { SyncSheetsProvisionRoute } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { SyncSheetsProvisionRoute } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   GoogleSheetsApiSyncProvider,
   type GoogleSheetsApiRequestEvent,
@@ -70,8 +70,8 @@ import {
 import {
   TRANSPORT_OUTCOME_KINDS,
   classifyTransportOutcome,
-} from "../src/application/sync/sheetsContract/transportOutcome.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/transportOutcome.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   StubSheet,
   StubSpreadsheet,

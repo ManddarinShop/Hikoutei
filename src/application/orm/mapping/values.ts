@@ -7,13 +7,13 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
-} from "../../../shared/constants.js";
-import type { NormalizedCell } from "../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   isNormalizedCell,
   NORMALIZED_CELL_KINDS,
-} from "../../../shared/encoding/index.js";
-import { isCanonicalUtcIsoDate } from "../../../shared/validation.js";
+} from "@hikoutei/contracts/encoding/index.js";
+import { isCanonicalUtcIsoDate } from "@hikoutei/contracts/validation.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,

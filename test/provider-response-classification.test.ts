@@ -17,28 +17,28 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { SyncProjectionEffect } from "../src/application/sync/sheetsContract/syncSheets.js";
+import { presentValue, absentValue, notApplicableValue } from "@hikoutei/contracts/state/index.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
   SYNC_SHEETS_ERROR_CODES,
   type SyncInvalidProviderClassification,
-} from "../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import {
   HIKOUTEI_LOG_ENV_KEYS,
   getHikouteiInternalLogger,
   resetHikouteiInternalLoggerForTests,
 } from "../src/shared/observability/internalLog.js";
 import { HIKOUTEI_LOG_EVENTS } from "../src/shared/observability/logEvents.js";
-import type { RegisteredSyncProjectionDefinition, SyncSheetsProvisionRoute } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition, SyncSheetsProvisionRoute } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,
 } from "./support/StubSheetsTransport.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { SYSTEM_HEADERS } from "./support/googleSheetsFixtures.js";
 
 const SPREADSHEET_ID = "stub-spreadsheet";

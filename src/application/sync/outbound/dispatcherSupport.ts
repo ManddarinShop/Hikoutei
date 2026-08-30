@@ -10,7 +10,7 @@
 
 import {
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../shared/constants.js";
+} from "@hikoutei/contracts/constants.js";
 import type {
   PendingEffect,
   Presence,
@@ -18,17 +18,17 @@ import type {
 import {
   EFFECT_KINDS,
   EFFECT_TARGET_KINDS,
-} from "../../../domain/model/constants.js";
-import type { EffectTargetKind } from "../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import type { EffectTargetKind } from "@hikoutei/contracts/domain/model/constants.js";
 import {
   absentValue,
   presentValue,
-} from "../../../shared/state/index.js";
+} from "@hikoutei/contracts/state/index.js";
 import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
-import { parseSyncProjectionEffectPayload, type SyncProjectionEffect } from "../sheetsContract/syncSheets.js";
+import { parseSyncProjectionEffectPayload, type SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
-} from "../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 
 /**
  * Dispatch-priority classes for ready projection effects.

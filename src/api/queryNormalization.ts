@@ -10,7 +10,7 @@ import type {
   ScalarEntityQuery,
   ScalarEntityValue,
   ScalarEntityOrder,
-} from "../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 
 /** Normalizes a public collection query after validating descriptor-owned fields and values. */
 export function normalizeEntityQuery(

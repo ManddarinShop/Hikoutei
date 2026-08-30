@@ -11,7 +11,7 @@
 
 import { GoogleAuth } from "google-auth-library";
 import { sheets, type sheets_v4 } from "@googleapis/sheets";
-import { presentValue, absentValue, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
+import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
   describeErrorForInternalLog,
   logHikouteiInternalEvent,

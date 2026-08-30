@@ -9,18 +9,18 @@
 import {
   FIELD_OWNERSHIPS,
   type EffectTargetKind,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   EMPTY_STRING_LENGTH_ZERO,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../../shared/constants.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
-import { SYNC_PROJECTIONS } from "../../../sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../../../sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   createCandidateReconcileEffect,
   createSystemProjectionEffect,
@@ -53,7 +53,7 @@ import {
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushChange,
-} from "../../../../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import {
   requireTypedSheetsEntityProjection,
   type TypedSheetsEntityFieldMapping,
@@ -74,11 +74,11 @@ import {
   absentValue,
   applicableValue,
   presentValue,
-} from "../../../../shared/state/index.js";
+} from "@hikoutei/contracts/state/index.js";
 import {
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
-} from "../../../../shared/validation.js";
+} from "@hikoutei/contracts/validation.js";
 
 /** Plans all projection effects required by one mapped entity lifecycle change. */
 export async function projectionEffects(

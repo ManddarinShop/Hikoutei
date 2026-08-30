@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   NORMALIZED_CELL_KINDS,
   STABLE_ENCODING_ERROR_CODES,
-} from "../src/shared/encoding/constants.js";
-import { stableEncode } from "../src/shared/encoding/stableEncode.js";
-import { StableEncodingError } from "../src/domain/errors/index.js";
+} from "@hikoutei/contracts/encoding/constants.js";
+import { stableEncode } from "@hikoutei/contracts/encoding/stableEncode.js";
+import { StableEncodingError } from "@hikoutei/contracts/domain/errors/index.js";
 
 describe("stable encoding errors", () => {
   it("raises a structured error for an invalid date", () => {

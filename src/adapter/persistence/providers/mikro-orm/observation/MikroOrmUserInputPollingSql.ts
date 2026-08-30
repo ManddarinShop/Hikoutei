@@ -2,15 +2,15 @@
 
 import {
   CONFLICT_STATUSES,
-} from "../../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   type TypedSheetsEntityMapping,
 } from "../../../../../application/orm/mapping/entityMapping.js";
-import type { SqlExecutor } from "../../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 
 export interface RowBindingSqlRow {
   readonly row_binding_id: string;

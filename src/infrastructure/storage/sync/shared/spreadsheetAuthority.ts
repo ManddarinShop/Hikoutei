@@ -1,7 +1,7 @@
 /** Durable per-spreadsheet authority records used to fence remote mutations. */
 
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import { isFencingValidWithSql, type FencingContext } from "@hikoutei/ikisaki";
 
 const READ_PHYSICAL_AUTHORITY_SQL = `

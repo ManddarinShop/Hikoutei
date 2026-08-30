@@ -13,7 +13,7 @@ import { createEntityManager } from "../src/api/internalEntityManager.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushCoordinator,
-} from "../src/adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import { MikroOrmScalarPersistenceProvider } from "../src/adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
 import {
   createMikroOrmSqliteAdapter,

@@ -6,7 +6,7 @@ import {
   validateApplyResultOptions,
   validateProjectionConfirmation,
 } from "@hikoutei/ikisaki";
-import { isCanonicalUtcIsoDate } from "../src/shared/validation.js";
+import { isCanonicalUtcIsoDate } from "@hikoutei/contracts/validation.js";
 
 function rawPendingEffect(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

@@ -16,24 +16,24 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
-import type { Presence } from "../../../../../shared/state/index.js";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
-import { stableHash } from "../../../../../shared/encoding/index.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import { stableHash } from "@hikoutei/contracts/encoding/index.js";
 import {
   CELL_OBSERVATION_KINDS,
-} from "../../../../../shared/encoding/constants.js";
-import type { StableValue } from "../../../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/encoding/constants.js";
+import type { StableValue } from "@hikoutei/contracts/encoding/types.js";
 import {
   SYNC_PROTOCOL_VERSIONS,
   SYNC_SNAPSHOT_READ_MODES,
   type SyncSnapshotReadMode,
-} from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import type {
   SyncSheetsSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import type {
   GoogleSheetsApiTransport,

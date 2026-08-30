@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
-} from "../src/domain/model/constants.js";
-import { stableHash } from "../src/shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { APPLICABILITY_KINDS } from "../src/shared/state/constants.js";
-import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
-import { CELL_OBSERVATION_KINDS } from "../src/shared/encoding/constants.js";
-import { PRESENCE_KINDS } from "../src/shared/state/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { APPLICABILITY_KINDS } from "@hikoutei/contracts/state/constants.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { CELL_OBSERVATION_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import { OBSERVATION_WRITE_RESULT_KINDS } from "../src/infrastructure/storage/state/observation/observationConstants.js";
 import {
   isAuthoritativeObservationResult,
@@ -23,14 +23,14 @@ import {
 } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
 import { inspectFastPollingTable } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";
 import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import { SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheetsContract/constants.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { SYNC_PROTOCOL_VERSIONS } from "@hikoutei/contracts/sheets/constants.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import type {
   SyncObservedSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
   SyncTableRowsResult,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 
 interface Probe {
   readonly id: string;

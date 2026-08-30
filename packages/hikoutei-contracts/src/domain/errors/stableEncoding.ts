@@ -1,4 +1,4 @@
-import type { StableEncodingErrorCode } from "../../shared/encoding/constants.js";
+import type { StableEncodingErrorCode } from "../../encoding/constants.js";
 import { CoreErrorException } from "./types.js";
 
 /** A structured failure raised when stable encoding cannot produce bytes. */

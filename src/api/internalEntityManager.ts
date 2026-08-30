@@ -37,7 +37,7 @@ import type {
   ScalarEntityReader,
   ScalarEntityRow,
   ScalarEntityTransaction,
-} from "../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import {
   readEntityValues,
   ScalarEntityUnitOfWork,

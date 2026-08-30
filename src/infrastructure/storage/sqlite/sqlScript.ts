@@ -1,4 +1,4 @@
-import type { SqlExecutor } from "../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 
 /** Executes a SQLite SQL script statement-by-statement through the active executor. */

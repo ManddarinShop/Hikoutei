@@ -13,11 +13,11 @@
 
 import {
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
-} from "../../../../domain/model/constants.js";
-import type { CandidateVisibleEvidence } from "../../../../domain/model/types.js";
-import { PRESENCE_KINDS } from "../../../../shared/state/constants.js";
-import type { Presence } from "../../../../shared/state/types.js";
-import { isNonNegativeSafeInteger } from "../../../../shared/validation.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import type { CandidateVisibleEvidence } from "@hikoutei/contracts/domain/model/types.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
+import type { Presence } from "@hikoutei/contracts/state/types.js";
+import { isNonNegativeSafeInteger } from "@hikoutei/contracts/validation.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 
 /** Returns the unavailable evidence variant used by legacy and unread rows. */

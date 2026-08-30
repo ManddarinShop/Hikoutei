@@ -9,8 +9,8 @@ import {
   classifyTransportOutcome,
   isDeliveryUncertainOutcome,
   sanitizeTransportRemoteCode,
-} from "../src/application/sync/sheetsContract/transportOutcome.js";
-import { absentValue, presentValue } from "../src/shared/state/index.js";
+} from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { absentValue, presentValue } from "@hikoutei/contracts/state/index.js";
 
 function transportError(
   code: GoogleSheetsApiTransportError["code"],

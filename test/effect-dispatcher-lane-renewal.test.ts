@@ -19,7 +19,7 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -40,23 +40,23 @@ import {
   type ReadSyncEffectPostconditionsRequest,
   type SyncEffectPostconditionResult,
   type PreparedApplyEffects,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import { absentValue } from "../src/shared/state/index.js";
-import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import { absentValue } from "@hikoutei/contracts/state/index.js";
+import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/contracts/sheets/transportOutcome.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../src/application/sync/sheetsContract/errors.js";
-import type { CoordinatorLaneEvent } from "../src/application/sync/sheetsContract/mutationCoordinator/laneTelemetry.js";
+} from "@hikoutei/contracts/sheets/errors.js";
+import type { CoordinatorLaneEvent } from "@hikoutei/contracts/sheets/mutationCoordinator/laneTelemetry.js";
 import {
   CoordinatedSheetsProvider,
-} from "../src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
+} from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
 import {
   SheetsEffectDispatcher,
   SHEETS_SPREADSHEET_ROUTE_KEY,
   PreparedDispatchError,
 } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
-import type { SqlStorageAdapter } from "../src/adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import { FakeSyncSheetsProvider, type FakeSyncSheetInput } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
@@ -67,8 +67,8 @@ import {
   StubSheetsTransport,
   StubSpreadsheet,
 } from "./support/StubSheetsTransport.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 
 const EntitySchema = defineEntity({
   name: "LaneRenewalEntity",

@@ -10,15 +10,15 @@
  * because every operation shares them.
  */
 
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../../application/sync/sheetsContract/errors.js";
-import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "../../../../../application/sync/sheetsContract/transportOutcome.js";
-import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
+} from "@hikoutei/contracts/sheets/errors.js";
+import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
 import {
   logHikouteiInternalEvent,
 } from "../../../../../shared/observability/internalLog.js";

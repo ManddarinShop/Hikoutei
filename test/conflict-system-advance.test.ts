@@ -37,8 +37,8 @@ import {
   appendPendingEffectsWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "@hikoutei/ikisaki";
-import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { presentValue, absentValue, notApplicableValue } from "@hikoutei/contracts/state/index.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
@@ -47,7 +47,7 @@ import {
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import { createCandidateReconcileEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
 import { runUserInputCleanupScan } from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
 import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
@@ -61,9 +61,9 @@ import {
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   CONFLICT_STATUSES,
   type ConflictStatus,
-} from "../src/domain/model/constants.js";
-import type { SyncConflict } from "../src/domain/model/types.js";
-import type { SyncSheetsProvisioner } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import type { SyncConflict } from "@hikoutei/contracts/domain/model/types.js";
+import type { SyncSheetsProvisioner } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const User = defineTypedSheetsEntity({

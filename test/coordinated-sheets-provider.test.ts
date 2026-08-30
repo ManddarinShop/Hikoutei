@@ -3,9 +3,9 @@ import {
   CoordinatedLanePreconditionError,
   CoordinatedSheetsProvider,
   type CoordinatedSheetsInner,
-} from "../src/application/sync/sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
-import type { CoordinatorLaneEvent } from "../src/application/sync/sheetsContract/mutationCoordinator/laneTelemetry.js";
-import { TRANSPORT_OUTCOME_KINDS } from "../src/application/sync/sheetsContract/transportOutcome.js";
+} from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
+import type { CoordinatorLaneEvent } from "@hikoutei/contracts/sheets/mutationCoordinator/laneTelemetry.js";
+import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/contracts/sheets/transportOutcome.js";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,
@@ -26,13 +26,13 @@ import type {
   SyncSheetsObservationBatchProvider,
   SyncSheetsTableReader,
   SyncTableRowsResult,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
-import { SYNC_POSTCONDITION_DISPOSITIONS, SYNC_PROTOCOL_VERSIONS } from "../src/application/sync/sheetsContract/constants.js";
-import { absentValue, presentValue } from "../src/shared/state/index.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import { SYNC_POSTCONDITION_DISPOSITIONS, SYNC_PROTOCOL_VERSIONS } from "@hikoutei/contracts/sheets/constants.js";
+import { absentValue, presentValue } from "@hikoutei/contracts/state/index.js";
 
 type Inner = CoordinatedSheetsInner;
 

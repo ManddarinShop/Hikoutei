@@ -7,9 +7,9 @@ import {
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
-} from "../src/domain/model/constants.js";
-import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
-import { PRESENCE_KINDS } from "../src/shared/state/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import type {
   ActiveRowBindingContext,
   CanonicalEntityState,
@@ -17,15 +17,15 @@ import type {
   ObservedEditBatch,
   ObservedExistingRowChange,
   ObservedInsertRowChange,
-} from "../src/domain/model/types.js";
-import { evaluateBatch } from "../src/domain/evaluate/evaluateBatch.js";
-import { acceptedDelete, evaluateUserFields } from "../src/domain/evaluate/fieldEvaluation.js";
-import type { EvaluationContext as FieldEvaluationContext } from "../src/domain/evaluate/contracts.js";
-import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
+} from "@hikoutei/contracts/domain/model/types.js";
+import { evaluateBatch } from "@hikoutei/contracts/domain/evaluate/evaluateBatch.js";
+import { acceptedDelete, evaluateUserFields } from "@hikoutei/contracts/domain/evaluate/fieldEvaluation.js";
+import type { EvaluationContext as FieldEvaluationContext } from "@hikoutei/contracts/domain/evaluate/contracts.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
 import {
   EVALUATION_ERROR_CODES,
   EvaluationContractError,
-} from "../src/domain/errors/index.js";
+} from "@hikoutei/contracts/domain/errors/index.js";
 
 const rowBindingId = "binding-1";
 const entityId = "entity-1";

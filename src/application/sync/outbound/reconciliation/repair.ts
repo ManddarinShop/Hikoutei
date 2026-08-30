@@ -9,20 +9,20 @@
  * snapshot that triggered the drift.
  */
 
-import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../shared/constants.js";
+import { POSITIVE_SAFE_INTEGER_MINIMUM } from "@hikoutei/contracts/constants.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../../shared/state/index.js";
-import { isRecord } from "../../../../shared/encoding/typeGuards.js";
+} from "@hikoutei/contracts/state/index.js";
+import { isRecord } from "@hikoutei/contracts/encoding/typeGuards.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 import {
   isRecoverableEffectErrorCode,
 } from "@hikoutei/ikisaki";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
-import { computeSyncVisibleHash } from "../../sheetsContract/syncSheets.js";
-import type { SyncSnapshotRow } from "../../sheetsContract/syncSheets.js";
-import { SYNC_PROJECTIONS } from "../../sheetsContract/constants.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { SyncSnapshotRow } from "@hikoutei/contracts/sheets/syncSheets.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { createSystemProjectionEffect } from "../projection/ProjectionEffectFactory.js";
 import { computeObservedHash } from "./diff.js";
 import {

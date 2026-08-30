@@ -7,28 +7,28 @@
  */
 
 // Domain contract: canonical rows are the SQLite source of truth.
-import { ROW_OPERATIONS } from "../../../../domain/model/constants.js";
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import { ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type {
   FieldOwnership,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   Applicability,
   Presence,
-} from "../../../../shared/state/types.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/state/types.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 
 // Shared state tags: these make applicability and presence explicit.
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
 import {
   absentValue,
   applicableValue,
   notApplicableValue,
   presentValue,
-} from "../../../../shared/state/constructors.js";
+} from "@hikoutei/contracts/state/constructors.js";
 
 // Storage boundary: errors, transactions, fencing, and SQL adapters.
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
@@ -46,7 +46,7 @@ import {
   appendPendingEffectsWithSql,
   type NewEffect,
 } from "@hikoutei/ikisaki";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   readMappedActiveCanonicalEntityWithSql,
   readMappedCanonicalEntityStateWithSql,

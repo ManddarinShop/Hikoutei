@@ -15,7 +15,7 @@ import type {
   ScalarEntityTransaction,
   ScalarEntityUpdate,
   ScalarEntityValue,
-} from "../src/adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 
 /**
  * A fully in-memory provider-neutral persistence provider.

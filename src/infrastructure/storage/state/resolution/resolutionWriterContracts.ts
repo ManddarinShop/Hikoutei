@@ -1,6 +1,6 @@
 /** Status, command, row, and SQL-result contracts for resolution persistence. */
 
-import type { ResolutionCommand } from "../../../../domain/model/types.js";
+import type { ResolutionCommand } from "@hikoutei/contracts/domain/model/types.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 
 /** Runtime values for the durable resolution-command lifecycle. */

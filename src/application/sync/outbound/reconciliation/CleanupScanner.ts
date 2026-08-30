@@ -28,7 +28,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../shared/constants.js";
+import { POSITIVE_SAFE_INTEGER_MINIMUM } from "@hikoutei/contracts/constants.js";
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
@@ -38,15 +38,15 @@ import {
   requireRegisteredSyncSheetWithAdapter,
 } from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
-import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   observeSyncSnapshot,
   type SyncSheetsProvider,
-} from "../../sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   DEFAULT_RECONCILIATION_LEASE_MS,
   DEFAULT_RECONCILIATION_ROLE,

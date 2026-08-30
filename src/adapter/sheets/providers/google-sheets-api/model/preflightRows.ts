@@ -10,15 +10,15 @@
  * provisioning readers.
  */
 
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
-import type { Presence } from "../../../../../shared/state/index.js";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
-import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   missingTabClassification,
   type SyncMissingTabOperation,
-} from "../../../../../application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import {
   GOOGLE_SHEETS_API_ROW_ID_HEADER,
 } from "../constants.js";

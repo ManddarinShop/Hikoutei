@@ -12,16 +12,16 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { presentValue, absentValue, notApplicableValue } from "@hikoutei/contracts/state/index.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
 import type {
   ApplySyncEffectsRequest,
   FastAppendRow,
   SyncProjectionEffect,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import { SYNC_POSTCONDITION_MODES } from "../src/application/sync/sheetsContract/constants.js";
-import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "../src/application/sync/sheetsContract/transportOutcome.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import { SYNC_POSTCONDITION_MODES } from "@hikoutei/contracts/sheets/constants.js";
+import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "@hikoutei/contracts/sheets/transportOutcome.js";
 import { GoogleSheetsApiSyncProvider, classifyGoogleSheetsApiError, isRetryableTransportStatus } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
 import type {
   GoogleSheetsApiTransport,
@@ -35,8 +35,8 @@ import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELD
 import { GOOGLE_SHEETS_API_RECEIPT_HEADERS, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
 import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,

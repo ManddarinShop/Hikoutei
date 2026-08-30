@@ -1,10 +1,10 @@
 /** Stable Sync_Conflicts audit projection schema and row materialization helpers. */
 
-import type { SyncConflict } from "../../../domain/model/types.js";
-import type { NormalizedCell } from "../../../shared/encoding/types.js";
-import { CONFLICT_STATUSES } from "../../../domain/model/constants.js";
-import { NORMALIZED_CELL_KINDS } from "../../../shared/encoding/constants.js";
-import { PRESENCE_KINDS } from "../../../shared/state/constants.js";
+import type { SyncConflict } from "@hikoutei/contracts/domain/model/types.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { CONFLICT_STATUSES } from "@hikoutei/contracts/domain/model/constants.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,

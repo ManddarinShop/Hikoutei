@@ -8,19 +8,19 @@
 import {
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../../../shared/state/constants.js";
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
-import type { ObservedRowChange } from "../../../../domain/model/types.js";
-import type { Presence } from "../../../../shared/state/types.js";
-import type { RowEvaluationResult } from "../../../../domain/evaluate/contracts.js";
-import type { RowOutcome } from "../../../../domain/evaluate/constants.js";
-import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { ObservedRowChange } from "@hikoutei/contracts/domain/model/types.js";
+import type { Presence } from "@hikoutei/contracts/state/types.js";
+import type { RowEvaluationResult } from "@hikoutei/contracts/domain/evaluate/contracts.js";
+import type { RowOutcome } from "@hikoutei/contracts/domain/evaluate/constants.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
 import {
   CONFLICT_STATUSES,
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   EMPTY_ARRAY_LENGTH_ZERO,
@@ -32,7 +32,7 @@ import {
   commitCanonicalChangesWithSql,
   type CanonicalCommitInput,
 } from "../canonical/canonicalCommit.js";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import type { FencingContext } from "@hikoutei/ikisaki";
 import { auditJson } from "./observationAudit.js";
 import {

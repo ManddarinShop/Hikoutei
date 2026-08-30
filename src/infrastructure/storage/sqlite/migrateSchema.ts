@@ -7,7 +7,7 @@
  * migration sequence while keeping DDL and later writes on one connection.
  */
 
-import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../errors.js";
 import {
   CURRENT_SCHEMA_VERSION,

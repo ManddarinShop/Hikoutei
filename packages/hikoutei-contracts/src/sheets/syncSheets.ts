@@ -7,23 +7,23 @@
  * exercise the same compare-and-set semantics as a deployed provider.
  */
 
-import { stableHash } from "../../../shared/encoding/stableEncode.js";
+import { stableHash } from "../encoding/stableEncode.js";
 import type {
   CellObservation,
   NormalizedCell,
-} from "../../../shared/encoding/types.js";
+} from "../encoding/types.js";
 import type {
   EffectKind,
   EffectTargetKind,
-} from "../../../domain/model/constants.js";
-import { formatZodBoundaryIssues } from "../../../shared/validation/zodBoundary.js";
-import { APPLICABILITY_KINDS } from "../../../shared/state/constants.js";
+} from "../domain/model/constants.js";
+import { formatZodBoundaryIssues } from "../validation/zodBoundary.js";
+import { APPLICABILITY_KINDS } from "../state/constants.js";
 import {
   applicableValue,
   notApplicableValue,
-} from "../../../shared/state/index.js";
-import type { Applicability, Presence } from "../../../shared/state/types.js";
-import type { RegisteredProjection } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
+} from "../state/index.js";
+import type { Applicability, Presence } from "../state/types.js";
+import type { RegisteredProjection } from "../storage/syncRegistry.js";
 import {
   type SyncEffectResultStatus,
   type SyncFastAppendStatus,
@@ -39,7 +39,7 @@ import {
 } from "./errors.js";
 import { syncProjectionEffectPayloadSchema } from "./payloadSchemas.js";
 import { requireSyncSheetsText } from "./validation.js";
-import type { SyncSheetsTiming } from "../telemetry/syncTiming.js";
+import type { SyncProviderTiming as SyncSheetsTiming } from "./timing.js";
 
 /** Projections supported by the v1 sync provider. */
 export type SyncProjection = RegisteredProjection;

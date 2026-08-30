@@ -7,9 +7,9 @@
  * deferred-mode postcondition relabeling.
  */
 
-import type { SyncEffectResult, SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import { SYNC_EFFECT_RESULT_STATUSES, SYNC_POSTCONDITION_STATUSES } from "../../../../../application/sync/sheetsContract/constants.js";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
+import type { SyncEffectResult, SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
+import { SYNC_EFFECT_RESULT_STATUSES, SYNC_POSTCONDITION_STATUSES } from "@hikoutei/contracts/sheets/constants.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
 import type { PlannedOutcome, PlannedReceipt } from "./plannerContracts.js";
 
 /** Builds a receipt record exactly like `makeReceipt_`. */

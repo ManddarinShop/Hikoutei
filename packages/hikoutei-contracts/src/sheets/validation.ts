@@ -2,13 +2,13 @@
 import {
   absentValue,
   presentValue,
-} from "../../../shared/state/index.js";
-import type { Presence } from "../../../shared/state/types.js";
+} from "../state/index.js";
+import type { Presence } from "../state/types.js";
 import { isNonEmptyList,
   isNonEmptyString,
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
-} from "../../../shared/validation.js";
+} from "../validation.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_PROTOCOL_VERSIONS,

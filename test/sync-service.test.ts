@@ -15,13 +15,13 @@ import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "@hikoutei/ikisaki";
-import { presentValue } from "../src/shared/state/index.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { presentValue } from "@hikoutei/contracts/state/index.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { runReconciliationScan } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncTimingEvent } from "../src/application/sync/telemetry/syncTiming.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";

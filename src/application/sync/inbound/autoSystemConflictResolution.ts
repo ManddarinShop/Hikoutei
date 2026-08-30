@@ -19,27 +19,27 @@
 
 import {
   candidateHash,
-} from "../../../domain/conflict/transitions.js";
+} from "@hikoutei/contracts/domain/conflict/transitions.js";
 import {
   CONFLICT_STATUSES,
   FIELD_OWNERSHIPS,
-} from "../../../domain/model/constants.js";
-import { LOOKUP_RESULT_KINDS } from "../../../shared/state/constants.js";
-import { stableHash } from "../../../shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { LOOKUP_RESULT_KINDS } from "@hikoutei/contracts/state/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import type {
   ResolutionCommand,
   SyncConflict,
-} from "../../../domain/model/types.js";
+} from "@hikoutei/contracts/domain/model/types.js";
 import {
   applicableValue,
   absentValue,
   notApplicableValue,
   presentValue,
-} from "../../../shared/state/index.js";
+} from "@hikoutei/contracts/state/index.js";
 import {
   SYNC_PROJECTIONS,
-} from "../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
@@ -65,7 +65,7 @@ import type {
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   availableCandidateVisibleEvidence,
 } from "../../../infrastructure/storage/state/resolution/candidateEvidence.js";
@@ -104,7 +104,7 @@ import {
   type FencingContext,
   type NewEffect,
 } from "@hikoutei/ikisaki";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import type { CommandRow } from "../../../infrastructure/storage/state/resolution/resolutionWriterContracts.js";
 
 /** Actor identity recorded on every implicit system-wins resolution command. */

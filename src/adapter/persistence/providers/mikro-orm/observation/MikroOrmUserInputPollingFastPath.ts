@@ -9,18 +9,18 @@
 
 import {
   FIELD_OWNERSHIPS,
-} from "../../../../../domain/model/constants.js";
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
-import { stableHash } from "../../../../../shared/encoding/stableEncode.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../../shared/encoding/constants.js";
-import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { isCanonicalUtcIsoDate } from "@hikoutei/contracts/validation.js";
 import type {
   SyncTableRowsResult,
   SyncTableRow,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,

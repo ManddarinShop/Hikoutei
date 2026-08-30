@@ -13,12 +13,12 @@ import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/provide
 import type { TypedSheetsEntityMapping } from "../../orm/mapping/contracts.js";
 import type { TypedSheetsEntityWriterOptions } from "../../orm/persistence/support/contracts.js";
 import type { InternalSyncServiceOptions } from "./serviceOptions.js";
-import type { SyncSheetsProvider } from "../sheetsContract/syncSheets.js";
+import type { SyncSheetsProvider } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   runReconciliationScan,
 } from "../outbound/reconciliation/ReconciliationScanner.js";
 import { runUserInputCleanupScan } from "../outbound/reconciliation/CleanupScanner.js";
-import { SYNC_PROJECTIONS } from "../sheetsContract/constants.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
 import {
   createEffectWorkerSupervisor,

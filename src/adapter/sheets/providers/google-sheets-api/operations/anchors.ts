@@ -13,7 +13,7 @@
 import type {
   EnsureSyncRowAnchorsRequest,
   EnsureSyncRowAnchorsResult,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import { invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import {
