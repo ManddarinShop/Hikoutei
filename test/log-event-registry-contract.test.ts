@@ -1,6 +1,6 @@
 /**
  * Contract tests for the internal log registries
- * (`src/shared/observability/logEvents.ts`).
+ * (`@hikoutei/sync-engine/shared/observability/logEvents.js` — the implementation module).
  *
  * The registries are a deliberate allowlist: an unknown or arbitrary
  * `error.code` or `errorClass` (which could be an ID-like secret) must never
