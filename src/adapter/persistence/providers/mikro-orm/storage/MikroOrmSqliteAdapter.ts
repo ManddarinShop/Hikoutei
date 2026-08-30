@@ -12,7 +12,7 @@ import {
 } from "@mikro-orm/sql";
 import type { Options, SqlEntityManager } from "@mikro-orm/sql";
 
-import { isRecord } from "../../../../../shared/encoding/typeGuards.js";
+import { isRecord } from "@hikoutei/contracts/encoding/typeGuards.js";
 import type {
   SqlExecutor,
   SqlGeneratedId,
@@ -21,7 +21,7 @@ import type {
   SqlParameter,
   SqlStorageAdapter,
   SqlStorageContext,
-} from "../../../contracts/sql.js";
+} from "@hikoutei/contracts/storage/sql.js";
 
 /** MikroORM entity-manager type used by the Node SQLite dialect. */
 export type MikroOrmSqliteEntityManager = SqlEntityManager<SqliteDriver>;

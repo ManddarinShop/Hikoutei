@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { formatZodBoundaryIssues } from "../src/shared/validation/zodBoundary.js";
+import { formatZodBoundaryIssues } from "@hikoutei/contracts/validation/zodBoundary.js";
 
 describe("Zod boundary diagnostics", () => {
   it("formats paths without including invalid input values", () => {

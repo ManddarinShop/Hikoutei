@@ -10,8 +10,8 @@
  * result instead of a mutation.
  */
 
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
-import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
   GOOGLE_SHEETS_API_RECEIPT_HEADERS,

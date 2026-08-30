@@ -12,7 +12,7 @@
  * the local-only lifecycle codes above.
  */
 
-import { CoreErrorException } from "../domain/errors/index.js";
+import { CoreErrorException } from "@hikoutei/contracts/domain/errors/index.js";
 
 /** Stable machine-readable codes raised by the public Hikoutei API. */
 export const HIKOUTEI_ERROR_CODES = {

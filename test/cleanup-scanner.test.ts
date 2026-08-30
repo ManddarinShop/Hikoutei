@@ -26,13 +26,13 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS } from "../src/shared/state/constants.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
+import { APPLICABILITY_KINDS } from "@hikoutei/contracts/state/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import type { SqlExecutor } from "../src/adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import {
   runUserInputCleanupScan,

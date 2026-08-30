@@ -4,8 +4,8 @@ import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
 
 function validPayload() {
   const fields = {

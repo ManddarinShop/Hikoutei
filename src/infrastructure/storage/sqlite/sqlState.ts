@@ -1,8 +1,8 @@
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../shared/state/constants.js";
-import type { Applicability, Presence } from "../../../shared/state/types.js";
+} from "@hikoutei/contracts/state/constants.js";
+import type { Applicability, Presence } from "@hikoutei/contracts/state/types.js";
 
 /** Converts an internal state value to SQLite's nullable column representation. */
 export function toSqlNullable<T>(value: Presence<T> | Applicability<T>): T | null {

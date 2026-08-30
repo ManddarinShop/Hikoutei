@@ -7,7 +7,7 @@
  * strings, and the identity-from-cell rule used by the append/replay paths.
  */
 
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT,
 } from "../constants.js";

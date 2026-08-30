@@ -18,7 +18,7 @@ import type {
   ScalarEntityInsert,
   ScalarEntityUpdate,
   ScalarEntityValue,
-} from "../../../../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 
 /** Lifecycle state of one managed entity inside a Unit of Work. */
 export type ScalarManagedEntityState = "new" | "clean" | "removed";

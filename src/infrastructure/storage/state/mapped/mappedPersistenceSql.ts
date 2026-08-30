@@ -7,15 +7,15 @@
  * changing the public entity lifecycle API.
  */
 
-import type { EffectStatus } from "../../../../domain/model/constants.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+import type { EffectStatus } from "@hikoutei/contracts/domain/model/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   ROW_BINDING_STATES,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   SqlExecutor,
   SqlMutationResult,
-} from "../../../../adapter/persistence/contracts/sql.js";
+} from "@hikoutei/contracts/storage/sql.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import { parseNormalizedCell } from "../resolution/resolutionWriterHelpers.js";
 

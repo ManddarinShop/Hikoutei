@@ -1,4 +1,4 @@
-import { CoreErrorException } from "../../../domain/errors/index.js";
+import { CoreErrorException } from "../domain/errors/index.js";
 
 /** Stable error categories emitted by the runtime sync provider contract. */
 export const SYNC_SHEETS_ERROR_CODES = {

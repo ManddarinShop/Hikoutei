@@ -3,12 +3,12 @@
 import {
   EFFECT_STATUSES,
   type EffectStatus,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import type {
   SqlExecutor,
   SqlStorageAdapter,
-} from "../../../../adapter/persistence/contracts/sql.js";
+} from "@hikoutei/contracts/storage/sql.js";
 
 /** Canonical field row used to assemble the desired System_State projection. */
 export interface ReconciliationDesiredSystemStateRow {

@@ -29,15 +29,15 @@ import {
   type PostconditionOutcome,
   type PreparedDispatch,
 } from "@hikoutei/ikisaki";
-import type { SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   CONFLICT_STATUSES,
   EFFECT_KINDS,
-} from "../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   presentValue,
-} from "../../../shared/state/index.js";
-import { stableHash } from "../../../shared/encoding/stableEncode.js";
+} from "@hikoutei/contracts/state/index.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import {
   hasActiveUserInputCandidateWithSql,
 } from "../../../infrastructure/storage/sync/outbound/effectWorkerSql.js";
@@ -49,7 +49,7 @@ import {
   hasCoordinatedSerializedInnerForRoutes,
   CoordinatedLanePreconditionError,
   CoordinatedSplitApplyUnsupportedError,
-} from "../sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
+} from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
 import {
   type ApplySyncEffectsRequest,
   type ApplySyncEffectsResult,
@@ -60,7 +60,7 @@ import {
   type SyncEffectResult,
   type SyncProjectionEffect,
   type SyncEffectWorkerProvider,
-} from "../sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_EFFECT_RESULT_STATUSES,
   SYNC_FAST_APPEND_STATUSES,
@@ -68,15 +68,15 @@ import {
   SYNC_POSTCONDITION_MODES,
   SYNC_POSTCONDITION_STATUSES,
   SYNC_PROJECTIONS,
-} from "../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   classifyTransportOutcome,
   TRANSPORT_OUTCOME_KINDS,
-} from "../sheetsContract/transportOutcome.js";
+} from "@hikoutei/contracts/sheets/transportOutcome.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
 import {
   isSheetsFastAppendCandidate,

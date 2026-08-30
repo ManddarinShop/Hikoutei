@@ -5,10 +5,10 @@
  * All cell values are NormalizedCell, all timestamps are audit-only ISO strings.
  */
 
-import type { NormalizedCell } from "../../shared/encoding/types.js";
+import type { NormalizedCell } from "../../encoding/types.js";
 import type { ConflictStatus, CandidateVisibleEvidenceStatus } from "./constants.js";
-import type { NormalizedCellKind } from "../../shared/encoding/types.js";
-import type { Applicability, Presence } from "../../shared/state/types.js";
+import type { NormalizedCellKind } from "../../encoding/types.js";
+import type { Applicability, Presence } from "../../state/types.js";
 import type {
   CANONICAL_RESOLUTION_STATUSES,
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,

@@ -27,9 +27,9 @@
  * reclassified as a retryable transport error.
  */
 
-import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../../../adapter/sheets/providers/google-sheets-api/errors.js";
-import { PRESENCE_KINDS, presentValue } from "../../../shared/state/index.js";
-import type { Presence } from "../../../shared/state/types.js";
+import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "./transportError.js";
+import { PRESENCE_KINDS, presentValue } from "../state/index.js";
+import type { Presence } from "../state/types.js";
 
 export const TRANSPORT_OUTCOME_KINDS = {
   SUCCESS: "success",

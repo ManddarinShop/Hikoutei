@@ -8,9 +8,9 @@
  * cycle.
  */
 
-import type { SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import type { Presence } from "../../../../../shared/state/index.js";
-import type { NormalizedCell } from "../../../../../shared/encoding/index.js";
+import type { SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 
 /** Receipt evidence produced by the planner for one effect. */
 export interface PlannedReceipt {

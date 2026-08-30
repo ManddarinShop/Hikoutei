@@ -14,7 +14,7 @@ import {
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushChange,
-} from "../../../../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import type {
   MappedChangePlan,
   ResolvedWriterOptions,

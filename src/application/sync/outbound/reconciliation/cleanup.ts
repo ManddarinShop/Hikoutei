@@ -46,19 +46,19 @@
  * the durable outbox and the worker's CAS-guarded slow path.
  */
 
-import { POSITIVE_SAFE_INTEGER_MINIMUM } from "../../../../shared/constants.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+import { POSITIVE_SAFE_INTEGER_MINIMUM } from "@hikoutei/contracts/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   PRESENCE_KINDS,
-} from "../../../../shared/state/index.js";
+} from "@hikoutei/contracts/state/index.js";
 import { isRecoverableEffectErrorCode } from "@hikoutei/ikisaki";
 import type { NewEffect } from "@hikoutei/ikisaki";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   computeSyncVisibleHash,
   type SyncSheetsSnapshot,
-} from "../../sheetsContract/syncSheets.js";
-import { SYNC_PROJECTIONS } from "../../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   createCandidateReconcileEffect,
   createUserInputDeleteEffect,

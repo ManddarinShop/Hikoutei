@@ -4,26 +4,26 @@ import {
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
-} from "../../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   NormalizedRowField,
   ObservedExistingRowChange,
-} from "../../../../../domain/model/types.js";
-import { stableHash } from "../../../../../shared/encoding/stableEncode.js";
+} from "@hikoutei/contracts/domain/model/types.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
 import type {
   SyncSheetsSnapshot,
   SyncObservedSnapshot,
   SyncSnapshotCell,
   SyncSnapshotRow,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_PROTOCOL_VERSIONS,
-} from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,
@@ -34,7 +34,7 @@ import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
 } from "../../../../../application/orm/errors.js";
-import { isCanonicalUtcIsoDate } from "../../../../../shared/validation.js";
+import { isCanonicalUtcIsoDate } from "@hikoutei/contracts/validation.js";
 import {
   type EntityStateRecord,
   type MappedPollingState,
@@ -44,7 +44,7 @@ import {
 import {
   CELL_OBSERVATION_KINDS,
   NORMALIZED_CELL_KINDS,
-} from "../../../../../shared/encoding/constants.js";
+} from "@hikoutei/contracts/encoding/constants.js";
 
 /** Stable reasons for a User_Input row that cannot enter the evaluator. */
 export const MAPPED_USER_INPUT_INVALID_REASONS = {

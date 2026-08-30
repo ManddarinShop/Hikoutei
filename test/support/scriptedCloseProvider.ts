@@ -1,4 +1,4 @@
-import type { ScalarEntityPersistenceProvider } from "../../src/adapter/persistence/contracts/scalar.js";
+import type { ScalarEntityPersistenceProvider } from "@hikoutei/contracts/storage/scalar.js";
 
 /**
  * Provider with scripted close behavior: `close()` fails the first

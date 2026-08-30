@@ -10,22 +10,22 @@
 import {
   NON_NEGATIVE_SAFE_INTEGER_MINIMUM,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../src/shared/constants.js";
-import { stableHash } from "../../src/shared/encoding/stableEncode.js";
-import type { EffectKind } from "../../src/domain/model/constants.js";
+} from "@hikoutei/contracts/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { EffectKind } from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   Applicability,
   LookupResult,
   Presence,
-} from "../../src/shared/state/types.js";
-import type { NormalizedCell } from "../../src/shared/encoding/types.js";
-import { CELL_OBSERVATION_KINDS } from "../../src/shared/encoding/constants.js";
+} from "@hikoutei/contracts/state/types.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { CELL_OBSERVATION_KINDS } from "@hikoutei/contracts/encoding/constants.js";
 import {
   APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../src/shared/state/index.js";
-import { CoreErrorException } from "../../src/domain/errors/index.js";
+} from "@hikoutei/contracts/state/index.js";
+import { CoreErrorException } from "@hikoutei/contracts/domain/errors/index.js";
 import {
   computeSyncVisibleHash,
   type ApplySyncEffectsRequest,
@@ -49,7 +49,7 @@ import {
   type SyncSheetsProvider,
   type SyncSnapshotCell,
   type SyncSnapshotRow,
-} from "../../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_DELETE_EFFECT_KINDS,
   SYNC_EFFECT_RESULT_STATUSES,
@@ -59,18 +59,18 @@ import {
   SYNC_POSTCONDITION_STATUSES,
   SYNC_PROJECTIONS,
   SYNC_PROTOCOL_VERSIONS,
-} from "../../src/application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import {
   requireSyncSheetsNonEmptyList,
   requireSyncSheetsNonNegativeSafeInteger,
   requireSyncSheetsPositiveSafeInteger,
   requireSyncProjectionKind,
   requireSyncSheetsText,
-} from "../../src/application/sync/sheetsContract/validation.js";
+} from "@hikoutei/contracts/sheets/validation.js";
 
 const FAKE_EFFECT_KINDS = {
   SYSTEM_PROJECTION: "system_projection",

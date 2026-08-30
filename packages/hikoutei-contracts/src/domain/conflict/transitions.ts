@@ -9,8 +9,8 @@
  * - RESOLVED: user submitted acknowledge_system with matching revision/hash CAS
  */
 
-import { stableHash } from "../../shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../../shared/encoding/types.js";
+import { stableHash } from "../../encoding/stableEncode.js";
+import type { NormalizedCell } from "../../encoding/types.js";
 import {
   createAlreadyResolvedError,
   createConflictIdMismatchError,
@@ -20,8 +20,8 @@ import {
 import type { ConflictResolutionError } from "./errors.js";
 import { CONFLICT_STATUSES } from "../model/constants.js";
 import type { ResolutionCommand, SyncConflict } from "../model/types.js";
-import { LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "../../shared/state/constants.js";
-import type { LookupResult } from "../../shared/state/types.js";
+import { LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "../../state/constants.js";
+import type { LookupResult } from "../../state/types.js";
 
 /** Runtime values for the discriminated conflict transition result. */
 export const CONFLICT_TRANSITION_KINDS = {

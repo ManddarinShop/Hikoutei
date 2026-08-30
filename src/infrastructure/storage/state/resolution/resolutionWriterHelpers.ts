@@ -1,17 +1,17 @@
 /** Validation and fencing helpers shared by the resolution writer paths. */
 
-import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
-import { CONFLICT_STATUSES } from "../../../../domain/model/constants.js";
+import { isNormalizedCell } from "@hikoutei/contracts/encoding/normalizedCell.js";
+import { CONFLICT_STATUSES } from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   ConflictStatus,
-} from "../../../../domain/model/constants.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   isFencingValidWithSql,
   type FencingContext,
 } from "@hikoutei/ikisaki";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 
 /** Parses and validates a normalized cell stored as serialized JSON. */
 export function parseNormalizedCell(serialized: string, fieldName: string): NormalizedCell {

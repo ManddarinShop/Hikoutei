@@ -9,11 +9,11 @@
  * plans with no mutation and no receipt.
  */
 
-import { computeSyncVisibleHash, type SyncProjectionEffect } from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import { EFFECT_KINDS } from "../../../../../domain/model/constants.js";
-import { PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
-import type { NormalizedCell } from "../../../../../shared/encoding/index.js";
+import { computeSyncVisibleHash, type SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
+import { EFFECT_KINDS } from "@hikoutei/contracts/domain/model/constants.js";
+import { PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import type { PreflightContext, PreflightRow } from "./preflightContext.js";
 import type { EffectPlan, PlannedReceipt, WorkingRow } from "./plannerContracts.js";

@@ -15,7 +15,7 @@ import {
 } from "../src/infrastructure/storage/sync/shared/spreadsheetAuthority.js";
 import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
 import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 
 describe("durable delivery and spreadsheet fencing", () => {

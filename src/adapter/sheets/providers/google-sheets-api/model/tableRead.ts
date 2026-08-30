@@ -10,8 +10,8 @@
  * Script source throws.
  */
 
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
-import type { SyncTableRow } from "../../../../../application/sync/sheetsContract/syncSheets.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import type { SyncTableRow } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   GOOGLE_SHEETS_API_ROW_ID_HEADER,
 } from "../constants.js";

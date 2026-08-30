@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import type { HikouteiStableHash } from "../identity/types.js";
-import { StableEncodingError } from "../../domain/errors/stableEncoding.js";
+import { StableEncodingError } from "../domain/errors/stableEncoding.js";
 import {
   StableCodecError,
   stableEncode as encodeStableValue,

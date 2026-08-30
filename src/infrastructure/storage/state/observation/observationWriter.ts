@@ -10,12 +10,12 @@ import {
   APPLICABILITY_KINDS,
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
 import type {
   Applicability,
   Presence,
-} from "../../../../shared/state/types.js";
-import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
+} from "@hikoutei/contracts/state/types.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
 import { EMPTY_ARRAY_LENGTH_ZERO, EXPECTED_SINGLE_ROW_CHANGE_COUNT } from "../../constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
@@ -64,7 +64,7 @@ import {
   requireBatchRow,
   validatePersistObservedRowInput,
 } from "./observationValidation.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 
 const UPDATE_EVENT_STATUS_SQL = `
   UPDATE event_log

@@ -13,7 +13,7 @@ import type {
   SyncObservedSnapshot,
   SyncSheetsObservationProvider,
   SyncTableRowsResult,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   emptySyncTimingOperationCounts,
   SYNC_TIMING_SCOPES,
@@ -22,11 +22,11 @@ import {
 import {
   isSyncSheetsTableReader,
   observeSyncSnapshots,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import type {
   TypedSheetsEntityMapping,
   TypedSheetsEntityMappingRegistry,
@@ -49,7 +49,7 @@ import {
 import type { PersistObservedRowInput } from "../../../../../infrastructure/storage/state/observation/observationWriter.js";
 import type {
   SqlStorageAdapter,
-} from "../../../../../adapter/persistence/contracts/sql.js";
+} from "@hikoutei/contracts/storage/sql.js";
 import { TypedSheetsOrmError, TYPED_SHEETS_ORM_ERROR_CODES } from "../../../../../application/orm/errors.js";
 import type { MikroOrmSqliteAdapter } from "../storage/MikroOrmSqliteAdapter.js";
 import {

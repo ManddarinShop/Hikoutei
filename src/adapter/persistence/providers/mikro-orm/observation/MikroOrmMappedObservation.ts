@@ -7,7 +7,7 @@
  * second outbound Sheets projection.
  */
 
-import { PRESENCE_KINDS } from "../../../../../shared/state/index.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import type { FencingContext } from "@hikoutei/ikisaki";
 import type { CanonicalCommitInput } from "../../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
 import {

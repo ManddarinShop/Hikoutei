@@ -10,15 +10,15 @@
 
 import {
   EMPTY_STRING_LENGTH_ZERO,
-} from "../../../../shared/constants.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
-import { PRESENCE_KINDS } from "../../../../shared/state/index.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
+} from "@hikoutei/contracts/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
 import {
   computeSyncVisibleHash,
   type SyncSheetsSnapshot,
   type SyncSnapshotRow,
-} from "../../sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import type { DesiredRow } from "./shared.js";
 
 export type DriftKind = "drifted" | "missing";

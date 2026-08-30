@@ -31,7 +31,7 @@ import { SETUP_ERROR_CODES } from "../src/cli/errors.js";
 import { SYNC_SERVICE_ERROR_CODES } from "../src/application/sync/service/errors.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
-} from "../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
 } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";

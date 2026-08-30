@@ -6,31 +6,31 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type {
   FieldConflict,
-} from "../../../../domain/evaluate/contracts.js";
+} from "@hikoutei/contracts/domain/evaluate/contracts.js";
 import type {
   ObservedEditBatch,
   ObservedRowChange,
   NormalizedRow,
-} from "../../../../domain/model/types.js";
+} from "@hikoutei/contracts/domain/model/types.js";
 import type {
   Presence,
   LookupResult,
-} from "../../../../shared/state/types.js";
-import { LOOKUP_RESULT_KINDS } from "../../../../shared/state/constants.js";
-import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
-import { PRESENCE_KINDS } from "../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/types.js";
+import { LOOKUP_RESULT_KINDS } from "@hikoutei/contracts/state/constants.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import {
   CONFLICT_STATUSES,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import { EMPTY_ARRAY_LENGTH_ZERO } from "../../constants.js";
 import { fromSqlNullable, toSqlNullable } from "../../sqlite/sqlState.js";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import {
   OBSERVATION_APPEND_RESULT_KINDS,
   OBSERVATION_RECEIPT_STATES,

@@ -9,8 +9,8 @@
 import type {
   EffectStatus,
   EffectTargetKind,
-} from "../../../../domain/model/constants.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import type {
   SyncTimingSink,
 } from "../../../sync/telemetry/syncTiming.js";
@@ -25,12 +25,12 @@ import type {
 import type {
   RegisteredSyncSheet,
 } from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import type {
   ScalarEntityFlushChange,
   ScalarEntityFlushContext,
   ScalarEntityFlushCoordinator,
-} from "../../../../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import type {
   TypedSheetsEntityFieldMapping,
   TypedSheetsEntityMapping,

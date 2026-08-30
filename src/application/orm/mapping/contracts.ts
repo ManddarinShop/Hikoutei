@@ -5,13 +5,13 @@
  * registration, and value conversion live in their respective modules.
  */
 
-import type { FieldOwnership } from "../../../domain/model/constants.js";
-import type { NormalizedCell } from "../../../shared/encoding/types.js";
+import type { FieldOwnership } from "@hikoutei/contracts/domain/model/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import type { RegisterSyncSheetInput } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import type { NormalizedCellKind } from "../../../shared/encoding/constants.js";
+import type { NormalizedCellKind } from "@hikoutei/contracts/encoding/constants.js";
 
 /** Provider-neutral entity reference retained by private mapping metadata. */
 export interface MappedEntityClass<Entity extends object> {

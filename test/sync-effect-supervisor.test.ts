@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PRESENCE_KINDS } from "../src/shared/state/index.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
   EffectWorkerSupervisor,
   type WorkerReport,

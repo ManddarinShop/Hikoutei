@@ -5,33 +5,33 @@ import {
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
   ROW_OPERATIONS,
-} from "../../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   APPLICABILITY_KINDS,
   PRESENCE_KINDS,
-} from "../../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
 import {
   computeEventKey,
   computeRowHash,
-} from "../../../../../domain/evaluate/identity.js";
-import { evaluateBatch } from "../../../../../domain/evaluate/evaluateBatch.js";
-import { stableHash } from "../../../../../shared/encoding/stableEncode.js";
+} from "@hikoutei/contracts/domain/evaluate/identity.js";
+import { evaluateBatch } from "@hikoutei/contracts/domain/evaluate/evaluateBatch.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type {
   CanonicalEntityState,
   CanonicalResolution,
   CanonicalFieldState,
   ObservedEditBatch,
   RowBindingContext,
-} from "../../../../../domain/model/types.js";
+} from "@hikoutei/contracts/domain/model/types.js";
 import type {
   NormalizedCell,
-} from "../../../../../shared/encoding/types.js";
-import type { Presence } from "../../../../../shared/state/types.js";
-import type { RowEvaluationResult } from "../../../../../domain/evaluate/contracts.js";
-import { QUARANTINE_REASONS } from "../../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/encoding/types.js";
+import type { Presence } from "@hikoutei/contracts/state/types.js";
+import type { RowEvaluationResult } from "@hikoutei/contracts/domain/evaluate/contracts.js";
+import { QUARANTINE_REASONS } from "@hikoutei/contracts/domain/model/constants.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   createTypedSheetsEntityOwnershipManifest,
   requireTypedSheetsEntityProjection,
@@ -287,7 +287,7 @@ function evaluationContext(
   binding: RowBindingStateRecord,
   canonical: EntityStateRecord,
   state: MappedPollingState,
-): import("../../../../../domain/evaluate/contracts.js").EvaluationContext {
+): import("@hikoutei/contracts/domain/evaluate/contracts.js").EvaluationContext {
   const canonicalFields = new Map<string, CanonicalFieldState>();
   for (const field of mapping.fields) {
     const current = canonical.fields.get(field.fieldName);
@@ -364,7 +364,7 @@ async function canonicalMutationFor(
   const commitId = identifiedValue("commit", writer);
   const changedFields = prepared.mapping.fields.filter((field) => acceptedByField.has(field.fieldName));
   const effectsFactory = async (
-    sql: import("../../../../../adapter/persistence/contracts/sql.js").SqlExecutor,
+    sql: import("@hikoutei/contracts/storage/sql.js").SqlExecutor,
     result: { readonly entityRevision: number },
   ) => projectionEffects(
     sql,

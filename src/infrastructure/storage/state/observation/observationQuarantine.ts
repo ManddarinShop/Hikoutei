@@ -1,18 +1,18 @@
 /** Quarantine persistence for invalid or unresolvable observed rows. */
 
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type {
   ObservedRowChange,
   QuarantinePlan,
-} from "../../../../domain/model/types.js";
-import type { Presence } from "../../../../shared/state/types.js";
-import type { QuarantineReason } from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/types.js";
+import type { Presence } from "@hikoutei/contracts/state/types.js";
+import type { QuarantineReason } from "@hikoutei/contracts/domain/model/constants.js";
 import {
   QUARANTINE_ID_PREFIX,
-} from "../../../../domain/evaluate/constants.js";
-import { QUARANTINE_REASONS, ROW_OPERATIONS } from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/evaluate/constants.js";
+import { QUARANTINE_REASONS, ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
 import { toSqlNullable } from "../../sqlite/sqlState.js";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import {
   FENCE_EXISTS_SQL,
   fenceParameters,

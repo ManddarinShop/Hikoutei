@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Emit pass only: the root dist layout must stay 1:1 with src (published
+    // `files: ["dist"]`), so this program includes ONLY src and resolves
+    // @hikoutei/contracts through node_modules (contracts workspace dist,
+    // built first by the `build` script) instead of through source paths.
+    // Typecheck (`tsconfig.json` / `tsconfig.test.json`) keeps compiling the
+    // leaf straight from source.
+    "paths": {
+      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
+    },
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

@@ -9,16 +9,16 @@
  * modules can import from one place without importing each other.
  */
 
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import {
   isRecoverableEffectErrorCode,
 } from "@hikoutei/ikisaki";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
-import { NORMALIZED_CELL_KINDS } from "../../../../shared/encoding/constants.js";
-import { isNormalizedCell } from "../../../../shared/encoding/normalizedCell.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { isNormalizedCell } from "@hikoutei/contracts/encoding/normalizedCell.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
-import type { SyncSheetsProvider } from "../../sheetsContract/syncSheets.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
+import type { SyncSheetsProvider } from "@hikoutei/contracts/sheets/syncSheets.js";
 
 export const DEFAULT_RECONCILIATION_ROLE = "typed-sheets-reconciler";
 export const DEFAULT_RECONCILIATION_LEASE_MS = 60_000;

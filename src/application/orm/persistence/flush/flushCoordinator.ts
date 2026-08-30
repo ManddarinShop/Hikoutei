@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import {
   EMPTY_STRING_LENGTH_ZERO,
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../../shared/constants.js";
+} from "@hikoutei/contracts/constants.js";
 import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
@@ -20,8 +20,8 @@ import {
 import {
   registerSyncSheetWithSql,
 } from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../sync/sheetsContract/sheetsProvisioning.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   hasMappedRowActiveCandidateWithSql,
 } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
@@ -30,7 +30,7 @@ import {
   type ScalarEntityFlushChange,
   type ScalarEntityFlushContext,
   type ScalarEntityFlushCoordinator,
-} from "../../../../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import {
   createTypedSheetsEntityMappingRegistry,
   createTypedSheetsMappedProjectionDefinitions,
@@ -44,7 +44,7 @@ import {
 import {
   requireTypedSheetsEntityProjection,
 } from "../../mapping/projection.js";
-import { SYNC_PROJECTIONS } from "../../../sync/sheetsContract/constants.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,

@@ -16,10 +16,10 @@ import type {
 import type {
   RegisteredSyncProjectionDefinition,
   SyncSheetsProvisioner,
-} from "../sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   CoordinatedSheetsProvider,
-} from "../sheetsContract/mutationCoordinator/CoordinatedSheetsProvider.js";
+} from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
 import {
   GoogleSheetsApiSyncProvider,
 } from "../../../adapter/sheets/providers/google-sheets-api/index.js";

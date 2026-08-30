@@ -8,7 +8,7 @@
  * or quarantined user edit into an entity-table write.
  */
 
-import { ROW_OPERATIONS } from "../../../domain/model/constants.js";
+import { ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
 import type { CanonicalCommitInput } from "../../../infrastructure/storage/state/canonical/canonicalCommit.js";
 import {
   decodeTypedSheetsEntityField,

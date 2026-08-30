@@ -24,15 +24,15 @@ import type {
   SyncEffectPostconditionResult,
   SyncEffectResult,
   SyncProjectionEffect,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import { SYNC_POSTCONDITION_MODES } from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import { SYNC_POSTCONDITION_MODES } from "@hikoutei/contracts/sheets/constants.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
-} from "../../../../../application/sync/sheetsContract/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
-import type { Presence } from "../../../../../shared/state/index.js";
-import { presentValue, absentValue, PRESENCE_KINDS } from "../../../../../shared/state/index.js";
+} from "@hikoutei/contracts/sheets/errors.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
+import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";

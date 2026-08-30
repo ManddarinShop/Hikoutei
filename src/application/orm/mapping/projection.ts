@@ -8,12 +8,12 @@
 import {
   FIELD_OWNERSHIPS,
   REGISTERED_PROJECTION_KINDS,
-} from "../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   FieldManifestEntry,
   OwnershipManifest,
-} from "../../../domain/model/types.js";
-import { SYNC_PROJECTIONS } from "../../sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/domain/model/types.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import type { RegisterSyncSheetInput, RegisteredProjection } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

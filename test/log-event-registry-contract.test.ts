@@ -35,7 +35,7 @@ import {
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
@@ -47,14 +47,14 @@ import {
 import {
   EVALUATION_ERROR_CODES,
   EvaluationContractError,
-} from "../src/domain/errors/evaluation.js";
+} from "@hikoutei/contracts/domain/errors/evaluation.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
 } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { STABLE_ENCODING_ERROR_CODES } from "../src/shared/encoding/constants.js";
-import { StableEncodingError } from "../src/domain/errors/stableEncoding.js";
-import { DuplicateChangedFieldError } from "../src/domain/errors/identity.js";
+import { STABLE_ENCODING_ERROR_CODES } from "@hikoutei/contracts/encoding/constants.js";
+import { StableEncodingError } from "@hikoutei/contracts/domain/errors/stableEncoding.js";
+import { DuplicateChangedFieldError } from "@hikoutei/contracts/domain/errors/identity.js";
 
 /** Every stable code a first-party layer can emit (mirrors the registry comment). */
 const TAXONOMY_CODES: readonly string[] = [

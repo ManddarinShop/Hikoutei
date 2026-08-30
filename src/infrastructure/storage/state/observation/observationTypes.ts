@@ -8,22 +8,22 @@
 import type {
   EditorActorSource,
   ObservedEditBatch,
-} from "../../../../domain/model/types.js";
+} from "@hikoutei/contracts/domain/model/types.js";
 import type {
   RowBindingState,
   ConflictStatus,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   Applicability,
   Presence,
-} from "../../../../shared/state/types.js";
+} from "@hikoutei/contracts/state/types.js";
 import type {
   RowEvaluationResult,
-} from "../../../../domain/evaluate/contracts.js";
+} from "@hikoutei/contracts/domain/evaluate/contracts.js";
 import type {
   RowOutcome,
-} from "../../../../domain/evaluate/constants.js";
-import { ROW_OUTCOMES } from "../../../../domain/evaluate/constants.js";
+} from "@hikoutei/contracts/domain/evaluate/constants.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
 import { CANONICAL_COMMIT_RESULT_KINDS } from "../canonical/canonicalCommit.js";
 import type { CanonicalCommitInput, CanonicalCommitResult } from "../canonical/canonicalCommit.js";
 import type { NewEffect } from "@hikoutei/ikisaki";

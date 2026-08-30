@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { isNormalizedCell } from "../src/shared/encoding/normalizedCell.js";
+import { isNormalizedCell } from "@hikoutei/contracts/encoding/normalizedCell.js";
 import {
   isCanonicalUtcIsoDate,
   isNonEmptyList,
   isNonEmptyString,
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
-} from "../src/shared/validation.js";
+} from "@hikoutei/contracts/validation.js";
 import {
   isSemanticRevision,
   requireHash,
   requireSemanticRevision,
   requireSemanticString,
-} from "../src/shared/identity/types.js";
+} from "@hikoutei/contracts/identity/types.js";
 
 describe("shared validation predicates", () => {
   it("recognizes non-empty strings", () => {

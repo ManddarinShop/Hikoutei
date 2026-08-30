@@ -9,9 +9,9 @@
  * the typed context the planner can mutate.
  */
 
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
-import type { Presence } from "../../../../../shared/state/index.js";
-import { presentValue, absentValue } from "../../../../../shared/state/index.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
 import {
   GOOGLE_SHEETS_API_RECEIPT_HEADERS,
   GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
@@ -24,7 +24,7 @@ import {
 import { invalidProviderState } from "../errors.js";
 import type {
   SyncMissingTabOperation,
-} from "../../../../../application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import type {
   GoogleSheetsApiTransport,
   GoogleSheetsApiGetSpreadsheetRequest,

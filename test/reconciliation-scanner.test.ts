@@ -28,8 +28,8 @@ import {
 } from "../src/infrastructure/storage/sync/outbound/reconciliationSql.js";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { createSystemProjectionEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
-import { computeSyncVisibleHash, parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
+import { computeSyncVisibleHash, parseSyncProjectionEffectPayload } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 
 const EntitySchema = defineEntity({
   name: "ReconciliationEntity",

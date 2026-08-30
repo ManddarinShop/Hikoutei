@@ -6,20 +6,20 @@
  * considered.
  */
 
-import type { NormalizedCell } from "../../shared/encoding/types.js";
+import type { NormalizedCell } from "../../encoding/types.js";
 import {
   NORMALIZED_CELL_KINDS,
-} from "../../shared/encoding/constants.js";
-import { APPLICABILITY_KINDS } from "../../shared/state/constants.js";
+} from "../../encoding/constants.js";
+import { APPLICABILITY_KINDS } from "../../state/constants.js";
 import {
   isNormalizedCell,
   isRecord,
-} from "../../shared/encoding/index.js";
-import { stableHash } from "../../shared/encoding/stableEncode.js";
+} from "../../encoding/index.js";
+import { stableHash } from "../../encoding/stableEncode.js";
 import {
   isSemanticRevision,
   type HikouteiRevision,
-} from "../../shared/identity/types.js";
+} from "../../identity/types.js";
 import {
   CANONICAL_RESOLUTION_STATUSES,
   DELETE_EVIDENCE,

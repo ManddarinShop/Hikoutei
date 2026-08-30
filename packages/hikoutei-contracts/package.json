@@ -1,0 +1,45 @@
+{
+  "name": "@hikoutei/contracts",
+  "version": "0.1.0",
+  "description": "Pure contract layer for the Hikoutei typed repository: domain model, state/identity/encoding primitives, SQL storage interfaces, and the Sheets sync protocol boundary.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/hikoutei-contracts"
+  },
+  "bugs": {
+    "type": "git",
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hikoutei/kohkai": "0.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

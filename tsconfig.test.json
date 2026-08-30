@@ -9,12 +9,14 @@
       // in the test typecheck that resolves to the current source tree so
       // it never depends on a stale ./dist build.
       "hikoutei": ["./src/index.ts"],
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
+      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      "@hikoutei/contracts/*": ["./packages/hikoutei-contracts/src/*"]
     }
   },
   "include": [
     "src/**/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "packages/hikoutei-contracts/src/**/*.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

@@ -6,9 +6,9 @@
  * the entity lifecycle change.
  */
 
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

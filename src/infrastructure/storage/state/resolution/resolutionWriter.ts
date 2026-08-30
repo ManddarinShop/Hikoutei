@@ -10,20 +10,20 @@
 import {
   applyResolution,
   CONFLICT_TRANSITION_KINDS,
-} from "../../../../domain/conflict/transitions.js";
-import { PROJECTION_KINDS } from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/conflict/transitions.js";
+import { PROJECTION_KINDS } from "@hikoutei/contracts/domain/model/constants.js";
 import {
   LOOKUP_RESULT_KINDS,
   PRESENCE_KINDS,
-} from "../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
 import type {
   ConflictStatus,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   ResolutionCommand,
   SyncConflict,
-} from "../../../../domain/model/types.js";
-import type { LookupResult } from "../../../../shared/state/types.js";
+} from "@hikoutei/contracts/domain/model/types.js";
+import type { LookupResult } from "@hikoutei/contracts/state/types.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 import {
   appendPendingEffectsWithSql,
@@ -40,7 +40,7 @@ import {
   promoteCandidateVisibleEvidence,
 } from "../resolution/candidateEvidence.js";
 import { auditJson } from "../observation/observationAudit.js";
-import type { SqlExecutor, SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   PERSIST_RESOLUTION_RESULT_KINDS,
   RESOLUTION_COMMAND_STATUSES,
@@ -381,7 +381,7 @@ export async function rebaseActiveConflictWithSql(
   fence: FencingContext,
   input: {
     readonly conflictId: string;
-    readonly currentCanonicalValue: import("../../../../shared/encoding/types.js").NormalizedCell;
+    readonly currentCanonicalValue: import("@hikoutei/contracts/encoding/types.js").NormalizedCell;
     readonly currentCanonicalRevision: number;
     readonly lastRebasedCommitId: string;
     readonly updatedAt: number;

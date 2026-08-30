@@ -9,7 +9,7 @@ import {
   registerSyncSheetWithSql,
   type RegisteredSyncSheet,
 } from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import type { SqlStorageAdapter } from "../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
@@ -27,13 +27,13 @@ import {
 import type { InternalSyncProjectionConfig } from "../service/contracts.js";
 import {
   SYNC_PROJECTIONS,
-} from "./constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   SYNC_CONFLICT_PROJECTION_HEADERS,
 } from "./conflictProjection.js";
 import type {
   RegisteredSyncProjectionDefinition,
-} from "./sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 
 /** Registers all conflict routes under one writer fence for a mapped runtime. */
 export async function registerSyncConflictProjectionRoutes(

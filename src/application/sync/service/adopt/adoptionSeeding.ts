@@ -25,16 +25,16 @@
 import {
   ROW_OPERATIONS,
   FIELD_OWNERSHIPS,
-} from "../../../../domain/model/constants.js";
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   notApplicableValue,
   presentValue,
-} from "../../../../shared/state/constructors.js";
+} from "@hikoutei/contracts/state/constructors.js";
 import {
   PRESENCE_KINDS,
-} from "../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
 import {
   columnLetters,
   quoteA1SheetName,
@@ -67,13 +67,13 @@ import {
   observeSyncSnapshots,
   type SyncSnapshotRow,
   type SyncObservedSnapshot,
-} from "../../sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
-} from "../../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   SYNC_SNAPSHOT_READ_MODES,
-} from "../../sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import type { TypedSheetsEntityMapping } from "../../../orm/mapping/contracts.js";
 import type { TypedSheetsEntityWriterOptions } from "../../../orm/persistence/support/contracts.js";
 import type { InternalSyncProvider } from "../serviceOptions.js";
@@ -83,7 +83,7 @@ import type {
 import { DEFAULT_EFFECT_LEASE_DURATION_MS } from "@hikoutei/ikisaki";
 import { typedSheetsEntityRowBindingId } from "../../../orm/mapping/identity.js";
 import { typedSheetsEntityProjectionHeaders } from "../../../orm/mapping/projection.js";
-import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   validateSnapshotCell,
 } from "../../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";

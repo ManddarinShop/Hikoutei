@@ -7,20 +7,20 @@
 
 import {
   ROW_OPERATIONS,
-} from "../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   APPLICABILITY_KINDS,
-} from "../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/state/constants.js";
 import {
   POSITIVE_SAFE_INTEGER_MINIMUM,
-} from "../../../../shared/constants.js";
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../../../../shared/encoding/types.js";
-import type { Presence } from "../../../../shared/state/types.js";
+} from "@hikoutei/contracts/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import type { Presence } from "@hikoutei/contracts/state/types.js";
 import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
-} from "../../../../adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 import {
   encodeTypedSheetsEntityValues,
   typedSheetsCanonicalEntityId,
@@ -29,7 +29,7 @@ import {
   type TypedSheetsEntityFieldMapping,
   type TypedSheetsEntityMapping,
 } from "../../mapping/entityMapping.js";
-import type { SqlExecutor } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import { readMappedCanonicalFieldsWithSql } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
 import type { FencingContext, CanonicalFieldWrite, CanonicalCommitInput } from "../support/contracts.js";
 import { CANONICAL_REACTIVATE_OPERATION } from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
@@ -60,7 +60,7 @@ import {
   requireChangeEntityId,
   requireEncodedField,
 } from "../support/helpers.js";
-import { absentValue, presentValue } from "../../../../shared/state/index.js";
+import { absentValue, presentValue } from "@hikoutei/contracts/state/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,

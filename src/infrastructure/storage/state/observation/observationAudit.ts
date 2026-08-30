@@ -5,13 +5,13 @@
  * preserved without JSON coercion silently hiding malformed data.
  */
 
-import { computeRowHash } from "../../../../domain/evaluate/identity.js";
-import { stableHash } from "../../../../shared/encoding/stableEncode.js";
-import type { NormalizedRow } from "../../../../domain/model/types.js";
+import { computeRowHash } from "@hikoutei/contracts/domain/evaluate/identity.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedRow } from "@hikoutei/contracts/domain/model/types.js";
 import {
   isRecord,
-} from "../../../../shared/encoding/index.js";
-import { QUARANTINE_FINGERPRINT_MARKERS } from "../../../../domain/evaluate/constants.js";
+} from "@hikoutei/contracts/encoding/index.js";
+import { QUARANTINE_FINGERPRINT_MARKERS } from "@hikoutei/contracts/domain/evaluate/constants.js";
 import { STORAGE_ERROR_CODES, StorageError } from "../../errors.js";
 
 /** Builds the persisted hash for an observed row snapshot or absent row. */

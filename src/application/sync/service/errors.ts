@@ -1,4 +1,4 @@
-import { CoreErrorException } from "../../../domain/errors/index.js";
+import { CoreErrorException } from "@hikoutei/contracts/domain/errors/index.js";
 
 /** Stable failures raised while assembling or running the internal sync service. */
 export const SYNC_SERVICE_ERROR_CODES = {

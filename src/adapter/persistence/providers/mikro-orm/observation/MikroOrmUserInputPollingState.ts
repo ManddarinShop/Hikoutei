@@ -2,12 +2,12 @@
 
 import {
   ROW_BINDING_STATES,
-} from "../../../../../domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   RowBindingContext,
   SyncConflict,
-} from "../../../../../domain/model/types.js";
-import type { NormalizedCell } from "../../../../../shared/encoding/types.js";
+} from "@hikoutei/contracts/domain/model/types.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
   parseNormalizedCell,
   requireConflictStatus,

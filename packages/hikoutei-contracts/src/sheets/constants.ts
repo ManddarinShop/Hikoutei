@@ -1,5 +1,5 @@
-import { REGISTERED_PROJECTION_KINDS } from "../../../domain/model/constants.js";
-import type { RegisteredProjectionKind } from "../../../domain/model/constants.js";
+import { REGISTERED_PROJECTION_KINDS } from "../domain/model/constants.js";
+import type { RegisteredProjectionKind } from "../domain/model/constants.js";
 
 /** Protocol versions understood by the sync provider contract. */
 export const SYNC_PROTOCOL_VERSIONS = {

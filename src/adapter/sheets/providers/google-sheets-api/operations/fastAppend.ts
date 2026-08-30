@@ -22,16 +22,16 @@ import {
   type FastAppendRow,
   type FastAppendRowResult,
   type SyncProjection,
-} from "../../../../../application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../../../../../application/sync/sheetsContract/errors.js";
-import { SYNC_FAST_APPEND_STATUSES } from "../../../../../application/sync/sheetsContract/constants.js";
-import { absentValue, PRESENCE_KINDS, type Presence } from "../../../../../shared/state/index.js";
-import { isNormalizedCell } from "../../../../../shared/encoding/index.js";
+} from "@hikoutei/contracts/sheets/errors.js";
+import { SYNC_FAST_APPEND_STATUSES } from "@hikoutei/contracts/sheets/constants.js";
+import { absentValue, PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
+import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import { identityFromNormalizedCell } from "../model/valueNormalization.js";
@@ -52,7 +52,7 @@ import {
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
 import { readPreflight, readPreflightForRoutes, refreshReceiptForWrite } from "./preflightOp.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 
 /** Appends rows through one idempotent, atomic target+receipt batch. */
 export async function fastAppendRows(

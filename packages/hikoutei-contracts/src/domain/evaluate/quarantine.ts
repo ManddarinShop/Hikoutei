@@ -6,9 +6,9 @@
  * quarantine identity.
  */
 
-import type { NormalizedCell, StableValue } from "../../shared/encoding/types.js";
-import { stableHash } from "../../shared/encoding/stableEncode.js";
-import { isRecord } from "../../shared/encoding/typeGuards.js";
+import type { NormalizedCell, StableValue } from "../../encoding/types.js";
+import { stableHash } from "../../encoding/stableEncode.js";
+import { isRecord } from "../../encoding/typeGuards.js";
 import {
   CANONICAL_RESOLUTION_STATUSES,
   FIELD_OWNERSHIPS,

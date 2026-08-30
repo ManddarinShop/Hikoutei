@@ -17,7 +17,7 @@ import {
   type FencingContext,
   type NewEffect,
 } from "@hikoutei/ikisaki";
-import type { SqlStorageAdapter } from "../../../../adapter/persistence/contracts/sql.js";
+import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 
 /** One effect to append plus the terminal head it must supersede, if any. */
 export interface AppendPlan {

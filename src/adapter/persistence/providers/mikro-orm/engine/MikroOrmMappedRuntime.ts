@@ -21,14 +21,14 @@ import type {
   RegisteredTypedSheetsMappedProjection,
   TypedSheetsEntityWriterOptions,
 } from "../../../../../application/orm/persistence/support/contracts.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   initializeMikroOrmSqliteAdapter,
   type InitializeMikroOrmSqliteAdapterOptions,
   type MikroOrmSqliteAdapter,
 } from "../storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteStorageSchema } from "../storage/MikroOrmSqliteSchema.js";
-import type { ScalarEntityFlushCoordinator } from "../../../contracts/scalar.js";
+import type { ScalarEntityFlushCoordinator } from "@hikoutei/contracts/storage/scalar.js";
 
 /** Options for opening and registering one mapped SQLite runtime. */
 export interface InitializeMappedRuntimeOptions

@@ -32,12 +32,12 @@ import {
   type MikroOrmScalarEntityRuntimeDefinition,
 } from "./MikroOrmScalarEntityRuntime.js";
 export type { MikroOrmScalarEntityRuntimeDefinition } from "./MikroOrmScalarEntityRuntime.js";
-import { FIELD_OWNERSHIPS } from "../../../../../domain/model/constants.js";
+import { FIELD_OWNERSHIPS } from "@hikoutei/contracts/domain/model/constants.js";
 import {
   NORMALIZED_CELL_KINDS,
   type NormalizedCellKind,
-} from "../../../../../shared/encoding/constants.js";
-import { SYNC_PROJECTIONS } from "../../../../../application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/encoding/constants.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 
 /** Generated provider inputs for one mapped internal sync runtime. */
 export interface MikroOrmScalarRuntimeDefinition extends MikroOrmScalarEntityRuntimeDefinition {

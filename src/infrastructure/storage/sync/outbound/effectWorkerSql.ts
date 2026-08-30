@@ -3,7 +3,7 @@
 import type {
   SqlExecutor,
   SqlStorageAdapter,
-} from "../../../../adapter/persistence/contracts/sql.js";
+} from "@hikoutei/contracts/storage/sql.js";
 
 /** Parameters for the active-candidate guard query. */
 export interface UserInputCandidateGuardQuery {

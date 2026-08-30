@@ -9,20 +9,20 @@
  * snapshot build target, failing closed on unknown read modes.
  */
 
-import type { ReadSyncSnapshotRequest } from "../../../../../application/sync/sheetsContract/syncSheets.js";
-import { requireSyncSnapshotReadMode } from "../../../../../application/sync/sheetsContract/validation.js";
+import type { ReadSyncSnapshotRequest } from "@hikoutei/contracts/sheets/syncSheets.js";
+import { requireSyncSnapshotReadMode } from "@hikoutei/contracts/sheets/validation.js";
 import {
   SYNC_SNAPSHOT_READ_MODES,
   SYNC_PROJECTIONS,
-} from "../../../../../application/sync/sheetsContract/constants.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../../../../../application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/constants.js";
+import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
 import type {
   SyncMissingTabOperation,
-} from "../../../../../application/sync/sheetsContract/errors.js";
-import type { RegisteredSyncProjectionDefinition } from "../../../../../application/sync/sheetsContract/sheetsProvisioning.js";
-import type { Presence } from "../../../../../shared/state/index.js";
-import { presentValue } from "../../../../../shared/state/index.js";
-import { PRESENCE_KINDS } from "../../../../../shared/state/constants.js";
+} from "@hikoutei/contracts/sheets/errors.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
+import { presentValue } from "@hikoutei/contracts/state/index.js";
+import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import { invalidProviderRequest } from "../errors.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
