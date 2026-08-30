@@ -5,7 +5,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
-    "directory": "packages/hikoutei-cli"
+    "directory": "packages/cli"
   },
   "bugs": {
     "url": "https://github.com/ManddarinShop/Hikoutei/issues"
@@ -18,12 +18,12 @@
   },
   "exports": {
     "./*.js": {
-      "types": "./dist/packages/hikoutei-cli/src/*.d.ts",
-      "import": "./dist/packages/hikoutei-cli/src/*.js"
+      "types": "./dist/packages/cli/src/*.d.ts",
+      "import": "./dist/packages/cli/src/*.js"
     },
     "./*": {
-      "types": "./dist/packages/hikoutei-cli/src/*.d.ts",
-      "import": "./dist/packages/hikoutei-cli/src/*.js"
+      "types": "./dist/packages/cli/src/*.d.ts",
+      "import": "./dist/packages/cli/src/*.js"
     }
   },
   "files": [

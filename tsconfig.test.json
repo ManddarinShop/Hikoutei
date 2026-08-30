@@ -10,26 +10,26 @@
       // it never depends on a stale ./dist build.
       "hikoutei": ["./src/index.ts"],
       "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
-      "@hikoutei/contracts/*": ["./packages/hikoutei-contracts/src/*"],
+      "@hikoutei/contracts/*": ["./packages/contracts/src/*"],
       // P8-D2 phase 2: every moved leaf compiles from SOURCE in the test
       // program (rootDir "." covers all trees), so typecheck/test never
       // depend on a stale package dist (P8-D2 phase 2 bridge removal).
-      "@hikoutei/storage/*": ["./packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["./packages/hikoutei-sheets/src/*"],
-      "@hikoutei/sync-engine/*": ["./packages/hikoutei-sync-engine/src/*"],
-      "@hikoutei/composition/*": ["./packages/hikoutei-composition/src/*"],
-      "@hikoutei/cli/*": ["./packages/hikoutei-cli/src/*"]
+      "@hikoutei/storage/*": ["./packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["./packages/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["./packages/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["./packages/composition/src/*"],
+      "@hikoutei/cli/*": ["./packages/cli/src/*"]
     }
   },
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
-    "packages/hikoutei-contracts/src/**/*.ts",
-    "packages/hikoutei-storage/src/**/*.ts",
-    "packages/hikoutei-sheets/src/**/*.ts",
-    "packages/hikoutei-sync-engine/src/**/*.ts",
-    "packages/hikoutei-composition/src/**/*.ts",
-    "packages/hikoutei-cli/src/**/*.ts"
+    "packages/contracts/src/**/*.ts",
+    "packages/storage/src/**/*.ts",
+    "packages/sheets/src/**/*.ts",
+    "packages/sync-engine/src/**/*.ts",
+    "packages/composition/src/**/*.ts",
+    "packages/cli/src/**/*.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

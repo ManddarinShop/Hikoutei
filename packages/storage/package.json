@@ -1,13 +1,14 @@
 {
-  "name": "@hikoutei/sync-engine",
+  "name": "@hikoutei/storage",
   "version": "0.1.0",
-  "description": "Sync-ORM engine leaf for the Hikoutei typed repository: sync services (outbound worker, supervisors, reconciliation, adoption), the scalar flush unit-of-work, the internal runtime core, and shared observability (P8-D2 phase 2 + cycle break; the mapped persistence glue lives in @hikoutei/storage, which this package imports one-directionally).",
+  "description": "Storage + persistence leaves for the Hikoutei typed repository: SQLite storage plumbing, the MikroORM-backed persistence adapter, the mapped flush/observation/projection/conflict persistence bridge, and shared sync timing (P8-D2 phase 2 cycle break; imports contracts/ikisaki only — never the sync engine).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
-    "directory": "packages/hikoutei-sync-engine"
+    "directory": "packages/storage"
   },
   "bugs": {
+    "type": "git",
     "url": "https://github.com/ManddarinShop/Hikoutei/issues"
   },
   "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
@@ -18,12 +19,12 @@
   },
   "exports": {
     "./*.js": {
-      "types": "./dist/packages/hikoutei-sync-engine/src/*.d.ts",
-      "import": "./dist/packages/hikoutei-sync-engine/src/*.js"
+      "types": "./dist/packages/storage/src/*.d.ts",
+      "import": "./dist/packages/storage/src/*.js"
     },
     "./*": {
-      "types": "./dist/packages/hikoutei-sync-engine/src/*.d.ts",
-      "import": "./dist/packages/hikoutei-sync-engine/src/*.js"
+      "types": "./dist/packages/storage/src/*.d.ts",
+      "import": "./dist/packages/storage/src/*.js"
     }
   },
   "files": [
@@ -37,7 +38,8 @@
   "dependencies": {
     "@hikoutei/contracts": "0.1.0",
     "@hikoutei/ikisaki": "0.1.5",
-    "@hikoutei/storage": "0.1.0"
+    "@mikro-orm/core": "7.1.7",
+    "@mikro-orm/sql": "7.1.7"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"

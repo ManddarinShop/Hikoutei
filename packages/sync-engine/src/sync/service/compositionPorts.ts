@@ -2,9 +2,9 @@
  * Composition seams for the internal sync engine (P8-C).
  *
  * The sync engine (application/sync) must not name concrete adapters: the
- * concrete-adapter wiring lives in `packages/hikoutei-composition/src/`, which registers the
+ * concrete-adapter wiring lives in `packages/composition/src/`, which registers the
  * engine-facing ports below at composition-root load (see
- * `packages/hikoutei-composition/src/index.ts`; the public API layer is the composition
+ * `packages/composition/src/index.ts`; the public API layer is the composition
  * carrier). Engine modules resolve the ports lazily and fail closed with a
  * stable `SyncServiceError` when the composition root has not been
  * registered (which can only mean an import graph bypassed `src/api`).
@@ -161,7 +161,7 @@ let portsPromise: Promise<SyncEngineCompositionPorts> | undefined;
 
 /**
  * Registers the concrete composition ports LOADER (called by
- * `packages/hikoutei-composition/src/index.ts`). Lazy by design: only the thunk is stored at
+ * `packages/composition/src/index.ts`). Lazy by design: only the thunk is stored at
  * registration time, so importing the composition root (and, transitively,
  * the public API layer) never starts loading the MikroORM / Google SDK
  * module graphs. A re-registration replaces any prior loader and memoized

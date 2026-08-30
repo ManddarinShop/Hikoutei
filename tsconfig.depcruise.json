@@ -27,14 +27,14 @@
       // could-not-resolve even though the real compiler resolves them fine
       // through NodeNext exports). The paths are version-stable via the
       // pnpm workspace links.
-      "zod": ["./packages/hikoutei-contracts/node_modules/zod"],
-      "@hikoutei/kohkai": ["./packages/hikoutei-contracts/node_modules/@hikoutei/kohkai"],
-      "@hikoutei/contracts/*": ["./packages/hikoutei-contracts/src/*"],
-      "@hikoutei/storage/*": ["./packages/hikoutei-storage/src/*"],
-      "@hikoutei/sheets/*": ["./packages/hikoutei-sheets/src/*"],
-      "@hikoutei/sync-engine/*": ["./packages/hikoutei-sync-engine/src/*"],
-      "@hikoutei/composition/*": ["./packages/hikoutei-composition/src/*"],
-      "@hikoutei/cli/*": ["./packages/hikoutei-cli/src/*"]
+      "zod": ["./packages/contracts/node_modules/zod"],
+      "@hikoutei/kohkai": ["./packages/contracts/node_modules/@hikoutei/kohkai"],
+      "@hikoutei/contracts/*": ["./packages/contracts/src/*"],
+      "@hikoutei/storage/*": ["./packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["./packages/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["./packages/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["./packages/composition/src/*"],
+      "@hikoutei/cli/*": ["./packages/cli/src/*"]
     }
   }
 }

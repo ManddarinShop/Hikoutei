@@ -298,12 +298,12 @@ const packageJson = JSON.parse(
 };
 
 describe("package.json bin pin", () => {
-  it("registers the hikoutei CLI at the compiled root of packages/hikoutei-cli/src/index.ts", () => {
+  it("registers the hikoutei CLI at the compiled root of packages/cli/src/index.ts", () => {
     // The bin dist path is produced by the reconcile codemod bundling the
     // cli package's dist into `dist/cli/**`; the source file must exist so
     // the bin entry can never silently dangle.
     expect(packageJson.bin).toEqual({ hikoutei: "./dist/cli/index.js" });
-    expect(existsSync(join(repoRoot, "packages/hikoutei-cli/src/index.ts"))).toBe(true);
-    expect(existsSync(join(repoRoot, "packages/hikoutei-cli/src/index.js"))).toBe(false);
+    expect(existsSync(join(repoRoot, "packages/cli/src/index.ts"))).toBe(true);
+    expect(existsSync(join(repoRoot, "packages/cli/src/index.js"))).toBe(false);
   });
 });

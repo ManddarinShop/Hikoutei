@@ -98,7 +98,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "sync_spreadsheet_access_denied",
   "sync_spreadsheet_not_found",
   "sync_provisioning_failed",
-  // Sync sheets contract codes (packages/hikoutei-sync-engine/src/sync/sheetsContract/errors.ts).
+  // Sync sheets contract codes (packages/sync-engine/src/sync/sheetsContract/errors.ts).
   "invalid_sync_effect_payload",
   "invalid_sync_provisioning",
   "invalid_sync_client_options",
@@ -110,12 +110,12 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "google_sheets_api_http_error",
   "google_sheets_api_invalid_response",
   "google_sheets_api_request_start_refused",
-  // Sync service bootstrap codes (packages/hikoutei-sync-engine/src/sync/service/errors.ts).
+  // Sync service bootstrap codes (packages/sync-engine/src/sync/service/errors.ts).
   "invalid_sync_service_options",
   "invalid_sync_projection_config",
   "sync_provider_unavailable",
   "sync_service_startup_failed",
-  // Existing-sheet adoption (packages/hikoutei-sync-engine/src/sync/service/adopt/existingSheetAdoption.ts).
+  // Existing-sheet adoption (packages/sync-engine/src/sync/service/adopt/existingSheetAdoption.ts).
   "existing_sheet_adoption_dry_run_report",
   // Adoption seeding fail-closed cell validation (adopt/adoptionSeeding.ts).
   "existing_sheet_adoption_cell_kind_mismatch",
@@ -155,7 +155,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "base_field_revision_required",
   // Domain event-identity code (src/domain/errors/identity.ts).
   "duplicate_changed_field",
-  // Mapped ORM facade codes (packages/hikoutei-sync-engine/src/orm/errors.ts).
+  // Mapped ORM facade codes (packages/sync-engine/src/orm/errors.ts).
   "invalid_entity_mapping",
   "duplicate_entity_mapping",
   "entity_mapping_not_found",
@@ -257,7 +257,7 @@ export const HIKOUTEI_LOG_STABLE_CLASSES = Object.freeze([
  * its `providerOperation` field.
  *
  * Mirrors `SYNC_INVALID_PROVIDER_OPERATIONS` in
- * `packages/hikoutei-sync-engine/src/sync/sheetsContract/errors.ts`. Only proven invalid-
+ * `packages/sync-engine/src/sync/sheetsContract/errors.ts`. Only proven invalid-
  * provider-state operations are allowed; anything else (including an ID-like
  * or secret value) is redacted by the internal log writer.
  */
@@ -274,7 +274,7 @@ export const HIKOUTEI_LOG_PROVIDER_OPERATIONS = Object.freeze([
  * its `providerReason` field.
  *
  * Mirrors `SYNC_INVALID_PROVIDER_REASONS` in
- * `packages/hikoutei-sync-engine/src/sync/sheetsContract/errors.ts`. Every value is a stable
+ * `packages/sync-engine/src/sync/sheetsContract/errors.ts`. Every value is a stable
  * lowercase identifier with no ID/URL/payload content.
  */
 export const HIKOUTEI_LOG_PROVIDER_REASONS = Object.freeze([

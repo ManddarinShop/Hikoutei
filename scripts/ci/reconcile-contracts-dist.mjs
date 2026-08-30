@@ -12,16 +12,16 @@
  *
  *   1. Each leaf's dist subtree is copied into `dist/<destDir>` so the leaves
  *      ship inside the root package (`files: ["dist"]`):
- *        - packages/hikoutei-contracts/dist          -> dist/contracts/**
- *        - packages/hikoutei-storage/dist/…/src/{storage,persistence,orm,sync}
+ *        - packages/contracts/dist          -> dist/contracts/**
+ *        - packages/storage/dist/…/src/{storage,persistence,orm,sync}
  *              -> dist/{storage,persistence,orm,sync}/**  (the subpaths the
  *                 `@hikoutei/storage/<sub>` specifiers name; the package's
  *                 transient dist mirror of reached-in sibling-package sources
  *                 is NOT copied)
- *        - packages/hikoutei-sheets/dist/…/src/sheets -> dist/sheets/**
- *        - packages/hikoutei-sync-engine/dist/…/src   -> dist/sync-engine/**
- *        - packages/hikoutei-composition/dist/…/src  -> dist/composition/**
- *        - packages/hikoutei-cli/dist/…/src            -> dist/cli/**
+ *        - packages/sheets/dist/…/src/sheets -> dist/sheets/**
+ *        - packages/sync-engine/dist/…/src   -> dist/sync-engine/**
+ *        - packages/composition/dist/…/src  -> dist/composition/**
+ *        - packages/cli/dist/…/src            -> dist/cli/**
  *          (the published `bin` entry: dist/cli/index.js must exist here)
  *   2. Every `@hikoutei/{contracts,storage,sheets,sync-engine,composition,cli}/…`
  *      specifier inside root dist is rewritten to the correct RELATIVE
@@ -73,7 +73,7 @@ const rootDist = path.join(repoRoot, "dist");
 const BUNDLES = [
   {
     prefix: "@hikoutei/contracts",
-    distSrc: "packages/hikoutei-contracts/dist",
+    distSrc: "packages/contracts/dist",
     destDir: "contracts",
     copySubtrees: [""],
   },
@@ -83,13 +83,13 @@ const BUNDLES = [
     // package's tsconfig.json — cross-map rootDir "../.."); the useful
     // subtrees are the package's own src emissions. P8-D2 phase 2 cycle
     // break adds the storage-hosted persistence glue (orm/**, sync/**).
-    distSrc: "packages/hikoutei-storage/dist/packages/hikoutei-storage/src",
+    distSrc: "packages/storage/dist/packages/storage/src",
     destDir: "",
     copySubtrees: ["storage", "persistence", "orm", "sync"],
   },
   {
     prefix: "@hikoutei/sheets",
-    distSrc: "packages/hikoutei-sheets/dist/packages/hikoutei-sheets/src",
+    distSrc: "packages/sheets/dist/packages/sheets/src",
     destDir: "",
     copySubtrees: ["sheets"],
   },
@@ -99,7 +99,7 @@ const BUNDLES = [
     // `@hikoutei/sync-engine/<sub>` specifier subpaths each land exactly
     // where the rewritten specifiers point.
     prefix: "@hikoutei/sync-engine",
-    distSrc: "packages/hikoutei-sync-engine/dist/packages/hikoutei-sync-engine/src",
+    distSrc: "packages/sync-engine/dist/packages/sync-engine/src",
     destDir: "sync-engine",
     copySubtrees: [""],
   },
@@ -108,7 +108,7 @@ const BUNDLES = [
     // Composition cross-maps the leaf sources (transient mirrors are NOT
     // bundled), so its own emission lives under the repo-root-relative
     // packages/…/src subtree like the other cross-mapped leaves.
-    distSrc: "packages/hikoutei-composition/dist/packages/hikoutei-composition/src",
+    distSrc: "packages/composition/dist/packages/composition/src",
     destDir: "composition",
     copySubtrees: [""],
   },
@@ -117,7 +117,7 @@ const BUNDLES = [
     // The cli tsconfig spans the repo root for its `hikoutei` source map;
     // only the package's own emission subtree is bundled (onto dist/cli/** —
     // the published bin path).
-    distSrc: "packages/hikoutei-cli/dist/packages/hikoutei-cli/src",
+    distSrc: "packages/cli/dist/packages/cli/src",
     destDir: "cli",
     copySubtrees: [""],
   },
@@ -137,10 +137,10 @@ const BRIDGE_LITERAL_RE = /@hikoutei-app-src/;
 // Leaf packages whose own dist must stay standalone-loadable (relative
 // specifiers resolve inside it; the removed bridge literal never appears).
 const LEAF_PACKAGES = [
-  { name: "@hikoutei/storage", distDir: "packages/hikoutei-storage/dist" },
-  { name: "@hikoutei/sheets", distDir: "packages/hikoutei-sheets/dist" },
-  { name: "@hikoutei/sync-engine", distDir: "packages/hikoutei-sync-engine/dist" },
-  { name: "@hikoutei/composition", distDir: "packages/hikoutei-composition/dist" },
+  { name: "@hikoutei/storage", distDir: "packages/storage/dist" },
+  { name: "@hikoutei/sheets", distDir: "packages/sheets/dist" },
+  { name: "@hikoutei/sync-engine", distDir: "packages/sync-engine/dist" },
+  { name: "@hikoutei/composition", distDir: "packages/composition/dist" },
 ];
 
 /** Recursively collect file paths (absolute) under `dir`. */

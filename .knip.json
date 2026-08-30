@@ -27,7 +27,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/hikoutei-storage": {
+    "packages/storage": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -35,7 +35,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/hikoutei-sheets": {
+    "packages/sheets": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -43,7 +43,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/hikoutei-sync-engine": {
+    "packages/sync-engine": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -51,7 +51,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/hikoutei-composition": {
+    "packages/composition": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -59,7 +59,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/hikoutei-cli": {
+    "packages/cli": {
       "entry": [
         "src/**/*.ts"
       ],

@@ -4,7 +4,7 @@
  * This is the composition carrier: the public API layer (`src/api/Hikoutei.ts`)
  * imports it statically, and it registers the engine ports as a LAZY promise.
  * The heavyweight concrete adapters (MikroORM, the Google Sheets API client)
- * load only when `packages/hikoutei-composition/src/syncEngine.ts` is first dynamically
+ * load only when `packages/composition/src/syncEngine.ts` is first dynamically
  * imported — i.e. when a runtime is actually opened — preserving the
  * root-package lazy-loading guarantee.
  *

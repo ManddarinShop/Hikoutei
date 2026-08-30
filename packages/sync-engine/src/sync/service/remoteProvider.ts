@@ -9,7 +9,7 @@
  * single-module bootstrap.
  *
  * P8-C: the direct-mode provider is a concrete adapter — its construction
- * moved to the composition root (`packages/hikoutei-composition/src/syncEngine.ts`) and is
+ * moved to the composition root (`packages/composition/src/syncEngine.ts`) and is
  * received here through the `SyncEngineCompositionPorts` closures; this
  * module names only contract types.
  */

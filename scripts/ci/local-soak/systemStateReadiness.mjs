@@ -24,7 +24,7 @@ function immediateReadyReadSystemStateReadiness(_runtime) {
 
 /** Absolute file URL of the source module (Vitest/Vite resolves this `.ts`). */
 const SYSTEM_STATE_READINESS_SOURCE_URL = new URL(
-  "../../../packages/hikoutei-sync-engine/src/sync/service/systemStateReadiness.ts",
+  "../../../packages/sync-engine/src/sync/service/systemStateReadiness.ts",
   import.meta.url,
 );
 /** Absolute file URL of the built dist module (plain-Node CLI resolves this). */

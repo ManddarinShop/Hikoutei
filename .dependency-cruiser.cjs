@@ -48,8 +48,8 @@
  */
 
 /** Leaf-tree alternation shared by the package-space rules. */
-const ENGINE = "packages/hikoutei-sync-engine/(?:src|dist)";
-const STORAGE = "packages/hikoutei-storage/(?:src|dist)";
+const ENGINE = "packages/sync-engine/(?:src|dist)";
+const STORAGE = "packages/storage/(?:src|dist)";
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
@@ -59,10 +59,10 @@ module.exports = {
       comment:
         "The sync engine is composition-free and provider-free: it must never import @hikoutei/sheets, @hikoutei/composition, @hikoutei/cli, or root src (the public API layer/composition imports the engine, never the reverse). Contract types flow through @hikoutei/contracts; concrete-adapter wiring arrives via the registered composition ports (sync/service/compositionPorts.ts).",
       severity: "error",
-      from: { path: "^packages/hikoutei-sync-engine/src/" },
+      from: { path: "^packages/sync-engine/src/" },
       to: {
         path:
-          "^packages/hikoutei-(sheets|composition|cli)/(?:src|dist)/|^src/",
+          "^packages/(sheets|composition|cli)/(?:src|dist)/|^src/",
       },
     },
     {
@@ -78,7 +78,7 @@ module.exports = {
       comment:
         "The Google Sheets provider may reuse ONLY the engine's shared/observability log modules (internalLog/logEvents). Any other sheets->engine edge is an error: the provider belongs below the engine, and the engine must never import @hikoutei/sheets.",
       severity: "error",
-      from: { path: "^packages/hikoutei-sheets/src/" },
+      from: { path: "^packages/sheets/src/" },
       to: {
         path: `^${ENGINE}/`,
         pathNot: [
@@ -90,12 +90,12 @@ module.exports = {
     {
       name: "storage-layer-not-into-upper-trees",
       comment:
-        "packages/hikoutei-storage/src/storage is the SQLite storage technology layer: it may depend on contracts/ikisaki and itself only — never the engine, composition, cli, the src/orm + src/sync persistence glue, the adapter bridge, or root src.",
+        "packages/storage/src/storage is the SQLite storage technology layer: it may depend on contracts/ikisaki and itself only — never the engine, composition, cli, the src/orm + src/sync persistence glue, the adapter bridge, or root src.",
       severity: "error",
-      from: { path: "^packages/hikoutei-storage/src/storage/" },
+      from: { path: "^packages/storage/src/storage/" },
       to: {
         path:
-          `^packages/hikoutei-(sync-engine|composition|cli)/(?:src|dist)/|^src/|^packages/hikoutei-storage/src/(persistence|orm|sync)/`,
+          `^packages/(sync-engine|composition|cli)/(?:src|dist)/|^src/|^packages/storage/src/(persistence|orm|sync)/`,
       },
     },
     {
@@ -104,15 +104,15 @@ module.exports = {
         "The public API layer stays adapter-free (composition root owns wiring): src/api may consume @hikoutei/sync-engine and @hikoutei/composition but must never import @hikoutei/storage or @hikoutei/sheets.",
       severity: "error",
       from: { path: "^src/api/" },
-      to: { path: "^src/adapter/|^packages/hikoutei-(storage|sheets)/(?:src|dist)/" },
+      to: { path: "^src/adapter/|^packages/(storage|sheets)/(?:src|dist)/" },
     },
     {
       name: "cli-not-into-adapter-leaves",
       comment:
         "The setup/adoption cli talks to the public root entrypoint (`hikoutei` barrel — the api-bridge) and the engine's registry internals only; concrete adapter leaves (@hikoutei/storage, @hikoutei/sheets) are the composition root's business and are never named from cli code.",
       severity: "error",
-      from: { path: "^packages/hikoutei-cli/src/" },
-      to: { path: "^packages/hikoutei-(storage|sheets)/(?:src|dist)/" },
+      from: { path: "^packages/cli/src/" },
+      to: { path: "^packages/(storage|sheets)/(?:src|dist)/" },
     },
     {
       name: "domain-shared-leaf",
@@ -127,10 +127,10 @@ module.exports = {
       comment:
         "@hikoutei/contracts is a pure leaf: only node builtins, @hikoutei/kohkai, zod and itself. Workspace/undeclared specifiers that fail to resolve stay flagged (could-not-resolved edges carry the bare specifier, not a node_modules path).",
       severity: "error",
-      from: { path: "^packages/hikoutei-contracts/src/" },
+      from: { path: "^packages/contracts/src/" },
       to: {
         pathNot:
-          "^packages/hikoutei-contracts/src/|^(node:)?(crypto|zod|@hikoutei/kohkai|@hikoutei/contracts)($|/)|(^|/)node_modules/",
+          "^packages/contracts/src/|^(node:)?(crypto|zod|@hikoutei/kohkai|@hikoutei/contracts)($|/)|(^|/)node_modules/",
       },
     },
     {
