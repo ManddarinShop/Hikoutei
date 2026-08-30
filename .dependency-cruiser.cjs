@@ -1,10 +1,15 @@
 /**
- * dependency-cruiser layer rules (P8-A baseline, P8-B contracts package).
+ * dependency-cruiser layer rules — P8-A baseline + P8-B contracts package.
  *
- * Report-only until P8-C flips the blocking gate: the `audit:deps` script
- * force-exits 0 (depcruise exits non-zero on violations and has no
- * keep-going flag), so the layer baseline stays measurable without
- * failing CI before the campaign finishes.
+ * This config encodes the INTENDED architecture as `forbidden` rules with
+ * severity "error", but until P8-C flips the blocking gate the
+ * `audit:deps` script is REPORT-ONLY: it always exits 0 (see the script
+ * comment in package.json). Gate enforcement (fail on nonzero violations)
+ * is deliberately deferred to P8-C, after the measured violations are
+ * remediated. Do NOT weaken these rules to force-pass; fix the graph instead.
+ *
+ * Baseline ledger: docs/maintenance/0.9-cleanup-baseline.md (§v P8-A 실행 기록)
+ * Full violation list: docs/maintenance/baseline/depcruise-2026-08-29.txt (local-only)
  *
  * `tsPreCompilationDeps` is mandatory: without it `import type` edges
  * disappear from the graph and the infra rule silently reports 0.
