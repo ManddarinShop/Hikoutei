@@ -11,6 +11,7 @@
   },
   "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
   "type": "module",
+  "packageManager": "pnpm@11.1.2",
   "engines": {
     "node": ">=22.13"
   },
@@ -68,6 +69,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@hikoutei/contracts": "0.1.0",
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",
     "@types/node": "^20.14.10",

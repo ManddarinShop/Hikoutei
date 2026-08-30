@@ -9,11 +9,13 @@ every change must respect.
 
 ## Development setup
 
-The repository is an npm workspace: the root package (`hikoutei`) plus
-`packages/ikisaki` (`@hikoutei/ikisaki`, the durable consistency queue).
+Package management is pnpm (workspaces declared in `pnpm-workspace.yaml`;
+pinned via the `packageManager` field in `package.json`): the root package
+(`hikoutei`) plus `packages/ikisaki` (`@hikoutei/ikisaki`, the durable
+consistency queue).
 
 ```sh
-npm install        # installs root and workspace dependencies
+pnpm install --frozen-lockfile # installs root and workspace dependencies
 npm test           # unit and provider/contract tests (no live Google calls)
 npm run typecheck  # production typecheck
 npm run typecheck:test

@@ -37,11 +37,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Validate release tag matches the mcp package version
@@ -89,20 +93,22 @@ jobs:
           await writeFile("./packages/mcp/package.json", JSON.stringify(pkg, null, 2) + "\n");
           NODE
           # The workspace root version satisfies the patched range, so this
-          # still links hikoutei locally for typecheck/test/build.
-          npm install
+          # still links hikoutei locally for typecheck/test/build. The manifest
+          # was just patched, so the install must re-resolve (no frozen
+          # lockfile) as a publish-time-only deviation.
+          pnpm install --no-frozen-lockfile
 
       - name: Typecheck production code
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Typecheck tests
-        run: npm run typecheck:test
+        run: pnpm run typecheck:test
 
       - name: Run unit and contract tests
-        run: npm test
+        run: pnpm test
 
       - name: Build packages
-        run: npm run build
+        run: pnpm run build
 
       - name: Pack and assert the publishable tarball
         shell: bash
