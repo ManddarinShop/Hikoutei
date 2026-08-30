@@ -1,0 +1,47 @@
+{
+  "name": "@hikoutei/storage",
+  "version": "0.1.0",
+  "description": "Storage + persistence adapter leaves for the Hikoutei typed repository: SQLite storage plumbing and the MikroORM-backed persistence adapter (P8-D2 phase 1).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/hikoutei-storage"
+  },
+  "bugs": {
+    "type": "git",
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/packages/hikoutei-storage/src/*.d.ts",
+      "import": "./dist/packages/hikoutei-storage/src/*.js"
+    },
+    "./*": {
+      "types": "./dist/packages/hikoutei-storage/src/*.d.ts",
+      "import": "./dist/packages/hikoutei-storage/src/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/ikisaki": "0.1.5",
+    "@mikro-orm/core": "7.1.7",
+    "@mikro-orm/sql": "7.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

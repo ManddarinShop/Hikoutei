@@ -24,7 +24,7 @@ import {
   HikouteiError,
 } from "../src/index.js";
 import type { HikouteiEntity, HikouteiErrorCode, HikouteiPropertyOptions } from "../src/index.js";
-import { initializeMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { initializeMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import {
   buildSyncProjections,
   createTypedSheetsWithSync,
@@ -39,7 +39,7 @@ import {
   type TypedSheetsWithSyncResult,
 } from "../src/application/sync/service/syncAutoStart.js";
 import type { InternalSyncService } from "../src/application/sync/service/SyncServiceBootstrap.js";
-import { GOOGLE_SHEETS_API_DEFAULTS } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
+import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,

@@ -32,34 +32,34 @@ import {
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "@hikoutei/ikisaki";
-import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
-import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
+import { persistObservedRowWithAdapter } from "@hikoutei/storage/storage/state/observation/observationWriter.js";
+import { validatePersistObservedRowInput } from "@hikoutei/storage/storage/state/observation/observationValidation.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
   CANONICAL_REACTIVATE_OPERATION,
   commitCanonicalChangesWithSql,
-} from "../src/infrastructure/storage/state/canonical/canonicalCommit.js";
+} from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
 import {
   registerSyncSheetWithAdapter,
   requireRegisteredSyncSheetWithAdapter,
-} from "../src/infrastructure/storage/sync/shared/syncRegistry.js";
-import { persistResolutionCommandWithAdapter } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
+import { persistResolutionCommandWithAdapter } from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
 import { renewAutomaticConflictResolutionLeaseWithSql } from "../src/application/sync/inbound/autoSystemConflictResolution.js";
 import type {
   NewEffect,
 } from "@hikoutei/ikisaki";
 import type {
   PersistObservedRowInput,
-} from "../src/infrastructure/storage/state/observation/observationWriter.js";
+} from "@hikoutei/storage/storage/state/observation/observationWriter.js";
 import type {
   PersistResolutionCommandInput,
-} from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+} from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
 import {
   initializeMikroOrmSqliteAdapter,
   MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,

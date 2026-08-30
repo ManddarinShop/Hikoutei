@@ -27,10 +27,10 @@ import { HikouteiError, HIKOUTEI_ERROR_CODES } from "../src/api/errors.js";
 import {
   initializeMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
-import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
+import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import { RESERVED_TABLE_NAMES } from "../src/api/entity.js";
 

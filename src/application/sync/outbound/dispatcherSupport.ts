@@ -24,7 +24,7 @@ import {
   absentValue,
   presentValue,
 } from "@hikoutei/contracts/state/index.js";
-import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
+import { fromSqlNullable } from "@hikoutei/storage/storage/sqlite/sqlState.js";
 import { parseSyncProjectionEffectPayload, type SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,

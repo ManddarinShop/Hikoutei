@@ -12,9 +12,9 @@ import {
 import {
   ensureSpreadsheetAuthorityWithAdapter,
   readSpreadsheetAuthorityWithAdapter,
-} from "../src/infrastructure/storage/sync/shared/spreadsheetAuthority.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+} from "@hikoutei/storage/storage/sync/shared/spreadsheetAuthority.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 

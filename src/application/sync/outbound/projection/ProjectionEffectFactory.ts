@@ -40,7 +40,7 @@ import {
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../../../../infrastructure/storage/errors.js";
+} from "@hikoutei/storage/storage/errors.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 
 const PROJECTION_EFFECT_KINDS = {

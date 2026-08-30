@@ -14,16 +14,16 @@
 import {
   createMikroOrmScalarEntityRuntime,
   type MikroOrmScalarEntityRuntimeDefinition,
-} from "../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarEntityRuntime.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/engine/MikroOrmScalarEntityRuntime.js";
 import {
   initializeMikroOrmScalarStorage,
-} from "../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarStorage.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/engine/MikroOrmScalarStorage.js";
 import {
   MikroOrmScalarPersistenceProvider,
-} from "../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
 import type {
   MikroOrmSqliteAdapter,
-} from "../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import type {
   ScalarEntityPersistenceProvider,
 } from "@hikoutei/contracts/storage/scalar.js";

@@ -23,11 +23,11 @@ import {
   MAPPED_USER_INPUT_INVALID_REASONS,
   inspectSnapshot,
   type PreparedRow,
-} from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
-import { pollMappedUserInputWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
-import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import { createMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
+import { pollMappedUserInputWithMikroOrm } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { MappedPollingState } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
+import { createMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,

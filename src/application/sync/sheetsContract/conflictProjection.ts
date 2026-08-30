@@ -8,7 +8,7 @@ import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../../../infrastructure/storage/errors.js";
+} from "@hikoutei/storage/storage/errors.js";
 
 /** Fixed audit headers shared by every entity-specific Sync_Conflicts tab. */
 export const SYNC_CONFLICT_PROJECTION_HEADERS = [

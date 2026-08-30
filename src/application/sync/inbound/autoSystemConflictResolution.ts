@@ -68,7 +68,7 @@ import {
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   availableCandidateVisibleEvidence,
-} from "../../../infrastructure/storage/state/resolution/candidateEvidence.js";
+} from "@hikoutei/storage/storage/state/resolution/candidateEvidence.js";
 import {
   persistResolutionCommandWithSql,
   readConflictWithSql,
@@ -78,10 +78,10 @@ import {
   staleSupersededPendingCommandsWithSql,
   rebaseActiveConflictWithSql,
   appendResolutionEffectsWithSql,
-} from "../../../infrastructure/storage/state/resolution/resolutionWriter.js";
+} from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
 import {
   readActiveCandidateWithSql,
-} from "../../../infrastructure/storage/state/observation/observationLedger.js";
+} from "@hikoutei/storage/storage/state/observation/observationLedger.js";
 import {
   readMappedActiveCanonicalEntityWithSql,
   readMappedCanonicalFieldsWithSql,
@@ -90,14 +90,14 @@ import {
   readMappedLatestProjectionEffectWithSql,
   readMappedRowBindingWithSql,
   type MappedLatestProjectionEffectSqlRow,
-} from "../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+} from "@hikoutei/storage/storage/state/mapped/mappedPersistenceSql.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../../../infrastructure/storage/errors.js";
+} from "@hikoutei/storage/storage/errors.js";
 import {
   requireRegisteredSyncSheetWithSql,
-} from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
 import {
   claimWriterLeaseWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
@@ -105,7 +105,7 @@ import {
   type NewEffect,
 } from "@hikoutei/ikisaki";
 import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
-import type { CommandRow } from "../../../infrastructure/storage/state/resolution/resolutionWriterContracts.js";
+import type { CommandRow } from "@hikoutei/storage/storage/state/resolution/resolutionWriterContracts.js";
 
 /** Actor identity recorded on every implicit system-wins resolution command. */
 export const SYSTEM_WINS_ACTOR_ID = "sync:system-wins";

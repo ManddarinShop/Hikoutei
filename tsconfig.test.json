@@ -10,13 +10,22 @@
       // it never depends on a stale ./dist build.
       "hikoutei": ["./src/index.ts"],
       "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
-      "@hikoutei/contracts/*": ["./packages/hikoutei-contracts/src/*"]
+      "@hikoutei/contracts/*": ["./packages/hikoutei-contracts/src/*"],
+      "@hikoutei-app-src/*": ["./src/*"],
+      // P8-D2 phase 1: the moved storage/sheets leaves compile from source in
+      // the test program. The leaves' transitional "@hikoutei-app-src/*"
+      // imports resolve via the root tsconfig paths mapping; rootDir "." covers
+      // both trees, so the transitional type flow typechecks hermetically.
+      "@hikoutei/storage/*": ["./packages/hikoutei-storage/src/*"],
+      "@hikoutei/sheets/*": ["./packages/hikoutei-sheets/src/*"]
     }
   },
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
-    "packages/hikoutei-contracts/src/**/*.ts"
+    "packages/hikoutei-contracts/src/**/*.ts",
+    "packages/hikoutei-storage/src/**/*.ts",
+    "packages/hikoutei-sheets/src/**/*.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

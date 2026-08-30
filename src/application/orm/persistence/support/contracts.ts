@@ -17,14 +17,14 @@ import type {
 import type {
   CanonicalCommitInput,
   CanonicalFieldWrite,
-} from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+} from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
 import type {
   FencingContext,
   NewEffect,
 } from "@hikoutei/ikisaki";
 import type {
   RegisteredSyncSheet,
-} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
 import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import type {
   ScalarEntityFlushChange,

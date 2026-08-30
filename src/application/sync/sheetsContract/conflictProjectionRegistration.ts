@@ -8,7 +8,7 @@ import {
 import {
   registerSyncSheetWithSql,
   type RegisteredSyncSheet,
-} from "../../../infrastructure/storage/sync/shared/syncRegistry.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
 import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

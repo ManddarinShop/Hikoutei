@@ -23,25 +23,25 @@
 import {
   initializeMappedRuntime,
   type InitializeMappedRuntimeOptions,
-} from "../adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js";
 import {
   createMikroOrmScalarRuntime,
   type MikroOrmScalarRuntimeDefinition,
-} from "../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarRuntime.js";
-import { MikroOrmScalarPersistenceProvider } from "../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/engine/MikroOrmScalarRuntime.js";
+import { MikroOrmScalarPersistenceProvider } from "@hikoutei/storage/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
 import {
   MAPPED_USER_INPUT_POLL_MODES,
   pollMappedUserInputWithMikroOrm,
-} from "../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import {
   GoogleSheetsApiHttpTransport,
-} from "../adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import {
   GoogleSheetsApiSyncProvider,
-} from "../adapter/sheets/providers/google-sheets-api/index.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import {
   requireValidBatchUpdateReply,
-} from "../adapter/sheets/providers/google-sheets-api/operations/shared.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
 import type {
   SyncDirectRemoteProvider,
   SyncEngineCompositionPorts,
@@ -56,7 +56,7 @@ import type {
 import type { HikouteiEntity } from "../api/entity.js";
 import type { GoogleSheetsApiProviderOptions } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
-import type { MikroOrmSqliteAdapter } from "../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import type { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 
 /** Builds the concrete MikroORM runtime seeds and its open/bind closures. */
 function planMappedRuntime(

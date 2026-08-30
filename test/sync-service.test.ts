@@ -22,7 +22,7 @@ import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
-import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import type { SyncTimingEvent } from "../src/application/sync/telemetry/syncTiming.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import {

@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import {
   ReadQoSScheduler,
   RequestStartLimiter,
-} from "../src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
 
 describe("ReadQoSScheduler", () => {
   it("shares ONE timeline and interval across both read classes", async () => {

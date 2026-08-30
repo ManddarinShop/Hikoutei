@@ -16,7 +16,7 @@ import {
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
 import { isNormalizedCell } from "@hikoutei/contracts/encoding/normalizedCell.js";
-import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
+import { STORAGE_ERROR_CODES, StorageError } from "@hikoutei/storage/storage/errors.js";
 import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import type { SyncSheetsProvider } from "@hikoutei/contracts/sheets/syncSheets.js";
 

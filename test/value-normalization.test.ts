@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 import {
   dateSerialFromIso,
   isoFromDateSerial,
-} from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 

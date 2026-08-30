@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import { HIKOUTEI_ERROR_CODES } from "../src/api/errors.js";
-import { GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+import { GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { EVALUATION_ERROR_CODES } from "@hikoutei/contracts/domain/errors/evaluation.js";
 import { TYPED_SHEETS_ORM_ERROR_CODES } from "../src/application/orm/errors.js";
 import { SYNC_SERVICE_ERROR_CODES } from "../src/application/sync/service/errors.js";
@@ -19,7 +19,7 @@ import {
   SYNC_INVALID_PROVIDER_REASONS,
   SYNC_SHEETS_ERROR_CODES,
 } from "@hikoutei/contracts/sheets/errors.js";
-import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
+import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 import {
   HIKOUTEI_LOG_PROVIDER_OPERATIONS,
   HIKOUTEI_LOG_PROVIDER_REASONS,

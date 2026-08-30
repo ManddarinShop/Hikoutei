@@ -8,8 +8,8 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import {
   runReconciliationScan,
   RECONCILIATION_DEFAULTS,
@@ -25,7 +25,7 @@ import {
 } from "@hikoutei/ikisaki";
 import {
   readReconciliationCorrectionStateWithAdapter,
-} from "../src/infrastructure/storage/sync/outbound/reconciliationSql.js";
+} from "@hikoutei/storage/storage/sync/outbound/reconciliationSql.js";
 import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
 import { createSystemProjectionEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
 import { computeSyncVisibleHash, parseSyncProjectionEffectPayload } from "@hikoutei/contracts/sheets/syncSheets.js";

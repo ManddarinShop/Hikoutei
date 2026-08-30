@@ -30,9 +30,9 @@ import {
   type TypedSheetsEntityMapping,
 } from "../../mapping/entityMapping.js";
 import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
-import { readMappedCanonicalFieldsWithSql } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+import { readMappedCanonicalFieldsWithSql } from "@hikoutei/storage/storage/state/mapped/mappedPersistenceSql.js";
 import type { FencingContext, CanonicalFieldWrite, CanonicalCommitInput } from "../support/contracts.js";
-import { CANONICAL_REACTIVATE_OPERATION } from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+import { CANONICAL_REACTIVATE_OPERATION } from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
 import type { ResolvedWriterOptions, MappedChangePlan } from "../support/contracts.js";
 import {
   claimBusinessKey,

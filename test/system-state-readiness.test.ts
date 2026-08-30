@@ -218,7 +218,7 @@ describe("System_State readiness controller", () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [User] });
     try {
       const storage = await import(
-        "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
       );
       const opened = await storage.initializeMikroOrmSqliteAdapter({
         dbName: ":memory:",
@@ -227,7 +227,7 @@ describe("System_State readiness controller", () => {
       // The sync bootstrap runs the full sync schema migration before
       // registering; mirror it so the outbox table exists for the read.
       const { migrateMikroOrmSqliteStorageSchema } = await import(
-        "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js",
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js",
       );
       await migrateMikroOrmSqliteStorageSchema(opened);
       try {

@@ -35,12 +35,15 @@ const [entityApi, entityManagerApi, scalarProviderApi, mappedFlushApi, mapping, 
   await Promise.all([
     import(new URL("./api/entity.js", sourceRoot).href),
     import(new URL("./api/internalEntityManager.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js", sourceRoot).href),
+    // P8-D2 phase 1: the persistence/sheets adapter trees moved into the
+// @hikoutei/storage / @hikoutei/sheets workspace packages; the source-ts-loader
+// still transpiles them (every URL contains "/src/").
+import(new URL("../../packages/hikoutei-storage/src/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js", import.meta.url).href),
     import(new URL("./application/orm/persistence/flush/flushCoordinator.js", sourceRoot).href),
     import(new URL("./application/orm/mapping/entityMapping.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", sourceRoot).href),
+    import(new URL("../../packages/hikoutei-storage/src/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", import.meta.url).href),
+    import(new URL("../../packages/hikoutei-storage/src/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", import.meta.url).href),
+    import(new URL("../../packages/hikoutei-storage/src/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", import.meta.url).href),
     import(new URL("../../packages/hikoutei-contracts/src/sheets/sheetsProvisioning.js", import.meta.url).href),
     import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", sourceRoot).href),
     import(new URL("../../packages/hikoutei-contracts/src/encoding/index.js", import.meta.url).href),
@@ -64,8 +67,8 @@ const { SheetsEffectDispatcher } = sheetsDispatcher;
 const { runEffectWorkerWithAdapter } = outboxWorker;
 const { stableHash } = encoding;
 const [directSheets, mappedPolling] = await Promise.all([
-  import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", sourceRoot).href),
-  import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", sourceRoot).href),
+  import(new URL("../../packages/hikoutei-sheets/src/sheets/providers/google-sheets-api/index.js", import.meta.url).href),
+  import(new URL("../../packages/hikoutei-storage/src/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", import.meta.url).href),
 ]);
 const { GoogleSheetsApiSyncProvider, GoogleSheetsApiHttpTransport } = directSheets;
 const { pollMappedUserInputWithMikroOrm } = mappedPolling;

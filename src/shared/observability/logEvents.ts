@@ -104,7 +104,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "invalid_sync_client_options",
   "invalid_sync_provider_response",
   "invalid_fake_sync_provider_input",
-  // Google Sheets API transport codes (src/adapter/sheets/providers/google-sheets-api/errors.ts).
+  // Google Sheets API transport codes (@hikoutei/sheets sheets/providers/google-sheets-api/errors.ts).
   "google_sheets_api_timeout",
   "google_sheets_api_network_error",
   "google_sheets_api_http_error",
@@ -120,7 +120,7 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   // Adoption seeding fail-closed cell validation (adopt/adoptionSeeding.ts).
   "existing_sheet_adoption_cell_kind_mismatch",
 
-  // Storage/schema/effect codes (src/infrastructure/storage/errors.ts).
+  // Storage/schema/effect codes (@hikoutei/storage storage/errors.ts).
   "invalid_writer_lease_options",
   "invalid_sync_registration",
   "sync_registration_write_failed",

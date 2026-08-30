@@ -43,15 +43,15 @@ import type { SyncSheetsProvisionRoute } from "@hikoutei/contracts/sheets/sheets
 import {
   GoogleSheetsApiSyncProvider,
   type GoogleSheetsApiRequestEvent,
-} from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import {
   PromiseTailLock,
   runWrite,
   type GoogleSheetsApiProviderDeps,
-} from "../src/adapter/sheets/providers/google-sheets-api/operations/shared.js";
-import { readRows } from "../src/adapter/sheets/providers/google-sheets-api/operations/readRows.js";
-import { readEffectPostcondition } from "../src/adapter/sheets/providers/google-sheets-api/operations/applyEffects.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "../src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
+import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
+import { readEffectPostcondition } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/applyEffects.js";
+import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
 import {
   GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
   GOOGLE_SHEETS_API_ENUMERATION_FIELDS,
@@ -60,13 +60,13 @@ import {
   GOOGLE_SHEETS_API_VALUES_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
-} from "../src/adapter/sheets/providers/google-sheets-api/model/preflightFields.js";
-import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
-import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
+import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
+import { dateSerialFromIso } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import {
   TRANSPORT_OUTCOME_KINDS,
   classifyTransportOutcome,

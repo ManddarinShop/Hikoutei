@@ -9,7 +9,7 @@
  */
 
 import { ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
-import type { CanonicalCommitInput } from "../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+import type { CanonicalCommitInput } from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
 import {
   decodeTypedSheetsEntityField,
   requireTypedSheetsEntityField,

@@ -23,6 +23,17 @@
  *   adapter→application stays an error. Proper break-up (engine extraction or callback inversion
  *   through composition) is P8-D scope.
  *
+ * P8-D2 phase 1 (`packages/hikoutei-storage`, `packages/hikoutei-sheets`):
+ * the persistence adapter (`src/adapter/persistence` →
+ * `packages/hikoutei-storage/src/persistence`) hosts the same P8-C bridge —
+ * the `from` side of the exact-allowlist rule now matches the new location
+ * too (the pathNot list keeps naming the seven application modules, which
+ * have NOT moved). The moved trees keep TRANSITIONAL relative imports into
+ * root src until P8-D2 phase 2; rule
+ * `transitional-packages-into-root-src` enumerates exactly which root-src
+ * modules are reachable that way (additions are a violation) and phase 2
+ * deletes the whole rule.
+ *
  * Baseline ledger: docs/maintenance/0.9-cleanup-baseline.md (§v P8-A 실행 기록, §vi P8-B, P8-C)
  * Full violation list: docs/maintenance/baseline/depcruise-2026-08-29.txt (local-only)
  *
@@ -38,7 +49,7 @@ module.exports = {
       comment:
         "Adapter code must not reach into application-layer modules (contracts live in @hikoutei/contracts). The pathNot list is the P8-C boundary decision, enumerated as an EXACT module list (verified against the residual 12-edge audit report): the mikro-orm observation/persistence bridge implements the sync-ORM engine's flush coordinator, writer contracts, projection-effect builders, observation mapping, and conflict planners — seven exact files, never whole trees. A new or near-named application file inherits nothing (each allowance is anchored to one real module path). Contract-type flow continues through @hikoutei/contracts; the companion rule `adapter-into-application-allowlist-trees` reports anything else percolating into the seven allowlisted trees.",
       severity: "error",
-      from: { path: "^src/adapter/" },
+      from: { path: "^(src/adapter|packages/hikoutei-storage/src/persistence)/" },
       to: {
         path: "^src/application/",
         pathNot: [
@@ -57,7 +68,7 @@ module.exports = {
       comment:
         "Near-name guard for the exact-allowlist rule above: inside the application trees that host the seven P8-C bridge modules, adapter→application is allowed for NOTHING but those seven exact files. A new similar file (flushCoordinatorV2, support/extraHelpers, …) is flagged here immediately instead of silently inheriting a prefix allowance.",
       severity: "error",
-      from: { path: "^src/adapter/" },
+      from: { path: "^(src/adapter|packages/hikoutei-storage/src/persistence)/" },
       to: {
         path: "^src/application/(orm/mapping/|orm/persistence/(flush/|projection/|support/)|sync/inbound/|sync/telemetry/)",
         pathNot: [
@@ -74,17 +85,40 @@ module.exports = {
     {
       name: "infrastructure-upward",
       comment:
-        "Infrastructure must not depend on adapter or application modules.",
+        "P8-D2 phase 1: infrastructure/storage moved to @hikoutei/storage (packages/hikoutei-storage/src/storage) and must not depend on adapter or application modules.",
       severity: "error",
-      from: { path: "^src/infrastructure/" },
+      from: { path: "^packages/hikoutei-storage/src/storage/" },
       to: { path: "^src/(adapter|application)/" },
     },
     {
       name: "api-not-into-adapter",
-      comment: "The public API layer stays adapter-free (composition root owns wiring).",
+      comment: "The public API layer stays adapter-free (composition root owns wiring). P8-D2 phase 1: the concrete adapters moved to @hikoutei/storage/@hikoutei/sheets — those package paths are equally forbidden from src/api.",
       severity: "error",
       from: { path: "^src/api/" },
-      to: { path: "^src/adapter/" },
+      to: { path: "^src/adapter/|^packages/hikoutei-(storage|sheets)/src/" },
+    },
+    {
+      name: "transitional-packages-into-root-src",
+      comment:
+        "P8-D2 phase 2 REMOVES THIS RULE. Transitional allowance for the moved leaves: packages/hikoutei-storage + packages/hikoutei-sheets keep RELATIVE imports into root src (the sync-ORM engine glue + the public api types/descriptor + shared observability) until phase 2 severs them. The list is EXACT (no wildcards): every module reachable from the packages through root src is named below; a new root-src module pulled in by the packages is a violation that must be fixed, not allowlisted silently.",
+      severity: "error",
+      from: { path: "^packages/hikoutei-(storage|sheets)/src/" },
+      to: {
+        path: "^src/(api|application|shared)/",
+        pathNot: [
+          "^src/api/entity\\.ts$",
+          "^src/api/errors\\.ts$",
+          "^src/application/orm/mapping/observationMapping\\.ts$",
+          "^src/application/orm/persistence/flush/flushCoordinator\\.ts$",
+          "^src/application/orm/persistence/projection/projectionEffects\\.ts$",
+          "^src/application/orm/persistence/support/contracts\\.ts$",
+          "^src/application/orm/persistence/support/helpers\\.ts$",
+          "^src/application/sync/inbound/autoSystemConflictResolution\\.ts$",
+          "^src/application/sync/telemetry/syncTiming\\.ts$",
+          "^src/shared/observability/internalLog\\.ts$",
+          "^src/shared/observability/logEvents\\.ts$",
+        ],
+      },
     },
     {
       name: "domain-shared-leaf",

@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // P8-D2 phase 1 transitional: same story as packages/hikoutei-storage/
+    // tsconfig.json — the moved google-sheets-api provider keeps transitional
+    // imports into root src via "@hikoutei-app-src/*" until P8-D2 phase 2; the
+    // paths targets are root-src sources, so rootDir must cover the repo root.
+    "rootDir": "../..",
+    "outDir": "dist",
+    "baseUrl": "../..",
+    "paths": {
+      "@hikoutei-app-src/*": ["src/*"],
+      "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"]
+    },
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

@@ -35,13 +35,13 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run clean && tsc -p tsconfig.build.json && node scripts/ci/reconcile-contracts-dist.mjs && npm run build -w spreadsheet-db-mcp",
+    "build": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run build -w @hikoutei/storage && npm run build -w @hikoutei/sheets && npm run clean && tsc -p tsconfig.build.json && node scripts/ci/reconcile-contracts-dist.mjs && node scripts/ci/smoke-contracts-bundle.mjs && npm run build -w spreadsheet-db-mcp",
     "typecheck": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json",
-    "typecheck:test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
-    "test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && vitest run",
+    "typecheck:test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json && npm run typecheck -w @hikoutei/storage && npm run typecheck -w @hikoutei/sheets",
+    "test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run build -w @hikoutei/storage && npm run build -w @hikoutei/sheets && vitest run",
     "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
     "audit:knip": "knip",
-    "audit:deps": "npx depcruise src packages/hikoutei-contracts --config .dependency-cruiser.cjs --output-type err",
+    "audit:deps": "npx depcruise src packages/hikoutei-contracts packages/hikoutei-storage packages/hikoutei-sheets --config .dependency-cruiser.cjs --output-type err",
     "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "audit:markers": "node scripts/maintenance/audit-markers.mjs"
   },
@@ -70,6 +70,8 @@
   },
   "devDependencies": {
     "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/sheets": "0.1.0",
+    "@hikoutei/storage": "0.1.0",
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",
     "@types/node": "^20.14.10",

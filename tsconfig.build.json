@@ -8,7 +8,8 @@
     // Typecheck (`tsconfig.json` / `tsconfig.test.json`) keeps compiling the
     // leaf straight from source.
     "paths": {
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
+      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      "@hikoutei-app-src/*": ["./src/*"]
     },
     "rootDir": "src",
     "outDir": "dist"

@@ -20,7 +20,7 @@ import {
   readMappedBusinessKeyOwnerWithSql,
   retireMappedActiveBusinessKeyWithSql,
   retireMappedEntityBusinessKeysWithSql,
-} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+} from "@hikoutei/storage/storage/state/mapped/mappedPersistenceSql.js";
 import { requireEncodedField } from "./helpers.js";
 
 /** Claims the mapped entity's normalized business key during creation. */

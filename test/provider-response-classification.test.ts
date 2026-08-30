@@ -33,7 +33,7 @@ import {
 } from "../src/shared/observability/internalLog.js";
 import { HIKOUTEI_LOG_EVENTS } from "../src/shared/observability/logEvents.js";
 import type { RegisteredSyncProjectionDefinition, SyncSheetsProvisionRoute } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
-import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+import { GoogleSheetsApiSyncProvider } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,

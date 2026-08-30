@@ -43,7 +43,7 @@ import {
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/storage/storage/errors.js";
 import {
   EVALUATION_ERROR_CODES,
   EvaluationContractError,
@@ -51,7 +51,7 @@ import {
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { STABLE_ENCODING_ERROR_CODES } from "@hikoutei/contracts/encoding/constants.js";
 import { StableEncodingError } from "@hikoutei/contracts/domain/errors/stableEncoding.js";
 import { DuplicateChangedFieldError } from "@hikoutei/contracts/domain/errors/identity.js";

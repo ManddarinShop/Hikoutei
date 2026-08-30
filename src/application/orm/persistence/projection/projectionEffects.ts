@@ -34,11 +34,11 @@ import {
 import {
   readMappedLatestProjectionEffectWithSql,
   readMappedVisibleProjectionStateWithSql,
-} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
-import type { MappedLatestProjectionEffectSqlRow } from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+} from "@hikoutei/storage/storage/state/mapped/mappedPersistenceSql.js";
+import type { MappedLatestProjectionEffectSqlRow } from "@hikoutei/storage/storage/state/mapped/mappedPersistenceSql.js";
 import {
   requireRegisteredSyncSheetWithSql,
-} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
 import type {
   NewEffect,
   RegisteredSyncSheet,

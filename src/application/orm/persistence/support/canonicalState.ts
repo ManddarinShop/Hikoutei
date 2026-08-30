@@ -12,7 +12,7 @@ import {
   CANONICAL_COMMIT_RESULT_KINDS,
   commitCanonicalChangesWithSql,
   type CanonicalCommitInput,
-} from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+} from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
 import {
   insertMappedActiveRowBindingWithSql,
   readMappedActiveCanonicalEntityWithSql,
@@ -21,7 +21,7 @@ import {
   readMappedRowBindingWithSql,
   reactivateMappedTombstonedRowBindingWithSql,
   tombstoneMappedActiveRowBindingWithSql,
-} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+} from "@hikoutei/storage/storage/state/mapped/mappedPersistenceSql.js";
 import type { FencingContext } from "@hikoutei/ikisaki";
 import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
 import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";

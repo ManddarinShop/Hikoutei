@@ -30,8 +30,8 @@ import {
 } from "@hikoutei/ikisaki";
 import {
   requireRegisteredSyncSheetWithAdapter,
-} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
-import { STORAGE_ERROR_CODES, StorageError } from "../../../../infrastructure/storage/errors.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
+import { STORAGE_ERROR_CODES, StorageError } from "@hikoutei/storage/storage/errors.js";
 import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   observeSyncSnapshot,

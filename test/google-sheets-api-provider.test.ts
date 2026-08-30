@@ -22,19 +22,19 @@ import type {
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { SYNC_POSTCONDITION_MODES } from "@hikoutei/contracts/sheets/constants.js";
 import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "@hikoutei/contracts/sheets/transportOutcome.js";
-import { GoogleSheetsApiSyncProvider, classifyGoogleSheetsApiError, isRetryableTransportStatus } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+import { GoogleSheetsApiSyncProvider, classifyGoogleSheetsApiError, isRetryableTransportStatus } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import type {
   GoogleSheetsApiTransport,
   GoogleSheetsApiGetSpreadsheetRequest,
   GoogleSheetsApiBatchUpdateRequest,
   GoogleSheetsApiWriteRequest,
-} from "../src/adapter/sheets/providers/google-sheets-api/index.js";
-import { serializeBatchUpdateRequests } from "../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
-import { parseRawErrorRecord } from "../src/adapter/sheets/providers/google-sheets-api/transport/rawErrorSchemas.js";
-import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "../src/adapter/sheets/providers/google-sheets-api/model/preflightFields.js";
-import { GOOGLE_SHEETS_API_RECEIPT_HEADERS, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
-import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
-import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
+import { serializeBatchUpdateRequests } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
+import { parseRawErrorRecord } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rawErrorSchemas.js";
+import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
+import { GOOGLE_SHEETS_API_RECEIPT_HEADERS, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
+import { dateSerialFromIso } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {

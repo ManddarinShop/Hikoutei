@@ -19,12 +19,12 @@ import {
 } from "@hikoutei/ikisaki";
 import {
   registerSyncSheetWithSql,
-} from "../../../../infrastructure/storage/sync/shared/syncRegistry.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   hasMappedRowActiveCandidateWithSql,
-} from "../../../../infrastructure/storage/state/mapped/mappedPersistenceSql.js";
+} from "@hikoutei/storage/storage/state/mapped/mappedPersistenceSql.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushChange,

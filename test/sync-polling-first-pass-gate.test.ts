@@ -29,7 +29,7 @@ import {
 } from "../src/application/sync/service/SyncServiceBootstrap.js";
 import { SyncPollingSupervisor } from "../src/application/sync/service/SyncPollingSupervisor.js";
 import { readSystemStateDrainReadinessWithAdapter } from "@hikoutei/ikisaki";
-import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,

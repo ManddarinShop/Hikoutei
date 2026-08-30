@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import {
   TRANSPORT_OUTCOME_KINDS,
   TRANSPORT_OUTCOME_UNKNOWN_CODE,

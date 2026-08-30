@@ -24,7 +24,7 @@ import {
 import {
   columnLetters,
   quoteA1SheetName,
-} from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import {
   adoptionTabRange,
   analyzeExistingSheetAdoptionEntity,

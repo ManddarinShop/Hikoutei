@@ -47,10 +47,10 @@ import {
 } from "@hikoutei/ikisaki";
 import {
   commitCanonicalChangesWithSql,
-} from "../../../../infrastructure/storage/state/canonical/canonicalCommit.js";
+} from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
 import {
   CONFIRM_OBSERVED_VISIBLE_STATE_SQL,
-} from "../../../../infrastructure/storage/state/observation/observationCanonical.js";
+} from "@hikoutei/storage/storage/state/observation/observationCanonical.js";
 import {
   createRowBinding,
 } from "../../../orm/persistence/support/canonicalState.js";

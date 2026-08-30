@@ -14,11 +14,11 @@ import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushCoordinator,
 } from "@hikoutei/contracts/storage/scalar.js";
-import { MikroOrmScalarPersistenceProvider } from "../src/adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
+import { MikroOrmScalarPersistenceProvider } from "@hikoutei/storage/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
 import {
   createMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 
 const OrderSchema = defineEntity({
   name: "TypedSheetsFacadeOrder",

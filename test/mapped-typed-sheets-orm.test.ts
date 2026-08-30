@@ -34,12 +34,12 @@ import {
 import {
   createMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { MikroOrmScalarPersistenceProvider } from "../src/adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
-import { persistMappedObservedRowWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { MikroOrmScalarPersistenceProvider } from "@hikoutei/storage/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { persistMappedObservedRowWithMikroOrm } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
 import { parseSyncProjectionEffectPayload } from "@hikoutei/contracts/sheets/syncSheets.js";
-import type { PersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationWriter.js";
+import type { PersistObservedRowInput } from "@hikoutei/storage/storage/state/observation/observationWriter.js";
 
 const OrderSchema = defineEntity({
   name: "MappedTypedSheetsOrder",

@@ -40,10 +40,10 @@ import {
 import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import {
   hasActiveUserInputCandidateWithSql,
-} from "../../../infrastructure/storage/sync/outbound/effectWorkerSql.js";
+} from "@hikoutei/storage/storage/sync/outbound/effectWorkerSql.js";
 import {
   ensureSpreadsheetAuthorityWithAdapter,
-} from "../../../infrastructure/storage/sync/shared/spreadsheetAuthority.js";
+} from "@hikoutei/storage/storage/sync/shared/spreadsheetAuthority.js";
 import {
   hasCoordinatedSerializedInner,
   hasCoordinatedSerializedInnerForRoutes,
@@ -77,7 +77,7 @@ import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "@hikoutei/contracts/sheets/errors.js";
-import { fromSqlNullable } from "../../../infrastructure/storage/sqlite/sqlState.js";
+import { fromSqlNullable } from "@hikoutei/storage/storage/sqlite/sqlState.js";
 import {
   isSheetsFastAppendCandidate,
   PreparedDispatchError,

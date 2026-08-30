@@ -21,7 +21,8 @@
       // exports -> its own dist, built first by the build scripts).
       // Source-based contract compilation lives in tsconfig.test.json and
       // the vitest alias, so typecheck/test never depend on a stale dist.
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
+      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      "@hikoutei-app-src/*": ["./src/*"]
     },
     "declaration": true,
     "declarationMap": true,
