@@ -24,10 +24,10 @@ import {
   type NewEffect,
   type PendingEffect,
 } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher, sheetsRouteKeyFor } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { SheetsEffectDispatcher, sheetsRouteKeyFor } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 
 const PerfOrderSchema = defineEntity({
   name: "OutboundPerfOrder",

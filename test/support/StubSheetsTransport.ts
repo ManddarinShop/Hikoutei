@@ -28,22 +28,22 @@ import type {
   GoogleSheetsApiGetSpreadsheetRequest,
   GoogleSheetsApiTransport,
   GoogleSheetsApiWriteRequest,
-} from "../../src/adapter/sheets/providers/google-sheets-api/index.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import type {
   GoogleSheetsApiValuesGetRequest,
   GoogleSheetsApiValuesGetResponse,
-} from "../../src/adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
-} from "../../src/adapter/sheets/providers/google-sheets-api/constants.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
 import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
-import { dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "../../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import { dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
 /** One stored cell in the in-memory grid (real REST wire shapes). */
 export interface StubCell {

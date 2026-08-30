@@ -5,7 +5,7 @@ import {
   EffectWorkerSupervisor,
   type WorkerReport,
 } from "@hikoutei/ikisaki";
-import type { ReconciliationScanReport } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
+import type { ReconciliationScanReport } from "@hikoutei/sync-engine/sync/outbound/reconciliation/ReconciliationScanner.js";
 
 describe("EffectWorkerSupervisor", () => {
   it("coalesces concurrent manual and background passes", async () => {

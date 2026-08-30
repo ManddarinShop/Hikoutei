@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { RequestStartLimiter } from "../src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import { RequestStartLimiter } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
 
 describe("RequestStartLimiter", () => {
   it("waits only the remaining interval since the previous start", async () => {

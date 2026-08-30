@@ -22,8 +22,8 @@ import {
   createTypedSheetsWithSync,
   SYNC_ENV_KEYS,
   type TypedSheetsWithSyncResult,
-} from "../src/application/sync/service/syncAutoStart.js";
-import type { InternalSyncService } from "../src/application/sync/service/SyncServiceBootstrap.js";
+} from "@hikoutei/composition/syncAutoStart.js";
+import type { InternalSyncService } from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import {
   listHikouteiConflicts,
   HIKOUTEI_SYNC_STATUS_ERROR_CODES,
@@ -140,7 +140,9 @@ describe("internal sync status reader", () => {
     // The closed database keeps sync tables only when sync ran; a local-only
     // database created without the sync env has no sync tables at all. Build
     // that case through the local factory path by opening without the env.
-    const { createLocalTypedSheetsRuntime } = await import("../src/api/Hikoutei.js");
+    const { createLocalTypedSheetsRuntime } = await import(
+      "@hikoutei/composition/localRuntime.js"
+    );
     const localDb = tempDbName("pure-local");
     const runtime = await createLocalTypedSheetsRuntime({
       dbName: localDb,

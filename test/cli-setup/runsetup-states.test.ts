@@ -52,23 +52,23 @@ import {
   setupLockPath,
   setupStateTempPath,
   type LockFs,
-} from "../../src/cli/checkpoint.js";
+} from "@hikoutei/cli/checkpoint.js";
 import {
   SETUP_ERROR_CODES,
-} from "../../src/cli/errors.js";
+} from "@hikoutei/cli/errors.js";
 import {
   GcloudRunner,
   GcloudRunResult,
-} from "../../src/cli/gcloudRunner.js";
+} from "@hikoutei/cli/gcloudRunner.js";
 import {
   DRIVE_ACCESS_COMMAND,
   DRIVE_SCOPE,
   type TokenInfo,
   type TokenValidator,
-} from "../../src/cli/humanAuth.js";
+} from "@hikoutei/cli/humanAuth.js";
 import {
   type SaAccessVerifier,
-} from "../../src/cli/saVerify.js";
+} from "@hikoutei/cli/saVerify.js";
 import {
   HIKOUTEI_SETUP_MARKER_KEY,
   listAllMarkerFiles,
@@ -79,14 +79,14 @@ import {
   type HumanSheetApiFactory,
   type MarkerFileInfo,
   type ShareOutcome,
-} from "../../src/cli/sheetsFactory.js";
+} from "@hikoutei/cli/sheetsFactory.js";
 import {
   safeError,
   safeReasonOf,
-} from "../../src/cli/sdkError.js";
+} from "@hikoutei/cli/sdkError.js";
 import {
   createSafeRunner,
-} from "../../src/cli/gcloudRunner.js";
+} from "@hikoutei/cli/gcloudRunner.js";
 import {
   KEY_LIST_COMMAND,
   KEY_SETTLE_POLL_DELAYS_MS,
@@ -100,7 +100,7 @@ import {
   prepareStageDir,
   stagedKeyPath,
   type KeyCleanupFs,
-} from "../../src/cli/keyProvision.js";
+} from "@hikoutei/cli/keyProvision.js";
 import {
   DEFAULT_KEY_FILE_NAME,
   defaultSpreadsheetTitle,
@@ -110,7 +110,7 @@ import {
   SETUP_ENV_KEYS,
   type RunSetupOptions,
   type SetupResult,
-} from "../../src/cli/setupFlow.js";
+} from "@hikoutei/cli/setupFlow.js";
 
 import {
   tempDirs,

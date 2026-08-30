@@ -55,14 +55,14 @@ import {
   SheetsEffectDispatcher,
   SHEETS_SPREADSHEET_ROUTE_KEY,
   PreparedDispatchError,
-} from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+} from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import { FakeSyncSheetsProvider, type FakeSyncSheetInput } from "./support/FakeSyncSheetsProvider.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import {
   GoogleSheetsApiSyncProvider,
-} from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,

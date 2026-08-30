@@ -15,7 +15,7 @@ import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/c
 import {
   sheetsDispatchPriorityFor,
   SYNC_DISPATCH_PRIORITIES,
-} from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+} from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,

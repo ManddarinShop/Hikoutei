@@ -25,13 +25,13 @@ import {
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "../src/shared/observability/logEvents.js";
-import { formatHikouteiLogLine } from "../src/shared/observability/internalLog.js";
-import { HIKOUTEI_ERROR_CODES, HikouteiError } from "../src/api/errors.js";
+} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+import { formatHikouteiLogLine } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+import { HIKOUTEI_ERROR_CODES, HikouteiError } from "@hikoutei/sync-engine/api/errors.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../src/application/orm/errors.js";
+} from "@hikoutei/sync-engine/orm/errors.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
@@ -39,11 +39,11 @@ import {
 import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
-} from "../src/application/sync/service/errors.js";
+} from "@hikoutei/sync-engine/sync/service/errors.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/storage/storage/errors.js";
 import {
   EVALUATION_ERROR_CODES,
   EvaluationContractError,
@@ -51,7 +51,7 @@ import {
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { STABLE_ENCODING_ERROR_CODES } from "@hikoutei/contracts/encoding/constants.js";
 import { StableEncodingError } from "@hikoutei/contracts/domain/errors/stableEncoding.js";
 import { DuplicateChangedFieldError } from "@hikoutei/contracts/domain/errors/identity.js";

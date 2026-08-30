@@ -30,8 +30,8 @@ import { afterEach, expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PlannedCommand, SetupResult } from "../../src/cli/setupFlow.js";
-import type { GcloudRunResult } from "../../src/cli/gcloudRunner.js";
+import type { PlannedCommand, SetupResult } from "@hikoutei/cli/setupFlow.js";
+import type { GcloudRunResult } from "@hikoutei/cli/gcloudRunner.js";
 
 export const tempDirs: string[] = [];
 

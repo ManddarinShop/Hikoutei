@@ -29,7 +29,7 @@ import {
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import {
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -43,20 +43,20 @@ import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
   SYNC_CONFLICT_RESOLUTIONS,
-} from "../src/application/sync/sheetsContract/conflictProjection.js";
+} from "@hikoutei/storage/sync/sheetsContract/conflictProjection.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
-import { createCandidateReconcileEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
-import { runUserInputCleanupScan } from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
-import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
+import { createCandidateReconcileEffect } from "@hikoutei/storage/sync/outbound/projection/ProjectionEffectFactory.js";
+import { runUserInputCleanupScan } from "@hikoutei/sync-engine/sync/outbound/reconciliation/CleanupScanner.js";
+import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 import {
   advanceCandidateVisibleEvidence,
   promoteCandidateVisibleEvidence,
   unavailableCandidateVisibleEvidence,
-} from "../src/infrastructure/storage/state/resolution/candidateEvidence.js";
-import { readConflictWithSql } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+} from "@hikoutei/storage/storage/state/resolution/candidateEvidence.js";
+import { readConflictWithSql } from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
 import {
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   CONFLICT_STATUSES,
@@ -1952,10 +1952,10 @@ describe("issue #196 audit projection state union", () => {
 
   it("rejects one-sided stored evidence when a conflict row is promoted", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
     );
     const { migrateMikroOrmSqliteStorageSchema } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
     );
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -2015,10 +2015,10 @@ describe("issue #196 audit projection state union", () => {
 
   it("migrates a v5 store to v6 additively, preserves legacy rows, and stays idempotent", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
     );
     const { migrateMikroOrmSqliteStorageSchema } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
     );
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -2134,10 +2134,10 @@ describe("issue #196 audit projection state union", () => {
 
   it("drops real legacy quarantine repair data in the v5→v7 multi-hop path and keeps the surviving columns intact", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
     );
     const { migrateMikroOrmSqliteStorageSchema } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
     );
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",

@@ -26,17 +26,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { HIKOUTEI_ERROR_CODES } from "../src/api/errors.js";
-import { SETUP_ERROR_CODES } from "../src/cli/errors.js";
-import { SYNC_SERVICE_ERROR_CODES } from "../src/application/sync/service/errors.js";
+import { HIKOUTEI_ERROR_CODES } from "@hikoutei/sync-engine/api/errors.js";
+import { SETUP_ERROR_CODES } from "@hikoutei/cli/errors.js";
+import { SYNC_SERVICE_ERROR_CODES } from "@hikoutei/sync-engine/sync/service/errors.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
 } from "@hikoutei/contracts/sheets/errors.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
-import { TYPED_SHEETS_ORM_ERROR_CODES } from "../src/application/orm/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
+import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
+import { TYPED_SHEETS_ORM_ERROR_CODES } from "@hikoutei/sync-engine/orm/errors.js";
 import {
   HIKOUTEI_SYNC_STATUS_ERROR_CODES,
 } from "../src/internal/syncStatus.js";
@@ -298,12 +298,12 @@ const packageJson = JSON.parse(
 };
 
 describe("package.json bin pin", () => {
-  it("registers the hikoutei CLI at the compiled root of src/cli/index.ts", () => {
-    // The dist path mirrors the src path (the same convention as the
-    // package.json `exports` map); the source file must exist so the bin
-    // entry can never silently dangle.
+  it("registers the hikoutei CLI at the compiled root of packages/hikoutei-cli/src/index.ts", () => {
+    // The bin dist path is produced by the reconcile codemod bundling the
+    // cli package's dist into `dist/cli/**`; the source file must exist so
+    // the bin entry can never silently dangle.
     expect(packageJson.bin).toEqual({ hikoutei: "./dist/cli/index.js" });
-    expect(existsSync(join(repoRoot, "src/cli/index.ts"))).toBe(true);
-    expect(existsSync(join(repoRoot, "src/cli/index.js"))).toBe(false);
+    expect(existsSync(join(repoRoot, "packages/hikoutei-cli/src/index.ts"))).toBe(true);
+    expect(existsSync(join(repoRoot, "packages/hikoutei-cli/src/index.js"))).toBe(false);
   });
 });

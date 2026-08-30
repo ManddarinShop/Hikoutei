@@ -31,18 +31,18 @@ import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import {
   runUserInputCleanupScan,
   type CleanupScanReport,
-} from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
+} from "@hikoutei/sync-engine/sync/outbound/reconciliation/CleanupScanner.js";
 import {
   listReadyEffectsWithAdapter,
   runEffectWorkerWithAdapter,
 } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 
 const EntitySchema = defineEntity({
   name: "CleanupEntity",

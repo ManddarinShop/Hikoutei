@@ -11,7 +11,7 @@ import {
   HIKOUTEI_ERROR_CODES,
   type Hikoutei,
 } from "../src/index.js";
-import { initializeMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { initializeMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 
 const User = defineTypedSheetsEntity({
   name: "User",

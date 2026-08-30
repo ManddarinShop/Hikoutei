@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   ADOPT_HELP_TEXT,
   parseAdoptArgs,
-} from "../src/cli/adoptArgs.js";
+} from "@hikoutei/cli/adoptArgs.js";
 import {
   ADOPT_RUNTIME_ERROR_EXIT_CODE,
   ADOPT_SUCCESS_EXIT_CODE,
@@ -18,7 +18,7 @@ import {
   runAdoptCli,
   type AdoptRunner,
   type AdoptRunnerInput,
-} from "../src/cli/adoptFlow.js";
+} from "@hikoutei/cli/adoptFlow.js";
 import { defineTypedSheetsEntity } from "../src/index.js";
 import type {
   AdoptionEntityReport,

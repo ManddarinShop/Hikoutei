@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import { defineTypedSheetsEntity } from "../src/index.js";
-import { getEntityDescriptor } from "../src/api/entity.js";
+import { getEntityDescriptor } from "@hikoutei/sync-engine/api/entity.js";
 import { createInternalHikoutei } from "../src/api/Hikoutei.js";
 import type { ScalarEntityPersistenceProvider } from "@hikoutei/contracts/storage/scalar.js";
 import { ScriptedCloseProvider } from "./support/scriptedCloseProvider.js";

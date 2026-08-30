@@ -148,7 +148,7 @@ async function importInternalLoggerReset() {
   // own URL. Declared here so the catch can evaluate the loader-failure
   // predicate against it.
   const sourceUrl = new URL(
-    "../../../src/shared/observability/internalLog.ts",
+    "../../../packages/hikoutei-sync-engine/src/shared/observability/internalLog.ts",
     import.meta.url,
   );
   try {

@@ -27,9 +27,21 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@hikoutei/composition':
+        specifier: 0.1.0
+        version: link:packages/hikoutei-composition
       '@hikoutei/contracts':
         specifier: 0.1.0
         version: link:packages/hikoutei-contracts
+      '@hikoutei/sheets':
+        specifier: 0.1.0
+        version: link:packages/hikoutei-sheets
+      '@hikoutei/storage':
+        specifier: 0.1.0
+        version: link:packages/hikoutei-storage
+      '@hikoutei/sync-engine':
+        specifier: 0.1.0
+        version: link:packages/hikoutei-sync-engine
       '@mikro-orm/core':
         specifier: 7.1.7
         version: 7.1.7
@@ -52,6 +64,47 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@20.19.43)
 
+  packages/hikoutei-cli:
+    dependencies:
+      '@googleapis/drive':
+        specifier: ^21.0.0
+        version: 21.0.0
+      '@googleapis/sheets':
+        specifier: ^14.0.0
+        version: 14.0.0
+      '@hikoutei/sync-engine':
+        specifier: 0.1.0
+        version: link:../hikoutei-sync-engine
+      google-auth-library:
+        specifier: ^11.0.0
+        version: 11.0.0
+      hikoutei:
+        specifier: workspace:*
+        version: link:../..
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/hikoutei-composition:
+    dependencies:
+      '@hikoutei/contracts':
+        specifier: 0.1.0
+        version: link:../hikoutei-contracts
+      '@hikoutei/sheets':
+        specifier: 0.1.0
+        version: link:../hikoutei-sheets
+      '@hikoutei/storage':
+        specifier: 0.1.0
+        version: link:../hikoutei-storage
+      '@hikoutei/sync-engine':
+        specifier: 0.1.0
+        version: link:../hikoutei-sync-engine
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
   packages/hikoutei-contracts:
     dependencies:
       '@hikoutei/kohkai':
@@ -60,6 +113,63 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/hikoutei-sheets:
+    dependencies:
+      '@googleapis/sheets':
+        specifier: ^14.0.0
+        version: 14.0.0
+      '@hikoutei/contracts':
+        specifier: 0.1.0
+        version: link:../hikoutei-contracts
+      '@hikoutei/sync-engine':
+        specifier: 0.1.0
+        version: link:../hikoutei-sync-engine
+      google-auth-library:
+        specifier: ^11.0.0
+        version: 11.0.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/hikoutei-storage:
+    dependencies:
+      '@hikoutei/contracts':
+        specifier: 0.1.0
+        version: link:../hikoutei-contracts
+      '@hikoutei/ikisaki':
+        specifier: 0.1.5
+        version: link:../ikisaki
+      '@mikro-orm/core':
+        specifier: 7.1.7
+        version: 7.1.7
+      '@mikro-orm/sql':
+        specifier: 7.1.7
+        version: 7.1.7(@mikro-orm/core@7.1.7)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/hikoutei-sync-engine:
+    dependencies:
+      '@hikoutei/contracts':
+        specifier: 0.1.0
+        version: link:../hikoutei-contracts
+      '@hikoutei/ikisaki':
+        specifier: 0.1.5
+        version: link:../ikisaki
+      '@hikoutei/storage':
+        specifier: 0.1.0
+        version: link:../hikoutei-storage
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

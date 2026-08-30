@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // P8-D2 phase 2 cycle break: storage sits BELOW the sync engine in the
+    // DAG and imports contracts/ikisaki plus its own trees only — the former
+    // "@hikoutei/sync-engine/*" source cross-map (the transitional bridge)
+    // is gone with the storage->engine imports. The mapped flush/observation/
+    // projection/conflict persistence glue now lives in this package under
+    // src/orm + src/sync, so the emission layout is
+    // dist/packages/hikoutei-storage/src/**.
+    "rootDir": "../..",
+    "outDir": "dist",
+    "baseUrl": "../..",
+    "paths": {
+      // Hermetic self/cross maps: the reached-in root-src files import the
+      // moved packages back by name; mapping both to source (never dist)
+      // removes any build-order dependency between the two packages.
+      "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"]
+    },
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

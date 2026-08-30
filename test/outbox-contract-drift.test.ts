@@ -26,7 +26,7 @@ import {
   EFFECT_STATUSES as HOST_EFFECT_STATUSES,
   EFFECT_TARGET_KINDS as HOST_EFFECT_TARGET_KINDS,
 } from "@hikoutei/contracts/domain/model/constants.js";
-import { STORAGE_ERROR_CODES as HOST_STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
+import { STORAGE_ERROR_CODES as HOST_STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 
 /** Constant tables are plain string-keyed string maps at runtime. */
 type StringConstantTable = Readonly<Record<string, string>>;

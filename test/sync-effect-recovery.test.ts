@@ -12,7 +12,7 @@ import { absentValue, presentValue } from "@hikoutei/contracts/state/index.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -24,15 +24,15 @@ import {
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { SYNC_POSTCONDITION_DISPOSITIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
-import { GoogleSheetsApiSyncProvider } from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
+import { GoogleSheetsApiSyncProvider } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,
 } from "./support/StubSheetsTransport.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 
 const EntitySchema = defineEntity({

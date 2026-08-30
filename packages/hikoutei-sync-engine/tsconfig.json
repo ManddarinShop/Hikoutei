@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // P8-D2 phase 2 cycle break: the sync engine has NO upward edges (it
+    // never imports the root package, @hikoutei/composition, @hikoutei/cli,
+    // @hikoutei/sheets, or anything named by the retired storage->engine
+    // bridge) and no private workspace cycle exists anymore. It imports
+    // @hikoutei/storage state/SQL primitives plus the storage-hosted mapped
+    // persistence glue (src/orm + src/sync); mapping the storage package to
+    // SOURCE removes any build-order dependency. The transient
+    // dist/packages/hikoutei-storage/src/** emission is a reached-in mirror
+    // that is never bundled or shipped.
+    "rootDir": "../..",
+    "outDir": "dist",
+    "baseUrl": "../..",
+    "paths": {
+      "@hikoutei/storage/*": ["packages/hikoutei-storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/hikoutei-sheets/src/*"]
+    },
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

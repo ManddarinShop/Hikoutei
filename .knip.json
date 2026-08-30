@@ -7,18 +7,73 @@
         "test/**/*.{ts,mts,cts}",
         "scripts/**/*.{ts,mts,mjs}"
       ],
-      "project": ["src/**/*.ts", "test/**/*.{ts,mts}", "scripts/**/*.{ts,mts,mjs}"]
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.{ts,mts}",
+        "scripts/**/*.{ts,mts,mjs}"
+      ]
     },
     "packages/ikisaki": {
-      "entry": ["test/**/*.ts"],
-      "project": ["src/**/*.ts", "test/**/*.ts"]
+      "entry": [
+        "test/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ]
     },
     "packages/mcp": {
-      "project": ["src/**/*.ts"]
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/hikoutei-storage": {
+      "entry": [
+        "src/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/hikoutei-sheets": {
+      "entry": [
+        "src/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/hikoutei-sync-engine": {
+      "entry": [
+        "src/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/hikoutei-composition": {
+      "entry": [
+        "src/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "packages/hikoutei-cli": {
+      "entry": [
+        "src/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
     }
   },
   "ignore": [],
-  "ignoreBinaries": ["mkfifo"],
+  "ignoreBinaries": [
+    "mkfifo"
+  ],
   "ignoreExportsUsedInFile": true,
-  "tags": ["-lint-ignore"]
+  "tags": [
+    "-lint-ignore"
+  ]
 }

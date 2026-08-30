@@ -7,8 +7,8 @@ import { defineTypedSheetsEntity } from "../src/index.js";
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
-import { SYNC_SERVICE_ERROR_CODES } from "../src/application/sync/service/errors.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
+import { SYNC_SERVICE_ERROR_CODES } from "@hikoutei/sync-engine/sync/service/errors.js";
 import {
   applyEffectResultWithAdapter,
   claimEffectWithAdapter,
@@ -17,13 +17,13 @@ import {
 } from "@hikoutei/ikisaki";
 import { presentValue } from "@hikoutei/contracts/state/index.js";
 import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
-import { runReconciliationScan } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
+import { runReconciliationScan } from "@hikoutei/sync-engine/sync/outbound/reconciliation/ReconciliationScanner.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
-import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
-import type { SyncTimingEvent } from "../src/application/sync/telemetry/syncTiming.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { SyncTimingEvent } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import {
   StubSpreadsheet,

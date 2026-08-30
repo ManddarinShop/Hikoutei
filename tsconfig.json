@@ -13,14 +13,16 @@
       // exists before the root typecheck runs; the root npm scripts do this
       // as a prebuild step.
       //
-      // @hikoutei/contracts deliberately has NO paths entry here: this
-      // config must stay an emit-compatible program (rootDir src, include
-      // src) because it drives `npm run build` and the in-memory
-      // declaration-emit audit (test/hikoutei-public-surface-audit.test.ts).
-      // The leaf resolves through node_modules (workspace link + package
-      // exports -> its own dist, built first by the build scripts).
-      // Source-based contract compilation lives in tsconfig.test.json and
-      // the vitest alias, so typecheck/test never depend on a stale dist.
+      // @hikoutei/contracts, @hikoutei/storage, @hikoutei/sheets,
+      // @hikoutei/sync-engine and @hikoutei/composition deliberately have NO
+      // paths entries here: this config must stay an emit-compatible program
+      // (rootDir src, include src) because it drives `npm run build` and the
+      // in-memory declaration-emit audit
+      // (test/hikoutei-public-surface-audit.test.ts). The leaves resolve
+      // through node_modules (workspace link + package exports -> their own
+      // dists, built first by the build scripts). Source-based compilation
+      // lives in tsconfig.test.json and the vitest aliases, so
+      // typecheck/test never depend on a stale dist.
       "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
     },
     "declaration": true,
