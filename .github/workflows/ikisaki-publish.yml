@@ -37,10 +37,15 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Validate ikisaki manifest
@@ -72,7 +77,9 @@ jobs:
             echo "@hikoutei/ikisaki@${version} already published; re-applying latest dist-tag."
             npm dist-tag add "@hikoutei/ikisaki@${version}" latest --registry=https://registry.npmjs.org
           else
-            npm ci
-            npm run build -w @hikoutei/ikisaki
+            # npm publish below is deliberate (registry act, unchanged until
+            # P8-DD); the INSTALL and BUILD run through pnpm.
+            pnpm install --frozen-lockfile
+            pnpm --filter @hikoutei/ikisaki run build
             (cd packages/ikisaki && npm publish --tag latest --access public --provenance)
           fi

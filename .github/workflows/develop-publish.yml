@@ -84,11 +84,15 @@ jobs:
           ref: ${{ github.event_name == 'push' && github.sha || format('refs/tags/{0}', steps.resolve-mode.outputs.tag) }}
           persist-credentials: false
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Validate release tag matches package versions
         shell: bash
@@ -139,19 +143,19 @@ jobs:
           test "$published_kohkai_version" = "$kohkai_version"
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck production code
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Typecheck tests
-        run: npm run typecheck:test
+        run: pnpm run typecheck:test
 
       - name: Run unit and contract tests
-        run: npm test
+        run: pnpm test
 
       - name: Build package
-        run: npm run build
+        run: pnpm run build
 
       - name: Verify package name and contents
         shell: bash
@@ -196,7 +200,9 @@ jobs:
           # lookup in publish still finds exactly one tarball.
           ikisaki_dir="$package_dir/ikisaki"
           mkdir -p "$ikisaki_dir"
-          (cd packages/ikisaki && npm run build && npm pack --silent --pack-destination "$ikisaki_dir")
+          # npm pack here is deliberate (tarball production, registry act
+          # unchanged until P8-DD); the BUILD runs through pnpm.
+          (cd packages/ikisaki && pnpm run build && npm pack --silent --pack-destination "$ikisaki_dir")
           # Exact ikisaki artifact integrity: exactly one tarball whose
           # package name/version match the workspace manifest and the version
           # record the publish job reads. The checksum accompanies the tarball

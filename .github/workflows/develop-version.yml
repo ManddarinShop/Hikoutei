@@ -44,14 +44,18 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN }}
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Verify the merge commit before release work
         shell: bash
@@ -66,10 +70,10 @@ jobs:
 
       - name: Verify the current package
         run: |
-          npm run typecheck
-          npm run typecheck:test
-          npm test
-          npm run build
+          pnpm run typecheck
+          pnpm run typecheck:test
+          pnpm test
+          pnpm run build
 
       - name: Calculate and apply the patch version
         id: version
@@ -127,6 +131,12 @@ jobs:
               fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
             ' "$ikisaki_next_version"
             npm install --package-lock-only --no-audit --no-fund --ignore-scripts
+            # Dual-lockfile transition (P8-D1): package-lock.json is kept until
+            # every consumer of it is flipped; pnpm-lock.yaml is the pnpm
+            # source of truth and must move with the ikisaki version pin so a
+            # later `pnpm install --frozen-lockfile` still resolves the exact
+            # pin to the workspace package (linkWorkspacePackages: true).
+            pnpm install --lockfile-only
           fi
           node -e '
             const expected = process.argv[1];
@@ -145,9 +155,9 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only | sort)"
-          expected=$'package-lock.json\npackage.json'
+          expected=$'package-lock.json\npackage.json\npnpm-lock.yaml'
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            expected=$'package-lock.json\npackage.json\npackages/ikisaki/package.json'
+            expected=$'package-lock.json\npackage.json\npnpm-lock.yaml\npackages/ikisaki/package.json'
           fi
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
@@ -163,7 +173,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
+          git add package.json package-lock.json pnpm-lock.yaml
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
             git add packages/ikisaki/package.json
           fi
