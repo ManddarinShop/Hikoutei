@@ -18,6 +18,16 @@ import {
   type FencingContext,
 } from "@hikoutei/ikisaki";
 
+/**
+ * The only row-identity mode the v1 registry accepts, writes, or reads.
+ *
+ * Legacy databases may still carry the `developer_metadata` value in the
+ * `anchor_mode` column; {@link validateRegistration} rejects it at write
+ * time and {@link registeredSyncSheetFromRow} rejects it at read time, so
+ * the runtime value is a de-facto constant (ADR anchor-mode decision).
+ */
+const REGISTRY_ANCHOR_MODE = "business_key" as const;
+
 const READ_LOGICAL_SHEET_REGISTRATION_SQL = `
   SELECT schema_version, ownership_manifest_json, business_key_field, anchor_mode, enabled
   FROM sheet_registry
@@ -68,9 +78,12 @@ export interface RegisterSyncSheetInput {
   readonly schemaVersion: number;
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
-  /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
-  /** Compatibility with the pre-foundation developer-metadata fixture path. */
-  readonly anchorMode?: "business_key" | "developer_metadata";
+  /**
+   * Legacy column retained in SQLite; only the business-key identity mode is
+   * accepted (everything else fails validation, including the pre-foundation
+   * `developer_metadata` fixture path).
+   */
+  readonly anchorMode?: "business_key";
 }
 
 /** Registry row used for all provider requests. */
@@ -84,8 +97,8 @@ export interface RegisteredSyncSheet {
   readonly schemaVersion: number;
   readonly ownershipManifestJson: string;
   readonly businessKeyField: string;
-  /** Legacy column retained in SQLite; the active remote identity is visible business_key. */
-  readonly anchorMode: "business_key" | "developer_metadata";
+  /** Legacy column retained in SQLite; the only accepted value is business_key. */
+  readonly anchorMode: "business_key";
 }
 
 /** Records whether a fenced registry request won the writer ownership check. */
@@ -119,7 +132,7 @@ export async function registerSyncSheetWithSql(
         normalizedInput.schemaVersion,
         normalizedInput.ownershipManifestJson,
         normalizedInput.businessKeyField,
-        normalizedInput.anchorMode ?? "business_key",
+        normalizedInput.anchorMode ?? REGISTRY_ANCHOR_MODE,
       ]);
       if (inserted.changes !== 1) {
         throw new StorageError(
@@ -146,7 +159,7 @@ export async function registerSyncSheetWithSql(
         normalizedInput.registeredRange,
         normalizedInput.projection,
         normalizedInput.schemaVersion,
-        normalizedInput.anchorMode ?? "business_key",
+        normalizedInput.anchorMode ?? REGISTRY_ANCHOR_MODE,
       ]);
       if (inserted.changes !== 1) {
         throw new StorageError(
@@ -263,7 +276,7 @@ function validateRegistration(input: RegisterSyncSheetInput): void {
       "unsupported sync projection",
     );
   }
-  if (input.anchorMode !== undefined && input.anchorMode !== "business_key") {
+  if (input.anchorMode !== undefined && input.anchorMode !== REGISTRY_ANCHOR_MODE) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_SYNC_REGISTRATION,
       "sync registry requires business-key row identity",
@@ -293,7 +306,7 @@ function sameLogicalRegistration(existing: LogicalRow, input: RegisterSyncSheetI
   return existing.schema_version === input.schemaVersion &&
     existing.ownership_manifest_json === input.ownershipManifestJson &&
     existing.business_key_field === input.businessKeyField &&
-    existing.anchor_mode === (input.anchorMode ?? "business_key") &&
+    existing.anchor_mode === (input.anchorMode ?? REGISTRY_ANCHOR_MODE) &&
     existing.enabled === 1;
 }
 
@@ -304,7 +317,7 @@ function samePhysicalRegistration(existing: PhysicalRow, input: RegisterSyncShee
     existing.registered_range === input.registeredRange &&
     existing.projection === input.projection &&
     existing.schema_version === input.schemaVersion &&
-    existing.anchor_mode === (input.anchorMode ?? "business_key") &&
+    existing.anchor_mode === (input.anchorMode ?? REGISTRY_ANCHOR_MODE) &&
     existing.enabled === 1;
 }
 
@@ -315,7 +328,7 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
       "physical sheet is not an enabled sync registry target",
     );
   }
-  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== "business_key") {
+  if (!isRegisteredProjection(row.projection) || row.anchor_mode !== REGISTRY_ANCHOR_MODE) {
     throw new StorageError(
       STORAGE_ERROR_CODES.SYNC_REGISTRY_TARGET_UNAVAILABLE,
       "physical sheet registry has an unsupported projection or identity mode",
@@ -341,7 +354,7 @@ function registeredSyncSheetFromRow(row: RegisteredRow | undefined): RegisteredS
     schemaVersion: row.schema_version,
     ownershipManifestJson: row.ownership_manifest_json,
     businessKeyField: row.business_key_field,
-    anchorMode: "business_key",
+    anchorMode: REGISTRY_ANCHOR_MODE,
   };
 }
 
