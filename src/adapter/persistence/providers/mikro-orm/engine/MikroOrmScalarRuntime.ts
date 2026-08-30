@@ -13,20 +13,28 @@ import type {
   ResolvedHikouteiEntityDescriptor,
   ResolvedHikouteiProperty,
 } from "../../../../../api/entity.js";
-import type { MappedEntityReference } from "../../../../../application/orm/mapping/contracts.js";
-import { defineTypedSheetsEntityMapping } from "../../../../../application/orm/mapping/definition.js";
+import type {
+  MappedEntityReference,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
+
+import {
+  defineTypedSheetsEntityMapping,
+} from "@hikoutei/contracts/sync-orm/mapping/definition.js";
+
 import type {
   TypedSheetsEntityMapping,
   TypedSheetsEntityProjectionMappingInput,
-} from "../../../../../application/orm/mapping/contracts.js";
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
+
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../../../../application/orm/errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
+
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,
-} from "../../../../../application/sync/service/contracts.js";
+} from "@hikoutei/contracts/sheets/syncServiceConfig.js";
 import {
   createMikroOrmScalarEntityRuntime,
   type MikroOrmScalarEntityRuntimeDefinition,

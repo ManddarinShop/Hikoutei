@@ -37,14 +37,14 @@ import {
   HIKOUTEI_ERROR_CODES,
   HikouteiError,
 } from "../../../api/errors.js";
-import type { GoogleSheetsApiTransport } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
+import type { GoogleSheetsApiTransport } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import {
   GoogleSheetsApiTransportError,
-} from "../../../adapter/sheets/providers/google-sheets-api/errors.js";
-import { columnLetters } from "../../../adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+} from "@hikoutei/contracts/sheets/transportError.js";
+import { columnLetters } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import {
   GOOGLE_SHEETS_API_DEFAULTS,
-} from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,

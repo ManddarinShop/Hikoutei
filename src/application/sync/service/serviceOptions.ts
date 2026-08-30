@@ -28,9 +28,9 @@ import type {
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import type { SyncSheetsProvider, SyncSheetsTableReader } from "@hikoutei/contracts/sheets/syncSheets.js";
 import type { CoordinatorLaneEvent } from "@hikoutei/contracts/sheets/mutationCoordinator/laneTelemetry.js";
-import type { GoogleSheetsApiProviderOptions } from "../../../adapter/sheets/providers/google-sheets-api/index.js";
+import type { GoogleSheetsApiProviderOptions } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import type { ExistingSheetAdoptionSpec } from "./adopt/existingSheetAdoption.js";
-import { GOOGLE_SHEETS_API_DEFAULTS } from "../../../adapter/sheets/providers/google-sheets-api/constants.js";
+import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WRITER_LEASE_DURATION_MS,
@@ -38,8 +38,8 @@ import {
   type EffectWorkerSupervisor,
   type WorkerReport,
 } from "@hikoutei/ikisaki";
-import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import type { MappedUserInputPollingReport } from "../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { SyncServiceStorage } from "./compositionPorts.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/contracts/sheets/userInputPolling.js";
 import type { SyncTimingSink } from "../telemetry/syncTiming.js";
 import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
 import {
@@ -111,7 +111,7 @@ export interface InternalSyncServiceOptions {
 export interface InternalSyncService {
   readonly hikoutei: Hikoutei;
   /** Internal inspection handle; never part of the root application API. */
-  readonly storage: MikroOrmSqliteAdapter;
+  readonly storage: SyncServiceStorage;
   readonly projectionDefinitions: readonly RegisteredSyncProjectionDefinition[];
   /** Retries durable OPEN system-wins commands after predecessors settle. */
   readonly retryDeferredConflicts: () => Promise<number>;

@@ -21,16 +21,20 @@ import type {
 import {
   SYNC_PROJECTIONS,
 } from "@hikoutei/contracts/sheets/constants.js";
+import type {
+  TypedSheetsEntityFieldMapping,
+  TypedSheetsEntityMapping,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
 import {
   requireTypedSheetsEntityProjection,
   typedSheetsEntityProjectionHeaders,
-  type TypedSheetsEntityFieldMapping,
-  type TypedSheetsEntityMapping,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/projection.js";
+
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../../../../application/orm/errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
+
 import type { MappedPollingState } from "./MikroOrmUserInputPollingState.js";
 
 /** Result of one values-only table comparison. */

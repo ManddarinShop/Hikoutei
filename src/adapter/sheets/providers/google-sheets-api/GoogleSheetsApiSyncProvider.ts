@@ -67,7 +67,6 @@ import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
-import type { Presence } from "@hikoutei/contracts/state/index.js";
 import {
   GOOGLE_SHEETS_API_DEFAULTS,
 } from "./constants.js";
@@ -103,66 +102,17 @@ import {
   provisionRegistry,
 } from "./operations/provisioning.js";
 
-/** Redacted telemetry event emitted for every transport request. */
-export interface GoogleSheetsApiRequestEvent {
-  readonly operation: "getSpreadsheet" | "batchUpdate";
-  /** Pacing lane the request-start wait used (`polling`, `preflight`, or `write`). */
-  readonly pacing: "polling" | "preflight" | "write";
-  readonly operationCount: number;
-  readonly startedAt: number;
-  readonly durationMs: number;
-  readonly ok: boolean;
-  readonly httpStatus: Presence<number>;
-  readonly code: Presence<string>;
-  /** Pacing wait before the request-start slot was granted (0 when none). */
-  readonly pacingWaitMs?: number;
-  /** Number of batchUpdate requests in the written batch. */
-  readonly requestCount?: number;
-  /** Serialized batchUpdate body-size estimate in bytes. */
-  readonly bodyBytes?: number;
-  /** Effects requested for this write batch. */
-  readonly requestedEffects?: number;
-  /** Effects included in the written batch (the budget-fitting prefix). */
-  readonly includedEffects?: number;
-}
-
-/** Provider options without the bootstrap-supplied spreadsheet and routes. */
-export interface GoogleSheetsApiProviderOptions {
-  /** Stub transport for tests; omitted builds the real ADC-backed client. */
-  readonly transport?: GoogleSheetsApiTransport;
-  /** Per-request timeout; defaults to 60 seconds, bounded 1s..120s. */
-  readonly requestTimeoutMs?: number;
-  /**
-   * Per-READ-request timeout (every getSpreadsheet call); defaults to
-   * 10 seconds, bounded 1s..60s. Writes keep `requestTimeoutMs`, so a slow
-   * dispatch (two preflight reads plus one write) cannot outlive its effect
-   * lease.
-   */
-  readonly readTimeoutMs?: number;
-  /**
-   * Minimum interval between request starts per class; defaults to 800 ms.
-   * This only SPACES request starts; admission is governed by the separate
-   * independent bound `requestStartMaxWaitMs`, which refuses a request whose
-   * predicted wait exceeds it before any SDK call (delivery-uncertain,
-   * requeued durably).
-   */
-  readonly rateLimitIntervalMs?: number;
-  /**
-   * Maximum admitted wait for one request-start slot before refusal;
-   * defaults to `REQUEST_START_MAX_ADMISSION_WAIT_MS` (5 s), independent of
-   * the pacing interval. Lets a postcondition read wait a few intervals for
-   * the shared write limiter instead of being refused by the read burst.
-   */
-  readonly requestStartMaxWaitMs?: number;
-  /** Serialized batchUpdate byte budget; defaults to ~2 MB. */
-  readonly maxBatchBytes?: number;
-  /** Injectable clock for limiters and telemetry. */
-  readonly now?: () => number;
-  /** Injectable sleep used by the request-start limiters. */
-  readonly sleep?: (ms: number) => Promise<void>;
-  /** Redacted request telemetry sink. */
-  readonly onRequest?: (event: GoogleSheetsApiRequestEvent) => void;
-}
+// P8-C sole-source: the redacted telemetry event and provider options
+// surface live in the contracts leaf; re-exported here so existing
+// adapter-internal and test import paths stay valid.
+export type {
+  GoogleSheetsApiRequestEvent,
+  GoogleSheetsApiProviderOptions,
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
+import type {
+  GoogleSheetsApiProviderOptions,
+  GoogleSheetsApiRequestEvent,
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 
 /** Full construction options (bootstrap supplies spreadsheet and routes). */
 export interface GoogleSheetsApiSyncProviderOptions extends GoogleSheetsApiProviderOptions {

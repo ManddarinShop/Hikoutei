@@ -13,81 +13,11 @@
  * legacy tabs must be re-provisioned.
  */
 
-/** Spreadsheets scope requested through Application Default Credentials. */
-export const GOOGLE_SHEETS_API_SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets",
-] as const;
-
-/** Defaults for the direct Google Sheets API transport and batching. */
-export const GOOGLE_SHEETS_API_DEFAULTS = {
-  /** Default per-request timeout; the durable worker owns retries, not gaxios. */
-  REQUEST_TIMEOUT_MS: 60_000,
-  MIN_REQUEST_TIMEOUT_MS: 1_000,
-  MAX_REQUEST_TIMEOUT_MS: 120_000,
-  /**
-   * Default per-READ-request timeout (every getSpreadsheet call). Reads are
-   * bounded much shorter than writes so a slow-but-working effect dispatch
-   * (up to three sequential paced calls: two preflight reads plus one write)
-   * cannot outlive its effect lease.
-   */
-  READ_TIMEOUT_MS: 10_000,
-  /** Upper bound for read timeouts; reads must stay well under the lease. */
-  MAX_READ_TIMEOUT_MS: 60_000,
-  /**
-   * Minimum interval between request starts of the WHOLE provider: reads
-   * and writes use independent request-start limiters, so reads serialize
-   * only against reads and writes only against writes, and a read and a
-   * write can start concurrently. Google Sheets quota is enforced per
-   * 100-second windows; the 800 ms default paces each class to at most 125
-   * starts per 100 s, leaving headroom inside the default per-user/
-   * per-project 100-second quotas for the observation and provisioning
-   * reads that run beside the worker. The exact quota stays provider and
-   * environment dependent, so operators can override the interval through
-   * the internal sync env key
-   * (HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS) or the internal provider option;
-   * the safe default is intentionally conservative. The interval is part of
-   * the effect-lease headroom contract: a worst-case dispatch (two
-   * preflight/postcondition reads plus one write, each paced and timed out,
-   * with up to one full interval of first-slot wait) must finish inside the
-   * lease with the 30-second provider headroom, and the internal service
-   * validation rejects an override that would let pacing outlive the lease
-   * (the env override is bounded to the largest default-safe interval,
-   * ~10 s). Admission is BOUNDED to one interval per request start: a call
-   * whose slot lies more than one interval out is refused before any SDK
-   * call with the stable delivery-uncertain
-   * `google_sheets_api_request_start_refused` error (the durable worker
-   * requeues), so an arbitrarily long queue of concurrent lock-free polling
-   * reads can never make a write wait past its lease.
-   */
-  REQUEST_START_INTERVAL_MS: 800,
-  /**
-   * Maximum admitted wait for ONE request-start slot before the bounded
-   * admission refuses it (delivery-uncertain, requeued durably). This is
-   * intentionally larger than the pacing interval: a postcondition read
-   * that verifies a just-written row shares the write limiter, and it must
-   * be allowed to wait a few intervals for the write slot instead of being
-   * refused by the read burst. The interval still spaces request STARTS
-   * (quota safety); this bound only caps how long a call queued behind a
-   * saturated limiter will wait before refusing rather than firing unpaced.
-   */
-  REQUEST_START_MAX_ADMISSION_WAIT_MS: 5_000,
-  /**
-   * The provider stops adding effects to one batchUpdate once the serialized
-   * body would exceed this budget and returns `hasMore` for the suffix. The
-   * Google API itself accepts larger bodies; this is the provider's own
-   * safety valve so a pathological payload cannot monopolize a request.
-   */
-  MAX_BATCH_REQUEST_BYTES: 2 * 1024 * 1024,
-  /**
-   * Effect cap per batchUpdate, aligned with MAX_APPEND_ROWS_PER_REQUEST (the
-   * worker's bulk claim window); the byte budget (MAX_BATCH_REQUEST_BYTES)
-   * remains the primary request-size valve. Previously the cap of the removed
-   * Apps Script gateway (`MAX_EFFECTS`).
-   */
-  MAX_EFFECTS_PER_REQUEST: 1_000,
-  /** Append row cap per request, matching the worker's bulk claim window. */
-  MAX_APPEND_ROWS_PER_REQUEST: 1_000,
-} as const;
+// P8-C sole-source: the scopes constant and the transport/batching defaults
+// live in the contracts leaf; re-exported here so existing adapter-internal
+// and test import paths stay valid (contracts → adapter is the allowed
+// direction).
+export { GOOGLE_SHEETS_API_SCOPES, GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 
 /**
  * Canonical Google API remote status that proves a range names a missing

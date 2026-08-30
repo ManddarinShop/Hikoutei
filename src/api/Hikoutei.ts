@@ -33,6 +33,12 @@ import {
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+// P8-C composition carrier: the public API layer loads the composition root,
+// which registers (lazily) the concrete sync-engine port wiring. The heavy
+// adapter module graphs (MikroORM, Google SDK) still load only when a runtime
+// actually opens (every wiring module is dynamically imported by factories).
+import "../composition/index.js";
+
 /** Environment variable that supplies the default SQLite path. */
 const HIKOUTEI_DB_PATH_ENV = "HIKOUTEI_DB_PATH";
 
@@ -414,17 +420,12 @@ export async function createLocalTypedSheetsRuntime(
     const descriptors = resolveEntityDescriptors(entities, throwHikouteiResolutionError);
     // Load the current provider only when a runtime is opened. Importing the
     // root package alone must not require MikroORM or expose its module graph.
-    const [engineModule, providerModule, runtimeModule] = await Promise.all([
-      import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarStorage.js"),
-      import("../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js"),
-      import("../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarEntityRuntime.js"),
-    ]);
-    const generated = runtimeModule.createMikroOrmScalarEntityRuntime(entities);
-    const storage = await engineModule.initializeMikroOrmScalarStorage({
-      dbName,
-      entities: generated.entities,
-    });
-    const provider = new providerModule.MikroOrmScalarPersistenceProvider(storage, generated.bindings);
+    // P8-C: the concrete wiring is composition-owned; this module stays
+    // adapter-free and only awaits the lazily loaded composition module.
+    const composition = await import("../composition/localRuntime.js");
+    const wiring = await composition.createLocalScalarRuntimeWiring(entities);
+    const storage = await wiring.initializeStorage(dbName);
+    const provider = wiring.createPersistenceProvider(storage);
     const hikoutei = createInternalHikoutei(provider, descriptors);
     logHikouteiInternalEvent({
       event: HIKOUTEI_LOG_EVENTS.RUNTIME_OPENED,
@@ -485,7 +486,7 @@ export async function createTypedSheets(
   // Env present: delegate to the internal sync auto-start bridge. The dynamic
   // import keeps the module graph out of the env-absent path.
   const { createTypedSheetsWithSync } = await import(
-    "../application/sync/service/syncAutoStart.js"
+    "../composition/syncAutoStart.js"
   );
   const result = await createTypedSheetsWithSync({
     dbName,

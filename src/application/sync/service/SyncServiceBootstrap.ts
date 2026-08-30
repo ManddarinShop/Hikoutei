@@ -25,15 +25,6 @@ import {
   resolveEntityDescriptors,
 } from "../../../api/internalEntityRegistry.js";
 import {
-  initializeMappedRuntime,
-} from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js";
-import {
-  createMikroOrmScalarRuntime,
-} from "../../../adapter/persistence/providers/mikro-orm/engine/MikroOrmScalarRuntime.js";
-import {
-  MikroOrmScalarPersistenceProvider,
-} from "../../../adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
-import {
   registeredTypedSheetsProjectionDefinitions,
   resolveTypedSheetsEntityWriterOptions,
 } from "../../orm/persistence/flush/flushCoordinator.js";
@@ -49,6 +40,7 @@ import {
   planMappedFlushConflictSyncWithSql,
 } from "../inbound/autoSystemConflictResolution.js";
 import { createRemoteProvider } from "./remoteProvider.js";
+import { requireSyncEnginePorts } from "./compositionPorts.js";
 import {
   planExistingSheetAdoptionStartup,
   resolveAdoptionReaderTransport,
@@ -102,6 +94,12 @@ export type {
 export async function createInternalSyncService(
   options: InternalSyncServiceOptions,
 ): Promise<InternalSyncService> {
+  // P8-C: the concrete-adapter wiring (MikroORM SQLite runtime, the direct
+  // Google Sheets API provider, the polling engine, the adoption transport)
+  // resolves through the composition root; the engine only ever receives
+  // port-typed closures. Fail closed when the composition root was never
+  // loaded (only possible when the public API entrypoints are bypassed).
+  const ports = await requireSyncEnginePorts();
   const descriptors = resolveEntityDescriptors(options.entities, throwSyncResolutionError);
   validateServiceOptions(options, descriptors);
 
@@ -113,7 +111,7 @@ export async function createInternalSyncService(
     adoptionPlan = await planExistingSheetAdoptionStartup({
       adopt: options.adopt,
       spreadsheetId: options.projections.spreadsheetId,
-      transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
+      transport: resolveAdoptionReaderTransport(options.googleSheetsApi, ports.createAdoptionReaderTransport),
       descriptors: [...descriptors.values()],
       projections: options.projections,
       userOwnedFieldsByEntity: Object.fromEntries(
@@ -134,7 +132,7 @@ export async function createInternalSyncService(
     ? options.projections
     : withAdoptionRegisteredRangeOverride(options.projections, adoptionPlan);
 
-  const generated = createMikroOrmScalarRuntime(options.entities, effectiveProjections);
+  const generated = ports.planMappedRuntime(options.entities, effectiveProjections);
   const writer = createWriterOptions(options);
   // The effect worker claims its own lease role with the same runtime identity
   // as the mapped writer unless the caller pinned an explicit worker id; one
@@ -158,13 +156,7 @@ export async function createInternalSyncService(
         suppressedUserProjection: input.plan.suppressedUserProjection,
       },
     );
-  const runtime = await initializeMappedRuntime({
-    dbName: options.dbName,
-    entities: generated.entities,
-    mappings: generated.mappings,
-    writer,
-    syncFlushHook,
-  });
+  const runtime = await generated.openMappedRuntime({ dbName: options.dbName, writer, syncFlushHook });
 
   try {
     const projectionDefinitions = [
@@ -187,7 +179,7 @@ export async function createInternalSyncService(
     const definitionsForRemote = adoptionPlan === undefined
       ? projectionDefinitions
       : withAdoptedPhysicalHeaders(projectionDefinitions, adoptionPlan);
-    const remote = createRemoteProvider(options, definitionsForRemote);
+    const remote = createRemoteProvider(options, definitionsForRemote, ports);
     if (adoptionPlan !== undefined) {
       // D7 (F3): adoption resolves tab names case-insensitively, so two
       // entities adopting `Invoices` and `invoices` collapse onto ONE sheet
@@ -247,7 +239,8 @@ export async function createInternalSyncService(
       // when the adoption as a whole must reject.
       for (const adoptionEntity of adoptionPlan.entities) {
         await applyAdoptionSystemColumns({
-          transport: resolveAdoptionReaderTransport(options.googleSheetsApi),
+          transport: resolveAdoptionReaderTransport(options.googleSheetsApi, ports.createAdoptionReaderTransport),
+          verifyReply: ports.verifyBatchUpdateReply,
           spreadsheetId: options.projections.spreadsheetId,
           sheetId: adoptionEntity.sheetId,
           rowIdColumnIndex: adoptionEntity.rowIdColumnIndex,
@@ -286,6 +279,7 @@ export async function createInternalSyncService(
       mappings: runtime.mappings,
       writer,
       options,
+      pollMappedUserInput: ports.pollMappedUserInput,
     });
     const retryDeferredConflicts = (): Promise<number> => retryOpenMappedConflictsWithAdapter(
       runtime.storage,
@@ -300,11 +294,7 @@ export async function createInternalSyncService(
       effectSupervisor,
     });
 
-    const provider = new MikroOrmScalarPersistenceProvider(
-      runtime.storage,
-      generated.bindings,
-      runtime.flushCoordinator,
-    );
+    const provider = runtime.createScalarPersistenceProvider();
     // The runtime object is the readiness key: the beforeClose hook runs
     // only after this assignment, so the captured reference is always the
     // fully constructed runtime. Unregistering happens BEFORE the stop

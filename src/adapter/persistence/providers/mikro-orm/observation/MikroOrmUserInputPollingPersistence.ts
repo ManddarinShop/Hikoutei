@@ -32,11 +32,14 @@ import { QUARANTINE_REASONS } from "@hikoutei/contracts/domain/model/constants.j
 import {
   SYNC_PROJECTIONS,
 } from "@hikoutei/contracts/sheets/constants.js";
+import type {
+  TypedSheetsEntityMapping,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
 import {
   createTypedSheetsEntityOwnershipManifest,
   requireTypedSheetsEntityProjection,
-  type TypedSheetsEntityMapping,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/projection.js";
+
 import { projectionEffects } from "../../../../../application/orm/persistence/projection/projectionEffects.js";
 import { identifiedValue } from "../../../../../application/orm/persistence/support/helpers.js";
 import type { ResolvedWriterOptions } from "../../../../../application/orm/persistence/support/contracts.js";
@@ -72,7 +75,11 @@ import {
   type MappedPollingState,
   type RowBindingStateRecord,
 } from "./MikroOrmUserInputPollingState.js";
-import { TypedSheetsOrmError, TYPED_SHEETS_ORM_ERROR_CODES } from "../../../../../application/orm/errors.js";
+import {
+  TypedSheetsOrmError,
+  TYPED_SHEETS_ORM_ERROR_CODES,
+} from "@hikoutei/contracts/sync-orm/errors.js";
+
 
 /** Persists invalid polling evidence without mutating canonical entity state. */
 export async function persistInvalidPollingRows(

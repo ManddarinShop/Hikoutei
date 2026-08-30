@@ -30,7 +30,10 @@ import type {
 } from "../storage/MikroOrmSqliteAdapter.js";
 import { isCanonicalUtcIsoDate } from "@hikoutei/contracts/validation.js";
 import { isRecord } from "@hikoutei/contracts/encoding/typeGuards.js";
-import type { MappedEntityReference } from "../../../../../application/orm/mapping/contracts.js";
+import type {
+  MappedEntityReference,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
+
 
 /** Internal mapping from a public descriptor to its generated MikroORM entity. */
 export interface MikroOrmScalarEntityBinding {

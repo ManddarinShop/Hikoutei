@@ -38,13 +38,8 @@ import {
 import {
   columnLetters,
   quoteA1SheetName,
-} from "../../../../adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
-import type {
-  GoogleSheetsApiWriteRequest,
-} from "../../../../adapter/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
-import {
-  requireValidBatchUpdateReply,
-} from "../../../../adapter/sheets/providers/google-sheets-api/operations/shared.js";
+  type GoogleSheetsApiWriteRequest,
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
@@ -86,7 +81,7 @@ import { typedSheetsEntityProjectionHeaders } from "../../../orm/mapping/project
 import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import {
   validateSnapshotCell,
-} from "../../../../adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
+} from "@hikoutei/contracts/sheets/userInputPolling.js";
 import type {
   ExistingSheetAdoptionEntityReport,
   ExistingSheetAdoptionLayout,
@@ -117,6 +112,12 @@ export async function applyAdoptionSystemColumns(input: {
    * blank rows.
    */
   readonly rows: readonly { readonly rowIndex: number; readonly pkValue: string }[];
+  /**
+   * P8-C: provider-owned batchUpdate reply verification supplied through the
+   * composition ports (the concrete reply gate stays adapter-owned and is
+   * reused verbatim).
+   */
+  readonly verifyReply: (reply: unknown, requestCount: number) => void;
 }): Promise<void> {
   const textRow = (value: string) => [{ userEnteredValue: { stringValue: value } }];
   const requests: GoogleSheetsApiWriteRequest[] = [];
@@ -170,7 +171,7 @@ export async function applyAdoptionSystemColumns(input: {
     spreadsheetId: input.spreadsheetId,
     requests,
   });
-  requireValidBatchUpdateReply(response, requests.length);
+  input.verifyReply(response, requests.length);
 }
 
 /** Groups sorted rows into maximal contiguous rowIndex runs. */

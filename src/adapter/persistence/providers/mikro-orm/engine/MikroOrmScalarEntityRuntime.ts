@@ -12,7 +12,10 @@ import type {
   HikouteiEntity,
   ResolvedHikouteiProperty,
 } from "../../../../../api/entity.js";
-import type { MappedEntityReference } from "../../../../../application/orm/mapping/contracts.js";
+import type {
+  MappedEntityReference,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
+
 import type { MikroOrmSqliteEntity } from "../storage/MikroOrmSqliteAdapter.js";
 import type { MikroOrmScalarEntityBinding } from "../api/MikroOrmScalarPersistenceProvider.js";
 

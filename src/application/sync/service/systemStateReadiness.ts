@@ -16,7 +16,7 @@
  */
 
 import type { Hikoutei } from "../../../api/Hikoutei.js";
-import type { MikroOrmSqliteAdapter } from "../../../adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import type { SyncServiceStorage } from "./compositionPorts.js";
 import {
   readSystemStateDrainReadinessWithAdapter,
   type SystemStateDrainReadiness,
@@ -24,7 +24,7 @@ import {
 
 /** Storage handle bound to one registered runtime. */
 interface RegisteredRuntime {
-  readonly storage: MikroOrmSqliteAdapter;
+  readonly storage: SyncServiceStorage;
 }
 
 /**
@@ -40,7 +40,7 @@ const registeredRuntimes = new WeakMap<Hikoutei, RegisteredRuntime>();
 /** Registers one bootstrapped runtime for readiness queries. */
 export function registerSystemStateReadiness(
   runtime: Hikoutei,
-  storage: MikroOrmSqliteAdapter,
+  storage: SyncServiceStorage,
 ): void {
   registeredRuntimes.set(runtime, { storage });
 }

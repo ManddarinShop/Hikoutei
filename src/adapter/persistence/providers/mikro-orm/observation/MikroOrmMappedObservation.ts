@@ -16,15 +16,22 @@ import {
   type PersistObservedRowResult,
 } from "../../../../../infrastructure/storage/state/observation/observationWriter.js";
 import { OBSERVATION_WRITE_RESULT_KINDS } from "../../../../../infrastructure/storage/state/observation/observationConstants.js";
+import type {
+  TypedSheetsEntityMapping,
+  TypedSheetsEntityMappingRegistry,
+} from "@hikoutei/contracts/sync-orm/mapping/contracts.js";
 import {
-  createTypedSheetsEntityMappingRegistry,
-  decodeTypedSheetsEntityField,
-  requireTypedSheetsEntityField,
   typedSheetsCanonicalEntityId,
   typedSheetsEntityIdFromCanonical,
-  type TypedSheetsEntityMapping,
-  type TypedSheetsEntityMappingRegistry,
-} from "../../../../../application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/sync-orm/mapping/identity.js";
+import {
+  createTypedSheetsEntityMappingRegistry,
+} from "@hikoutei/contracts/sync-orm/mapping/registry.js";
+import {
+  decodeTypedSheetsEntityField,
+  requireTypedSheetsEntityField,
+} from "@hikoutei/contracts/sync-orm/mapping/values.js";
+
 import {
   MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS,
   planMappedObservationEntityMutation,
@@ -32,7 +39,8 @@ import {
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../../../../application/orm/errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
+
 import {
   planOpenConflictAuditEffectsWithSql,
 } from "../../../../../application/sync/inbound/autoSystemConflictResolution.js";
