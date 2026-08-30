@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.9.13",
+  "version": "0.9.14",
   "description": "Typed repository and safe write layer for Google Sheets-backed MVPs. SQLite-authoritative entity lifecycle with asynchronous Google Sheets projection.",
   "repository": {
     "type": "git",
@@ -40,10 +40,9 @@
     "test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && vitest run",
     "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
     "audit:knip": "knip",
-    "audit:deps": "depcruise src --config .dependency-cruiser.cjs --output-type err || node -e \"console.error('[audit:deps] report-only: P8-A baseline phase — violations are recorded, not gated (see .dependency-cruiser.cjs header); hard-fail arrives in P8-C.')\"",
+    "audit:deps": "npx depcruise src packages/hikoutei-contracts --config .dependency-cruiser.cjs --output-type err || node -e \"console.error('[audit:deps] report-only: violations above are the P8-A/P8-B baseline; hard gate lands in P8-C')\"",
     "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
-    "audit:markers": "node scripts/maintenance/audit-markers.mjs",
-    "audit:deps": "npx depcruise src packages/hikoutei-contracts --config .dependency-cruiser.cjs --output-type err || node -e \"console.error('[audit:deps] report-only: violations above are the P8-A/P8-B baseline; hard gate lands in P8-C')\""
+    "audit:markers": "node scripts/maintenance/audit-markers.mjs"
   },
   "keywords": [
     "google-sheets",
