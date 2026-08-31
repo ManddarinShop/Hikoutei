@@ -106,6 +106,19 @@ jobs:
             --base-version="$effective_base" \
             --bump=patch)"
           npm version "$next_version" --no-git-tag-version
+          # Pin the cli workspace dependency to the new root release version
+          # so the package can be resolved by npm (which rejects workspace:*
+          # protocol). The cli always lags the root by one release; updating
+          # it here keeps the pin in lockstep (P8-D1).
+          node -e '
+            const fs = require("node:fs");
+            const next = process.argv[1];
+            for (const rel of ["./packages/cli/package.json", "./packages/mcp/package.json"]) {
+              const pkg = JSON.parse(fs.readFileSync(rel, "utf8"));
+              pkg.dependencies["hikoutei"] = next;
+              fs.writeFileSync(rel, JSON.stringify(pkg, null, 2) + "\n");
+            }
+          ' "$next_version"
           # Bump the @hikoutei/ikisaki kernel patch version only when its
           # source or manifest changed since the last develop release, and keep
           # the root dependency in lockstep so hikoutei never references a
@@ -130,14 +143,16 @@ jobs:
               pkg.dependencies["@hikoutei/ikisaki"] = next;
               fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
             ' "$ikisaki_next_version"
-            npm install --package-lock-only --no-audit --no-fund --ignore-scripts
-            # Dual-lockfile transition (P8-D1): package-lock.json is kept until
-            # every consumer of it is flipped; pnpm-lock.yaml is the pnpm
-            # source of truth and must move with the ikisaki version pin so a
-            # later `pnpm install --frozen-lockfile` still resolves the exact
-            # pin to the workspace package (linkWorkspacePackages: true).
-            pnpm install --lockfile-only
           fi
+          # Regenerate lockfiles after all manifest changes (root, cli pin,
+          # and optional ikisaki bump) are settled.
+          npm install --package-lock-only --no-audit --no-fund --ignore-scripts
+          # Dual-lockfile transition (P8-D1): package-lock.json is kept until
+          # every consumer of it is flipped; pnpm-lock.yaml is the pnpm
+          # source of truth and must move with the version pins so a
+          # later `pnpm install --frozen-lockfile` still resolves the exact
+          # pins to the workspace package (linkWorkspacePackages: true).
+          pnpm install --lockfile-only
           node -e '
             const expected = process.argv[1];
             const pkg = require("./package.json");
@@ -155,9 +170,9 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only | sort)"
-          expected=$'package-lock.json\npackage.json\npnpm-lock.yaml'
+          expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            expected=$'package-lock.json\npackage.json\npnpm-lock.yaml\npackages/ikisaki/package.json'
+            expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/mcp/package.json\npackages/ikisaki/package.json\npnpm-lock.yaml'
           fi
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
@@ -173,7 +188,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json pnpm-lock.yaml
+          git add package.json package-lock.json packages/cli/package.json packages/mcp/package.json pnpm-lock.yaml
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
             git add packages/ikisaki/package.json
           fi

@@ -5,13 +5,14 @@ name: Publish spreadsheet-db-mcp package
 # depends on (the workspace hikoutei version must satisfy the patched
 # dependency spec and that version must already exist on npmjs).
 #
-# Unlike the core package, spreadsheet-db-mcp keeps `"private": true` and a
-# workspace `file:../..` dependency in the repository so branch CI never
-# needs an unpublished registry version. This workflow patches both at
-# publish time only: the dependency becomes `^<core version>` and the
-# private flag is stripped, the resulting tarball is asserted clean, and a
-# bare consumer install smoke runs against the packed artifact before the
-# idempotent publish step (mirroring the ikisaki publish step).
+# Unlike the core package, spreadsheet-db-mcp keeps `"private": true` and an
+# exact-pinned `hikoutei` dependency (P8-D1 exact pin rule: workspace:
+# specifiers are unreadable by npm lockfile steps) in the repository so
+# branch CI never needs an unpublished registry version. This workflow
+# patches both at publish time only: the dependency becomes `^<core version>`
+# and the private flag is stripped, the resulting tarball is asserted clean,
+# and a bare consumer install smoke runs against the packed artifact before
+# the idempotent publish step (mirroring the ikisaki publish step).
 on:
   push:
     tags:
@@ -85,8 +86,11 @@ jobs:
           const pkg = JSON.parse(await readFile("./packages/mcp/package.json", "utf8"));
           const coreVersion = process.env.core_version;
           if (pkg.private !== true) throw new Error("expected private:true in the repo manifest");
-          if (pkg.dependencies.hikoutei !== "file:../..") {
-            throw new Error("expected the workspace file:../.. hikoutei dependency in the repo manifest");
+          if (pkg.dependencies.hikoutei !== coreVersion) {
+            throw new Error(
+              `expected hikoutei dependency to be exact-pinned to ${coreVersion} ` +
+              `(P8-D1 exact pin rule), got ${pkg.dependencies.hikoutei}`
+            );
           }
           delete pkg.private;
           pkg.dependencies.hikoutei = `^${coreVersion}`;

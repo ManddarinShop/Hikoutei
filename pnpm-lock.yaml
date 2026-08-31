@@ -79,7 +79,7 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: workspace:*
+        specifier: 0.9.15
         version: link:../..
     devDependencies:
       '@types/node':
@@ -136,8 +136,8 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: file:../..
-        version: file:(@mikro-orm/core@7.1.7)(@mikro-orm/sql@7.1.7(@mikro-orm/core@7.1.7))
+        specifier: 0.9.15
+        version: link:../..
 
   packages/sheets:
     dependencies:
@@ -352,9 +352,6 @@ packages:
   '@googleapis/sheets@14.0.0':
     resolution: {integrity: sha512-fANEl4RQohsPYUWhcLSYyUyE8A8bRfvw/bp8h0t8VDQqTgdQ3itZBkty4nddtdqCAvNDpA+KM66OejVKDd6aFg==}
     engines: {node: '>=12.0.0'}
-
-  '@hikoutei/ikisaki@0.1.5':
-    resolution: {integrity: sha512-sVRnNgK1zLgLxJd1EyA7A2BK8yrhKsZdBD7Ose6KXPemakOfy/wDVB5Ek0l5sVu+2e/YoitkaOWzhDe8a6rUgw==}
 
   '@hikoutei/kohkai@0.1.0':
     resolution: {integrity: sha512-ciZqHnU+4R4ozxzZBltaDpzhcra0wPegAXG7BDLtaQuYqkMvkHdq2PUhPtl6HGddSSI63bRwVO2Qb05mQBv0VQ==}
@@ -1201,19 +1198,6 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  'hikoutei@file:':
-    resolution: {directory: '', type: directory}
-    engines: {node: '>=22.13'}
-    hasBin: true
-    peerDependencies:
-      '@mikro-orm/core': 7.1.7
-      '@mikro-orm/sql': 7.1.7
-    peerDependenciesMeta:
-      '@mikro-orm/core':
-        optional: true
-      '@mikro-orm/sql':
-        optional: true
-
   hono@4.13.2:
     resolution: {integrity: sha512-JydRilDRkYBQMt9qR9U92mXxmbGqsqSn/IKOrh4e7/gEbn+0zSr8igTu0obwJoNGN4sez28DIql7FBHWydoJpA==}
     engines: {node: '>=16.9.0'}
@@ -1954,8 +1938,6 @@ snapshots:
       googleapis-common: 8.0.3
     transitivePeerDependencies:
       - supports-color
-
-  '@hikoutei/ikisaki@0.1.5': {}
 
   '@hikoutei/kohkai@0.1.0': {}
 
@@ -2728,20 +2710,6 @@ snapshots:
   hasown@2.0.4:
     dependencies:
       function-bind: 1.1.2
-
-  hikoutei@file:(@mikro-orm/core@7.1.7)(@mikro-orm/sql@7.1.7(@mikro-orm/core@7.1.7)):
-    dependencies:
-      '@googleapis/drive': 21.0.0
-      '@googleapis/sheets': 14.0.0
-      '@hikoutei/ikisaki': 0.1.5
-      '@hikoutei/kohkai': 0.1.0
-      google-auth-library: 11.0.0
-      zod: 4.4.3
-    optionalDependencies:
-      '@mikro-orm/core': 7.1.7
-      '@mikro-orm/sql': 7.1.7(@mikro-orm/core@7.1.7)
-    transitivePeerDependencies:
-      - supports-color
 
   hono@4.13.2: {}
 
