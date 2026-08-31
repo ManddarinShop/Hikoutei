@@ -180,6 +180,23 @@ function createMikroOrmTransaction(
   };
 }
 
+/**
+ * --- error-contract survey §c (I): MikroORM adapter invariant assertions ---
+ *
+ * The five raw `TypeError` sites below (findOne, nativeUpdate, nativeDelete in
+ * `createMikroOrmNativeEntityWriter`; SQL `all` and `get` in
+ * `MikroOrmSqlExecutor`) are intentional raw invariant assertions over the
+ * trusted MikroORM adapter boundary. A MikroORM or SQLite driver returning a
+ * structurally invalid result (non-object findOne, non-integer nativeUpdate/
+ * nativeDelete, non-array or non-object SQL result) is a library-contract
+ * violation (programming error), not a machine-readable channel outcome.
+ *
+ * These TypeErrors are therefore classified as intentional raw: they are NOT
+ * converted to persisted STORAGE_ERROR_CODES because the codes would never
+ * appear in the persisted error table (they represent bugs, not user-facing
+ * outcomes).
+ */
+
 /** Adapts native MikroORM writes without pretending the public manager has them. */
 function createMikroOrmNativeEntityWriter(
   entityManager: MikroOrmSqliteEntityManager,

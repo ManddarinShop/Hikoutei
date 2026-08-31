@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  COORDINATED_PREPARED_STATE_ERROR_CODES,
   CoordinatedLanePreconditionError,
+  CoordinatedPreparedStateError,
   CoordinatedSheetsProvider,
   type CoordinatedSheetsInner,
 } from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
@@ -625,6 +627,65 @@ describe("CoordinatedSheetsProvider", () => {
     } as unknown as PreparedApplyEffects;
     await expect(coordinator.applyPreparedEffects(malformed)).rejects.toThrow(/effect routes/);
     expect(inner.mutationCalls).toBe(0);
+  });
+
+  it("throws CoordinatedPreparedStateError with PREPARED_APPLY_ROUTES_REQUIRED for empty effects", async () => {
+    expect.assertions(4);
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    const malformed = {
+      kind: "single",
+      request: { physicalSheetId: SAMPLE_PHYSICAL_SHEET, effects: [] },
+    } as unknown as PreparedApplyEffects;
+    try {
+      await coordinator.applyPreparedEffects(malformed);
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(CoordinatedPreparedStateError);
+      expect((error as CoordinatedPreparedStateError).code).toBe(
+        COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_ROUTES_REQUIRED,
+      );
+      expect((error as Error).message).toBe("prepared apply state carries no effect routes");
+      expect((error as Error).name).toBe("CoordinatedPreparedStateError");
+    }
+  });
+
+  it("throws CoordinatedPreparedStateError with PREPARED_APPLY_ROUTES_REQUIRED for null prepared token", async () => {
+    expect.assertions(4);
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    try {
+      await coordinator.applyPreparedEffects(null as unknown as PreparedApplyEffects);
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(CoordinatedPreparedStateError);
+      expect((error as CoordinatedPreparedStateError).code).toBe(
+        COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_ROUTES_REQUIRED,
+      );
+      expect((error as Error).message).toBe("prepared apply state carries no effect routes");
+      expect((error as Error).name).toBe("CoordinatedPreparedStateError");
+    }
+  });
+
+  it("throws CoordinatedPreparedStateError with PREPARED_APPLY_EFFECT_SHEET_ID_REQUIRED for missing physicalSheetId", async () => {
+    expect.assertions(4);
+    const inner = new MockProvider();
+    const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
+    const malformed = {
+      kind: "single",
+      request: {
+        physicalSheetId: SAMPLE_PHYSICAL_SHEET,
+        effects: [{ effectId: "e1", payloadHash: "h1" }],
+      },
+    } as unknown as PreparedApplyEffects;
+    try {
+      await coordinator.applyPreparedEffects(malformed);
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(CoordinatedPreparedStateError);
+      expect((error as CoordinatedPreparedStateError).code).toBe(
+        COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_EFFECT_SHEET_ID_REQUIRED,
+      );
+      expect((error as Error).message).toBe("prepared apply state carries an effect without a physical sheet id");
+      expect((error as Error).name).toBe("CoordinatedPreparedStateError");
+    }
   });
 });
 
