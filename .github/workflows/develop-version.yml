@@ -172,7 +172,7 @@ jobs:
           changed="$(git diff --name-only | sort)"
           expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/mcp/package.json\npackages/ikisaki/package.json\npnpm-lock.yaml'
+            expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/ikisaki/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
           fi
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
