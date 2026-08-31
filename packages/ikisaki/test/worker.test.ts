@@ -14,9 +14,11 @@ import {
   appendPendingEffectsWithAdapter,
   claimEffectWithAdapter,
   createEffectWorkerSupervisor,
+  EffectWorkerSupervisor,
   AdaptiveBatchOptionsError,
   DispatchTransportError,
   KernelInputError,
+  SUPERVISOR_OPTIONS_ERROR_CODES,
   SupervisionOptionsError,
   WORKER_OPTIONS_ERROR_CODES,
   WorkerOptionsError,
@@ -1493,7 +1495,7 @@ describe("effect worker", () => {
               [effect1.effectId],
             );
           });
-          if (row?.lease_until != null && row.lease_until <= TEST_NOW + 5_000) {
+          if (row !== undefined && row.lease_until !== null && row.lease_until <= TEST_NOW + 5_000) {
             effect1Expired = true;
           }
         }
@@ -1778,6 +1780,22 @@ describe("reconciliation first-scan scheduling", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(SupervisionOptionsError);
       expect((error as SupervisionOptionsError).code).toBe("sync_effect_supervisor_non_negative_integer_required");
+    }
+  });
+
+  it("rejects non-positive reconciliation interval with the typed error code", () => {
+    expect.assertions(3);
+    try {
+      new EffectWorkerSupervisor({
+        runPass: () => Promise.resolve() as never,
+        reconciliation: { intervalMs: 0, run: () => Promise.resolve() as never },
+      });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(SupervisionOptionsError);
+      expect((error as SupervisionOptionsError).code).toBe(
+        SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      );
+      expect((error as Error).message).toBe("sync effect supervisor reconciliation interval must be a positive safe integer");
     }
   });
 
