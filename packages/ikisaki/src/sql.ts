@@ -1,3 +1,5 @@
+import { KERNEL_INPUT_ERROR_CODES, KernelInputError } from "./errors.js";
+
 /**
  * Adapter-neutral asynchronous SQL primitives used by the consistency queue.
  *
@@ -25,7 +27,7 @@ export function decodeSqlRow<Row extends object>(
   label = "SQL row",
 ): Row {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`${label} must be an object`);
+    throw new KernelInputError(KERNEL_INPUT_ERROR_CODES.OBJECT_REQUIRED, label);
   }
   return decoder(value as SqlRow);
 }
