@@ -10,10 +10,6 @@ import {
 import {
   APPLICABILITY_KINDS,
 } from "../state.js";
-import {
-  STORAGE_ERROR_CODES,
-  StorageError,
-} from "../errors.js";
 
 /** Redacts an unknown thrown value into a bounded diagnostic message. */
 export function safeErrorMessage(error: unknown): string {
@@ -53,6 +49,3 @@ export function applicabilityFromSqlNullable<T>(value: T | null): Applicability<
   return value === null ? { kind: APPLICABILITY_KINDS.NOT_APPLICABLE } : { kind: APPLICABILITY_KINDS.APPLICABLE, value };
 }
 
-export function throwWorkerError(message: string): never {
-  throw new StorageError(STORAGE_ERROR_CODES.INVALID_PENDING_EFFECT, message);
-}

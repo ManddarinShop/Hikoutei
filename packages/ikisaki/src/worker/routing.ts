@@ -12,7 +12,10 @@ import {
   EFFECT_BATCH_LIMIT,
   OUTBOX_EFFECT_STATUSES,
 } from "./constants.js";
-import { throwWorkerError } from "./helpers.js";
+import {
+  PROVIDER_BATCH_LIMIT_ERROR_CODES,
+  ProviderBatchLimitError,
+} from "./errors.js";
 
 /** One route-bound group of claimed effects. */
 export interface EffectRouteGroup {
@@ -188,6 +191,6 @@ export function fenceFromLease(lease: WriterLease, now: number): FencingContext 
 
 function requireBatchLimit(value: number): void {
   if (!Number.isSafeInteger(value) || value < 1) {
-    throwWorkerError("provider effect batch limit must be a positive safe integer");
+    throw new ProviderBatchLimitError(PROVIDER_BATCH_LIMIT_ERROR_CODES.POSITIVE_INTEGER_REQUIRED);
   }
 }

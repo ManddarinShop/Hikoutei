@@ -16,7 +16,10 @@ import {
   createEffectWorkerSupervisor,
   AdaptiveBatchOptionsError,
   DispatchTransportError,
+  KernelInputError,
   SupervisionOptionsError,
+  WORKER_OPTIONS_ERROR_CODES,
+  WorkerOptionsError,
   EFFECT_BATCH_LIMIT,
   markDeliveryUncertainWithAdapter,
   runEffectWorkerWithAdapter,
@@ -44,6 +47,9 @@ import type {
   SqlStorageAdapter,
   SqlStorageContext,
 } from "../src/sql.js";
+import { chunkEffectGroups } from "../src/worker/routing.js";
+import { ProviderBatchLimitError } from "../src/worker/errors.js";
+import { requireSemanticString } from "../src/identity.js";
 
 /**
  * Wraps a kernel store so the FIRST result-persistence transaction after the
@@ -1105,6 +1111,48 @@ describe("effect worker", () => {
       effectLeaseDurationMs: 120_000,
       requestTimeoutMs: 120_000,
     })).rejects.toThrow("effectLeaseDurationMs must exceed requestTimeoutMs by 30 seconds");
+  });
+
+  it("throws WorkerOptionsError with code for invalid worker options", async () => {
+    const adapter = createKernelStore();
+    const dispatcher = new FakeDispatcher();
+    try {
+      await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkerOptionsError);
+      expect((error as WorkerOptionsError).code).toBe(WORKER_OPTIONS_ERROR_CODES.WORKER_ID_REQUIRED);
+    }
+  });
+
+  it("throws KernelInputError with code for invalid semantic string", () => {
+    try {
+      requireSemanticString(123, "test field");
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(KernelInputError);
+      expect((error as KernelInputError).code).toBe("kernel_non_empty_string_required");
+      expect((error as KernelInputError).message).toBe("test field must be a non-empty string");
+    }
+  });
+
+  it("throws ProviderBatchLimitError with code when chunkEffectGroups receives a non-positive limit", () => {
+    try {
+      chunkEffectGroups(
+        [{ routeKey: "r", items: [{ pending: {} as any, claimToken: "c", invalidPayloadError: { kind: "absent" } } as any] }],
+        0,
+      );
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderBatchLimitError);
+      expect((error as ProviderBatchLimitError).code).toBe("provider_batch_limit_positive_integer_required");
+    }
   });
 
   it("supervisor runs one pass and stops", async () => {

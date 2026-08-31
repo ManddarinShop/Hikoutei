@@ -12,6 +12,7 @@ import {
   isNonEmptyString,
   isNonNegativeSafeInteger,
 } from "./validation.js";
+import { KERNEL_INPUT_ERROR_CODES, KernelInputError } from "./errors.js";
 
 declare const semanticStringBrand: unique symbol;
 declare const semanticNumberBrand: unique symbol;
@@ -40,7 +41,7 @@ export function requireSemanticString<Label extends string>(
   label: string,
 ): SemanticString<Label> {
   if (!isNonEmptyString(value)) {
-    throw new TypeError(`${label} must be a non-empty string`);
+    throw new KernelInputError(KERNEL_INPUT_ERROR_CODES.NON_EMPTY_STRING_REQUIRED, label);
   }
   return value as SemanticString<Label>;
 }

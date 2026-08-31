@@ -69,7 +69,6 @@ import {
   lookupResult,
   presentValue,
   safeErrorMessage,
-  throwWorkerError,
 } from "./helpers.js";
 import {
   countsForItems,
@@ -93,6 +92,8 @@ import {
 } from "./dispatch.js";
 import {
   isDispatchTransportError,
+  WORKER_OPTIONS_ERROR_CODES,
+  WorkerOptionsError,
 } from "./errors.js";
 import {
   chunkEffectGroups,
@@ -1059,33 +1060,33 @@ function freezeReport(report: MutableReport): WorkerReport {
 
 function validateOptions(options: EffectWorkerBaseOptions): void {
   if (options.workerId.length === EMPTY_STRING_LENGTH_ZERO) {
-    throwWorkerError("effect worker ID is required");
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.WORKER_ID_REQUIRED);
   }
   if (
     !Number.isSafeInteger(options.now) ||
     options.now < NON_NEGATIVE_SAFE_INTEGER_MINIMUM
   ) {
-    throwWorkerError("effect worker time must be a non-negative safe integer");
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.TIME_INVALID);
   }
   if (
     !Number.isSafeInteger(options.maxEffects) ||
     options.maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM
   ) {
-    throwWorkerError("effect worker maxEffects must be a positive safe integer");
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.MAX_EFFECTS_POSITIVE_REQUIRED);
   }
   if (
     options.maxFastAppendCandidates !== undefined &&
     (!Number.isSafeInteger(options.maxFastAppendCandidates) ||
       options.maxFastAppendCandidates < POSITIVE_SAFE_INTEGER_MINIMUM)
   ) {
-    throwWorkerError("effect worker maxFastAppendCandidates must be a positive safe integer");
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.MAX_FAST_APPEND_POSITIVE_REQUIRED);
   }
   if (
     options.appendDispatchIntervalMs !== undefined &&
     (!Number.isSafeInteger(options.appendDispatchIntervalMs) ||
       options.appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)
   ) {
-    throwWorkerError("effect worker appendDispatchIntervalMs must be a non-negative safe integer");
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.APPEND_INTERVAL_NON_NEGATIVE_REQUIRED);
   }
   for (const [name, value] of [
     ["writerLeaseDurationMs", options.writerLeaseDurationMs],
@@ -1096,18 +1097,18 @@ function validateOptions(options: EffectWorkerBaseOptions): void {
       value !== undefined &&
       (!Number.isSafeInteger(value) || value < POSITIVE_SAFE_INTEGER_MINIMUM)
     ) {
-      throwWorkerError(name + " must be a positive safe integer");
+      throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED, name);
     }
   }
   const writerLeaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
   const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
   if (writerLeaseDuration <= effectLeaseDuration) {
-    throwWorkerError("writerLeaseDurationMs must exceed effectLeaseDurationMs");
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.WRITER_LEASE_HEADROOM_INVALID);
   }
   if (
     options.requestTimeoutMs !== undefined &&
     effectLeaseDuration <= options.requestTimeoutMs + EFFECT_LEASE_PROVIDER_HEADROOM_MS
   ) {
-    throwWorkerError("effectLeaseDurationMs must exceed requestTimeoutMs by 30 seconds");
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.EFFECT_LEASE_HEADROOM_INVALID);
   }
 }

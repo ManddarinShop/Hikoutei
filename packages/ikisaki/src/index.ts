@@ -11,10 +11,13 @@
  */
 
 export {
+  KERNEL_INPUT_ERROR_CODES,
+  KernelInputError,
   STORAGE_ERROR_CODES,
   StorageError,
   CoreErrorException,
   type CoreError,
+  type KernelInputErrorCode,
   type StorageErrorCode,
 } from "./errors.js";
 

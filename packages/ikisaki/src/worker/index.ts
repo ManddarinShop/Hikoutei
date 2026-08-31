@@ -82,13 +82,19 @@ export {
   AdaptiveBatchOptionsError,
   DISPATCH_TRANSPORT_OUTCOME_KINDS,
   DispatchTransportError,
+  PROVIDER_BATCH_LIMIT_ERROR_CODES,
+  ProviderBatchLimitError,
   SUPERVISOR_OPTIONS_ERROR_CODES,
   SupervisionOptionsError,
+  WORKER_OPTIONS_ERROR_CODES,
+  WorkerOptionsError,
   isDispatchTransportError,
   type AdaptiveBatchErrorCode,
   type DispatchTransportOutcome,
   type DispatchTransportOutcomeKind,
+  type ProviderBatchLimitErrorCode,
   type SupervisorOptionsErrorCode,
+  type WorkerOptionsErrorCode,
 } from "./errors.js";
 
 export {
@@ -99,7 +105,6 @@ export {
   lookupResult,
   presentValue,
   safeErrorMessage,
-  throwWorkerError,
   type PresentValue,
 } from "./helpers.js";
 

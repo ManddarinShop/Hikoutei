@@ -79,3 +79,40 @@ export class StorageError extends CoreErrorException<"storage", string> {
     super("storage", code, message, options);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Kernel input validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable error codes for kernel input validation (non-empty strings, object
+ * checks). These cover the boundary where untrusted external values enter
+ * queue contracts.
+ */
+export const KERNEL_INPUT_ERROR_CODES = {
+  NON_EMPTY_STRING_REQUIRED: "kernel_non_empty_string_required",
+  OBJECT_REQUIRED: "kernel_object_required",
+} as const;
+
+export type KernelInputErrorCode =
+  (typeof KERNEL_INPUT_ERROR_CODES)[keyof typeof KERNEL_INPUT_ERROR_CODES];
+
+const kernelInputMessages: Record<KernelInputErrorCode, (label: string) => string> = {
+  [KERNEL_INPUT_ERROR_CODES.NON_EMPTY_STRING_REQUIRED]: (label) =>
+    `${label} must be a non-empty string`,
+  [KERNEL_INPUT_ERROR_CODES.OBJECT_REQUIRED]: (label) =>
+    `${label} must be an object`,
+};
+
+/**
+ * Typed error for kernel input validation failures (identity, SQL row decoding).
+ */
+export class KernelInputError extends TypeError {
+  readonly code: KernelInputErrorCode;
+
+  constructor(code: KernelInputErrorCode, label: string) {
+    super(kernelInputMessages[code](label));
+    this.name = "KernelInputError";
+    this.code = code;
+  }
+}
