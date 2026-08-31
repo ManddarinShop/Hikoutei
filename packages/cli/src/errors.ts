@@ -5,11 +5,13 @@
  * code plus a human message. Callers (the CLI entry, tests, and any wrapper)
  * branch on the code, never on message text. Most codes are phase-level: all
  * project-phase failures share one code, all service-account failures share
- * another, and so on; the message carries the specific detail. The path-safety
+ * another, and so on; the message carries the specific detail. The 13 path-safety
  * carrier codes (CHECKPOINT_TEMP_*, OUTPUT_*, SETUP_WRITE_NO_PROGRESS,
- * SETUP_DIR_FSYNC_*, SETUP_RENAME_DURABLE_*) are finer-grained: each names a
- * distinct recoverable failure site so the boundary catch can preserve
- * machine-readable specificity instead of collapsing to a generic write code.
+ * SETUP_DIR_FSYNC_*, SETUP_RENAME_DURABLE_*) are operation-level: 13 distinct
+ * codes cover 15 recoverable path-safety throw sites (OUTPUT_SYMLINK_REFUSED
+ * and OUTPUT_NOT_REGULAR_FILE are each reused at two sites) so the boundary
+ * catch can preserve machine-readable specificity instead of collapsing to a
+ * generic write code.
  */
 
 export const SETUP_ERROR_CODES = {

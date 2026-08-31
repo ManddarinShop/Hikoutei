@@ -28,7 +28,6 @@ import {
 import {
   adoptionTabRange,
   analyzeExistingSheetAdoptionEntity,
-  EXISTING_SHEET_ADOPTION_ERROR_CODES,
   ExistingSheetAdoptionDryRunReportError,
   type ExistingSheetAdoptionRunReport,
 } from "@hikoutei/sync-engine/sync/service/adopt/existingSheetAdoption.js";

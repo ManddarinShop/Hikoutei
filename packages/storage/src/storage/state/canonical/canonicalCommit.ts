@@ -43,6 +43,7 @@ import type { FencingContext } from "@hikoutei/ikisaki";
 
 // Outbound synchronization: accepted canonical changes become outbox effects.
 import {
+  AsyncFenceLostError,
   appendPendingEffectsWithSql,
   type NewEffect,
 } from "@hikoutei/ikisaki";
@@ -527,6 +528,3 @@ function requireApplicableRevision(revision: Applicability<number>): number {
 async function throwFenceIfLostWithSql(sql: SqlExecutor, fence: FencingContext): Promise<void> {
   if (!(await isFencingValidWithSql(sql, fence))) throw new AsyncFenceLostError();
 }
-
-/** Internal control-flow signal that rolls the async canonical savepoint back. */
-class AsyncFenceLostError extends Error {}

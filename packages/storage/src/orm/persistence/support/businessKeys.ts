@@ -13,7 +13,7 @@ import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
 import {
   insertMappedActiveBusinessKeyWithSql,
   readMappedActiveBusinessKeyWithSql,

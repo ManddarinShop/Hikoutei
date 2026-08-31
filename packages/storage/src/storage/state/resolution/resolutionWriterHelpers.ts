@@ -51,11 +51,11 @@ export async function assertCurrentFenceWithSql(
   sql: SqlExecutor,
   fence: FencingContext,
 ): Promise<void> {
-  if (!(await isFencingValidWithSql(sql, fence))) throw new FenceLostError();
+  if (!(await isFencingValidWithSql(sql, fence))) throw new ResolutionStaleFenceError();
 }
 
 /** Signals that a resolution transaction lost its writer ownership. */
-export class FenceLostError extends StorageError {
+export class ResolutionStaleFenceError extends StorageError {
   constructor() {
     super(STORAGE_ERROR_CODES.STALE_WRITER_FENCE, "writer fencing is stale or expired");
   }

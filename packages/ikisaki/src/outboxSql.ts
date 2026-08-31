@@ -6,6 +6,7 @@
  */
 
 import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./contracts.js";
+import { WORKER_ERROR_CODES } from "./worker/constants.js";
 import { FENCE_EXISTS_SQL } from "./writerLease.js";
 
 export { FENCE_EXISTS_SQL } from "./writerLease.js";
@@ -152,7 +153,7 @@ export const RELEASE_UNPROCESSED_EFFECT_SQL = `
   UPDATE sheet_effect_outbox
   SET status = 'pending', claim_token = NULL, lease_until = NULL,
       next_attempt_at = ?, uncertain_since = NULL, next_probe_at = NULL,
-      last_error_code = 'provider_batch_deferred',
+      last_error_code = '${WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED}',
       last_error_message = 'Provider acknowledged a bounded batch before this effect.'
   WHERE effect_id = ? AND status = 'processing' AND claim_token = ?
     AND writer_epoch = ? AND lease_until IS NOT NULL AND lease_until > ?

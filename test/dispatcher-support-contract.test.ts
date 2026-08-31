@@ -59,7 +59,7 @@ function baseEffect(overrides: Partial<PendingEffect> = {}): PendingEffect {
 
 describe("toProviderEffect persisted-value contract", () => {
   it("throws SyncEffectContractError for an unsupported effect_kind", () => {
-    const effect = baseEffect({ effect_kind: "bogus_kind" as PendingEffect["effect_kind"] });
+    const effect = baseEffect({ effect_kind: "unknown-kind" as PendingEffect["effect_kind"] });
     expect.assertions(3);
     try {
       toProviderEffect(effect);
@@ -68,12 +68,12 @@ describe("toProviderEffect persisted-value contract", () => {
       expect((error as SyncEffectContractError).code).toBe(
         SYNC_EFFECT_CONTRACT_ERROR_CODES.UNSUPPORTED_SYNC_EFFECT_KIND,
       );
-      expect((error as Error).message).toBe("unsupported sync effect kind: bogus_kind");
+      expect((error as Error).message).toBe("unsupported sync effect kind: unknown-kind");
     }
   });
 
   it("throws SyncEffectContractError for an unsupported projection", () => {
-    const effect = baseEffect({ projection: "bogus_projection" as PendingEffect["projection"] });
+    const effect = baseEffect({ projection: "unknown-projection" as PendingEffect["projection"] });
     expect.assertions(3);
     try {
       toProviderEffect(effect);
@@ -82,12 +82,12 @@ describe("toProviderEffect persisted-value contract", () => {
       expect((error as SyncEffectContractError).code).toBe(
         SYNC_EFFECT_CONTRACT_ERROR_CODES.UNSUPPORTED_SYNC_PROJECTION,
       );
-      expect((error as Error).message).toBe("unsupported sync projection: bogus_projection");
+      expect((error as Error).message).toBe("unsupported sync projection: unknown-projection");
     }
   });
 
   it("throws SyncEffectContractError for an unsupported target_kind", () => {
-    const effect = baseEffect({ target_kind: "bogus_target" as PendingEffect["target_kind"] });
+    const effect = baseEffect({ target_kind: "unknown-target" as PendingEffect["target_kind"] });
     expect.assertions(3);
     try {
       toProviderEffect(effect);
@@ -96,7 +96,7 @@ describe("toProviderEffect persisted-value contract", () => {
       expect((error as SyncEffectContractError).code).toBe(
         SYNC_EFFECT_CONTRACT_ERROR_CODES.UNSUPPORTED_SYNC_EFFECT_TARGET_KIND,
       );
-      expect((error as Error).message).toBe("unsupported sync effect target kind: bogus_target");
+      expect((error as Error).message).toBe("unsupported sync effect target kind: unknown-target");
     }
   });
 });

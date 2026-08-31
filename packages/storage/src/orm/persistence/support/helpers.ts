@@ -26,7 +26,7 @@ import {
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
 import type { ResolvedWriterOptions } from "./contracts.js";
 
 /** Returns a namespaced ID and rejects an invalid injected ID source. */

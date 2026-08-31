@@ -19,7 +19,7 @@ import {
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
 
 /** Runtime kinds of entity-table mutations derived from accepted observations. */
 export const MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS = {

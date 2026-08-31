@@ -929,6 +929,9 @@ describe("effect worker", () => {
     expect(dispatcher.probeCalls).toBe(0);
     await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 
   it("emits hasMore, requested, and acknowledged counts on fast-append timing", async () => {
@@ -973,6 +976,11 @@ describe("effect worker", () => {
     expect(dispatchEvent?.responseSucceeded).toBe(true);
     expect(dispatchEvent?.requestedEffects).toBe(2);
     expect(dispatchEvent?.acknowledgedEffects).toBe(1);
+    // Regression: the suffix released by the hasMore path must carry
+    // the provider_batch_deferred error code in the persisted row.
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 
   it("fails an effect per-effect when the dispatcher candidate predicate throws", async () => {
@@ -2529,6 +2537,9 @@ describe("adaptive batch controller", () => {
     expect(report).toMatchObject({ applied: 1, deferred: 1, requeued: 0, failed: 0 });
     await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 });
 
@@ -2548,6 +2559,16 @@ function outboxStatus(adapter: NodeSqliteTestAdapter, effectId: string): Promise
       [effectId],
     );
     return row?.status;
+  });
+}
+
+function outboxLastError(adapter: NodeSqliteTestAdapter, effectId: string): Promise<string | undefined> {
+  return adapter.read(async ({ sql }) => {
+    const row = await sql.get<{ readonly last_error_code: string | null }>(
+      "SELECT last_error_code FROM sheet_effect_outbox WHERE effect_id = ?",
+      [effectId],
+    );
+    return row?.last_error_code ?? undefined;
   });
 }
 

@@ -215,8 +215,9 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
  * value, never a class) and the MCP sync-status reader
  * (`HikouteiSyncStatusError` in `src/internal/syncStatus.ts`) are separate
  * tooling surfaces that never route through the runtime log, and the
- * internal storage sentinels (`FenceLostError`, `CanonicalStaleError`,
- * `AsyncFenceLostError`) are caught and converted into result kinds before
+ * internal storage sentinels (`FenceLostError`, `ResolutionStaleFenceError`,
+ * `CanonicalStaleError`, `AsyncFenceLostError`) are caught and converted into
+ * result kinds before
  * any boundary, so they never surface as thrown classes.
  */
 export const HIKOUTEI_LOG_STABLE_CLASSES = Object.freeze([

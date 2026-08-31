@@ -48,7 +48,7 @@ import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
 import {
   DEFAULT_MAPPED_WRITER_LEASE_DURATION_MS,
   DEFAULT_MAPPED_WRITER_ROLE,

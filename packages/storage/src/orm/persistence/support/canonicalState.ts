@@ -28,7 +28,7 @@ import type { TypedSheetsEntityMapping } from "../../mapping/entityMapping.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
 
 /** Canonical entity lifecycle values used by mapped reactivation. */
 const CANONICAL_ENTITY_STATUSES = {

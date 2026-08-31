@@ -138,10 +138,14 @@ jobs:
             node -e '
               const fs = require("node:fs");
               const next = process.argv[1];
-              const pkgPath = "./package.json";
-              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-              pkg.dependencies["@hikoutei/ikisaki"] = next;
-              fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+              // Root + storage + sync-engine all pin @hikoutei/ikisaki in
+              // lockstep: any consumer that lags will resolve the stale
+              // registry tarball which may lack newly-exported symbols.
+              for (const rel of ["./package.json", "./packages/storage/package.json", "./packages/sync-engine/package.json"]) {
+                const pkg = JSON.parse(fs.readFileSync(rel, "utf8"));
+                pkg.dependencies["@hikoutei/ikisaki"] = next;
+                fs.writeFileSync(rel, JSON.stringify(pkg, null, 2) + "\n");
+              }
             ' "$ikisaki_next_version"
           fi
           # Regenerate lockfiles after all manifest changes (root, cli pin,
@@ -172,7 +176,10 @@ jobs:
           changed="$(git diff --name-only | sort)"
           expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/ikisaki/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
+            # packages/storage and packages/sync-engine are included because
+            # their @hikoutei/ikisaki pins must stay in lockstep with the
+            # root dep (same pattern as cli/mcp hikoutei pins; #434/#435).
+            expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/ikisaki/package.json\npackages/mcp/package.json\npackages/storage/package.json\npackages/sync-engine/package.json\npnpm-lock.yaml'
           fi
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
@@ -190,7 +197,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json packages/cli/package.json packages/mcp/package.json pnpm-lock.yaml
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            git add packages/ikisaki/package.json
+            git add packages/ikisaki/package.json packages/storage/package.json packages/sync-engine/package.json
           fi
           git commit -m "chore(release): bump develop version to $RELEASE_VERSION"
           git tag -a "develop-v$RELEASE_VERSION" \
