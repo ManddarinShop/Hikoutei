@@ -1,21 +1,21 @@
 /** Route grouping, chunking, and routing predicates for the effect worker. */
 
-import type { Dispatcher } from "./dispatcher.js";
-import type { ClaimedEffect } from "./contracts.js";
+import type { Dispatcher } from "../dispatcher.js";
+import type { ClaimedEffect } from "../contracts.js";
 import type {
   FencingContext,
   PendingEffect,
   WriterLease,
-} from "../index.js";
-import { EFFECT_KINDS } from "../contract/constants.js";
+} from "../../index.js";
+import { EFFECT_KINDS } from "../../contract/constants.js";
 import {
   EFFECT_BATCH_LIMIT,
   OUTBOX_EFFECT_STATUSES,
-} from "./constants.js";
+} from "../constants.js";
 import {
   PROVIDER_BATCH_LIMIT_ERROR_CODES,
   ProviderBatchLimitError,
-} from "./errors.js";
+} from "../errors.js";
 
 /** One route-bound group of claimed effects. */
 export interface EffectRouteGroup {

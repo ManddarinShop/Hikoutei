@@ -9,7 +9,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { SqlStorageAdapter } from "../sql/sql.js";
 import type {
   FencingContext,
   PendingEffect,
@@ -20,19 +19,6 @@ import {
   type Presence,
 } from "../contract/state.js";
 import {
-  claimEffectWithAdapter,
-  applyEffectResultWithAdapter,
-  markDeliveryUncertainWithAdapter,
-  renewEffectLeaseWithAdapter,
-  recoverExpiredLeasesWithAdapter,
-  listReadyEffectsWithAdapter,
-  listReadyFastAppendEffectsWithAdapter,
-  releaseUnprocessedEffectWithAdapter,
-  retryClaimedEffectWithAdapter,
-  supersedeAndReplanWithAdapter,
-} from "../outbox/outbox.js";
-import {
-  claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "../outbox/writerLease.js";
 import type { ClaimedEffect } from "./contracts.js";
@@ -48,16 +34,22 @@ import type {
   EffectWorkerWithAdapterOptions,
 } from "./options.js";
 import type { EffectWorkerStorage } from "./storage.js";
+import {
+  createAdapterEffectWorkerStorage,
+} from "./storage.js";
 import type {
   MutableReport,
   WorkerReport,
+} from "./report.js";
+import {
+  mutableReport,
+  freezeReport,
 } from "./report.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
   DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
   EFFECT_BATCH_LIMIT,
-  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
   MAX_IN_FLIGHT_EFFECTS,
   OUTBOX_EFFECT_STATUSES,
   WORKER_ERROR_CODES,
@@ -79,21 +71,19 @@ import {
   operationKindsForCounts,
   operationKindsForItems,
   operationKindsForPendingEffects,
-} from "./timing.js";
+} from "./pacing/timing.js";
 import {
   completeFailure,
   completeProviderResult,
   failUnclassifiableItems,
   recoverUnknownResults,
-} from "./transitions.js";
+} from "./dispatch/transitions.js";
 import {
   dispatchFastAppendGroup,
   handleProviderDispatchError,
-} from "./dispatch.js";
+} from "./dispatch/dispatch.js";
 import {
   isDispatchTransportError,
-  WORKER_OPTIONS_ERROR_CODES,
-  WorkerOptionsError,
 } from "./errors.js";
 import {
   chunkEffectGroups,
@@ -103,14 +93,13 @@ import {
   orderDispatchUnits,
   type EffectDispatchUnit,
   type EffectRouteGroup,
-} from "./routing.js";
+} from "./dispatch/routing.js";
 import {
   TIMING_SCOPES,
-} from "./timing.js";
-
-const EMPTY_STRING_LENGTH_ZERO = 0;
-const NON_NEGATIVE_SAFE_INTEGER_MINIMUM = 0;
-const POSITIVE_SAFE_INTEGER_MINIMUM = 1;
+} from "./pacing/timing.js";
+import {
+  validateOptions,
+} from "./validate.js";
 
 /**
  * Processes effects through an adapter-owned SQL connection.
@@ -1017,100 +1006,5 @@ async function handlePreflightFailure(
       report.deferred += 1;
       report.requeued += 1;
     }
-  }
-}
-
-function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWorkerStorage {
-  return {
-    claimWriterLease: (options) => claimWriterLeaseWithAdapter(storage, options),
-    recoverExpiredLeases: (fence) => recoverExpiredLeasesWithAdapter(storage, fence),
-    listReadyEffects: (limit, now) => listReadyEffectsWithAdapter(storage, limit, now),
-    listReadyFastAppendEffects: (limit, now) => listReadyFastAppendEffectsWithAdapter(storage, limit, now),
-    claimEffect: (options) => claimEffectWithAdapter(storage, options),
-    markDeliveryUncertain: (options) => markDeliveryUncertainWithAdapter(storage, options),
-    renewEffectLease: (options) => renewEffectLeaseWithAdapter(storage, options),
-    applyEffectResult: (options) => applyEffectResultWithAdapter(storage, options),
-    releaseUnprocessedEffect: (options) => releaseUnprocessedEffectWithAdapter(storage, options),
-    retryClaimedEffect: (options) => retryClaimedEffectWithAdapter(storage, options),
-    supersedeAndReplan: (fence, oldEffectId, newEffect) => {
-      return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
-    },
-  };
-}
-
-function mutableReport(lease: Presence<WriterLease>): MutableReport {
-  return {
-    lease,
-    expiredLeasesRecovered: 0,
-    selected: 0,
-    claimed: 0,
-    applied: 0,
-    blockedCandidate: 0,
-    superseded: 0,
-    conflicted: 0,
-    failed: 0,
-    deferred: 0,
-    requeued: 0,
-    replanned: 0,
-    responseLossRecovered: 0,
-  };
-}
-
-function freezeReport(report: MutableReport): WorkerReport {
-  return { ...report };
-}
-
-function validateOptions(options: EffectWorkerBaseOptions): void {
-  if (options.workerId.length === EMPTY_STRING_LENGTH_ZERO) {
-    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.WORKER_ID_REQUIRED);
-  }
-  if (
-    !Number.isSafeInteger(options.now) ||
-    options.now < NON_NEGATIVE_SAFE_INTEGER_MINIMUM
-  ) {
-    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.TIME_INVALID);
-  }
-  if (
-    !Number.isSafeInteger(options.maxEffects) ||
-    options.maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM
-  ) {
-    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.MAX_EFFECTS_POSITIVE_REQUIRED);
-  }
-  if (
-    options.maxFastAppendCandidates !== undefined &&
-    (!Number.isSafeInteger(options.maxFastAppendCandidates) ||
-      options.maxFastAppendCandidates < POSITIVE_SAFE_INTEGER_MINIMUM)
-  ) {
-    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.MAX_FAST_APPEND_POSITIVE_REQUIRED);
-  }
-  if (
-    options.appendDispatchIntervalMs !== undefined &&
-    (!Number.isSafeInteger(options.appendDispatchIntervalMs) ||
-      options.appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)
-  ) {
-    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.APPEND_INTERVAL_NON_NEGATIVE_REQUIRED);
-  }
-  for (const [name, value] of [
-    ["writerLeaseDurationMs", options.writerLeaseDurationMs],
-    ["effectLeaseDurationMs", options.effectLeaseDurationMs],
-    ["requestTimeoutMs", options.requestTimeoutMs],
-  ] as const) {
-    if (
-      value !== undefined &&
-      (!Number.isSafeInteger(value) || value < POSITIVE_SAFE_INTEGER_MINIMUM)
-    ) {
-      throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED, name);
-    }
-  }
-  const writerLeaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
-  const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
-  if (writerLeaseDuration <= effectLeaseDuration) {
-    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.WRITER_LEASE_HEADROOM_INVALID);
-  }
-  if (
-    options.requestTimeoutMs !== undefined &&
-    effectLeaseDuration <= options.requestTimeoutMs + EFFECT_LEASE_PROVIDER_HEADROOM_MS
-  ) {
-    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.EFFECT_LEASE_HEADROOM_INVALID);
   }
 }

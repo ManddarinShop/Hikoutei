@@ -15,7 +15,7 @@ import type {
 import type { FencingContext } from "../outbox/writerLease.js";
 import type { Presence } from "../contract/state.js";
 import type { ClaimedEffect } from "./contracts.js";
-import type { ProviderTiming } from "./timing.js";
+import type { ProviderTiming } from "./pacing/timing.js";
 
 /**
  * Renews the effect leases of one claimed batch.

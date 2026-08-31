@@ -1,10 +1,10 @@
 /** Timing classification and diagnostics emission for one effect-worker pass. */
 
-import type { PendingEffect } from "../contract/contracts.js";
-import { EFFECT_KINDS } from "../contract/constants.js";
-import type { ClaimedEffect } from "./contracts.js";
-import type { EffectWorkerBaseOptions } from "./options.js";
-import { isAbsent } from "./helpers.js";
+import type { PendingEffect } from "../../contract/contracts.js";
+import { EFFECT_KINDS } from "../../contract/constants.js";
+import type { ClaimedEffect } from "../contracts.js";
+import type { EffectWorkerBaseOptions } from "../options.js";
+import { isAbsent } from "../helpers.js";
 
 /** Diagnostic scopes emitted by the worker. */
 export const TIMING_SCOPES = {

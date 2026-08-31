@@ -51,8 +51,8 @@ import type {
   SqlStorageAdapter,
   SqlStorageContext,
 } from "../src/sql/sql.js";
-import { chunkEffectGroups } from "../src/worker/routing.js";
-import { ProviderBatchLimitError } from "../src/worker/errors.js";
+import { chunkEffectGroups } from "../src/worker/dispatch/routing.js";
+import { ProviderBatchLimitError } from "../src/worker/optionContracts.js";
 import { requireSemanticString } from "../src/contract/identity.js";
 
 /**

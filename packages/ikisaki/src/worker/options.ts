@@ -2,7 +2,7 @@
 
 import type { SqlStorageAdapter } from "../sql/sql.js";
 import type { Dispatcher, RepairReplanFactory } from "./dispatcher.js";
-import type { TimingSink } from "./timing.js";
+import type { TimingSink } from "./pacing/timing.js";
 
 /** Shared construction options for a bounded effect-worker pass. */
 export interface EffectWorkerBaseOptions {

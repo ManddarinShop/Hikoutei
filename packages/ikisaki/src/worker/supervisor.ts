@@ -11,16 +11,20 @@ import { randomUUID } from "node:crypto";
 import {
   SUPERVISOR_OPTIONS_ERROR_CODES,
   SupervisionOptionsError,
-} from "./errors.js";
+} from "./optionContracts.js";
 import {
   runEffectWorkerWithAdapter,
 } from "./worker.js";
 import type { EffectWorkerWithAdapterOptions } from "./options.js";
 import type { WorkerReport } from "./report.js";
 import {
+  hasImmediateProgress,
+  isResponseLossRetryLoop,
+} from "./report.js";
+import {
   AdaptiveEffectBatchController,
   type AdaptiveEffectBatchController as AdaptiveEffectBatchControllerType,
-} from "./batch.js";
+} from "./pacing/batch.js";
 
 /**
  * Conservative generic default for the SQLite selection upper bound when a
@@ -483,32 +487,7 @@ export function createEffectWorkerSupervisor<
   });
 }
 
-function hasImmediateProgress(report: WorkerReport): boolean {
-  return report.claimed > 0;
-}
 
-/**
- * A pass claimed work but reached no terminal state and only requeued it is a
- * response-loss / postcondition-unapplied retry loop against the remote.
- * `requeued` always implies `deferred` in the worker, so it covers both the
- * fast-append and regular recovery paths. Forward progress elsewhere (an
- * applied/superseded/conflicted/blocked/replanned/failed effect) keeps the
- * drain loop running immediately.
- */
-function isResponseLossRetryLoop(report: WorkerReport): boolean {
-  return report.claimed > 0 &&
-    report.requeued > 0 &&
-    !hasForwardProgress(report);
-}
-
-function hasForwardProgress(report: WorkerReport): boolean {
-  return report.applied > 0 ||
-    report.superseded > 0 ||
-    report.conflicted > 0 ||
-    report.blockedCandidate > 0 ||
-    report.replanned > 0 ||
-    report.failed > 0;
-}
 
 function nextBackoff(current: number, maximum: number): number {
   return Math.min(maximum, current * 2);
