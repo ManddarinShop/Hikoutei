@@ -1113,6 +1113,26 @@ describe("effect worker", () => {
     })).rejects.toThrow("effectLeaseDurationMs must exceed requestTimeoutMs by 30 seconds");
   });
 
+  it("rejects invalid lease duration with the original message and error code", async () => {
+    const adapter = createKernelStore();
+    const dispatcher = new FakeDispatcher();
+    try {
+      await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "worker-1",
+        now: 1_000,
+        maxEffects: 1,
+        writerLeaseDurationMs: 0,
+      });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkerOptionsError);
+      expect((error as WorkerOptionsError).code).toBe(WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED);
+      expect((error as WorkerOptionsError).message).toBe("writerLeaseDurationMs must be a positive safe integer");
+    }
+  });
+
   it("throws WorkerOptionsError with code for invalid worker options", async () => {
     const adapter = createKernelStore();
     const dispatcher = new FakeDispatcher();

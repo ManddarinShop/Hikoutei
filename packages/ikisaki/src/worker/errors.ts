@@ -79,7 +79,7 @@ const workerOptionsMessages: Record<WorkerOptionsErrorCode, (label?: string) => 
   [WORKER_OPTIONS_ERROR_CODES.APPEND_INTERVAL_NON_NEGATIVE_REQUIRED]: () =>
     "effect worker appendDispatchIntervalMs must be a non-negative safe integer",
   [WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED]: (label) =>
-    `effect worker ${label} must be a positive safe integer`,
+    `${label} must be a positive safe integer`,
   [WORKER_OPTIONS_ERROR_CODES.WRITER_LEASE_HEADROOM_INVALID]: () =>
     "writerLeaseDurationMs must exceed effectLeaseDurationMs",
   [WORKER_OPTIONS_ERROR_CODES.EFFECT_LEASE_HEADROOM_INVALID]: () =>
@@ -90,6 +90,14 @@ const workerOptionsMessages: Record<WorkerOptionsErrorCode, (label?: string) => 
 export class WorkerOptionsError extends RangeError {
   readonly code: WorkerOptionsErrorCode;
 
+  constructor(
+    code: Exclude<WorkerOptionsErrorCode, typeof WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED>,
+    label?: string,
+  );
+  constructor(
+    code: typeof WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED,
+    label: string,
+  );
   constructor(code: WorkerOptionsErrorCode, label?: string) {
     super(workerOptionsMessages[code](label));
     this.name = "WorkerOptionsError";
