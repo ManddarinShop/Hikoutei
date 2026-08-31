@@ -119,6 +119,18 @@ export const HIKOUTEI_LOG_STABLE_CODES = Object.freeze([
   "existing_sheet_adoption_dry_run_report",
   // Adoption seeding fail-closed cell validation (adopt/adoptionSeeding.ts).
   "existing_sheet_adoption_cell_kind_mismatch",
+  // SyncPollingSupervisor constructor option validation (sync/service/errors.ts).
+  // Flows through SYNC_SERVICE_START_FAILED (bootstrap catch) — validation
+  // runs in the constructor before the liveness loop is created.
+  "sync_polling_positive_integer_required",
+  "sync_polling_backoff_order_invalid",
+  // Persisted outbox-value contract violations (sync/outbound/errors.ts).
+  // Raised by toProviderEffect; caught by sheetsPayloadValidationError and
+  // surfaced to the worker as an invalid-payload presence. The kernel
+  // persists the effect as invalid_effect_payload (no outbox log event).
+  "unsupported_sync_effect_kind",
+  "unsupported_sync_projection",
+  "unsupported_sync_effect_target_kind",
 
   // Storage/schema/effect codes (@hikoutei/storage storage/errors.ts).
   "invalid_writer_lease_options",
@@ -220,6 +232,8 @@ export const HIKOUTEI_LOG_STABLE_CLASSES = Object.freeze([
   "TypedSheetsOrmError",
   "SyncSheetsContractError",
   "SyncServiceError",
+  "PollingSupervisorOptionsError",
+  "SyncEffectContractError",
   "StorageError",
   "EvaluationContractError",
   "StableEncodingError",

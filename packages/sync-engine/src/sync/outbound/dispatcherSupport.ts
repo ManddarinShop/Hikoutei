@@ -29,6 +29,10 @@ import { parseSyncProjectionEffectPayload, type SyncProjectionEffect } from "@hi
 import {
   SYNC_PROJECTIONS,
 } from "@hikoutei/contracts/sheets/constants.js";
+import {
+  SYNC_EFFECT_CONTRACT_ERROR_CODES,
+  SyncEffectContractError,
+} from "./errors.js";
 
 /**
  * Dispatch-priority classes for ready projection effects.
@@ -179,13 +183,22 @@ export class PreparedDispatchError extends Error {
 /** Validates and converts one durable outbox row into a provider effect. */
 export function toProviderEffect(effect: PendingEffect): SyncProjectionEffect {
   if (!isSyncEffectKind(effect.effect_kind)) {
-    throw new Error("unsupported sync effect kind: " + effect.effect_kind);
+    throw new SyncEffectContractError(
+      SYNC_EFFECT_CONTRACT_ERROR_CODES.UNSUPPORTED_SYNC_EFFECT_KIND,
+      effect.effect_kind,
+    );
   }
   if (!isSyncProjection(effect.projection)) {
-    throw new Error("unsupported sync projection: " + effect.projection);
+    throw new SyncEffectContractError(
+      SYNC_EFFECT_CONTRACT_ERROR_CODES.UNSUPPORTED_SYNC_PROJECTION,
+      effect.projection,
+    );
   }
   if (!isEffectTargetKind(effect.target_kind)) {
-    throw new Error("unsupported sync effect target kind: " + effect.target_kind);
+    throw new SyncEffectContractError(
+      SYNC_EFFECT_CONTRACT_ERROR_CODES.UNSUPPORTED_SYNC_EFFECT_TARGET_KIND,
+      effect.target_kind,
+    );
   }
   return {
     effectId: effect.effect_id,

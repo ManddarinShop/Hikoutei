@@ -14,6 +14,8 @@ import { GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "@hikoutei/sheets/sheets
 import { EVALUATION_ERROR_CODES } from "@hikoutei/contracts/domain/errors/evaluation.js";
 import { TYPED_SHEETS_ORM_ERROR_CODES } from "@hikoutei/sync-engine/orm/errors.js";
 import { SYNC_SERVICE_ERROR_CODES } from "@hikoutei/sync-engine/sync/service/errors.js";
+import { SYNC_POLLING_ERROR_CODES } from "@hikoutei/sync-engine/sync/service/errors.js";
+import { SYNC_EFFECT_CONTRACT_ERROR_CODES } from "@hikoutei/sync-engine/sync/outbound/errors.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
@@ -33,6 +35,8 @@ const RUNTIME_ERROR_CODE_FAMILIES = [
   SYNC_SHEETS_ERROR_CODES,
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   SYNC_SERVICE_ERROR_CODES,
+  SYNC_POLLING_ERROR_CODES,
+  SYNC_EFFECT_CONTRACT_ERROR_CODES,
   EVALUATION_ERROR_CODES,
   STORAGE_ERROR_CODES,
   TYPED_SHEETS_ORM_ERROR_CODES,

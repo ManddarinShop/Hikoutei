@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { SyncPollingSupervisor } from "@hikoutei/sync-engine/sync/service/SyncPollingSupervisor.js";
+import {
+  SYNC_POLLING_ERROR_CODES,
+  PollingSupervisorOptionsError,
+} from "@hikoutei/sync-engine/sync/service/errors.js";
 
 describe("SyncPollingSupervisor", () => {
   it("drains an externally triggered pass before stop resolves", async () => {
@@ -23,5 +27,33 @@ describe("SyncPollingSupervisor", () => {
     await pass;
     await stopping;
     expect(stopped).toBe(true);
+  });
+
+  it("rejects non-positive intervalMs with the typed error code", () => {
+    expect.assertions(2);
+    try {
+      new SyncPollingSupervisor({ runPass: () => Promise.resolve(), intervalMs: 0 });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(PollingSupervisorOptionsError);
+      expect((error as PollingSupervisorOptionsError).code).toBe(
+        SYNC_POLLING_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      );
+    }
+  });
+
+  it("rejects errorBackoffMaxMs < errorBackoffInitialMs with the backoff order code", () => {
+    expect.assertions(2);
+    try {
+      new SyncPollingSupervisor({
+        runPass: () => Promise.resolve(),
+        errorBackoffInitialMs: 5_000,
+        errorBackoffMaxMs: 1_000,
+      });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(PollingSupervisorOptionsError);
+      expect((error as PollingSupervisorOptionsError).code).toBe(
+        SYNC_POLLING_ERROR_CODES.BACKOFF_ORDER_INVALID,
+      );
+    }
   });
 });

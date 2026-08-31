@@ -117,6 +117,13 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   // Existing-sheet adoption codes.
   "existing_sheet_adoption_dry_run_report",
   "existing_sheet_adoption_cell_kind_mismatch",
+  // SyncPollingSupervisor option validation codes.
+  "sync_polling_positive_integer_required",
+  "sync_polling_backoff_order_invalid",
+  // Persisted outbox-value contract violation codes.
+  "unsupported_sync_effect_kind",
+  "unsupported_sync_projection",
+  "unsupported_sync_effect_target_kind",
   // Storage/schema/effect codes.
   "invalid_writer_lease_options",
   "invalid_sync_registration",
@@ -198,6 +205,8 @@ export const LOGGED_STABLE_CLASSES = Object.freeze([
   "TypedSheetsOrmError",
   "SyncSheetsContractError",
   "SyncServiceError",
+  "PollingSupervisorOptionsError",
+  "SyncEffectContractError",
   "StorageError",
   "EvaluationContractError",
   "StableEncodingError",
