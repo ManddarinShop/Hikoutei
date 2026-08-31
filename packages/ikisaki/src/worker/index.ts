@@ -78,11 +78,17 @@ export type {
 } from "./report.js";
 
 export {
+  ADAPTIVE_BATCH_ERROR_CODES,
+  AdaptiveBatchOptionsError,
   DISPATCH_TRANSPORT_OUTCOME_KINDS,
   DispatchTransportError,
+  SUPERVISOR_OPTIONS_ERROR_CODES,
+  SupervisionOptionsError,
   isDispatchTransportError,
+  type AdaptiveBatchErrorCode,
   type DispatchTransportOutcome,
   type DispatchTransportOutcomeKind,
+  type SupervisorOptionsErrorCode,
 } from "./errors.js";
 
 export {

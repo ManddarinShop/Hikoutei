@@ -14,7 +14,9 @@ import {
   appendPendingEffectsWithAdapter,
   claimEffectWithAdapter,
   createEffectWorkerSupervisor,
+  AdaptiveBatchOptionsError,
   DispatchTransportError,
+  SupervisionOptionsError,
   EFFECT_BATCH_LIMIT,
   markDeliveryUncertainWithAdapter,
   runEffectWorkerWithAdapter,
@@ -1567,6 +1569,25 @@ describe("reconciliation first-scan scheduling", () => {
     })).toThrow("initial reconciliation delay must be a non-negative safe integer");
   });
 
+  it("throws SupervisionOptionsError with code for invalid reconciliation delay", () => {
+    const adapter = createKernelStore();
+    try {
+      createEffectWorkerSupervisor({
+        storage: adapter,
+        dispatcher: new FakeDispatcher(),
+        workerId: "recon-worker",
+        reconciliation: {
+          initialReconciliationDelayMs: -1,
+          run: async () => ({ effectsEnqueued: 0 }),
+        },
+      });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SupervisionOptionsError);
+      expect((error as SupervisionOptionsError).code).toBe("sync_effect_supervisor_non_negative_integer_required");
+    }
+  });
+
   describe("split read-ahead pipeline (preflight + applyPrepared)", () => {
     /** Regular effect on a chosen route (never fast-append shaped). */
     const routeRegular = (effectId: string, physicalSheetId: string): NewEffect =>
@@ -2257,6 +2278,23 @@ describe("adaptive batch controller", () => {
       .toThrow("adaptive effect batch limits must satisfy minimum <= initial <= maximum");
     expect(() => new AdaptiveEffectBatchController({ initial: 0 }))
       .toThrow("adaptive initial must be a positive safe integer");
+  });
+
+  it("throws AdaptiveBatchOptionsError with code for invalid batch limits", () => {
+    try {
+      new AdaptiveEffectBatchController({ minimum: 20, maximum: 5 });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AdaptiveBatchOptionsError);
+      expect((error as AdaptiveBatchOptionsError).code).toBe("adaptive_limit_order_invalid");
+    }
+    try {
+      new AdaptiveEffectBatchController({ initial: 0 });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AdaptiveBatchOptionsError);
+      expect((error as AdaptiveBatchOptionsError).code).toBe("adaptive_positive_integer_required");
+    }
   });
 
   it("backs a route off when its preflight read fails", () => {
