@@ -661,7 +661,7 @@ describe("runSetup — mid-run reserved-path revalidation", () => {
     };
 
     const result = await harness.run();
-    expectError(result, SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED);
+    expectError(result, SETUP_ERROR_CODES.OUTPUT_SYMLINK_REFUSED);
     // The symlink entry and its target are untouched; the key is intact.
     expect(lstatSync(harness.outputPath).isSymbolicLink()).toBe(true);
     expect(readFileSync(decoy, "utf8")).toBe("decoy-content");
@@ -3118,7 +3118,7 @@ describe("runSetup — failure mapping", () => {
     expectError(result, SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED);
   });
 
-  it("reports output_write_failed for a directory at the output path and leaves it untouched", async () => {
+  it("reports output_not_regular_file for a directory at the output path and leaves it untouched", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
     const outputDir = join(dir, "env-dir");
@@ -3126,7 +3126,7 @@ describe("runSetup — failure mapping", () => {
     writeFileSync(join(outputDir, "keep.txt"), "kept", "utf8");
 
     const result = await harness.run({ outputPath: outputDir });
-    expectError(result, SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED);
+    expectError(result, SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE);
     if (result.status === "error") {
       expect(result.message).toContain("not a regular file");
     }
@@ -3137,7 +3137,7 @@ describe("runSetup — failure mapping", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_shared");
   });
 
-  it("reports output_write_failed for a FIFO at the output path without blocking on it", async (ctx) => {
+  it("reports output_not_regular_file for a FIFO at the output path without blocking on it", async (ctx) => {
     if ((constants as { O_NONBLOCK?: number }).O_NONBLOCK === undefined) {
       ctx.skip();
       return;
@@ -3154,7 +3154,7 @@ describe("runSetup — failure mapping", () => {
     }
 
     const result = await harness.run({ outputPath: fifoPath });
-    expectError(result, SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED);
+    expectError(result, SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE);
     if (result.status === "error") {
       expect(result.message).toContain("not a regular file");
     }

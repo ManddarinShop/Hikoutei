@@ -87,6 +87,7 @@ import {
 } from "@hikoutei/cli/confirm.js";
 import {
   SETUP_ERROR_CODES,
+  SetupPathSafetyError,
 } from "@hikoutei/cli/errors.js";
 import {
   GcloudRunner,
@@ -1360,6 +1361,7 @@ describe("checkpoint state file", () => {
   });
 
   it("reports a directory-fsync failure after the rename WITHOUT deleting the destination (next run sees the checkpoint)", () => {
+    expect.assertions(8);
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
     let unlinkCalls = 0;
@@ -1386,9 +1388,18 @@ describe("checkpoint state file", () => {
         throw new Error("pathname chmod must never be used by the private temp write");
       },
     };
-    expect(() => saveSetupState(statePath, projectState(), undefined, fs)).toThrow(
-      /simulated directory fsync failure/,
+    let caughtError: unknown;
+    try {
+      saveSetupState(statePath, projectState(), undefined, fs);
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBeDefined();
+    expect(caughtError).toBeInstanceOf(SetupPathSafetyError);
+    expect((caughtError as SetupPathSafetyError).code).toBe(
+      SETUP_ERROR_CODES.SETUP_RENAME_DURABLE_FAILED,
     );
+    expect((caughtError as Error).message).toMatch(/simulated directory fsync failure/);
     // The rename was NOT rolled back: the destination holds the new
     // checkpoint (the write-ahead must never be destroyed by a failed
     // durability step) and nothing of ours was unlinked.
@@ -3632,5 +3643,146 @@ describe("SA access verifier", () => {
       { client_email: "sa@proj-1.iam.gserviceaccount.com", private_key: RSA_PRIVATE_KEY_PEM },
     ]);
     expect(delays).toStrictEqual([]);
+  });
+});
+
+describe("SetupPathSafetyError carrier codes (Phase 6)", () => {
+  const credentialsPath = "/abs/path/key.json";
+  const spreadsheetUrl = "https://docs.google.com/spreadsheets/d/abc/edit";
+
+  it("writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_SYMLINK_REFUSED for a symlink", () => {
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    const target = join(dir, "elsewhere.env");
+    writeFileSync(target, "existing-content", "utf8");
+    symlinkSync(target, outputPath);
+
+    try {
+      writeSetupEnvFile(outputPath, credentialsPath, spreadsheetUrl);
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SetupPathSafetyError);
+      expect((error as InstanceType<typeof SetupPathSafetyError>).code).toBe(SETUP_ERROR_CODES.OUTPUT_SYMLINK_REFUSED);
+    }
+  });
+
+  it("writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_NOT_REGULAR_FILE for a directory", () => {
+    const dir = makeTempDir();
+    const outputDir = join(dir, "env-dir");
+    mkdirSync(outputDir, { mode: 0o700 });
+
+    try {
+      writeSetupEnvFile(outputDir, credentialsPath, spreadsheetUrl);
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SetupPathSafetyError);
+      expect((error as InstanceType<typeof SetupPathSafetyError>).code).toBe(SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE);
+    }
+  });
+
+  it("writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_ALIASES_RESERVED for an alias", () => {
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    const keyPath = join(dir, "key.json");
+    writeFileSync(keyPath, "key-content", "utf8");
+    linkSync(keyPath, outputPath);
+
+    try {
+      writeSetupEnvFile(outputPath, keyPath, spreadsheetUrl);
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SetupPathSafetyError);
+      expect((error as InstanceType<typeof SetupPathSafetyError>).code).toBe(SETUP_ERROR_CODES.OUTPUT_ALIASES_RESERVED);
+    }
+  });
+
+  it("atomicWritePrivateFile throws SetupPathSafetyError with SETUP_WRITE_NO_PROGRESS on zero-byte write", () => {
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    const fakeStat = { dev: 1, ino: 1, mode: 0o100600 } as Stats;
+    const fs: SetupStateWriteFs = {
+      openSync: () => 42,
+      fstatSync: () => fakeStat,
+      fchmodSync: () => {},
+      writeSync: () => 0,
+      fsyncSync: () => {},
+      closeSync: () => {},
+      lstatSync: () => fakeStat,
+      unlinkSync: () => {},
+      renameSync: () => {},
+      openDirSync: () => 43,
+      fsyncDirSync: () => {},
+      chmodSync: () => {},
+    };
+
+    try {
+      atomicWritePrivateFile(outputPath, "content\n", fs);
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SetupPathSafetyError);
+      expect((error as InstanceType<typeof SetupPathSafetyError>).code).toBe(SETUP_ERROR_CODES.SETUP_WRITE_NO_PROGRESS);
+    }
+  });
+
+  it("saveSetupState throws SetupPathSafetyError with CHECKPOINT_TEMP_EXISTS on EEXIST", () => {
+    const dir = makeTempDir();
+    const statePath = join(dir, SETUP_STATE_FILE_NAME);
+    const fixedTemp = setupStateTempPath(statePath);
+    writeFileSync(fixedTemp, "stale-orphan", "utf8");
+    const state: SetupState = {
+      version: SETUP_STATE_VERSION,
+      status: "project_selected",
+      projectId: "hikoutei-proj",
+      projectMode: "generated",
+      ownerEmail: FAKE_OWNER,
+      saName: "hikoutei-sa",
+      saEmail: "hikoutei-sa@hikoutei-proj.iam.gserviceaccount.com",
+      keyPath: "/tmp/hikoutei-service-account.json",
+      spreadsheetTitle: "hikoutei-sync-hikoutei-proj",
+    } as unknown as SetupState;
+
+    try {
+      saveSetupState(statePath, state, fixedTemp);
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SetupPathSafetyError);
+      expect((error as InstanceType<typeof SetupPathSafetyError>).code).toBe(SETUP_ERROR_CODES.CHECKPOINT_TEMP_EXISTS);
+    }
+  });
+
+  it("atomicWritePrivateFile throws SetupPathSafetyError with OUTPUT_TEMP_PERMISSION_VERIFY_FAILED on mode mismatch", () => {
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    let fstatCallCount = 0;
+    const fs: SetupStateWriteFs = {
+      openSync: () => 42,
+      fstatSync: () => {
+        fstatCallCount += 1;
+        // First call (temp stat after open) — mode 0600.
+        // Second call (secured stat after fchmod) — mode 0644 (mismatch).
+        if (fstatCallCount === 1) {
+          return { dev: 1, ino: 1, mode: 0o100600 } as Stats;
+        }
+        return { dev: 1, ino: 1, mode: 0o100644 } as Stats;
+      },
+      fchmodSync: () => {},
+      writeSync: (_fd, buf, offset, len) => { buf.copy(Buffer.alloc(len), 0, offset, offset + len); return len; },
+      fsyncSync: () => {},
+      closeSync: () => {},
+      lstatSync: () => ({ dev: 1, ino: 1 } as Stats),
+      unlinkSync: () => {},
+      renameSync: () => {},
+      openDirSync: () => 43,
+      fsyncDirSync: () => {},
+      chmodSync: () => {},
+    };
+
+    try {
+      atomicWritePrivateFile(outputPath, "content\n", fs);
+      expect.fail("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SetupPathSafetyError);
+      expect((error as InstanceType<typeof SetupPathSafetyError>).code).toBe(SETUP_ERROR_CODES.OUTPUT_TEMP_PERMISSION_VERIFY_FAILED);
+    }
   });
 });

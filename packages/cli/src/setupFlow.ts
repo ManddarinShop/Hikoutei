@@ -86,7 +86,7 @@ import {
   type SetupState,
   type ShareOrigin,
 } from "./checkpoint.js";
-import { SETUP_ERROR_CODES, type SetupErrorCode } from "./errors.js";
+import { SETUP_ERROR_CODES, carrierCode, type SetupErrorCode } from "./errors.js";
 import { describeGcloudFailure, errorResult, outcomeOf, type PlannedCommand, type SetupErrorResult } from "./flowResult.js";
 import {
   atomicWritePrivateFile,
@@ -1442,7 +1442,7 @@ async function runSetupLocked(
     );
   } catch (error) {
     return errorResult(
-      SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED,
+      carrierCode(error) ?? SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED,
       `could not write ${options.outputPath}: ${messageOf(error)}`,
     );
   }
@@ -1670,7 +1670,9 @@ function spreadsheetState(
   // spreadsheet_shared and complete require the share provenance so a
   // resumed shared-but-unverified state keeps its 403/404 retries.
   if (shareOrigin === undefined) {
-    // Unreachable through the flow; guards the discriminated union shape.
+    // survey §c (I): invariant — unreachable through the flow; guards the
+    // discriminated union shape (shareOrigin is required for shared/complete
+    // statuses only, and the flow never reaches this branch).
     throw new Error(`shareOrigin is required for the ${status} checkpoint`);
   }
   return {
@@ -1965,8 +1967,9 @@ function uncertainCreateResult(message: string): SpreadsheetEnsureResult {
 /**
  * Writes the checkpoint atomically and records the step in the executed list.
  *
- * Returns an error result on filesystem failure so callers can short-circuit
- * with `setup_state_write_failed`.
+ * Returns an error result on filesystem failure, preserving carrier codes
+ * (`SetupPathSafetyError`) and falling back to `setup_state_write_failed`
+ * for other errors.
  */
 function persistState(
   options: RunSetupOptions,
@@ -1984,7 +1987,7 @@ function persistState(
     saveSetupState(options.statePath, state);
   } catch (error) {
     return errorResult(
-      SETUP_ERROR_CODES.SETUP_STATE_WRITE_FAILED,
+      carrierCode(error) ?? SETUP_ERROR_CODES.SETUP_STATE_WRITE_FAILED,
       `could not write ${options.statePath}: ${messageOf(error)}`,
     );
   }

@@ -30,7 +30,7 @@ import {
   writeAllSync,
   type SetupStateWriteFs,
 } from "./setupPaths.js";
-import { SETUP_ERROR_CODES } from "./errors.js";
+import { SETUP_ERROR_CODES, setupPathSafetyError } from "./errors.js";
 import { errorResult, type SetupErrorResult } from "./flowResult.js";
 import { findSetupPathCollision } from "./setupPathCollision.js";
 import type { RunSetupOptions } from "./setupFlow.js";
@@ -84,8 +84,8 @@ const ENV_FILE_MODE = 0o600;
  * owner bits are not exactly 0600 counts as modified and is atomically
  * replaced by a fresh verified-0600 file — never pathname-chmodded — so
  * hardlinks sharing the old inode keep their own mode and content. Throws on filesystem
- * failure or an unsafe existing entry; the caller maps the throw to
- * `output_write_failed`.
+ * failure or an unsafe existing entry; the caller preserves carrier codes
+ * (`SetupPathSafetyError`) and falls back to `output_write_failed` for other errors.
  */
 export function writeSetupEnvFile(
   outputPath: string,
@@ -142,21 +142,23 @@ interface ExistingEnvRead {
  * lstat check and the open) and prevents a FIFO open/read from blocking —
  * and the descriptor inode is compared against every reserved path; any
  * match is refused before reading. A missing file is `created` with empty
- * content. Throws on unsafe entries; the caller maps throws to
- * `output_write_failed`.
+ * content. Throws on unsafe entries; the caller preserves carrier codes
+ * (`SetupPathSafetyError`) and falls back to `output_write_failed` for other errors.
  */
 function readExistingEnvFile(outputPath: string, reservedPaths: readonly string[]): ExistingEnvRead {
   try {
     const lst = lstatSync(outputPath);
     if (lst.isSymbolicLink()) {
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_SYMLINK_REFUSED,
         `refusing to follow a symlink at the output path ${outputPath}; remove the symlink and retry`,
       );
     }
     if (!lst.isFile()) {
       // Directories, FIFOs, devices, and sockets are never opened or read:
       // a FIFO open without O_NONBLOCK would block indefinitely.
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE,
         `the output path ${outputPath} is not a regular file; remove it and retry`,
       );
     }
@@ -174,7 +176,8 @@ function readExistingEnvFile(outputPath: string, reservedPaths: readonly string[
     if (isNodeError(error) && (error.code === "ELOOP" || error.code === "EMLINK")) {
       // The entry became a symlink between the lstat check and the open
       // (or the platform lacks O_NOFOLLOW): refuse rather than follow.
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_SYMLINK_REFUSED,
         `refusing to follow a symlink at the output path ${outputPath}; remove the symlink and retry`,
       );
     }
@@ -186,13 +189,15 @@ function readExistingEnvFile(outputPath: string, reservedPaths: readonly string[
       // A non-regular entry replaced the output between the lstat check and
       // the open (e.g. a FIFO planted mid-run): refuse without reading it
       // (O_NONBLOCK made the open return instead of blocking on a FIFO).
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE,
         `the output path ${outputPath} is not a regular file; remove it and retry`,
       );
     }
     const alias = reservedPaths.find((path) => sameInodeAsPath(stat, path));
     if (alias !== undefined) {
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_ALIASES_RESERVED,
         `the output path ${outputPath} aliases the reserved file ${alias}; refusing to read or write through it`,
       );
     }
@@ -252,7 +257,8 @@ export function atomicWritePrivateFile(
     if (isNodeError(error) && error.code === "EEXIST") {
       // A pre-existing entry at the unique temp path is never followed,
       // truncated, or unlinked.
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_TEMP_CONFLICT,
         `a conflicting entry appeared at the env temp path ${tempPath}; nothing was written`,
       );
     }
@@ -268,7 +274,8 @@ export function atomicWritePrivateFile(
     fs.fchmodSync(fd, ENV_FILE_MODE);
     const secured = fs.fstatSync(fd);
     if ((Number(secured.mode) & 0o777) !== ENV_FILE_MODE) {
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_TEMP_PERMISSION_VERIFY_FAILED,
         `could not verify owner-only permissions on the env temp file ${tempPath}`,
       );
     }
@@ -297,7 +304,8 @@ export function atomicWritePrivateFile(
   // rename; a swapped alias must never be renamed onto the output.
   if (!pathNamesInode(tempPath, tempDev, tempIno, fs)) {
     removeOwnedTempFile(tempPath, tempDev, tempIno, fs);
-    throw new Error(
+    throw setupPathSafetyError(
+      SETUP_ERROR_CODES.OUTPUT_TEMP_PATH_CHANGED,
       `the env temp path ${tempPath} changed while writing; nothing was written`,
     );
   }
