@@ -3,7 +3,7 @@
 import {
   ADAPTIVE_BATCH_ERROR_CODES,
   AdaptiveBatchOptionsError,
-} from "./errors.js";
+} from "../errors.js";
 
 export const ADAPTIVE_EFFECT_BATCH_LIMITS = {
   MINIMUM: 5,

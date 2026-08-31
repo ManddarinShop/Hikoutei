@@ -7,11 +7,11 @@
  * - Stale fencing tokens are rejected even if the affected row hasn't changed.
  */
 
-import { STORAGE_ERROR_CODES, StorageError } from "./errors.js";
-import { LOOKUP_RESULT_KINDS } from "./state.js";
-import type { LookupResult } from "./state.js";
-import type { SqlExecutor, SqlStorageAdapter } from "./sql.js";
-import { withSqlSavepoint } from "./sqlTransaction.js";
+import { STORAGE_ERROR_CODES, StorageError } from "../contract/errors.js";
+import { LOOKUP_RESULT_KINDS } from "../contract/state.js";
+import type { LookupResult } from "../contract/state.js";
+import type { SqlExecutor, SqlStorageAdapter } from "../sql/sql.js";
+import { withSqlSavepoint } from "../sql/sqlTransaction.js";
 
 const READ_WRITER_LEASE_SQL =
   "SELECT role, writer_id, writer_epoch, fencing_token, lease_until FROM writer_lease WHERE role = ?";
@@ -373,6 +373,39 @@ function validateReleaseOptions(options: ReleaseWriterLeaseOptions): void {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS,
       "writer lease role and writer ID are required",
+    );
+  }
+}
+
+export async function requireCurrentFenceWithSql(
+  sql: SqlExecutor,
+  fence: FencingContext,
+): Promise<void> {
+  if (!(await isFencingValidWithSql(sql, fence))) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.STALE_WRITER_FENCE,
+      "writer fencing is stale or expired",
+    );
+  }
+}
+
+/** Internal control-flow signal that forces the enclosing async savepoint to roll back. */
+export class AsyncFenceLostError extends Error {}
+
+export function validateEffectLeaseDuration(leaseDurationMs: number): void {
+  if (!Number.isSafeInteger(leaseDurationMs) || leaseDurationMs <= 0) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "effect lease duration must be a positive safe integer",
+    );
+  }
+}
+
+export function validateReadyEffectLimit(limit: number): void {
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_EFFECT_OPTIONS,
+      "ready effect limit must be a positive safe integer",
     );
   }
 }

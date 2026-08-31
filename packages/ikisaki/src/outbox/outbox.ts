@@ -7,9 +7,9 @@
  * - Supersede/replan atomically closes old effect and inserts new one.
  */
 
-import { STORAGE_ERROR_CODES, StorageError } from "./errors.js";
-import type { EffectKind } from "./constants.js";
-import { withSqlSavepoint } from "./sqlTransaction.js";
+import { STORAGE_ERROR_CODES, StorageError } from "../contract/errors.js";
+import type { EffectKind } from "../contract/constants.js";
+import { withSqlSavepoint } from "../sql/sqlTransaction.js";
 import {
   fenceParameters,
   isFencingValidWithSql,
@@ -20,7 +20,7 @@ import {
   type SqlExecutor,
   type SqlRow,
   type SqlStorageAdapter,
-} from "./sql.js";
+} from "../sql/sql.js";
 import type {
   ApplyResultOptions,
   ClaimEffectOptions,
@@ -30,7 +30,7 @@ import type {
   RenewEffectLeaseOptions,
   PendingEffect,
   RetryClaimedEffectOptions,
-} from "./contracts.js";
+} from "../contract/contracts.js";
 import {
   isRecoverableEffectErrorCode,
   APPLY_EFFECT_RESULT_SQL,
@@ -53,21 +53,25 @@ import {
 } from "./outboxSql.js";
 import {
   applyEffectResultParameters,
-  assertProjectionConfirmationTargetWithSql,
-  AsyncFenceLostError,
   claimEffectParameters,
   decodePendingEffectRow,
   pendingEffectParameters,
   markDeliveryUncertainParameters,
   replannedEffectParameters,
-  requireCurrentFenceWithSql,
   retryClaimedEffectParameters,
+} from "./effectRow.js";
+import {
+  assertProjectionConfirmationTargetWithSql,
   validateApplyResultOptions,
+  writeProjectionConfirmationWithSql,
+} from "./confirmation.js";
+import {
+  AsyncFenceLostError,
+  requireCurrentFenceWithSql,
   validateEffectLeaseDuration,
   validateReadyEffectLimit,
-  writeProjectionConfirmationWithSql,
-} from "./support.js";
-export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./contracts.js";
+} from "./writerLease.js";
+export { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contract/contracts.js";
 export {
   RECOVERABLE_EFFECT_ERROR_CODES,
   RECOVERABLE_EFFECT_ERROR_CODE_SQL,
@@ -85,7 +89,7 @@ export type {
   NewEffect,
   PendingEffect,
   RetryClaimedEffectOptions,
-} from "./contracts.js";
+} from "../contract/contracts.js";
 
 /**
  * Claims a pending effect through an already-active async SQL context.

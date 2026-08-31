@@ -9,6 +9,7 @@
  * classification.
  */
 
+// --- Pacing (adaptive batch + timing) ---
 export {
   ADAPTIVE_EFFECT_BATCH_LIMITS,
   AdaptiveEffectBatchController,
@@ -17,8 +18,34 @@ export {
   EFFECT_BATCH_HIGH_LATENCY_THRESHOLD_MS,
   EFFECT_BATCH_STABLE_SUCCESSES_TO_GROW,
   type AdaptiveEffectBatchObservation,
-} from "./batch.js";
+} from "./pacing/batch.js";
 
+export {
+  countsForItems,
+  countsForOperationKinds,
+  countsForPendingEffects,
+  emptyOperationCounts,
+  emitProviderTiming,
+  emitWorkerTiming,
+  operationKindsForCounts,
+  operationKindsForItems,
+  operationKindsForPendingEffects,
+  timingOperationKindForPending,
+} from "./pacing/timing.js";
+
+export {
+  TIMING_OPERATION_KINDS,
+  TIMING_SCOPES,
+  type ProviderTiming,
+  type ProviderTimingPhase,
+  type TimingEvent,
+  type TimingOperationCounts,
+  type TimingOperationKind,
+  type TimingScope,
+  type TimingSink,
+} from "./pacing/timing.js";
+
+// --- Constants ---
 export {
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
   DEFAULT_EFFECT_LEASE_DURATION_MS,
@@ -33,18 +60,7 @@ export {
   type WorkerErrorCode,
 } from "./constants.js";
 
-export {
-  TIMING_OPERATION_KINDS,
-  TIMING_SCOPES,
-  type ProviderTiming,
-  type ProviderTimingPhase,
-  type TimingEvent,
-  type TimingOperationCounts,
-  type TimingOperationKind,
-  type TimingScope,
-  type TimingSink,
-} from "./timing.js";
-
+// --- Dispatcher contracts ---
 export type {
   ApplyEffectResult,
   ApplyOutcome,
@@ -62,21 +78,26 @@ export type {
   RepairReplanRequest,
 } from "./dispatcher.js";
 
+// --- Options ---
 export type {
   AdaptiveEffectBatchControllerLike,
   EffectWorkerBaseOptions,
   EffectWorkerWithAdapterOptions,
 } from "./options.js";
 
+// --- Contracts ---
 export type { ClaimedEffect } from "./contracts.js";
 
+// --- Storage ---
 export type { EffectWorkerStorage } from "./storage.js";
 
+// --- Report ---
 export type {
   MutableReport,
   WorkerReport,
 } from "./report.js";
 
+// --- Errors (transport + re-exported option contracts) ---
 export {
   ADAPTIVE_BATCH_ERROR_CODES,
   AdaptiveBatchOptionsError,
@@ -97,6 +118,7 @@ export {
   type WorkerOptionsErrorCode,
 } from "./errors.js";
 
+// --- Helpers ---
 export {
   absentValue,
   applicabilityFromSqlNullable,
@@ -108,6 +130,7 @@ export {
   type PresentValue,
 } from "./helpers.js";
 
+// --- Dispatch (routing + transitions + fast-append) ---
 export {
   chunkEffectGroups,
   fenceFromLease,
@@ -115,20 +138,7 @@ export {
   isCandidateProtectingUserInputEffect,
   isFastAppendPendingEffect,
   type EffectRouteGroup,
-} from "./routing.js";
-
-export {
-  countsForItems,
-  countsForOperationKinds,
-  countsForPendingEffects,
-  emptyOperationCounts,
-  emitProviderTiming,
-  emitWorkerTiming,
-  operationKindsForCounts,
-  operationKindsForItems,
-  operationKindsForPendingEffects,
-  timingOperationKindForPending,
-} from "./timing.js";
+} from "./dispatch/routing.js";
 
 export {
   completeApplied,
@@ -137,18 +147,20 @@ export {
   recoverUnknownResults,
   replanOrFail,
   settleUnknownPostcondition,
-} from "./transitions.js";
+} from "./dispatch/transitions.js";
 
 export {
   dispatchFastAppendGroup,
   handleProviderDispatchError,
   requeueFastAppendItems,
-} from "./dispatch.js";
+} from "./dispatch/dispatch.js";
 
+// --- Worker pipeline ---
 export {
   runEffectWorkerWithAdapter,
 } from "./worker.js";
 
+// --- Supervisor loop ---
 export {
   createEffectWorkerSupervisor,
   EffectWorkerSupervisor,

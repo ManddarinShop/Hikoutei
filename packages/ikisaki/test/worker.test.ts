@@ -50,10 +50,10 @@ import type { NodeSqliteTestAdapter } from "./support/nodeSqliteAdapter.js";
 import type {
   SqlStorageAdapter,
   SqlStorageContext,
-} from "../src/sql.js";
-import { chunkEffectGroups } from "../src/worker/routing.js";
-import { ProviderBatchLimitError } from "../src/worker/errors.js";
-import { requireSemanticString } from "../src/identity.js";
+} from "../src/sql/sql.js";
+import { chunkEffectGroups } from "../src/worker/dispatch/routing.js";
+import { ProviderBatchLimitError } from "../src/worker/optionContracts.js";
+import { requireSemanticString } from "../src/contract/identity.js";
 
 /**
  * Wraps a kernel store so the FIRST result-persistence transaction after the

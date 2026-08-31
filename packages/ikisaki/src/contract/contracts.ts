@@ -14,7 +14,7 @@ import type {
   Applicability,
   Presence,
 } from "./state.js";
-import type { FencingContext } from "./writerLease.js";
+import type { FencingContext } from "../outbox/writerLease.js";
 import type {
   OutboxEffectDedupeKey,
   OutboxEffectId,

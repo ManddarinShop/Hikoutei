@@ -15,7 +15,7 @@ import type {
   SqlParameter,
   SqlStorageAdapter,
   SqlStorageContext,
-} from "../../src/sql.js";
+} from "../../src/sql/sql.js";
 
 /**
  * Loads the `node:sqlite` builtin outside the bundler's module graph.

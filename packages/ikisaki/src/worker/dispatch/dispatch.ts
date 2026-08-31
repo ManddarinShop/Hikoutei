@@ -1,28 +1,28 @@
 /** Fast-append dispatch and transport-failure handling for the effect worker. */
 
-import type { ClaimedEffect } from "./contracts.js";
-import type { EffectLeaseRenewal, FastAppendOutcome } from "./dispatcher.js";
-import type { EffectWorkerBaseOptions } from "./options.js";
-import type { MutableReport } from "./report.js";
-import type { EffectWorkerStorage } from "./storage.js";
-import type { FencingContext } from "../index.js";
+import type { ClaimedEffect } from "../contracts.js";
+import type { EffectLeaseRenewal, FastAppendOutcome } from "../dispatcher.js";
+import type { EffectWorkerBaseOptions } from "../options.js";
+import type { MutableReport } from "../report.js";
+import type { EffectWorkerStorage } from "../storage.js";
+import type { FencingContext } from "../../index.js";
 import {
   LOOKUP_RESULT_KINDS,
-} from "../state.js";
+} from "../../contract/state.js";
 import {
   TIMING_OPERATION_KINDS,
   TIMING_SCOPES,
-} from "./timing.js";
-import { WORKER_ERROR_CODES } from "./constants.js";
+} from "../pacing/timing.js";
+import { WORKER_ERROR_CODES } from "../constants.js";
 import {
   isDispatchTransportError,
-} from "./errors.js";
+} from "../errors.js";
 import {
   isPresent,
   lookupResult,
   presentValue,
   safeErrorMessage,
-} from "./helpers.js";
+} from "../helpers.js";
 import {
   completeApplied,
   completeFailure,
@@ -31,7 +31,7 @@ import {
 import {
   emitProviderTiming,
   emitWorkerTiming,
-} from "./timing.js";
+} from "../pacing/timing.js";
 
 /**
  * Handles a failed remote dispatch at the transport boundary.

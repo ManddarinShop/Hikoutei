@@ -11,11 +11,11 @@
 import type {
   NewEffect,
   PendingEffect,
-} from "../contracts.js";
-import type { FencingContext } from "../writerLease.js";
-import type { Presence } from "../state.js";
+} from "../contract/contracts.js";
+import type { FencingContext } from "../outbox/writerLease.js";
+import type { Presence } from "../contract/state.js";
 import type { ClaimedEffect } from "./contracts.js";
-import type { ProviderTiming } from "./timing.js";
+import type { ProviderTiming } from "./pacing/timing.js";
 
 /**
  * Renews the effect leases of one claimed batch.

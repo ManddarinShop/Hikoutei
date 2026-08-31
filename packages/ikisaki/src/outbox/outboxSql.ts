@@ -5,8 +5,8 @@
  * though the kernel treats their values as opaque route/evidence keys.
  */
 
-import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "./contracts.js";
-import { WORKER_ERROR_CODES } from "./worker/constants.js";
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contract/contracts.js";
+import { WORKER_ERROR_CODES } from "../worker/constants.js";
 import { FENCE_EXISTS_SQL } from "./writerLease.js";
 
 export { FENCE_EXISTS_SQL } from "./writerLease.js";

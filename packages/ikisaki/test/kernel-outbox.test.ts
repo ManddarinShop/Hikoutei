@@ -14,6 +14,7 @@ import {
   appendPendingEffectsWithSql,
   applyEffectResultWithAdapter,
   applyEffectResultWithSql,
+  assertProjectionConfirmationTargetWithSql,
   claimEffectWithAdapter,
   claimEffectWithSql,
   claimWriterLeaseWithAdapter,
@@ -787,6 +788,42 @@ describe("consistency-queue kernel", () => {
           })),
       ).rejects.toMatchObject({
         code: STORAGE_ERROR_CODES.INVALID_PROJECTION_CONFIRMATION,
+      });
+    });
+
+    it("throws INVALID_PENDING_EFFECT for a malformed claimed effect kind", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      const effect = newEffect({
+        effectKind: "malformed_kind" as typeof EFFECT_KINDS[keyof typeof EFFECT_KINDS],
+        rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" },
+      });
+      await appendPendingEffectsWithAdapter(adapter, fence, [effect]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: effect.effectId,
+        claimToken: "claim-1",
+        leaseDurationMs: 30_000,
+      });
+
+      await expect(
+        withSql(adapter, (sql) =>
+          assertProjectionConfirmationTargetWithSql(
+            sql,
+            effect.effectId,
+            "claim-1",
+            {
+              physicalSheetId: "physical-1",
+              projection: "system_state",
+              rowBindingId: "binding-1",
+              visibleRevision: 1,
+              visibleHash: "visible-hash-1",
+              entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+              fieldHashes: {},
+            },
+          )),
+      ).rejects.toMatchObject({
+        code: STORAGE_ERROR_CODES.INVALID_PENDING_EFFECT,
       });
     });
   });
