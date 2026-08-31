@@ -6,6 +6,11 @@
  * different persistence library later without changing sync semantics.
  */
 
+import {
+  CONTRACTS_INPUT_ERROR_CODES,
+  ContractsInputError,
+} from "../domain/errors/input.js";
+
 /** Values accepted as bound parameters by the SQLite-backed adapters. */
 export type SqlParameter = string | number | bigint | boolean | Uint8Array | null;
 
@@ -25,7 +30,7 @@ export function decodeSqlRow<Row extends object>(
   label = "SQL row",
 ): Row {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`${label} must be an object`);
+    throw new ContractsInputError(CONTRACTS_INPUT_ERROR_CODES.OBJECT_REQUIRED, label);
   }
   return decoder(value as SqlRow);
 }

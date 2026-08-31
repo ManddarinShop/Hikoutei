@@ -10,6 +10,10 @@ import {
   isNonEmptyString,
   isNonNegativeSafeInteger,
 } from "../validation.js";
+import {
+  CONTRACTS_INPUT_ERROR_CODES,
+  ContractsInputError,
+} from "../domain/errors/input.js";
 
 declare const semanticStringBrand: unique symbol;
 declare const semanticNumberBrand: unique symbol;
@@ -45,7 +49,7 @@ export function requireSemanticString<Label extends string>(
   label: string,
 ): SemanticString<Label> {
   if (!isNonEmptyString(value)) {
-    throw new TypeError(`${label} must be a non-empty string`);
+    throw new ContractsInputError(CONTRACTS_INPUT_ERROR_CODES.NON_EMPTY_STRING_REQUIRED, label);
   }
   return value as SemanticString<Label>;
 }
@@ -56,7 +60,7 @@ export function requireSemanticRevision<Label extends string = "revision">(
   label = "revision",
 ): SemanticRevision<Label> {
   if (!isNonNegativeSafeInteger(value)) {
-    throw new TypeError(`${label} must be a non-negative safe integer`);
+    throw new ContractsInputError(CONTRACTS_INPUT_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED, label);
   }
   return value as SemanticRevision<Label>;
 }
@@ -72,7 +76,7 @@ export function requireHash<Label extends string>(
   label: string,
 ): SemanticString<Label> {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/i.test(value)) {
-    throw new TypeError(`${label} must be a SHA-256 hexadecimal hash`);
+    throw new ContractsInputError(CONTRACTS_INPUT_ERROR_CODES.SHA256_HASH_REQUIRED, label);
   }
   return value as SemanticString<Label>;
 }
