@@ -322,7 +322,7 @@ export function atomicWritePrivateFile(
   // right after the rename could leave the old entry (or nothing) at the
   // output path. A failure here reports the write as failed WITHOUT
   // rolling back the rename — the destination is already in place.
-  fsyncParentDirectory(dirname(outputPath), fs);
+  fsyncParentDirectory(dirname(outputPath), "output", fs);
 }
 
 /**

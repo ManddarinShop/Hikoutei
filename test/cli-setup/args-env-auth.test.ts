@@ -1409,6 +1409,221 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  it("reports a directory-fsync open failure for the checkpoint path with SETUP_DIR_FSYNC_OPEN_FAILED", () => {
+    expect.assertions(5);
+    const dir = makeTempDir();
+    const statePath = join(dir, SETUP_STATE_FILE_NAME);
+    let unlinkCalls = 0;
+    const fs: SetupStateWriteFs = {
+      openSync,
+      fstatSync,
+      fchmodSync,
+      writeSync,
+      fsyncSync,
+      closeSync,
+      lstatSync,
+      unlinkSync: (path) => {
+        unlinkCalls += 1;
+        unlinkSync(path);
+      },
+      renameSync,
+      openDirSync: () => {
+        throw new Error("simulated directory open failure");
+      },
+      fsyncDirSync: fsyncSync,
+      chmodSync() {
+        throw new Error("pathname chmod must never be used by the private temp write");
+      },
+    };
+    let caughtError: unknown;
+    try {
+      saveSetupState(statePath, projectState(), undefined, fs);
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBeDefined();
+    expect(caughtError).toBeInstanceOf(SetupPathSafetyError);
+    expect((caughtError as SetupPathSafetyError).code).toBe(
+      SETUP_ERROR_CODES.SETUP_DIR_FSYNC_OPEN_FAILED,
+    );
+    expect((caughtError as Error).message).toMatch(/simulated directory open failure/);
+    // The rename completed but the durability step failed; the owned temp
+    // is gone with the rename and nothing of ours is unlinked.
+    expect(unlinkCalls).toBe(0);
+  });
+
+  it("reports a directory close failure for the checkpoint path with SETUP_DIR_FSYNC_CLOSE_FAILED", () => {
+    expect.assertions(5);
+    const dir = makeTempDir();
+    const statePath = join(dir, SETUP_STATE_FILE_NAME);
+    const fs: SetupStateWriteFs = {
+      openSync,
+      fstatSync,
+      fchmodSync,
+      writeSync,
+      fsyncSync,
+      closeSync: (fd) => {
+        // -1 is never a real descriptor, so only the sentinel directory fd
+        // fails here; the data/temp fds are closed for real.
+        if (fd === -1) {
+          throw new Error("simulated directory close failure");
+        }
+        closeSync(fd);
+      },
+      lstatSync,
+      unlinkSync,
+      renameSync,
+      openDirSync: () => -1,
+      fsyncDirSync: () => {},
+      chmodSync() {
+        throw new Error("pathname chmod must never be used by the private temp write");
+      },
+    };
+    let caughtError: unknown;
+    try {
+      saveSetupState(statePath, projectState(), undefined, fs);
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBeDefined();
+    expect(caughtError).toBeInstanceOf(SetupPathSafetyError);
+    expect((caughtError as SetupPathSafetyError).code).toBe(
+      SETUP_ERROR_CODES.SETUP_DIR_FSYNC_CLOSE_FAILED,
+    );
+    expect((caughtError as Error).message).toMatch(/simulated directory close failure/);
+    // The rename was NOT rolled back: the next run still sees the checkpoint.
+    expect(loadSetupState(statePath)).toStrictEqual({ status: "loaded", state: projectState() });
+  });
+
+  it("reports a directory-fsync open failure for the env path with OUTPUT_DIR_FSYNC_OPEN_FAILED", () => {
+    expect.assertions(5);
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    let unlinkCalls = 0;
+    const fs: SetupStateWriteFs = {
+      openSync,
+      fstatSync,
+      fchmodSync,
+      writeSync,
+      fsyncSync,
+      closeSync,
+      lstatSync,
+      unlinkSync: (path) => {
+        unlinkCalls += 1;
+        unlinkSync(path);
+      },
+      renameSync,
+      openDirSync: () => {
+        throw new Error("simulated directory open failure");
+      },
+      fsyncDirSync: fsyncSync,
+      chmodSync() {
+        throw new Error("pathname chmod must never be used by the private temp write");
+      },
+    };
+    let caughtError: unknown;
+    try {
+      atomicWritePrivateFile(outputPath, "NEW=2\n", fs);
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBeDefined();
+    expect(caughtError).toBeInstanceOf(SetupPathSafetyError);
+    expect((caughtError as SetupPathSafetyError).code).toBe(
+      SETUP_ERROR_CODES.OUTPUT_DIR_FSYNC_OPEN_FAILED,
+    );
+    expect((caughtError as Error).message).toMatch(/simulated directory open failure/);
+    // The rename completed but the durability step failed; the owned temp
+    // is cleaned up and nothing of ours is unlinked from the destination.
+    expect(unlinkCalls).toBe(0);
+  });
+
+  it("reports a directory-fsync failure for the env path with OUTPUT_RENAME_DURABLE_FAILED", () => {
+    expect.assertions(6);
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    let unlinkCalls = 0;
+    let dirFsyncs = 0;
+    const fs: SetupStateWriteFs = {
+      openSync,
+      fstatSync,
+      fchmodSync,
+      writeSync,
+      fsyncSync,
+      closeSync,
+      lstatSync,
+      unlinkSync: (path) => {
+        unlinkCalls += 1;
+        unlinkSync(path);
+      },
+      renameSync,
+      openDirSync: (path, flags) => openSync(path, flags),
+      fsyncDirSync: () => {
+        dirFsyncs += 1;
+        throw new Error("simulated directory fsync failure");
+      },
+      chmodSync() {
+        throw new Error("pathname chmod must never be used by the private temp write");
+      },
+    };
+    let caughtError: unknown;
+    try {
+      atomicWritePrivateFile(outputPath, "NEW=2\n", fs);
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBeDefined();
+    expect(caughtError).toBeInstanceOf(SetupPathSafetyError);
+    expect((caughtError as SetupPathSafetyError).code).toBe(
+      SETUP_ERROR_CODES.OUTPUT_RENAME_DURABLE_FAILED,
+    );
+    expect((caughtError as Error).message).toMatch(/simulated directory fsync failure/);
+    // The rename was NOT rolled back: the destination holds the new
+    // env file (the durability step failure must never destroy it).
+    expect(dirFsyncs).toBe(1);
+    expect(unlinkCalls).toBe(0);
+  });
+
+  it("reports a directory close failure for the env path with OUTPUT_DIR_FSYNC_CLOSE_FAILED", () => {
+    expect.assertions(4);
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    const dataFakeStat = { dev: 1, ino: 1, mode: 0o100600 } as Stats;
+    const fs: SetupStateWriteFs = {
+      openSync,
+      fstatSync: () => dataFakeStat,
+      fchmodSync: () => {},
+      writeSync: (_fd, buf, offset, len) => { buf.copy(Buffer.alloc(len), 0, offset, offset + len); return len; },
+      fsyncSync: () => {},
+      closeSync: (fd) => {
+        // -1 is never a real descriptor, so only the sentinel directory fd
+        // fails here; the data/temp fds are closed for real.
+        if (fd === -1) {
+          throw new Error("simulated directory close failure");
+        }
+        closeSync(fd);
+      },
+      lstatSync: () => dataFakeStat,
+      unlinkSync: () => {},
+      renameSync: () => {},
+      openDirSync: () => -1,
+      fsyncDirSync: () => {},
+      chmodSync: () => {},
+    };
+    let caughtError: unknown;
+    try {
+      atomicWritePrivateFile(outputPath, "NEW=2\n", fs);
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBeDefined();
+    expect(caughtError).toBeInstanceOf(SetupPathSafetyError);
+    expect((caughtError as SetupPathSafetyError).code).toBe(
+      SETUP_ERROR_CODES.OUTPUT_DIR_FSYNC_CLOSE_FAILED,
+    );
+    expect((caughtError as Error).message).toMatch(/simulated directory close failure/);
+  });
+
   it("applies and verifies 0600 through the still-open descriptor for the env temp write", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");

@@ -172,6 +172,11 @@ function directoryFsyncOpenFlags(): number {
  * Fsyncs the containing directory of a just-renamed file so the rename is
  * durable across power loss.
  *
+ * The `qualifier` selects the carrier code set ("checkpoint" for the state
+ * file, "output" for the .env file) so the boundary catch preserves
+ * machine-readable specificity per target path. Messages are byte-identical
+ * regardless of qualifier.
+ *
  * POSIX rename durability requires the directory entry change to be
  * flushed to stable storage; a directory fsync after the rename makes the
  * write-ahead checkpoint (and the `.env` output) survive a power loss.
@@ -181,13 +186,29 @@ function directoryFsyncOpenFlags(): number {
  * sanitized error; the caller must NOT roll back a completed rename — the
  * destination is already in place and the next run sees it.
  */
-export function fsyncParentDirectory(parentPath: string, fs: SetupStateWriteFs): void {
+export function fsyncParentDirectory(parentPath: string, qualifier: "checkpoint" | "output", fs: SetupStateWriteFs): void {
+  // #448: per-path code mapping — messages are byte-identical; only the
+  // carrier code differs by target so the boundary catch preserves
+  // machine-readable specificity per path.
+  const CODES = {
+    checkpoint: {
+      open: SETUP_ERROR_CODES.SETUP_DIR_FSYNC_OPEN_FAILED,
+      rename: SETUP_ERROR_CODES.SETUP_RENAME_DURABLE_FAILED,
+      close: SETUP_ERROR_CODES.SETUP_DIR_FSYNC_CLOSE_FAILED,
+    },
+    output: {
+      open: SETUP_ERROR_CODES.OUTPUT_DIR_FSYNC_OPEN_FAILED,
+      rename: SETUP_ERROR_CODES.OUTPUT_RENAME_DURABLE_FAILED,
+      close: SETUP_ERROR_CODES.OUTPUT_DIR_FSYNC_CLOSE_FAILED,
+    },
+  } as const;
+  const codes = CODES[qualifier];
   let dirFd: number;
   try {
     dirFd = fs.openDirSync(parentPath, directoryFsyncOpenFlags());
   } catch (error) {
     throw setupPathSafetyError(
-      SETUP_ERROR_CODES.SETUP_DIR_FSYNC_OPEN_FAILED,
+      codes.open,
       `could not open the directory containing ${parentPath} to make the rename durable: ${messageOf(error)}`,
     );
   }
@@ -205,13 +226,13 @@ export function fsyncParentDirectory(parentPath: string, fs: SetupStateWriteFs):
   }
   if (fsyncError !== undefined) {
     throw setupPathSafetyError(
-      SETUP_ERROR_CODES.SETUP_RENAME_DURABLE_FAILED,
+      codes.rename,
       `could not make the rename at ${parentPath} durable: ${messageOf(fsyncError)}`,
     );
   }
   if (closeError !== undefined) {
     throw setupPathSafetyError(
-      SETUP_ERROR_CODES.SETUP_DIR_FSYNC_CLOSE_FAILED,
+      codes.close,
       `could not finalize the directory sync for ${parentPath}: ${messageOf(closeError)}`,
     );
   }
