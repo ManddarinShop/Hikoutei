@@ -1,5 +1,45 @@
 import { CoreErrorException } from "@hikoutei/contracts/domain/errors/index.js";
 
+// ---------------------------------------------------------------------------
+// SyncPollingSupervisor option validation
+// ---------------------------------------------------------------------------
+
+/** Stable error codes for SyncPollingSupervisor option validation. */
+export const SYNC_POLLING_ERROR_CODES = {
+  /** A numeric option must be a positive (> 0) safe integer. */
+  POSITIVE_INTEGER_REQUIRED: "sync_polling_positive_integer_required",
+  /** errorBackoffMaxMs must be >= errorBackoffInitialMs. */
+  BACKOFF_ORDER_INVALID: "sync_polling_backoff_order_invalid",
+} as const;
+
+export type SyncPollingErrorCode =
+  (typeof SYNC_POLLING_ERROR_CODES)[keyof typeof SYNC_POLLING_ERROR_CODES];
+
+const pollingMessages: Record<SyncPollingErrorCode, (label?: string) => string> = {
+  [SYNC_POLLING_ERROR_CODES.POSITIVE_INTEGER_REQUIRED]: (label) =>
+    `${label} must be a positive safe integer`,
+  [SYNC_POLLING_ERROR_CODES.BACKOFF_ORDER_INVALID]: () =>
+    "poll maximum error backoff must be at least the initial backoff",
+};
+
+/** Typed error for SyncPollingSupervisor option validation. */
+export class PollingSupervisorOptionsError extends RangeError {
+  readonly code: SyncPollingErrorCode;
+
+  // Fixed-message code: no label needed.
+  constructor(code: typeof SYNC_POLLING_ERROR_CODES.BACKOFF_ORDER_INVALID);
+  // Parameterized code: label required (reproduce existing message bytes).
+  constructor(
+    code: typeof SYNC_POLLING_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+    label: string,
+  );
+  constructor(code: SyncPollingErrorCode, label?: string) {
+    super(pollingMessages[code](label));
+    this.name = "PollingSupervisorOptionsError";
+    this.code = code;
+  }
+}
+
 /** Stable failures raised while assembling or running the internal sync service. */
 export const SYNC_SERVICE_ERROR_CODES = {
   INVALID_OPTIONS: "invalid_sync_service_options",

@@ -38,8 +38,14 @@ import {
 } from "@hikoutei/contracts/sheets/errors.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
+  SYNC_POLLING_ERROR_CODES,
   SyncServiceError,
+  PollingSupervisorOptionsError,
 } from "@hikoutei/sync-engine/sync/service/errors.js";
+import {
+  SYNC_EFFECT_CONTRACT_ERROR_CODES,
+  SyncEffectContractError,
+} from "@hikoutei/sync-engine/sync/outbound/errors.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
@@ -62,6 +68,8 @@ const TAXONOMY_CODES: readonly string[] = [
   ...Object.values(TYPED_SHEETS_ORM_ERROR_CODES),
   ...Object.values(SYNC_SHEETS_ERROR_CODES),
   ...Object.values(SYNC_SERVICE_ERROR_CODES),
+  ...Object.values(SYNC_POLLING_ERROR_CODES),
+  ...Object.values(SYNC_EFFECT_CONTRACT_ERROR_CODES),
   ...Object.values(STORAGE_ERROR_CODES),
   ...Object.values(EVALUATION_ERROR_CODES),
   ...Object.values(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES),
@@ -80,6 +88,8 @@ const BOUNDARY_ERROR_CLASSES: readonly string[] = [
   TypedSheetsOrmError.name,
   SyncSheetsContractError.name,
   SyncServiceError.name,
+  PollingSupervisorOptionsError.name,
+  SyncEffectContractError.name,
   StorageError.name,
   EvaluationContractError.name,
   StableEncodingError.name,

@@ -1,6 +1,10 @@
 /** Internal liveness loop for User_Input polling. */
 
 import { SYNC_POLLING_INTERVAL_MS } from "./cadence.js";
+import {
+  SYNC_POLLING_ERROR_CODES,
+  PollingSupervisorOptionsError,
+} from "./errors.js";
 
 const DEFAULT_ERROR_BACKOFF_INITIAL_MS = 1_000;
 const DEFAULT_ERROR_BACKOFF_MAX_MS = 30_000;
@@ -63,7 +67,9 @@ export class SyncPollingSupervisor<Report = unknown> {
       "poll maximum error backoff",
     );
     if (this.errorBackoffMaxMs < this.errorBackoffInitialMs) {
-      throw new RangeError("poll maximum error backoff must be at least the initial backoff");
+      throw new PollingSupervisorOptionsError(
+        SYNC_POLLING_ERROR_CODES.BACKOFF_ORDER_INVALID,
+      );
     }
     this.wait = options.wait ?? defaultWait;
     this.waitForFirstPass = options.waitForFirstPass;
@@ -190,7 +196,10 @@ export class SyncPollingSupervisor<Report = unknown> {
 
 function requirePositive(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
-    throw new RangeError(`${label} must be a positive safe integer`);
+    throw new PollingSupervisorOptionsError(
+      SYNC_POLLING_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      label,
+    );
   }
   return value;
 }
