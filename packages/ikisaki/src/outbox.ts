@@ -45,6 +45,7 @@ import {
   RENEW_EFFECT_LEASE_SQL,
   REQUEUE_CLAIMED_EFFECT_SQL,
   RELEASE_UNPROCESSED_EFFECT_SQL,
+  RELEASE_UNPROCESSED_EFFECT_REASON,
   SELECT_PENDING_EFFECTS_BY_TARGET_SQL,
   SELECT_READY_EFFECTS_SQL,
   SELECT_READY_FAST_APPEND_EFFECTS_SQL,
@@ -398,20 +399,27 @@ export async function markDeliveryUncertainWithAdapter(
 /**
  * Returns an acknowledged-but-unprocessed batch suffix to pending.
  *
- * This is intentionally narrower than a generic redrive: it may be used only
- * after a valid provider response explicitly says the batch budget stopped
- * before this effect. Unknown response loss remains failed until read-back.
+ * `reason` determines which `last_error_code`/`last_error_message` pair is
+ * persisted on the row: `provider_batch` (default) when a valid provider
+ * response explicitly says the batch budget stopped before this effect, or
+ * `lease_recovered` when a writer-lease recovery requeues a renewed item
+ * without any provider acknowledgement.
  */
 export async function releaseUnprocessedEffectWithSql(
   sql: SqlExecutor,
   options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
     readonly effectId: string;
     readonly claimToken: string;
+    readonly reason?: "provider_batch" | "lease_recovered";
   },
 ): Promise<boolean> {
   if (!(await isFencingValidWithSql(sql, options))) return false;
+  const reason = options.reason ?? "provider_batch";
+  const pair = RELEASE_UNPROCESSED_EFFECT_REASON[reason];
   const result = await sql.run(RELEASE_UNPROCESSED_EFFECT_SQL, [
     options.now + 1_000,
+    pair.code,
+    pair.message,
     options.effectId,
     options.claimToken,
     options.writerEpoch,
@@ -427,6 +435,7 @@ export async function releaseUnprocessedEffectWithAdapter(
   options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
     readonly effectId: string;
     readonly claimToken: string;
+    readonly reason?: "provider_batch" | "lease_recovered";
   },
 ): Promise<boolean> {
   return storage.transaction(({ sql }) => releaseUnprocessedEffectWithSql(sql, options));

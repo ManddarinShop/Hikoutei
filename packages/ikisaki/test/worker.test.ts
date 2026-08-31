@@ -35,12 +35,14 @@ import {
   presentValue,
   absentValue,
   WORKER_ERROR_CODES,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES,
   type WorkerReport,
 } from "../src/index.js";
 import {
   claimTestFence,
   createKernelStore,
   newEffect,
+  TEST_NOW,
 } from "./support/kernelFixtures.js";
 import type { NodeSqliteTestAdapter } from "./support/nodeSqliteAdapter.js";
 import type {
@@ -929,6 +931,9 @@ describe("effect worker", () => {
     expect(dispatcher.probeCalls).toBe(0);
     await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 
   it("emits hasMore, requested, and acknowledged counts on fast-append timing", async () => {
@@ -973,6 +978,11 @@ describe("effect worker", () => {
     expect(dispatchEvent?.responseSucceeded).toBe(true);
     expect(dispatchEvent?.requestedEffects).toBe(2);
     expect(dispatchEvent?.acknowledgedEffects).toBe(1);
+    // Regression: the suffix released by the hasMore path must carry
+    // the provider_batch_deferred error code in the persisted row.
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 
   it("fails an effect per-effect when the dispatcher candidate predicate throws", async () => {
@@ -1434,6 +1444,121 @@ describe("effect worker", () => {
       "ready-other",
     ]);
     await expect(outboxStatus(adapter, "blocked-append")).resolves.toBe("pending");
+  });
+
+  it("persists lease_recovered_requeue when a renewed item is released after mixed lease-renewal recovery", async () => {
+    // Regression: worker.ts:280 mixed lease-renewal path must persist
+    // LEASE_RECOVERED_REQUEUE, not PROVIDER_BATCH_DEFERRED.
+    // The worker's beforeRemoteDispatch hook calls renewDispatchEffectLeases:
+    // when some renewals fail and others succeed, the renewed items are
+    // released with reason "lease_recovered" and the not-renewed items are
+    // recovered through recoverExpiredLeases.  This test exercises that
+    // actual worker path instead of calling releaseUnprocessedEffect directly.
+    //
+    // To trigger the mixed renewal path, we intercept the adapter's
+    // transaction to expire effect-1's lease immediately after the worker
+    // claims it (via claimEffect SQL), so that renewEffectLease fails for
+    // effect-1 during beforeRemoteDispatch while effect-2's renewal succeeds.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const effect1 = newEffect({ effectId: "lease-rr-1", targetId: "entity-lease-rr-1" });
+    const effect2 = newEffect({ effectId: "lease-rr-2", targetId: "entity-lease-rr-2" });
+    await appendPendingEffectsWithAdapter(adapter, fence, [effect1, effect2]);
+
+    // Adapter wrapper: after every transaction completes, if effect-1 has been
+    // claimed (status = 'processing') but its lease_until is still in the
+    // future, expire it in a follow-up write.  This ensures the worker's
+    // beforeRemoteDispatch hook sees an expired lease for effect-1 when it
+    // tries to renew.  The expiry runs AFTER the committing transaction so it
+    // is not overwritten by the in-transaction renewal.
+    let effect1Expired = false;
+    const wrappedAdapter: SqlStorageAdapter = {
+      read: adapter.read.bind(adapter),
+      async transaction<T>(op: (context: SqlStorageContext) => Promise<T>) {
+        const result = await adapter.transaction(op);
+        if (!effect1Expired) {
+          await adapter.transaction(async ({ sql }) => {
+            await sql.run(
+              `UPDATE sheet_effect_outbox
+               SET lease_until = ?
+               WHERE effect_id = ? AND status = 'processing'
+                 AND lease_until IS NOT NULL AND lease_until > ?`,
+              [TEST_NOW + 5_000, effect1.effectId, TEST_NOW + 5_000],
+            );
+          });
+          // Check if the expiry actually took effect (effect-1 was claimed)
+          const row = await adapter.read(async ({ sql }) => {
+            return sql.get<{ readonly lease_until: number | null }>(
+              "SELECT lease_until FROM sheet_effect_outbox WHERE effect_id = ?",
+              [effect1.effectId],
+            );
+          });
+          if (row?.lease_until != null && row.lease_until <= TEST_NOW + 5_000) {
+            effect1Expired = true;
+          }
+        }
+        return result;
+      },
+    };
+
+    // FakeDispatcher with a custom apply that manually invokes the
+    // beforeRemoteDispatch hook.  When the hook returns false (mixed
+    // renewal), return empty results so the worker proceeds to recovery
+    // without a remote write.
+    const dispatcher = new FakeDispatcher({
+      invokeBeforeRemote: false,
+      isFastAppendCandidate: () => false,
+      apply: async (request) => {
+        const renewed = await request.beforeRemoteDispatch?.() ?? true;
+        if (!renewed) {
+          return { hasMore: false, results: [] };
+        }
+        return {
+          hasMore: false,
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+        };
+      },
+    });
+
+    const report = await runEffectWorkerWithAdapter({
+      storage: wrappedAdapter,
+      dispatcher,
+      workerId: "worker-rr",
+      now: TEST_NOW + 40_000,
+      maxEffects: 10,
+    });
+
+    // The worker selected and claimed both effects, then the mixed renewal
+    // hook released effect-2 and recovered effect-1.
+    expect(report.selected).toBe(2);
+    expect(report.claimed).toBe(2);
+
+    // effect-2: released back to pending with LEASE_RECOVERED_REQUEUE.
+    await expect(outboxLastError(adapter, effect2.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.LEASE_RECOVERED_REQUEUE,
+    );
+    const row2 = await outboxError(adapter, effect2.effectId);
+    expect(row2?.last_error_message).toBe(
+      "Requeued after writer-lease recovery; no provider acknowledgement.",
+    );
+    expect(row2?.status).toBe("pending");
+
+    // effect-1: lease expired, recovered to delivery_uncertain.
+    await expect(outboxLastError(adapter, effect1.effectId)).resolves.toBe(
+      SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
+    );
+    const row1 = await outboxError(adapter, effect1.effectId);
+    expect(row1?.status).toBe("delivery_uncertain");
+
+    // No remote apply was executed — the hook aborted before dispatch.
+    expect(dispatcher.applyCalls).toBe(1);
   });
 });
 
@@ -2529,6 +2654,9 @@ describe("adaptive batch controller", () => {
     expect(report).toMatchObject({ applied: 1, deferred: 1, requeued: 0, failed: 0 });
     await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 });
 
@@ -2548,6 +2676,16 @@ function outboxStatus(adapter: NodeSqliteTestAdapter, effectId: string): Promise
       [effectId],
     );
     return row?.status;
+  });
+}
+
+function outboxLastError(adapter: NodeSqliteTestAdapter, effectId: string): Promise<string | undefined> {
+  return adapter.read(async ({ sql }) => {
+    const row = await sql.get<{ readonly last_error_code: string | null }>(
+      "SELECT last_error_code FROM sheet_effect_outbox WHERE effect_id = ?",
+      [effectId],
+    );
+    return row?.last_error_code ?? undefined;
   });
 }
 

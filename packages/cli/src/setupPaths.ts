@@ -6,7 +6,7 @@
  * checkpoint module and the env-file writer can share these names without
  * importing each other (the previous checkpoint ↔ envFileWriter re-import
  * formed a benign but avoidable module cycle). This module imports only
- * ./errors.js for the carrier types (SetupPathSafetyError, SETUP_ERROR_CODES).
+ * ./errors.js for the setupPathSafetyError carrier factory and SETUP_ERROR_CODES.
  */
 
 import {

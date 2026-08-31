@@ -152,6 +152,7 @@ export {
 } from "./outbox.js";
 
 export {
+  AsyncFenceLostError,
   assertProjectionConfirmationTargetWithSql,
   decodePendingEffectRow,
   validateApplyResultOptions,

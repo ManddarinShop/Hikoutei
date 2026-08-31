@@ -43,15 +43,6 @@ import type {
   RegisteredSyncProjectionDefinition,
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 
-/** Stable failures raised by the existing-sheet adoption startup path. */
-export const EXISTING_SHEET_ADOPTION_ERROR_CODES = {
-  /** dry-run finished; the full report rides on the error (service not started). */
-  DRY_RUN_REPORT: "existing_sheet_adoption_dry_run_report",
-} as const;
-
-export type ExistingSheetAdoptionErrorCode =
-  (typeof EXISTING_SHEET_ADOPTION_ERROR_CODES)[keyof typeof EXISTING_SHEET_ADOPTION_ERROR_CODES];
-
 /**
  * Thrown instead of starting the sync service when `adopt.mode === "dry-run"`.
  * Carries the complete read-only report; the spreadsheet was not mutated.

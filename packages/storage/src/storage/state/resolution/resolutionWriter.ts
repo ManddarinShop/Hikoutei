@@ -80,7 +80,7 @@ import {
 } from "./resolutionWriterSql.js";
 import {
   assertCurrentFenceWithSql,
-  FenceLostError,
+  ResolutionStaleFenceError,
   parseNormalizedCell,
   requireConflictStatus,
 } from "./resolutionWriterHelpers.js";
@@ -200,7 +200,7 @@ export async function persistResolutionCommandWithSql(
       };
     });
   } catch (error: unknown) {
-    if (error instanceof FenceLostError) {
+    if (error instanceof ResolutionStaleFenceError) {
       return { kind: PERSIST_RESOLUTION_RESULT_KINDS.FENCED_OUT };
     }
     throw error;
@@ -489,7 +489,7 @@ async function insertProcessingCommandWithSql(
     fence.now,
     ...fenceParameters(fence),
   ]);
-  if (result.changes !== 1) throw new FenceLostError();
+  if (result.changes !== 1) throw new ResolutionStaleFenceError();
 }
 
 /** Stores a deferred command as durable pending work without changing conflict state. */
@@ -517,7 +517,7 @@ async function insertPendingCommandWithSql(
   ]);
   if (result.changes === 1) return;
   if (result.changes === 0 && await isFencingValidWithSql(sql, fence)) return;
-  throw new FenceLostError();
+  throw new ResolutionStaleFenceError();
 }
 
 /** Claims a pending deferred command after its processing predecessor settles. */
@@ -532,7 +532,7 @@ async function markPendingCommandProcessingWithSql(
     requestKey,
     ...fenceParameters(fence),
   ]);
-  if (result.changes !== 1) throw new FenceLostError();
+  if (result.changes !== 1) throw new ResolutionStaleFenceError();
 }
 
 /** Applies a resolved transition, pointer clear, effects, and receipt through active async SQL. */
@@ -552,7 +552,7 @@ async function applyResolvedCommandWithSql(
     command.expectedCandidateEpoch,
     ...fenceParameters(fence),
   ]);
-  if (conflictResult.changes !== 1) throw new FenceLostError();
+  if (conflictResult.changes !== 1) throw new ResolutionStaleFenceError();
 
   const clearedPointer = await sql.run(CLEAR_ACTIVE_CANDIDATE_POINTER_SQL, [
     pointer.physical_sheet_id,
@@ -563,7 +563,7 @@ async function applyResolvedCommandWithSql(
     command.expectedCandidateEpoch,
     ...fenceParameters(fence),
   ]);
-  if (clearedPointer.changes !== 1) throw new FenceLostError();
+  if (clearedPointer.changes !== 1) throw new ResolutionStaleFenceError();
 
   const binding = await sql.run(ADVANCE_ROW_BINDING_CANDIDATE_EPOCH_SQL, [
     command.expectedCandidateEpoch,
@@ -572,7 +572,7 @@ async function applyResolvedCommandWithSql(
     input.logicalSheetId,
     ...fenceParameters(fence),
   ]);
-  if (binding.changes !== 1) throw new FenceLostError();
+  if (binding.changes !== 1) throw new ResolutionStaleFenceError();
 
   await appendResolutionEffectsWithSql(sql, fence, input.effects);
   // A legacy anchor-keyed cleanup/repair rewrite enqueued before this
@@ -599,7 +599,7 @@ async function applyResolvedCommandWithSql(
     command.commandId,
     ...fenceParameters(fence),
   ]);
-  if (commandResult.changes !== 1) throw new FenceLostError();
+  if (commandResult.changes !== 1) throw new ResolutionStaleFenceError();
 }
 
 /** Marks a command stale and appends its stale branch effects through active async SQL. */
@@ -619,7 +619,7 @@ async function markStaleCommandWithSql(
     input.command.commandId,
     ...fenceParameters(fence),
   ]);
-  if (command.changes !== 1) throw new FenceLostError();
+  if (command.changes !== 1) throw new ResolutionStaleFenceError();
   await appendResolutionEffectsWithSql(sql, fence, input.staleEffects ?? []);
 }
 
@@ -633,7 +633,7 @@ async function markRejectedCommandWithSql(
     input.command.commandId,
     ...fenceParameters(fence),
   ]);
-  if (result.changes !== 1) throw new FenceLostError();
+  if (result.changes !== 1) throw new ResolutionStaleFenceError();
   await appendResolutionEffectsWithSql(sql, fence, input.rejectedEffects ?? []);
 }
 
@@ -693,7 +693,7 @@ export async function appendResolutionEffectsWithSql(
       continue;
     }
     if (!(await appendPendingEffectsWithSql(sql, fence, [effect]))) {
-      throw new FenceLostError();
+      throw new ResolutionStaleFenceError();
     }
   }
 }

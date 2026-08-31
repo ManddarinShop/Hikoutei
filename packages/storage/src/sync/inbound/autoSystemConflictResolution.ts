@@ -55,7 +55,7 @@ import {
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../orm/errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
 import {
   identifiedValue,
 } from "../../orm/persistence/support/helpers.js";

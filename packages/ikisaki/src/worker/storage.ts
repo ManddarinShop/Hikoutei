@@ -30,6 +30,7 @@ export interface EffectWorkerStorage {
     options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
       readonly effectId: string;
       readonly claimToken: string;
+      readonly reason?: "provider_batch" | "lease_recovered";
     },
   ): Promise<boolean>;
   retryClaimedEffect(options: RetryClaimedEffectOptions): Promise<boolean>;

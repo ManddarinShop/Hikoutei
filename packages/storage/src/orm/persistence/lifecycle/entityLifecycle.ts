@@ -64,7 +64,7 @@ import { absentValue, presentValue } from "@hikoutei/contracts/state/index.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../../errors.js";
+} from "@hikoutei/contracts/sync-orm/errors.js";
 
 /** Applies one mapped change and emits append/update/delete phase timings. */
 export async function applyMappedChange(

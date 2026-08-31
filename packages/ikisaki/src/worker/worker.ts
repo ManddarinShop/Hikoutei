@@ -281,6 +281,7 @@ async function runEffectWorker(
         ...currentFence(),
         effectId: item.pending.effect_id,
         claimToken: item.claimToken,
+        reason: "lease_recovered",
       })) report.deferred += 1;
     }
     for (const item of notRenewed) {
@@ -912,6 +913,7 @@ async function dispatchRegularUnit(
         ...fence(),
         effectId: item.pending.effect_id,
         claimToken: item.claimToken,
+        reason: "provider_batch",
       })) {
         report.deferred += 1;
         deferredEffectIds.add(item.pending.effect_id);
