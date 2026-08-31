@@ -42,6 +42,38 @@ describe("SyncPollingSupervisor", () => {
     }
   });
 
+  it("rejects non-positive errorBackoffInitialMs with the typed error code", () => {
+    expect.assertions(3);
+    try {
+      new SyncPollingSupervisor({
+        runPass: () => Promise.resolve(),
+        errorBackoffInitialMs: 0,
+      });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(PollingSupervisorOptionsError);
+      expect((error as PollingSupervisorOptionsError).code).toBe(
+        SYNC_POLLING_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      );
+      expect((error as Error).message).toBe("poll error backoff must be a positive safe integer");
+    }
+  });
+
+  it("rejects non-positive errorBackoffMaxMs with the typed error code", () => {
+    expect.assertions(3);
+    try {
+      new SyncPollingSupervisor({
+        runPass: () => Promise.resolve(),
+        errorBackoffMaxMs: 0,
+      });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(PollingSupervisorOptionsError);
+      expect((error as PollingSupervisorOptionsError).code).toBe(
+        SYNC_POLLING_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      );
+      expect((error as Error).message).toBe("poll maximum error backoff must be a positive safe integer");
+    }
+  });
+
   it("rejects errorBackoffMaxMs < errorBackoffInitialMs with the backoff order code", () => {
     expect.assertions(3);
     try {
