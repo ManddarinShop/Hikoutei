@@ -24,6 +24,7 @@ import {
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 import {
   describeErrorForInternalLog,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "../shared/observability/internalLog.js";
 import {
@@ -244,7 +245,7 @@ class EntityManagerImpl implements EntityManager {
       if (!joinsActiveTransaction) {
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.EM_FLUSH_FAILED,
-          level: "error",
+          level: HIKOUTEI_LOG_LEVELS.ERROR,
           component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
           ...describeErrorForInternalLog(error),
           durationMs: Date.now() - startedAt,
@@ -291,7 +292,7 @@ class EntityManagerImpl implements EntityManager {
       // keys so entities loaded inside the failed callback remain retryable.
       logHikouteiInternalEvent({
         event: HIKOUTEI_LOG_EVENTS.EM_TRANSACTIONAL_FAILED,
-        level: "error",
+        level: HIKOUTEI_LOG_LEVELS.ERROR,
         component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
         ...describeErrorForInternalLog(error),
       });
@@ -413,7 +414,7 @@ export function createEntityManager(
 function logQueryFailure(tableName: string, error: unknown): void {
   logHikouteiInternalEvent({
     event: HIKOUTEI_LOG_EVENTS.EM_QUERY_FAILED,
-    level: "warn",
+    level: HIKOUTEI_LOG_LEVELS.WARN,
     component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
     table: tableName,
     ...describeErrorForInternalLog(error),
@@ -424,7 +425,7 @@ function logQueryFailure(tableName: string, error: unknown): void {
 function logLifecycleFailure(tableName: string | undefined, error: unknown): void {
   logHikouteiInternalEvent({
     event: HIKOUTEI_LOG_EVENTS.EM_LIFECYCLE_INVALID,
-    level: "warn",
+    level: HIKOUTEI_LOG_LEVELS.WARN,
     component: HIKOUTEI_LOG_COMPONENTS.ENTITY_MANAGER,
     ...(tableName === undefined ? {} : { table: tableName }),
     ...describeErrorForInternalLog(error),

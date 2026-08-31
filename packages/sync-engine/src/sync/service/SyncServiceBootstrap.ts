@@ -61,6 +61,7 @@ import {
 } from "./systemStateReadiness.js";
 import {
   describeErrorForInternalLog,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "../../shared/observability/internalLog.js";
 import {
@@ -328,7 +329,7 @@ export async function createInternalSyncService(
   } catch (error: unknown) {
     logHikouteiInternalEvent({
       event: HIKOUTEI_LOG_EVENTS.SYNC_SERVICE_START_FAILED,
-      level: "error",
+      level: HIKOUTEI_LOG_LEVELS.ERROR,
       component: HIKOUTEI_LOG_COMPONENTS.SYNC_SERVICE,
       ...describeErrorForInternalLog(error),
     });

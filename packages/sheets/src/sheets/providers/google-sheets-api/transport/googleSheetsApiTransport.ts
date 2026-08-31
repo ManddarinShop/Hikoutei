@@ -14,6 +14,7 @@ import { sheets, type sheets_v4 } from "@googleapis/sheets";
 import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
   describeErrorForInternalLog,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
@@ -214,7 +215,7 @@ function logTransportFailure(error: GoogleSheetsApiTransportError): void {
     : undefined;
   logHikouteiInternalEvent({
     event: HIKOUTEI_LOG_EVENTS.TRANSPORT_REQUEST_FAILED,
-    level: "warn",
+    level: HIKOUTEI_LOG_LEVELS.WARN,
     component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
     code: error.code,
     errorClass: "GoogleSheetsApiTransportError",

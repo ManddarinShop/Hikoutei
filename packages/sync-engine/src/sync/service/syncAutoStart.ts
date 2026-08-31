@@ -65,6 +65,7 @@ import {
 } from "./errors.js";
 import {
   describeErrorForInternalLog,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "../../shared/observability/internalLog.js";
 import {
@@ -363,7 +364,7 @@ export async function createTypedSheetsWithSync(
     });
     logHikouteiInternalEvent({
       event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_STARTED,
-      level: "info",
+      level: HIKOUTEI_LOG_LEVELS.INFO,
       component: HIKOUTEI_LOG_COMPONENTS.SYNC_AUTOSTART,
       counts: { entities: options.entities.length },
     });
@@ -719,7 +720,7 @@ export function resolveSyncRateLimitIntervalMs(
 function raiseDiagnosed(diagnostic: SyncDiagnostic, failure: HikouteiError): never {
   logHikouteiInternalEvent({
     event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_FAILED,
-    level: "error",
+    level: HIKOUTEI_LOG_LEVELS.ERROR,
     component: HIKOUTEI_LOG_COMPONENTS.SYNC_AUTOSTART,
     ...describeErrorForInternalLog(failure),
   });

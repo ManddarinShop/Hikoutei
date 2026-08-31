@@ -20,6 +20,7 @@ import {
 import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "@hikoutei/contracts/sheets/transportOutcome.js";
 import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
 import {
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
@@ -147,7 +148,7 @@ async function admitRequestStart(
   // buckets), never a message, payload, id, or URL.
   logHikouteiInternalEvent({
     event: HIKOUTEI_LOG_EVENTS.TRANSPORT_REQUEST_FAILED,
-    level: "warn",
+    level: HIKOUTEI_LOG_LEVELS.WARN,
     component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
     code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.REQUEST_START_REFUSED,
     pacing,

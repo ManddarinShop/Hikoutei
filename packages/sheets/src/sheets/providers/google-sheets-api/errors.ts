@@ -16,7 +16,7 @@ import {
   SyncSheetsContractError,
   type SyncInvalidProviderClassification,
 } from "@hikoutei/contracts/sheets/errors.js";
-import { logHikouteiInternalEvent } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+import { HIKOUTEI_LOG_LEVELS, logHikouteiInternalEvent } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
@@ -86,7 +86,7 @@ export function invalidProviderState(
   // remote payload fragments, ids, or URLs).
   logHikouteiInternalEvent({
     event: HIKOUTEI_LOG_EVENTS.TRANSPORT_RESPONSE_INVALID,
-    level: "warn",
+    level: HIKOUTEI_LOG_LEVELS.WARN,
     component: HIKOUTEI_LOG_COMPONENTS.TRANSPORT,
     code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVIDER_RESPONSE,
     errorClass: "SyncSheetsContractError",
