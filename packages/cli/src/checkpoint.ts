@@ -947,7 +947,7 @@ export function saveSetupState(
   // any rollback — the checkpoint is already in place and the next run
   // loads it (a claimed-unsafe rollback could destroy the only copy of the
   // write-ahead state).
-  fsyncParentDirectory(dirname(statePath), fs);
+  fsyncParentDirectory(dirname(statePath), "checkpoint", fs);
 }
 
 /**

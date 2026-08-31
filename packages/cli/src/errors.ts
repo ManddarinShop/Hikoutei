@@ -5,9 +5,9 @@
  * code plus a human message. Callers (the CLI entry, tests, and any wrapper)
  * branch on the code, never on message text. Most codes are phase-level: all
  * project-phase failures share one code, all service-account failures share
- * another, and so on; the message carries the specific detail. The 13 path-safety
+ * another, and so on; the message carries the specific detail. The 16 path-safety
  * carrier codes (CHECKPOINT_TEMP_*, OUTPUT_*, SETUP_WRITE_NO_PROGRESS,
- * SETUP_DIR_FSYNC_*, SETUP_RENAME_DURABLE_*) are operation-level: 13 distinct
+ * SETUP_DIR_FSYNC_*, SETUP_RENAME_DURABLE_*) are operation-level: 16 distinct
  * codes cover 15 recoverable path-safety throw sites (OUTPUT_SYMLINK_REFUSED
  * and OUTPUT_NOT_REGULAR_FILE are each reused at two sites) so the boundary
  * catch can preserve machine-readable specificity instead of collapsing to a
@@ -95,6 +95,14 @@ export const SETUP_ERROR_CODES = {
   SETUP_RENAME_DURABLE_FAILED: "setup_rename_durable_failed",
   /** Could not close the containing directory after the durability fsync. */
   SETUP_DIR_FSYNC_CLOSE_FAILED: "setup_dir_fsync_close_failed",
+
+  // -- Output-path durability codes (#448 per-path qualification) --
+  /** Opening the directory containing the .env output failed during durability sync. */
+  OUTPUT_DIR_FSYNC_OPEN_FAILED: "output_dir_fsync_open_failed",
+  /** fsync of the rename in the directory containing the .env output failed. */
+  OUTPUT_RENAME_DURABLE_FAILED: "setup_output_rename_durable_failed",
+  /** Directory fsync after the .env rename could not be finalized. */
+  OUTPUT_DIR_FSYNC_CLOSE_FAILED: "output_dir_fsync_close_failed",
 } as const;
 
 /** Union of every machine-readable setup error code. */
