@@ -13,6 +13,11 @@ import {
   requireSemanticRevision,
   requireSemanticString,
 } from "@hikoutei/contracts/identity/types.js";
+import {
+  CONTRACTS_INPUT_ERROR_CODES,
+  ContractsInputError,
+} from "@hikoutei/contracts/domain/errors/index.js";
+import { decodeSqlRow } from "@hikoutei/contracts/storage/sql.js";
 
 describe("shared validation predicates", () => {
   it("recognizes non-empty strings", () => {
@@ -50,6 +55,7 @@ describe("shared validation predicates", () => {
   });
 
   it("promotes semantic identifiers only after runtime validation", () => {
+    expect.assertions(18);
     expect(requireSemanticString<"entity-id">("entity-1", "entity ID")).toBe("entity-1");
     expect(requireSemanticRevision(0)).toBe(0);
     expect(isSemanticRevision(1)).toBe(true);
@@ -57,6 +63,49 @@ describe("shared validation predicates", () => {
     expect(() => requireSemanticString("", "entity ID")).toThrow();
     expect(() => requireSemanticRevision(-1)).toThrow();
     expect(() => requireHash("not-a-hash", "payload hash")).toThrow();
+
+    // ContractsInputError code assertions
+    expect(() => requireSemanticString("", "entity ID")).toThrow(ContractsInputError);
+    try {
+      requireSemanticString("", "entity ID");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractsInputError);
+      expect(e).toBeInstanceOf(TypeError);
+      expect((e as ContractsInputError).code).toBe(CONTRACTS_INPUT_ERROR_CODES.NON_EMPTY_STRING_REQUIRED);
+      expect(e).toHaveProperty("message", "entity ID must be a non-empty string");
+    }
+    try {
+      requireSemanticRevision(-1, "revision");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractsInputError);
+      expect((e as ContractsInputError).code).toBe(CONTRACTS_INPUT_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED);
+      expect(e).toHaveProperty("message", "revision must be a non-negative safe integer");
+    }
+    try {
+      requireHash("not-a-hash", "payload hash");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractsInputError);
+      expect((e as ContractsInputError).code).toBe(CONTRACTS_INPUT_ERROR_CODES.SHA256_HASH_REQUIRED);
+      expect(e).toHaveProperty("message", "payload hash must be a SHA-256 hexadecimal hash");
+    }
+  });
+
+  it("decodeSqlRow throws ContractsInputError for non-object values", () => {
+    expect.assertions(6);
+    try {
+      decodeSqlRow(null, (r) => r);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractsInputError);
+      expect((e as ContractsInputError).code).toBe(CONTRACTS_INPUT_ERROR_CODES.OBJECT_REQUIRED);
+      expect(e).toHaveProperty("message", "SQL row must be an object");
+    }
+    try {
+      decodeSqlRow([1], (r) => r);
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractsInputError);
+      expect((e as ContractsInputError).code).toBe(CONTRACTS_INPUT_ERROR_CODES.OBJECT_REQUIRED);
+      expect(e).toHaveProperty("message", "SQL row must be an object");
+    }
   });
 
   it("recognizes non-empty lists", () => {
