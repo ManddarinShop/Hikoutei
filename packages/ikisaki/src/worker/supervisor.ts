@@ -9,6 +9,10 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  SUPERVISOR_OPTIONS_ERROR_CODES,
+  SupervisionOptionsError,
+} from "./errors.js";
+import {
   runEffectWorkerWithAdapter,
 } from "./worker.js";
 import type { EffectWorkerWithAdapterOptions } from "./options.js";
@@ -161,19 +165,19 @@ export class EffectWorkerSupervisor<
     this.runPass = options.runPass;
     this.idleIntervalMs = requirePositiveSafeInteger(
       options.idleIntervalMs ?? DEFAULT_IDLE_INTERVAL_MS,
-      "sync effect supervisor idle interval",
+      "idle interval",
     );
     this.errorBackoffInitialMs = requirePositiveSafeInteger(
       options.errorBackoffInitialMs ?? DEFAULT_ERROR_BACKOFF_INITIAL_MS,
-      "sync effect supervisor error backoff",
+      "error backoff",
     );
     this.errorBackoffMaxMs = requirePositiveSafeInteger(
       options.errorBackoffMaxMs ?? DEFAULT_ERROR_BACKOFF_MAX_MS,
-      "sync effect supervisor maximum error backoff",
+      "maximum error backoff",
     );
     if (this.errorBackoffMaxMs < this.errorBackoffInitialMs) {
-      throw new RangeError(
-        "sync effect supervisor maximum error backoff must be at least the initial backoff",
+      throw new SupervisionOptionsError(
+        SUPERVISOR_OPTIONS_ERROR_CODES.BACKOFF_ORDER_INVALID,
       );
     }
     this.random = options.random ?? Math.random;
@@ -182,11 +186,11 @@ export class EffectWorkerSupervisor<
     this.reconciliation = options.reconciliation;
     this.reconciliationIntervalMs = requirePositiveSafeInteger(
       options.reconciliation?.intervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS,
-      "sync effect supervisor reconciliation interval",
+      "reconciliation interval",
     );
     this.initialReconciliationDelayMs = requireNonNegativeSafeInteger(
       options.reconciliation?.initialReconciliationDelayMs ?? 0,
-      "sync effect supervisor initial reconciliation delay",
+      "initial reconciliation delay",
     );
     this.isFirstScanReady = options.reconciliation?.isFirstScanReady;
     this.firstScanPending = options.reconciliation !== undefined;
@@ -523,18 +527,22 @@ function validateWorkerOptions(
   appendDispatchIntervalMs?: number,
 ): void {
   if (workerId.length === 0) {
-    throw new RangeError("sync effect supervisor worker ID is required");
+    throw new SupervisionOptionsError(SUPERVISOR_OPTIONS_ERROR_CODES.WORKER_ID_REQUIRED);
   }
   if (!Number.isSafeInteger(maxEffects) || maxEffects < 1) {
-    throw new RangeError("sync effect supervisor maxEffects must be a positive safe integer");
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      "maxEffects",
+    );
   }
   if (
     maxFastAppendCandidates !== undefined &&
     (!Number.isSafeInteger(maxFastAppendCandidates) ||
       maxFastAppendCandidates < 1)
   ) {
-    throw new RangeError(
-      "sync effect supervisor maxFastAppendCandidates must be a positive safe integer",
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      "maxFastAppendCandidates",
     );
   }
   if (
@@ -542,22 +550,29 @@ function validateWorkerOptions(
     (!Number.isSafeInteger(appendDispatchIntervalMs) ||
       appendDispatchIntervalMs < 0)
   ) {
-    throw new RangeError(
-      "sync effect supervisor appendDispatchIntervalMs must be a non-negative safe integer",
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED,
+      "appendDispatchIntervalMs",
     );
   }
 }
 
-function requirePositiveSafeInteger(value: number, name: string): number {
+function requirePositiveSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
-    throw new RangeError(name + " must be a positive safe integer");
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      label,
+    );
   }
   return value;
 }
 
-function requireNonNegativeSafeInteger(value: number, name: string): number {
+function requireNonNegativeSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RangeError(name + " must be a non-negative safe integer");
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED,
+      label,
+    );
   }
   return value;
 }

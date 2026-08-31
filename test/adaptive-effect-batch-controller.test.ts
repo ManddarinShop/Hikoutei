@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  AdaptiveBatchOptionsError,
   AdaptiveEffectBatchController,
 } from "@hikoutei/ikisaki";
 
@@ -32,6 +33,16 @@ describe("adaptive effect batch controller", () => {
       await expect(wait).resolves.toBe(400);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("throws AdaptiveBatchOptionsError with code for invalid limits", () => {
+    try {
+      new AdaptiveEffectBatchController({ minimum: 20, maximum: 5 });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AdaptiveBatchOptionsError);
+      expect((error as AdaptiveBatchOptionsError).code).toBe("adaptive_limit_order_invalid");
     }
   });
 });

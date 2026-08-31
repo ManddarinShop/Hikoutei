@@ -1,5 +1,10 @@
 /** Adaptive route batch sizing for the durable outbound effect worker. */
 
+import {
+  ADAPTIVE_BATCH_ERROR_CODES,
+  AdaptiveBatchOptionsError,
+} from "./errors.js";
+
 export const ADAPTIVE_EFFECT_BATCH_LIMITS = {
   MINIMUM: 5,
   INITIAL: 100,
@@ -51,11 +56,11 @@ export class AdaptiveEffectBatchController {
     /** Minimum interval between fast-append request starts; 0 disables the throttle. */
     readonly appendDispatchIntervalMs?: number;
   } = {}) {
-    this.minimum = requireBatchLimit(options.minimum ?? ADAPTIVE_EFFECT_BATCH_LIMITS.MINIMUM, "minimum");
-    this.initial = requireBatchLimit(options.initial ?? ADAPTIVE_EFFECT_BATCH_LIMITS.INITIAL, "initial");
-    this.maximum = requireBatchLimit(options.maximum ?? ADAPTIVE_EFFECT_BATCH_LIMITS.MAXIMUM, "maximum");
+    this.minimum = requirePositiveInteger(options.minimum ?? ADAPTIVE_EFFECT_BATCH_LIMITS.MINIMUM, "minimum");
+    this.initial = requirePositiveInteger(options.initial ?? ADAPTIVE_EFFECT_BATCH_LIMITS.INITIAL, "initial");
+    this.maximum = requirePositiveInteger(options.maximum ?? ADAPTIVE_EFFECT_BATCH_LIMITS.MAXIMUM, "maximum");
     if (this.minimum > this.initial || this.initial > this.maximum) {
-      throw new RangeError("adaptive effect batch limits must satisfy minimum <= initial <= maximum");
+      throw new AdaptiveBatchOptionsError(ADAPTIVE_BATCH_ERROR_CODES.LIMIT_ORDER_INVALID);
     }
     this.coalesceWindowMs = requireNonNegativeInteger(
       options.coalesceWindowMs ?? DEFAULT_EFFECT_BATCH_COALESCE_WINDOW_MS,
@@ -193,16 +198,16 @@ export class AdaptiveEffectBatchController {
   }
 }
 
-function requireBatchLimit(value: number, label: string): number {
-  return requirePositiveInteger(value, label);
-}
-
 function requirePositiveInteger(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`adaptive ${label} must be a positive safe integer`);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new AdaptiveBatchOptionsError(ADAPTIVE_BATCH_ERROR_CODES.POSITIVE_INTEGER_REQUIRED, label);
+  }
   return value;
 }
 
 function requireNonNegativeInteger(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`adaptive ${label} must be a non-negative safe integer`);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new AdaptiveBatchOptionsError(ADAPTIVE_BATCH_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED, label);
+  }
   return value;
 }
