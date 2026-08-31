@@ -79,7 +79,7 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: 0.9.18
+        specifier: 0.9.19
         version: link:../..
     devDependencies:
       '@types/node':
@@ -136,7 +136,7 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: 0.9.18
+        specifier: 0.9.19
         version: link:../..
 
   packages/sheets:
