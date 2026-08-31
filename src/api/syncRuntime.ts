@@ -151,6 +151,7 @@ export interface CreateTypedSheetsWithSyncOptions {
   readonly dbName: string;
   readonly entities: readonly HikouteiEntity[];
   readonly env?: Readonly<Record<string, string | undefined>>;
+  // Public API diagnostic type — literal level union is the external contract, not an internalLog emission site.
   readonly onDiagnostic?: (level: "info" | "error", message: string) => void;
   readonly adopt?: AdoptSpec;
 }

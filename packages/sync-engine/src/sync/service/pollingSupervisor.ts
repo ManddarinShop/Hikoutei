@@ -25,6 +25,7 @@ import { POLLING_FULL_SCAN_INTERVAL_MS } from "./cadence.js";
 import { readSystemStateDrainReadinessWithAdapter } from "@hikoutei/ikisaki";
 import {
   describeErrorForInternalLog,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "../../shared/observability/internalLog.js";
 import {
@@ -114,7 +115,7 @@ export function createPollingSupervisor(
       if (isNotablePollingReport(report)) {
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.POLLING_PASS_SUMMARY,
-          level: "info",
+          level: HIKOUTEI_LOG_LEVELS.INFO,
           component: HIKOUTEI_LOG_COMPONENTS.POLLING,
           durationMs: Math.round(report.elapsedMs),
           counts: {
@@ -140,7 +141,7 @@ export function createPollingSupervisor(
       // line is the durable record of the pass failure.
       logHikouteiInternalEvent({
         event: HIKOUTEI_LOG_EVENTS.POLLING_PASS_FAILED,
-        level: "error",
+        level: HIKOUTEI_LOG_LEVELS.ERROR,
         component: HIKOUTEI_LOG_COMPONENTS.POLLING,
         ...describeErrorForInternalLog(error),
         retryable: true,

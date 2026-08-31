@@ -47,6 +47,7 @@ import {
 } from "@hikoutei/sync-engine/api/errors.js";
 import {
   describeErrorForInternalLog,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
@@ -114,7 +115,7 @@ export async function createLocalTypedSheetsRuntime(
     const hikoutei = createInternalHikoutei(provider, descriptors);
     logHikouteiInternalEvent({
       event: HIKOUTEI_LOG_EVENTS.RUNTIME_OPENED,
-      level: "info",
+      level: HIKOUTEI_LOG_LEVELS.INFO,
       component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
       durationMs: Date.now() - startedAt,
       counts: { entities: descriptors.size },
@@ -123,7 +124,7 @@ export async function createLocalTypedSheetsRuntime(
   } catch (error: unknown) {
     logHikouteiInternalEvent({
       event: HIKOUTEI_LOG_EVENTS.RUNTIME_OPEN_FAILED,
-      level: "error",
+      level: HIKOUTEI_LOG_LEVELS.ERROR,
       component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
       durationMs: Date.now() - startedAt,
       ...describeErrorForInternalLog(error),

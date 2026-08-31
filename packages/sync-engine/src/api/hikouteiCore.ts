@@ -21,6 +21,7 @@ import {
 import {
   describeErrorForInternalLog,
   getHikouteiInternalLogger,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
 } from "../shared/observability/internalLog.js";
 import {
@@ -286,7 +287,7 @@ class HikouteiImpl implements Hikoutei {
       } catch (providerError: unknown) {
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.RUNTIME_CLOSE_FAILED,
-          level: "error",
+          level: HIKOUTEI_LOG_LEVELS.ERROR,
           component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
           ...describeErrorForInternalLog(providerError),
         });
@@ -308,7 +309,7 @@ class HikouteiImpl implements Hikoutei {
       if (beforeCloseFailed) {
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.RUNTIME_CLOSE_FAILED,
-          level: "error",
+          level: HIKOUTEI_LOG_LEVELS.ERROR,
           component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
           ...describeErrorForInternalLog(beforeCloseError),
         });
@@ -321,7 +322,7 @@ class HikouteiImpl implements Hikoutei {
       this.closeState = "closed";
       logHikouteiInternalEvent({
         event: HIKOUTEI_LOG_EVENTS.RUNTIME_CLOSED,
-        level: "info",
+        level: HIKOUTEI_LOG_LEVELS.INFO,
         component: HIKOUTEI_LOG_COMPONENTS.RUNTIME,
       });
     } catch (error: unknown) {

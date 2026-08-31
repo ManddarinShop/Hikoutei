@@ -32,6 +32,7 @@ import { SheetsEffectDispatcher } from "../outbound/SheetsEffectDispatcher.js";
 import type { SyncTimingSink } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
 import {
   describeErrorForInternalLog,
+  HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
   stableConsoleErrorTag,
 } from "../../shared/observability/internalLog.js";
@@ -169,7 +170,7 @@ export function createEffectSupervisor(
         // warning / custom-hook behavior unchanged.
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.RECONCILIATION_SCAN_FAILED,
-          level: "warn",
+          level: HIKOUTEI_LOG_LEVELS.WARN,
           component: HIKOUTEI_LOG_COMPONENTS.RECONCILIATION,
           ...describeErrorForInternalLog(error),
           retryable: true,
@@ -207,7 +208,7 @@ function wrapEffectWorkerHooks(options: InternalSyncServiceOptions): {
       if (isNonIdleWorkerReport(report)) {
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.OUTBOX_PASS_SUMMARY,
-          level: "info",
+          level: HIKOUTEI_LOG_LEVELS.INFO,
           component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
           counts: {
             selected: report.selected,
@@ -230,7 +231,7 @@ function wrapEffectWorkerHooks(options: InternalSyncServiceOptions): {
     onError: (error: unknown) => {
       logHikouteiInternalEvent({
         event: HIKOUTEI_LOG_EVENTS.OUTBOX_PASS_FAILED,
-        level: "error",
+        level: HIKOUTEI_LOG_LEVELS.ERROR,
         component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
         ...describeErrorForInternalLog(error),
       });
