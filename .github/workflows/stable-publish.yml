@@ -224,6 +224,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          # Publish runs without pnpm on purpose (it only publishes the
+          # verified pre-built tarball). setup-node v5's package-manager-cache
+          # defaults to true and probes pnpm-lock.yaml, failing the job with
+          # "Unable to locate executable file: pnpm"; publish needs no cache.
+          package-manager-cache: false
 
       - name: Download stable package
         uses: actions/download-artifact@v7
