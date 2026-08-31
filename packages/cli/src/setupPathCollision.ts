@@ -102,6 +102,8 @@ function canonicalPath(path: string): string {
   for (;;) {
     hops += 1;
     if (hops > 100) {
+      // survey §c (I): invariant — bounding a TOCTOU-safe symlink cycle
+      // loop; not user-recoverable.
       throw new Error(`symlink cycle while resolving ${path}`);
     }
     let stat;

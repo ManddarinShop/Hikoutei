@@ -108,6 +108,10 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import {
+  SETUP_ERROR_CODES,
+  setupPathSafetyError,
+} from "./errors.js";
+import {
   SETUP_LOCK_SUFFIX,
   SETUP_STATE_TEMP_SUFFIX,
   defaultSetupStateWriteFs,
@@ -855,7 +859,8 @@ function extractCommonFields(value: Record<string, unknown>): SetupStateCommon |
  * before the rename, so an alias swapped in after the open can never be
  * renamed onto the state path. Cleanup after a failed rename removes only
  * the temp inode this invocation created. Throws on filesystem failure;
- * the flow maps the throw to `setup_state_write_failed`.
+ * the caller preserves carrier codes (`SetupPathSafetyError`) and falls
+ * back to `setup_state_write_failed` for other errors.
  */
 export function saveSetupState(
   statePath: string,
@@ -873,7 +878,8 @@ export function saveSetupState(
     if (isNodeError(error) && error.code === "EEXIST") {
       // A pre-existing temp file (symlink, hardlink, or regular) is left
       // exactly as found: never unlink, truncate, or write through it.
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.CHECKPOINT_TEMP_EXISTS,
         `a file already exists at the checkpoint temp path ${tempPath}; remove it and retry`,
       );
     }
@@ -889,7 +895,8 @@ export function saveSetupState(
     fs.fchmodSync(fd, SETUP_STATE_FILE_MODE);
     const secured = fs.fstatSync(fd);
     if ((Number(secured.mode) & 0o777) !== SETUP_STATE_FILE_MODE) {
-      throw new Error(
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.CHECKPOINT_TEMP_PERMISSION_VERIFY_FAILED,
         `could not verify owner-only permissions on the checkpoint temp file ${tempPath}`,
       );
     }
@@ -919,7 +926,8 @@ export function saveSetupState(
   // rename; a swapped alias must never be renamed onto the checkpoint path.
   if (!pathNamesInode(tempPath, tempDev, tempIno, fs)) {
     removeOwnedTempFile(tempPath, tempDev, tempIno, fs);
-    throw new Error(
+    throw setupPathSafetyError(
+      SETUP_ERROR_CODES.CHECKPOINT_TEMP_PATH_CHANGED,
       `the checkpoint temp path ${tempPath} changed while saving; nothing was written`,
     );
   }
@@ -1186,6 +1194,8 @@ export function acquireSetupLock(lockPath: string, fs: LockFs = defaultLockFs): 
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isDirectory()) {
+      // survey §c (I): invariant — the directory was just created by mkdir;
+      // this guard is unreachable in production.
       throw new Error("not a directory");
     }
     const token = nextSetupLockToken();

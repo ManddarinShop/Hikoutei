@@ -3,9 +3,13 @@
  *
  * Every failure the setup flow can produce maps to a stable machine-readable
  * code plus a human message. Callers (the CLI entry, tests, and any wrapper)
- * branch on the code, never on message text. Codes are phase-level: all
+ * branch on the code, never on message text. Most codes are phase-level: all
  * project-phase failures share one code, all service-account failures share
- * another, and so on; the message carries the specific detail.
+ * another, and so on; the message carries the specific detail. The path-safety
+ * carrier codes (CHECKPOINT_TEMP_*, OUTPUT_*, SETUP_WRITE_NO_PROGRESS,
+ * SETUP_DIR_FSYNC_*, SETUP_RENAME_DURABLE_*) are finer-grained: each names a
+ * distinct recoverable failure site so the boundary catch can preserve
+ * machine-readable specificity instead of collapsing to a generic write code.
  */
 
 export const SETUP_ERROR_CODES = {
@@ -57,6 +61,38 @@ export const SETUP_ERROR_CODES = {
   OUTPUT_WRITE_FAILED: "output_write_failed",
   /** Command-line arguments are malformed (unknown flag, missing value, ...). */
   INVALID_ARGS: "invalid_args",
+
+  // -- Path safety carrier codes (Phase 6) --
+  // Typed codes thrown by the 15 recoverable path-safety sites so the
+  // boundary catch preserves machine-readable specificity instead of
+  // collapsing everything to the generic OUTPUT_WRITE_FAILED / SETUP_STATE_WRITE_FAILED.
+
+  /** A pre-existing temp entry blocks the exclusive checkpoint temp create. */
+  CHECKPOINT_TEMP_EXISTS: "checkpoint_temp_exists",
+  /** Owner-only mode verification failed on the checkpoint temp descriptor. */
+  CHECKPOINT_TEMP_PERMISSION_VERIFY_FAILED: "checkpoint_temp_permission_verify_failed",
+  /** The checkpoint temp path was swapped before the rename could proceed. */
+  CHECKPOINT_TEMP_PATH_CHANGED: "checkpoint_temp_path_changed",
+  /** A symlink was found (or appeared) at the output path. */
+  OUTPUT_SYMLINK_REFUSED: "output_symlink_refused",
+  /** The output path is not a regular file (directory, FIFO, device, ...). */
+  OUTPUT_NOT_REGULAR_FILE: "output_not_regular_file",
+  /** The output path aliases a reserved file (key, checkpoint, ...). */
+  OUTPUT_ALIASES_RESERVED: "output_aliases_reserved",
+  /** A conflicting entry appeared at the env temp path. */
+  OUTPUT_TEMP_CONFLICT: "output_temp_conflict",
+  /** Owner-only mode verification failed on the env temp descriptor. */
+  OUTPUT_TEMP_PERMISSION_VERIFY_FAILED: "output_temp_permission_verify_failed",
+  /** The env temp path was swapped before the rename could proceed. */
+  OUTPUT_TEMP_PATH_CHANGED: "output_temp_path_changed",
+  /** The write loop made no progress (zero or negative byte count). */
+  SETUP_WRITE_NO_PROGRESS: "setup_write_no_progress",
+  /** Could not open the containing directory for the durability fsync. */
+  SETUP_DIR_FSYNC_OPEN_FAILED: "setup_dir_fsync_open_failed",
+  /** The directory fsync after rename failed (rename durability uncertain). */
+  SETUP_RENAME_DURABLE_FAILED: "setup_rename_durable_failed",
+  /** Could not close the containing directory after the durability fsync. */
+  SETUP_DIR_FSYNC_CLOSE_FAILED: "setup_dir_fsync_close_failed",
 } as const;
 
 /** Union of every machine-readable setup error code. */
@@ -77,4 +113,35 @@ export interface SetupFailure {
 /** Builds a structured failure value. */
 export function setupFailure(code: SetupErrorCode, message: string): SetupFailure {
   return { code, message };
+}
+
+/**
+ * Typed internal carrier thrown by the 15 recoverable path-safety sites.
+ *
+ * The nearest boundary catch extracts the code when present and falls back
+ * to the existing generic code (OUTPUT_WRITE_FAILED / SETUP_STATE_WRITE_FAILED)
+ * for non-carrier errors. Messages are byte-identical to the previous raw
+ * Error throws.
+ */
+export class SetupPathSafetyError extends Error {
+  readonly code: SetupErrorCode;
+  constructor(code: SetupErrorCode, message: string) {
+    super(message);
+    this.name = "SetupPathSafetyError";
+    this.code = code;
+  }
+}
+
+/** Builds a typed path-safety carrier error. */
+export function setupPathSafetyError(code: SetupErrorCode, message: string): SetupPathSafetyError {
+  return new SetupPathSafetyError(code, message);
+}
+
+/**
+ * Extracts the carrier code from a caught error when it is a
+ * `SetupPathSafetyError`; returns `undefined` for non-carrier errors so
+ * the boundary catch can fall back to the existing generic code.
+ */
+export function carrierCode(error: unknown): SetupErrorCode | undefined {
+  return error instanceof SetupPathSafetyError ? error.code : undefined;
 }

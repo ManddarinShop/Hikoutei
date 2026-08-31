@@ -5,8 +5,8 @@
  * Extracted as the dependency-free leaf of the CLI module graph so the
  * checkpoint module and the env-file writer can share these names without
  * importing each other (the previous checkpoint ↔ envFileWriter re-import
- * formed a benign but avoidable module cycle). Nothing in this module
- * imports another CLI module.
+ * formed a benign but avoidable module cycle). This module imports only
+ * ./errors.js for the carrier types (SetupPathSafetyError, SETUP_ERROR_CODES).
  */
 
 import {
@@ -22,6 +22,10 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
+import {
+  SETUP_ERROR_CODES,
+  setupPathSafetyError,
+} from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Reserved path suffixes and derivations (moved verbatim from checkpoint.ts)
@@ -110,6 +114,8 @@ export const defaultSetupStateWriteFs: SetupStateWriteFs = {
   chmodSync: () => {
     // Production never pathname-chmods a temp file; this default exists only
     // to satisfy the interface for callers that do not inject a test fs.
+    // survey §c (I): invariant — unreachable in production; the private temp
+    // write applies and verifies mode through the descriptor, never via pathname.
     throw new Error("pathname chmod is not used by the private temp write");
   },
 };
@@ -122,8 +128,9 @@ export const defaultSetupStateWriteFs: SetupStateWriteFs = {
  * multibyte character is still resumed at the exact byte offset and the
  * final content is byte-identical. A write that reports 0, a negative
  * value, a non-integer, or more bytes than remain is a safe failure (the
- * loop can never spin forever). Throws when the content cannot be fully
- * written; callers map the throw to their write-failed error.
+ * loop can never spin forever). Throws a SetupPathSafetyError with
+ * SETUP_WRITE_NO_PROGRESS so the boundary catch preserves the specific
+ * carrier code.
  */
 export function writeAllSync(
   fd: number,
@@ -135,7 +142,10 @@ export function writeAllSync(
   while (offset < buffer.length) {
     const written = write(fd, buffer, offset, buffer.length - offset, null);
     if (!Number.isInteger(written) || written <= 0 || written > buffer.length - offset) {
-      throw new Error("the write made no progress; nothing was written");
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.SETUP_WRITE_NO_PROGRESS,
+        "the write made no progress; nothing was written",
+      );
     }
     offset += written;
   }
@@ -176,7 +186,8 @@ export function fsyncParentDirectory(parentPath: string, fs: SetupStateWriteFs):
   try {
     dirFd = fs.openDirSync(parentPath, directoryFsyncOpenFlags());
   } catch (error) {
-    throw new Error(
+    throw setupPathSafetyError(
+      SETUP_ERROR_CODES.SETUP_DIR_FSYNC_OPEN_FAILED,
       `could not open the directory containing ${parentPath} to make the rename durable: ${messageOf(error)}`,
     );
   }
@@ -193,10 +204,16 @@ export function fsyncParentDirectory(parentPath: string, fs: SetupStateWriteFs):
     closeError = error;
   }
   if (fsyncError !== undefined) {
-    throw new Error(`could not make the rename at ${parentPath} durable: ${messageOf(fsyncError)}`);
+    throw setupPathSafetyError(
+      SETUP_ERROR_CODES.SETUP_RENAME_DURABLE_FAILED,
+      `could not make the rename at ${parentPath} durable: ${messageOf(fsyncError)}`,
+    );
   }
   if (closeError !== undefined) {
-    throw new Error(`could not finalize the directory sync for ${parentPath}: ${messageOf(closeError)}`);
+    throw setupPathSafetyError(
+      SETUP_ERROR_CODES.SETUP_DIR_FSYNC_CLOSE_FAILED,
+      `could not finalize the directory sync for ${parentPath}: ${messageOf(closeError)}`,
+    );
   }
 }
 
