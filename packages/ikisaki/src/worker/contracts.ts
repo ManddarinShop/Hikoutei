@@ -7,8 +7,8 @@
  * these contracts; it never interprets effect payloads.
  */
 
-import type { PendingEffect } from "../contracts.js";
-import type { Presence } from "../state.js";
+import type { PendingEffect } from "../contract/contracts.js";
+import type { Presence } from "../contract/state.js";
 
 /** One claimed effect held by a worker pass. */
 export interface ClaimedEffect {

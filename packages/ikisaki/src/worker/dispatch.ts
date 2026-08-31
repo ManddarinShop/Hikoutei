@@ -8,7 +8,7 @@ import type { EffectWorkerStorage } from "./storage.js";
 import type { FencingContext } from "../index.js";
 import {
   LOOKUP_RESULT_KINDS,
-} from "../state.js";
+} from "../contract/state.js";
 import {
   TIMING_OPERATION_KINDS,
   TIMING_SCOPES,

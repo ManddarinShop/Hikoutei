@@ -6,11 +6,11 @@
  * byte-identical to the codes the host application has always persisted.
  */
 
-import type { EffectStatus } from "../constants.js";
+import type { EffectStatus } from "../contract/constants.js";
 import {
   EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
-} from "../constants.js";
-import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contracts.js";
+} from "../contract/constants.js";
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contract/contracts.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 /** Outbound writer lease must outlive the longest remote effect request. */

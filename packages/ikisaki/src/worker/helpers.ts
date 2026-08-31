@@ -6,10 +6,10 @@ import {
   type Applicability,
   type LookupResult,
   type Presence,
-} from "../state.js";
+} from "../contract/state.js";
 import {
   APPLICABILITY_KINDS,
-} from "../state.js";
+} from "../contract/state.js";
 
 /** Redacts an unknown thrown value into a bounded diagnostic message. */
 export function safeErrorMessage(error: unknown): string {

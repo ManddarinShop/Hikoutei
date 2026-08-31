@@ -1,6 +1,6 @@
 /** Construction options for a bounded effect-worker pass. */
 
-import type { SqlStorageAdapter } from "../sql.js";
+import type { SqlStorageAdapter } from "../sql/sql.js";
 import type { Dispatcher, RepairReplanFactory } from "./dispatcher.js";
 import type { TimingSink } from "./timing.js";
 

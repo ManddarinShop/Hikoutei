@@ -9,12 +9,12 @@ import type {
   PendingEffect,
   RenewEffectLeaseOptions,
   RetryClaimedEffectOptions,
-} from "../contracts.js";
+} from "../contract/contracts.js";
 import type {
   ClaimLeaseOptions,
   FencingContext,
   WriterLeaseClaimResult,
-} from "../writerLease.js";
+} from "../outbox/writerLease.js";
 
 /** Persistence operations used by the shared effect-worker state machine. */
 export interface EffectWorkerStorage {

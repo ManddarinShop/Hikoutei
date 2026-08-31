@@ -1,8 +1,8 @@
 /** Durable result transitions for dispatcher outcomes and response-loss recovery. */
 
-import { EFFECT_KINDS } from "../constants.js";
+import { EFFECT_KINDS } from "../contract/constants.js";
 import type { ClaimedEffect } from "./contracts.js";
-import type { PendingEffect } from "../contracts.js";
+import type { PendingEffect } from "../contract/contracts.js";
 import type {
   ApplyEffectResult,
   EffectLeaseRenewal,
@@ -17,10 +17,10 @@ import type {
   FencingContext,
   NewEffect,
 } from "../index.js";
-import type { Presence } from "../state.js";
+import type { Presence } from "../contract/state.js";
 import {
   LOOKUP_RESULT_KINDS,
-} from "../state.js";
+} from "../contract/state.js";
 import {
   OUTBOX_EFFECT_STATUSES,
   WORKER_ERROR_CODES,

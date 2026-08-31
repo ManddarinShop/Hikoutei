@@ -1,7 +1,7 @@
 /** Worker pass reports: the immutable result and its mutable accumulator. */
 
-import type { Presence } from "../state.js";
-import type { WriterLease } from "../writerLease.js";
+import type { Presence } from "../contract/state.js";
+import type { WriterLease } from "../outbox/writerLease.js";
 
 /** Counters that make partial results and recovery visible to callers. */
 export interface WorkerReport {

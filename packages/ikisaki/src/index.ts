@@ -19,7 +19,7 @@ export {
   type CoreError,
   type KernelInputErrorCode,
   type StorageErrorCode,
-} from "./errors.js";
+} from "./contract/errors.js";
 
 export {
   APPLICABILITY_KINDS,
@@ -28,7 +28,7 @@ export {
   type Applicability,
   type LookupResult,
   type Presence,
-} from "./state.js";
+} from "./contract/state.js";
 
 export {
   EFFECT_KINDS,
@@ -37,7 +37,7 @@ export {
   type EffectKind,
   type EffectStatus,
   type EffectTargetKind,
-} from "./constants.js";
+} from "./contract/constants.js";
 
 export {
   isSemanticRevision,
@@ -51,7 +51,7 @@ export {
   type OutboxVisibleHash,
   type SemanticRevision,
   type SemanticString,
-} from "./identity.js";
+} from "./contract/identity.js";
 
 export {
   decodeSqlRow,
@@ -64,17 +64,17 @@ export {
   type SqlRowDecoder,
   type SqlStorageAdapter,
   type SqlStorageContext,
-} from "./sql.js";
+} from "./sql/sql.js";
 
 export {
   fromSqlNullable,
   toSqlNullable,
-} from "./sqlState.js";
+} from "./sql/sqlState.js";
 
 export {
   rollbackSqlSavepoint,
   withSqlSavepoint,
-} from "./sqlTransaction.js";
+} from "./sql/sqlTransaction.js";
 
 export {
   claimWriterLeaseWithAdapter,
@@ -96,7 +96,7 @@ export {
   type WriterLeaseClaimFailureReason,
   type WriterLeaseClaimResult,
   type WriterLeaseClaimResultKind,
-} from "./writerLease.js";
+} from "./outbox/writerLease.js";
 
 export {
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
@@ -111,7 +111,7 @@ export {
   type PendingEffect,
   type RenewEffectLeaseOptions,
   type RetryClaimedEffectOptions,
-} from "./contracts.js";
+} from "./contract/contracts.js";
 
 export {
   applyEffectResultWithAdapter,
@@ -149,16 +149,22 @@ export {
   supersedeEffectWithSql,
   RECOVERABLE_EFFECT_ERROR_CODES,
   isRecoverableEffectErrorCode,
-} from "./outbox.js";
+} from "./outbox/outbox.js";
 
 export {
-  AsyncFenceLostError,
-  assertProjectionConfirmationTargetWithSql,
   decodePendingEffectRow,
+} from "./outbox/effectRow.js";
+
+export {
+  assertProjectionConfirmationTargetWithSql,
   validateApplyResultOptions,
   validateProjectionConfirmation,
   writeProjectionConfirmationWithSql,
-} from "./support.js";
+} from "./outbox/confirmation.js";
+
+export {
+  AsyncFenceLostError,
+} from "./outbox/writerLease.js";
 
 export {
   EFFECT_OUTBOX_DDL,
@@ -167,6 +173,6 @@ export {
   syncSchemaV5IndexesDdl,
   VISIBLE_STATE_TABLES_DDL,
   WRITER_LEASE_DDL,
-} from "./schema.js";
+} from "./sql/schema.js";
 
 export * from "./worker/index.js";

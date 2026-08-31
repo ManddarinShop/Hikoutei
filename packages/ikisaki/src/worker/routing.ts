@@ -7,7 +7,7 @@ import type {
   PendingEffect,
   WriterLease,
 } from "../index.js";
-import { EFFECT_KINDS } from "../constants.js";
+import { EFFECT_KINDS } from "../contract/constants.js";
 import {
   EFFECT_BATCH_LIMIT,
   OUTBOX_EFFECT_STATUSES,

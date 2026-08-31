@@ -1,5 +1,5 @@
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "./state.js";
-import type { Applicability, Presence } from "./state.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../contract/state.js";
+import type { Applicability, Presence } from "../contract/state.js";
 
 /** Converts an internal state value to SQLite's nullable column representation. */
 export function toSqlNullable<T>(value: Presence<T> | Applicability<T>): T | null {

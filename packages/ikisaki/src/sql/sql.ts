@@ -1,4 +1,4 @@
-import { KERNEL_INPUT_ERROR_CODES, KernelInputError } from "./errors.js";
+import { KERNEL_INPUT_ERROR_CODES, KernelInputError } from "../contract/errors.js";
 
 /**
  * Adapter-neutral asynchronous SQL primitives used by the consistency queue.

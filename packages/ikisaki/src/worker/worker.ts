@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { SqlStorageAdapter } from "../sql.js";
+import type { SqlStorageAdapter } from "../sql/sql.js";
 import type {
   FencingContext,
   PendingEffect,
@@ -18,7 +18,7 @@ import type {
 import {
   LOOKUP_RESULT_KINDS,
   type Presence,
-} from "../state.js";
+} from "../contract/state.js";
 import {
   claimEffectWithAdapter,
   applyEffectResultWithAdapter,
@@ -30,11 +30,11 @@ import {
   releaseUnprocessedEffectWithAdapter,
   retryClaimedEffectWithAdapter,
   supersedeAndReplanWithAdapter,
-} from "../outbox.js";
+} from "../outbox/outbox.js";
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../writerLease.js";
+} from "../outbox/writerLease.js";
 import type { ClaimedEffect } from "./contracts.js";
 import type {
   Dispatcher,
