@@ -96,6 +96,8 @@ export const WORKER_ERROR_CODES = {
   PROVIDER_CAPABILITY_MISSING: "provider_capability_missing",
   /** Provider acknowledged a bounded batch before this effect. */
   PROVIDER_BATCH_DEFERRED: "provider_batch_deferred",
+  /** Requeued after writer-lease recovery; no provider acknowledgement. */
+  LEASE_RECOVERED_REQUEUE: "lease_recovered_requeue",
 } as const;
 
 export type WorkerErrorCode =

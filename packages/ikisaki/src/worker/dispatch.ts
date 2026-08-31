@@ -202,6 +202,7 @@ export async function dispatchFastAppendGroup(
       ...resultFence,
       effectId: item.pending.effect_id,
       claimToken: item.claimToken,
+      reason: "provider_batch",
     })) {
       deferredEffectIds.add(item.pending.effect_id);
       report.deferred += 1;
