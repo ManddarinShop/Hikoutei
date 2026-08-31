@@ -540,6 +540,41 @@ function distinctLaneKeys(keys: readonly string[]): readonly string[] {
 }
 
 /**
+ * Persistent error codes for opaque prepared-token invariant guards.
+ *
+ * Classification (survey §c (I)): a prepared token crosses an opaque API
+ * boundary; a malformed token is foreign-input failure, not a local
+ * programmer assertion, but the thrown error is still a TypeError because the
+ * caller fed structurally invalid data into an internal invariant slot.
+ */
+export const COORDINATED_PREPARED_STATE_ERROR_CODES = {
+  PREPARED_APPLY_ROUTES_REQUIRED: "coordinated_prepared_apply_routes_required",
+  PREPARED_APPLY_EFFECT_SHEET_ID_REQUIRED: "coordinated_prepared_apply_effect_sheet_id_required",
+} as const;
+
+/** Union type derived from the coordinated prepared-state error code table. */
+export type CoordinatedPreparedStateErrorCode =
+  (typeof COORDINATED_PREPARED_STATE_ERROR_CODES)[keyof typeof COORDINATED_PREPARED_STATE_ERROR_CODES];
+
+/** Error thrown when a prepared apply token violates structural invariants. */
+export class CoordinatedPreparedStateError extends TypeError {
+  public readonly code: CoordinatedPreparedStateErrorCode;
+
+  public constructor(code: CoordinatedPreparedStateErrorCode) {
+    super(COORDINATED_PREPARED_STATE_MESSAGE_REGISTRY[code]);
+    this.name = "CoordinatedPreparedStateError";
+    this.code = code;
+  }
+}
+
+const COORDINATED_PREPARED_STATE_MESSAGE_REGISTRY: Record<CoordinatedPreparedStateErrorCode, string> = {
+  [COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_ROUTES_REQUIRED]:
+    "prepared apply state carries no effect routes",
+  [COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_EFFECT_SHEET_ID_REQUIRED]:
+    "prepared apply state carries an effect without a physical sheet id",
+};
+
+/**
  * Collects the physical sheet ids one prepared apply state would mutate, from
  * its own per-effect route fields.
  *
@@ -549,15 +584,18 @@ function distinctLaneKeys(keys: readonly string[]): readonly string[] {
  * acquired or any remote call is made.
  */
 function preparedLanePhysicalSheetIds(prepared: PreparedApplyEffects): readonly string[] {
+  if (prepared === null || prepared === undefined) {
+    throw new CoordinatedPreparedStateError(COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_ROUTES_REQUIRED);
+  }
   const effects: unknown = prepared.request?.effects;
   if (!Array.isArray(effects) || effects.length === 0) {
-    throw new TypeError("prepared apply state carries no effect routes");
+    throw new CoordinatedPreparedStateError(COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_ROUTES_REQUIRED);
   }
   const ids: string[] = [];
   for (const effect of effects) {
     const physicalSheetId = (effect as SyncProjectionEffect | undefined)?.physicalSheetId;
     if (typeof physicalSheetId !== "string" || physicalSheetId.length === 0) {
-      throw new TypeError("prepared apply state carries an effect without a physical sheet id");
+      throw new CoordinatedPreparedStateError(COORDINATED_PREPARED_STATE_ERROR_CODES.PREPARED_APPLY_EFFECT_SHEET_ID_REQUIRED);
     }
     ids.push(physicalSheetId);
   }

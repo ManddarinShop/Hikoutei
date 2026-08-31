@@ -13,6 +13,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  RATE_LIMIT_OPTIONS_ERROR_CODES,
+  RateLimitOptionsError,
   ReadQoSScheduler,
   RequestStartLimiter,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
@@ -203,5 +205,36 @@ describe("ReadQoSScheduler", () => {
     expect(writeAdmission.status).toBe("admitted");
     // The write did not consume a read timeline slot.
     expect(scheduler.lastStart()).toBe(1_001_100);
+  });
+
+  it("throws RateLimitOptionsError with INTERVAL_NON_NEGATIVE_REQUIRED for invalid constructor intervalMs", () => {
+    expect.assertions(3);
+    try {
+      new ReadQoSScheduler({ intervalMs: -1 });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(RateLimitOptionsError);
+      expect((error as RateLimitOptionsError).code).toBe(
+        RATE_LIMIT_OPTIONS_ERROR_CODES.INTERVAL_NON_NEGATIVE_REQUIRED,
+      );
+      expect((error as Error).message).toBe(
+        "request-start interval must be a non-negative safe integer",
+      );
+    }
+  });
+
+  it("throws RateLimitOptionsError with MAX_WAIT_NON_NEGATIVE_REQUIRED for invalid maxWaitMs", async () => {
+    expect.assertions(3);
+    const scheduler = new ReadQoSScheduler({ intervalMs: 1_100 });
+    try {
+      await scheduler.waitForSlot("polling", -1);
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(RateLimitOptionsError);
+      expect((error as RateLimitOptionsError).code).toBe(
+        RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED,
+      );
+      expect((error as Error).message).toBe(
+        "maximum request-start wait must be a non-negative safe integer",
+      );
+    }
   });
 });

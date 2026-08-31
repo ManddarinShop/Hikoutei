@@ -17,6 +17,34 @@
 const DEFAULT_SLEEP = (ms: number): Promise<void> =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Persistent error codes for rate-limiter option validation. */
+export const RATE_LIMIT_OPTIONS_ERROR_CODES = {
+  INTERVAL_NON_NEGATIVE_REQUIRED: "rate_limiter_interval_non_negative_required",
+  MAX_WAIT_NON_NEGATIVE_REQUIRED: "rate_limiter_max_wait_non_negative_required",
+} as const;
+
+/** Union type derived from the rate-limit error code table. */
+export type RateLimitOptionErrorCode =
+  (typeof RATE_LIMIT_OPTIONS_ERROR_CODES)[keyof typeof RATE_LIMIT_OPTIONS_ERROR_CODES];
+
+/** Error thrown when rate-limiter options violate non-negative integer constraints. */
+export class RateLimitOptionsError extends RangeError {
+  public readonly code: RateLimitOptionErrorCode;
+
+  public constructor(code: RateLimitOptionErrorCode) {
+    super(RATE_LIMIT_OPTIONS_MESSAGE_REGISTRY[code]);
+    this.name = "RateLimitOptionsError";
+    this.code = code;
+  }
+}
+
+const RATE_LIMIT_OPTIONS_MESSAGE_REGISTRY: Record<RateLimitOptionErrorCode, string> = {
+  [RATE_LIMIT_OPTIONS_ERROR_CODES.INTERVAL_NON_NEGATIVE_REQUIRED]:
+    "request-start interval must be a non-negative safe integer",
+  [RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED]:
+    "maximum request-start wait must be a non-negative safe integer",
+};
+
 export interface RequestStartLimiterOptions {
   /** Minimum interval between two request starts of this limiter class. */
   readonly intervalMs: number;
@@ -58,7 +86,7 @@ export class RequestStartLimiter {
 
   public constructor(options: RequestStartLimiterOptions) {
     if (!Number.isSafeInteger(options.intervalMs) || options.intervalMs < 0) {
-      throw new RangeError("request-start interval must be a non-negative safe integer");
+      throw new RateLimitOptionsError(RATE_LIMIT_OPTIONS_ERROR_CODES.INTERVAL_NON_NEGATIVE_REQUIRED);
     }
     this.intervalMs = options.intervalMs;
     this.now = options.now ?? Date.now;
@@ -104,7 +132,7 @@ export class RequestStartLimiter {
       maxWaitMs !== undefined &&
       (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0)
     ) {
-      throw new RangeError("maximum request-start wait must be a non-negative safe integer");
+      throw new RateLimitOptionsError(RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED);
     }
     const now = this.now();
     const nextStart = this.lastStartAt === undefined
@@ -173,7 +201,7 @@ export class ReadQoSScheduler {
 
   public constructor(options: RequestStartLimiterOptions) {
     if (!Number.isSafeInteger(options.intervalMs) || options.intervalMs < 0) {
-      throw new RangeError("request-start interval must be a non-negative safe integer");
+      throw new RateLimitOptionsError(RATE_LIMIT_OPTIONS_ERROR_CODES.INTERVAL_NON_NEGATIVE_REQUIRED);
     }
     this.intervalMs = options.intervalMs;
     this.now = options.now ?? Date.now;
@@ -197,7 +225,7 @@ export class ReadQoSScheduler {
     maxWaitMs: number,
   ): Promise<RequestStartAdmission> {
     if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0) {
-      throw new RangeError("maximum request-start wait must be a non-negative safe integer");
+      throw new RateLimitOptionsError(RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED);
     }
     const queue = pacing === "polling" ? this.pollingQueue : this.preflightQueue;
     return new Promise<RequestStartAdmission>((resolve) => {
