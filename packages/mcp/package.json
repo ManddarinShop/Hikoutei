@@ -49,6 +49,6 @@
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "hikoutei": "0.9.17"
+    "hikoutei": "0.9.18"
   }
 }
