@@ -15,7 +15,7 @@ importers:
         specifier: ^14.0.0
         version: 14.0.0
       '@hikoutei/ikisaki':
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:packages/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
@@ -79,7 +79,7 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: 0.9.20
+        specifier: 0.9.21
         version: link:../..
     devDependencies:
       '@types/node':
@@ -136,7 +136,7 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: 0.9.20
+        specifier: 0.9.21
         version: link:../..
 
   packages/sheets:
@@ -167,7 +167,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../ikisaki
       '@mikro-orm/core':
         specifier: 7.1.7
@@ -186,8 +186,8 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.5
-        version: 0.1.5
+        specifier: 0.1.7
+        version: link:../ikisaki
       '@hikoutei/storage':
         specifier: 0.1.0
         version: link:../storage
@@ -352,9 +352,6 @@ packages:
   '@googleapis/sheets@14.0.0':
     resolution: {integrity: sha512-fANEl4RQohsPYUWhcLSYyUyE8A8bRfvw/bp8h0t8VDQqTgdQ3itZBkty4nddtdqCAvNDpA+KM66OejVKDd6aFg==}
     engines: {node: '>=12.0.0'}
-
-  '@hikoutei/ikisaki@0.1.5':
-    resolution: {integrity: sha512-sVRnNgK1zLgLxJd1EyA7A2BK8yrhKsZdBD7Ose6KXPemakOfy/wDVB5Ek0l5sVu+2e/YoitkaOWzhDe8a6rUgw==}
 
   '@hikoutei/kohkai@0.1.0':
     resolution: {integrity: sha512-ciZqHnU+4R4ozxzZBltaDpzhcra0wPegAXG7BDLtaQuYqkMvkHdq2PUhPtl6HGddSSI63bRwVO2Qb05mQBv0VQ==}
@@ -1941,8 +1938,6 @@ snapshots:
       googleapis-common: 8.0.3
     transitivePeerDependencies:
       - supports-color
-
-  '@hikoutei/ikisaki@0.1.5': {}
 
   '@hikoutei/kohkai@0.1.0': {}
 
