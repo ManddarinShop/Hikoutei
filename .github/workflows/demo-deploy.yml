@@ -92,12 +92,13 @@ jobs:
             chmod 600 website/demo/deploy/secrets/demo.env
             rm -f website/demo/deploy/secrets/sa.json
 
-            # Swap static docs atomically.
-            rm -rf website/demo/deploy/docs-dist && mkdir -p website/demo/deploy/docs-dist
+            # Swap static docs in place (keep the directory inode — the
+            # running caddy container holds the bind mount).
+            mkdir -p website/demo/deploy/docs-dist
             tar -xzf /tmp/hikoutei-docs.tar.gz -C website/demo/deploy/docs-dist
             rm -f /tmp/hikoutei-docs.tar.gz
 
-            docker compose -f website/demo/deploy/docker-compose.yml up -d --build
+            docker compose -f website/demo/deploy/docker-compose.yml up -d --build --force-recreate
 
       - name: Health gate
         uses: appleboy/ssh-action@v1
