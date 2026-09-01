@@ -55,31 +55,31 @@ jobs:
 
       - name: Deploy stack on VM
         uses: appleboy/ssh-action@v1
+        env:
+          REF: ${{ github.ref_name }}
+          DEMO_SA_JSON: ${{ secrets.DEMO_SA_JSON }}
+          DEMO_ENV: ${{ secrets.DEMO_ENV }}
         with:
           host: ${{ secrets.DEMO_SSH_HOST }}
           username: ${{ secrets.DEMO_SSH_USER }}
           key: ${{ secrets.DEMO_SSH_KEY }}
           envs: REF,DEMO_SA_JSON,DEMO_ENV
-        env:
-          REF: ${{ github.ref_name }}
-          DEMO_SA_JSON: ${{ secrets.DEMO_SA_JSON }}
-          DEMO_ENV: ${{ secrets.DEMO_ENV }}
-        script: |
-          set -euo pipefail
-          cd /opt/hikoutei
-          git fetch --all
-          git reset --hard "origin/${REF}"
+          script: |
+            set -euo pipefail
+            cd /opt/hikoutei
+            git fetch --all
+            git reset --hard "origin/${REF}"
 
-          # Inject secrets (single source of truth: GH Secrets).
-          sudo install -d -m 700 /etc/hikoutei-demo
-          printf '%s' "$DEMO_SA_JSON" | python3 -m json.tool > /dev/null  # fail fast on malformed key JSON
-          sudo install -m 600 /dev/null /etc/hikoutei-demo/sa.json
-          printf '%s' "$DEMO_SA_JSON" | sudo tee /etc/hikoutei-demo/sa.json > /dev/null
-          sudo install -m 600 /dev/null /etc/hikoutei-demo.env
-          printf '%s\n' "$DEMO_ENV" | sudo tee /etc/hikoutei-demo.env > /dev/null
-          sudo chmod 600 /etc/hikoutei-demo.env
+            # Inject secrets (single source of truth: GH Secrets).
+            sudo install -d -m 700 /etc/hikoutei-demo
+            printf '%s' "$DEMO_SA_JSON" | python3 -m json.tool > /dev/null
+            sudo install -m 600 /dev/null /etc/hikoutei-demo/sa.json
+            printf '%s' "$DEMO_SA_JSON" | sudo tee /etc/hikoutei-demo/sa.json > /dev/null
+            sudo install -m 600 /dev/null /etc/hikoutei-demo.env
+            printf '%s\n' "$DEMO_ENV" | sudo tee /etc/hikoutei-demo.env > /dev/null
+            sudo chmod 600 /etc/hikoutei-demo.env
 
-          docker compose -f website/demo/deploy/docker-compose.yml up -d --build
+            docker compose -f website/demo/deploy/docker-compose.yml up -d --build
 
       - name: Health gate
         uses: appleboy/ssh-action@v1
