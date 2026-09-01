@@ -43,15 +43,18 @@ jobs:
         working-directory: website
         run: npm ci && DOCS_BASE_PATH=/ npm run docs:build
 
-      - name: Rsync static assets to VM
-        uses: easingthemes/ssh-deploy@v5
+      - name: Pack static assets
+        run: tar -czf /tmp/hikoutei-docs.tar.gz -C website/.vitepress/dist .
+
+      - name: Copy static assets to VM
+        uses: appleboy/scp-action@v1
         with:
-          SSH_PRIVATE_KEY: ${{ secrets.DEMO_SSH_KEY }}
-          REMOTE_HOST: ${{ secrets.DEMO_SSH_HOST }}
-          REMOTE_USER: ${{ secrets.DEMO_SSH_USER }}
-          SOURCE: website/.vitepress/dist/
-          TARGET: /srv/hikoutei-docs/
-          ARGS: "-rlgoDzvc --delete"
+          host: ${{ secrets.DEMO_SSH_HOST }}
+          username: ${{ secrets.DEMO_SSH_USER }}
+          key: ${{ secrets.DEMO_SSH_KEY }}
+          source: hikoutei-docs.tar.gz
+          target: /tmp
+          strip_components: 0
 
       - name: Deploy stack on VM
         uses: appleboy/ssh-action@v1
@@ -78,6 +81,13 @@ jobs:
             sudo install -m 600 /dev/null /etc/hikoutei-demo.env
             printf '%s\n' "$DEMO_ENV" | sudo tee /etc/hikoutei-demo.env > /dev/null
             sudo chmod 600 /etc/hikoutei-demo.env
+
+            # Swap static docs atomically.
+            sudo mkdir -p /srv/hikoutei-docs /srv/hikoutei-docs-next
+            sudo rm -rf /srv/hikoutei-docs-next && sudo mkdir -p /srv/hikoutei-docs-next
+            sudo tar -xzf /tmp/hikoutei-docs.tar.gz -C /srv/hikoutei-docs-next
+            sudo rsync -a --delete /srv/hikoutei-docs-next/ /srv/hikoutei-docs/
+            sudo rm -f /tmp/hikoutei-docs.tar.gz
 
             docker compose -f website/demo/deploy/docker-compose.yml up -d --build
 
