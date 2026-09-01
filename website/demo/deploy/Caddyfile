@@ -17,9 +17,10 @@
 	}
 
 	# Static docs + demo
+	# Static docs + demo (VitePress pretty URLs: /demo -> demo.html)
 	handle {
 		root * /srv/docs
-		try_files {path} {path}/ /404.html
+		try_files {path} {path}.html {path}/ /404.html
 		file_server
 	}
 }
