@@ -78,21 +78,19 @@ jobs:
             git fetch --all
             git reset --hard "origin/${REF}"
 
-            # Inject secrets (single source of truth: GH Secrets).
-            sudo install -d -m 700 /etc/hikoutei-demo
+            # Inject secrets (single source of truth: GH Secrets) — no sudo
+            # needed: everything lives inside the repo checkout.
+            install -d -m 700 website/demo/deploy/secrets
             printf '%s' "$DEMO_SA_JSON" | python3 -m json.tool > /dev/null
-            sudo install -m 600 /dev/null /etc/hikoutei-demo/sa.json
-            printf '%s' "$DEMO_SA_JSON" | sudo tee /etc/hikoutei-demo/sa.json > /dev/null
-            sudo install -m 600 /dev/null /etc/hikoutei-demo.env
-            printf '%s\n' "$DEMO_ENV" | sudo tee /etc/hikoutei-demo.env > /dev/null
-            sudo chmod 600 /etc/hikoutei-demo.env
+            install -m 600 /dev/null website/demo/deploy/secrets/sa.json
+            printf '%s' "$DEMO_SA_JSON" > website/demo/deploy/secrets/sa.json
+            printf '%s\n' "$DEMO_ENV" > website/demo/deploy/secrets/demo.env
+            chmod 600 website/demo/deploy/secrets/*
 
             # Swap static docs atomically.
-            sudo mkdir -p /srv/hikoutei-docs /srv/hikoutei-docs-next
-            sudo rm -rf /srv/hikoutei-docs-next && sudo mkdir -p /srv/hikoutei-docs-next
-            sudo tar -xzf /tmp/hikoutei-docs.tar.gz -C /srv/hikoutei-docs-next
-            sudo rsync -a --delete /srv/hikoutei-docs-next/ /srv/hikoutei-docs/
-            sudo rm -f /tmp/hikoutei-docs.tar.gz
+            rm -rf website/demo/deploy/docs-dist && mkdir -p website/demo/deploy/docs-dist
+            tar -xzf /tmp/hikoutei-docs.tar.gz -C website/demo/deploy/docs-dist
+            rm -f /tmp/hikoutei-docs.tar.gz
 
             docker compose -f website/demo/deploy/docker-compose.yml up -d --build
 
