@@ -69,6 +69,11 @@ jobs:
           envs: REF,DEMO_SA_JSON,DEMO_ENV
           script: |
             set -euo pipefail
+            if [ ! -d /opt/hikoutei/.git ]; then
+              sudo mkdir -p /opt/hikoutei
+              sudo chown "$USER" /opt/hikoutei
+              git clone https://github.com/ManddarinShop/Hikoutei.git /opt/hikoutei
+            fi
             cd /opt/hikoutei
             git fetch --all
             git reset --hard "origin/${REF}"
