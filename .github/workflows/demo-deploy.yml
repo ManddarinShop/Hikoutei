@@ -1,0 +1,101 @@
+# Demo VM deploy (docker compose).
+#
+# Flow: build VitePress docs (DOCS_BASE_PATH=/) on the runner -> rsync static
+# assets to the VM -> SSH: pull repo, inject secrets (GH Secrets -> /etc),
+# `docker compose up -d --build`, then gate on a live health check.
+#
+# Required GH Secrets:
+#   DEMO_SSH_HOST  VM public IP or hostname
+#   DEMO_SSH_USER  SSH user (with docker group + write access to /opt/hikoutei)
+#   DEMO_SSH_KEY   private deploy key
+#   DEMO_SA_JSON   full demo service-account key JSON
+#   DEMO_ENV       demo env file body (HIKOUTEI_SYNC_SPREADSHEET_URL,
+#                  GOOGLE_APPLICATION_CREDENTIALS=/etc/hikoutei-demo/sa.json,
+#                  PORT=3101)
+
+name: demo-deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, develop]
+    paths:
+      - "website/demo/**"
+      - "website/.vitepress/**"
+      - "website/guide/**"
+      - "website/package.json"
+
+concurrency:
+  group: demo-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build docs (bare-root, demo included)
+        working-directory: website
+        run: npm ci && DOCS_BASE_PATH=/ npm run docs:build
+
+      - name: Rsync static assets to VM
+        uses: easingthemes/ssh-deploy@v5
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.DEMO_SSH_KEY }}
+          REMOTE_HOST: ${{ secrets.DEMO_SSH_HOST }}
+          REMOTE_USER: ${{ secrets.DEMO_SSH_USER }}
+          SOURCE: website/.vitepress/dist/
+          TARGET: /srv/hikoutei-docs/
+          ARGS: "-rlgoDzvc --delete"
+
+      - name: Deploy stack on VM
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEMO_SSH_HOST }}
+          username: ${{ secrets.DEMO_SSH_USER }}
+          key: ${{ secrets.DEMO_SSH_KEY }}
+          envs: REF,DEMO_SA_JSON,DEMO_ENV
+        env:
+          REF: ${{ github.ref_name }}
+          DEMO_SA_JSON: ${{ secrets.DEMO_SA_JSON }}
+          DEMO_ENV: ${{ secrets.DEMO_ENV }}
+        script: |
+          set -euo pipefail
+          cd /opt/hikoutei
+          git fetch --all
+          git reset --hard "origin/${REF}"
+
+          # Inject secrets (single source of truth: GH Secrets).
+          sudo install -d -m 700 /etc/hikoutei-demo
+          printf '%s' "$DEMO_SA_JSON" | python3 -m json.tool > /dev/null  # fail fast on malformed key JSON
+          sudo install -m 600 /dev/null /etc/hikoutei-demo/sa.json
+          printf '%s' "$DEMO_SA_JSON" | sudo tee /etc/hikoutei-demo/sa.json > /dev/null
+          sudo install -m 600 /dev/null /etc/hikoutei-demo.env
+          printf '%s\n' "$DEMO_ENV" | sudo tee /etc/hikoutei-demo.env > /dev/null
+          sudo chmod 600 /etc/hikoutei-demo.env
+
+          docker compose -f website/demo/deploy/docker-compose.yml up -d --build
+
+      - name: Health gate
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEMO_SSH_HOST }}
+          username: ${{ secrets.DEMO_SSH_USER }}
+          key: ${{ secrets.DEMO_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            for i in 1 2 3 4 5 6; do
+              if curl -fsS http://localhost/api/health | grep -q '"syncMode":"sync"'; then
+                echo "health OK: sync mode"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "health check failed — demo server did not report sync mode"
+            docker compose -f /opt/hikoutei/website/demo/deploy/docker-compose.yml logs --tail 50
+            exit 1
