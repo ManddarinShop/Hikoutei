@@ -16,7 +16,6 @@ services:
       - "3101"
     volumes:
       - demo-data:/data
-      - ./secrets/sa.json:/etc/hikoutei-demo/sa.json:ro
     networks: [demo]
 
   caddy:

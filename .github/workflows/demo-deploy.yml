@@ -79,13 +79,18 @@ jobs:
             git reset --hard "origin/${REF}"
 
             # Inject secrets (single source of truth: GH Secrets) — no sudo
-            # needed: everything lives inside the repo checkout.
+            # needed: everything lives inside the repo checkout. The SA key is
+            # passed as a single-line env value; the container materializes it
+            # to its own tmpfs at startup (no key file on the host).
             install -d -m 700 website/demo/deploy/secrets
             printf '%s' "$DEMO_SA_JSON" | python3 -m json.tool > /dev/null
-            install -m 600 /dev/null website/demo/deploy/secrets/sa.json
-            printf '%s' "$DEMO_SA_JSON" > website/demo/deploy/secrets/sa.json
-            printf '%s\n' "$DEMO_ENV" > website/demo/deploy/secrets/demo.env
-            chmod 600 website/demo/deploy/secrets/*
+            MIN_JSON=$(printf '%s' "$DEMO_SA_JSON" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), separators=(",", ":")))')
+            {
+              printf '%s\n' "$DEMO_ENV"
+              printf 'DEMO_SA_JSON=%s\n' "$MIN_JSON"
+            } > website/demo/deploy/secrets/demo.env
+            chmod 600 website/demo/deploy/secrets/demo.env
+            rm -f website/demo/deploy/secrets/sa.json
 
             # Swap static docs atomically.
             rm -rf website/demo/deploy/docs-dist && mkdir -p website/demo/deploy/docs-dist

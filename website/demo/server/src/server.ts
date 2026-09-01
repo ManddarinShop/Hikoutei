@@ -27,10 +27,18 @@
 
 import express from "express";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { createTypedSheets, defineTypedSheetsEntity } from "hikoutei";
 import { readHikouteiSyncStatus } from "hikoutei/internal/sync-status";
+
+// Container deploy: the key arrives as DEMO_SA_JSON (GH Secrets -> compose
+// env_file) and is materialized to a per-process temp file here — the host
+// never holds a key file.
+if (process.env.DEMO_SA_JSON && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  writeFileSync("/tmp/hikoutei-demo-sa.json", process.env.DEMO_SA_JSON, { mode: 0o600 });
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = "/tmp/hikoutei-demo-sa.json";
+}
 
 const PORT = Number(process.env.PORT ?? 3101);
 const DB_PATH = process.env.DEMO_DB_PATH ?? "./demo.sqlite";
