@@ -44,7 +44,7 @@ jobs:
         run: npm ci && DOCS_BASE_PATH=/ npm run docs:build
 
       - name: Pack static assets
-        run: tar -czf /tmp/hikoutei-docs.tar.gz -C website/.vitepress/dist .
+        run: tar -czf hikoutei-docs.tar.gz -C website/.vitepress/dist .
 
       - name: Copy static assets to VM
         uses: appleboy/scp-action@v1
