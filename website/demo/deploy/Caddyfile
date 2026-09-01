@@ -1,0 +1,25 @@
+# Caddy reverse proxy for the Hikoutei live demo (docker compose).
+#
+#   /            -> 302 -> /demo (the VitePress demo page)
+#   /api/*       -> demo-server container (SSE streams unbuffered)
+#   everything   -> VitePress static build (DOCS_BASE_PATH=/, mounted /srv/docs)
+#
+# When a domain is added later, replace ":80" with "hikoutei.example.com"
+# and Caddy obtains/renews the TLS certificate automatically.
+
+:80 {
+	# Bare host root -> live demo
+	redir / /demo 302
+
+	# Demo backend (SSE: Caddy streams responses without buffering)
+	handle /api/* {
+		reverse_proxy demo-server:3101
+	}
+
+	# Static docs + demo
+	handle {
+		root * /srv/docs
+		try_files {path} {path}/ /404.html
+		file_server
+	}
+}

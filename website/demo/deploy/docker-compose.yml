@@ -1,0 +1,39 @@
+# Demo VM stack: demo server (node/hikoutei) + Caddy (static docs + API proxy).
+#
+# Deployed by .github/workflows/demo-deploy.yml:
+#   - secrets injected to /etc/hikoutei-demo.env + /etc/hikoutei-demo/sa.json
+#   - VitePress build (DOCS_BASE_PATH=/) rsynced to /srv/hikoutei-docs
+#
+# Bare host root lands on the live demo (Caddyfile redir / -> /demo).
+
+services:
+  demo-server:
+    build: ../server
+    image: hikoutei-demo-server
+    restart: unless-stopped
+    env_file: /etc/hikoutei-demo.env
+    expose:
+      - "3101"
+    volumes:
+      - demo-data:/data
+    networks: [demo]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /srv/hikoutei-docs:/srv/docs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [demo]
+
+volumes:
+  demo-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  demo:
