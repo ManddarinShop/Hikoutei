@@ -29,6 +29,8 @@ export const LOGGED_FIELD_NAMES = Object.freeze([
   "code",
   "table",
   "errorClass",
+  "providerOperation",
+  "pacing",
   "retryable",
   "attempts",
   "durationMs",
@@ -60,6 +62,8 @@ export const LOGGED_EVENT_NAMES = Object.freeze([
   "hikoutei.polling.pass_summary",
   "hikoutei.writer_lease.unavailable",
   "hikoutei.writer_lease.heartbeat",
+  "hikoutei.sheets.request",
+  "hikoutei.sheets.request_summary",
 ]);
 
 /** Stable component tags the logger may write (mirror of HIKOUTEI_LOG_COMPONENTS). */
@@ -72,6 +76,7 @@ export const LOGGED_COMPONENT_NAMES = Object.freeze([
   "outbox",
   "reconciliation",
   "polling",
+  "sheets",
 ]);
 
 /**
@@ -240,6 +245,25 @@ export const LOGGED_STABLE_CLASSES = Object.freeze([
   "UniqueConstraintViolationException",
 ]);
 
+/**
+ * Allowlisted provider-operation tags the logger may write (mirror of the
+ * internalLog providerOperation allowlist: the invalid-provider-state
+ * classification constants plus the Google Sheets transport operation
+ * names used by the request-telemetry events).
+ */
+export const LOGGED_PROVIDER_OPERATIONS = Object.freeze([
+  "preflight",
+  "batch_update_reply",
+  "get_reply",
+  "postcondition_read",
+  "unclassified",
+  "getSpreadsheet",
+  "batchUpdate",
+]);
+
+/** Allowlisted request-start pacing lanes the logger may write. */
+export const LOGGED_PACING_LANES = Object.freeze(["polling", "preflight", "write"]);
+
 /** Identifier shape shared by table names and counts keys. */
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
@@ -252,6 +276,8 @@ const EVENT_SET = new Set(LOGGED_EVENT_NAMES);
 const COMPONENT_SET = new Set(LOGGED_COMPONENT_NAMES);
 const CODE_SET = new Set(LOGGED_STABLE_CODES);
 const CLASS_SET = new Set(LOGGED_STABLE_CLASSES);
+const PROVIDER_OPERATION_SET = new Set(LOGGED_PROVIDER_OPERATIONS);
+const PACING_SET = new Set(LOGGED_PACING_LANES);
 
 /** Result of validating one raw line. */
 export const LOG_LINE_VALIDATION = Object.freeze({
@@ -307,6 +333,13 @@ export function sanitizeCollectedLogLine(rawLine) {
   if (record.errorClass !== undefined && !CLASS_SET.has(record.errorClass)) {
     return { status: "invalid", reason: "error-class-unsafe" };
   }
+  if (record.providerOperation !== undefined &&
+      !PROVIDER_OPERATION_SET.has(record.providerOperation)) {
+    return { status: "invalid", reason: "provider-operation-unsafe" };
+  }
+  if (record.pacing !== undefined && !PACING_SET.has(record.pacing)) {
+    return { status: "invalid", reason: "pacing-unsafe" };
+  }
   if (record.retryable !== undefined && typeof record.retryable !== "boolean") {
     return { status: "invalid", reason: "retryable-unsafe" };
   }
@@ -340,6 +373,8 @@ export function sanitizeCollectedLogLine(rawLine) {
     ...(record.code === undefined ? {} : { code: record.code }),
     ...(record.table === undefined ? {} : { table: record.table }),
     ...(record.errorClass === undefined ? {} : { errorClass: record.errorClass }),
+    ...(record.providerOperation === undefined ? {} : { providerOperation: record.providerOperation }),
+    ...(record.pacing === undefined ? {} : { pacing: record.pacing }),
     ...(record.retryable === undefined ? {} : { retryable: record.retryable }),
     ...(record.attempts === undefined ? {} : { attempts: record.attempts }),
     ...(record.durationMs === undefined ? {} : { durationMs: record.durationMs }),

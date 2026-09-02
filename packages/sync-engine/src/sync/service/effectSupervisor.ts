@@ -13,6 +13,7 @@ import type { SyncServiceStorage } from "./compositionPorts.js";
 import type { TypedSheetsEntityMapping } from "../../orm/mapping/contracts.js";
 import type { TypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
 import type { InternalSyncServiceOptions } from "./serviceOptions.js";
+import type { RequestTelemetry } from "./requestTelemetry.js";
 import type { SyncSheetsProvider } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   runReconciliationScan,
@@ -22,6 +23,7 @@ import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import {
   createEffectWorkerSupervisor,
+  AdaptiveEffectBatchController,
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
   FAST_APPEND_BATCH_CANDIDATE_LIMIT,
   readOutboxScanReadinessWithAdapter,
@@ -67,12 +69,14 @@ export interface CreateEffectSupervisorInput {
   readonly writer: TypedSheetsEntityWriterOptions;
   readonly effectWorkerId: string;
   readonly options: InternalSyncServiceOptions;
+  /** Optional request-telemetry window flushed at every non-idle pass. */
+  readonly requestTelemetry?: RequestTelemetry;
 }
 
 export function createEffectSupervisor(
   input: CreateEffectSupervisorInput,
 ): EffectWorkerSupervisor {
-  const { storage, mappings, provider, writer, effectWorkerId, options } = input;
+  const { storage, mappings, provider, writer, effectWorkerId, options, requestTelemetry } = input;
   let lastHeartbeatHeld: boolean | undefined;
 
   // Periodic System_State reconciliation is a lazy repair net, not part of
@@ -136,7 +140,7 @@ export function createEffectSupervisor(
       provider,
       storage,
     }),
-    ...optionalWorkerOptions(options),
+    ...optionalWorkerOptions(options, requestTelemetry),
     workerId: effectWorkerId,
     // Writer-lease heartbeat visibility: log ONLY the held-state transitions
     // (renewed ↔ not held), so an idle healthy writer logs nothing and a
@@ -214,7 +218,11 @@ export function createEffectSupervisor(
  * keep running unchanged after the log write; logging is fail-open and can
  * never alter worker results.
  */
-function wrapEffectWorkerHooks(options: InternalSyncServiceOptions): {
+function wrapEffectWorkerHooks(
+  options: InternalSyncServiceOptions,
+  requestTelemetry: RequestTelemetry | undefined,
+  batchController: AdaptiveEffectBatchController | undefined,
+): {
   readonly onReport: (report: WorkerReport) => void;
   readonly onError: (error: unknown) => void;
 } {
@@ -236,6 +244,16 @@ function wrapEffectWorkerHooks(options: InternalSyncServiceOptions): {
         });
       }
       if (isNonIdleWorkerReport(report)) {
+        // Request-telemetry window flush: the window accumulated since the
+        // last non-idle pass belongs to THIS pass, so the summary is emitted
+        // immediately before the pass summary line (which carries the pass's
+        // applied counts and lets the log analysis join effects/s per pass
+        // with the requests/429s of the same window). The adaptive batch
+        // controller's read-only limits snapshot rides the same line so the
+        // per-route growth curve (initial 100 -> cap 300) is visible per
+        // pass. Fail-open, after the counters were already read; then the
+        // existing pass summary.
+        requestTelemetry?.flushSummary(batchController?.limitsSnapshot());
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.OUTBOX_PASS_SUMMARY,
           level: HIKOUTEI_LOG_LEVELS.INFO,
@@ -286,7 +304,10 @@ function isNonIdleWorkerReport(report: WorkerReport): boolean {
     report.expiredLeasesRecovered > 0;
 }
 
-function optionalWorkerOptions(options: InternalSyncServiceOptions): {
+function optionalWorkerOptions(
+  options: InternalSyncServiceOptions,
+  requestTelemetry?: RequestTelemetry,
+): {
   readonly workerId?: string;
   readonly maxEffects?: number;
   readonly effectLeaseDurationMs?: number;
@@ -294,6 +315,7 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
   readonly idleIntervalMs?: number;
   readonly maxFastAppendCandidates?: number;
   readonly appendDispatchIntervalMs?: number;
+  readonly batchController?: AdaptiveEffectBatchController;
   readonly onTiming?: SyncTimingSink;
   readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
@@ -308,6 +330,15 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
     ? undefined
     : (options.googleSheetsApi.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS) +
       2 * (options.googleSheetsApi.readTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.READ_TIMEOUT_MS);
+  // Owned here (instead of inside the supervisor's fallback construction)
+  // solely so the per-pass telemetry can read the route limits. Built with
+  // EXACTLY the supervisor fallback's arguments, so batching policy is
+  // unchanged; the instance is handed to the worker via `batchController`.
+  const batchController = new AdaptiveEffectBatchController(
+    options.googleSheetsApi === undefined
+      ? {}
+      : { appendDispatchIntervalMs: APPEND_DISPATCH_THROTTLE_INTERVAL_MS },
+  );
   return {
     ...(options.workerId === undefined ? {} : { workerId: options.workerId }),
     ...(options.maxEffects === undefined ? {} : { maxEffects: options.maxEffects }),
@@ -322,7 +353,8 @@ function optionalWorkerOptions(options: InternalSyncServiceOptions): {
         maxFastAppendCandidates: FAST_APPEND_BATCH_CANDIDATE_LIMIT,
         appendDispatchIntervalMs: APPEND_DISPATCH_THROTTLE_INTERVAL_MS,
       }),
+    batchController,
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
-    ...wrapEffectWorkerHooks(options),
+    ...wrapEffectWorkerHooks(options, requestTelemetry, batchController),
   };
 }

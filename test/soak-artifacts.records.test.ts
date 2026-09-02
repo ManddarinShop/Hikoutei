@@ -364,7 +364,8 @@ describe("soak log collection: logger contract mirror", () => {
     // un-reviewed value admitted.
     expect(LOGGED_FIELD_NAMES).toEqual([
       "ts", "level", "event", "component", "code", "table", "errorClass",
-      "retryable", "attempts", "durationMs", "counts",
+      "providerOperation", "pacing", "retryable", "attempts", "durationMs",
+      "counts",
     ]);
     expect(LOGGED_LEVELS).toEqual(["debug", "info", "warn", "error"]);
     expect([...LOGGED_EVENT_NAMES].sort()).toEqual(

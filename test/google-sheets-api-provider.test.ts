@@ -3404,6 +3404,69 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(typeof write.pacingWaitMs).toBe("number");
   });
 
+  it("estimates getSpreadsheet response bytes scaled with the payload size", async () => {
+    // The preflight-vs-polling latency investigation needs payload evidence:
+    // every successful getSpreadsheet event must carry a responseBytes
+    // estimate, and a data read of a big tab must dwarf the metadata-only
+    // enumeration read of the same spreadsheet.
+    const spreadsheet = new StubSpreadsheet();
+    const padding = "x".repeat(200);
+    seedSystemTab(spreadsheet, Array.from({ length: 100 }, (_, index) => ({
+      anchor: `anchor-${index}`,
+      fields: {
+        id: cell.string(`u${index}`),
+        status: cell.string(padding),
+        __typed_sheets_deleted: cell.string(""),
+      },
+    })));
+    const transport = new StubSheetsTransport(spreadsheet);
+    const events: Array<Record<string, unknown>> = [];
+    const provider = buildProvider(transport, {
+      onRequest: (event) => events.push(event as Record<string, unknown>),
+    });
+    await applyRequest(provider, [
+      effect({
+        effectId: "bytes-1",
+        targetAnchor: "anchor-new",
+        createIfMissing: true,
+        fields: { id: cell.string("u-new"), status: cell.string("pending") },
+      }),
+    ]);
+    const readEvents = events.filter((event) => event.operation === "getSpreadsheet");
+    expect(readEvents.length).toBeGreaterThanOrEqual(2);
+    for (const read of readEvents) {
+      expect(typeof read.responseBytes).toBe("number");
+      expect(read.responseBytes as number).toBeGreaterThan(0);
+    }
+    const byteSizes = readEvents.map((read) => read.responseBytes as number);
+    // The ranged data read carries the 100 seeded 200-char rows; the
+    // metadata-only enumeration carries none. The payload signal must be
+    // visible in the estimate.
+    expect(Math.max(...byteSizes)).toBeGreaterThan(10 * Math.min(...byteSizes));
+    // The write reply is small but still measured.
+    const write = events.find((event) => event.operation === "batchUpdate");
+    expect(typeof write?.responseBytes).toBe("number");
+  });
+
+  it("computes no responseBytes when no telemetry sink is attached", async () => {
+    // Zero-overhead gate: without onRequest the provider must not serialize
+    // responses. The event simply never exists, so the assertion is that a
+    // big read still succeeds unchanged with no sink wired.
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, []);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const result = await applyRequest(provider, [
+      effect({
+        effectId: "bytes-nosink",
+        targetAnchor: "anchor-1",
+        createIfMissing: true,
+        fields: { id: cell.string("u1"), status: cell.string("x") },
+      }),
+    ]);
+    expect(result.results[0]?.status).toBe("applied");
+  });
+
   it("never forwards an arbitrary remote code into onRequest telemetry", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });

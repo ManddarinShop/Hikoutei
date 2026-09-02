@@ -51,6 +51,7 @@ import {
 import {
   definitionForPhysicalSheet,
   requireValidBatchUpdateReply,
+  estimateJsonBytesOrNull,
   runRead,
   runWrite,
   validateRoute,
@@ -270,7 +271,11 @@ export async function readObservedTabs(
   const fields = lightweight
     ? GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS
     : GOOGLE_SHEETS_API_OBSERVATION_FIELDS;
-  return runRead(deps, () =>
+  // The RAW transport document is measured (not the parsed Map result) so the
+  // telemetry responseBytes reflect the true payload size for the
+  // preflight-vs-polling read-gap question.
+  const meta: { responseBytes?: number } = {};
+  const tabs = await runRead(deps, () =>
     readTabGrids(
       deps.transport,
       deps.spreadsheetId,
@@ -280,7 +285,8 @@ export async function readObservedTabs(
       })),
       fields,
       deps.readTimeoutMs,
-    ));
+    ), "polling", meta);
+  return tabs;
 }
 
 /** Builds the A1 range end letters for one registered range. */
