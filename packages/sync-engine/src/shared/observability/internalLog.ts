@@ -43,6 +43,7 @@ import {
   HIKOUTEI_LOG_PROVIDER_REASONS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
+  HIKOUTEI_LOG_TRANSPORT_OPERATIONS,
 } from "./logEvents.js";
 
 /** Environment keys that configure the internal file logger. */
@@ -101,7 +102,12 @@ const CODE_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CODES);
 /** Set of every stable error class name the log may carry. */
 const CLASS_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_STABLE_CLASSES);
 /** Set of every stable provider-operation tag the log may carry. */
-const PROVIDER_OPERATION_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_PROVIDER_OPERATIONS);
+const PROVIDER_OPERATION_ALLOWLIST: ReadonlySet<string> = new Set([
+  ...HIKOUTEI_LOG_PROVIDER_OPERATIONS,
+  // The request-telemetry boundary logs the transport's own operation names
+  // (`GoogleSheetsApiRequestEvent.operation`) in the same structured field.
+  ...HIKOUTEI_LOG_TRANSPORT_OPERATIONS,
+]);
 /** Set of every stable provider-reason tag the log may carry. */
 const PROVIDER_REASON_ALLOWLIST: ReadonlySet<string> = new Set(HIKOUTEI_LOG_PROVIDER_REASONS);
 /** Set of every stable request-start pacing lane the log may carry. */

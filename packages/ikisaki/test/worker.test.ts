@@ -2539,6 +2539,19 @@ describe("adaptive batch controller", () => {
     expect(controller.limitFor("route-a")).toBe(55);
   });
 
+  it("exposes a read-only limits snapshot without creating or mutating route state", () => {
+    const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
+    // Untouched controller: empty snapshot (the accessor creates no routes).
+    expect(controller.limitsSnapshot()).toEqual({});
+    controller.observe("route-b", { durationMs: 10, responseSucceeded: true, responseLoss: false });
+    controller.observePreflight("route-a", { durationMs: 5, succeeded: false });
+    expect(controller.limitsSnapshot()).toEqual({ "route-a": 50, "route-b": 100 });
+    // Mutating the copy cannot reach the controller's policy state.
+    const snapshot = controller.limitsSnapshot();
+    snapshot["route-b"] = 999;
+    expect(controller.limitFor("route-b")).toBe(100);
+  });
+
   it("rejects invalid adaptive batch limit configurations", () => {
     expect(() => new AdaptiveEffectBatchController({ minimum: 20, maximum: 5 }))
       .toThrow("adaptive effect batch limits must satisfy minimum <= initial <= maximum");

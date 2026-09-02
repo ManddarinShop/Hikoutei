@@ -244,6 +244,14 @@ export interface GoogleSheetsApiRequestEvent {
   readonly requestedEffects?: number;
   /** Effects included in the written batch (the budget-fitting prefix). */
   readonly includedEffects?: number;
+  /**
+   * Parsed-response size estimate in bytes (`JSON.stringify().length` of the
+   * transport result). An ESTIMATE of the wire payload, not a measured byte
+   * count: it excludes HTTP headers, compression framing, and JSON
+   * re-serialization differences. Computed only while a telemetry sink is
+   * attached, so a deployment without `onRequest` pays no estimation cost.
+   */
+  readonly responseBytes?: number;
 }
 
 /** Provider options without the bootstrap-supplied spreadsheet and routes. */

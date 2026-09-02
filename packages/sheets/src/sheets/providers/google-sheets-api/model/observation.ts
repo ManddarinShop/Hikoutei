@@ -143,6 +143,10 @@ export async function readTabGrids(
   targets: readonly ObservationGridTarget[],
   fields: string = GOOGLE_SHEETS_API_OBSERVATION_FIELDS,
   timeoutMs?: number,
+  /** Receives the RAW transport document before parsing — telemetry measures
+   * the true response size from it (the parsed result is a Map, which does
+   * not serialize meaningfully). */
+  onRawResponse?: (raw: unknown) => void,
 ): Promise<ReadonlyMap<string, ObservedTab>> {
   const tabs = new Map<string, ObservedTab>();
   if (targets.length === 0) return tabs;
@@ -155,6 +159,7 @@ export async function readTabGrids(
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
   const raw = await transport.getSpreadsheet(request);
+  onRawResponse?.(raw);
   const document = parseSpreadsheetDocument(raw, "observation grid");
   for (const target of targets) {
     const sheet = findSheetByTitle(document.sheets, target.sheetName);

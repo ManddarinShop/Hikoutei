@@ -40,6 +40,7 @@ import {
   planMappedFlushConflictSyncWithSql,
 } from "@hikoutei/storage/sync/inbound/autoSystemConflictResolution.js";
 import { createRemoteProvider } from "./remoteProvider.js";
+import { createRequestTelemetry } from "./requestTelemetry.js";
 import { requireSyncEnginePorts } from "./compositionPorts.js";
 import {
   planExistingSheetAdoptionStartup,
@@ -65,6 +66,7 @@ import {
 } from "./systemStateReadiness.js";
 import {
   describeErrorForInternalLog,
+  getHikouteiInternalLogger,
   HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
   logWriterLeaseStartupWait,
@@ -200,7 +202,23 @@ export async function createInternalSyncService(
     const definitionsForRemote = adoptionPlan === undefined
       ? projectionDefinitions
       : withAdoptedPhysicalHeaders(projectionDefinitions, adoptionPlan);
-    const remote = createRemoteProvider(options, definitionsForRemote, ports);
+    // Request-level Google Sheets telemetry (measurement only, fail-open):
+    // created at bootstrap scope so ONE aggregator instance is shared by the
+    // remote provider (sink) and the effect supervisor (per-pass flush).
+    // Wired ONLY when the internal file logger is enabled: the sink is what
+    // makes the provider estimate per-request payload sizes (a full
+    // JSON serialization of every transport result), so a default
+    // logging-off runtime must pay zero estimation cost. A caller-supplied
+    // `googleSheetsApi.onRequest` still gets its own sink regardless.
+    const requestTelemetry = getHikouteiInternalLogger().enabled
+      ? createRequestTelemetry()
+      : undefined;
+    const remote = createRemoteProvider(
+      options,
+      definitionsForRemote,
+      ports,
+      requestTelemetry?.sink,
+    );
     if (adoptionPlan !== undefined) {
       // D7 (F3): adoption resolves tab names case-insensitively, so two
       // entities adopting `Invoices` and `invoices` collapse onto ONE sheet
@@ -293,6 +311,7 @@ export async function createInternalSyncService(
       writer,
       effectWorkerId,
       options,
+      ...(requestTelemetry === undefined ? {} : { requestTelemetry }),
     });
     // Entity-writer lease heartbeat (strictly renew-only): keeps the mapped
     // writer's `heartbeat_at` fresh between flushes so a NEW process after a

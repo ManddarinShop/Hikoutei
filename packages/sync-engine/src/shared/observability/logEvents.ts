@@ -48,6 +48,10 @@ export const HIKOUTEI_LOG_EVENTS = {
   WRITER_LEASE_UNAVAILABLE: "hikoutei.writer_lease.unavailable",
   /** Background writer-lease heartbeat CHANGED held state (renewed ↔ not held). */
   WRITER_LEASE_HEARTBEAT: "hikoutei.writer_lease.heartbeat",
+  /** One Google Sheets API transport request completed (DEBUG, redacted counts). */
+  SHEETS_REQUEST: "hikoutei.sheets.request",
+  /** Non-empty Google Sheets request window summary flushed per non-idle pass. */
+  SHEETS_REQUEST_SUMMARY: "hikoutei.sheets.request_summary",
 } as const;
 
 /** Stable component tags naming the owning subsystem. */
@@ -60,6 +64,7 @@ export const HIKOUTEI_LOG_COMPONENTS = {
   OUTBOX: "outbox",
   RECONCILIATION: "reconciliation",
   POLLING: "polling",
+  SHEETS: "sheets",
 } as const;
 
 /**
@@ -286,6 +291,24 @@ export const HIKOUTEI_LOG_PROVIDER_OPERATIONS = Object.freeze([
   "get_reply",
   "postcondition_read",
   "unclassified",
+] as const);
+
+/**
+ * Explicit allowlist of Google Sheets API transport operation names the
+ * internal log may carry in its `providerOperation` field.
+ *
+ * These are the exact operation values of the provider's redacted request
+ * telemetry events (`GoogleSheetsApiRequestEvent.operation` in
+ * `@hikoutei/contracts/sheets/googleSheetsApi.ts`), so the request-telemetry
+ * boundary can log `providerOperation = event.operation` without redaction.
+ * Kept SEPARATE from {@link HIKOUTEI_LOG_PROVIDER_OPERATIONS} (which mirrors
+ * the invalid-provider-state classification constants and is pinned to them
+ * by test) — the request telemetry is a different producer of the same
+ * structured field, so the formatter accepts the union of both registries.
+ */
+export const HIKOUTEI_LOG_TRANSPORT_OPERATIONS = Object.freeze([
+  "getSpreadsheet",
+  "batchUpdate",
 ] as const);
 
 /**
