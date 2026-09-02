@@ -227,10 +227,33 @@ describe("env-driven sync auto-start", () => {
       sql.run("UPDATE writer_lease SET lease_until = 0", []));
   }
 
+  /**
+   * Simulates a CRASHED runtime (not a graceful stop): both lease rows keep a
+   * FUTURE `lease_until` but the heartbeat is frozen in the past, so only the
+   * stale-heartbeat takeover evidence rule lets the next runtime claim.
+   */
+  async function simulateCrashedWriterLeases(service: InternalSyncService): Promise<void> {
+    await service.storage.transaction(({ sql }) =>
+      sql.run(
+        "UPDATE writer_lease SET lease_until = ?, heartbeat_at = 0",
+        [Date.now() + 10 * 60_000],
+      ));
+  }
+
   function tempDbName(label: string): string {
     const db = join(tmpdir(), `hikoutei-sync-${label}-${randomUUID()}.sqlite`);
     dbFiles.push(db);
     return db;
+  }
+
+  /**
+   * Loads the `node:sqlite` builtin outside the bundler's module graph (a
+   * static import fails under Vite — see
+   * packages/ikisaki/test/support/nodeSqliteAdapter.ts).
+   */
+  function openRawSqlite(path: string): InstanceType<typeof import("node:sqlite").DatabaseSync> {
+    const nodeSqlite = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
+    return new nodeSqlite.DatabaseSync(path);
   }
 
   // -------------------------------------------------------------------------
@@ -1084,6 +1107,45 @@ describe("env-driven sync auto-start", () => {
       value: "u2",
     });
     await session3.hikoutei.close();
+  });
+
+  it("takes over a CRASHED runtime's writer leases via stale heartbeat and drains immediately (restart-stall fix)", async () => {
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const dbName = tempDbName("heartbeat-restart");
+    const { spreadsheet, transport } = newTransport();
+
+    // Session 1: provision + deliver u1, then close (graceful; rows remain).
+    const session1 = await openSync(transport, credentialsPath, dbName);
+    await createUser(session1, "u1", "pending");
+    await drainOutbox(session1);
+    await session1.hikoutei.close();
+    const systemTab = spreadsheet.findTab(SYSTEM_TAB);
+    expect(systemTab).toBeDefined();
+
+    // Simulate a CRASH: both lease rows keep a FUTURE lease window but the
+    // heartbeat is frozen — the exact pre-fix restart-stall state (the old
+    // behavior stalled every claim for the full lease duration).
+    const raw = openRawSqlite(dbName);
+    try {
+      raw.prepare(
+        "UPDATE writer_lease SET lease_until = ?, heartbeat_at = 0",
+      ).run(Date.now() + 10 * 60_000);
+    } finally {
+      raw.close();
+    }
+
+    // Session 2: stale-heartbeat takeover evidence must let every claim path
+    // (startup registration, mapped flush, effect worker) take over at once.
+    const session2 = await openSync(transport, credentialsPath, dbName);
+    await createUser(session2, "u2", "pending");
+    await drainOutbox(session2);
+
+    expect(stubRowFields(systemTab as never, 3, [...SYSTEM_HEADERS]).id).toEqual({
+      kind: "string",
+      value: "u2",
+    });
+    expect(stubRowFields(systemTab as never, 4, [...SYSTEM_HEADERS]).id).toBeNull();
+    await session2.hikoutei.close();
   });
 
   it("records a human edit during downtime as a durable OPEN conflict and resolves only after a later same-field canonical advance (issue #196)", async () => {

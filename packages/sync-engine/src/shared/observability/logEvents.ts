@@ -44,6 +44,10 @@ export const HIKOUTEI_LOG_EVENTS = {
   POLLING_PASS_FAILED: "hikoutei.polling.pass_failed",
   /** Non-idle polling pass summary (counts only, quarantines included). */
   POLLING_PASS_SUMMARY: "hikoutei.polling.pass_summary",
+  /** An effect-worker pass could not claim the writer lease (another writer holds it). */
+  WRITER_LEASE_UNAVAILABLE: "hikoutei.writer_lease.unavailable",
+  /** Background writer-lease heartbeat CHANGED held state (renewed ↔ not held). */
+  WRITER_LEASE_HEARTBEAT: "hikoutei.writer_lease.heartbeat",
 } as const;
 
 /** Stable component tags naming the owning subsystem. */

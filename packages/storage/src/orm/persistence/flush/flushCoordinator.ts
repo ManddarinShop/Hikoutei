@@ -15,6 +15,7 @@ import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   claimWriterLeaseWithSql,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
 import {
@@ -95,11 +96,15 @@ export function createMappedTypedSheetsFlushCoordinator(
       const leaseStartedAt = Date.now();
       const now = writer.now();
       // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+      // The stale-heartbeat bound lets a NEW process after a crash take the
+      // mapped lease over immediately instead of failing flushes with
+      // WRITER_LEASE_UNAVAILABLE for the full lease window.
       const claim = await claimWriterLeaseWithSql(context.sql, {
         role: writer.role,
         writerId: writer.writerId,
         leaseDurationMs: writer.leaseDurationMs,
         now,
+        heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now),
       });
       if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
         throw new TypedSheetsOrmError(
@@ -198,11 +203,14 @@ export async function registerTypedSheetsEntityMappings(
   return storage.transaction(async ({ sql }) => {
     const now = writer.now();
     // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+    // Stale-heartbeat takeover evidence keeps a crash-restart from blocking
+    // startup registration for the full lease window.
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,
       leaseDurationMs: writer.leaseDurationMs,
       now,
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now),
     });
     if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
       throw new TypedSheetsOrmError(

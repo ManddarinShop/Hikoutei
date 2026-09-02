@@ -3,6 +3,7 @@
 import {
   claimWriterLeaseWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
 import {
@@ -50,11 +51,14 @@ export async function registerSyncConflictProjectionRoutes(
 
   return storage.transaction(async ({ sql }) => {
     // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+    // Stale-heartbeat takeover evidence keeps a crash-restart from blocking
+    // startup registration for the full lease window.
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,
       leaseDurationMs: writer.leaseDurationMs,
       now: writer.now(),
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(writer.now()),
     });
     if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
       throw new TypedSheetsOrmError(

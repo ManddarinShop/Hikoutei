@@ -56,6 +56,10 @@ import { createEffectSupervisor } from "./effectSupervisor.js";
 import { createPollingSupervisor } from "./pollingSupervisor.js";
 import { createStopHandler, expireRuntimeWriterLeases } from "./shutdown.js";
 import {
+  createWriterLeaseHeartbeat,
+  type WriterLeaseHeartbeatHandle,
+} from "@hikoutei/ikisaki";
+import {
   registerSystemStateReadiness,
   unregisterSystemStateReadiness,
 } from "./systemStateReadiness.js";
@@ -158,6 +162,9 @@ export async function createInternalSyncService(
       },
     );
   const runtime = await generated.openMappedRuntime({ dbName: options.dbName, writer, syncFlushHook });
+  // Declared OUTSIDE the try so a startup failure after heartbeat creation can
+  // still stop the timer before the storage closes.
+  let entityWriterLeaseHeartbeat: WriterLeaseHeartbeatHandle | undefined;
 
   try {
     const projectionDefinitions = [
@@ -274,6 +281,31 @@ export async function createInternalSyncService(
       effectWorkerId,
       options,
     });
+    // Entity-writer lease heartbeat (strictly renew-only): keeps the mapped
+    // writer's `heartbeat_at` fresh between flushes so a NEW process after a
+    // crash takes the lease over through the stale-heartbeat evidence rule
+    // instead of waiting out the full mapped lease window. Stopped with the
+    // runtime (createStopHandler) so graceful shutdown stops renewing first.
+    const resolvedEntityWriter = resolveTypedSheetsEntityWriterOptions(writer);
+    let entityHeartbeatHeld: boolean | undefined;
+    entityWriterLeaseHeartbeat = createWriterLeaseHeartbeat({
+      storage: runtime.storage,
+      role: resolvedEntityWriter.role,
+      writerId: resolvedEntityWriter.writerId,
+      leaseDurationMs: resolvedEntityWriter.leaseDurationMs,
+      now: resolvedEntityWriter.now,
+      onEvent: (event) => {
+        const held = event.result.kind === "renewed";
+        if (entityHeartbeatHeld === held) return;
+        entityHeartbeatHeld = held;
+        logHikouteiInternalEvent({
+          event: HIKOUTEI_LOG_EVENTS.WRITER_LEASE_HEARTBEAT,
+          level: held ? HIKOUTEI_LOG_LEVELS.INFO : HIKOUTEI_LOG_LEVELS.WARN,
+          component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
+          counts: { mappedWriter: held ? 1 : 0 },
+        });
+      },
+    });
     const pollingSupervisor = createPollingSupervisor({
       storage: runtime.storage,
       provider: remote.provider,
@@ -293,6 +325,7 @@ export async function createInternalSyncService(
       effectWorkerId,
       pollingSupervisor,
       effectSupervisor,
+      entityWriterLeaseHeartbeat,
     });
 
     const provider = runtime.createScalarPersistenceProvider();
@@ -340,6 +373,7 @@ export async function createInternalSyncService(
     // WRITER_LEASE_UNAVAILABLE. Expire the claimed leases (CAS-guarded,
     // warn-and-continue) so the retry takes over at once; the extra guard
     // ensures this can never mask the original startup error.
+    await entityWriterLeaseHeartbeat?.stop().catch(() => undefined);
     await expireRuntimeWriterLeases(runtime.storage, writer, effectWorkerId)
       .catch(() => undefined);
     await runtime.storage.close(true).catch(() => undefined);

@@ -121,6 +121,14 @@ export async function migrateSqliteSchema(
       await writeSchemaVersion(sql, 7);
       appliedVersions.push(7);
     }
+    if (fromVersion < 8) {
+      // Add the nullable writer-lease heartbeat column used by the takeover
+      // evidence rule. Legacy rows keep NULL and stay on the expiry-only
+      // takeover predicate, so the migration is purely additive.
+      await applyVersion8LeaseHeartbeatMigration(sql);
+      await writeSchemaVersion(sql, 8);
+      appliedVersions.push(8);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
     // v5-only indexes are created after every migration so an upgraded v4
@@ -217,6 +225,10 @@ async function applyVersion7CleanupMigration(sql: SqlExecutor): Promise<void> {
   await dropColumnIfPresent(sql, "quarantine_record", "repair_state");
   await dropColumnIfPresent(sql, "quarantine_record", "repair_fields_json");
   await dropColumnIfPresent(sql, "quarantine_record", "candidate_payload_json");
+}
+
+async function applyVersion8LeaseHeartbeatMigration(sql: SqlExecutor): Promise<void> {
+  await addColumnIfMissing(sql, "writer_lease", "heartbeat_at", "INTEGER");
 }
 
 async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {

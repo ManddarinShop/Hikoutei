@@ -73,6 +73,7 @@ export function createEffectSupervisor(
   input: CreateEffectSupervisorInput,
 ): EffectWorkerSupervisor {
   const { storage, mappings, provider, writer, effectWorkerId, options } = input;
+  let lastHeartbeatHeld: boolean | undefined;
 
   // Periodic System_State reconciliation is a lazy repair net, not part of
   // the normal write path: one scan per system_state projection reads a
@@ -137,6 +138,20 @@ export function createEffectSupervisor(
     }),
     ...optionalWorkerOptions(options),
     workerId: effectWorkerId,
+    // Writer-lease heartbeat visibility: log ONLY the held-state transitions
+    // (renewed ↔ not held), so an idle healthy writer logs nothing and a
+    // restart handoff shows one "not held" → "renewed" pair.
+    onWriterLeaseHeartbeat: (event) => {
+      const held = event.result.kind === "renewed";
+      if (lastHeartbeatHeld === held) return;
+      lastHeartbeatHeld = held;
+      logHikouteiInternalEvent({
+        event: HIKOUTEI_LOG_EVENTS.WRITER_LEASE_HEARTBEAT,
+        level: held ? HIKOUTEI_LOG_LEVELS.INFO : HIKOUTEI_LOG_LEVELS.WARN,
+        component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
+        counts: held ? { held: 1 } : { notHeld: 1 },
+      });
+    },
     reconciliation: {
       intervalMs: options.reconciliationIntervalMs ?? RECONCILIATION_SCAN_INTERVAL_MS,
       // Only the real Google Sheets provider starts with a large initial
@@ -205,6 +220,21 @@ function wrapEffectWorkerHooks(options: InternalSyncServiceOptions): {
 } {
   return {
     onReport: (report: WorkerReport) => {
+      // Restart-stall visibility: a pass that could not claim the writer
+      // lease is silent in every counter (all zeros), so it gets its own
+      // event. While the lease is held by a (dead or live) other writer this
+      // fires once per idle tick — exactly the dead window the dynamic
+      // throughput findings needed observable.
+      if (report.leaseClaimFailureReason !== undefined) {
+        logHikouteiInternalEvent({
+          event: HIKOUTEI_LOG_EVENTS.WRITER_LEASE_UNAVAILABLE,
+          level: HIKOUTEI_LOG_LEVELS.WARN,
+          component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
+          counts: report.leaseClaimFailureReason === "active_writer"
+            ? { activeWriter: 1 }
+            : { leaseRaceLost: 1 },
+        });
+      }
       if (isNonIdleWorkerReport(report)) {
         logHikouteiInternalEvent({
           event: HIKOUTEI_LOG_EVENTS.OUTBOX_PASS_SUMMARY,

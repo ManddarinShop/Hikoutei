@@ -3,7 +3,8 @@ export type SchemaMigrationTableName =
   | "sync_conflict"
   | "resolution_command"
   | "sheet_effect_outbox"
-  | "spreadsheet_authority";
+  | "spreadsheet_authority"
+  | "writer_lease";
 
 /** Column names added by the additive SQLite schema migrations. */
 export type SchemaMigrationColumnName =
@@ -14,4 +15,5 @@ export type SchemaMigrationColumnName =
   | "next_probe_at"
   | "dispatch_id"
   | "candidate_visible_revision"
-  | "candidate_visible_hash";
+  | "candidate_visible_hash"
+  | "heartbeat_at";

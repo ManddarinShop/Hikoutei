@@ -43,6 +43,7 @@ import {
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
 import {
@@ -229,11 +230,14 @@ export async function seedAdoptedEntityRows(input: {
   readonly now: number;
 }): Promise<{ readonly seeded: number }> {
   if (input.rows.length === 0) return { seeded: 0 };
+  // Stale-heartbeat takeover evidence: an adopted-tab seeding that follows a
+  // crash must not wait out the previous runtime's full lease window.
   const lease = await claimWriterLeaseWithAdapter(input.storage, {
     role: input.writerRole,
     writerId: input.writerId,
     leaseDurationMs: input.leaseDurationMs,
     now: input.now,
+    heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(input.now),
   });
   if (lease.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
     throw new SyncServiceError(

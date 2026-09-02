@@ -23,7 +23,7 @@ export { REQUIRED_V3_COLUMNS } from "@hikoutei/ikisaki";
 export { syncSchemaV5IndexesDdl } from "@hikoutei/ikisaki";
 
 /** Current durable schema version managed by the provider migration. */
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {

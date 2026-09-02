@@ -48,6 +48,7 @@ import type {
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
 import type { PersistObservedRowInput } from "../../../../storage/state/observation/observationWriter.js";
@@ -447,11 +448,14 @@ async function claimMappedInboundWriterLease(
 ): Promise<FencingContext> {
   const now = writer.now();
   // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+  // Stale-heartbeat takeover evidence keeps a crash-restart from blocking
+  // inbound polling for the full lease window.
   const claim = await claimWriterLeaseWithAdapter(storage, {
     role: writer.role,
     writerId: writer.writerId,
     leaseDurationMs: writer.leaseDurationMs,
     now,
+    heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now),
   });
   if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
     throw new TypedSheetsOrmError(

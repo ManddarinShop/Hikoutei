@@ -32,6 +32,7 @@ import { POSITIVE_SAFE_INTEGER_MINIMUM } from "@hikoutei/contracts/constants.js"
 import {
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
 import {
@@ -249,11 +250,15 @@ async function scanAndEnqueue(context: CleanupScanContext): Promise<CleanupScanR
 }
 
 async function claimReconcilerFence(context: CleanupScanContext): Promise<FencingContext | null> {
+  const now = context.now();
+  // Stale-heartbeat takeover evidence: after a crash the scan must not defer
+  // for the previous runtime's full lease window.
   const claim = await claimWriterLeaseWithAdapter(context.storage, {
     role: context.role,
     writerId: context.writerId,
     leaseDurationMs: context.leaseDurationMs,
-    now: context.now(),
+    now,
+    heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now),
   });
   if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) return null;
   const lease = claim.lease;

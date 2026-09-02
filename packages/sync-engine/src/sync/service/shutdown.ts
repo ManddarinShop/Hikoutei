@@ -18,6 +18,7 @@ import {
   readWriterLeaseWithAdapter,
   releaseWriterLeaseWithAdapter,
   type EffectWorkerSupervisor,
+  type WriterLeaseHeartbeatHandle,
 } from "@hikoutei/ikisaki";
 import { RECONCILIATION_DEFAULTS } from "../outbound/reconciliation/ReconciliationScanner.js";
 import { stableConsoleErrorTag } from "../../shared/observability/internalLog.js";
@@ -95,6 +96,8 @@ export interface CreateStopHandlerInput {
   readonly effectWorkerId: string;
   readonly pollingSupervisor: SyncPollingSupervisor<MappedUserInputPollingReport>;
   readonly effectSupervisor: EffectWorkerSupervisor;
+  /** Renew-only entity-writer lease heartbeat; stopped FIRST so shutdown stops renewing. */
+  readonly entityWriterLeaseHeartbeat?: WriterLeaseHeartbeatHandle;
 }
 
 /**
@@ -108,7 +111,7 @@ export interface CreateStopHandlerInput {
  * leaves a retryable close() that re-runs the stops and the release.
  */
 export function createStopHandler(input: CreateStopHandlerInput): () => Promise<void> {
-  const { storage, writer, effectWorkerId, pollingSupervisor, effectSupervisor } = input;
+  const { storage, writer, effectWorkerId, pollingSupervisor, effectSupervisor, entityWriterLeaseHeartbeat } = input;
 
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
@@ -119,6 +122,10 @@ export function createStopHandler(input: CreateStopHandlerInput): () => Promise<
     // drain manual and background passes before SQLite is closed.
     stopPromise = (async () => {
       try {
+        // The heartbeat must stop renewing BEFORE the supervisors stop and
+        // the leases expire, so graceful shutdown hands the lease over at
+        // once instead of renewing it underneath the release path.
+        await entityWriterLeaseHeartbeat?.stop();
         await pollingSupervisor.stop();
         await effectSupervisor.stop();
       } finally {
