@@ -354,3 +354,14 @@ option instead of asking.
   `~/.pi/agent/npm/node_modules/pi-sub-agent/extensions/index.ts:801` so
   project agents never prompt. Re-applying this patch is required after a
   pi extension reinstall/update.
+
+- 2026-09-02 FINAL: agents live ONLY in the GLOBAL dir
+  (`~/.pi/agent/agents/` — worker=opencode-go/qwen3.8-flash,
+  reviewer=openai-codex/gpt-5.6-terra, fallback-worker=ollama/lm-5.3-flash:cloud,
+  reviewer-quick=ollama/glm-5.3-flash:cloud, ocr-reviewer=Alibaba OCR workflow).
+  The project `.pi/agents/` was moved to
+  `.pi/agents.project-backup-20260902/` because the pi-sub-agent harness
+  prompts for project-agent approval on EVERY delegation with the
+  "project"/"both" scope. With global agents, the DEFAULT scope ("user")
+  finds them with no gate and no parameters needed. Do not pass agentScope;
+  do not recreate `.pi/agents/` unless the owner asks.
