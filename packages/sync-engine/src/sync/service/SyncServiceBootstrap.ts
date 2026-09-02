@@ -67,6 +67,7 @@ import {
   describeErrorForInternalLog,
   HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
+  logWriterLeaseStartupWait,
 } from "../../shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
@@ -138,7 +139,19 @@ export async function createInternalSyncService(
     : withAdoptionRegisteredRangeOverride(options.projections, adoptionPlan);
 
   const generated = ports.planMappedRuntime(options.entities, effectiveProjections);
-  const writer = createWriterOptions(options);
+  // One warn per startup, AT WAIT ENTRY: every startup wait-gate site (mapped
+  // registration, conflict routes, adoption seeding) reports through this
+  // latched callback (storage owns no observability, so the mapped site
+  // cannot log itself). Immediate claims never enter a wait and log nothing.
+  let startupLeaseWaitWarned = false;
+  const writer = {
+    ...createWriterOptions(options),
+    onStartupLeaseWait: () => {
+      if (startupLeaseWaitWarned) return;
+      startupLeaseWaitWarned = true;
+      logWriterLeaseStartupWait();
+    },
+  };
   // The effect worker claims its own lease role with the same runtime identity
   // as the mapped writer unless the caller pinned an explicit worker id; one
   // resolved identity is reused by the supervisor and by the graceful-shutdown

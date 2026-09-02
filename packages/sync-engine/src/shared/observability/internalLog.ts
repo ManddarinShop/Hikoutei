@@ -285,6 +285,21 @@ export function resetHikouteiInternalLoggerForTests(): void {
   processLogger = undefined;
 }
 
+/**
+ * Emits the single stable WARN for ENTERING a writer-lease startup wait
+ * (every startup wait-gate site and the sync bootstrap's injected callback
+ * share this shape). Callers that need once-per-startup semantics latch this
+ * at their own boundary; the log module stays emission-only.
+ */
+export function logWriterLeaseStartupWait(): void {
+  logHikouteiInternalEvent({
+    event: HIKOUTEI_LOG_EVENTS.WRITER_LEASE_UNAVAILABLE,
+    level: HIKOUTEI_LOG_LEVELS.WARN,
+    component: HIKOUTEI_LOG_COMPONENTS.OUTBOX,
+    counts: { startupWait: 1 },
+  });
+}
+
 /** True once the value is one of the known levels. */
 function isLogLevel(value: unknown): value is HikouteiInternalLogLevel {
   return value === HIKOUTEI_LOG_LEVELS.DEBUG ||

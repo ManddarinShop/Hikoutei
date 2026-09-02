@@ -1,11 +1,15 @@
 /** Registers and provisions the mandatory entity-specific Sync_Conflicts routes. */
 
 import {
+  awaitTakeoverableWriterLeaseWithAdapter,
   claimWriterLeaseWithSql,
+  WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS,
   writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
+import { logWriterLeaseStartupWait } from "../../shared/observability/internalLog.js";
 import {
   registerSyncSheetWithSql,
   type RegisteredSyncSheet,
@@ -47,6 +51,31 @@ export async function registerSyncConflictProjectionRoutes(
   const uniqueMappings = new Map<string, RegisteredTypedSheetsMappedProjection>();
   for (const registration of registrations) {
     uniqueMappings.set(registration.mapping.logicalSheetId, registration);
+  }
+
+  // Startup wait gate: a crash→relaunch within the stale-heartbeat window
+  // cannot be told apart from a live writer by a single read, so wait
+  // (read-only) until the observed heartbeat goes stale before attempting
+  // the claim. The real claim stays a compare-and-set inside the transaction
+  // below; this gate is purely advisory. The gate must run on the wall clock
+  // (Date.now default): heartbeat staleness is a real-time property, and a
+  // test-injected fixed `writer.now` would make the wait never progress.
+  const gate = await awaitTakeoverableWriterLeaseWithAdapter(storage, {
+    role: writer.role,
+    writerId: writer.writerId,
+    // Warn AT WAIT ENTRY (before sleeping), routed through the bootstrap's
+    // latched callback when injected so one startup emits one warn across
+    // every gate site; the direct helper is the standalone-caller fallback.
+    onWaitEntry: writer.onStartupLeaseWait ?? logWriterLeaseStartupWait,
+  });
+  if (gate.kind === WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.FAILED) {
+    // Byte-identical fail-closed contract: every gate failure is a lease the
+    // pre-gate claim CAS below would have rejected, so the error keeps the
+    // existing `active_writer` reason instead of leaking gate-specific ones.
+    throw new TypedSheetsOrmError(
+      TYPED_SHEETS_ORM_ERROR_CODES.WRITER_LEASE_UNAVAILABLE,
+      `conflict projection registration lease is unavailable: ${WRITER_LEASE_CLAIM_FAILURE_REASONS.ACTIVE_WRITER}.`,
+    );
   }
 
   return storage.transaction(async ({ sql }) => {

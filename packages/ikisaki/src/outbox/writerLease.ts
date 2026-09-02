@@ -29,6 +29,14 @@ export const DEFAULT_WRITER_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
  * event loop is never mistaken for a dead writer.
  */
 export const DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS = 15_000;
+/**
+ * Startup wait-gate cap: how long a relaunching runtime will poll a live
+ * lease for its heartbeat to go stale before giving up. Stale bound (15s)
+ * plus 10s of slack, so a crash→relaunch within the stale window succeeds
+ * while a genuinely live writer (heartbeat keeps moving) is never waited out
+ * indefinitely.
+ */
+export const DEFAULT_WRITER_LEASE_STARTUP_WAIT_MS = 25_000;
 
 /**
  * Takeover evidence bound for one claim at timestamp `now`: the earliest
@@ -435,6 +443,162 @@ export async function readWriterLeaseWithAdapter(
   role: string,
 ): Promise<LookupResult<WriterLease>> {
   return storage.read(({ sql }) => readWriterLeaseWithSql(sql, role));
+}
+
+/** Runtime values for the two observable startup wait-gate outcomes. */
+export const WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS = {
+  READY: "ready",
+  FAILED: "failed",
+} as const;
+
+/** Closed set of startup wait-gate outcome kinds. */
+export type WriterLeaseStartupWaitResultKind =
+  (typeof WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS)[keyof typeof WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS];
+
+/** Runtime values explaining why the startup wait-gate gave up. */
+export const WRITER_LEASE_STARTUP_WAIT_FAILURE_REASONS = {
+  /** Live lease with a NULL heartbeat: a legacy row is never waited out. */
+  LIVE_LEGACY_LEASE: "live_legacy_lease",
+  /** A live writer kept its heartbeat moving past the wait cap. */
+  WAIT_CAP_REACHED: "wait_cap_reached",
+} as const;
+
+/** Closed set of startup wait-gate failure reasons. */
+export type WriterLeaseStartupWaitFailureReason =
+  (typeof WRITER_LEASE_STARTUP_WAIT_FAILURE_REASONS)[keyof typeof WRITER_LEASE_STARTUP_WAIT_FAILURE_REASONS];
+
+export type WriterLeaseStartupWaitResult =
+  | {
+      readonly kind: typeof WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.READY;
+      /** Milliseconds actually waited before the lease became takeable. */
+      readonly waitedMs: number;
+    }
+  | {
+      readonly kind: typeof WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.FAILED;
+      readonly reason: WriterLeaseStartupWaitFailureReason;
+      readonly waitedMs: number;
+    };
+
+export interface AwaitTakeoverableWriterLeaseOptions {
+  readonly role: string;
+  /**
+   * The calling runtime's writer identity. A live lease ALREADY owned by this
+   * id never needs waiting out: the caller's own claim CAS renews it (and
+   * startup flows claim-then-reclaim the same role across entities/passes),
+   * so the gate reports `ready` immediately when `writer_id` matches.
+   */
+  readonly writerId?: string;
+  /** Injectable clock; defaults to `Date.now`. */
+  readonly now?: () => number;
+  /** Heartbeat stale bound; defaults to {@link DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS}. */
+  readonly staleMs?: number;
+  /** Total wait cap; defaults to {@link DEFAULT_WRITER_LEASE_STARTUP_WAIT_MS}. */
+  readonly maxWaitMs?: number;
+  /** Injectable sleep; defaults to a `setTimeout`-based promise. */
+  readonly wait?: (ms: number) => Promise<void>;
+  /**
+   * Fired at WAIT ENTRY: exactly once per gate invocation, immediately before
+   * the first actual sleep, so callers can surface a warning while the startup
+   * is still waiting (never after the wait has already returned). Immediates
+   * (`ready`/`failed` with zero wait) never fire it. Multiple gate calls in
+   * one startup each fire at most once; the caller latches for a
+   * once-per-startup warning.
+   */
+  readonly onWaitEntry?: (() => void) | undefined;
+}
+
+/** Default sleep: a `setTimeout`-based promise. */
+function defaultWait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Startup wait gate: polls a live writer lease until it becomes takeable.
+ *
+ * A crash→relaunch within the stale-heartbeat window cannot be told apart
+ * from a live writer by a single read — the ONLY discriminator is waiting
+ * until the OBSERVED `heartbeat_at` + stale bound and re-reading (live
+ * writers keep moving `heartbeat_at` forward; dead ones freeze). This gate
+ * performs that wait so the caller's fail-closed startup claim can succeed
+ * instead of exiting with `sync_startup_failed`.
+ *
+ * Read-only by contract: every read goes through
+ * {@link readWriterLeaseWithAdapter} (a read context, never a transaction)
+ * and the gate never writes. The real claim stays a compare-and-set inside
+ * the caller's own transaction, so this gate is purely advisory.
+ *
+ * Loop rules, in order:
+ * 1. Row missing OR `lease_until <= now` OR the row is owned by the
+ *    caller's own `writerId` → `ready` (the caller's claim renews its lease).
+ * 2. `heartbeat_at === null` → `failed("live_legacy_lease")` immediately
+ *    (a legacy row is never waited out).
+ * 3. `heartbeat_at + staleMs <= now` → `ready` (takeover evidence valid).
+ * 4. elapsed >= `maxWaitMs` → `failed("wait_cap_reached")` (a live writer
+ *    kept its heartbeat moving).
+ * 5. Otherwise sleep until `min(heartbeat_at + staleMs, start + maxWaitMs)`
+ *    and loop. A target already in the past re-reads immediately; the fresh
+ *    `now()` read at the top of each iteration advances the clock, so a real
+ *    clock never busy-loops on a zero/negative sleep. `onWaitEntry` (when
+ *    provided) fires once, immediately before the first actual sleep.
+ */
+export async function awaitTakeoverableWriterLeaseWithAdapter(
+  storage: SqlStorageAdapter,
+  options: AwaitTakeoverableWriterLeaseOptions,
+): Promise<WriterLeaseStartupWaitResult> {
+  const staleMs = options.staleMs ?? DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS;
+  const maxWaitMs = options.maxWaitMs ?? DEFAULT_WRITER_LEASE_STARTUP_WAIT_MS;
+  const now = options.now ?? (() => Date.now());
+  const wait = options.wait ?? defaultWait;
+  const start = now();
+  let waitEntryReported = false;
+
+  for (;;) {
+    const current = now();
+    const lease = await readLeaseEvidenceWithAdapter(storage, options.role);
+    if (
+      lease === undefined ||
+      lease.lease_until <= current ||
+      (options.writerId !== undefined && lease.writer_id === options.writerId)
+    ) {
+      return { kind: WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.READY, waitedMs: current - start };
+    }
+    if (lease.heartbeat_at === null) {
+      return {
+        kind: WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.FAILED,
+        reason: WRITER_LEASE_STARTUP_WAIT_FAILURE_REASONS.LIVE_LEGACY_LEASE,
+        waitedMs: current - start,
+      };
+    }
+    if (lease.heartbeat_at + staleMs <= current) {
+      return { kind: WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.READY, waitedMs: current - start };
+    }
+    if (current - start >= maxWaitMs) {
+      return {
+        kind: WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.FAILED,
+        reason: WRITER_LEASE_STARTUP_WAIT_FAILURE_REASONS.WAIT_CAP_REACHED,
+        waitedMs: current - start,
+      };
+    }
+    const target = Math.min(lease.heartbeat_at + staleMs, start + maxWaitMs);
+    const sleepMs = target - current;
+    if (sleepMs > 0) {
+      if (!waitEntryReported) {
+        waitEntryReported = true;
+        options.onWaitEntry?.();
+      }
+      await wait(sleepMs);
+    }
+    // sleepMs <= 0 means the target is already past: re-read immediately. The
+    // fresh now() read at the top of the next iteration advances the clock.
+  }
+}
+
+/** Reads the full lease row (including heartbeat evidence) through a read context. */
+async function readLeaseEvidenceWithAdapter(
+  storage: SqlStorageAdapter,
+  role: string,
+): Promise<LeaseRow | undefined> {
+  return storage.read(({ sql }) => readLeaseRowWithSql(sql, role));
 }
 
 /** Checks a fencing token inside an already-active async SQL context. */

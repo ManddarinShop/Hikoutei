@@ -70,6 +70,16 @@ export interface TypedSheetsEntityWriterOptions {
   readonly createId?: () => string;
   /** Optional diagnostics sink for append/update/delete flush phases. */
   readonly onTiming?: SyncTimingSink;
+  /**
+   * Fired AT WAIT ENTRY — immediately before a startup writer-lease wait
+   * gate begins sleeping — by every gate site (mapped registration, conflict
+   * route registration, adoption seeding). Each waited gate invocation fires
+   * it at most once; the injecting bootstrap latches it for a once-per-
+   * startup warning. Injected by the sync bootstrap because the warning must
+   * live in the package that owns logging; storage never depends on log
+   * infrastructure.
+   */
+  readonly onStartupLeaseWait?: () => void;
 }
 
 /** Options for deriving a built-in flush coordinator from mapping metadata. */
@@ -127,6 +137,8 @@ export interface ResolvedWriterOptions {
   readonly now: () => number;
   readonly createId: () => string;
   readonly onTiming: SyncTimingSink | undefined;
+  /** See {@link TypedSheetsEntityWriterOptions.onStartupLeaseWait}. */
+  readonly onStartupLeaseWait?: () => void;
 }
 
 /** Confirmed or queued baseline used when creating the next projection effect. */
