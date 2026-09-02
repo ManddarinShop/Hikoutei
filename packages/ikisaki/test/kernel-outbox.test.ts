@@ -19,6 +19,8 @@ import {
   claimEffectWithSql,
   claimWriterLeaseWithAdapter,
   claimWriterLeaseWithSql,
+  renewWriterLeaseWithAdapter,
+  renewWriterLeaseWithSql,
   findPendingEffectsByTargetWithSql,
   hasPendingOrProcessingEffectsWithSql,
   listReadyEffectsWithAdapter,
@@ -42,7 +44,14 @@ import {
   type PendingEffect,
   type SqlExecutor,
 } from "../src/index.js";
-import { APPLICABILITY_KINDS, EFFECT_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS, WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/index.js";
+import {
+  APPLICABILITY_KINDS,
+  EFFECT_KINDS,
+  LOOKUP_RESULT_KINDS,
+  PRESENCE_KINDS,
+  WRITER_LEASE_CLAIM_RESULT_KINDS,
+  WRITER_LEASE_RENEW_RESULT_KINDS,
+} from "../src/index.js";
 import {
   claimTestFence,
   createKernelStore,
@@ -1051,6 +1060,249 @@ describe("consistency-queue kernel", () => {
       const staleOk = await withSql(adapter, (sql) =>
         appendPendingEffectsWithSql(sql, fence, [newEffect()]));
       expect(staleOk).toBe(false);
+    });
+  });
+
+  describe("writer lease heartbeat takeover", () => {
+    // Timestamps need headroom over TEST_NOW so the stale bound stays
+    // non-negative: staleBefore = now - 15_000.
+    const HB_NOW = 1_000_000;
+    const HB_LEASE_MS = 60_000;
+    const STALE_BOUND = HB_NOW - 15_000;
+
+    /** Seeds one lease row with explicit heartbeat evidence via direct SQL. */
+    async function seedLease(
+      adapter: NodeSqliteTestAdapter,
+      options: {
+        writerId: string;
+        leaseUntil: number;
+        heartbeatAt: number | null;
+        writerEpoch?: number;
+      },
+    ): Promise<void> {
+      const epoch = options.writerEpoch ?? 1;
+      await adapter.read(({ sql }) =>
+        sql.run(
+          "INSERT INTO writer_lease (role, writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
+          [TEST_ROLE, options.writerId, epoch, `fence-${epoch}:${options.writerId}`, options.leaseUntil, options.heartbeatAt],
+        ));
+    }
+
+    async function readLeaseRow(
+      adapter: NodeSqliteTestAdapter,
+    ): Promise<{
+      readonly writer_id: string;
+      readonly writer_epoch: number;
+      readonly fencing_token: string;
+      readonly lease_until: number;
+      readonly heartbeat_at: number | null;
+    } | undefined> {
+      return adapter.read(({ sql }) => sql.get(
+        "SELECT writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at FROM writer_lease WHERE role = ?",
+        [TEST_ROLE],
+      ));
+    }
+
+    it("rejects a takeover while the lease AND heartbeat are both fresh", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: STALE_BOUND + 1,
+      });
+      const claim = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(claim).toEqual({ kind: "not_claimed", reason: "active_writer" });
+    });
+
+    it("takes over a LIVE lease whose heartbeat is stale: epoch + 1, new token, heartbeat restamped", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: STALE_BOUND - 1,
+      });
+      const claim = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(claim.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected takeover");
+      expect(claim.lease.writerEpoch).toBe(2);
+      expect(claim.lease.fencingToken).toBe("fence-2:writer-2");
+      // The takeover row itself carries fresh evidence for the NEXT restart.
+      const row = await readLeaseRow(adapter);
+      expect(row).toMatchObject({
+        writer_id: "writer-2",
+        writer_epoch: 2,
+        lease_until: HB_NOW + HB_LEASE_MS,
+        heartbeat_at: HB_NOW,
+      });
+    });
+
+    it("keeps the expiry-only rule for NULL-heartbeat rows (legacy databases)", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: null,
+      });
+      // Live lease with NULL heartbeat: NOT takeable even with evidence bounds.
+      const live = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(live).toEqual({ kind: "not_claimed", reason: "active_writer" });
+
+      // Expired NULL-heartbeat row: takeover through the legacy rule.
+      await adapter.read(({ sql }) => sql.run(
+        "UPDATE writer_lease SET lease_until = ? WHERE role = ?",
+        [HB_NOW - 1, TEST_ROLE],
+      ));
+      const expired = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(expired.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+    });
+
+    it("without heartbeatStaleBeforeMs the stale heartbeat never grants takeover (legacy callers)", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: 0,
+      });
+      const claim = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+        }));
+      expect(claim).toEqual({ kind: "not_claimed", reason: "active_writer" });
+    });
+
+    it("rejects a negative heartbeatStaleBeforeMs with INVALID_WRITER_LEASE_OPTIONS", async () => {
+      const adapter = createKernelStore();
+      await expect(withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: TEST_NOW,
+          heartbeatStaleBeforeMs: -1,
+        }))).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
+    });
+
+    it("renew-only heartbeat renews the caller's OWN lease and stamps heartbeat_at without bumping the epoch", async () => {
+      const adapter = createKernelStore();
+      const first = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW,
+      });
+      expect(first.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+
+      const renewAt = HB_NOW + 5_000;
+      const renewal = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: renewAt,
+        }));
+      expect(renewal.kind).toBe(WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED);
+      if (renewal.kind !== WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED) throw new Error("expected renewal");
+      // Epoch and fencing token are UNCHANGED by a renewal.
+      expect(renewal.lease.writerEpoch).toBe(1);
+      expect(renewal.lease.fencingToken).toBe("fence-1:writer-1");
+      expect(renewal.lease.leaseUntil).toBe(renewAt + HB_LEASE_MS);
+      const row = await readLeaseRow(adapter);
+      expect(row).toMatchObject({ heartbeat_at: renewAt });
+    });
+
+    it("renew-only heartbeat NEVER takes over another writer's stale-heartbeat lease", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: 0,
+      });
+      const renewal = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+        }));
+      expect(renewal).toEqual({ kind: "not_held" });
+      // The dead writer's row is untouched: takeover stays the claim path's job.
+      const row = await readLeaseRow(adapter);
+      expect(row).toMatchObject({ writer_id: "writer-1", heartbeat_at: 0 });
+    });
+
+    it("renew-only heartbeat reports not_held for an expired or missing lease", async () => {
+      const adapter = createKernelStore();
+      const missing = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+        }));
+      expect(missing).toEqual({ kind: "not_held" });
+
+      await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW,
+      });
+      const expired = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW + HB_LEASE_MS + 1,
+        }));
+      expect(expired).toEqual({ kind: "not_held" });
+    });
+
+    it("renew-only heartbeat works through the adapter transaction path", async () => {
+      const adapter = createKernelStore();
+      await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW,
+      });
+      const renewal = await renewWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW + 5_000,
+      });
+      expect(renewal.kind).toBe(WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED);
     });
   });
 

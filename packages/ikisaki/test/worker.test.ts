@@ -45,6 +45,7 @@ import {
   createKernelStore,
   newEffect,
   TEST_NOW,
+  TEST_ROLE,
 } from "./support/kernelFixtures.js";
 import type { NodeSqliteTestAdapter } from "./support/nodeSqliteAdapter.js";
 import type {
@@ -280,6 +281,60 @@ describe("effect worker", () => {
     expect(dispatcher.fastAppendCalls).toBe(0);
     await expect(outboxStatus(adapter, "worker-a")).resolves.toBe("applied");
     await expect(outboxStatus(adapter, "worker-b")).resolves.toBe("applied");
+  });
+
+  it("takes over a dead writer's stale-heartbeat lease within one pass (restart-stall fix)", async () => {
+    const adapter = createKernelStore();
+    // "Dead" writer: lease still nominally alive, heartbeat frozen in the past.
+    const deadFence = await claimTestFence(adapter, 1_000, "dead-writer");
+    await appendPendingEffectsWithAdapter(adapter, deadFence, [regularEffect("takeover-x")]);
+    await adapter.read(({ sql }) =>
+      sql.run("UPDATE writer_lease SET heartbeat_at = 0", []));
+
+    const dispatcher = new FakeDispatcher();
+    // now = 30_000: lease_until (61_000) is still in the FUTURE, but the
+    // heartbeat (0) is far older than the 15_000 stale bound → takeable.
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      writerRole: TEST_ROLE,
+      workerId: "worker-2",
+      now: 30_000,
+      maxEffects: 5,
+    });
+
+    expect(report.leaseClaimFailureReason).toBeUndefined();
+    expect(report.lease.kind).toBe("present");
+    if (report.lease.kind !== "present") throw new Error("expected claim");
+    expect(report.lease.value.writerEpoch).toBe(2);
+    expect(report.claimed).toBe(1);
+    expect(report.applied).toBe(1);
+    await expect(outboxStatus(adapter, "takeover-x")).resolves.toBe("applied");
+  });
+
+  it("reports active_writer and claims nothing while a LIVE writer's lease and heartbeat are fresh", async () => {
+    const adapter = createKernelStore();
+    const liveFence = await claimTestFence(adapter, 1_000, "live-writer");
+    await appendPendingEffectsWithAdapter(adapter, liveFence, [regularEffect("blocked-x")]);
+    // Heartbeat fresh relative to the pass clock (now = 30_000, stale bound 15_000).
+    await adapter.read(({ sql }) =>
+      sql.run("UPDATE writer_lease SET heartbeat_at = ?", [29_000]));
+
+    const dispatcher = new FakeDispatcher();
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      writerRole: TEST_ROLE,
+      workerId: "worker-2",
+      now: 30_000,
+      maxEffects: 5,
+    });
+
+    expect(report.lease.kind).toBe("absent");
+    expect(report.leaseClaimFailureReason).toBe("active_writer");
+    expect(report.claimed).toBe(0);
+    expect(dispatcher.applyCalls).toBe(0);
+    await expect(outboxStatus(adapter, "blocked-x")).resolves.toBe("pending");
   });
 
   it("renews the effect lease inside the before-remote hook before the provider result", async () => {

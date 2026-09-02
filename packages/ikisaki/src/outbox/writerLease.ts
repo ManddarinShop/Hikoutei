@@ -13,25 +13,62 @@ import type { LookupResult } from "../contract/state.js";
 import type { SqlExecutor, SqlStorageAdapter } from "../sql/sql.js";
 import { withSqlSavepoint } from "../sql/sqlTransaction.js";
 
+/**
+ * Heartbeat renewal interval for a live writer lease. The supervisor (and any
+ * host using `createWriterLeaseHeartbeat`) re-renews the lease and stamps
+ * `writer_lease.heartbeat_at` at this cadence, so a dead process's lease
+ * becomes takeable within the stale bound of its last renewal instead of
+ * after the full lease duration.
+ */
+export const DEFAULT_WRITER_LEASE_HEARTBEAT_INTERVAL_MS = 5_000;
+/**
+ * Stale-heartbeat takeover evidence bound: a lease whose owner last stamped
+ * `heartbeat_at` more than this long ago (while `lease_until` is still in the
+ * future) is presumed dead and may be taken over. Must stay a comfortable
+ * multiple of the heartbeat interval (3× by default) so a momentarily paused
+ * event loop is never mistaken for a dead writer.
+ */
+export const DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS = 15_000;
+
+/**
+ * Takeover evidence bound for one claim at timestamp `now`: the earliest
+ * `heartbeat_at` that still counts as fresh. Clamped at zero so deterministic
+ * test clocks cannot produce a negative (invalid) bound.
+ */
+export function writerLeaseHeartbeatStaleBoundMs(
+  now: number,
+  staleMs: number = DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS,
+): number {
+  return Math.max(0, now - staleMs);
+}
+
 const READ_WRITER_LEASE_SQL =
-  "SELECT role, writer_id, writer_epoch, fencing_token, lease_until FROM writer_lease WHERE role = ?";
+  "SELECT role, writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at FROM writer_lease WHERE role = ?";
 
 const INSERT_WRITER_LEASE_SQL = `
-  INSERT INTO writer_lease (role, writer_id, writer_epoch, fencing_token, lease_until)
-  VALUES (?, ?, ?, ?, ?)
+  INSERT INTO writer_lease (role, writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at)
+  VALUES (?, ?, ?, ?, ?, ?)
 `;
 
 const RENEW_WRITER_LEASE_SQL = `
   UPDATE writer_lease
-  SET lease_until = ?
+  SET lease_until = ?, heartbeat_at = ?
   WHERE role = ? AND writer_id = ? AND writer_epoch = ?
     AND fencing_token = ? AND lease_until > ?
 `;
 
+/**
+ * Takeover CAS. A lease may be taken over when it EXPIRED (`lease_until <=
+ * now`) or, only when the caller supplied heartbeat evidence bounds
+ * (`staleBefore` non-NULL), when the owner stamped a stale heartbeat while
+ * its lease is still nominally alive. Rows with a NULL heartbeat (legacy
+ * databases, hosts that never heartbeat) stay on the expiry-only rule.
+ */
 const TAKEOVER_WRITER_LEASE_SQL = `
   UPDATE writer_lease
-  SET writer_id = ?, writer_epoch = ?, fencing_token = ?, lease_until = ?
-  WHERE role = ? AND writer_epoch = ? AND fencing_token = ? AND lease_until <= ?
+  SET writer_id = ?, writer_epoch = ?, fencing_token = ?, lease_until = ?, heartbeat_at = ?
+  WHERE role = ? AND writer_epoch = ? AND fencing_token = ?
+    AND (lease_until <= ? OR (heartbeat_at IS NOT NULL AND heartbeat_at <= ?))
 `;
 
 const RELEASE_WRITER_LEASE_SQL = `
@@ -85,6 +122,15 @@ export interface ClaimLeaseOptions {
   readonly writerId: string;
   readonly leaseDurationMs: number;
   readonly now: number;
+  /**
+   * Takeover evidence bound for the DEAD-writer heartbeat rule: the earliest
+   * `writer_lease.heartbeat_at` timestamp that still counts as fresh. When
+   * set, a lease whose owner last heartbeated BEFORE this bound may be taken
+   * over even while `lease_until` is in the future (the owner is presumed
+   * dead or event-loop-paused). When undefined, takeover stays strictly
+   * expiry-based and NULL-heartbeat rows are unaffected either way.
+   */
+  readonly heartbeatStaleBeforeMs?: number;
 }
 
 /** Identity of one writer lease a runtime may expire on graceful shutdown. */
@@ -141,6 +187,7 @@ export async function claimWriterLeaseWithSql(
         lease.writerEpoch,
         lease.fencingToken,
         lease.leaseUntil,
+        options.now,
       ]);
       return result.changes === 1
         ? { kind: WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED, lease }
@@ -153,6 +200,7 @@ export async function claimWriterLeaseWithSql(
     if (existing.writer_id === options.writerId && existing.lease_until > options.now) {
       const result = await sql.run(RENEW_WRITER_LEASE_SQL, [
         newLeaseUntil,
+        options.now,
         options.role,
         options.writerId,
         existing.writer_epoch,
@@ -176,7 +224,15 @@ export async function claimWriterLeaseWithSql(
           };
     }
 
-    if (existing.lease_until > options.now) {
+    // Expired leases are always takeable. A live lease is takeable only when
+    // the caller supplied heartbeat evidence bounds AND the owner last
+    // heartbeated before it (presumed dead or paused). NULL heartbeats never
+    // satisfy the stale rule, so legacy rows keep the expiry-only behavior.
+    const heartbeatStale =
+      options.heartbeatStaleBeforeMs !== undefined &&
+      existing.heartbeat_at !== null &&
+      existing.heartbeat_at <= options.heartbeatStaleBeforeMs;
+    if (existing.lease_until > options.now && !heartbeatStale) {
       return {
         kind: WRITER_LEASE_CLAIM_RESULT_KINDS.NOT_CLAIMED,
         reason: WRITER_LEASE_CLAIM_FAILURE_REASONS.ACTIVE_WRITER,
@@ -194,10 +250,12 @@ export async function claimWriterLeaseWithSql(
       takeover.writerEpoch,
       takeover.fencingToken,
       takeover.leaseUntil,
+      options.now,
       options.role,
       existing.writer_epoch,
       existing.fencing_token,
       options.now,
+      options.heartbeatStaleBeforeMs ?? null,
     ]);
     return result.changes === 1
       ? { kind: WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED, lease: takeover }
@@ -214,6 +272,104 @@ export async function claimWriterLeaseWithAdapter(
   options: ClaimLeaseOptions,
 ): Promise<WriterLeaseClaimResult> {
   return storage.transaction(({ sql }) => claimWriterLeaseWithSql(sql, options));
+}
+
+/** Runtime values for the observable renew-only heartbeat outcomes. */
+export const WRITER_LEASE_RENEW_RESULT_KINDS = {
+  RENEWED: "renewed",
+  NOT_HELD: "not_held",
+} as const;
+
+/** Closed set of renew-only heartbeat outcome kinds. */
+export type WriterLeaseRenewResultKind =
+  (typeof WRITER_LEASE_RENEW_RESULT_KINDS)[keyof typeof WRITER_LEASE_RENEW_RESULT_KINDS];
+
+export type WriterLeaseRenewResult =
+  | {
+      readonly kind: typeof WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED;
+      /** Epoch and fencing token are UNCHANGED by a renewal. */
+      readonly lease: WriterLease;
+    }
+  | {
+      /**
+       * The lease row is absent, owned by another writer, or expired. A
+       * renew-only heartbeat NEVER takes over: takeover is exclusively the
+       * worker pass's claim decision, so a background heartbeat can never
+       * steal the lease back from a live owner and cause ping-pong.
+       */
+      readonly kind: typeof WRITER_LEASE_RENEW_RESULT_KINDS.NOT_HELD;
+    };
+
+export interface RenewLeaseOptions {
+  readonly role: string;
+  readonly writerId: string;
+  readonly leaseDurationMs: number;
+  readonly now: number;
+}
+
+const RENEW_HEARTBEAT_SQL = `
+  UPDATE writer_lease
+  SET lease_until = ?, heartbeat_at = ?
+  WHERE role = ? AND writer_id = ? AND writer_epoch = ?
+    AND fencing_token = ? AND lease_until > ?
+`;
+
+/**
+ * Renew-only writer-lease heartbeat inside an already-active SQL context.
+ *
+ * Extends the caller's OWN live lease and stamps `heartbeat_at = now`. Never
+ * claims a fresh lease, never takes another writer's lease over: a failed
+ * renewal simply reports `not_held`, leaving takeover decisions to the
+ * worker pass's `claimWriterLease` path.
+ */
+export async function renewWriterLeaseWithSql(
+  sql: SqlExecutor,
+  options: RenewLeaseOptions,
+): Promise<WriterLeaseRenewResult> {
+  validateClaimOptions({
+    role: options.role,
+    writerId: options.writerId,
+    leaseDurationMs: options.leaseDurationMs,
+    now: options.now,
+  });
+  const existing = await readLeaseRowWithSql(sql, options.role);
+  if (
+    existing === undefined ||
+    existing.writer_id !== options.writerId ||
+    existing.lease_until <= options.now
+  ) {
+    return { kind: WRITER_LEASE_RENEW_RESULT_KINDS.NOT_HELD };
+  }
+  const leaseUntil = options.now + options.leaseDurationMs;
+  const result = await sql.run(RENEW_HEARTBEAT_SQL, [
+    leaseUntil,
+    options.now,
+    options.role,
+    options.writerId,
+    existing.writer_epoch,
+    existing.fencing_token,
+    options.now,
+  ]);
+  return result.changes === 1
+    ? {
+        kind: WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED,
+        lease: {
+          role: options.role,
+          writerId: options.writerId,
+          writerEpoch: existing.writer_epoch,
+          fencingToken: existing.fencing_token,
+          leaseUntil,
+        },
+      }
+    : { kind: WRITER_LEASE_RENEW_RESULT_KINDS.NOT_HELD };
+}
+
+/** Renews the caller's own writer lease in one adapter-owned transaction. */
+export async function renewWriterLeaseWithAdapter(
+  storage: SqlStorageAdapter,
+  options: RenewLeaseOptions,
+): Promise<WriterLeaseRenewResult> {
+  return storage.transaction(({ sql }) => renewWriterLeaseWithSql(sql, options));
 }
 
 /**
@@ -309,6 +465,7 @@ interface LeaseRow {
   readonly writer_epoch: number;
   readonly fencing_token: string;
   readonly lease_until: number;
+  readonly heartbeat_at: number | null;
 }
 
 function readLeaseRowWithSql(sql: SqlExecutor, role: string): Promise<LeaseRow | undefined> {
@@ -340,6 +497,13 @@ function validateClaimOptions(options: ClaimLeaseOptions): void {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS,
       "writer lease now must be a non-negative safe integer",
+    );
+  }
+  if (options.heartbeatStaleBeforeMs !== undefined &&
+      (!Number.isSafeInteger(options.heartbeatStaleBeforeMs) || options.heartbeatStaleBeforeMs < 0)) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS,
+      "writer lease heartbeat stale bound must be a non-negative safe integer",
     );
   }
   if (!Number.isSafeInteger(options.leaseDurationMs) || options.leaseDurationMs <= 0) {

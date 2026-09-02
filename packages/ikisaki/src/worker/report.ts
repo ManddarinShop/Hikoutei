@@ -4,11 +4,18 @@
  */
 
 import type { Presence } from "../contract/state.js";
-import type { WriterLease } from "../outbox/writerLease.js";
+import type { WriterLease, WriterLeaseClaimFailureReason } from "../outbox/writerLease.js";
 
 /** Counters that make partial results and recovery visible to callers. */
 export interface WorkerReport {
   readonly lease: Presence<WriterLease>;
+  /**
+   * Set ONLY when the pass could not claim the writer lease (lease absent
+   * from the report): `active_writer` means another live writer holds it,
+   * `*_race_lost` means the CAS lost between the read and the write. The
+   * primary restart-stall visibility signal.
+   */
+  readonly leaseClaimFailureReason?: WriterLeaseClaimFailureReason;
   readonly expiredLeasesRecovered: number;
   readonly selected: number;
   readonly claimed: number;
@@ -26,6 +33,7 @@ export interface WorkerReport {
 /** Mutable accumulator behind one worker pass report. */
 export interface MutableReport {
   lease: Presence<WriterLease>;
+  leaseClaimFailureReason?: WriterLeaseClaimFailureReason;
   expiredLeasesRecovered: number;
   selected: number;
   claimed: number;

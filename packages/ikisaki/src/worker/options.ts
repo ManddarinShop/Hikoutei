@@ -12,6 +12,14 @@ export interface EffectWorkerBaseOptions {
   readonly maxEffects: number;
   readonly writerRole?: string;
   readonly writerLeaseDurationMs?: number;
+  /**
+   * Stale-heartbeat takeover evidence bound in ms (feeds
+   * `ClaimLeaseOptions.heartbeatStaleBeforeMs`). Defaults to
+   * `DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS`: a writer lease whose owner
+   * last heartbeated more than this long ago (while `lease_until` is still
+   * in the future) is presumed dead and may be taken over by this worker.
+   */
+  readonly writerLeaseHeartbeatStaleMs?: number;
   readonly effectLeaseDurationMs?: number;
   /** Internal transport timeout used to validate lease headroom. */
   readonly requestTimeoutMs?: number;
