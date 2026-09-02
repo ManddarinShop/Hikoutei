@@ -25,6 +25,15 @@ import {
   AdaptiveEffectBatchController,
   type AdaptiveEffectBatchController as AdaptiveEffectBatchControllerType,
 } from "./pacing/batch.js";
+import {
+  createWriterLeaseHeartbeat,
+  type WriterLeaseHeartbeatEvent,
+  type WriterLeaseHeartbeatHandle,
+} from "./leaseHeartbeat.js";
+import {
+  DEFAULT_WORKER_ROLE,
+  DEFAULT_WRITER_LEASE_DURATION_MS,
+} from "./constants.js";
 
 /**
  * Conservative generic default for the SQLite selection upper bound when a
@@ -106,6 +115,10 @@ export interface EffectWorkerSupervisorLoopOptions<
   readonly reconciliation?: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>;
   readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
+  /** Called once when the background loop starts (heartbeat wiring hook). */
+  readonly onLoopStart?: () => void;
+  /** Awaited once when the background loop stops (heartbeat teardown hook). */
+  readonly onLoopStop?: () => Promise<void> | void;
 }
 
 /** Worker options with a clock supplied by the supervisor on every pass. */
@@ -130,6 +143,10 @@ export type CreateEffectWorkerSupervisorOptions<
   readonly reconciliation?: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>;
   readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
+  /** Override for the background writer-lease heartbeat cadence. */
+  readonly writerLeaseHeartbeatIntervalMs?: number;
+  /** Receives every heartbeat tick outcome (renewed / not held). */
+  readonly onWriterLeaseHeartbeat?: (event: WriterLeaseHeartbeatEvent) => void;
 };
 
 /**
@@ -153,6 +170,8 @@ export class EffectWorkerSupervisor<
   private readonly reconciliationIntervalMs: number;
   private readonly onReport: ((report: WorkerReport) => void) | undefined;
   private readonly onError: ((error: unknown) => void) | undefined;
+  private readonly onLoopStart: (() => void) | undefined;
+  private readonly onLoopStop: (() => Promise<void> | void) | undefined;
   private running = false;
   private acceptingPasses = true;
   private loopPromise: Promise<void> | undefined;
@@ -200,6 +219,8 @@ export class EffectWorkerSupervisor<
     this.firstScanPending = options.reconciliation !== undefined;
     this.onReport = options.onReport;
     this.onError = options.onError;
+    this.onLoopStart = options.onLoopStart;
+    this.onLoopStop = options.onLoopStop;
   }
 
   /** Starts the background drain loop; repeated calls are harmless. */
@@ -210,6 +231,7 @@ export class EffectWorkerSupervisor<
     // immediately after the first pass, exactly like the legacy schedule).
     this.nextReconciliationAt = this.now() + this.initialReconciliationDelayMs;
     this.firstScanPending = this.reconciliation !== undefined;
+    this.onLoopStart?.();
     this.loopPromise = this.runLoop();
   }
 
@@ -250,6 +272,11 @@ export class EffectWorkerSupervisor<
       const inFlightReconciliation = this.inFlightReconciliation;
       if (inFlightReconciliation !== undefined) {
         await inFlightReconciliation.catch(() => undefined);
+      }
+      try {
+        await this.onLoopStop?.();
+      } catch {
+        // Teardown hooks must never break stop().
       }
       this.loopPromise = undefined;
     })();
@@ -462,6 +489,9 @@ export function createEffectWorkerSupervisor<
     ...(options.writerLeaseDurationMs === undefined
       ? {}
       : { writerLeaseDurationMs: options.writerLeaseDurationMs }),
+    ...(options.writerLeaseHeartbeatStaleMs === undefined
+      ? {}
+      : { writerLeaseHeartbeatStaleMs: options.writerLeaseHeartbeatStaleMs }),
     ...(options.effectLeaseDurationMs === undefined
       ? {}
       : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
@@ -480,9 +510,34 @@ export function createEffectWorkerSupervisor<
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
   } satisfies EffectWorkerWithAdapterOptions;
 
+  // Background writer-lease heartbeat: keeps `writer_lease.heartbeat_at`
+  // fresh (and the lease renewed) for as long as this supervisor runs, so a
+  // NEW process after a crash takes the lease over within the stale-evidence
+  // bound instead of waiting out the full lease duration. Strictly renew-only:
+  // the timer never claims or takes over; takeover decisions stay with the
+  // worker pass's claim path.
+  let heartbeat: WriterLeaseHeartbeatHandle | undefined;
   return new EffectWorkerSupervisor({
     ...options,
     now,
+    onLoopStart: () => {
+      if (heartbeat !== undefined) return;
+      heartbeat = createWriterLeaseHeartbeat({
+        storage: options.storage,
+        role: options.writerRole ?? DEFAULT_WORKER_ROLE,
+        writerId: workerId,
+        leaseDurationMs: options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS,
+        ...(options.writerLeaseHeartbeatIntervalMs === undefined
+          ? {}
+          : { intervalMs: options.writerLeaseHeartbeatIntervalMs }),
+        now,
+        ...(options.onWriterLeaseHeartbeat === undefined
+          ? {}
+          : { onEvent: options.onWriterLeaseHeartbeat }),
+        ...(options.onError === undefined ? {} : { onError: options.onError }),
+      });
+    },
+    onLoopStop: () => heartbeat?.stop() ?? Promise.resolve(),
     runPass: () => runEffectWorkerWithAdapter({ ...workerOptions, now: now() }),
   });
 }

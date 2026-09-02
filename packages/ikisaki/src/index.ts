@@ -77,6 +77,7 @@ export {
 } from "./sql/sqlTransaction.js";
 
 export {
+  awaitTakeoverableWriterLeaseWithAdapter,
   claimWriterLeaseWithAdapter,
   claimWriterLeaseWithSql,
   fenceParameters,
@@ -87,15 +88,31 @@ export {
   readWriterLeaseWithSql,
   releaseWriterLeaseWithAdapter,
   releaseWriterLeaseWithSql,
+  renewWriterLeaseWithAdapter,
+  renewWriterLeaseWithSql,
+  writerLeaseHeartbeatStaleBoundMs,
+  DEFAULT_WRITER_LEASE_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS,
+  DEFAULT_WRITER_LEASE_STARTUP_WAIT_MS,
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  WRITER_LEASE_RENEW_RESULT_KINDS,
+  WRITER_LEASE_STARTUP_WAIT_FAILURE_REASONS,
+  WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS,
+  type AwaitTakeoverableWriterLeaseOptions,
   type ClaimLeaseOptions,
   type FencingContext,
   type ReleaseWriterLeaseOptions,
+  type RenewLeaseOptions,
   type WriterLease,
   type WriterLeaseClaimFailureReason,
   type WriterLeaseClaimResult,
   type WriterLeaseClaimResultKind,
+  type WriterLeaseRenewResult,
+  type WriterLeaseRenewResultKind,
+  type WriterLeaseStartupWaitFailureReason,
+  type WriterLeaseStartupWaitResult,
+  type WriterLeaseStartupWaitResultKind,
 } from "./outbox/writerLease.js";
 
 export {

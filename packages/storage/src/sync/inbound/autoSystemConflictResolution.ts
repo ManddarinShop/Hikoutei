@@ -101,6 +101,7 @@ import {
 import {
   claimWriterLeaseWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
   type NewEffect,
 } from "@hikoutei/ikisaki";
@@ -137,6 +138,9 @@ export async function renewAutomaticConflictResolutionLeaseWithSql(
 ): Promise<FencingContext> {
   const now = Math.max(fence.now, writer.now());
   // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+  // NOTE: this renewal is fence-guarded (epoch/token must match below), so it
+  // intentionally does NOT carry stale-heartbeat takeover evidence — a
+  // takeover here would silently hand the resolver's fence to another epoch.
   const claim = await claimWriterLeaseWithSql(sql, {
     role: writer.role,
     writerId: writer.writerId,
@@ -449,11 +453,14 @@ export async function retryOpenMappedConflictsWithAdapter(
   return storage.transaction(async ({ sql }) => {
     const now = writer.now();
     // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+    // Stale-heartbeat takeover evidence keeps a crash-restart from blocking
+    // implicit resolution for the full lease window.
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,
       leaseDurationMs: writer.leaseDurationMs,
       now,
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now),
     });
     // Another writer may be processing an observation. The next polling pass
     // will retry the durable pending rows; do not turn a temporary lease race

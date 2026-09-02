@@ -86,14 +86,21 @@ export const EFFECT_OUTBOX_DDL = `
     WHERE status IN ('pending', 'processing', 'delivery_uncertain');
 `;
 
-/** Writer-lease table DDL backing every fenced queue mutation. */
+/**
+ * Writer-lease table DDL backing every fenced queue mutation.
+ *
+ * `heartbeat_at` is nullable for backward compatibility: rows written before
+ * the heartbeat takeover evidence existed (or by hosts that never heartbeat)
+ * keep NULL and are only ever taken over by plain lease expiry.
+ */
 export const WRITER_LEASE_DDL = `
   CREATE TABLE IF NOT EXISTS writer_lease (
     role TEXT PRIMARY KEY,
     writer_id TEXT NOT NULL,
     writer_epoch INTEGER NOT NULL,
     fencing_token TEXT NOT NULL,
-    lease_until INTEGER NOT NULL
+    lease_until INTEGER NOT NULL,
+    heartbeat_at INTEGER
   );
 `;
 

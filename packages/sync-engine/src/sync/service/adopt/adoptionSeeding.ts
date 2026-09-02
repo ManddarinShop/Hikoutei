@@ -41,10 +41,14 @@ import {
   type GoogleSheetsApiWriteRequest,
 } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import {
+  awaitTakeoverableWriterLeaseWithAdapter,
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
+import { logWriterLeaseStartupWait } from "../../../shared/observability/internalLog.js";
 import {
   commitCanonicalChangesWithSql,
 } from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
@@ -227,13 +231,41 @@ export async function seedAdoptedEntityRows(input: {
   readonly writerId: string;
   readonly leaseDurationMs: number;
   readonly now: number;
+  /**
+   * Startup-wait warn callback from the runtime writer options (see
+   * {@link TypedSheetsEntityWriterOptions.onStartupLeaseWait}); the local
+   * direct-log fallback keeps standalone callers warning-visible too.
+   */
+  readonly onStartupLeaseWait?: () => void;
 }): Promise<{ readonly seeded: number }> {
   if (input.rows.length === 0) return { seeded: 0 };
+  // Startup wait gate: a crash→relaunch within the stale-heartbeat window
+  // cannot be told apart from a live writer by a single read, so wait
+  // (read-only) until the observed heartbeat goes stale before the claim.
+  // The real claim stays a CAS below; this gate is purely advisory. The
+  // caller's own live lease (same writerId, e.g. a later entity/pass of one
+  // adoption startup) short-circuits to ready. Wall clock only: staleness is
+  // a real-time property.
+  const gate = await awaitTakeoverableWriterLeaseWithAdapter(input.storage, {
+    role: input.writerRole,
+    writerId: input.writerId,
+    // Warn AT WAIT ENTRY (before sleeping), like every other gate site.
+    onWaitEntry: input.onStartupLeaseWait ?? logWriterLeaseStartupWait,
+  });
+  if (gate.kind === WRITER_LEASE_STARTUP_WAIT_RESULT_KINDS.FAILED) {
+    throw new SyncServiceError(
+      SYNC_SERVICE_ERROR_CODES.STARTUP_FAILED,
+      "adoption seeding could not claim the writer lease; the startup is refused (fail-closed).",
+    );
+  }
+  // Stale-heartbeat takeover evidence: an adopted-tab seeding that follows a
+  // crash must not wait out the previous runtime's full lease window.
   const lease = await claimWriterLeaseWithAdapter(input.storage, {
     role: input.writerRole,
     writerId: input.writerId,
     leaseDurationMs: input.leaseDurationMs,
     now: input.now,
+    heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(input.now),
   });
   if (lease.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
     throw new SyncServiceError(
@@ -503,6 +535,9 @@ export async function completeExistingSheetAdoption(input: {
         writerId: input.writer.writerId,
         leaseDurationMs: input.writer.leaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS,
         now: Date.now(),
+        ...(input.writer.onStartupLeaseWait !== undefined
+          ? { onStartupLeaseWait: input.writer.onStartupLeaseWait }
+          : {}),
       });
       seededTotal += seeded.seeded;
 

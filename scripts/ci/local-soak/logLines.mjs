@@ -58,6 +58,8 @@ export const LOGGED_EVENT_NAMES = Object.freeze([
   "hikoutei.reconciliation.scan_failed",
   "hikoutei.polling.pass_failed",
   "hikoutei.polling.pass_summary",
+  "hikoutei.writer_lease.unavailable",
+  "hikoutei.writer_lease.heartbeat",
 ]);
 
 /** Stable component tags the logger may write (mirror of HIKOUTEI_LOG_COMPONENTS). */

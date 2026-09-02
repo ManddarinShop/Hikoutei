@@ -19,7 +19,9 @@ import {
   type Presence,
 } from "../contract/state.js";
 import {
+  DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
+  writerLeaseHeartbeatStaleBoundMs,
 } from "../outbox/writerLease.js";
 import type { ClaimedEffect } from "./contracts.js";
 import type {
@@ -128,6 +130,8 @@ async function runEffectWorker(
   validateOptions(options);
   const role = options.writerRole ?? DEFAULT_WORKER_ROLE;
   const leaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
+  const heartbeatStaleMs =
+    options.writerLeaseHeartbeatStaleMs ?? DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS;
   const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
   const leaseStartedAt = Date.now();
   const claimResult = await storage.claimWriterLease({
@@ -135,9 +139,11 @@ async function runEffectWorker(
     writerId: options.workerId,
     leaseDurationMs: leaseDuration,
     now: options.now,
+    heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(options.now, heartbeatStaleMs),
   });
   if (claimResult.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
     const report = mutableReport(absentValue<WriterLease>());
+    report.leaseClaimFailureReason = claimResult.reason;
     emitWorkerTiming(options, {
       scope: TIMING_SCOPES.WORKER,
       phase: "writer_lease_claim",
@@ -188,6 +194,7 @@ async function runEffectWorker(
       writerId: options.workerId,
       leaseDurationMs: leaseDuration,
       now,
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now, heartbeatStaleMs),
     });
     if (writerRefresh.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) return false;
     if (
@@ -240,6 +247,7 @@ async function runEffectWorker(
       writerId: options.workerId,
       leaseDurationMs: leaseDuration,
       now,
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now, heartbeatStaleMs),
     });
     if (writerRefresh.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) return false;
     if (

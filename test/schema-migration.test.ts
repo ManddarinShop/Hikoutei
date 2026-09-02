@@ -144,7 +144,7 @@ async function seedPreV7Rows(sql: SqlExecutor): Promise<void> {
 }
 
 describe("SQLite schema v7 cleanup migration", () => {
-  it("installs the v7 schema fresh: no projection_row_binding, no dead columns, straight version stamp", async () => {
+  it("installs the v8 schema fresh: no projection_row_binding, no dead columns, straight version stamp", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
       entities: [SchemaMigrationOrder],
@@ -153,8 +153,8 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 7,
-      appliedVersions: [7],
+      toVersion: 8,
+      appliedVersions: [8],
     });
 
     expect(await sqliteTableNames(adapter)).not.toContain("projection_row_binding");
@@ -169,8 +169,11 @@ describe("SQLite schema v7 cleanup migration", () => {
     expect(await tableColumnNames(adapter, "quarantine_record"))
       .not.toEqual(expect.arrayContaining(DROPPED_QUARANTINE_COLUMNS));
 
+    // v8: the writer-lease heartbeat evidence column exists on fresh installs.
+    expect(await tableColumnNames(adapter, "writer_lease")).toContain("heartbeat_at");
+
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 7 });
+      .resolves.toEqual({ user_version: 8 });
   });
 
   it("migrates a genuine v6 store to v7 in place: drops the orphan table and dead columns, keeps row data", async () => {
@@ -191,8 +194,8 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 6,
-      toVersion: 7,
-      appliedVersions: [7],
+      toVersion: 8,
+      appliedVersions: [7, 8],
     });
 
     // Dropped state is gone for good.
@@ -233,10 +236,10 @@ describe("SQLite schema v7 cleanup migration", () => {
       created_at: 1_000,
     });
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 7 });
+      .resolves.toEqual({ user_version: 8 });
   });
 
-  it("is idempotent on reopen: an already-v7 database applies no steps", async () => {
+  it("is idempotent on reopen: an already-current database applies no steps", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
       entities: [SchemaMigrationOrder],
@@ -245,23 +248,23 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await migrateSqliteSchema(adapter);
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
-      fromVersion: 7,
-      toVersion: 7,
+      fromVersion: 8,
+      toVersion: 8,
       appliedVersions: [],
     });
-    // A v7 database where the cleanup already happened is also a no-op even
+    // A current database where the cleanup already happened is also a no-op even
     // if the marker lags (tolerates any already-clean intermediate state).
     await adapter.transaction(async ({ sql }) => {
       await sql.run("PRAGMA user_version = 6");
     });
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 6,
-      toVersion: 7,
-      appliedVersions: [7],
+      toVersion: 8,
+      appliedVersions: [7, 8],
     });
   });
 
-  it("refuses a database stamped newer than v7", async () => {
+  it("refuses a database stamped newer than the current schema", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
       entities: [SchemaMigrationOrder],
@@ -270,7 +273,7 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await migrateSqliteSchema(adapter);
     await adapter.transaction(async ({ sql }) => {
-      await sql.run("PRAGMA user_version = 8");
+      await sql.run("PRAGMA user_version = 9");
     });
     await expect(migrateSqliteSchema(adapter)).rejects.toMatchObject({
       code: STORAGE_ERROR_CODES.SCHEMA_VERSION_TOO_NEW,
@@ -330,8 +333,8 @@ describe("SQLite schema v7 cleanup migration", () => {
     const adapter = await createAdapter();
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 7,
-      appliedVersions: [7],
+      toVersion: 8,
+      appliedVersions: [8],
     });
     expect(await sqliteTableNames(adapter)).toContain("schema_migration_orders");
     expect(await sqliteTableNames(adapter)).not.toContain("projection_row_binding");

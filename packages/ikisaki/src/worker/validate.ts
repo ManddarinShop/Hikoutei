@@ -54,6 +54,7 @@ export function validateOptions(options: EffectWorkerBaseOptions): void {
     ["writerLeaseDurationMs", options.writerLeaseDurationMs],
     ["effectLeaseDurationMs", options.effectLeaseDurationMs],
     ["requestTimeoutMs", options.requestTimeoutMs],
+    ["writerLeaseHeartbeatStaleMs", options.writerLeaseHeartbeatStaleMs],
   ] as const) {
     if (
       value !== undefined &&

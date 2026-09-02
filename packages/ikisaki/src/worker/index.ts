@@ -170,3 +170,11 @@ export {
   type EffectWorkerSupervisorWait,
   type WorkerReconciliationReport,
 } from "./supervisor.js";
+
+// --- Writer-lease heartbeat ---
+export {
+  createWriterLeaseHeartbeat,
+  type WriterLeaseHeartbeatEvent,
+  type WriterLeaseHeartbeatHandle,
+  type WriterLeaseHeartbeatOptions,
+} from "./leaseHeartbeat.js";

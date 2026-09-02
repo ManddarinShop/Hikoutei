@@ -13,8 +13,10 @@ import {
 } from "@hikoutei/contracts/constants.js";
 import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
 import {
+  awaitTakeoverableWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   claimWriterLeaseWithSql,
+  writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
 import {
@@ -95,11 +97,15 @@ export function createMappedTypedSheetsFlushCoordinator(
       const leaseStartedAt = Date.now();
       const now = writer.now();
       // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+      // The stale-heartbeat bound lets a NEW process after a crash take the
+      // mapped lease over immediately instead of failing flushes with
+      // WRITER_LEASE_UNAVAILABLE for the full lease window.
       const claim = await claimWriterLeaseWithSql(context.sql, {
         role: writer.role,
         writerId: writer.writerId,
         leaseDurationMs: writer.leaseDurationMs,
         now,
+        heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now),
       });
       if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
         throw new TypedSheetsOrmError(
@@ -195,14 +201,32 @@ export async function registerTypedSheetsEntityMappings(
   const writer = resolveTypedSheetsEntityWriterOptions(writerInput);
   const definitions = createTypedSheetsMappedProjectionDefinitions(mappings.mappings);
 
+  // Startup wait gate: mapped registration is the FIRST fail-closed writer
+  // claim of every sync startup (it runs inside openMappedRuntime, before
+  // conflict-route registration), so a crash→relaunch within the stale-
+  // heartbeat window is decided here: wait (read-only, wall clock) until the
+  // observed heartbeat goes stale before the claim. The real claim stays a
+  // CAS inside the transaction below; this gate is purely advisory, and the
+  // caller's own live lease (same writerId) short-circuits to ready. The
+  // injected observer fires AT WAIT ENTRY (storage owns no log infra, so the
+  // sync bootstrap supplies the warning); an un-waiting gate fires nothing.
+  await awaitTakeoverableWriterLeaseWithAdapter(storage, {
+    role: writer.role,
+    writerId: writer.writerId,
+    onWaitEntry: writer.onStartupLeaseWait,
+  });
+
   return storage.transaction(async ({ sql }) => {
     const now = writer.now();
     // Mapped-role claim; mirror this site in expireRuntimeWriterLeases (SyncServiceBootstrap).
+    // Stale-heartbeat takeover evidence keeps a crash-restart from blocking
+    // startup registration for the full lease window.
     const claim = await claimWriterLeaseWithSql(sql, {
       role: writer.role,
       writerId: writer.writerId,
       leaseDurationMs: writer.leaseDurationMs,
       now,
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now),
     });
     if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
       throw new TypedSheetsOrmError(
@@ -342,6 +366,7 @@ export function resolveTypedSheetsEntityWriterOptions(
     now: options.now ?? (() => Date.now()),
     createId: options.createId ?? randomUUID,
     onTiming: options.onTiming,
+    ...(options.onStartupLeaseWait === undefined ? {} : { onStartupLeaseWait: options.onStartupLeaseWait }),
   };
 }
 

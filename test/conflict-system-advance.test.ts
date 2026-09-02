@@ -2085,8 +2085,8 @@ describe("issue #196 audit projection state union", () => {
     // and the new evidence columns start NULL (never guessed).
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 5,
-      toVersion: 7,
-      appliedVersions: [6, 7],
+      toVersion: 8,
+      appliedVersions: [6, 7, 8],
     });
     await expect(adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sync_conflict)",
@@ -2117,8 +2117,8 @@ describe("issue #196 audit projection state union", () => {
 
     // Idempotent: a second migration applies nothing.
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-      fromVersion: 7,
-      toVersion: 7,
+      fromVersion: 8,
+      toVersion: 8,
       appliedVersions: [],
     });
 
@@ -2169,8 +2169,8 @@ describe("issue #196 audit projection state union", () => {
     // The v5→v6→v7 multi-hop migration still reports both applied versions.
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 5,
-      toVersion: 7,
-      appliedVersions: [6, 7],
+      toVersion: 8,
+      appliedVersions: [6, 7, 8],
     });
 
     // The repair columns (and their data) are gone for good.

@@ -32,7 +32,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     await migrateSqliteSchema(adapter);
 
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 7 });
+      .resolves.toEqual({ user_version: 8 });
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sheet_effect_outbox)",
     ));
@@ -117,8 +117,8 @@ describe("durable delivery and spreadsheet fencing", () => {
     // does not exist yet); the rebuild must run and then recreate the index.
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 4,
-      toVersion: 7,
-      appliedVersions: [5, 6, 7],
+      toVersion: 8,
+      appliedVersions: [5, 6, 7, 8],
     });
 
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
