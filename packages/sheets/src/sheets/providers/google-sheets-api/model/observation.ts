@@ -159,7 +159,15 @@ export async function readTabGrids(
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
   const raw = await transport.getSpreadsheet(request);
-  onRawResponse?.(raw);
+  // Fail-open by construction: the callback is telemetry-only, so a throwing
+  // callback must never break the read path (same contract as the sink).
+  if (onRawResponse !== undefined) {
+    try {
+      onRawResponse(raw);
+    } catch {
+      // Swallowed deliberately — size estimation is observational only.
+    }
+  }
   const document = parseSpreadsheetDocument(raw, "observation grid");
   for (const target of targets) {
     const sheet = findSheetByTitle(document.sheets, target.sheetName);

@@ -49,9 +49,9 @@ import {
   quoteA1SheetName,
 } from "../model/valueNormalization.js";
 import {
+  createRawResponseMeta,
   definitionForPhysicalSheet,
   requireValidBatchUpdateReply,
-  estimateJsonBytesOrNull,
   runRead,
   runWrite,
   validateRoute,
@@ -273,8 +273,10 @@ export async function readObservedTabs(
     : GOOGLE_SHEETS_API_OBSERVATION_FIELDS;
   // The RAW transport document is measured (not the parsed Map result) so the
   // telemetry responseBytes reflect the true payload size for the
-  // preflight-vs-polling read-gap question.
-  const meta: { responseBytes?: number } = {};
+  // preflight-vs-polling read-gap question. The measurement is gated on the
+  // telemetry sink exactly like runRead's own estimate: a logging-off
+  // deployment must never stringify the multi-MB raw document.
+  const capture = createRawResponseMeta(deps);
   const tabs = await runRead(deps, () =>
     readTabGrids(
       deps.transport,
@@ -285,7 +287,8 @@ export async function readObservedTabs(
       })),
       fields,
       deps.readTimeoutMs,
-    ), "polling", meta);
+      capture.onRawResponse,
+    ), "polling", capture.meta);
   return tabs;
 }
 

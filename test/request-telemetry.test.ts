@@ -49,6 +49,10 @@ import {
   StubSheetsTransport,
   stubRowFields,
 } from "./support/StubSheetsTransport.js";
+import {
+  GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS,
+  GOOGLE_SHEETS_API_OBSERVATION_FIELDS,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
 
 import type { GoogleSheetsApiRequestEvent } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 
@@ -621,5 +625,150 @@ describe("bootstrap telemetry gating (zero serialization when logging is off)", 
     const spy = spyTransportResultStringifications();
     await runOneDispatch();
     expect(spy.stop()).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Pins the polling lane's `responseBytes` to the RAW transport document size
+ * (the fix this branch exists for). Observation reads return a parsed Map,
+ * which stringifies to a meaningless 2-byte `"{}"`; the raw document is now
+ * captured through `readTabGrids`' `onRawResponse` callback (sink-gated), and
+ * `runRead` uses the supplied meta carrier WITHOUT falling back to
+ * stringifying the Map. This e2e test asserts, per request line and per pass
+ * summary, that polling-lane bytes equal `JSON.stringify(raw).length` of the
+ * actual stub transport reply — never the Map artifact.
+ */
+describe("polling-lane responseBytes measures the RAW transport document", () => {
+  const RawBytesUser = defineTypedSheetsEntity({
+    name: "RawBytesUser",
+    tableName: "raw_bytes_users",
+    properties: {
+      id: { type: "string", primary: true },
+      status: { type: "string" },
+    },
+  });
+
+  const rawBytesProjections = {
+    spreadsheetId: "raw-bytes-spreadsheet",
+    entities: {
+      RawBytesUser: {
+        systemState: { tabName: "RawBytesUsers_System", registeredRange: "A:C" },
+        syncConflicts: { tabName: "RawBytesUsers_Conflicts", registeredRange: "A:O" },
+        userInput: { tabName: "RawBytesUsers_Input", registeredRange: "A:C" },
+        userOwnedFields: ["id", "status"],
+      },
+    },
+  };
+
+  const savedEnv = { ...process.env };
+  let tempRoot: string;
+  let logFile: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-raw-bytes-"));
+    logFile = path.join(tempRoot, "raw-bytes-log.txt");
+    process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE] = logFile;
+    process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_LEVEL] = HIKOUTEI_LOG_LEVELS.DEBUG;
+    resetHikouteiInternalLoggerForTests();
+  });
+
+  afterEach(async () => {
+    resetHikouteiInternalLoggerForTests();
+    for (const name of Object.values(HIKOUTEI_LOG_ENV_KEYS)) {
+      const original = savedEnv[name];
+      if (original === undefined) delete process.env[name];
+      else process.env[name] = original;
+    }
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("records polling-lane bytes equal to the raw getSpreadsheet document, at line and summary level", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    // Raw-document sizes for every successful getSpreadsheet, with the
+    // OBSERVATION/LIGHTWEIGHT subset recorded separately: those masks are
+    // unique to `readTabGrids` (the fixed path — its task returns a parsed
+    // Map, so without the raw capture its polling line would record the 2-byte
+    // "{}" artifact). Preflight/write-lane reads reuse other masks and their
+    // task returns a parsed context, so their line bytes are parsed-object
+    // estimates (a known pre-existing limitation, outside this fix's scope).
+    const allRawSizes = new Map<number, number>();
+    const observationRawSizes = new Map<number, number>();
+    let sawObservationRead = false;
+    const origGet = transport.getSpreadsheet.bind(transport);
+    transport.getSpreadsheet = async (request: Parameters<typeof origGet>[0]) => {
+      const raw = await origGet(request);
+      const size = JSON.stringify(raw).length;
+      allRawSizes.set(size, (allRawSizes.get(size) ?? 0) + 1);
+      const fieldsText = String(request.fields ?? "");
+      if (fieldsText === GOOGLE_SHEETS_API_OBSERVATION_FIELDS ||
+          fieldsText === GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS) {
+        sawObservationRead = true;
+        observationRawSizes.set(size, (observationRawSizes.get(size) ?? 0) + 1);
+      }
+      return raw;
+    };
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [RawBytesUser],
+      projections: rawBytesProjections,
+      googleSheetsApi: { transport, rateLimitIntervalMs: 0 },
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    try {
+      const em = service.hikoutei.em.fork();
+      em.persist(em.create(RawBytesUser, { id: "raw-1", status: "pending" }));
+      await em.flush();
+      await service.effectSupervisor.runOnce();
+      // The row really landed: the dispatch exercised read/write paths.
+      expect(stubRowFields(spreadsheet.findTab("RawBytesUsers_Input") as never, 2, ["id"]).id)
+        .toEqual({ kind: "string", value: "raw-1" });
+    } finally {
+      await service.close();
+    }
+
+    // The fixture actually exercised the fixed path (observation reads return
+    // a parsed Map; without the raw capture they would record 2 bytes).
+    expect(sawObservationRead).toBe(true);
+    expect(observationRawSizes.size).toBeGreaterThan(0);
+
+    await getHikouteiInternalLogger().drain();
+    const lines = await readLogLines(logFile);
+
+    // Per-request level: EVERY successful polling-lane getSpreadsheet DEBUG
+    // line carries responseBytes that is a TRUE raw document size (a member of
+    // the all-calls raw-size multiset), never the Map artifact ("{}" = 2).
+    const pollingLineBytes = logEvents(lines, HIKOUTEI_LOG_EVENTS.SHEETS_REQUEST)
+      .filter((line) => line.providerOperation === "getSpreadsheet")
+      .filter((line) => (line.counts as Record<string, number>)?.httpStatus === 0)
+      .filter((line) => line.pacing === "polling")
+      .map((line) => (line.counts as Record<string, number>)?.responseBytes as number);
+    expect(pollingLineBytes.length).toBeGreaterThan(0);
+    const rawSizeMultiset = new Map(allRawSizes);
+    for (const bytes of pollingLineBytes) {
+      expect(bytes).toBeDefined();
+      expect(bytes).not.toBe(2);
+      const remaining = rawSizeMultiset.get(bytes) ?? 0;
+      expect(remaining).toBeGreaterThan(0);
+      rawSizeMultiset.set(bytes, remaining - 1);
+    }
+    // Every OBSERVATION-call raw size was carried by some polling line: the
+    // fixed path reports the raw document, not the parsed Map.
+    for (const size of observationRawSizes.keys()) {
+      expect(pollingLineBytes).toContain(size);
+    }
+
+    // Summary (aggregator) level: pollingResponseBytesTotal equals the sum of
+    // the polling lines' responseBytes, which per the per-line assertion above
+    // equals the sum of the TRUE raw document sizes.
+    const summaries = logEvents(lines, HIKOUTEI_LOG_EVENTS.SHEETS_REQUEST_SUMMARY);
+    expect(summaries.length).toBeGreaterThanOrEqual(1);
+    const pollingBytesFromSummaries = summaries.reduce(
+      (sum, line) => sum + ((line.counts as Record<string, number>)?.pollingResponseBytesTotal ?? 0),
+      0,
+    );
+    expect(pollingBytesFromSummaries).toBe(pollingLineBytes.reduce((sum, bytes) => sum + bytes, 0));
+    expect(pollingBytesFromSummaries).toBeGreaterThan(2);
   });
 });

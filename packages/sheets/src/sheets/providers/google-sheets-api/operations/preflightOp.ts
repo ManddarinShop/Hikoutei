@@ -51,6 +51,7 @@ import { quoteA1SheetName } from "../model/valueNormalization.js";
 import type { GoogleSheetsApiGetSpreadsheetRequest } from "../transport/googleSheetsApiTransport.js";
 import type { SnapshotBuildTarget } from "../model/observation.js";
 import {
+  createRawResponseMeta,
   definitionForPhysicalSheet,
   runRead,
   validateRoute,
@@ -78,8 +79,13 @@ export async function readPreflight(
 ): Promise<PreflightContext> {
   // Each preflight performs two paced transport calls: a range-less sheet
   // enumeration (hidden receipt tab discovery) plus one ranged data read.
+  // Both measure the RAW transport document through the shared carrier when
+  // a telemetry sink is attached (zero estimate cost without telemetry).
+  const enumeration = createRawResponseMeta(deps);
+  const data = createRawResponseMeta(deps);
   const sheets = await runRead(deps, () =>
-    enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs), pacing);
+    enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs,
+      enumeration.onRawResponse), pacing, enumeration.meta);
   return runRead(deps, () =>
     readPreflightData(deps.transport, {
       spreadsheetId: deps.spreadsheetId,
@@ -90,7 +96,7 @@ export async function readPreflight(
       identityField: routeOptions.identityField,
       checkboxHeaders: routeOptions.checkboxHeaders,
       projection: definition.sheet.projection,
-    }, sheets, deps.readTimeoutMs), pacing);
+    }, sheets, deps.readTimeoutMs, data.onRawResponse), pacing, data.meta);
 }
 
 /**
@@ -119,8 +125,13 @@ export async function readPreflightForRoutes(
   operation?: SyncMissingTabOperation,
   pacing: RequestStartPacing = "preflight",
 ): Promise<ReadonlyMap<string, PreflightContext>> {
+  // Same raw-document measurement as the single-route preflight: both paced
+  // calls report the RAW transport document when a telemetry sink is attached.
+  const enumeration = createRawResponseMeta(deps);
+  const data = createRawResponseMeta(deps);
   const sheets = await runRead(deps, () =>
-    enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs), pacing);
+    enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs,
+      enumeration.onRawResponse), pacing, enumeration.meta);
   return runRead(deps, () =>
     readPreflightDataForRoutes(
       deps.transport,
@@ -137,7 +148,8 @@ export async function readPreflightForRoutes(
       sheets,
       deps.readTimeoutMs,
       operation,
-    ), pacing);
+      data.onRawResponse,
+    ), pacing, data.meta);
 }
 
 /** Validates one observation request and derives its snapshot target. */
