@@ -37,7 +37,7 @@
   },
   "dependencies": {
     "@hikoutei/contracts": "0.1.0",
-    "@hikoutei/ikisaki": "0.1.8",
+    "@hikoutei/ikisaki": "0.1.9",
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7"
   },

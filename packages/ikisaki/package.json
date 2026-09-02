@@ -1,6 +1,6 @@
 {
   "name": "@hikoutei/ikisaki",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Hikoutei consistency queue: a durable, ordered, idempotent delivery queue bound to the business transaction.",
   "repository": {
     "type": "git",
