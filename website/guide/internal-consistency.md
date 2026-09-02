@@ -12,8 +12,9 @@ the internal mechanisms behind that policy.
 ## Single writer: lease, epoch, fencing token
 
 A worker claims a SQLite `writer_lease` (`role`, `writer_id`,
-`writer_epoch`, `fencing_token`, `lease_until`). Takeover increments the epoch
-and issues a new token. Every storage mutation is guarded by:
+`writer_epoch`, `fencing_token`, `lease_until`, `heartbeat_at`). Takeover
+increments the epoch and issues a new token. Every storage mutation is
+guarded by:
 
 ```text
 WHERE ... AND EXISTS (
@@ -22,6 +23,23 @@ WHERE ... AND EXISTS (
 ```
 
 A stale epoch/token is rejected even if the row did not change.
+
+### Takeover: expiry OR dead-writer heartbeat evidence
+
+A live writer keeps its lease fresh two ways: pass-time renewals stamp
+`heartbeat_at`, and a background renew-only heartbeat timer renews on a
+5 s cadence. A lease may be taken over when it EXPIRED (`lease_until <=
+now`) **or** when the owner's `heartbeat_at` is stale (older than 15 s
+while `lease_until` is still in the future — the owner is presumed dead;
+NULL-heartbeat rows, written before the evidence column existed, stay on
+the expiry-only rule). Takeover always bumps epoch + fencing token, so the
+displaced writer's mutations are fenced out through the same CAS above,
+and its in-flight work is recovered exactly like a crash: pre-dispatch
+renewal aborts before any remote call, post-ack bookkeeping is rejected,
+and the new owner recovers the rows through the durable outbox. The
+background heartbeat never claims or takes over — it only extends the
+caller's own live lease, so a running timer can never steal the lease back
+from a live owner.
 
 ## Remote write protection: authority + visible-hash CAS
 
