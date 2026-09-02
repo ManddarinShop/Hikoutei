@@ -1,0 +1,27 @@
+[Unit]
+Description=Hikoutei demo server (SQLite authority + Sheets sync + SSE metrics)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# VM path holding the demo server checkout (adjust after cloning).
+WorkingDirectory=/opt/hikoutei/website/demo/server
+# Secrets live ONLY here on the VM; never commit them.
+EnvironmentFile=/etc/hikoutei-demo.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node --experimental-strip-types src/server.ts
+Restart=always
+RestartSec=5
+User=hikoutei
+Group=hikoutei
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/hikoutei/website/demo/server
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

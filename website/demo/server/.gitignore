@@ -1,0 +1,7 @@
+node_modules/
+*.sqlite
+*.sqlite-*
+.env
+.demo-service-account.json
+__*.mjs
+__smoke.cjs
