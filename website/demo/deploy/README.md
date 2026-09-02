@@ -24,9 +24,17 @@ Deployed by `.github/workflows/demo-deploy.yml` (manual dispatch + push paths).
 
 | Secret | Content |
 | --- | --- |
-| `DEMO_SSH_HOST` / `DEMO_SSH_USER` / `DEMO_SSH_KEY` | VM access for the deploy workflow |
+| `DEMO_SSH_HOST` / `DEMO_SSH_USER` / `DEMO_SSH_KEY` | VM access for the deploy workflow (SSH user needs the `docker` group) |
 | `DEMO_SA_JSON` | **Dedicated** demo service-account key (full JSON). Never the dev/test account. |
-| `DEMO_ENV` | env file body: `HIKOUTEI_SYNC_SPREADSHEET_URL=https://docs.google.com/spreadsheets/d/<demo-sheet-id>/edit`, `GOOGLE_APPLICATION_CREDENTIALS=/etc/hikoutei-demo/sa.json` |
+| `DEMO_ENV` | Env file body for the container: `HIKOUTEI_SYNC_SPREADSHEET_URL=https://docs.google.com/spreadsheets/d/<demo-sheet-id>/edit` — nothing else (see below) |
+
+The workflow writes `website/demo/deploy/secrets/demo.env` on the VM at every
+deploy. It embeds the spreadsheet URL **plus a single-line `DEMO_SA_JSON`
+value** (minified from the `DEMO_SA_JSON` secret). The demo server container
+materializes that env value to its own `/tmp/hikoutei-demo-sa.json` at startup
+and points `GOOGLE_APPLICATION_CREDENTIALS` there — **no key file ever exists
+on the VM host**. The demo sheet itself must be a **dedicated sheet** shared
+with the demo service account (Editor).
 
 The workflow writes `/etc/hikoutei-demo.env` + `/etc/hikoutei-demo/sa.json`
 (chmod 600) on the VM at every deploy — GH Secrets are the single source of
