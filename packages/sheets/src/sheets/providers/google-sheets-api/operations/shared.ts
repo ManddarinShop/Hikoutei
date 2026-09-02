@@ -205,6 +205,29 @@ export function estimateJsonBytesOrNull(value: unknown): number | undefined {
 }
 
 /**
+ * Builds one raw-response measurement carrier: `meta` for `runRead`/`runWrite`
+ * plus the matching `onRawResponse` callback for read helpers that can capture
+ * the RAW transport document before parsing. Both are `undefined`-safe: with
+ * no telemetry sink attached, `onRawResponse` is `undefined` and the meta
+ * carrier stays empty (zero estimate cost without telemetry).
+ */
+export function createRawResponseMeta(deps: GoogleSheetsApiProviderDeps): {
+  readonly meta: { responseBytes?: number };
+  readonly onRawResponse: ((raw: unknown) => void) | undefined;
+} {
+  const meta: { responseBytes?: number } = {};
+  return {
+    meta,
+    onRawResponse: deps.onRequest === undefined
+      ? undefined
+      : (raw) => {
+        const bytes = estimateJsonBytesOrNull(raw);
+        if (bytes !== undefined) meta.responseBytes = bytes;
+      },
+  };
+}
+
+/**
  * Paces ONE `getSpreadsheet` transport call and emits one read event.
  *
  * `pacing` selects the request-start lane: the two read classes route through
@@ -227,12 +250,16 @@ export async function runRead<T>(
     const result = await task();
     // Payload-size evidence for the preflight-vs-polling read-gap question:
     // gated on the sink so a telemetry-less deployment pays zero estimate cost.
-    // A caller that measured the RAW response document supplies meta.responseBytes
+    // A caller that measured the RAW response document supplies a meta carrier
     // (e.g., observation reads whose task returns a parsed Map, which cannot be
-    // re-serialized meaningfully); otherwise the task result itself is estimated.
+    // re-serialized meaningfully): its `responseBytes` is then used as-is, with
+    // NO fallback to stringifying the task result — an unserializable raw
+    // document records no bytes rather than a meaningless 2-byte `"{}"`.
     const responseBytes = deps.onRequest === undefined
       ? undefined
-      : (meta?.responseBytes ?? estimateJsonBytesOrNull(result));
+      : (meta === undefined
+        ? estimateJsonBytesOrNull(result)
+        : meta.responseBytes);
     emitRequest(deps, "getSpreadsheet", pacing, 1, startedAt, true, absentValue(), absentValue(), {
       pacingWaitMs,
       ...(responseBytes === undefined ? {} : { responseBytes }),

@@ -167,6 +167,9 @@ export async function enumerateSheetProperties(
   transport: GoogleSheetsApiTransport,
   spreadsheetId: string,
   timeoutMs?: number,
+  /** Receives the RAW transport document before parsing — telemetry measures
+   * the true response size from it (the parsed result loses wire detail). */
+  onRawResponse?: (raw: unknown) => void,
 ): Promise<readonly ParsedSheet[]> {
   const enumerationRequest: GoogleSheetsApiGetSpreadsheetRequest = {
     spreadsheetId,
@@ -175,6 +178,14 @@ export async function enumerateSheetProperties(
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
   const enumerationRaw = await transport.getSpreadsheet(enumerationRequest);
+  // Fail-open by construction: telemetry must never change a read outcome.
+  if (onRawResponse !== undefined) {
+    try {
+      onRawResponse(enumerationRaw);
+    } catch {
+      // Swallowed deliberately — size estimation is observational only.
+    }
+  }
   return parseSheetPropertiesDocument(enumerationRaw, "sheet enumeration");
 }
 
@@ -214,6 +225,9 @@ export async function readPreflightData(
   route: PreflightRouteOptions,
   sheets: readonly ParsedSheet[],
   timeoutMs?: number,
+  /** Receives the RAW transport document before parsing — telemetry measures
+   * the true response size from it (the parsed context loses wire detail). */
+  onRawResponse?: (raw: unknown) => void,
 ): Promise<PreflightContext> {
   const targetSheet = requireSheetByTitle(sheets, route.sheetName);
   const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
@@ -224,6 +238,14 @@ export async function readPreflightData(
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
   const dataRaw = await transport.getSpreadsheet(dataRequest);
+  // Fail-open by construction: telemetry must never change a read outcome.
+  if (onRawResponse !== undefined) {
+    try {
+      onRawResponse(dataRaw);
+    } catch {
+      // Swallowed deliberately — size estimation is observational only.
+    }
+  }
   const dataDocument = parseSpreadsheetDocument(dataRaw, "grid data");
   return buildRouteContext(dataDocument, sheets, route);
 }
@@ -241,6 +263,9 @@ export async function readPreflightDataForRoutes(
   sheets: readonly ParsedSheet[],
   timeoutMs?: number,
   operation?: SyncMissingTabOperation,
+  /** Receives the RAW transport document before parsing — telemetry measures
+   * the true response size from it (the parsed result loses wire detail). */
+  onRawResponse?: (raw: unknown) => void,
 ): Promise<ReadonlyMap<string, PreflightContext>> {
   const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
   const dataRequest: GoogleSheetsApiGetSpreadsheetRequest = {
@@ -250,6 +275,14 @@ export async function readPreflightDataForRoutes(
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
   const dataRaw = await transport.getSpreadsheet(dataRequest);
+  // Fail-open by construction: telemetry must never change a read outcome.
+  if (onRawResponse !== undefined) {
+    try {
+      onRawResponse(dataRaw);
+    } catch {
+      // Swallowed deliberately — size estimation is observational only.
+    }
+  }
   const dataDocument = parseSpreadsheetDocument(dataRaw, "grid data");
   const contexts = new Map<string, PreflightContext>();
   for (const route of routes) {
