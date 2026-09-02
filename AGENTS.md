@@ -348,3 +348,9 @@ false` — otherwise the harness prompts the user for project-agent approval
 on every delegation, which the owner has explicitly disabled. Never ask the
 user to approve project-local agents; if the tool re-prompts, pass the
 option instead of asking.
+
+- 2026-09-02 update: the pi-sub-agent package default was patched to
+  `confirmProjectAgents: default false` in
+  `~/.pi/agent/npm/node_modules/pi-sub-agent/extensions/index.ts:801` so
+  project agents never prompt. Re-applying this patch is required after a
+  pi extension reinstall/update.
