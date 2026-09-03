@@ -35,6 +35,7 @@ import type {
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
+  GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
@@ -63,6 +64,11 @@ export interface StubCell {
       readonly pattern: string;
     };
   };
+  /**
+   * The real API COMPUTES effectiveFormat; the stub only carries one on
+   * malformed-shape fixtures that must reach the boundary guard verbatim.
+   */
+  effectiveFormat?: unknown;
   effectiveValue?: {
     readonly stringValue?: string;
     readonly numberValue?: number;
@@ -90,7 +96,16 @@ export type StubTransportFault =
   | { readonly kind: "network" }
   | { readonly kind: "malformedBatchUpdateReply" }
   | { readonly kind: "malformedGetResponse" }
-  | { readonly kind: "malformedGetField" };
+  | { readonly kind: "malformedGetField" }
+  | { readonly kind: "duplicateGrids" }
+  /**
+   * The real API's proven pre-mutation rejection of a receipt-tail band whose
+   * start row sits beyond the tab's rows (HTTP 400 INVALID_ARGUMENT). Applies
+   * ONLY to a `spreadsheets.get` that requests a banded receipt range
+   * (`'receipts'!A{n}:...` with n >= 2); enumerations and full receipt reads
+   * pass through untouched, so a cursor-recovery fallback can be pinned.
+   */
+  | { readonly kind: "rejectBandedReceiptRange" };
 
 /** One tab of the in-memory spreadsheet. */
 export class StubSheet {
@@ -316,7 +331,12 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
     this.requestStarts.push({ kind: "read", at: this.now() });
     this.getSpreadsheetCalls += 1;
     this.getSpreadsheetRequests.push(request);
-    if (this.fault !== undefined && this.fault.kind !== "malformedBatchUpdateReply") {
+    // The duplicateGrids fault targets ranged data calls only; a range-less
+    // enumeration passes through untouched so the fault survives to the data
+    // read that follows it in provisioning/snapshot flows.
+    if (this.fault !== undefined && this.fault.kind !== "malformedBatchUpdateReply" &&
+        !(this.fault.kind === "duplicateGrids" && request.ranges.length === 0) &&
+        !(this.fault.kind === "rejectBandedReceiptRange" && !requestsBandedReceiptRange(request))) {
       const fault = this.fault;
       this.fault = undefined;
       if (fault.kind === "malformedGetResponse") {
@@ -331,6 +351,21 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
           sheets: [{ properties: { sheetId: 1, title: 42 } }],
         };
       }
+      if (fault.kind === "duplicateGrids") {
+        // A structurally valid multi-grid reply to a single-range request:
+        // the grids no longer match the request shape and single-range
+        // readers must fail closed instead of silently taking grid [0].
+        // Re-run the normal path (fault cleared) and duplicate each grid.
+        const body = (await this.getSpreadsheet(request)) as {
+          spreadsheetId: string;
+          sheets: Array<{ data?: unknown[] }>;
+        };
+        return {
+          ...body,
+          sheets: body.sheets.map((entry) =>
+            Array.isArray(entry.data) ? { ...entry, data: [...entry.data, ...entry.data] } : entry),
+        };
+      }
       throw transportFaultError(fault);
     }
     // The real API returns only the sheets intersecting the requested ranges
@@ -343,10 +378,28 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
       ? this.spreadsheet.sheets
       : this.spreadsheet.sheets.filter((sheet) =>
           request.ranges.some((range) => rangeNamesSheet(range, sheet.title)));
+    // The real API returns ONLY the response fields named by the request's
+    // field mask. Enforcing the mask here (per top-level cell wrapper) is
+    // what makes values-only base reads and format-evidenced verification
+    // reads actually different in tests, exactly like on the wire.
+    const includeNumberFormats = request.fields.includes("numberFormat");
+    const includeEffectiveValue = request.fields.includes("effectiveValue");
+    const includeFormattedValue = request.fields.includes("formattedValue");
+    const includeDataValidation = request.fields.includes("dataValidation");
     const sheets = visible.map((sheet) => {
-      const data = request.ranges.some((range) => rangeNamesSheet(range, sheet.title))
-        ? [gridDataFor(sheet)]
-        : [];
+      // The real API returns ONE cropped GridData per requested range of the
+      // sheet (in request order), each carrying its own startRow/startColumn
+      // band. Emitting a single whole-sheet grid would let scoped-read tests
+      // silently pass against data outside the requested band.
+      const bands = request.ranges
+        .map((range) => parseA1Range(range))
+        .filter((band): band is ParsedA1Range => band !== undefined && band.sheetName === sheet.title);
+      const data = bands.map((band) => gridDataFor(sheet, band, {
+        includeNumberFormats,
+        includeEffectiveValue,
+        includeFormattedValue,
+        includeDataValidation,
+      }));
       return {
         properties: {
           sheetId: sheet.sheetId,
@@ -389,7 +442,8 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
     if (this.fault !== undefined) {
       const fault = this.fault;
       this.fault = undefined;
-      if (fault.kind === "malformedGetResponse" || fault.kind === "malformedGetField") {
+      if (fault.kind === "malformedGetResponse" || fault.kind === "malformedGetField" ||
+          fault.kind === "duplicateGrids" || fault.kind === "rejectBandedReceiptRange") {
         throw new Error("stub fault misuse: malformed get faults only apply to getSpreadsheet");
       }
       throw transportFaultError(fault);
@@ -413,6 +467,15 @@ function transportFaultError(fault: StubTransportFault): Error {
         presentValue(fault.status),
         presentValue(fault.apiErrorStatus),
       );
+    case "rejectBandedReceiptRange":
+      // Same wire shape the real API uses to reject an out-of-bounds range:
+      // HTTP 400 carrying the canonical INVALID_ARGUMENT remote status.
+      return new GoogleSheetsApiTransportError(
+        GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
+        "Range (receipt tail band) exceeds grid limits",
+        presentValue(400),
+        presentValue("INVALID_ARGUMENT"),
+      );
     case "timeout":
       return new GoogleSheetsApiTransportError(
         GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT,
@@ -431,31 +494,115 @@ function transportFaultError(fault: StubTransportFault): Error {
   }
 }
 
-/** Builds the grid data response shape for one stub sheet. */
-function gridDataFor(sheet: StubSheet): unknown {
-  const lastRow = sheet.lastContentRow();
+/** Cell wrappers kept per requested field mask (real API mask semantics). */
+interface StubMaskOptions {
+  readonly includeNumberFormats: boolean;
+  readonly includeEffectiveValue: boolean;
+  readonly includeFormattedValue: boolean;
+  readonly includeDataValidation: boolean;
+}
+
+/** Builds the cropped grid data response for ONE requested A1 band. */
+function gridDataFor(sheet: StubSheet, band: ParsedA1Range, mask: StubMaskOptions): unknown {
+  // The real API omits trailing fully-empty rows inside the requested band.
+  const lastRow = Math.min(band.endRow, sheet.lastContentRow());
   const rowData: unknown[] = [];
-  for (let row = 0; row <= lastRow; row += 1) {
-    const lastColumn = sheet.lastContentColumn();
+  for (let row = band.startRow; row <= lastRow; row += 1) {
     const values: unknown[] = [];
-    for (let col = 0; col <= lastColumn; col += 1) {
-      const cell = sheet.cell(row, col);
-      values.push(stubCellWire(cell, sheet.dataValidationFor(row, col)));
+    for (let col = band.startColumn; col <= band.endColumn; col += 1) {
+      values.push(stubCellWire(sheet.cell(row, col), sheet.dataValidationFor(row, col), mask));
+    }
+    // ...and each row's values only up to its last populated column. The
+    // real API omits trailing empty CellData entries, but a MERGE-COVERED
+    // cell inside the row's span still comes back as a blank `{}` entry —
+    // the provider's merged/blank contract depends on that distinction
+    // (`null` position means blank; a present `{}` inside a merge means
+    // merged), so the trim must stop at merge coverage.
+    while (
+      values.length > 0
+      && isPlainEmptyCell(values[values.length - 1])
+      && !mergeCovers(sheet, row, band.startColumn + values.length - 1)
+    ) {
+      values.pop();
     }
     rowData.push({ values });
   }
   return {
-    startRow: 0,
-    startColumn: 0,
+    startRow: band.startRow,
+    startColumn: band.startColumn,
     rowData,
   };
 }
 
-function stubCellWire(cell: StubCell | undefined, dataValidation: StubCell["dataValidation"]): unknown {
-  if (cell === undefined) {
-    return dataValidation === undefined ? {} : { dataValidation };
+/** True when one 0-based cell position falls inside a merged region. */
+function mergeCovers(sheet: StubSheet, row: number, col: number): boolean {
+  return sheet.mergedRanges.some((range) =>
+    row >= range.startRowIndex && row < range.endRowIndex &&
+    col >= range.startColumnIndex && col < range.endColumnIndex);
+}
+
+/** True when a built wire cell carries no wrappers (a blank `{}` CellData). */
+function isPlainEmptyCell(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value as Record<string, unknown>).length === 0;
+}
+
+function stubCellWire(
+  cell: StubCell | undefined,
+  dataValidation: StubCell["dataValidation"],
+  mask: StubMaskOptions,
+): unknown {
+  // Injected primitive/null CellData entries are malformed wire data and
+  // must survive untouched so the provider's boundary guard fails closed on
+  // them (the real API never emits one; injection fixtures do).
+  if (cell === null || (cell !== undefined && typeof cell !== "object")) return cell;
+  // Allowlisted rebuild: the response carries ONLY the CellData wrappers the
+  // real API can emit, and only the ones the request's field mask names —
+  // a stray wrapper in the stored model can never ride through unmasked.
+  const wire: Record<string, unknown> = {};
+  if (cell !== undefined && cell.userEnteredValue !== undefined) {
+    wire.userEnteredValue = cell.userEnteredValue;
   }
-  return dataValidation === undefined ? cell : { ...cell, dataValidation };
+  if (mask.includeNumberFormats) {
+    if (cell !== undefined && cell.userEnteredFormat !== undefined) {
+      wire.userEnteredFormat = cell.userEnteredFormat;
+    }
+    // An injected effectiveFormat (malformed-shape fixture: the real API
+    // COMPUTES effectiveFormat, so only fixtures carry one explicitly) rides
+    // through under its real wrapper name for the boundary guard to catch.
+    if (cell !== undefined && cell.effectiveFormat !== undefined) {
+      wire.effectiveFormat = cell.effectiveFormat;
+    } else if (wire.userEnteredValue !== undefined) {
+      // The real API resolves a COMPUTED effectiveFormat for every populated
+      // cell (that is what dominates preflight response bytes on the wire):
+      // absent entered formats come back as the column-inherited default and
+      // date-formatted cells carry the same canonical format in effective.
+      wire.effectiveFormat = cell !== undefined && cell.userEnteredFormat !== undefined
+        ? cell.userEnteredFormat
+        : { numberFormat: { type: "TEXT", pattern: "@" } };
+    }
+  }
+  if (mask.includeEffectiveValue && cell !== undefined && cell.effectiveValue !== undefined) {
+    wire.effectiveValue = cell.effectiveValue;
+  }
+  if (mask.includeFormattedValue && cell !== undefined && cell.formattedValue !== undefined) {
+    wire.formattedValue = cell.formattedValue;
+  }
+  if (dataValidation !== undefined && mask.includeDataValidation) {
+    wire.dataValidation = dataValidation;
+  }
+  return wire;
+}
+
+/**
+ * True when one `spreadsheets.get` requests a TAIL BAND of the receipt tab
+ * (start row >= 2, i.e. below the header row). The historical full receipt
+ * read starts at A1 and never matches, which is what lets the
+ * `rejectBandedReceiptRange` fault target exactly the banded dispatch.
+ */
+function requestsBandedReceiptRange(request: GoogleSheetsApiGetSpreadsheetRequest): boolean {
+  const pattern = new RegExp(`^'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A(?:[2-9]|[1-9]\\d+):`);
+  return request.ranges.some((range) => pattern.test(range));
 }
 
 function rangeNamesSheet(range: string, title: string): boolean {
@@ -465,12 +612,40 @@ function rangeNamesSheet(range: string, title: string): boolean {
 
 interface ParsedA1Range {
   readonly sheetName: string;
+  /** Inclusive 0-based start row of the requested band. */
+  readonly startRow: number;
+  /** Inclusive 0-based end row of the requested band. */
+  readonly endRow: number;
+  /** Inclusive 0-based start column of the requested band. */
+  readonly startColumn: number;
+  /** Inclusive 0-based end column of the requested band. */
+  readonly endColumn: number;
 }
 
 function parseA1Range(range: string): ParsedA1Range | undefined {
-  const match = /^'((?:[^']|'')*)'!/.exec(range);
-  if (match === null || match[1] === undefined) return undefined;
-  return { sheetName: match[1]?.replace(/''/g, "'") ?? "" };
+  const match = /^'((?:[^']|'')*)'!([A-Za-z]+)(\d*):([A-Za-z]+)(\d*)$/.exec(range);
+  if (match === null) return undefined;
+  const [, name, startColumnText, startRowText, endColumnText, endRowText] = match;
+  if (name === undefined || startColumnText === undefined || endColumnText === undefined) {
+    return undefined;
+  }
+  return {
+    sheetName: name.replace(/''/g, "'"),
+    startColumn: columnLettersToIndex(startColumnText),
+    endColumn: columnLettersToIndex(endColumnText),
+    // Open row bounds mean the sheet's full height in the real API.
+    startRow: startRowText === undefined || startRowText === "" ? 0 : Number(startRowText) - 1,
+    endRow: endRowText === undefined || endRowText === "" ? 1_048_575 : Number(endRowText) - 1,
+  };
+}
+
+/** Converts A1 column letters (A, B, ..., AA) to a 0-based index. */
+function columnLettersToIndex(letters: string): number {
+  let index = 0;
+  for (const character of letters.toUpperCase()) {
+    index = index * 26 + (character.charCodeAt(0) - 64);
+  }
+  return index - 1;
 }
 
 /** Applies one provider write request to the model and returns its reply. */

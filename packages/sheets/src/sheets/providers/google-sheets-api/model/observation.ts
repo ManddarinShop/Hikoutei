@@ -57,6 +57,7 @@ import {
   apiCellNumberFormat,
   gridRowCells,
   readAnchorIndex,
+  requireGridDataForSheet,
 } from "./preflightRows.js";
 import type {
   ParsedGridData,
@@ -177,12 +178,11 @@ export async function readTabGrids(
       // so it keeps the safe unclassified default.
       invalidProviderState(`Registered sync sheet does not exist: ${target.sheetName}`);
     }
-    const grid = document.grids.get(sheet.sheetId);
-    if (grid === undefined) {
-      // The request explicitly required grid data for a present tab, so a
-      // reply that omits it violated that structural expectation.
-      invalidProviderState(`grid data is missing for sheet ${sheet.sheetId}`, GET_REPLY_MALFORMED);
-    }
+    // Fail closed unless the reply carries exactly one GridData for the
+    // requested range shape: a missing grid violated the structural
+    // expectation and a multi-grid reply does not match this reader's
+    // one-range-per-sheet request (same contract as requireGridDataForSheet).
+    const grid = requireGridDataForSheet(document, sheet.sheetId);
     tabs.set(target.sheetName, {
       sheetId: sheet.sheetId,
       title: sheet.title,
