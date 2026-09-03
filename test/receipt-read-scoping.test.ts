@@ -267,6 +267,106 @@ describe("receipt read cursor (tail band + fallback)", () => {
   });
 });
 
+describe("receipt accumulation seeding (burst over a deep history)", () => {
+  /**
+   * Seeded receipt-history depth. Parameterized because the FIRST dispatch
+   * after a cold cursor parses the whole tab once (stub grid materialization
+   * is O(rows)); 20k rows ≈ 6 columns of cells and stays well under a
+   * second here. Lower this if the suite's runtime budget tightens.
+   */
+  const SEED_ROWS = 20_000;
+  const BURST_BATCHES = 5;
+  const BURST_ROWS = 100;
+
+  /** Parses the 1-based start row of one receipt-tab range. */
+  function receiptStartRow(range: string): number {
+    const match = new RegExp(`'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A(\\d+):`).exec(range);
+    if (match === null || match[1] === undefined) throw new Error(`not a receipt range: ${range}`);
+    return Number(match[1]);
+  }
+
+  it("bands over a seeded history without re-reading it and applies each effect once", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    // Deep synthetic receipt history: rows 2..SEED_ROWS+1, all unrelated
+    // effectIds (unique hashes; the visible-hash is computed ONCE and reused
+    // — the memo only needs parseable, non-colliding evidence).
+    const sharedHash = computeSyncVisibleHash({ id: { kind: "string", value: "seed" } });
+    const seededRows = Array.from({ length: SEED_ROWS }, (_, index) => [
+      `seed-${String(index)}`,
+      `seed-payload-${String(index)}`,
+      "applied",
+      sharedHash,
+      1,
+      "2024-01-01T00:00:00.000Z",
+    ]);
+    spreadsheet.addTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME, {
+      headers: [...GOOGLE_SHEETS_API_RECEIPT_HEADERS],
+      rows: seededRows,
+      hidden: true,
+    });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    // BURST: several multi-row append dispatches over the seeded history.
+    for (let batch = 0; batch < BURST_BATCHES; batch += 1) {
+      const rows: FastAppendRow[] = Array.from({ length: BURST_ROWS }, (_, index) => {
+        const identity = `b${String(batch)}r${String(index).padStart(3, "0")}`;
+        return {
+          ...appendRequest(identity).rows[0]!,
+          effectId: `append-${identity}-0000`,
+          payloadHash: `payload-${identity}-0000`,
+          anchor: `anchor-${identity}-0000`,
+        };
+      });
+      const result = await provider.fastAppendRows({
+        physicalSheetId: SYSTEM_SHEET_ID,
+        sheetName: "Users_System",
+        registeredRange: "A:C",
+        projection: "system_state",
+        schemaVersion: 1,
+        rows,
+      });
+      expect(result.results.every((entry) => entry.status === "applied")).toBe(true);
+    }
+
+    // (1) The receipt reads are COLD-FULL-ONCE, then TAIL BANDS over the
+    // seeded history: every band starts at/after the seeded tail, so the
+    // 20k seeded rows are never re-parsed by a steady dispatch.
+    const receiptRanges = dataCalls(transport)
+      .map(receiptRange)
+      .filter((range): range is string => range !== undefined);
+    expect(receiptRanges.length).toBeGreaterThanOrEqual(BURST_BATCHES);
+    expect(receiptRanges[0]).toBe(
+      `'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A1:F1048576`,
+    );
+    for (const range of receiptRanges.slice(1)) {
+      expect(range).not.toBe(`'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A1:F1048576`);
+      expect(receiptStartRow(range)).toBeGreaterThanOrEqual(SEED_ROWS);
+    }
+
+    // (2) Effects applied EXACTLY ONCE: target rows are the burst rows only
+    // (no seeded-history interference shifted or duplicated them), and the
+    // receipt tab holds its seeded history plus one receipt per burst row.
+    const systemTab = spreadsheet.findTab("Users_System")!;
+    const receiptTab = spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)!;
+    const totalReceipts = 1 + SEED_ROWS + BURST_BATCHES * BURST_ROWS;
+    expect(systemTab.lastContentRow()).toBe(BURST_BATCHES * BURST_ROWS);
+    expect(receiptTab.lastContentRow()).toBe(totalReceipts - 1);
+    const effectIds = new Set<string>();
+    for (const [key, cell] of receiptTab.cells) {
+      const [row, col] = key.split(",").map(Number) as [number, number];
+      if (col !== 0 || row === 0) continue;
+      const value = cell.userEnteredValue?.stringValue;
+      if (value !== undefined) expect(effectIds.has(value)).toBe(false);
+      if (value !== undefined) effectIds.add(value);
+    }
+    expect(effectIds.size).toBe(SEED_ROWS + BURST_BATCHES * BURST_ROWS);
+    // The seeded history itself is untouched at the tab head.
+    expect(receiptTab.cell(1, 0)?.userEnteredValue?.stringValue).toBe("seed-0");
+  }, 60_000);
+});
+
 describe("column-scoped base read", () => {
   /** Pre-create the hidden receipt tab (headers only) so dispatches are
    * steady-state scoped reads — a receipt-init dispatch (tab absent) is
