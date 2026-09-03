@@ -3071,6 +3071,254 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     // (no receipt tab exists in this fixture).
     expect(transport.getSpreadsheetCalls).toBe(readsBefore + 2);
   });
+
+  // --- Scoped postcondition-probe reads (band scoping of the recovery read) ---
+
+  /** Seed one landed write: target row + matching receipt. */
+  function seedLandedWrite(spreadsheet: StubSpreadsheet): string {
+    seedSystemTab(spreadsheet, [
+      {
+        anchor: "anchor-1",
+        fields: {
+          id: cell.string("u1"),
+          status: cell.string("written"),
+          __typed_sheets_deleted: cell.bool(false),
+        },
+      },
+    ]);
+    const targetHash = computeSyncVisibleHash({
+      id: cell.string("u1"),
+      status: cell.string("written"),
+      __typed_sheets_deleted: cell.bool(false),
+    });
+    seedReceiptTab(spreadsheet, [{
+      effectId: "effect-1",
+      payloadHash: "payload-1",
+      visibleHash: targetHash,
+      visibleRevision: 2,
+    }]);
+    return targetHash;
+  }
+
+  function landedProbe(): SyncProjectionEffect {
+    return effect({
+      effectId: "effect-1",
+      targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: computeSyncVisibleHash({
+        id: cell.string("u1"),
+        status: cell.string("pending"),
+        __typed_sheets_deleted: cell.bool(false),
+      }),
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("written"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+  }
+
+  it("settles a landed batch as applied from scoped band reads (cold cursor)", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedLandedWrite(spreadsheet);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const postcondition = await provider.readEffectPostcondition(landedProbe());
+    expect(postcondition.disposition).toBe("applied");
+    // Even the cold-cursor probe never issues the whole-tab full-evidence
+    // target range: the receipt tab's full read rides the same scoped request.
+    for (const request of transport.getSpreadsheetRequests) {
+      expect(request.ranges).not.toContain("'Users_System'!A1:C1048576");
+    }
+  });
+
+  it("settles a receipt-landed but pre-write row as unapplied (redrive)", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedSystemTab(spreadsheet, [
+      {
+        anchor: "anchor-1",
+        fields: {
+          id: cell.string("u1"),
+          status: cell.string("written"),
+          __typed_sheets_deleted: cell.bool(false),
+        },
+      },
+    ]);
+    // Receipt IS landed here (partial remote state, not the missing-receipt
+    // case): the batch reached the sheet but the row still holds the
+    // pre-write expected state, so the probe must answer `unapplied` and the
+    // worker redrives, decided from the located row's band.
+    seedReceiptTab(spreadsheet, [{
+      effectId: "effect-redrive",
+      payloadHash: "payload-redrive",
+      visibleHash: "whatever",
+      visibleRevision: 2,
+    }]);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const baseline = stubRowVisibleHash(spreadsheet.findTab("Users_System") as never, 2, SYSTEM_HEADERS);
+    const probe = effect({
+      effectId: "effect-redrive",
+      payloadHash: "payload-redrive",
+      targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: baseline,
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("queued"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const postcondition = await provider.readEffectPostcondition(probe);
+    expect(postcondition.disposition).toBe("unapplied");
+  });
+
+  it("decides a missing receipt from bands alone under a live cursor even when a full read times out", async () => {
+    // The drain-blocking defect this guards: a genuinely not-landed effect
+    // under a warm cursor used to route through the historical whole-table
+    // + FULL-receipt fallback. That fallback does not reset the cursor, and
+    // at scale the whole-table read is what times out, so every redrive
+    // probe repeated the timeout and the delivery-uncertain head blocked
+    // forever. A live cursor after the base read proves COMPLETE memo
+    // coverage (append-only tab + sentinel-trusted band or an in-read full
+    // settle), so the miss is provable and must classify `unapplied` from
+    // the scoped bands. The wrapper transport below fails any whole-tab
+    // full-evidence or full-receipt read with a timeout: if the probe ever
+    // regresses to the fallback, this test throws instead of settling.
+    const spreadsheet = new StubSpreadsheet();
+    seedLandedWrite(spreadsheet);
+    const stub = new StubSheetsTransport(spreadsheet);
+    let failFullReads = false;
+    const timingOutTransport: GoogleSheetsApiTransport = {
+      getSpreadsheet: async (request) => {
+        if (failFullReads && request.ranges.some((range) =>
+          range === "'Users_System'!A1:C1048576" ||
+          range.endsWith("__typed_sheets_internal_effect_receipts'!A1:F1048576"))) {
+          throw new GoogleSheetsApiTransportError(
+            GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT,
+            "stub full-read timeout",
+            absentValue(),
+          );
+        }
+        return stub.getSpreadsheet(request);
+      },
+      batchUpdate: (request) => stub.batchUpdate(request),
+    };
+    const provider = buildProvider(timingOutTransport);
+    // Cold probe advances the receipt cursor to the tab's parsed tail.
+    await provider.readEffectPostcondition(landedProbe());
+    failFullReads = true;
+    // A never-dispatched effect: its receipt exists nowhere, and the target
+    // row still holds the pre-write state the effect expected.
+    const baseline = stubRowVisibleHash(spreadsheet.findTab("Users_System") as never, 2, SYSTEM_HEADERS);
+    const missing = effect({
+      effectId: "effect-2",
+      payloadHash: "payload-2",
+      targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: baseline,
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("queued"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const postcondition = await provider.readEffectPostcondition(missing);
+    expect(postcondition.disposition).toBe("unapplied");
+  });
+
+  it("decides a missing receipt from a cold cursor's full receipt coverage", async () => {
+    // Cursor-invalid (fresh process) counterpart: the base read itself is
+    // the historical FULL receipt read, so the miss is proven by complete
+    // coverage, not by a band. The full receipt range must appear, and no
+    // separate whole-tab target fallback read may follow.
+    const spreadsheet = new StubSpreadsheet();
+    seedLandedWrite(spreadsheet);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    const baseline = stubRowVisibleHash(spreadsheet.findTab("Users_System") as never, 2, SYSTEM_HEADERS);
+    const missing = effect({
+      effectId: "effect-2",
+      payloadHash: "payload-2",
+      targetAnchor: "anchor-1",
+      targetId: "entity:users:u1",
+      expectedVisibleRevision: 1,
+      expectedVisibleHash: baseline,
+      fields: {
+        id: cell.string("u1"),
+        status: cell.string("queued"),
+        __typed_sheets_deleted: cell.bool(false),
+      },
+    });
+    const postcondition = await provider.readEffectPostcondition(missing);
+    expect(postcondition.disposition).toBe("unapplied");
+    // Enumeration, scoped base read (carrying the FULL receipt range), and
+    // the located row's verification band — nothing after.
+    expect(transport.getSpreadsheetRequests).toHaveLength(3);
+    const base = transport.getSpreadsheetRequests[1]!;
+    expect(base.ranges.some((range) =>
+      range.includes("__typed_sheets_internal_effect_receipts'!A1:F1048576"))).toBe(true);
+    for (const request of transport.getSpreadsheetRequests) {
+      expect(request.ranges).not.toContain("'Users_System'!A1:C1048576");
+    }
+  });
+
+  it("carries responseBytes telemetry on the scoped probe verification read", async () => {
+    // The verification pass runs its OWN paced getSpreadsheet with a raw
+    // meta carrier; the event must measure the RAW document like every
+    // other preflight read, or write-lane payload evidence silently vanishes
+    // exactly when probes go scoped.
+    const spreadsheet = new StubSpreadsheet();
+    seedLandedWrite(spreadsheet);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const events: Array<Record<string, unknown>> = [];
+    const provider = buildProvider(transport, {
+      onRequest: (event) => events.push(event as Record<string, unknown>),
+    });
+    await provider.readEffectPostcondition(landedProbe());
+    const readEvents = events.filter((event) => event.operation === "getSpreadsheet");
+    // Enumeration, scoped base read, and the row-band verification read.
+    expect(readEvents).toHaveLength(3);
+    for (const read of readEvents) {
+      expect(typeof read.responseBytes).toBe("number");
+      expect(read.responseBytes as number).toBeGreaterThan(0);
+    }
+  });
+
+  it("requests key-column and row BANDS (never whole-tab ranges) once the receipt cursor is live", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    seedLandedWrite(spreadsheet);
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+    // Cold probe: advances the cursor to the receipt tab's parsed tail.
+    await provider.readEffectPostcondition(landedProbe());
+    const requestsBefore = transport.getSpreadsheetRequests.length;
+    const postcondition = await provider.readEffectPostcondition(landedProbe());
+    expect(postcondition.disposition).toBe("applied");
+    const probeRequests = transport.getSpreadsheetRequests.slice(requestsBefore);
+    // Enumeration, scoped base read, and the row-band verification read.
+    expect(probeRequests).toHaveLength(3);
+    expect(probeRequests[0]!.ranges).toEqual([]);
+    const base = probeRequests[1]!;
+    // Header row + tab-wide identity column band replace the whole-tab range,
+    // and the receipt tab is read as the tail band from the cursor row.
+    expect(base.fields).toBe(GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS);
+    expect(base.ranges).toContain("'Users_System'!A1:C1");
+    expect(base.ranges).toContain("'Users_System'!A2:A1048576");
+    expect(base.ranges.some((range) => range.includes("__typed_sheets_internal_effect_receipts'!A2:F1048576")))
+      .toBe(true);
+    for (const request of probeRequests) {
+      expect(request.ranges).not.toContain("'Users_System'!A1:C1048576");
+    }
+    // The landed row's full-field, format-evidenced band comes from its own
+    // atomic request (values + both number-format sources in one snapshot).
+    const band = probeRequests[2]!;
+    expect(band.fields).toBe(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS);
+    expect(band.ranges).toContain("'Users_System'!A2:C2");
+  });
 });
 
 describe("GoogleSheetsApiSyncProvider transport classification and telemetry", () => {
@@ -4061,6 +4309,7 @@ function verificationContextFixture(overrides: {
     checkboxHeaders: [],
     scopedBase: true,
     anchorColumn: overrides.anchorColumn,
+    checkColumn: undefined,
     receiptSheetId: absentValue(),
     receiptLastRow: 0,
     receiptFirstRow: undefined,

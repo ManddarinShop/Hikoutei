@@ -43,6 +43,11 @@ import {
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
 import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
+import {
+  renderRowCheckCell,
+  SYNC_ROW_CHECK_DELIMITER,
+} from "@hikoutei/contracts/sheets/rowCheck.js";
+import { buildRowCheckFormula } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/rowCheckFormula.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
@@ -117,6 +122,18 @@ export class StubSheet {
 
   /** Cells keyed by `${row},${col}` with 0-based coordinates. */
   public readonly cells = new Map<string, StubCell>();
+  /**
+   * Explicit grid column count for addDimension/grid-width tests. The stub
+   * otherwise reports `max(lastContentColumn + 1, 26)` like a fresh real
+   * sheet; setting it lets a test pin a NARROW grid so provisioning must
+   * emit an addDimension for the row-check column before its header write.
+   */
+  public gridColumnCount: number | undefined;
+  /** Grid width the stub reports (default 26 columns, like a real sheet). */
+  public gridColumns(): number {
+    return this.gridColumnCount ?? Math.max(this.lastContentColumn() + 1, 26);
+  }
+
   /** Checkbox data-validation ranges recorded for assertions. */
   public readonly dataValidationRanges: {
     readonly startRowIndex: number;
@@ -407,7 +424,7 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
           hidden: sheet.hidden,
           gridProperties: {
             rowCount: Math.max(sheet.lastContentRow() + 1, 1000),
-            columnCount: Math.max(sheet.lastContentColumn() + 1, 26),
+            columnCount: sheet.gridColumns(),
           },
         },
         // Merged regions live on the SHEET object as `merges` GridRange
@@ -510,7 +527,7 @@ function gridDataFor(sheet: StubSheet, band: ParsedA1Range, mask: StubMaskOption
   for (let row = band.startRow; row <= lastRow; row += 1) {
     const values: unknown[] = [];
     for (let col = band.startColumn; col <= band.endColumn; col += 1) {
-      values.push(stubCellWire(sheet.cell(row, col), sheet.dataValidationFor(row, col), mask));
+      values.push(stubCellWire(sheet, row, col, mask));
     }
     // ...and each row's values only up to its last populated column. The
     // real API omits trailing empty CellData entries, but a MERGE-COVERED
@@ -547,11 +564,33 @@ function isPlainEmptyCell(value: unknown): boolean {
     && Object.keys(value as Record<string, unknown>).length === 0;
 }
 
+/**
+ * The provider-written per-row token formula in the check column (see
+ * `model/rowCheckFormula.ts`): one `IF(ISNUMBER(<ref>),"n",...)&LEN(<ref>)
+ * &":"&<ref>` term per
+ * data column joined by `&"|"&`. The stub EVALUATES it lazily at read time
+ * over the current row cells — mirroring the real API's PROVEN behavior
+ * that a recalc is visible on the FIRST read after the batchUpdate that
+ * changed a referenced cell, and that a cell-targeted `updateCells`
+ * preserves the neighboring formula. Tokens are rendered by the SAME
+ * contracts renderer the SQLite side uses, so the provider write/read pair
+ * is exercised against the real encoding, not a stub re-implementation.
+ */
+const STUB_ROW_CHECK_TERM = /IF\(ISNUMBER\(([A-Z]+)(\d+)\),"n",/g;
+
+/**
+ * Computes one cell's wire representation (mask-filtered), evaluating
+ * row-check token formulas into `effectiveValue`/`formattedValue` like
+ * the real engine does.
+ */
 function stubCellWire(
-  cell: StubCell | undefined,
-  dataValidation: StubCell["dataValidation"],
+  sheet: StubSheet,
+  row: number,
+  col: number,
   mask: StubMaskOptions,
 ): unknown {
+  const cell = sheet.cell(row, col);
+  const dataValidation = sheet.dataValidationFor(row, col);
   // Injected primitive/null CellData entries are malformed wire data and
   // must survive untouched so the provider's boundary guard fails closed on
   // them (the real API never emits one; injection fixtures do).
@@ -560,8 +599,27 @@ function stubCellWire(
   // real API can emit, and only the ones the request's field mask names —
   // a stray wrapper in the stored model can never ride through unmasked.
   const wire: Record<string, unknown> = {};
+  const formula = cell?.userEnteredValue?.formulaValue;
   if (cell !== undefined && cell.userEnteredValue !== undefined) {
     wire.userEnteredValue = cell.userEnteredValue;
+  }
+  // A supported row-check formula computes live; anything else keeps the
+  // fixture-provided effectiveValue/formattedValue verbatim (the old
+  // behavior hand-written fixtures rely on).
+  const computed = typeof formula === "string"
+    ? evaluateStubRowCheck(sheet, row, formula)
+    : undefined;
+  if (mask.includeEffectiveValue) {
+    if (computed !== undefined) wire.effectiveValue = { stringValue: computed };
+    else if (cell !== undefined && cell.effectiveValue !== undefined) {
+      wire.effectiveValue = cell.effectiveValue;
+    }
+  }
+  if (mask.includeFormattedValue) {
+    if (computed !== undefined) wire.formattedValue = computed;
+    else if (cell !== undefined && cell.formattedValue !== undefined) {
+      wire.formattedValue = cell.formattedValue;
+    }
   }
   if (mask.includeNumberFormats) {
     if (cell !== undefined && cell.userEnteredFormat !== undefined) {
@@ -574,25 +632,87 @@ function stubCellWire(
       wire.effectiveFormat = cell.effectiveFormat;
     } else if (wire.userEnteredValue !== undefined) {
       // The real API resolves a COMPUTED effectiveFormat for every populated
-      // cell (that is what dominates preflight response bytes on the wire):
-      // absent entered formats come back as the column-inherited default and
-      // date-formatted cells carry the same canonical format in effective.
+      // cell (that is what dominates preflight response bytes on the wire:
+      // textFormat/alignment wrappers around the inherited number format),
+      // and date-formatted cells carry the same canonical format in
+      // effective. The stub mirrors that shape so byte guards measure the
+      // real payload hierarchy instead of a toy minimum.
       wire.effectiveFormat = cell !== undefined && cell.userEnteredFormat !== undefined
         ? cell.userEnteredFormat
-        : { numberFormat: { type: "TEXT", pattern: "@" } };
+        : {
+          numberFormat: { type: "TEXT", pattern: "@" },
+          textFormat: {
+            foregroundColorStyle: { rgbColor: {} },
+            fontFamily: "Arial",
+            fontSize: 10,
+            bold: false,
+            italic: false,
+          },
+          verticalAlignment: "BOTTOM",
+        };
     }
-  }
-  if (mask.includeEffectiveValue && cell !== undefined && cell.effectiveValue !== undefined) {
-    wire.effectiveValue = cell.effectiveValue;
-  }
-  if (mask.includeFormattedValue && cell !== undefined && cell.formattedValue !== undefined) {
-    wire.formattedValue = cell.formattedValue;
   }
   if (dataValidation !== undefined && mask.includeDataValidation) {
     wire.dataValidation = dataValidation;
   }
   return wire;
 }
+
+/**
+ * Evaluates one supported row-check token formula over the referenced
+ * column span; returns undefined for any other formula text (fixtures keep
+ * their stored shape). A referenced cell that is itself an unsupported
+ * formula yields undefined too (passthrough, never a fake token).
+ */
+function evaluateStubRowCheck(
+  sheet: StubSheet,
+  row: number,
+  formula: string,
+): string | undefined {
+  const refs = [...formula.matchAll(STUB_ROW_CHECK_TERM)];
+  if (refs.length === 0) return undefined;
+  const firstRef = refs[0];
+  const lastRef = refs[refs.length - 1];
+  if (firstRef === undefined || lastRef === undefined) return undefined;
+  const writtenRow = firstRef[2];
+  if (writtenRow === undefined || refs.some((ref) => ref[2] !== writtenRow)) {
+    return undefined;
+  }
+  const firstCol = columnLettersToIndex(firstRef[1]!);
+  const lastCol = columnLettersToIndex(lastRef[1]!);
+  if (refs.length !== lastCol - firstCol + 1) return undefined;
+  // Exact-shape guard: only the generator's own formula text computes; a
+  // foreign formula resembling the shape stays fixture-passthrough.
+  if (formula !== buildRowCheckFormula(firstCol + 1, lastCol + 1, Number(writtenRow))) {
+    return undefined;
+  }
+  // A row shift (insert/deleteDimension) MOVES the formula cell but keeps
+  // its written reference text; the real engine adjusts references. Mirror
+  // the engine: resolve the referenced COLUMNS against the cell's ACTUAL
+  // row so a shifted stub grid can never disagree with itself.
+  const tokens: string[] = [];
+  for (let col = firstCol; col <= lastCol; col += 1) {
+    const cell = sheet.cell(row, col);
+    const value = cell?.userEnteredValue;
+    if (value === undefined) {
+      tokens.push(renderRowCheckCell(null));
+      continue;
+    }
+    if (typeof value.formulaValue === "string" || value.errorValue !== undefined) {
+      return undefined;
+    }
+    const rendered = value.stringValue !== undefined
+      ? { kind: "string" as const, value: value.stringValue }
+      : value.numberValue !== undefined
+        ? { kind: "number" as const, value: value.numberValue }
+        : value.boolValue !== undefined
+          ? { kind: "boolean" as const, value: value.boolValue }
+          : null;
+    tokens.push(renderRowCheckCell(rendered));
+  }
+  return tokens.join(SYNC_ROW_CHECK_DELIMITER);
+}
+
 
 /**
  * True when one `spreadsheets.get` requests a TAIL BAND of the receipt tab
@@ -689,6 +809,14 @@ function applyRequest(spreadsheet: StubSpreadsheet, request: GoogleSheetsApiWrit
       const sheet = requireSheet(spreadsheet, request.sheetId);
       const count = request.endIndex - request.startIndex;
       shiftRows(sheet, request.startIndex, count);
+      return {};
+    }
+    case "addDimension": {
+      // Grid growth only: the stub's sparse cell map never needs the extra
+      // slots, but the reported gridProperties.columnCount must move so a
+      // provisioning retry sees the width the real API would have grown to.
+      const sheet = requireSheet(spreadsheet, request.sheetId);
+      sheet.gridColumnCount = Math.max(sheet.gridColumns(), request.endIndex);
       return {};
     }
     case "deleteDimension": {

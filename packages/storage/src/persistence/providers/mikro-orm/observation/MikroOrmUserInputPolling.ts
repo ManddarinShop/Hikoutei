@@ -20,8 +20,13 @@ import {
   type SyncTimingSink,
 } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
 import {
+  isSyncSheetsRowChecksReader,
   isSyncSheetsTableReader,
   observeSyncSnapshots,
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import type {
+  ReadSyncRowChecksRequest,
+  SyncRowChecksResult,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
@@ -75,6 +80,11 @@ import {
   type SheetAccumulator,
 } from "./MikroOrmUserInputPollingInspection.js";
 import { inspectFastPollingTable } from "./MikroOrmUserInputPollingFastPath.js";
+import {
+  CHECKS_POLLING_DECISION_KINDS,
+  inspectChecksPollingTable,
+  toRowChecksRequest,
+} from "./MikroOrmUserInputPollingChecks.js";
 import {
   persistInvalidPollingRows,
   persistPreparedRows,
@@ -143,6 +153,8 @@ interface PollingPassMetrics {
 export const POLLING_TIMING_PHASES = {
   CANONICAL_STATE_READ: "canonical_state_read",
   VALUES_ONLY_READ: "values_only_read",
+  /** Narrow identity + anchor + check-column band read (the check-column gate). */
+  ROW_CHECKS_READ: "row_checks_read",
   FAST_COMPARISON: "fast_comparison",
   FULL_METADATA_OBSERVATION: "full_metadata_observation",
   PERSISTENCE: "persistence",
@@ -199,6 +211,27 @@ export async function pollMappedUserInputWithMikroOrm(
   const canUseAdaptivePath = requestedMode === MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE &&
     options.forceFull !== true &&
     isSyncSheetsTableReader(options.provider);
+
+  // Check-column gate (preferred adaptive preflight): when the provider can
+  // answer the narrow row-check read, poll ONLY the identity + anchor +
+  // check column
+  // bands, diff each row against the expected check derived from canonical
+  // state, and re-read (metadata-preserving, one batched band request) only
+  // the mismatched rows. Tables the gate cannot prove — no provisioned check
+  // column (legacy mixed mode) or any identity/canonical anomaly — escalate
+  // to the historical whole-table observation UNCHANGED, so every conflict
+  // outcome the full read produced is produced here too.
+  if (canUseAdaptivePath && isSyncSheetsRowChecksReader(options.provider)) {
+    return await pollWithRowChecksGate(
+      options,
+      options.provider,
+      mappings,
+      accumulators,
+      state,
+      startedAt,
+      safetyScanLagMs,
+    );
+  }
 
   if (canUseAdaptivePath) {
     const valuesReadStartedAt = Date.now();
@@ -339,6 +372,182 @@ function assertObservationCount(
   throw new TypedSheetsOrmError(
     TYPED_SHEETS_ORM_ERROR_CODES.INVALID_ENTITY_MAPPING,
     "User_Input observation result count does not match the requested mappings.",
+  );
+}
+
+/**
+ * Runs one check-column-gated adaptive polling pass.
+ *
+ * One narrow band read (identity + anchor + check columns only,
+ * values-only mask)
+ * preflights every mapped User_Input tab; rows whose computed check
+ * mismatches the value derived from canonical SQLite state (with no
+ * in-flight delivery of our own write) receive a targeted, metadata-
+ * preserving band observation, and identity/anchor/canonical anomalies
+ * receive the historical whole-table observation. A fully clean pass
+ * therefore never reads a single data column — the gate's whole purpose
+ * (measured ~490 B/row of identity+anchor+check bands versus ~1.25 KB/row
+ * for the whole-table metadata read it replaces; the live pre-fix polling
+ * pass measured 2.95 MB).
+ * Every accepted decision path still funnels into the UNCHANGED inspector,
+ * evaluator, and persistence code, so conflict semantics cannot drift.
+ */
+async function pollWithRowChecksGate(
+  options: PollMappedUserInputWithMikroOrmOptions,
+  provider: Parameters<typeof observeSyncSnapshots>[0] & {
+    readRowChecksBatch(
+      requests: readonly ReadSyncRowChecksRequest[],
+    ): Promise<readonly SyncRowChecksResult[]>;
+  },
+  mappings: readonly TypedSheetsEntityMapping[],
+  accumulators: readonly SheetAccumulator[],
+  state: MappedPollingState,
+  startedAt: number,
+  safetyScanLagMs: number,
+): Promise<MappedUserInputPollingReport> {
+  const timingSink = options.onTiming;
+  const checksReadStartedAt = Date.now();
+  const checkResults = await provider.readRowChecksBatch(
+    mappings.map(toRowChecksRequest),
+  );
+  emitPollingTiming(
+    timingSink,
+    POLLING_TIMING_PHASES.ROW_CHECKS_READ,
+    Date.now() - checksReadStartedAt,
+  );
+  assertRowChecksCount(checkResults, mappings.length);
+
+  const fullMappings: TypedSheetsEntityMapping[] = [];
+  const fullAccumulators: SheetAccumulator[] = [];
+  const targeted: {
+    readonly mapping: TypedSheetsEntityMapping;
+    readonly accumulator: SheetAccumulator;
+    readonly rowNumbers: readonly number[];
+  }[] = [];
+  let checksRowsScanned = 0;
+  let checksChangedRows = 0;
+  const comparisonStartedAt = Date.now();
+  for (const [index, mapping] of mappings.entries()) {
+    const result = checkResults[index];
+    const accumulator = accumulators[index];
+    if (result === undefined || accumulator === undefined) continue;
+    const decision = inspectChecksPollingTable(mapping, result, state);
+    checksRowsScanned += decision.rowsScanned;
+    checksChangedRows += decision.changedRows;
+    if (
+      decision.kind === CHECKS_POLLING_DECISION_KINDS.ESCALATE ||
+      decision.kind === CHECKS_POLLING_DECISION_KINDS.TARGETED
+    ) {
+      // The inspector counts the rows it actually scans (the whole table
+      // for an escalation, the targeted bands for a mismatch), exactly the
+      // way the values-only preflight resets its scan count before an
+      // escalation.
+      accumulator.rowsScanned = 0;
+    } else {
+      accumulator.rowsScanned = decision.rowsScanned;
+    }
+    if (decision.kind === CHECKS_POLLING_DECISION_KINDS.ESCALATE) {
+      fullMappings.push(mapping);
+      fullAccumulators.push(accumulator);
+    } else if (decision.kind === CHECKS_POLLING_DECISION_KINDS.TARGETED) {
+      targeted.push({
+        mapping,
+        accumulator,
+        rowNumbers: decision.rowNumbers,
+      });
+    }
+  }
+  emitPollingTiming(
+    timingSink,
+    POLLING_TIMING_PHASES.FAST_COMPARISON,
+    Date.now() - comparisonStartedAt,
+  );
+
+  const preparedRows: PreparedRow[] = [];
+  const invalidRows: InvalidRow[] = [];
+  if (fullMappings.length > 0) {
+    const observationStartedAt = Date.now();
+    const observed = await observeSyncSnapshots(
+      options.provider,
+      fullMappings.map(toSnapshotRequest),
+    );
+    emitPollingTiming(
+      timingSink,
+      POLLING_TIMING_PHASES.FULL_METADATA_OBSERVATION,
+      Date.now() - observationStartedAt,
+    );
+    assertObservationCount(observed, fullMappings.length);
+    const prepared = prepareObservedRows(
+      fullMappings,
+      observed,
+      state,
+      fullAccumulators,
+    );
+    preparedRows.push(...prepared.preparedRows);
+    invalidRows.push(...prepared.invalidRows);
+  }
+  if (targeted.length > 0) {
+    // ONE batched observation request carries every targeted tab; each tab
+    // is read as its header row plus contiguous row bands over the
+    // mismatched rows only (multi-range band, metadata-preserving mask).
+    const observationStartedAt = Date.now();
+    const observed = await observeSyncSnapshots(
+      options.provider,
+      targeted.map((entry) => ({
+        ...toSnapshotRequest(entry.mapping),
+        rowNumbers: entry.rowNumbers,
+      })),
+    );
+    emitPollingTiming(
+      timingSink,
+      POLLING_TIMING_PHASES.FULL_METADATA_OBSERVATION,
+      Date.now() - observationStartedAt,
+    );
+    assertObservationCount(observed, targeted.length);
+    const prepared = prepareObservedRows(
+      targeted.map((entry) => entry.mapping),
+      observed,
+      state,
+      targeted.map((entry) => entry.accumulator),
+    );
+    preparedRows.push(...prepared.preparedRows);
+    invalidRows.push(...prepared.invalidRows);
+  }
+
+  const persistenceStartedAt = Date.now();
+  await persistPreparedRowsIfNeeded(
+    options,
+    state,
+    preparedRows,
+    invalidRows,
+    [...accumulators],
+  );
+  emitPollingTiming(
+    timingSink,
+    POLLING_TIMING_PHASES.PERSISTENCE,
+    Date.now() - persistenceStartedAt,
+  );
+  await retryDeferredConflicts(options, mappings);
+  const report = createPollingReport(startedAt, accumulators, {
+    mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
+    safetyFullScan: false,
+    safetyScanLagMs,
+    fullMetadataTables: fullMappings.length + targeted.length,
+    fastPathRowsScanned: checksRowsScanned,
+    fastPathChangedRows: checksChangedRows,
+  });
+  emitPollingTiming(timingSink, POLLING_TIMING_PHASES.POLLING_TOTAL, report.elapsedMs);
+  return report;
+}
+
+function assertRowChecksCount(
+  results: readonly SyncRowChecksResult[],
+  expectedCount: number,
+): void {
+  if (results.length === expectedCount) return;
+  throw new TypedSheetsOrmError(
+    TYPED_SHEETS_ORM_ERROR_CODES.INVALID_ENTITY_MAPPING,
+    "User_Input row-check result count does not match the requested mappings.",
   );
 }
 
@@ -566,6 +775,7 @@ async function readMappedPollingState(
       rows.businessKeys,
       rows.conflicts,
       rows.visible,
+      rows.pendingEffects,
     );
   });
 }

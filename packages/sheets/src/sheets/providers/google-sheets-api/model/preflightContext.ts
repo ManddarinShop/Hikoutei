@@ -16,6 +16,7 @@ import {
   GOOGLE_SHEETS_API_RECEIPT_HEADERS,
   GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
   GOOGLE_SHEETS_API_ROW_ID_HEADER,
+  GOOGLE_SHEETS_API_ROW_CHECK_HEADER,
 } from "../constants.js";
 import {
   GOOGLE_SHEETS_API_ENUMERATION_FIELDS,
@@ -48,14 +49,17 @@ import {
 } from "./preflightParsing.js";
 import {
   anchorColumnFor,
+  checkColumnFor,
   findSheetByTitle,
   gridRowCells,
   indexRows,
+  pickRegisteredGrid,
   readRows,
   requireGridDataForSheet,
   requireSheetByTitle,
   requireSheetGrids,
   requireSingleGrid,
+  resolveGridCell,
   synthesizeScopedTargetGrid,
 } from "./preflightRows.js";
 import {
@@ -124,6 +128,18 @@ export interface PreflightContext {
    * for projections without one (system_state, sync_conflicts).
    */
   readonly anchorColumn: number | undefined;
+  /**
+   * 1-based absolute column of a PROVISIONED row-check formula column (the
+   * column directly after the registered range whose row-1 header cell is
+   * exactly `__hikoutei_row_check`), or `undefined` when the route has no
+   * verified check column (every non-user_input route, and user_input tabs
+   * not yet re-provisioned). Appends write the row's token-join formula
+   * ONLY
+   * when this is present, so a legacy tab never receives stray formulas and
+   * an out-of-bounds `updateCells` (which cannot grow the grid) can never
+   * abort a batch because of this feature.
+   */
+  readonly checkColumn: number | undefined;
   readonly receiptSheetId: Presence<number>;
   /** Receipt tab last content row; 0 when the tab is absent. */
   readonly receiptLastRow: number;
@@ -321,7 +337,15 @@ function scopedOrFullTargetRanges(
   const lastColumn = parsedRange.startColumn + parsedRange.columnCount - 1;
   const quote = quoteA1SheetName(route.sheetName);
   const full = `${quote}!A1:${columnLetters(lastColumn)}1048576`;
-  if (!scoped) return [full];
+  // A user_input route's read additionally probes the single cell where a
+  // provisioned row-check column header would sit (one 1-cell band; the
+  // header is the only evidence that separates "provisioned" from "legacy",
+  // and the probe never grows any existing range).
+  const checkProbe = checkColumnFor(route.registeredRange, route.projection);
+  const checkProbeRange = checkProbe === undefined
+    ? []
+    : [`${quote}!${columnLetters(checkProbe)}1:${columnLetters(checkProbe)}1`];
+  if (!scoped) return [full, ...checkProbeRange];
   const headerRow = `${quote}!A1:${columnLetters(lastColumn)}1`;
   const columns: number[] = [];
   if (route.identityField.kind === "present") {
@@ -332,12 +356,13 @@ function scopedOrFullTargetRanges(
   if (anchorColumn !== undefined) columns.push(anchorColumn);
   // A route whose registered range holds NEITHER key column cannot prove
   // dedupe/append identity from a column-scoped read: keep the full range.
-  if (columns.length === 0) return [full];
+  if (columns.length === 0) return [full, ...checkProbeRange];
   const ranges: string[] = [headerRow];
   for (const column of new Set(columns)) {
     const letter = columnLetters(column);
     ranges.push(`${quote}!${letter}2:${letter}1048576`);
   }
+  ranges.push(...checkProbeRange);
   return ranges;
 }
 
@@ -609,13 +634,22 @@ export function buildRouteContext(
   // geometrically into one dense logical grid so the historical header,
   // blank-row, anchor, and normalization rules run unchanged over the cells
   // that were actually requested.
+  const targetGrids = requireSheetGrids(dataDocument, targetSheet.sheetId);
   const targetData = shape.scoped
-    ? synthesizeScopedTargetGrid(
-        requireSheetGrids(dataDocument, targetSheet.sheetId),
-        parsedRange,
-      )
-    : requireGridDataForSheet(dataDocument, targetSheet.sheetId);
+    ? synthesizeScopedTargetGrid(targetGrids, parsedRange)
+    : pickRegisteredGrid(targetGrids, parsedRange, targetSheet.sheetId);
   const anchorColumn = anchorColumnFor(route.registeredRange, route.projection);
+  // Row-check column evidence: the provisioned header cell directly after
+  // the registered range (read from the dedicated 1-cell probe band). A
+  // missing/foreign header means a legacy tab: appends skip the formula
+  // write and polling keeps the historical whole-table observation.
+  const checkColumnAbsolute = checkColumnFor(route.registeredRange, route.projection);
+  const checkHeaderRaw = checkColumnAbsolute === undefined
+    ? undefined
+    : apiStringValue(resolveGridCell(targetGrids, 1, checkColumnAbsolute));
+  const checkColumn = checkHeaderRaw === GOOGLE_SHEETS_API_ROW_CHECK_HEADER
+    ? checkColumnAbsolute
+    : undefined;
   const headers = readRegisteredHeaders(
     targetData,
     parsedRange,
@@ -688,6 +722,7 @@ export function buildRouteContext(
     identityNeedsFormatEvidence,
     checkboxHeaders,
     anchorColumn,
+    checkColumn,
     receiptSheetId,
     receiptLastRow,
     receiptFirstRow,

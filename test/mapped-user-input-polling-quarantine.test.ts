@@ -112,6 +112,7 @@ function state(): MappedPollingState {
     ]),
     conflictsByBindingAndField: new Map(),
     visibleRevisionsByPhysicalAndBinding: new Map(),
+    pendingDeliveryBindingIds: new Set(),
   };
 }
 

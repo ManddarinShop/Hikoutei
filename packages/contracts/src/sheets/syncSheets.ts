@@ -102,6 +102,18 @@ export interface EnsureSyncRowAnchorsResult {
 export interface ReadSyncSnapshotRequest extends EnsureSyncRowAnchorsRequest {
   /** Full metadata for reconciliation, or user-editable values for polling. */
   readonly readMode?: SyncSnapshotReadMode;
+  /**
+   * Optional row-level scoping for the check-column polling gate. When
+   * present, a provider that supports it reads ONLY the header row plus
+   * row bands covering these 1-based physical row numbers (multi-range
+   * bands of the registered span) instead of the whole table, and returns
+   * a snapshot containing just the banded nonblank rows. Providers without
+   * the capability ignore the field and return the historical whole-table
+   * snapshot, which stays correct (a superset of rows the caller asked
+   * for); callers only send rowNumbers to providers that expose
+   * {@link isSyncSheetsRowChecksReader}.
+   */
+  readonly rowNumbers?: readonly number[];
 }
 
 /** Result of one combined anchor assignment and snapshot read. */
@@ -391,6 +403,82 @@ export interface SyncSheetsTableReader {
   readRowsBatch(
     requests: readonly ReadSyncTableRowsRequest[],
   ): Promise<readonly SyncTableRowsResult[]>;
+  /**
+   * Optional narrow row-check read backing the formula check-column polling
+   * gate (see `sheets/rowCheck.ts`). Providers without the capability (fake
+   * providers, non-Sheets adapters) leave it undefined; polling then keeps
+   * the historical values-only whole-table preflight.
+   */
+  readRowChecksBatch?: (
+    requests: readonly ReadSyncRowChecksRequest[],
+  ) => Promise<readonly SyncRowChecksResult[]>;
+}
+
+/**
+ * Request for the narrow row-check read of one registered User_Input tab:
+ * ONLY the identity column, the system row-id (anchor) column, and the
+ * check column (three column bands in one ranged read). `identityField`
+ * names the header whose column the provider maps rows with; it must be
+ * one of the route's registered headers.
+ */
+export interface ReadSyncRowChecksRequest {
+  readonly physicalSheetId: string;
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly projection: SyncProjection;
+  readonly schemaVersion: number;
+  readonly identityField: string;
+}
+
+/** One visible row of the narrow check read (row mapping + check string). */
+export interface SyncRowCheckRow {
+  readonly rowNumber: number;
+  /** Identity cell under values-only (getValues) normalization. */
+  readonly identity: NormalizedCell;
+  /**
+   * System row-id (anchor) column value, ABSENT when the cell is blank.
+   * The polling gate compares it against the binding's anchor reference
+   * and escalates any deletion/duplication/misplacement to the
+   * whole-table observation.
+   */
+  readonly anchor: Presence<string>;
+  /**
+   * Computed check-column display string, PRESENT only when the check cell
+   * still carries the EXACT system-generated formula for this row (formula
+   * provenance). A blank cell, a literal replacement, or a foreign formula
+   * yields ABSENT — "no check evidence" — so a pasted stale string can
+   * never pass the gate; callers treat absent as a mismatch.
+   */
+  readonly check: Presence<string>;
+}
+
+/**
+ * Result of one narrow check read. `status` is `checks_unavailable` when
+ * the tab is not provisioned with the check column (missing or foreign
+ * header cell), so polling falls back to the historical whole-table read
+ * for that tab (mixed mode); rows remain listed so the provider's answer
+ * is still a complete observation of the bands it read.
+ */
+export interface SyncRowChecksResult {
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly status: "checks_available" | "checks_unavailable";
+  readonly rows: readonly SyncRowCheckRow[];
+}
+
+/** Providers that can answer the narrow check-column read (the polling gate). */
+export interface SyncSheetsRowChecksReader {
+  readRowChecksBatch(
+    requests: readonly ReadSyncRowChecksRequest[],
+  ): Promise<readonly SyncRowChecksResult[]>;
+}
+
+/** Returns whether a table reader also exposes the narrow row-check read. */
+export function isSyncSheetsRowChecksReader(
+  provider: object,
+): provider is SyncSheetsRowChecksReader {
+  const candidate = provider as Partial<SyncSheetsRowChecksReader>;
+  return typeof candidate.readRowChecksBatch === "function";
 }
 
 /** Returns whether a full observation provider also exposes the values-only reader. */

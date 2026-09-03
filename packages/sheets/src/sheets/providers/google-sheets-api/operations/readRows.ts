@@ -258,6 +258,7 @@ export async function readObservedTabs(
     readonly sheetName: string;
     readonly registeredRange: string;
     readonly readMode?: SyncSnapshotReadMode;
+    readonly rowNumbers?: readonly number[];
   }[],
 ): Promise<ReadonlyMap<string, ObservedTab>> {
   // One getSpreadsheet call serves the whole batch with ONE mask: the
@@ -282,6 +283,7 @@ export async function readObservedTabs(
       requests.map((request) => ({
         sheetName: request.sheetName,
         registeredRange: request.registeredRange,
+        ...(request.rowNumbers === undefined ? {} : { rowNumbers: request.rowNumbers }),
       })),
       fields,
       deps.readTimeoutMs,

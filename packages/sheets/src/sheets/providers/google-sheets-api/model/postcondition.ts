@@ -94,6 +94,22 @@ export function classifyPostcondition(
   return postcondition("changed", absentValue(), presentValue(current));
 }
 
+/**
+ * Locates the row number the probe's `findProbeRow` will classify for one
+ * effect, against a preflight context (anchor first, then identity, then the
+ * targetId tail). Returns `undefined` when the context holds no candidate
+ * row. The recovery probe uses this to build its scoped row-band read: a row
+ * that cannot be located needs no band (its absence is itself the evidence
+ * `classifyPostcondition` consumes).
+ */
+export function probeTargetRowNumber(
+  context: PreflightContext,
+  effect: SyncProjectionEffect,
+): number | undefined {
+  const row = findProbeRow(context, effect);
+  return row === undefined ? undefined : row.rowNumber;
+}
+
 function findProbeRow(
   context: PreflightContext,
   effect: SyncProjectionEffect,

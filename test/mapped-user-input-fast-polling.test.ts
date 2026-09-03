@@ -85,6 +85,7 @@ function state(): MappedPollingState {
     ]),
     conflictsByBindingAndField: new Map(),
     visibleRevisionsByPhysicalAndBinding: new Map(),
+    pendingDeliveryBindingIds: new Set(),
   };
 }
 
@@ -251,6 +252,7 @@ function richState(): MappedPollingState {
     ]),
     conflictsByBindingAndField: new Map(),
     visibleRevisionsByPhysicalAndBinding: new Map(),
+    pendingDeliveryBindingIds: new Set(),
   };
 }
 
@@ -358,6 +360,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
       ]),
       conflictsByBindingAndField: new Map(),
       visibleRevisionsByPhysicalAndBinding: new Map(),
+      pendingDeliveryBindingIds: new Set(),
     };
 
     const decision = inspectFastPollingTable(richMapping, richResult([

@@ -104,6 +104,12 @@ export interface GoogleSheetsApiCell {
     readonly stringValue?: string;
     readonly numberValue?: number;
     readonly boolValue?: boolean;
+    /**
+     * Formula text with the leading `=` (exactly what the UI shows; the
+     * real API echoes it back in `userEnteredValue`). Used only by the
+     * row-check column formula cells; every other write stays literal.
+     */
+    readonly formulaValue?: string;
   };
   readonly userEnteredFormat?: {
     readonly numberFormat?: GoogleSheetsApiNumberFormat;
@@ -154,6 +160,20 @@ export type GoogleSheetsApiWriteRequest =
     readonly dimension: "ROWS";
     readonly startIndex: number;
     /** Exclusive end index; exactly one row is deleted by the provider. */
+    readonly endIndex: number;
+  }
+  | {
+    /**
+     * Grows the tab's grid. `updateCells` never expands the grid (a proven
+     * 400 for out-of-bounds ranges), so provisioning emits this BEFORE the
+     * header write whenever the row-check column sits outside the current
+     * grid width. 0-based exclusive end index, like the other dimension
+     * requests.
+     */
+    readonly kind: "addDimension";
+    readonly sheetId: number;
+    readonly dimension: "COLUMNS";
+    readonly startIndex: number;
     readonly endIndex: number;
   }
   | {

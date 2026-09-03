@@ -88,6 +88,24 @@ export const GOOGLE_SHEETS_API_VALUES_FIELDS = [
 ].join("");
 
 /**
+ * Row-check band mask (the polling check-column gate).
+ *
+ * The narrow identity + anchor + check three-band read needs neither merged
+ * regions, data-validation rules, number formats, nor formatted display
+ * strings: the token formula's result arrives as the computed
+ * `effectiveValue`, its `userEnteredValue.formulaValue` (already in the
+ * mask) proves check provenance, and identity/anchor cells normalize from
+ * entered values. A number-format-dependent
+ * identity (a canonical-date business key) then normalizes conservatively
+ * (as a number) and ESCALATES to the format-evidenced whole-table pass —
+ * the safe direction that keeps this mask (and its wire cost) minimal.
+ */
+export const GOOGLE_SHEETS_API_ROW_CHECK_FIELDS = [
+  "sheets.properties(sheetId,title,hidden),",
+  "sheets.data(startRow,startColumn,rowData.values(userEnteredValue,effectiveValue))",
+].join("");
+
+/**
  * Full observation mask: values, computed values, merged ranges.
  *
  * This is the metadata-preserving read used by snapshots and anchor
