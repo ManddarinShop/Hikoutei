@@ -79,10 +79,12 @@ import {
   completeProviderResult,
   failUnclassifiableItems,
   recoverUnknownResults,
+  settleAbsorbedProbeResults,
 } from "./dispatch/transitions.js";
 import {
   dispatchFastAppendGroup,
   handleProviderDispatchError,
+  type UnitProbeAttachment,
 } from "./dispatch/dispatch.js";
 import {
   isDispatchTransportError,
@@ -403,16 +405,14 @@ async function runEffectWorker(
     operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
   });
 
-  if (await prepareDispatchFences(recoveryCandidates)) {
-    await recoverUnknownResults(
-      options,
-      storage,
-      currentFence(),
-      recoveryCandidates,
-      report,
-      renewDispatchEffectLeases,
-    );
-  }
+  // Recovery candidates are NOT probed here any more: same-route candidates
+  // are absorbed into the dispatch units' own batch reads below (design
+  // §10.3 D1/D2), and anything the absorption cannot carry (cross-route, no
+  // matching unit, or a unit whose dispatch never settled them) falls back
+  // to the UNCHANGED standalone probe at the end of the pass (D4/D6). The
+  // candidates stay `processing` under their claim for the remainder of the
+  // pass; their leases renew with the batch they ride, and every settle
+  // stays behind the same CAS fence.
 
   const usable = claimed.filter((item) => isAbsent(item.invalidPayloadError));
   for (const invalid of claimed.filter((item) => isPresent(item.invalidPayloadError))) {
@@ -554,6 +554,61 @@ async function runEffectWorker(
     regularGroups,
     options.dispatcher,
   );
+  // Same-route probe absorption (design §10.3 D1): group the claimed
+  // recovery candidates by dispatcher route key and attach each group to
+  // the FIRST dispatch unit that covers its route (a route split into
+  // several chunked units absorbs its candidates once). Candidates with an
+  // invalid payload never ride a batch (the standalone probe closes them);
+  // cross-route or unit-less candidates stay in the end-of-pass residual.
+  const recoveryResidual: ClaimedEffect[] = [];
+  const absorbQueue = new Map<string, ClaimedEffect[]>();
+  try {
+    for (const item of recoveryCandidates) {
+      if (isPresent(item.invalidPayloadError)) {
+        recoveryResidual.push(item);
+        continue;
+      }
+      const key = options.dispatcher.routeKeyFor(item.pending);
+      const group = absorbQueue.get(key);
+      if (group === undefined) absorbQueue.set(key, [item]);
+      else group.push(item);
+    }
+  } catch (error: unknown) {
+    // The route predicate is declared never to throw; a violating dispatcher
+    // forfeits absorption for every candidate (they keep the standalone
+    // probe path, which re-applies the same no-throw guard there).
+    absorbQueue.clear();
+    recoveryResidual.push(...recoveryCandidates.filter(
+      (item) => !recoveryResidual.includes(item),
+    ));
+  }
+  const unitProbes = new Map<EffectDispatchUnit, UnitProbeAttachment>();
+  for (const unit of dispatchUnits) {
+    if (absorbQueue.size === 0) break;
+    const routeKeys = new Set<string>();
+    if (unit.bucket === "regular") {
+      routeKeys.add(unit.group.routeKey);
+    } else {
+      // The fast-append group's own route key is provider-scoped (one
+      // spreadsheet-wide atomic batch), so match per-effect physical routes.
+      try {
+        for (const item of unit.group.items) {
+          routeKeys.add(options.dispatcher.routeKeyFor(item.pending));
+        }
+      } catch {
+        routeKeys.clear();
+      }
+    }
+    const attached: ClaimedEffect[] = [];
+    for (const key of routeKeys) {
+      const group = absorbQueue.get(key);
+      if (group === undefined) continue;
+      attached.push(...group);
+      absorbQueue.delete(key);
+    }
+    if (attached.length > 0) unitProbes.set(unit, { items: attached, consumed: false });
+  }
+  for (const group of absorbQueue.values()) recoveryResidual.push(...group);
   // Read-ahead pipeline: overlap one route's regular preflight (a paced read)
   // with the previous route's write/verify. Only a split-capable regular unit
   // whose route DIFFERS from the current unit is preflighted ahead, so
@@ -566,11 +621,21 @@ async function runEffectWorker(
     unit.bucket === "regular" &&
     options.dispatcher.preflight !== undefined &&
     options.dispatcher.applyPrepared !== undefined;
-  const dispatchRequestFor = (unit: EffectDispatchUnit): DispatchRequest => ({
-    routeKey: unit.group.routeKey,
-    effects: unit.group.items.map((item) => item.pending),
-    beforeRemoteDispatch: () => renewDispatchEffectLeases(unit.group.items),
-  });
+  const dispatchRequestFor = (unit: EffectDispatchUnit): DispatchRequest => {
+    const probes = unitProbes.get(unit);
+    const probeItems = probes?.items ?? [];
+    return {
+      routeKey: unit.group.routeKey,
+      effects: unit.group.items.map((item) => item.pending),
+      ...(probeItems.length === 0 ? {} : {
+        probeEffects: probeItems.map((item) => item.pending),
+      }),
+      beforeRemoteDispatch: () => renewDispatchEffectLeases([
+        ...unit.group.items,
+        ...probeItems,
+      ]),
+    };
+  };
   // Fires a unit's preflight and feeds its latency/outcome into the adaptive
   // batch controller so a slow or failed read backs the route off instead of
   // letting later write successes falsely grow the batch limit.
@@ -670,6 +735,7 @@ async function runEffectWorker(
   const runRegularUnit = async (
     group: EffectRouteGroup,
     remote: () => Promise<ApplyOutcome>,
+    probes: UnitProbeAttachment | undefined,
   ): Promise<boolean> => {
     try {
       const writeOk = await dispatchRegularUnit(
@@ -681,6 +747,8 @@ async function runEffectWorker(
         remote,
         prepareDispatchFences,
         renewDispatchEffectLeases,
+        probes,
+        recoveryResidual,
       );
       if (!writeOk) await settleAndSuppressReadAhead();
       return writeOk;
@@ -706,6 +774,8 @@ async function runEffectWorker(
         report,
         () => prepareDispatchFences(group.items),
         renewDispatchEffectLeases,
+        unitProbes.get(unit),
+        recoveryResidual,
       );
       continue;
     }
@@ -745,6 +815,7 @@ async function runEffectWorker(
       await runRegularUnit(
         group,
         () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
+        unitProbes.get(unit),
       );
       continue;
     }
@@ -780,6 +851,7 @@ async function runEffectWorker(
       await runRegularUnit(
         group,
         () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
+        unitProbes.get(unit),
       );
       continue;
     }
@@ -791,7 +863,29 @@ async function runEffectWorker(
     await runRegularUnit(
       group,
       () => options.dispatcher.apply(dispatchRequestFor(unit)),
+      unitProbes.get(unit),
     );
+  }
+  // End-of-pass fallback (design §10.3 D6, §10.4 D4): every recovery
+  // candidate the absorption could not settle — cross-route, no matching
+  // unit, a unit that failed before its settle, or a dispatcher with no
+  // absorption support — runs through the UNCHANGED standalone probe. An
+  // empty dispatch queue naturally lands every candidate here, so the
+  // end-of-queue idle pass behaves exactly as the pre-absorption path did.
+  for (const probes of unitProbes.values()) {
+    if (!probes.consumed) recoveryResidual.push(...probes.items);
+  }
+  if (recoveryResidual.length > 0) {
+    if (await prepareDispatchFences(recoveryResidual)) {
+      await recoverUnknownResults(
+        options,
+        storage,
+        currentFence(),
+        recoveryResidual,
+        report,
+        renewDispatchEffectLeases,
+      );
+    }
   }
   emitWorkerTiming(options, {
     scope: TIMING_SCOPES.WORKER,
@@ -824,6 +918,8 @@ async function dispatchRegularUnit(
   remote: () => Promise<ApplyOutcome>,
   prepareFences: (items: readonly ClaimedEffect[]) => Promise<boolean>,
   renewEffectLeases: EffectLeaseRenewal,
+  probes: UnitProbeAttachment | undefined,
+  probeResidual: ClaimedEffect[],
 ): Promise<boolean> {
   const deferredEffectIds = new Set<string>();
   let outcome: ApplyOutcome;
@@ -857,6 +953,12 @@ async function dispatchRegularUnit(
     // Remote side may have written the effect before an uncertain transport
     // failure. Explicit remote failures skip recovery because the provider
     // already proved that the operation was rejected.
+    // The absorbed probes got no result envelope either: hand them back for
+    // the standalone end-of-pass fallback probe.
+    if (probes !== undefined && !probes.consumed) {
+      probes.consumed = true;
+      probeResidual.push(...probes.items);
+    }
     await handleProviderDispatchError(
       options,
       storage,
@@ -887,6 +989,22 @@ async function dispatchRegularUnit(
     responseLoss: !outcome.hasMore && outcome.results.length !== group.items.length,
   });
   emitProviderTiming(options, outcome.timing);
+  // Settle this unit's absorbed same-route probes from the batch's own read
+  // evidence before persisting the unit's results (design §10.3 D2): the
+  // verdicts run the unchanged transitions, and anything the dispatcher did
+  // not return falls back to the standalone end-of-pass probe.
+  if (probes !== undefined && !probes.consumed) {
+    probes.consumed = true;
+    const unsettled = await settleAbsorbedProbeResults(
+      options,
+      storage,
+      fence,
+      probes.items,
+      outcome.probeResults,
+      report,
+    );
+    probeResidual.push(...unsettled);
+  }
   emitWorkerTiming(options, {
     scope: TIMING_SCOPES.WORKER,
     phase: "regular_provider_dispatch",

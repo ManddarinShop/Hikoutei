@@ -27,6 +27,7 @@ import {
   type FastAppendOutcome,
   type Postcondition,
   type PostconditionOutcome,
+  type PostconditionResult,
   type PreparedDispatch,
 } from "@hikoutei/ikisaki";
 import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
@@ -57,6 +58,7 @@ import {
   type PreparedApplyEffects,
   type ReadSyncEffectPostconditionsRequest,
   type SyncEffectPostcondition,
+  type SyncEffectPostconditionResult,
   type SyncEffectResult,
   type SyncProjectionEffect,
   type SyncEffectWorkerProvider,
@@ -174,8 +176,11 @@ export class SheetsEffectDispatcher implements Dispatcher {
 
   /** Dispatches append-only rows through the idempotent provider batch operation. */
   public async fastAppend(request: DispatchRequest): Promise<FastAppendOutcome> {
-    const providerRequest = buildFastAppendRowsRequest(request.effects);
-    const physicalSheetIds = request.effects.map((effect) => effect.physical_sheet_id);
+    const providerRequest = buildFastAppendRowsRequest(request.effects, request.probeEffects);
+    const physicalSheetIds = [
+      ...request.effects.map((effect) => effect.physical_sheet_id),
+      ...(request.probeEffects ?? []).map((effect) => effect.physical_sheet_id),
+    ];
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["fastAppendRows"]>>;
     try {
       response = await this.dispatchBeforeRemote(
@@ -219,17 +224,25 @@ export class SheetsEffectDispatcher implements Dispatcher {
         fieldHashes: fieldHashesFor(effect),
       });
     }
-    return { results, hasMore: response.hasMore, ...(response.timing === undefined ? {} : { timing: response.timing }) };
+    return {
+      results,
+      hasMore: response.hasMore,
+      ...(response.timing === undefined ? {} : { timing: response.timing }),
+      ...translateProbeResults(response.probeResults, request.probeEffects),
+    };
   }
 
   /** Dispatches one regular effect batch through the provider. */
   public async apply(request: DispatchRequest): Promise<ApplyOutcome> {
     const effects = request.effects.map((pending) => toProviderEffect(pending));
-    const providerRequest = buildApplyEffectsRequest(effects);
+    const providerRequest = buildApplyEffectsRequest(effects, request.probeEffects);
     let response: Awaited<ReturnType<SyncEffectWorkerProvider["applyEffects"]>>;
     try {
       response = await this.dispatchBeforeRemote(
-        effects.map((effect) => effect.physicalSheetId),
+        [
+          ...effects.map((effect) => effect.physicalSheetId),
+          ...(request.probeEffects ?? []).map((effect) => effect.physical_sheet_id),
+        ],
         "applyEffects",
         request.beforeRemoteDispatch,
         (provider) => provider.applyEffects(providerRequest),
@@ -242,7 +255,12 @@ export class SheetsEffectDispatcher implements Dispatcher {
     for (const result of response.results) {
       results.push(translateApplyResult(result, byEffect.get(result.effectId)));
     }
-    return { results, hasMore: response.hasMore, ...(response.timing === undefined ? {} : { timing: response.timing }) };
+    return {
+      results,
+      hasMore: response.hasMore,
+      ...(response.timing === undefined ? {} : { timing: response.timing }),
+      ...translateProbeResults(response.probeResults, request.probeEffects),
+    };
   }
 
   /**
@@ -252,11 +270,13 @@ export class SheetsEffectDispatcher implements Dispatcher {
    * paced reads and planner/budget work but NO remote mutation and NO effect
    * lease renewal. The returned opaque `PreparedDispatch` carries the
    * validated route/plan/context/evidence state that `applyPrepared` needs;
-   * the worker may run this read concurrently with another route's write.
+   * the worker may run this read concurrently with another route's write —
+   * EXCEPT when the request carries absorbed same-route probes, which run
+   * inside the route's mutation lane (design §10.3 D1; see `preflight`).
    */
   public async preflight(request: DispatchRequest): Promise<PreparedDispatch> {
     const effects = request.effects.map((pending) => toProviderEffect(pending));
-    const providerRequest = buildApplyEffectsRequest(effects);
+    const providerRequest = buildApplyEffectsRequest(effects, request.probeEffects);
     // Split apply is only usable when the provider exposes BOTH optional
     // stages. A provider (or coordinator wrapping a partial inner) exposing
     // only one stage must use the single legacy `applyEffects` path, never
@@ -269,9 +289,35 @@ export class SheetsEffectDispatcher implements Dispatcher {
     }
     // Call the method on the provider instance (not as a detached function)
     // so the provider keeps its `this` deps binding during the paced reads.
+    //
+    // Same-route absorbed probes (design §10.3 D1): the probe verdict is a
+    // read of rows another writer may be mutating RIGHT NOW, so a
+    // probe-riding preflight inherits the coordinator mutation-lane
+    // serialization that the standalone probe read already gets. Without the
+    // lane, an in-flight same-route write could interleave with the probe
+    // read and be misclassified as a human `changed` (own-write false
+    // conflict): the worker never preflights a same-route unit across an
+    // in-flight same-route write. A probeless preflight stays lock-free so
+    // the read-ahead pipeline can still overlap it with another route's
+    // write. No lease renewal runs in-lane here: preflight performs no
+    // SQLite work by contract; the write stage renews inside its own lane.
     let state: PreparedApplyEffects;
     try {
-      state = await this.provider.preflightApplyEffects(providerRequest);
+      state = providerRequest.probeEffects !== undefined &&
+          providerRequest.probeEffects.length > 0 &&
+          hasCoordinatedSerializedInner(this.provider)
+        ? await this.provider.runSerializedInner(
+            providerRequest.physicalSheetId,
+            "preflightApplyEffects:absorbedProbe",
+            (inner) => {
+              if (inner.preflightApplyEffects === undefined) {
+                throw new CoordinatedSplitApplyUnsupportedError();
+              }
+              // Call as a method so the inner keeps its `this` deps binding.
+              return inner.preflightApplyEffects(providerRequest);
+            },
+          )
+        : await this.provider.preflightApplyEffects(providerRequest);
     } catch (error: unknown) {
       if (error instanceof CoordinatedSplitApplyUnsupportedError) {
         // A coordinated provider wrapping a partial inner (e.g. a fake)
@@ -334,9 +380,12 @@ export class SheetsEffectDispatcher implements Dispatcher {
     // (or cross-route, or cross-request) token fails safely instead of
     // reaching the provider.
     const currentEffects = request.effects.map((pending) => toProviderEffect(pending));
-    const currentRequest = buildApplyEffectsRequest(currentEffects);
+    const currentRequest = buildApplyEffectsRequest(currentEffects, request.probeEffects);
     const state = this.requirePreparedState(prepared, request.routeKey, currentRequest);
-    const physicalSheetIds = request.effects.map((effect) => effect.physical_sheet_id);
+    const physicalSheetIds = [
+      ...request.effects.map((effect) => effect.physical_sheet_id),
+      ...(request.probeEffects ?? []).map((effect) => effect.physical_sheet_id),
+    ];
     let response: ApplySyncEffectsResult;
     try {
       response = await this.dispatchBeforeRemote(
@@ -379,7 +428,12 @@ export class SheetsEffectDispatcher implements Dispatcher {
     for (const result of response.results) {
       results.push(translateApplyResult(result, byEffect.get(result.effectId)));
     }
-    return { results, hasMore: response.hasMore, ...(response.timing === undefined ? {} : { timing: response.timing }) };
+    return {
+      results,
+      hasMore: response.hasMore,
+      ...(response.timing === undefined ? {} : { timing: response.timing }),
+      ...translateProbeResults(response.probeResults, request.probeEffects),
+    };
   }
 
 
@@ -666,6 +720,7 @@ export class SheetsEffectDispatcher implements Dispatcher {
 /** Builds the provider apply-effects request for one dispatcher batch. */
 function buildApplyEffectsRequest(
   effects: readonly SyncProjectionEffect[],
+  probeEffects: readonly PendingEffect[] | undefined,
 ): ApplySyncEffectsRequest {
   return {
     physicalSheetId: effects[0]!.physicalSheetId,
@@ -675,6 +730,37 @@ function buildApplyEffectsRequest(
     schemaVersion: effects[0]!.payload.schemaVersion,
     postconditionMode: SYNC_POSTCONDITION_MODES.DEFERRED,
     effects,
+    ...(probeEffects === undefined || probeEffects.length === 0
+      ? {}
+      : { probeEffects: probeEffects.map(toProviderEffect) }),
+  };
+}
+
+/**
+ * Translates the provider's absorbed-probe classifications into the worker-
+ * visible `PostconditionResult` shape with the SAME `translatePostcondition`
+ * evidence rules the standalone `readPostconditions` probe uses, so an
+ * absorbed verdict and a standalone verdict are indistinguishable to the
+ * worker's transitions (design §10.3 D2).
+ */
+function translateProbeResults(
+  probeResults: readonly SyncEffectPostconditionResult[] | undefined,
+  probeEffects: readonly PendingEffect[] | undefined,
+): { readonly probeResults?: readonly PostconditionResult[] } {
+  if (probeResults === undefined || probeResults.length === 0) return {};
+  const byEffect = new Map((probeEffects ?? []).map((pending) => {
+    const effect = toProviderEffect(pending);
+    return [effect.effectId, effect] as const;
+  }));
+  return {
+    probeResults: probeResults.map((result) => ({
+      effectId: result.effectId,
+      payloadHash: result.payloadHash,
+      postcondition: translatePostcondition(
+        result.postcondition,
+        byEffect.get(result.effectId),
+      ),
+    })),
   };
 }
 
@@ -749,6 +835,30 @@ function makePreparedToken(
  * the effect list in a stable claimed order.
  */
 function preparedFingerprint(routeKey: string, request: ApplySyncEffectsRequest): string {
+  const digestEffect = (effect: SyncProjectionEffect) => ({
+    effectId: effect.effectId,
+    payloadHash: effect.payloadHash,
+    effectKind: effect.effectKind,
+    physicalSheetId: effect.physicalSheetId,
+    projection: effect.projection,
+    targetKind: effect.targetKind,
+    targetId: effect.targetId,
+    rowBindingId: effect.rowBindingId,
+    conflictId: effect.conflictId,
+    expectedVisibleRevision: effect.expectedVisibleRevision,
+    expectedVisibleHash: effect.expectedVisibleHash,
+    repairGuardHash: effect.repairGuardHash,
+    payload: {
+      sheetName: effect.payload.sheetName,
+      registeredRange: effect.payload.registeredRange,
+      schemaVersion: effect.payload.schemaVersion,
+      targetAnchor: effect.payload.targetAnchor,
+      fields: effect.payload.fields,
+      targetVisibleHash: effect.payload.targetVisibleHash,
+      createIfMissing: effect.payload.createIfMissing,
+      expectedCandidateHash: effect.payload.expectedCandidateHash,
+    },
+  });
   return stableHash({
     routeKey,
     physicalSheetId: request.physicalSheetId,
@@ -757,30 +867,11 @@ function preparedFingerprint(routeKey: string, request: ApplySyncEffectsRequest)
     projection: request.projection,
     schemaVersion: request.schemaVersion,
     postconditionMode: request.postconditionMode ?? "undefined",
-    effects: request.effects.map((effect) => ({
-      effectId: effect.effectId,
-      payloadHash: effect.payloadHash,
-      effectKind: effect.effectKind,
-      physicalSheetId: effect.physicalSheetId,
-      projection: effect.projection,
-      targetKind: effect.targetKind,
-      targetId: effect.targetId,
-      rowBindingId: effect.rowBindingId,
-      conflictId: effect.conflictId,
-      expectedVisibleRevision: effect.expectedVisibleRevision,
-      expectedVisibleHash: effect.expectedVisibleHash,
-      repairGuardHash: effect.repairGuardHash,
-      payload: {
-        sheetName: effect.payload.sheetName,
-        registeredRange: effect.payload.registeredRange,
-        schemaVersion: effect.payload.schemaVersion,
-        targetAnchor: effect.payload.targetAnchor,
-        fields: effect.payload.fields,
-        targetVisibleHash: effect.payload.targetVisibleHash,
-        createIfMissing: effect.payload.createIfMissing,
-        expectedCandidateHash: effect.payload.expectedCandidateHash,
-      },
-    })),
+    effects: request.effects.map(digestEffect),
+    // Absorbed probe effects are part of the bound request: a token created
+    // for a request without its probes (or with different probes) fails
+    // closed before any remote call, exactly like a swapped effect list.
+    probeEffects: (request.probeEffects ?? []).map(digestEffect),
   });
 }
 
@@ -802,6 +893,7 @@ function isPreparedApplyEffects(value: unknown): value is PreparedApplyEffects {
 
 function buildFastAppendRowsRequest(
   effects: readonly PendingEffect[],
+  probeEffects: readonly PendingEffect[] | undefined,
 ): FastAppendRowsRequest {
   const converted = effects.map((pending) => toProviderEffect(pending));
   const first = converted[0]!;
@@ -822,6 +914,9 @@ function buildFastAppendRowsRequest(
       registeredRange: effect.payload.registeredRange,
       schemaVersion: effect.payload.schemaVersion,
     })),
+    ...(probeEffects === undefined || probeEffects.length === 0
+      ? {}
+      : { probeEffects: probeEffects.map(toProviderEffect) }),
   };
 }
 
