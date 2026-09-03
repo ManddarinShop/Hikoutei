@@ -22,6 +22,9 @@ import type {
   InternalSyncServiceOptions,
 } from "./serviceOptions.js";
 import type {
+  GoogleSheetsApiRequestEvent,
+} from "@hikoutei/contracts/sheets/googleSheetsApi.js";
+import type {
   RegisteredSyncProjectionDefinition,
   SyncSheetsProvisioner,
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
@@ -37,6 +40,12 @@ export function createRemoteProvider(
   options: InternalSyncServiceOptions,
   definitions: readonly RegisteredSyncProjectionDefinition[],
   ports: SyncEngineCompositionPorts,
+  // Optional request-telemetry sink (bootstrap-scoped aggregator). Chained
+  // BEFORE any caller-supplied `googleSheetsApi.onRequest` (both sinks are
+  // observational and fail-open, so ordering is not behavioral; the telemetry
+  // sink is guaranteed non-throwing, so the user sink always runs).
+  // keep their contract; the sink itself is fail-open.
+  onRequest?: (event: GoogleSheetsApiRequestEvent) => void,
 ): {
   readonly provider: InternalSyncProvider;
   readonly provisioner: SyncSheetsProvisioner;
@@ -72,7 +81,17 @@ export function createRemoteProvider(
   // the provider so writes and anchor observation share one mutation lane;
   // provisioning runs at startup on the provider itself.
   const remoteProvider = ports.createDirectRemoteProvider({
-    providerOptions: { ...options.googleSheetsApi },
+    providerOptions: {
+      ...options.googleSheetsApi,
+      ...(onRequest === undefined
+        ? {}
+        : {
+          onRequest: (event: GoogleSheetsApiRequestEvent) => {
+            onRequest(event);
+            options.googleSheetsApi?.onRequest?.(event);
+          },
+        }),
+    },
     spreadsheetId: options.projections.spreadsheetId,
     definitions,
   }).provider;

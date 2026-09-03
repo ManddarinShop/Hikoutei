@@ -89,6 +89,19 @@ export class AdaptiveEffectBatchController {
     return this.routeState(routeKey).limit;
   }
 
+  /**
+   * Read-only snapshot of the current per-route limits (telemetry only).
+   *
+   * Never creates route state and never changes policy: an untouched route
+   * is simply absent from the snapshot. The returned object is a copy, so
+   * mutating it cannot affect the controller.
+   */
+  public limitsSnapshot(): Record<string, number> {
+    const snapshot: Record<string, number> = {};
+    for (const [routeKey, state] of this.routes) snapshot[routeKey] = state.limit;
+    return snapshot;
+  }
+
   /** Marks a route dispatch so the next selection can coalesce a short burst. */
   public beginDispatch(routeKey: string, now: number = Date.now()): number {
     this.routeState(routeKey);

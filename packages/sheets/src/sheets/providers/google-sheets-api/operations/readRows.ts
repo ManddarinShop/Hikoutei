@@ -49,6 +49,7 @@ import {
   quoteA1SheetName,
 } from "../model/valueNormalization.js";
 import {
+  createRawResponseMeta,
   definitionForPhysicalSheet,
   requireValidBatchUpdateReply,
   runRead,
@@ -270,7 +271,13 @@ export async function readObservedTabs(
   const fields = lightweight
     ? GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS
     : GOOGLE_SHEETS_API_OBSERVATION_FIELDS;
-  return runRead(deps, () =>
+  // The RAW transport document is measured (not the parsed Map result) so the
+  // telemetry responseBytes reflect the true payload size for the
+  // preflight-vs-polling read-gap question. The measurement is gated on the
+  // telemetry sink exactly like runRead's own estimate: a logging-off
+  // deployment must never stringify the multi-MB raw document.
+  const capture = createRawResponseMeta(deps);
+  const tabs = await runRead(deps, () =>
     readTabGrids(
       deps.transport,
       deps.spreadsheetId,
@@ -280,7 +287,9 @@ export async function readObservedTabs(
       })),
       fields,
       deps.readTimeoutMs,
-    ));
+      capture.onRawResponse,
+    ), "polling", capture.meta);
+  return tabs;
 }
 
 /** Builds the A1 range end letters for one registered range. */

@@ -181,6 +181,50 @@ export interface GoogleSheetsApiRequestMeta {
   readonly requestedEffects?: number;
   /** Effects included in the written batch (the budget-fitting prefix). */
   readonly includedEffects?: number;
+  /**
+   * Parsed-response size estimate in bytes (see the event field docs).
+   * Computed by the run helpers ONLY while a telemetry sink is attached.
+   */
+  readonly responseBytes?: number;
+}
+
+/**
+ * Estimates the serialized size of one parsed transport response.
+ *
+ * The transport hands back PARSED JSON (no raw bytes), so the payload size
+ * is a `JSON.stringify().length` estimate. Returns `undefined` when the
+ * value cannot be serialized (e.g. BigInt) instead of throwing: a size
+ * estimate must never change a successful remote result.
+ */
+export function estimateJsonBytesOrNull(value: unknown): number | undefined {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Builds one raw-response measurement carrier: `meta` for `runRead`/`runWrite`
+ * plus the matching `onRawResponse` callback for read helpers that can capture
+ * the RAW transport document before parsing. Both are `undefined`-safe: with
+ * no telemetry sink attached, `onRawResponse` is `undefined` and the meta
+ * carrier stays empty (zero estimate cost without telemetry).
+ */
+export function createRawResponseMeta(deps: GoogleSheetsApiProviderDeps): {
+  readonly meta: { responseBytes?: number };
+  readonly onRawResponse: ((raw: unknown) => void) | undefined;
+} {
+  const meta: { responseBytes?: number } = {};
+  return {
+    meta,
+    onRawResponse: deps.onRequest === undefined
+      ? undefined
+      : (raw) => {
+        const bytes = estimateJsonBytesOrNull(raw);
+        if (bytes !== undefined) meta.responseBytes = bytes;
+      },
+  };
 }
 
 /**
@@ -198,12 +242,28 @@ export async function runRead<T>(
   deps: GoogleSheetsApiProviderDeps,
   task: () => Promise<T>,
   pacing: RequestStartPacing = "polling",
+  meta?: GoogleSheetsApiRequestMeta,
 ): Promise<T> {
   const pacingWaitMs = await admitRequestStart(deps, pacing);
   const startedAt = deps.now();
   try {
     const result = await task();
-    emitRequest(deps, "getSpreadsheet", pacing, 1, startedAt, true, absentValue(), absentValue(), { pacingWaitMs });
+    // Payload-size evidence for the preflight-vs-polling read-gap question:
+    // gated on the sink so a telemetry-less deployment pays zero estimate cost.
+    // A caller that measured the RAW response document supplies a meta carrier
+    // (e.g., observation reads whose task returns a parsed Map, which cannot be
+    // re-serialized meaningfully): its `responseBytes` is then used as-is, with
+    // NO fallback to stringifying the task result — an unserializable raw
+    // document records no bytes rather than a meaningless 2-byte `"{}"`.
+    const responseBytes = deps.onRequest === undefined
+      ? undefined
+      : (meta === undefined
+        ? estimateJsonBytesOrNull(result)
+        : meta.responseBytes);
+    emitRequest(deps, "getSpreadsheet", pacing, 1, startedAt, true, absentValue(), absentValue(), {
+      pacingWaitMs,
+      ...(responseBytes === undefined ? {} : { responseBytes }),
+    });
     return result;
   } catch (error: unknown) {
     const outcome = classifyTransportOutcome(error);
@@ -222,9 +282,13 @@ export async function runWrite<T>(
   const startedAt = deps.now();
   try {
     const result = await task();
+    const responseBytes = deps.onRequest === undefined
+      ? undefined
+      : estimateJsonBytesOrNull(result);
     emitRequest(deps, "batchUpdate", "write", 1, startedAt, true, absentValue(), absentValue(), {
       pacingWaitMs,
       ...meta,
+      ...(responseBytes === undefined ? {} : { responseBytes }),
     });
     return result;
   } catch (error: unknown) {
