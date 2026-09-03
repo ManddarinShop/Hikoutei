@@ -11,12 +11,33 @@
 
 /**
  * Preflight field mask: sheet identity plus grid values and formats.
+ *
+ * This is the full-evidence mask. It is used for the scoped verification
+ * read (values plus BOTH number-format sources for row-banded CAS/replay
+ * rows and the identity-column band) and as the oversized-batch fallback;
+ * the steady-state every-dispatch read uses the values-only base mask below.
  */
 export const GOOGLE_SHEETS_API_PREFLIGHT_FIELDS = [
   "sheets.properties(sheetId,title,hidden),",
   "sheets.data(startRow,startColumn,",
   "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
 ].join("");
+
+/**
+ * Preflight base field mask: sheet identity plus entered values only.
+ *
+ * The every-dispatch full-table read requests no format evidence: headers,
+ * the blank-row rule, the anchor index, the identity index, and
+ * `nextAppendRow` all resolve from `userEnteredValue` alone. Cells whose
+ * normalization can depend on a number format (a `numberValue` that could
+ * render as a canonical date) are re-read with formats in the scoped
+ * verification read; this mask never decides their hash alone.
+ */
+export const GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS = [
+  "sheets.properties(sheetId,title,hidden),",
+  "sheets.data(startRow,startColumn,rowData.values(userEnteredValue))",
+].join("");
+
 
 /**
  * Enumeration field mask: sheet identity only.

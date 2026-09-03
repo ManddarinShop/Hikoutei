@@ -49,6 +49,7 @@ import {
   runWrite,
   type GoogleSheetsApiProviderDeps,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
+import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
 import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
 import { readEffectPostcondition } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/applyEffects.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
@@ -1770,6 +1771,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       definitions: [SYSTEM_DEFINITION],
       transport,
       receiptInitLock: new PromiseTailLock(),
+      receiptReadCursor: new ReceiptReadCursor(),
       readTimeoutMs: 60_000,
       maxBatchBytes: 2_000_000,
       readScheduler,

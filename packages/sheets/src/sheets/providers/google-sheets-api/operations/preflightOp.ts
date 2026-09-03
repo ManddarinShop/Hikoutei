@@ -24,6 +24,7 @@ import type { Presence } from "@hikoutei/contracts/state/index.js";
 import { presentValue } from "@hikoutei/contracts/state/index.js";
 import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import { invalidProviderRequest } from "../errors.js";
+import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
@@ -32,15 +33,25 @@ import {
   GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
   GOOGLE_SHEETS_API_MISSING_RANGE_REMOTE_CODE,
 } from "../constants.js";
-import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS } from "../model/preflightFields.js";
+import {
+  GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS,
+  GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+} from "../model/preflightFields.js";
+import type { PreflightReadShape } from "../model/preflightContext.js";
 import {
   enumerateSheetProperties,
   readPreflightData,
   readPreflightDataForRoutes,
   readReceipts,
+  type ParsedSheet,
   type ParsedSpreadsheetDocument,
   type PreflightContext,
 } from "../model/preflightContext.js";
+import {
+  MAX_VERIFY_RANGES_PER_REQUEST,
+  patchPreflightContext,
+  planPreflightVerification,
+} from "../model/preflightVerify.js";
 import {
   anchorColumnFor,
   findSheetByTitle,
@@ -76,7 +87,24 @@ export async function readPreflight(
     readonly checkboxHeaders: readonly string[];
   },
   pacing: RequestStartPacing = "preflight",
+  fields: string = GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+  /**
+   * `scoped`: steady-state fast-append base read — target tabs contribute
+   * only the header row and the tab-wide key columns (identity/anchor
+   * bands). `receiptCursor`: read the receipt tab through this provider's
+   * tail-band cursor (same paced request, never an extra call). Defaults to
+   * the historical whole-table full-evidence shape WITH the receipt cursor;
+   * only the postcondition-recovery probe opts the cursor out (it must be
+   * able to see receipts below any cursor without memo support).
+   */
+  options: { readonly scoped?: boolean; readonly receiptCursor?: boolean } = {},
 ): Promise<PreflightContext> {
+  const shape: PreflightReadShape = {
+    scoped: options.scoped === true,
+    ...(options.receiptCursor === false
+      ? {}
+      : { cursor: deps.receiptReadCursor }),
+  };
   // Each preflight performs two paced transport calls: a range-less sheet
   // enumeration (hidden receipt tab discovery) plus one ranged data read.
   // Both measure the RAW transport document through the shared carrier when
@@ -96,7 +124,93 @@ export async function readPreflight(
       identityField: routeOptions.identityField,
       checkboxHeaders: routeOptions.checkboxHeaders,
       projection: definition.sheet.projection,
-    }, sheets, deps.readTimeoutMs, data.onRawResponse), pacing, data.meta);
+    }, sheets, deps.readTimeoutMs, data.onRawResponse, fields, shape), pacing, data.meta);
+}
+
+/**
+ * One route's read inputs for the shared (multi-route) preflight and for the
+ * scoped verification pass's whole-table recovery read.
+ */
+export interface PreflightRouteInput {
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly definition: RegisteredSyncProjectionDefinition;
+  readonly routeOptions: {
+    readonly identityField: Presence<string>;
+    readonly checkboxHeaders: readonly string[];
+  };
+}
+
+/**
+ * The paced, range-less sheet enumeration ONE preflight dispatch shares.
+ *
+ * The base data read and any whole-table full-evidence recovery read are
+ * built from this same sheet list, so a verification-overflow fallback can
+ * never stack a second enumeration onto the leased request budget.
+ */
+export async function enumeratePreflightSheets(
+  deps: GoogleSheetsApiProviderDeps,
+  pacing: RequestStartPacing = "preflight",
+): Promise<readonly ParsedSheet[]> {
+  const enumeration = createRawResponseMeta(deps);
+  return runRead(deps, () =>
+    enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs,
+      enumeration.onRawResponse), pacing, enumeration.meta);
+}
+
+/** Maps route inputs to the model-level per-route preflight options. */
+function toPreflightRoutes(
+  deps: GoogleSheetsApiProviderDeps,
+  routes: readonly PreflightRouteInput[],
+) {
+  return routes.map((route) => ({
+    spreadsheetId: deps.spreadsheetId,
+    sheetName: route.sheetName,
+    registeredRange: route.registeredRange,
+    headers: route.definition.headers,
+    ...(route.definition.physicalHeaders === undefined ? {} : { physicalHeaders: route.definition.physicalHeaders }),
+    identityField: route.routeOptions.identityField,
+    checkboxHeaders: route.routeOptions.checkboxHeaders,
+    projection: route.definition.sheet.projection,
+  }));
+}
+
+/**
+ * Reads the target and receipt tabs for MANY routes from an ALREADY
+ * ENUMERATED sheet list with ONE ranged data call (see
+ * `enumeratePreflightSheets` for why callers hold onto the enumeration).
+ * Same contract and defaults as `readPreflightForRoutes`, minus its
+ * enumeration call.
+ */
+export async function readPreflightDataForEnumeratedRoutes(
+  deps: GoogleSheetsApiProviderDeps,
+  sheets: readonly ParsedSheet[],
+  routes: readonly PreflightRouteInput[],
+  operation?: SyncMissingTabOperation,
+  pacing: RequestStartPacing = "preflight",
+  fields: string = GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+  options: { readonly scoped?: boolean; readonly receiptCursor?: boolean } = {},
+): Promise<ReadonlyMap<string, PreflightContext>> {
+  const shape: PreflightReadShape = {
+    scoped: options.scoped === true,
+    ...(options.receiptCursor === false
+      ? {}
+      : { cursor: deps.receiptReadCursor }),
+  };
+  // Same raw-document measurement as the single-route preflight: the data
+  // call reports the RAW transport document when a telemetry sink is attached.
+  const data = createRawResponseMeta(deps);
+  return runRead(deps, () =>
+    readPreflightDataForRoutes(
+      deps.transport,
+      toPreflightRoutes(deps, routes),
+      sheets,
+      deps.readTimeoutMs,
+      operation,
+      data.onRawResponse,
+      fields,
+      shape,
+    ), pacing, data.meta);
 }
 
 /**
@@ -113,43 +227,161 @@ export async function readPreflight(
  */
 export async function readPreflightForRoutes(
   deps: GoogleSheetsApiProviderDeps,
-  routes: ReadonlyArray<{
-    readonly sheetName: string;
-    readonly registeredRange: string;
-    readonly definition: RegisteredSyncProjectionDefinition;
-    readonly routeOptions: {
-      readonly identityField: Presence<string>;
-      readonly checkboxHeaders: readonly string[];
-    };
-  }>,
+  routes: readonly PreflightRouteInput[],
   operation?: SyncMissingTabOperation,
   pacing: RequestStartPacing = "preflight",
+  fields: string = GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+  /** Scoped/cursor read-shape options (see `readPreflight`). */
+  options: { readonly scoped?: boolean; readonly receiptCursor?: boolean } = {},
 ): Promise<ReadonlyMap<string, PreflightContext>> {
-  // Same raw-document measurement as the single-route preflight: both paced
-  // calls report the RAW transport document when a telemetry sink is attached.
-  const enumeration = createRawResponseMeta(deps);
-  const data = createRawResponseMeta(deps);
-  const sheets = await runRead(deps, () =>
-    enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs,
-      enumeration.onRawResponse), pacing, enumeration.meta);
-  return runRead(deps, () =>
-    readPreflightDataForRoutes(
-      deps.transport,
-      routes.map((route) => ({
-        spreadsheetId: deps.spreadsheetId,
-        sheetName: route.sheetName,
-        registeredRange: route.registeredRange,
-        headers: route.definition.headers,
-        ...(route.definition.physicalHeaders === undefined ? {} : { physicalHeaders: route.definition.physicalHeaders }),
-        identityField: route.routeOptions.identityField,
-        checkboxHeaders: route.routeOptions.checkboxHeaders,
-        projection: route.definition.sheet.projection,
-      })),
-      sheets,
-      deps.readTimeoutMs,
-      operation,
-      data.onRawResponse,
-    ), pacing, data.meta);
+  const sheets = await enumeratePreflightSheets(deps, pacing);
+  return readPreflightDataForEnumeratedRoutes(
+    deps, sheets, routes, operation, pacing, fields, options,
+  );
+}
+
+/**
+ * One route's scoped verification pass over a base (values-only) preflight
+ * context.
+ *
+ * `targetRowNumbers` are the existing rows whose CAS/replay hashes the
+ * planner or the fast-append path will compute, collected against the base
+ * indexes as an over-approximation. `route` is this pass's preflight route
+ * input: when a consolidated whole-table full-evidence recovery read runs
+ * (see `verifyPreflightContexts`), this tab is re-read through it from the
+ * shared enumeration — correctness never depends on the scoping.
+ */
+export interface PreflightVerifyPass {
+  readonly context: PreflightContext;
+  readonly targetRowNumbers: readonly number[];
+  readonly route: PreflightRouteInput;
+}
+
+/**
+ * Runs the scoped verification reads for one or more routes in ONE paced
+ * `spreadsheets.get` (row bands + conditional identity-column band, values
+ * plus BOTH number-format sources), then patches each base context from its
+ * sheet's per-range grid list.
+ *
+ * Every banded row's value and formats come from the same request, so a
+ * verification hash is never a mixed base/overlay snapshot. When ANY route's
+ * plan overflows the shared range budget, the band request is skipped
+ * entirely and EVERY still-pending route (the overflow routes plus the routes
+ * that had planned bands) resolves through ONE consolidated whole-table
+ * full-evidence ranged read built from `sheets` — the base read's own
+ * enumeration, never a re-enumeration. Correctness never depends on the
+ * scoping; the consolidation keeps the leased dispatch inside its
+ * enumeration + base read + at most one conditional third read + write
+ * budget however many routes overflow (the per-route re-read fallback this
+ * replaces stacked one enumeration + one full read PER overflow route).
+ * The read is paced on the same lane as the base read it follows and reports
+ * its RAW document to telemetry.
+ */
+export async function verifyPreflightContexts(
+  deps: GoogleSheetsApiProviderDeps,
+  passes: readonly PreflightVerifyPass[],
+  sheets: readonly ParsedSheet[],
+  pacing: RequestStartPacing = "preflight",
+): Promise<readonly PreflightContext[]> {
+  const results: (PreflightContext | undefined)[] = passes.map(() => undefined);
+  const shared: { readonly index: number; readonly ranges: readonly string[] }[] = [];
+  const recovery: number[] = [];
+  let totalRanges = 0;
+  passes.forEach((pass, index) => {
+    // A non-scoped base context (receipt-init downgrade, key-row-gap
+    // fallback, or a full-evidence recovery result) already carries
+    // whole-table full-evidence rows: a verification read would add a paced
+    // call with nothing to add. Only a values-only scoped base needs the
+    // band read.
+    if (!pass.context.scopedBase) {
+      results[index] = pass.context;
+      return;
+    }
+    const plan = planPreflightVerification(pass.context, pass.targetRowNumbers);
+    if (plan.kind === "none") {
+      results[index] = pass.context;
+      return;
+    }
+    // Keep every route's bands inside ONE request: a route whose own plan
+    // overflows, or which would push the shared list past the budget, joins
+    // the single consolidated full-evidence recovery read below.
+    if (plan.kind === "overflow" ||
+        totalRanges + plan.ranges.length > MAX_VERIFY_RANGES_PER_REQUEST) {
+      recovery.push(index);
+      return;
+    }
+    totalRanges += plan.ranges.length;
+    shared.push({ index, ranges: plan.ranges });
+  });
+  if (recovery.length > 0) {
+    // ONE whole-table full-evidence read covers every pass still waiting on
+    // a third read (overflow plus planned bands): full-evidence contexts are
+    // correct by construction, so nothing is re-planned afterwards and the
+    // dispatch never grows past its single conditional third read.
+    const pending = [...recovery, ...shared.map((entry) => entry.index)];
+    const fallbackContexts = await readPreflightDataForEnumeratedRoutes(
+      deps, sheets, pending.map((index) => passes[index]!.route),
+      undefined, pacing, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+    );
+    for (const index of pending) {
+      const sheetName = passes[index]!.route.sheetName;
+      const context = fallbackContexts.get(sheetName);
+      if (context === undefined) {
+        invalidProviderState(`preflight context is missing for ${sheetName}`);
+      }
+      results[index] = context;
+    }
+  } else if (shared.length > 0) {
+    const rawMeta = createRawResponseMeta(deps);
+    const dataRaw = await runRead(deps, () => deps.transport.getSpreadsheet({
+      spreadsheetId: deps.spreadsheetId,
+      ranges: shared.flatMap((entry) => [...entry.ranges]),
+      fields: GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+      timeoutMs: deps.readTimeoutMs,
+    }), pacing, rawMeta.meta);
+    const dataDocument = parseSpreadsheetDocument(dataRaw, "preflight verification");
+    for (const entry of shared) {
+      const pass = passes[entry.index]!;
+      const grids = dataDocument.grids.get(pass.context.sheetId);
+      if (grids === undefined) {
+        invalidProviderState(
+          `preflight verification grid data is missing for sheet ${pass.context.sheetId}`,
+          GET_REPLY_MALFORMED,
+        );
+      }
+      results[entry.index] = patchPreflightContext(
+        pass.context,
+        grids,
+        pass.targetRowNumbers,
+        { includeIdentityBand: pass.context.identityNeedsFormatEvidence },
+      );
+    }
+  }
+  return results.map((result) => {
+    if (result !== undefined) return result;
+    invalidProviderState("preflight verification resolved no context for a pass");
+  });
+}
+
+/** Single-route convenience wrapper around `verifyPreflightContexts`. */
+export async function verifyPreflightContext(
+  deps: GoogleSheetsApiProviderDeps,
+  sheets: readonly ParsedSheet[],
+  context: PreflightContext,
+  targetRowNumbers: readonly number[],
+  route: PreflightRouteInput,
+  pacing: RequestStartPacing = "preflight",
+): Promise<PreflightContext> {
+  const [patched] = await verifyPreflightContexts(
+    deps,
+    [{ context, targetRowNumbers, route }],
+    sheets,
+    pacing,
+  );
+  if (patched === undefined) {
+    invalidProviderState("preflight verification returned no context");
+  }
+  return patched;
 }
 
 /** Validates one observation request and derives its snapshot target. */
@@ -227,7 +459,9 @@ export async function refreshReceiptForWrite(
   const dataRequest: GoogleSheetsApiGetSpreadsheetRequest = {
     spreadsheetId: deps.spreadsheetId,
     ranges: [`${quoteA1SheetName(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)}!A1:F1048576`],
-    fields: GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+    // Receipts are plain values forever: no format field is ever consulted
+    // on the receipt tab, so the refresh stays on the values-only base mask.
+    fields: GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS,
     ...(deps.readTimeoutMs === undefined ? {} : { timeoutMs: deps.readTimeoutMs }),
   };
   let dataDocument: ParsedSpreadsheetDocument;
@@ -247,11 +481,23 @@ export async function refreshReceiptForWrite(
   if (receiptSheet === undefined) return context;
   const receiptData = requireGridDataForSheet(dataDocument, receiptSheet.sheetId);
   const parsedReceipts = readReceipts(receiptData);
+  const cursor = deps.receiptReadCursor;
+  // A full receipt parse covers every receipt row: merge it into the
+  // cumulative memo and re-base the cursor at the verified tail so the next
+  // steady-state preflight reads only the band.
+  if (!cursor.mergeParsed(parsedReceipts.receipts)) {
+    invalidProviderState(
+      "receipt tab changed underneath this provider: effectId reappeared with different evidence",
+    );
+  }
+  cursor.advanceTo(parsedReceipts.lastRow);
+  if (cursor.isOverCapacity()) cursor.reset();
   return {
     ...context,
     receiptSheetId: presentValue(receiptSheet.sheetId),
     receiptLastRow: parsedReceipts.lastRow,
-    receipts: parsedReceipts.receipts,
+    receiptFirstRow: parsedReceipts.firstParsedRow,
+    receipts: cursor.isEmpty() ? parsedReceipts.receipts : cursor.memoView(),
   };
 }
 

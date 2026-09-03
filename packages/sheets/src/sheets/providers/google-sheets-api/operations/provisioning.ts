@@ -21,6 +21,7 @@ import {
   gridHeaderCells,
 } from "../model/preflightHeaders.js";
 import { parseSpreadsheetDocument, requireApiContainer } from "../model/preflightParsing.js";
+import { requireGridDataForSheet } from "../model/preflightRows.js";
 import type { ParsedGridData } from "../model/preflightContext.js";
 import { GOOGLE_SHEETS_API_ROW_ID_HEADER } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
@@ -101,10 +102,9 @@ export async function provisionRegistry(
       if (existing === undefined) {
         invalidProviderState(`Registered sync sheet does not exist: ${registration.sheetName}`);
       }
-      const grid = document.grids.get(existing.sheetId);
-      if (grid === undefined) {
-        invalidProviderState(`grid data is missing for sheet ${existing.sheetId}`, GET_REPLY_MALFORMED);
-      }
+      // Fail closed unless the reply carries exactly one GridData for this
+      // single-range reader (missing or multi-grid both mean malformed).
+      const grid = requireGridDataForSheet(document, existing.sheetId);
       grids.set(registration.sheetName, grid);
     }
   }

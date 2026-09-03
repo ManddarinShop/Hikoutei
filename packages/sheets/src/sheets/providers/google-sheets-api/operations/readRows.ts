@@ -31,7 +31,7 @@ import {
 } from "../model/preflightFields.js";
 import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
 import type { ParsedGridData } from "../model/preflightContext.js";
-import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
+import { invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import {
   buildSnapshotFromTab,
@@ -42,7 +42,7 @@ import {
   type SnapshotBuildTarget,
 } from "../model/observation.js";
 import { buildTableRowsFromGrid } from "../model/tableRead.js";
-import { anchorColumnFor } from "../model/preflightRows.js";
+import { anchorColumnFor, requireGridDataForSheet } from "../model/preflightRows.js";
 import {
   columnLetters,
   parseRegisteredRange,
@@ -114,11 +114,9 @@ export async function readRowsBatch(
       // unclassified default.
       invalidProviderState(`Registered sync sheet does not exist: ${request.sheetName}`);
     }
-    const grid = document.grids.get(sheet.sheetId);
-    if (grid === undefined) {
-      // The request explicitly required grid data for a present tab.
-      invalidProviderState(`grid data is missing for sheet ${sheet.sheetId}`, GET_REPLY_MALFORMED);
-    }
+    // Fail closed unless the reply carries exactly one GridData for this
+    // single-range reader (missing or multi-grid both mean malformed).
+    const grid = requireGridDataForSheet(document, sheet.sheetId);
     const rows = buildTableRowsFromGrid(grid, {
       registeredRange: request.registeredRange,
       headers: definition.headers,
