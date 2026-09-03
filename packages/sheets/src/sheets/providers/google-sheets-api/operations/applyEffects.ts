@@ -34,6 +34,7 @@ import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/she
 import type { Presence } from "@hikoutei/contracts/state/index.js";
 import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
+import { GOOGLE_SHEETS_API_PREFLIGHT_FIELDS } from "../model/preflightFields.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
 import { planEffectBatch } from "../model/planner.js";
@@ -61,7 +62,11 @@ import {
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
-import { readPreflight, readPreflightForRoutes, refreshReceiptForWrite } from "./preflightOp.js";
+import {
+  readPreflight,
+  readPreflightForRoutes,
+  refreshReceiptForWrite,
+} from "./preflightOp.js";
 
 /**
  * Derived per-route identity of one provider effect so effects spanning
@@ -293,6 +298,11 @@ async function preflightSingleRoute(
   const definition = definitionForPhysicalSheet(deps, request.physicalSheetId);
   validateRoute(request, definition);
   const routeOptions = effectRouteOptions(definition);
+  // Historical single paced data read (enumeration + one whole-table
+  // full-evidence read): the apply path keeps the committed request budget.
+  // The only steady-state reduction here is the receipt tab, read through
+  // the provider's tail-band cursor inside the SAME request (see
+  // `ReceiptReadCursor` and the cumulative receipt memo).
   const context = await readPreflight(deps, request, definition, routeOptions);
   const plans = planEffectBatch({ ...request, effects: prepared.bounded }, context);
   const includeReceipts = prepared.postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
@@ -386,6 +396,11 @@ async function applyPreparedSingleRoute(
     // when at least one included plan needs verification (a non-deletion
     // write); a deletion-only batch skips the read entirely.
     if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE && included.some((plan) => plan.verify)) {
+      // The inline verify is the historical whole-table full-evidence read
+      // (paced on the WRITE lane, receipt tab still read through the cursor
+      // in the same request): the just-written row's values and both
+      // number-format sources come from one snapshot, exactly like before
+      // the payload-reduction work.
       const verifyContext = await readPreflight(deps, request, definition, routeOptions, "write");
       included.forEach((plan, index) => {
         if (!plan.verify || plan.mutation === undefined || plan.mutation.kind === "delete") return;
@@ -561,15 +576,16 @@ async function preflightMultiRoute(
       group,
     };
   });
-  const contexts = await readPreflightForRoutes(
-    deps,
-    routeSpecs.map((spec) => ({
-      sheetName: spec.subRequest.sheetName,
-      registeredRange: spec.subRequest.registeredRange,
-      definition: spec.definition,
-      routeOptions: spec.routeOptions,
-    })),
-  );
+  const routeArgs = routeSpecs.map((spec) => ({
+    sheetName: spec.subRequest.sheetName,
+    registeredRange: spec.subRequest.registeredRange,
+    definition: spec.definition,
+    routeOptions: spec.routeOptions,
+  }));
+  // Historical shared whole-table full-evidence read (enumeration + ONE
+  // ranged data read); the receipt tab rides the provider's tail-band
+  // cursor inside the same request.
+  const contexts = await readPreflightForRoutes(deps, routeArgs);
   const combinedRoutes: CombinedApplyRoute[] = routeSpecs.map((spec) => {
     const context = contexts.get(spec.subRequest.sheetName);
     if (context === undefined) {
@@ -713,6 +729,12 @@ export async function readEffectPostconditions(
     // paced on the WRITE limiter (serializes against writes) instead of the
     // read burst.
     "write",
+    // The recovery probe ALWAYS reads the receipt tab in FULL: it settles
+    // delivery-uncertain effects and must see every receipt regardless of any
+    // provider cursor (and it may run before the cursor-owning steady path
+    // has ever read).
+    GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+    { receiptCursor: false },
   );
   const results: SyncEffectPostconditionResult[] = [];
   for (const route of routes) {

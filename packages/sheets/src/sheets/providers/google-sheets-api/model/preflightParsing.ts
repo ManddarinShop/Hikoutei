@@ -34,7 +34,7 @@ export function parseSpreadsheetDocument(
     value,
     `${label} response must contain a sheets array`,
   );
-  const grids = new Map<number, ParsedGridData>();
+  const grids = new Map<number, ParsedGridData[]>();
   const sheets = record.sheets.map((entry, index) => {
     const sheet = parseSheetEntry(entry, `${label} sheets[${index}]`);
     // Grid data is nested under each sheet entry in the API response and is
@@ -133,7 +133,7 @@ function parseGridDataArray(
   value: unknown,
   sheetId: number,
   label: string,
-  grids: Map<number, ParsedGridData>,
+  grids: Map<number, ParsedGridData[]>,
 ): void {
   const entries = parseProviderResponseShape(
     unknownArraySchema,
@@ -143,6 +143,7 @@ function parseGridDataArray(
   if (grids.has(sheetId)) {
     invalidProviderState(`${label} contains a duplicate grid for one sheet`, GET_REPLY_MALFORMED);
   }
+  const parsed: ParsedGridData[] = [];
   entries.forEach((entry, index) => {
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
       invalidProviderState(`${label}[${index}] must be an object`, GET_REPLY_MALFORMED);
@@ -154,8 +155,12 @@ function parseGridDataArray(
       `${label}[${index}].startColumn`,
     );
     const rowData = parseRowData(data.rowData, `${label}[${index}].rowData`);
-    grids.set(sheetId, { startRow, startColumn, rowData });
+    // One GridData per requested range of the sheet (the real API returns
+    // them in request order); single-range readers take entry 0, and the
+    // verification reader resolves cells across the whole list.
+    parsed.push({ startRow, startColumn, rowData });
   });
+  grids.set(sheetId, parsed);
 }
 
 /** Parses one sheet-level `merges` GridRange array with runtime guards. */

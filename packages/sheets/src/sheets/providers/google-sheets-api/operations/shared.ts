@@ -29,6 +29,7 @@ import {
 } from "@hikoutei/sync-engine/shared/observability/logEvents.js";
 import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
+import { ReceiptReadCursor } from "../model/receiptCursor.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "../transport/rateLimiter.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
@@ -91,6 +92,13 @@ export interface GoogleSheetsApiProviderDeps {
   readonly receiptInitLock: PromiseTailLock;
   readonly definitions: readonly RegisteredSyncProjectionDefinition[];
   readonly transport: GoogleSheetsApiTransport;
+  /**
+   * Per-provider receipt READ cursor (see `model/receiptCursor.ts`). Steady
+   * state apply/fast-append preflights read only the receipt tail band this
+   * cursor opens; postcondition probes, receipt-refresh, and every
+   * full-evidence fallback keep the historical full receipt read.
+   */
+  readonly receiptReadCursor: ReceiptReadCursor;
   readonly readTimeoutMs: number;
   readonly maxBatchBytes: number;
   /**
