@@ -812,9 +812,7 @@ export async function readEffectPostconditions(
         targetRowNumbers: route.group
           .map((effect) => probeTargetRowNumber(probeContexts[index]!, effect))
           .filter((row): row is number => row !== undefined),
-        route: routeInputs[index]!,
       })),
-      sheets,
       "write",
     );
   } else {

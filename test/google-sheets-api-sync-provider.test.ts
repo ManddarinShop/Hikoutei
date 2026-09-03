@@ -50,6 +50,7 @@ import {
   type GoogleSheetsApiProviderDeps,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
 import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
+import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
 import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
 import { readEffectPostcondition } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/applyEffects.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
@@ -1175,7 +1176,9 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     ]);
 
     expect(transport.batchUpdateCalls).toBe(1);
-    expect(transport.getSpreadsheetCalls).toBe(2); // one read + one shared re-read
+    // Unified engine: cold-title bound enumeration + one read + one shared
+    // re-read (the enumeration is once per title per provider instance).
+    expect(transport.getSpreadsheetCalls).toBe(3);
     // Anchors are user_input-only: the system tab gets no anchor writes.
     expect(results.map((result) => result.anchors.assigned)).toEqual([0, 1]);
     expect(results.map((result) => result.snapshot.rows.length)).toEqual([1, 1]);
@@ -1189,10 +1192,10 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     // Row anchors are cell values in the User_Input system column, so no
     // mask requests developer metadata anymore.
     expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).toBe(
-      "sheets.properties(sheetId,title,hidden),sheets.data(startRow,startColumn," +
+      "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),sheets.data(startRow,startColumn," +
       "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
     );
-    expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).toBe("sheets.properties(sheetId,title,hidden)");
+    expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).toBe("sheets.properties(sheetId,title,hidden,gridProperties(rowCount))");
     // Merged regions are sheet-level `sheets.merges` GridRange entries in the
     // real API; GridData has no mergedCells field, so the observation mask
     // must request the sheet-level field and never a per-grid mergedCells.
@@ -1855,6 +1858,8 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       transport,
       receiptInitLock: new PromiseTailLock(),
       receiptReadCursor: new ReceiptReadCursor(),
+      sheetRowBounds: new Map<string, number>(),
+      readCalibration: createReadCalibration(),
       readTimeoutMs: 60_000,
       maxBatchBytes: 2_000_000,
       readScheduler,

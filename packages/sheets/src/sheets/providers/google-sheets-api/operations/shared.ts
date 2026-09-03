@@ -30,6 +30,7 @@ import {
 import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import { ReceiptReadCursor } from "../model/receiptCursor.js";
+import type { ReadCalibration } from "../model/readPlan.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "../transport/rateLimiter.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
@@ -100,6 +101,23 @@ export interface GoogleSheetsApiProviderDeps {
    * read.
    */
   readonly receiptReadCursor: ReceiptReadCursor;
+  /**
+   * Per-provider authoritative ROW BOUND cache (sheet title → committed
+   * `gridProperties.rowCount`) for the unified read engine's band planning.
+   * Settled by a range-less metadata enumeration when cold (see
+   * `ensureSheetRowBounds`) and refreshed from EVERY engine response's
+   * sheet properties, so it tracks grid growth without extra calls. A
+   * too-low entry can never truncate coverage: the engine's last band per
+   * column always stays open-ended.
+   */
+  readonly sheetRowBounds: Map<string, number>;
+  /**
+   * Per-provider read-size calibration (see `model/readPlan.ts`): observed
+   * `responseBytes ÷ cellsRequested` above a class constant inflates future
+   * estimates, shrinking band sizes on the NEXT plan (telemetry-based budget
+   * reduction; never grows one request).
+   */
+  readonly readCalibration: ReadCalibration;
   readonly readTimeoutMs: number;
   readonly maxBatchBytes: number;
   /**

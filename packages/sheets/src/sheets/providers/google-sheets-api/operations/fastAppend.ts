@@ -197,10 +197,8 @@ async function fastAppendSingleRoute(
   // (enumeration + base read + at most one conditional third read + write).
   const context = await verifyPreflightContext(
     deps,
-    sheets,
     baseContext,
     collectAppendReplayRows(baseContext, bounded, routeOptions.identityField),
-    route,
   );
   const prepared = prepareFastAppend(deps, request, definition, routeOptions, context, bounded);
   let deferredSuffix = false;
@@ -334,7 +332,7 @@ async function fastAppendMultiRoute(
   const baseContexts = await readPreflightDataForEnumeratedRoutes(
     deps, sheets, baseRouteArgs,
     undefined, "preflight", GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, { scoped: true });
-  const verifiedContexts = await verifyPreflightContexts(deps, specs.map((spec, index) => {
+  const verifiedContexts = await verifyPreflightContexts(deps, specs.map((spec) => {
     const baseContext = baseContexts.get(spec.subRequest.sheetName);
     if (baseContext === undefined) {
       invalidProviderState(`preflight context is missing for ${spec.subRequest.sheetName}`);
@@ -342,9 +340,8 @@ async function fastAppendMultiRoute(
     return {
       context: baseContext,
       targetRowNumbers: collectAppendReplayRows(baseContext, spec.group, spec.routeOptions.identityField),
-      route: baseRouteArgs[index]!,
     };
-  }), sheets);
+  }));
   const prepared = specs.map((spec, index) => ({
     context: verifiedContexts[index]!,
     prepared: prepareFastAppend(deps, spec.subRequest, spec.definition, spec.routeOptions, verifiedContexts[index]!, spec.group),

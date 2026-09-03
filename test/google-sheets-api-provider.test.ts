@@ -40,6 +40,7 @@ import {
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightVerify.js";
 import type { ParsedGridData, PreflightContext, PreflightRow } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightContext.js";
 import { dateSerialFromIso } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
@@ -417,8 +418,10 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     // GridData has no sheetId of its own (the parent sheet properties
     // identify the grid) and row anchors are plain cell values now, so the
     // mask must never request a nonexistent metadata path.
+    // gridProperties(rowCount) rides the mask: it is the unified read
+    // engine's authoritative row bound (metadata-only, no grid cost).
     expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).toBe(
-      "sheets.properties(sheetId,title,hidden)," +
+      "sheets.properties(sheetId,title,hidden,gridProperties(rowCount))," +
       "sheets.data(startRow,startColumn," +
       "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
     );
@@ -427,7 +430,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     // The enumeration mask is the minimal identity-only subset; it must never
     // request grid data paths.
     expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).toBe(
-      "sheets.properties(sheetId,title,hidden)",
+      "sheets.properties(sheetId,title,hidden,gridProperties(rowCount))",
     );
     expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).not.toContain("sheets.data(");
 
@@ -4143,23 +4146,34 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(resolveVerifyCell(grids, 1, 1)).toBeNull();
   });
 
-  it("plans identity bands first, merges consecutive rows, and reports budget overflow", () => {
+  it("plans identity bands first and merges consecutive rows (no overflow rung)", () => {
     const context = verificationContextFixture({});
-    expect(planPreflightVerification(context, [2, 3, 4, 10])).toEqual({
+    const calibration = createReadCalibration();
+    expect(planPreflightVerification(context, [2, 3, 4, 10], calibration)).toEqual({
       kind: "ranges",
-      ranges: ["'Users_System'!A2:B4", "'Users_System'!A10:B10"],
+      items: [
+        { range: "'Users_System'!A2:B4", cells: 6 },
+        { range: "'Users_System'!A10:B10", cells: 2 },
+      ],
     });
     const withIdentity = verificationContextFixture({
       identityNeedsFormatEvidence: true,
       rows: [preflightRow(4)],
     });
-    const planned = planPreflightVerification(withIdentity, [2]);
+    const planned = planPreflightVerification(withIdentity, [2], calibration);
     if (planned.kind !== "ranges") throw new Error("expected ranges");
     // Identity column ("id" = column A) spans every data row; the resolved
     // CAS row band covers the full registered span.
-    expect(planned.ranges).toEqual(["'Users_System'!A2:A4", "'Users_System'!A2:B2"]);
+    expect(planned.items.map((item) => item.range)).toEqual([
+      "'Users_System'!A2:A4", "'Users_System'!A2:B2",
+    ]);
+    // The unified engine removed the `overflow` rung: a 41-range plan stays
+    // a band plan (the packer spreads it across sequential requests).
     const scattered = Array.from({ length: 41 }, (_, index) => 2 + index * 2);
-    expect(planPreflightVerification(context, scattered).kind).toBe("overflow");
+    const scatteredPlan = planPreflightVerification(context, scattered, calibration);
+    expect(scatteredPlan.kind).toBe("ranges");
+    if (scatteredPlan.kind !== "ranges") throw new Error("expected ranges");
+    expect(scatteredPlan.items).toHaveLength(41);
   });
 
   it("blanks a banded row whose verification anchor proves it shifted", () => {

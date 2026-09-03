@@ -35,10 +35,8 @@ import type {
   SyncSnapshotRow,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
-import type {
-  GoogleSheetsApiTransport,
-  GoogleSheetsApiGetSpreadsheetRequest,
-} from "../transport/googleSheetsApiTransport.js";
+import type { EngineRuntime, PlannedRange } from "./readPlan.js";
+import { packReadRequests, planRowBands } from "./readPlan.js";
 import {
   columnLetters,
   quoteA1SheetName,
@@ -81,9 +79,9 @@ export interface ObservationGridTarget {
    * present, the tab is read as the header row plus row bands covering
    * ONLY these 1-based physical rows (full registered width), and the
    * returned grid is the geometric synthesis of those bands: rows outside
-   * the bands resolve blank and are skipped by every downstream rule. A
-   * band plan that would exceed the shared per-request range budget
-   * degrades to the historical whole-table range (correct by construction).
+   * the bands resolve blank and are skipped by every downstream rule. An
+   * oversized band plan expands into additional sequential band requests
+   * (unified read engine); the whole-table degradation is removed.
    */
   readonly rowNumbers?: readonly number[];
 }
@@ -144,58 +142,69 @@ export interface SnapshotBuildTarget extends AnchorPlanningTarget {
 }
 
 /**
- * Reads the grids of several registered tabs in ONE `spreadsheets.get`
- * call. Every requested tab must exist and return grid data; the result is
- * keyed by tab name. The `fields` mask decides which metadata comes back
- * (full observation mask or the lighter user_input mask); `timeoutMs`
- * overrides the transport's per-request timeout for read calls.
+ * Reads the grids of several registered tabs through the unified read
+ * engine: the bands planned for the batch are packed into as FEW paced
+ * requests as the shared range/byte budget allows and executed SEQUENTIALLY
+ * on the runtime's lane, then reassembled per sheet (one ordered GridData
+ * list per requested range, in request order).
+ *
+ * Every requested tab must exist and return grid data; the result is keyed
+ * by tab name. The `fields` mask decides which metadata comes back (full
+ * observation mask or the lighter user_input mask). The historical
+ * "band plan > 40 ranges degrades to ONE whole-table request" rung is
+ * REMOVED: an oversized band plan expands into additional sequential
+ * requests (the polling lane has no lease, so multi-request reads are its
+ * steady state at scale), and a whole-table read chunks against the tab's
+ * authoritative row bound (`engine.rowBounds`, fed by the enumeration /
+ * the polling lane's cold-title metadata enumeration) with the last band
+ * open-ended, so no single request grows with the accumulated data while
+ * coverage is never truncated.
  */
 export async function readTabGrids(
-  transport: GoogleSheetsApiTransport,
-  spreadsheetId: string,
+  engine: EngineRuntime,
   targets: readonly ObservationGridTarget[],
-  fields: string = GOOGLE_SHEETS_API_OBSERVATION_FIELDS,
-  timeoutMs?: number,
-  /** Receives the RAW transport document before parsing — telemetry measures
-   * the true response size from it (the parsed result is a Map, which does
-   * not serialize meaningfully). */
-  onRawResponse?: (raw: unknown) => void,
+  fields: string,
 ): Promise<ReadonlyMap<string, ObservedTab>> {
   const tabs = new Map<string, ObservedTab>();
   if (targets.length === 0) return tabs;
-  const ranges: string[] = [];
+  const evidence = "rendering-complete" as const;
+  const items: PlannedRange[] = [];
   // Per-target request order is preserved so the parsed per-sheet grid list
   // can be synthesized back into one logical grid.
   const bandedTargets = new Map<string, { readonly range: { readonly startColumn: number; readonly columnCount: number } }>();
   for (const target of targets) {
     const parsed = parseRegisteredRange(target.registeredRange);
-    const bandRanges = target.rowNumbers === undefined
+    const bandItems = target.rowNumbers === undefined
       ? []
-      : rowBandRanges(target.sheetName, parsed, target.rowNumbers);
-    if (bandRanges.length === 0) {
-      ranges.push(`${quoteA1SheetName(target.sheetName)}!A1:${rangeEndColumnLetters(target.registeredRange)}1048576`);
+      : rowBandItems(target.sheetName, parsed, target.rowNumbers, evidence, engine.calibration);
+    if (bandItems.length === 0) {
+      // Whole-table read (or an empty row set): the historical open-ended
+      // range when no bound is known, chunked bands against the bound
+      // otherwise (last band stays open).
+      items.push(...planRowBands({
+        quote: `${quoteA1SheetName(target.sheetName)}!`,
+        firstLetter: "A",
+        lastLetter: rangeEndColumnLetters(target.registeredRange),
+        columnCount: rangeEndColumnCells(target.registeredRange),
+        fromRow: 1,
+        rowBound: engine.rowBounds.get(target.sheetName),
+        evidence,
+        calibration: engine.calibration,
+      }));
       continue;
     }
     bandedTargets.set(target.sheetName, { range: parsed });
-    ranges.push(...bandRanges);
+    // Header row first (the historical banded shape), then the dirty-row runs.
+    const firstLetter = columnLetters(parsed.startColumn);
+    const lastLetter = columnLetters(parsed.startColumn + parsed.columnCount - 1);
+    items.push({
+      range: `${quoteA1SheetName(target.sheetName)}!${firstLetter}1:${lastLetter}1`,
+      cells: parsed.columnCount,
+    });
+    items.push(...bandItems);
   }
-  const request: GoogleSheetsApiGetSpreadsheetRequest = {
-    spreadsheetId,
-    ranges,
-    fields,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-  };
-  const raw = await transport.getSpreadsheet(request);
-  // Fail-open by construction: the callback is telemetry-only, so a throwing
-  // callback must never break the read path (same contract as the sink).
-  if (onRawResponse !== undefined) {
-    try {
-      onRawResponse(raw);
-    } catch {
-      // Swallowed deliberately — size estimation is observational only.
-    }
-  }
-  const document = parseSpreadsheetDocument(raw, "observation grid");
+  const get = engine.makeGet(fields, evidence);
+  const document = await get(packReadRequests(items, evidence, engine.calibration));
   for (const target of targets) {
     const sheet = findSheetByTitle(document.sheets, target.sheetName);
     if (sheet === undefined) {
@@ -205,17 +214,29 @@ export async function readTabGrids(
       invalidProviderState(`Registered sync sheet does not exist: ${target.sheetName}`);
     }
     const banded = bandedTargets.get(target.sheetName);
+    const grids = requireSheetGrids(document, sheet.sheetId);
     if (banded !== undefined) {
       // Banded reads return one GridData per requested band; merge them
       // geometrically into one dense logical grid so the historical header,
       // blank-row, anchor, and cell-classification rules run unchanged over
       // the cells that were actually requested (same synthesis the scoped
       // preflight base read uses).
-      const grids = requireSheetGrids(document, sheet.sheetId);
       tabs.set(target.sheetName, {
         sheetId: sheet.sheetId,
         title: sheet.title,
         grid: synthesizeScopedTargetGrid(grids, banded.range),
+        merges: sheet.merges ?? [],
+      });
+      continue;
+    }
+    if (grids.length > 1) {
+      // A banded whole-table read: the sequential bands cover the FULL
+      // registered width contiguously, so synthesize the one logical grid
+      // the single-range consumers expect.
+      tabs.set(target.sheetName, {
+        sheetId: sheet.sheetId,
+        title: sheet.title,
+        grid: synthesizeScopedTargetGrid(grids, parseRegisteredRange(target.registeredRange)),
         merges: sheet.merges ?? [],
       });
       continue;
@@ -235,41 +256,55 @@ export async function readTabGrids(
   return tabs;
 }
 
-/** Hard cap on ranges per `spreadsheets.get` (shared with preflight verify). */
-const MAX_OBSERVATION_BAND_RANGES = 40;
-
 /**
- * Header row + grouped contiguous row bands over the full registered width
- * for one banded observation read. Returns an empty array (the caller
- * degrades to the whole-table range) when there are no rows or the band
- * plan would overflow the per-request range budget.
+ * Header-row-excluded contiguous row bands over the full registered width
+ * for one banded observation read, chunked at the shared cell/byte caps.
+ * Returns an empty array when there are no rows (the caller reads the whole
+ * table). The >40-range whole-table degradation is REMOVED: the packer
+ * spreads the bands across sequential requests instead.
  */
-function rowBandRanges(
+function rowBandItems(
   sheetName: string,
   range: { readonly startColumn: number; readonly columnCount: number },
   rowNumbers: readonly number[],
-): string[] {
+  evidence: "rendering-complete",
+  calibration: EngineRuntime["calibration"],
+): PlannedRange[] {
   const sorted = [...new Set(rowNumbers.filter((row) => row >= 2))].sort((a, b) => a - b);
   if (sorted.length === 0) return [];
-  const quote = quoteA1SheetName(sheetName);
+  const quote = `${quoteA1SheetName(sheetName)}!`;
   const firstLetter = columnLetters(range.startColumn);
   const lastLetter = columnLetters(range.startColumn + range.columnCount - 1);
-  const bands: string[] = [`${quote}!${firstLetter}1:${lastLetter}1`];
+  const items: PlannedRange[] = [];
   let runStart = sorted[0]!;
   let previous = runStart;
+  const flush = (): void => {
+    // The run's own rows are the proven extent: close the last chunk at the
+    // run end (no open tail, no unrelated rows fetched).
+    items.push(...planRowBands({
+      quote,
+      firstLetter,
+      lastLetter,
+      columnCount: range.columnCount,
+      fromRow: runStart,
+      rowBound: previous,
+      exactLastRow: previous,
+      evidence,
+      calibration,
+    }));
+  };
   for (let index = 1; index <= sorted.length; index += 1) {
     const row = sorted[index];
     if (row !== undefined && row === previous + 1) {
       previous = row;
       continue;
     }
-    bands.push(`${quote}!${firstLetter}${runStart}:${lastLetter}${previous}`);
+    flush();
     if (row === undefined) break;
     runStart = row;
     previous = row;
   }
-  if (bands.length > MAX_OBSERVATION_BAND_RANGES) return [];
-  return bands;
+  return items;
 }
 
 function findSheetByTitle(
@@ -699,6 +734,12 @@ function isBlankRow(
 function rangeEndColumnLetters(registeredRange: string): string {
   const range = parseRegisteredRange(registeredRange);
   return columnLetters(range.startColumn + range.columnCount - 1);
+}
+
+/** Planned cell columns of a whole-table read (A1..registered end). */
+function rangeEndColumnCells(registeredRange: string): number {
+  const range = parseRegisteredRange(registeredRange);
+  return range.startColumn + range.columnCount - 1;
 }
 
 /**

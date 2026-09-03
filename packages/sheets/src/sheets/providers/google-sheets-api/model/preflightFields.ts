@@ -18,7 +18,7 @@
  * the steady-state every-dispatch read uses the values-only base mask below.
  */
 export const GOOGLE_SHEETS_API_PREFLIGHT_FIELDS = [
-  "sheets.properties(sheetId,title,hidden),",
+  "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),",
   "sheets.data(startRow,startColumn,",
   "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
 ].join("");
@@ -34,21 +34,24 @@ export const GOOGLE_SHEETS_API_PREFLIGHT_FIELDS = [
  * verification read; this mask never decides their hash alone.
  */
 export const GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS = [
-  "sheets.properties(sheetId,title,hidden),",
+  "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),",
   "sheets.data(startRow,startColumn,rowData.values(userEnteredValue))",
 ].join("");
 
 
 /**
- * Enumeration field mask: sheet identity only.
+ * Enumeration field mask: sheet identity plus the committed grid row count.
  *
  * The enumeration call requests no ranges because a ranged
  * `spreadsheets.get` response only carries sheets intersecting the requested
  * ranges (hidden tabs included only when no ranges are given); the receipt
  * tab can therefore never be discovered from the ranged data call alone.
+ * `gridProperties.rowCount` is metadata-only and is the unified read
+ * engine's AUTHORITATIVE row bound: band planning chunks all-row reads
+ * against it so no request grows with the accumulated data.
  */
 export const GOOGLE_SHEETS_API_ENUMERATION_FIELDS =
-  "sheets.properties(sheetId,title,hidden)";
+  "sheets.properties(sheetId,title,hidden,gridProperties(rowCount))";
 
 /**
  * Provisioning enumeration mask: sheet identity plus grid dimensions.
@@ -81,7 +84,7 @@ export const GOOGLE_SHEETS_API_PROVISION_FIELDS = [
  * blank/false rule.
  */
 export const GOOGLE_SHEETS_API_VALUES_FIELDS = [
-  "sheets.properties(sheetId,title,hidden),",
+  "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),",
   "sheets.data(startRow,startColumn,",
   "rowData.values(userEnteredValue,effectiveValue,formattedValue,",
   "userEnteredFormat.numberFormat,effectiveFormat.numberFormat,dataValidation))",
@@ -101,7 +104,7 @@ export const GOOGLE_SHEETS_API_VALUES_FIELDS = [
  * the safe direction that keeps this mask (and its wire cost) minimal.
  */
 export const GOOGLE_SHEETS_API_ROW_CHECK_FIELDS = [
-  "sheets.properties(sheetId,title,hidden),",
+  "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),",
   "sheets.data(startRow,startColumn,rowData.values(userEnteredValue,effectiveValue))",
 ].join("");
 
@@ -114,7 +117,7 @@ export const GOOGLE_SHEETS_API_ROW_CHECK_FIELDS = [
  * User_Input tab's last column, so they arrive with `rowData.values`.
  */
 export const GOOGLE_SHEETS_API_OBSERVATION_FIELDS = [
-  "sheets.properties(sheetId,title,hidden),",
+  "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),",
   "sheets.merges,",
   "sheets.data(startRow,startColumn,",
   "rowData.values(userEnteredValue,effectiveValue,formattedValue,",
@@ -131,7 +134,7 @@ export const GOOGLE_SHEETS_API_OBSERVATION_FIELDS = [
  * request makes the polling read cheaper.
  */
 export const GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS = [
-  "sheets.properties(sheetId,title,hidden),",
+  "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),",
   "sheets.data(startRow,startColumn,",
   "rowData.values(userEnteredValue,effectiveValue,formattedValue,",
   "userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",

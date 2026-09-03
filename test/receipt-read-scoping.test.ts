@@ -309,6 +309,8 @@ describe("receipt accumulation seeding (burst over a deep history)", () => {
     const provider = buildProvider(transport);
 
     // BURST: several multi-row append dispatches over the seeded history.
+    const receiptRangesByDispatch: string[][] = [];
+    let seenDataCalls = 0;
     for (let batch = 0; batch < BURST_BATCHES; batch += 1) {
       const rows: FastAppendRow[] = Array.from({ length: BURST_ROWS }, (_, index) => {
         const identity = `b${String(batch)}r${String(index).padStart(3, "0")}`;
@@ -328,21 +330,27 @@ describe("receipt accumulation seeding (burst over a deep history)", () => {
         rows,
       });
       expect(result.results.every((entry) => entry.status === "applied")).toBe(true);
+      const calls = dataCalls(transport);
+      receiptRangesByDispatch.push(
+        calls.slice(seenDataCalls).flatMap((call) => call.ranges.filter((range) =>
+          range.includes(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME))),
+      );
+      seenDataCalls = calls.length;
     }
 
     // (1) The receipt reads are COLD-FULL-ONCE, then TAIL BANDS over the
-    // seeded history: every band starts at/after the seeded tail, so the
-    // 20k seeded rows are never re-parsed by a steady dispatch.
-    const receiptRanges = dataCalls(transport)
-      .map(receiptRange)
-      .filter((range): range is string => range !== undefined);
-    expect(receiptRanges.length).toBeGreaterThanOrEqual(BURST_BATCHES);
-    expect(receiptRanges[0]).toBe(
-      `'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A1:F1048576`,
+    // seeded history. Unified engine: the cold full read may span several
+    // sequential CHUNKED bands (each ≤ the cell/byte caps), always starting
+    // at the header row; every steady dispatch reads only the tail band at
+    // the cursor, so the 20k seeded rows are never re-parsed by one.
+    expect(receiptRangesByDispatch[0]?.[0]).toMatch(
+      new RegExp(`'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A1:F`),
     );
-    for (const range of receiptRanges.slice(1)) {
-      expect(range).not.toBe(`'${GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME}'!A1:F1048576`);
-      expect(receiptStartRow(range)).toBeGreaterThanOrEqual(SEED_ROWS);
+    for (const ranges of receiptRangesByDispatch.slice(1)) {
+      expect(ranges.length).toBeGreaterThanOrEqual(1);
+      for (const range of ranges) {
+        expect(receiptStartRow(range)).toBeGreaterThanOrEqual(SEED_ROWS);
+      }
     }
 
     // (2) Effects applied EXACTLY ONCE: target rows are the burst rows only
@@ -609,18 +617,27 @@ describe("leased paced-request budget (5차 re-review fixes)", () => {
     // Every row was a receipt replay: no mutation was dispatched.
     expect(transport.batchUpdateCalls).toBe(0);
     const requests = transport.getSpreadsheetRequests;
-    // enumeration + scoped base read + ONE consolidated full-evidence read.
-    expect(requests).toHaveLength(3);
+    // Unified engine: the overflow-consolidation whole-table read is GONE.
+    // 42 verification bands exceed the 40-range per-request budget and
+    // expand into SEQUENTIAL band requests: enumeration + scoped base read
+    // + two verification requests, every hashed cell still from ONE band
+    // snapshot and no uncapped single request anywhere.
+    expect(requests).toHaveLength(4);
     expect(requests[0]?.ranges).toHaveLength(0);
     expect(requests[1]?.fields).toBe(GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS);
     expect(requests[2]?.fields).toBe(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS);
-    // Consolidated: BOTH overflow and band-planned routes are covered by the
-    // one whole-table read (the band request was skipped, not stacked).
-    expect(requests[2]?.ranges).toContain("'Users_System'!A1:C1048576");
-    expect(requests[2]?.ranges).toContain("'Orders_System'!A1:C1048576");
+    expect(requests[3]?.fields).toBe(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS);
+    const verifyRanges = [...(requests[2]?.ranges ?? []), ...(requests[3]?.ranges ?? [])];
+    expect(verifyRanges).toHaveLength(42);
+    expect(requests[2]?.ranges.length).toBeLessThanOrEqual(40);
+    // No uncapped WHOLE-TARGET-TABLE read anywhere (the small seeded
+    // receipt tab legitimately collapses to its single historical open band).
+    for (const range of requests.flatMap((request) => request.ranges)) {
+      expect(range).not.toMatch(/System'!A1:[A-Z]+1048576$/);
+    }
 
-    // The legacy single-route path keeps the same bound: an overflow on ONE
-    // tab is enumeration + base + ONE recovery read (was 4 reads).
+    // The legacy single-route path keeps the same SHAPE: an over-budget band
+    // plan on ONE tab is enumeration + base + sequential verify bands.
     const before = transport.getSpreadsheetRequests.length;
     const single = await provider.fastAppendRows({
       ...usersRoute,
@@ -632,7 +649,7 @@ describe("leased paced-request budget (5차 re-review fixes)", () => {
     });
     expect(single.results.every((entry) => entry.status === "applied")).toBe(true);
     const dispatch = transport.getSpreadsheetRequests.slice(before);
-    expect(dispatch).toHaveLength(3);
+    expect(dispatch).toHaveLength(4);
     expect(dispatch[1]?.fields).toBe(GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS);
     expect(dispatch[2]?.fields).toBe(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS);
   });

@@ -2,9 +2,12 @@
  * Preflight and observation-target operations for the Google Sheets API
  * sync provider.
  *
- * `readPreflight` performs the two paced transport calls every outbound
- * effect operation needs (range-less sheet enumeration for hidden receipt
- * tab discovery, plus one bounded data read of the target and receipt tabs).
+ * `readPreflight` performs the paced transport calls every outbound effect
+ * operation needs (range-less sheet enumeration for hidden receipt tab
+ * discovery, plus the bounded data read of the target and receipt tabs —
+ * one reassembled logical read that the unified read engine expands into
+ * sequential paced band requests when a tab's authoritative row bound
+ * forces chunking).
  * `observationTargetFor` validates one observation request and derives its
  * snapshot build target, failing closed on unknown read modes.
  */
@@ -42,22 +45,22 @@ import {
   enumerateSheetProperties,
   readPreflightData,
   readPreflightDataForRoutes,
-  readReceipts,
+  readReceiptsAggregate,
   type ParsedSheet,
   type ParsedSpreadsheetDocument,
   type PreflightContext,
 } from "../model/preflightContext.js";
+import { packReadRequests, planRowBands, type PlannedRange } from "../model/readPlan.js";
 import {
-  MAX_VERIFY_RANGES_PER_REQUEST,
   patchPreflightContext,
   planPreflightVerification,
 } from "../model/preflightVerify.js";
 import {
   anchorColumnFor,
   findSheetByTitle,
-  requireGridDataForSheet,
 } from "../model/preflightRows.js";
 import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
+import { createBandedGet, createEngineRuntime } from "./readEngine.js";
 import { quoteA1SheetName } from "../model/valueNormalization.js";
 import type { GoogleSheetsApiGetSpreadsheetRequest } from "../transport/googleSheetsApiTransport.js";
 import type { SnapshotBuildTarget } from "../model/observation.js";
@@ -106,17 +109,17 @@ export async function readPreflight(
       ? {}
       : { cursor: deps.receiptReadCursor }),
   };
-  // Each preflight performs two paced transport calls: a range-less sheet
-  // enumeration (hidden receipt tab discovery) plus one ranged data read.
-  // Both measure the RAW transport document through the shared carrier when
-  // a telemetry sink is attached (zero estimate cost without telemetry).
+  // Each preflight performs a range-less sheet enumeration (hidden receipt
+  // tab discovery) plus the ranged data read; the engine paces and measures
+  // EACH band request of the data read separately (zero estimate cost
+  // without a telemetry sink).
   const enumeration = createRawResponseMeta(deps);
-  const data = createRawResponseMeta(deps);
   const sheets = await runRead(deps, () =>
     enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs,
       enumeration.onRawResponse), pacing, enumeration.meta);
-  return runRead(deps, () =>
-    readPreflightData(deps.transport, {
+  return readPreflightData(
+    createEngineRuntime(deps, pacing, "preflight data"),
+    {
       spreadsheetId: deps.spreadsheetId,
       sheetName: request.sheetName,
       registeredRange: request.registeredRange,
@@ -125,7 +128,7 @@ export async function readPreflight(
       identityField: routeOptions.identityField,
       checkboxHeaders: routeOptions.checkboxHeaders,
       projection: definition.sheet.projection,
-    }, sheets, deps.readTimeoutMs, data.onRawResponse, fields, shape), pacing, data.meta);
+    }, sheets, fields, shape);
 }
 
 /**
@@ -198,20 +201,16 @@ export async function readPreflightDataForEnumeratedRoutes(
       ? {}
       : { cursor: deps.receiptReadCursor }),
   };
-  // Same raw-document measurement as the single-route preflight: the data
-  // call reports the RAW transport document when a telemetry sink is attached.
-  const data = createRawResponseMeta(deps);
-  return runRead(deps, () =>
-    readPreflightDataForRoutes(
-      deps.transport,
-      toPreflightRoutes(deps, routes),
-      sheets,
-      deps.readTimeoutMs,
-      operation,
-      data.onRawResponse,
-      fields,
-      shape,
-    ), pacing, data.meta);
+  // Same per-band raw-document measurement as the single-route preflight
+  // (the engine emits one paced, telemetry-carrying request per band).
+  return readPreflightDataForRoutes(
+    createEngineRuntime(deps, pacing, "preflight data"),
+    toPreflightRoutes(deps, routes),
+    sheets,
+    operation,
+    fields,
+    shape,
+  );
 }
 
 /**
@@ -247,47 +246,43 @@ export async function readPreflightForRoutes(
  *
  * `targetRowNumbers` are the existing rows whose CAS/replay hashes the
  * planner or the fast-append path will compute, collected against the base
- * indexes as an over-approximation. `route` is this pass's preflight route
- * input: when a consolidated whole-table full-evidence recovery read runs
- * (see `verifyPreflightContexts`), this tab is re-read through it from the
- * shared enumeration — correctness never depends on the scoping.
+ * indexes as an over-approximation. Bands of every pass are packed and
+ * executed together by `verifyPreflightContexts` through the unified read
+ * engine (an over-budget plan expands into additional sequential band
+ * requests; correctness never depends on the packing).
  */
 export interface PreflightVerifyPass {
   readonly context: PreflightContext;
   readonly targetRowNumbers: readonly number[];
-  readonly route: PreflightRouteInput;
 }
 
 /**
- * Runs the scoped verification reads for one or more routes in ONE paced
- * `spreadsheets.get` (row bands + conditional identity-column band, values
+ * Runs the scoped verification reads for one or more routes through the
+ * unified read engine (row bands + conditional identity-column band, values
  * plus BOTH number-format sources), then patches each base context from its
  * sheet's per-range grid list.
  *
- * Every banded row's value and formats come from the same request, so a
- * verification hash is never a mixed base/overlay snapshot. When ANY route's
- * plan overflows the shared range budget, the band request is skipped
- * entirely and EVERY still-pending route (the overflow routes plus the routes
- * that had planned bands) resolves through ONE consolidated whole-table
- * full-evidence ranged read built from `sheets` — the base read's own
- * enumeration, never a re-enumeration. Correctness never depends on the
- * scoping; the consolidation keeps the leased dispatch inside its
- * enumeration + base read + at most one conditional third read + write
- * budget however many routes overflow (the per-route re-read fallback this
- * replaces stacked one enumeration + one full read PER overflow route).
- * The read is paced on the same lane as the base read it follows and reports
- * its RAW document to telemetry.
+ * Every banded row's value and formats come from ONE band request (one
+ * server snapshot), so a verification hash is never a mixed base/overlay
+ * snapshot. The pre-engine "ANY route overflows the range budget → skip the
+ * bands and resolve EVERYTHING through ONE uncapped whole-table
+ * full-evidence read" fallback is REMOVED: all routes' bands are packed
+ * into as FEW sequential paced requests as the 40-range and byte-estimate
+ * budget allows, each request individually bounded, so an oversized plan
+ * costs additional slots on the lane instead of a guaranteed-timeout 16 MB
+ * single request. Correctness never depends on the packing: every hashed
+ * cell still sits in exactly one band, and `patchPreflightContext`'s anchor
+ * revalidation blanks rows shifted between snapshots fail-closed exactly
+ * like a shift between the base and a single verification read.
  */
 export async function verifyPreflightContexts(
   deps: GoogleSheetsApiProviderDeps,
   passes: readonly PreflightVerifyPass[],
-  sheets: readonly ParsedSheet[],
   pacing: RequestStartPacing = "preflight",
 ): Promise<readonly PreflightContext[]> {
   const results: (PreflightContext | undefined)[] = passes.map(() => undefined);
-  const shared: { readonly index: number; readonly ranges: readonly string[] }[] = [];
-  const recovery: number[] = [];
-  let totalRanges = 0;
+  const shared: { readonly index: number }[] = [];
+  const items: PlannedRange[] = [];
   passes.forEach((pass, index) => {
     // A non-scoped base context (receipt-init downgrade, key-row-gap
     // fallback, or a full-evidence recovery result) already carries
@@ -298,57 +293,22 @@ export async function verifyPreflightContexts(
       results[index] = pass.context;
       return;
     }
-    const plan = planPreflightVerification(pass.context, pass.targetRowNumbers);
+    const plan = planPreflightVerification(pass.context, pass.targetRowNumbers, deps.readCalibration);
     if (plan.kind === "none") {
       results[index] = pass.context;
       return;
     }
-    // Keep every route's bands inside ONE request: a route whose own plan
-    // overflows, or which would push the shared list past the budget, joins
-    // the single consolidated full-evidence recovery read below.
-    if (plan.kind === "overflow" ||
-        totalRanges + plan.ranges.length > MAX_VERIFY_RANGES_PER_REQUEST) {
-      recovery.push(index);
-      return;
-    }
-    totalRanges += plan.ranges.length;
-    shared.push({ index, ranges: plan.ranges });
+    items.push(...plan.items);
+    shared.push({ index });
   });
-  if (recovery.length > 0) {
-    // ONE whole-table full-evidence read covers every pass still waiting on
-    // a third read (overflow plus planned bands): full-evidence contexts are
-    // correct by construction, so nothing is re-planned afterwards and the
-    // dispatch never grows past its single conditional third read.
-    const pending = [...recovery, ...shared.map((entry) => entry.index)];
-    const fallbackContexts = await readPreflightDataForEnumeratedRoutes(
-      deps, sheets, pending.map((index) => passes[index]!.route),
-      undefined, pacing, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+  if (shared.length > 0) {
+    const get = createBandedGet(
+      deps, pacing, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, "values+formats",
+      "preflight verification",
     );
-    for (const index of pending) {
-      const sheetName = passes[index]!.route.sheetName;
-      const context = fallbackContexts.get(sheetName);
-      if (context === undefined) {
-        invalidProviderState(`preflight context is missing for ${sheetName}`);
-      }
-      results[index] = context;
-    }
-  } else if (shared.length > 0) {
-    const rawMeta = createRawResponseMeta(deps);
-    // The RAW document is measured INSIDE the paced task: `runRead` emits its
-    // telemetry event when the task resolves, so a measurement taken after
-    // the awaited call would land one event too late (same ordering the
-    // model-level preflight reads follow).
-    const dataRaw = await runRead(deps, async () => {
-      const raw = await deps.transport.getSpreadsheet({
-        spreadsheetId: deps.spreadsheetId,
-        ranges: shared.flatMap((entry) => [...entry.ranges]),
-        fields: GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
-        timeoutMs: deps.readTimeoutMs,
-      });
-      rawMeta.onRawResponse?.(raw);
-      return raw;
-    }, pacing, rawMeta.meta);
-    const dataDocument = parseSpreadsheetDocument(dataRaw, "preflight verification");
+    const dataDocument = await get(
+      packReadRequests(items, "values+formats", deps.readCalibration),
+    );
     for (const entry of shared) {
       const pass = passes[entry.index]!;
       const grids = dataDocument.grids.get(pass.context.sheetId);
@@ -375,16 +335,13 @@ export async function verifyPreflightContexts(
 /** Single-route convenience wrapper around `verifyPreflightContexts`. */
 export async function verifyPreflightContext(
   deps: GoogleSheetsApiProviderDeps,
-  sheets: readonly ParsedSheet[],
   context: PreflightContext,
   targetRowNumbers: readonly number[],
-  route: PreflightRouteInput,
   pacing: RequestStartPacing = "preflight",
 ): Promise<PreflightContext> {
   const [patched] = await verifyPreflightContexts(
     deps,
-    [{ context, targetRowNumbers, route }],
-    sheets,
+    [{ context, targetRowNumbers }],
     pacing,
   );
   if (patched === undefined) {
@@ -488,8 +445,13 @@ export async function refreshReceiptForWrite(
   }
   const receiptSheet = findSheetByTitle(dataDocument.sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
   if (receiptSheet === undefined) return context;
-  const receiptData = requireGridDataForSheet(dataDocument, receiptSheet.sheetId);
-  const parsedReceipts = readReceipts(receiptData);
+  const receiptGrids = dataDocument.grids.get(receiptSheet.sheetId) ?? [];
+  // Aggregate parse (same cross-band header/duplicate contract the banded
+  // steady-state reads use). The refresh reply is one bounded-by-
+  // construction request: the tab was ABSENT in this dispatch's own
+  // enumeration, so a concurrently created tab holds at most one appended
+  // batch and needs no chunking.
+  const parsedReceipts = readReceiptsAggregate(receiptGrids);
   const cursor = deps.receiptReadCursor;
   // A full receipt parse covers every receipt row: merge it into the
   // cumulative memo and re-base the cursor at the verified tail so the next

@@ -50,7 +50,7 @@ import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { GOOGLE_SHEETS_API_ROW_CHECK_FIELDS } from "../model/preflightFields.js";
 import { invalidProviderRequest } from "../errors.js";
 import type { ParsedGridData } from "../model/preflightContext.js";
-import { apiStringValue, parseSpreadsheetDocument } from "../model/preflightParsing.js";
+import { apiStringValue } from "../model/preflightParsing.js";
 import {
   anchorColumnFor,
   anchorFromColumnValue,
@@ -66,12 +66,17 @@ import {
   quoteA1SheetName,
 } from "../model/valueNormalization.js";
 import {
-  createRawResponseMeta,
   definitionForPhysicalSheet,
-  runRead,
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
+import { createBandedGet, ensureSheetRowBounds } from "./readEngine.js";
+import {
+  packReadRequests,
+  planRowBands,
+  type PlannedRange,
+  type ReadEvidence,
+} from "../model/readPlan.js";
 
 /** Reads several registered tabs' check bands through ONE REST read. */
 export async function readRowChecksBatch(
@@ -117,28 +122,36 @@ export async function readRowChecksBatch(
     };
   });
   // Three narrow column bands per tab (identity + anchor + check), headers
-  // included so the row-1 cells decide check-column availability; ONE
-  // atomic server snapshot serves the whole batch.
-  const ranges = routes.flatMap((route) => [
-    columnBand(route.request.sheetName, route.identityAbsolute),
-    columnBand(route.request.sheetName, route.anchorAbsolute),
-    columnBand(route.request.sheetName, route.checkAbsolute),
-  ]);
-  const capture = createRawResponseMeta(deps);
-  const raw = await runRead(deps, async () => {
-    const response = await deps.transport.getSpreadsheet({
-      spreadsheetId: deps.spreadsheetId,
-      ranges,
-      fields: GOOGLE_SHEETS_API_ROW_CHECK_FIELDS,
-      timeoutMs: deps.readTimeoutMs,
-    });
-    // Measure the RAW document inside the paced task (same ordering the
-    // observation read follows): the parsed result cannot be re-serialized
-    // meaningfully for a byte estimate.
-    capture.onRawResponse?.(response);
-    return response;
-  }, "polling", capture.meta);
-  const document = parseSpreadsheetDocument(raw, "row-check read");
+  // included so the row-1 cells decide check-column availability. Unified
+  // read engine: each column band is chunked against the tab's authoritative
+  // row bound (cold titles settled by one polling-lane metadata enumeration)
+  // and the chunks run as sequential paced polling requests, each ≤ 40
+  // ranges ∧ ≤ the row-checks byte estimate — a 30k-row tab no longer pins
+  // one 3 × 1048576-cell request to the 10 s read timeout. The LAST band of
+  // every column stays open-ended, so a human row added past the cached
+  // bound between refreshes is still served (in the last band).
+  const evidence: ReadEvidence = "row-checks";
+  await ensureSheetRowBounds(deps, "polling", routes.map((route) => route.request.sheetName));
+  const items: PlannedRange[] = [];
+  for (const route of routes) {
+    const quote = `${quoteA1SheetName(route.request.sheetName)}!`;
+    const rowBound = deps.sheetRowBounds.get(route.request.sheetName);
+    for (const column of [route.identityAbsolute, route.anchorAbsolute, route.checkAbsolute]) {
+      const letter = columnLetters(column);
+      items.push(...planRowBands({
+        quote,
+        firstLetter: letter,
+        lastLetter: letter,
+        columnCount: 1,
+        fromRow: 1,
+        rowBound,
+        evidence,
+        calibration: deps.readCalibration,
+      }));
+    }
+  }
+  const get = createBandedGet(deps, "polling", GOOGLE_SHEETS_API_ROW_CHECK_FIELDS, evidence, "row-check read");
+  const document = await get(packReadRequests(items, evidence, deps.readCalibration));
   return routes.map((route) => {
     const sheet = document.sheets.find((candidate) =>
       candidate.title === route.request.sheetName);
@@ -151,12 +164,6 @@ export async function readRowChecksBatch(
     const grids = document.grids.get(sheet!.sheetId) ?? [];
     return buildRowChecksResult(route, grids);
   });
-}
-
-/** One 1-based absolute column's full-height band including the header row. */
-function columnBand(sheetName: string, absoluteColumn: number): string {
-  const letter = columnLetters(absoluteColumn);
-  return `${quoteA1SheetName(sheetName)}!${letter}1:${letter}1048576`;
 }
 
 /** Normalizes one requested band's cells into a row-check result. */
