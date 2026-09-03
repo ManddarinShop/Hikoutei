@@ -341,6 +341,17 @@ function toSdkRequest(request: GoogleSheetsApiWriteRequest): unknown {
           },
         },
       };
+    case "addDimension":
+      return {
+        addDimension: {
+          range: {
+            sheetId: request.sheetId,
+            dimension: request.dimension,
+            startIndex: request.startIndex,
+            endIndex: request.endIndex,
+          },
+        },
+      };
     case "setDataValidation":
       return {
         setDataValidation: {

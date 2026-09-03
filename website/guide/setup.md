@@ -284,7 +284,12 @@ above and call `createTypedSheets()` normally.
 > **Legacy spreadsheet note.** Spreadsheets provisioned by the old Apps Script
 > provider with developer-metadata row anchors are not migrated: `User_Input`
 > tabs now require the `__hikoutei_row_id` system column, so legacy tabs must
-> be re-provisioned before sync can start.
+> be re-provisioned before sync can start. Current provisioning also adds one
+> internal formula column, `__hikoutei_row_check`, directly after each
+> `User_Input` tab's registered range: Hikoutei writes a change-detection
+> formula per row, and polling reads only that column to spot human edits
+> (rows without it fall back to full reads). Do not edit, sort, or delete the
+> column or its formulas.
 
 Hikoutei uses a durable local outbox, idempotent delivery, and conflict-aware
 updates so temporary API failures do not lose committed application writes.

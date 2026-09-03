@@ -36,6 +36,7 @@ import {
 import type {
   ParsedCellNumberFormat,
   ParsedGridData,
+  ParsedRowData,
   ParsedSheet,
   ParsedSpreadsheetDocument,
   PreflightRow,
@@ -73,11 +74,125 @@ export function requireGridDataForSheet(
   document: ParsedSpreadsheetDocument,
   sheetId: number,
 ): ParsedGridData {
-  const grid = document.grids.get(sheetId);
-  if (grid === undefined) {
+  return requireSingleGrid(requireSheetGrids(document, sheetId), sheetId);
+}
+
+/** Returns the ordered per-range grid list of one sheet, failing closed. */
+export function requireSheetGrids(
+  document: ParsedSpreadsheetDocument,
+  sheetId: number,
+): readonly ParsedGridData[] {
+  const grids = document.grids.get(sheetId);
+  if (grids === undefined) {
     invalidProviderState(`grid data is missing for sheet ${sheetId}`, GET_REPLY_MALFORMED);
   }
-  return grid;
+  return grids;
+}
+
+/** Takes the single grid a one-range reader must have received. */
+export function requireSingleGrid(
+  grids: readonly ParsedGridData[],
+  sheetId: number,
+): ParsedGridData {
+  // Single-range readers take the one grid the API returns per requested
+  // range; a multi-grid response for these readers means the document does
+  // not match the request shape and must fail closed.
+  if (grids.length !== 1) {
+    invalidProviderState(`expected exactly one grid for sheet ${sheetId}`, GET_REPLY_MALFORMED);
+  }
+  return grids[0]!;
+}
+
+/**
+ * Resolves the raw CellData at one absolute 1-based coordinate across an
+ * ordered per-range GridData list of one sheet. The first range covering the
+ * coordinate wins; ranges of one request share one sheet snapshot, so
+ * overlapping ranges never mix evidence. Out of every band → `null`.
+ */
+export function resolveGridCell(
+  grids: readonly ParsedGridData[],
+  rowNumber: number,
+  absoluteColumn: number,
+): unknown {
+  for (const grid of grids) {
+    const rowIndex = rowNumber - grid.startRow - 1;
+    if (rowIndex < 0 || rowIndex >= grid.rowData.length) continue;
+    const values = grid.rowData[rowIndex]!.values;
+    const columnIndex = absoluteColumn - 1 - grid.startColumn;
+    if (columnIndex < 0 || columnIndex >= values.length) continue;
+    const cell = values[columnIndex];
+    if (cell === undefined) return null;
+    return cell;
+  }
+  return null;
+}
+
+/**
+ * Merges a scoped preflight read's per-range grids (one header row plus one
+ * 1-column band per tab-wide key column) into ONE dense logical grid over
+ * the full registered range, so the historical header/blank-row/anchor
+ * normalization runs unchanged. Columns outside the requested bands resolve
+ * to blank cells (`null`) — they are only ever hashed for rows the scoped
+ * verification read re-reads with full width and formats.
+ */
+export function synthesizeScopedTargetGrid(
+  grids: readonly ParsedGridData[],
+  range: { readonly startColumn: number; readonly columnCount: number },
+): ParsedGridData {
+  let maxRow = 1;
+  for (const grid of grids) {
+    maxRow = Math.max(maxRow, grid.startRow + grid.rowData.length);
+  }
+  const rowData: ParsedRowData[] = [];
+  for (let rowNumber = 1; rowNumber <= maxRow; rowNumber += 1) {
+    const values: unknown[] = [];
+    for (let offset = 0; offset < range.columnCount; offset += 1) {
+      values.push(resolveGridCell(grids, rowNumber, range.startColumn + offset));
+    }
+    rowData.push({ values });
+  }
+  return { startRow: 0, startColumn: range.startColumn - 1, rowData };
+}
+
+/**
+ * Returns the 1-based absolute column of the row-check formula column of
+ * one registered range, or `undefined` for projections without one. The
+ * check column lives DIRECTLY AFTER the registered range (outside every
+ * range-scoped read/hash rule) and only User_Input tabs carry it.
+ *
+ * This is the UNVERIFIED geometric position: the column is only USED once
+ * `buildRouteContext` has seen the `__hikoutei_row_check` header cell there
+ * (a provisioned tab); legacy tabs keep `PreflightContext.checkColumn`
+ * undefined and receive no formula writes.
+ */
+export function checkColumnFor(
+  registeredRange: string,
+  projection: string,
+): number | undefined {
+  if (projection !== SYNC_PROJECTIONS.USER_INPUT) return undefined;
+  const range = parseRegisteredRange(registeredRange);
+  return range.startColumn + range.columnCount;
+}
+
+/**
+ * Picks the whole-table grid of a full-shape read from an ordered
+ * per-range grid list. The registered-span grid (starts at the range's
+ * first cell) must appear EXACTLY once — a duplicate is the proven
+ * malformed multi-grid reply a single-range reader fails closed on — while
+ * additional out-of-range probe bands (the row-check header cell) are
+ * tolerated because the full-shape user_input read requests them.
+ */
+export function pickRegisteredGrid(
+  grids: readonly ParsedGridData[],
+  range: { readonly startColumn: number; readonly columnCount: number },
+  sheetId: number,
+): ParsedGridData {
+  const candidates = grids.filter((grid) =>
+    grid.startRow === 0 && grid.startColumn === range.startColumn - 1);
+  if (candidates.length !== 1) {
+    invalidProviderState(`expected exactly one grid for sheet ${sheetId}`, GET_REPLY_MALFORMED);
+  }
+  return candidates[0]!;
 }
 
 /** Normalizes nonblank grid rows into typed preflight rows. */
@@ -87,11 +202,32 @@ export function readRows(
   headers: readonly string[],
   identityField: Presence<string>,
   anchorColumn: number | undefined,
+  /**
+   * Scoped-read blank rule. The full-width read treats any nonblank user
+   * field as row content; a column-scoped read only sees the key columns.
+   * With a registered identity the rule is identity-cell nonblank: the
+   * provider always writes the identity on its content rows, so a key-blank
+   * row inside the content area is a human-drift candidate that the caller
+   * detects via the contiguity check and answers with a whole-table
+   * full-evidence re-read (non-key content can never be silently skipped;
+   * see `hasScopedKeyRowGap` in `preflightContext.ts`). Without a registered
+   * identity there is no required-identity validation to preserve, so the
+   * anchor cell marks content (an anchor-only row stays blank, matching the
+   * historical system-column rule). A hidden row BELOW the last visible key
+   * row cannot be detected from narrowed columns at all: appends shift it
+   * down (`insertDimension`, never overwrite) and the inbound observation
+   * path still gates it — the pre-cursor whole-table read is the upgrade
+   * path if a deployment needs that case refused too.
+   */
+  scoped = false,
 ): readonly PreflightRow[] {
   const anchorsByRow = readAnchorIndex(data, anchorColumn);
   const userFieldCount = anchorColumn === undefined
     ? range.columnCount
     : range.columnCount - 1;
+  const identityColumnIndex = identityField.kind === "present"
+    ? headers.indexOf(identityField.value)
+    : -1;
   const rows: PreflightRow[] = [];
   for (let rowIndex = 0; rowIndex < data.rowData.length; rowIndex += 1) {
     const rowNumber = data.startRow + 1 + rowIndex;
@@ -102,7 +238,12 @@ export function readRows(
     // The system row-id column is invisible to the blank-row rule: a row
     // whose user fields are all blank stays blank even when the anchor cell
     // still holds its UUID (same semantics as metadata anchors).
-    if (values.slice(0, userFieldCount).every((value) => isBlankApiCell(value))) continue;
+    const isContent = scoped
+      ? (identityColumnIndex >= 0
+        ? !isBlankApiCell(values[identityColumnIndex] ?? null)
+        : anchorColumn !== undefined && !isBlankApiCell(values[userFieldCount] ?? null))
+      : values.slice(0, userFieldCount).every((value) => isBlankApiCell(value)) === false;
+    if (!isContent) continue;
 
     const cells: Record<string, NormalizedCell> = {};
     headers.forEach((header, columnIndex) => {
@@ -170,7 +311,7 @@ export function readAnchorIndex(
 }
 
 /** Extracts one anchor value from a system-column cell, if any. */
-function anchorFromColumnValue(value: unknown): string | undefined {
+export function anchorFromColumnValue(value: unknown): string | undefined {
   const raw = apiStringValue(value);
   // Whitespace-only cells count as missing (re-anchored), mirroring the
   // header validation's trim rule for the system column.
@@ -194,6 +335,9 @@ export function anchorColumnFor(
 
 export function indexRows(
   rows: readonly PreflightRow[],
+  options: { readonly deferIdentityDupFailClosed: boolean } = {
+    deferIdentityDupFailClosed: false,
+  },
 ): {
   readonly byAnchor: ReadonlyMap<string, PreflightRow>;
   readonly byIdentity: ReadonlyMap<string, PreflightRow>;
@@ -215,9 +359,16 @@ export function indexRows(
     if (row.identity.kind === "present") {
       const existing = byIdentity.get(row.identity.value);
       if (existing !== undefined) {
-        invalidProviderState(
-          `sync identity is duplicated: ${row.identity.value} at rows ${existing.rowNumber} and ${row.rowNumber}`,
-        );
+        if (!options.deferIdentityDupFailClosed) {
+          invalidProviderState(
+            `sync identity is duplicated: ${row.identity.value} at rows ${existing.rowNumber} and ${row.rowNumber}`,
+          );
+        }
+        // Deferred: the values-only base read cannot tell a real duplicate
+        // from one identity that a number format would renormalize to a
+        // date string. Keep the FIRST row (mirrors the anchor rule) and let
+        // the format-aware verification re-index decide.
+        continue;
       }
       byIdentity.set(row.identity.value, row);
     }

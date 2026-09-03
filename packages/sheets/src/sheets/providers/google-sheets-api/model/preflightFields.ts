@@ -11,12 +11,33 @@
 
 /**
  * Preflight field mask: sheet identity plus grid values and formats.
+ *
+ * This is the full-evidence mask. It is used for the scoped verification
+ * read (values plus BOTH number-format sources for row-banded CAS/replay
+ * rows and the identity-column band) and as the oversized-batch fallback;
+ * the steady-state every-dispatch read uses the values-only base mask below.
  */
 export const GOOGLE_SHEETS_API_PREFLIGHT_FIELDS = [
   "sheets.properties(sheetId,title,hidden),",
   "sheets.data(startRow,startColumn,",
   "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
 ].join("");
+
+/**
+ * Preflight base field mask: sheet identity plus entered values only.
+ *
+ * The every-dispatch full-table read requests no format evidence: headers,
+ * the blank-row rule, the anchor index, the identity index, and
+ * `nextAppendRow` all resolve from `userEnteredValue` alone. Cells whose
+ * normalization can depend on a number format (a `numberValue` that could
+ * render as a canonical date) are re-read with formats in the scoped
+ * verification read; this mask never decides their hash alone.
+ */
+export const GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS = [
+  "sheets.properties(sheetId,title,hidden),",
+  "sheets.data(startRow,startColumn,rowData.values(userEnteredValue))",
+].join("");
+
 
 /**
  * Enumeration field mask: sheet identity only.
@@ -64,6 +85,24 @@ export const GOOGLE_SHEETS_API_VALUES_FIELDS = [
   "sheets.data(startRow,startColumn,",
   "rowData.values(userEnteredValue,effectiveValue,formattedValue,",
   "userEnteredFormat.numberFormat,effectiveFormat.numberFormat,dataValidation))",
+].join("");
+
+/**
+ * Row-check band mask (the polling check-column gate).
+ *
+ * The narrow identity + anchor + check three-band read needs neither merged
+ * regions, data-validation rules, number formats, nor formatted display
+ * strings: the token formula's result arrives as the computed
+ * `effectiveValue`, its `userEnteredValue.formulaValue` (already in the
+ * mask) proves check provenance, and identity/anchor cells normalize from
+ * entered values. A number-format-dependent
+ * identity (a canonical-date business key) then normalizes conservatively
+ * (as a number) and ESCALATES to the format-evidenced whole-table pass —
+ * the safe direction that keeps this mask (and its wire cost) minimal.
+ */
+export const GOOGLE_SHEETS_API_ROW_CHECK_FIELDS = [
+  "sheets.properties(sheetId,title,hidden),",
+  "sheets.data(startRow,startColumn,rowData.values(userEnteredValue,effectiveValue))",
 ].join("");
 
 /**

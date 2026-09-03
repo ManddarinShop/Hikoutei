@@ -21,8 +21,9 @@ import {
   gridHeaderCells,
 } from "../model/preflightHeaders.js";
 import { parseSpreadsheetDocument, requireApiContainer } from "../model/preflightParsing.js";
+import { checkColumnFor, gridRowCells, requireGridDataForSheet } from "../model/preflightRows.js";
 import type { ParsedGridData } from "../model/preflightContext.js";
-import { GOOGLE_SHEETS_API_ROW_ID_HEADER } from "../constants.js";
+import { GOOGLE_SHEETS_API_ROW_ID_HEADER, GOOGLE_SHEETS_API_ROW_CHECK_HEADER } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import { allocateSheetId } from "../model/sheetIdAllocator.js";
@@ -101,10 +102,9 @@ export async function provisionRegistry(
       if (existing === undefined) {
         invalidProviderState(`Registered sync sheet does not exist: ${registration.sheetName}`);
       }
-      const grid = document.grids.get(existing.sheetId);
-      if (grid === undefined) {
-        invalidProviderState(`grid data is missing for sheet ${existing.sheetId}`, GET_REPLY_MALFORMED);
-      }
+      // Fail closed unless the reply carries exactly one GridData for this
+      // single-range reader (missing or multi-grid both mean malformed).
+      const grid = requireGridDataForSheet(document, existing.sheetId);
       grids.set(registration.sheetName, grid);
     }
   }
@@ -119,10 +119,27 @@ export async function provisionRegistry(
     const range = parseRegisteredRange(registration.registeredRange);
     const existing = existingByTitle.get(registration.sheetName);
     const headerCells = provisionHeaderCells(registration);
+    // The row-check column sits directly after the registered range; a
+    // `updateCells` can NEVER grow the grid (proven 400 for out-of-bounds
+    // writes), so the batch carries an explicit addDimension whenever the
+    // (known) grid width lacks the slot. `updateCells` above a grown grid
+    // then lands the header in the same atomic batch.
+    const checkColumn = checkColumnFor(registration.registeredRange, registration.projection);
     if (existing === undefined) {
       const sheetId = allocateSheetId(usedSheetIds);
       usedSheetIds.add(sheetId);
       requests.push({ kind: "addSheet", title: registration.sheetName, sheetId });
+      // A freshly added sheet starts at the API's default 26 columns; only
+      // a registered range that reaches further needs the explicit growth.
+      if (checkColumn !== undefined && checkColumn > PROVISIONED_NEW_SHEET_GRID_COLUMNS) {
+        requests.push({
+          kind: "addDimension",
+          sheetId,
+          dimension: "COLUMNS",
+          startIndex: PROVISIONED_NEW_SHEET_GRID_COLUMNS,
+          endIndex: checkColumn,
+        });
+      }
       requests.push({
         kind: "updateCells",
         sheetId,
@@ -141,6 +158,16 @@ export async function provisionRegistry(
     }
     if (!gridHasContent(grid)) {
       // Truly empty tab: initialize the header row only.
+      const gridWidth = existing.gridProperties?.columnCount;
+      if (checkColumn !== undefined && gridWidth !== undefined && gridWidth < checkColumn) {
+        requests.push({
+          kind: "addDimension",
+          sheetId: existing.sheetId,
+          dimension: "COLUMNS",
+          startIndex: gridWidth,
+          endIndex: checkColumn,
+        });
+      }
       requests.push({
         kind: "updateCells",
         sheetId: existing.sheetId,
@@ -154,6 +181,9 @@ export async function provisionRegistry(
     }
     // Content tab: the header row must match the registered schema exactly.
     assertProvisioningHeaders(grid, registration);
+    if (checkColumn !== undefined) {
+      ensureRowCheckHeader(requests, grid, existing, registration, checkColumn);
+    }
   }
 
   if (requests.length > 0) {
@@ -171,6 +201,13 @@ export async function provisionRegistry(
     initializedHeaders,
   };
 }
+
+/**
+ * Default column count of a freshly `addSheet`-created grid (the real API
+ * creates 26-column sheets). Provisioning only emits an explicit
+ * addDimension when the row-check column lands beyond that width.
+ */
+const PROVISIONED_NEW_SHEET_GRID_COLUMNS = 26;
 
 /** Validates provisioning registrations before any transport call. */
 function validateProvisionRegistrations(
@@ -254,17 +291,67 @@ function validateProvisionRegistrations(
 
 /**
  * Builds the header cells written for one registration, appending the
- * reserved system row-id header on user_input tabs.
+ * reserved system row-id header on user_input tabs and the row-check
+ * column header directly AFTER the registered range (the write starts at
+ * the range's first column, so the extra cell lands in the check slot).
  */
 function provisionHeaderCells(registration: SyncSheetsProvisionRoute): {
   readonly userEnteredValue: { readonly stringValue: string };
 }[] {
-  const headers = registration.projection === SYNC_PROJECTIONS.USER_INPUT
-    ? [...registration.headers, GOOGLE_SHEETS_API_ROW_ID_HEADER]
+  const userInput = registration.projection === SYNC_PROJECTIONS.USER_INPUT;
+  const headers = userInput
+    ? [...registration.headers, GOOGLE_SHEETS_API_ROW_ID_HEADER, GOOGLE_SHEETS_API_ROW_CHECK_HEADER]
     : registration.headers;
   return headers.map((header) => ({
     userEnteredValue: { stringValue: header },
   }));
+}
+
+/**
+ * Ensures the row-check header on an EXISTING user_input tab that already
+ * carries content (the migration path for tabs provisioned before the
+ * check column existed). Idempotent: a matching header writes nothing; a
+ * blank slot grows the grid when needed and writes the header; a FOREIGN
+ * non-blank header fails closed BEFORE any mutation so the operator's own
+ * column is never overwritten (schema-drift rule). Legacy data rows keep
+ * blank check cells: appends start writing formulas once the header is
+ * verified, and the polling gate reads those legacy rows through the
+ * historical full-field read (mixed mode) until they are backfilled.
+ */
+function ensureRowCheckHeader(
+  requests: GoogleSheetsApiWriteRequest[],
+  grid: ParsedGridData,
+  existing: { readonly sheetId: number; readonly gridProperties?: { readonly rowCount: number; readonly columnCount: number } },
+  registration: SyncSheetsProvisionRoute,
+  checkColumn: number,
+): void {
+  const [headerCell] = gridRowCells(grid, 1, checkColumn, 1);
+  const rawHeader = provisioningHeaderString(headerCell ?? null);
+  if (rawHeader === GOOGLE_SHEETS_API_ROW_CHECK_HEADER) return;
+  if (rawHeader !== null && rawHeader.trim() !== "") {
+    invalidProviderState(
+      `operational provisioning header mismatch: ${registration.sheetName}`
+      + ` (row-check column ${columnLetters(checkColumn)} holds a foreign header)`,
+    );
+  }
+  const gridWidth = existing.gridProperties?.columnCount;
+  if (gridWidth !== undefined && gridWidth < checkColumn) {
+    requests.push({
+      kind: "addDimension",
+      sheetId: existing.sheetId,
+      dimension: "COLUMNS",
+      startIndex: gridWidth,
+      endIndex: checkColumn,
+    });
+  }
+  requests.push({
+    kind: "updateCells",
+    sheetId: existing.sheetId,
+    startRowIndex: 0,
+    startColumnIndex: checkColumn - 1,
+    rows: [[{ userEnteredValue: { stringValue: GOOGLE_SHEETS_API_ROW_CHECK_HEADER } }]],
+    fields: "userEnteredValue",
+  });
 }
 
 /**

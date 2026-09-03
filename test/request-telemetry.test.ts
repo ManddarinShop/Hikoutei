@@ -45,6 +45,7 @@ import {
 } from "@hikoutei/contracts/sheets/transportError.js";
 import { defineTypedSheetsEntity } from "../src/index.js";
 import {
+  StubSheet,
   StubSpreadsheet,
   StubSheetsTransport,
   stubRowFields,
@@ -514,6 +515,176 @@ describe("sheets request telemetry wiring (stub transport, one HTTP 429)", () =>
     expect((withRouteLimit?.counts as Record<string, number>).routeLimit_0)
       .toBeGreaterThanOrEqual(5);
   });
+
+  /**
+   * Burst-scale structural guard (telemetry e2e): N entities flushed in ONE
+   * transaction, drained through the durable worker, with the receipt-cursor /
+   * column-scoping read shape proven bounded at scale. Asserts, from the
+   * per-pass `request_summary` events plus a transport-boundary byte census:
+   * (a) every effect applied exactly once (system/input/receipt row counts
+   * exact), (b) every BASE-mask dispatch read stays under the 2 MB guardrail
+   * and every pass summary records `readResponseBytesMax` under it too (the
+   * receipt band + identity band held at burst scale), (c) the read lanes are
+   * actually populated, (d) zero 429s / refusals without injected faults.
+   * effects/s and the byte census are RECORDED (console) — no wall-clock
+   * assert, no pacing/batch/retry policy is observed or changed.
+   */
+  it("drains a 500-effect burst with bounded base reads, recorded lanes, and zero quota pressure", async () => {
+    const BURST_SIZE = 500;
+    // Guardrail, not a measurement target: the pre-banding whole-tab receipt
+    // read (`A1:F1048576` with format-evidence masks) sat in the multi-MB
+    // range at demo scale; every dispatch data read must stay far below this.
+    const MAX_BASE_READ_BYTES = 2 * 1024 * 1024;
+    const spreadsheet = new StubSpreadsheet();
+    const transport = new StubSheetsTransport(spreadsheet);
+    // Raw-size census of EVERY ranged dispatch read at the transport
+    // boundary — ground truth independent of the parsed-object estimate the
+    // event sink carries for the non-polling lanes.
+    const dispatchReadBytes: number[] = [];
+    let fullReceiptReads = 0;
+    let bandedReceiptReads = 0;
+    const origGet = transport.getSpreadsheet.bind(transport);
+    transport.getSpreadsheet = async (request: Parameters<typeof origGet>[0]) => {
+      const raw = await origGet(request);
+      if (request.ranges.length > 0) {
+        dispatchReadBytes.push(JSON.stringify(raw).length);
+        for (const range of request.ranges) {
+          if (!range.includes("__typed_sheets_internal_effect_receipts")) continue;
+          if (range.includes("!A1:F")) fullReceiptReads += 1;
+          else bandedReceiptReads += 1;
+        }
+      }
+      return raw;
+    };
+    const service = await createInternalSyncService({
+      dbName: ":memory:",
+      entities: [TelemetryUser],
+      projections,
+      googleSheetsApi: { transport, rateLimitIntervalMs: 0 },
+      pollingIntervalMs: 3_600_000,
+      effectIdleIntervalMs: 3_600_000,
+    });
+    services.push(service);
+
+    const em = service.hikoutei.em.fork();
+    for (let index = 0; index < BURST_SIZE; index += 1) {
+      em.persist(em.create(TelemetryUser, {
+        id: `burst-${String(index).padStart(4, "0")}`,
+        status: "pending",
+      }));
+    }
+    const startedAt = Date.now();
+    await em.flush();
+    // DRAIN: the adaptive batch route starts at 100 effects/dispatch, so a
+    // 500-effect burst needs a handful of passes; poll the durable outbox.
+    let passes = 0;
+    for (; passes < 30; passes += 1) {
+      await service.effectSupervisor.runOnce();
+      const pending = await service.storage.read(({ sql }) =>
+        sql.get<{ readonly count: number }>(
+          "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE status = 'pending'",
+        ));
+      if ((pending?.count ?? 0) === 0) break;
+    }
+    const elapsedMs = Math.max(1, Date.now() - startedAt);
+
+    // (a) ALL applied exactly once: header row 1 + BURST_SIZE data rows
+    // (0-based last index BURST_SIZE) in each projection, one receipt per
+    // effect, and the row after the last stays blank.
+    expect(passes, "burst outbox did not drain").toBeLessThan(30);
+    const systemTab = spreadsheet.findTab("TelemetryUsers_System");
+    const inputTab = spreadsheet.findTab("TelemetryUsers_Input");
+    const receiptTab = spreadsheet.findTab("__typed_sheets_internal_effect_receipts");
+    expect(systemTab?.lastContentRow()).toBe(BURST_SIZE);
+    expect(inputTab?.lastContentRow()).toBe(BURST_SIZE);
+    // One receipt per OUTBOX effect: each entity flush writes a system-state
+    // and a user-input route effect → 2 receipts per entity. Receipt ids are
+    // unique (applied exactly once, no duplicate receipt rows).
+    if (receiptTab === undefined) throw new Error("burst receipt tab missing");
+    const receiptIds = new Set<string>();
+    for (const [key, cell] of receiptTab.cells) {
+      const [row, col] = key.split(",").map(Number) as [number, number];
+      if (col !== 0 || row === 0) continue;
+      const value = cell.userEnteredValue?.stringValue;
+      if (value !== undefined) receiptIds.add(value);
+    }
+    expect(receiptIds.size).toBe(BURST_SIZE * 2);
+    // Exactly-once by CONTENT: the id column carries each burst identity
+    // exactly once (dispatch order across routes is not creation order).
+    const idColumn = (tab: StubSheet): Set<string> => {
+      const ids = new Set<string>();
+      for (const [key, cell] of tab.cells) {
+        const [row, col] = key.split(",").map(Number) as [number, number];
+        if (col !== 0 || row === 0) continue;
+        const value = cell.userEnteredValue?.stringValue;
+        if (value !== undefined) ids.add(value);
+      }
+      return ids;
+    };
+    const expectedIds = new Set(
+      Array.from({ length: BURST_SIZE }, (_, index) => `burst-${String(index).padStart(4, "0")}`),
+    );
+    if (systemTab === undefined || inputTab === undefined) throw new Error("burst tabs missing");
+    expect(idColumn(systemTab)).toEqual(expectedIds);
+    expect(idColumn(inputTab)).toEqual(expectedIds);
+
+    // (b) the read shape held at burst scale: every dispatch read under the
+    // guardrail, and the historical whole-tab receipt range appears at most
+    // once (the cold read) while the steady-state dispatches band.
+    expect(dispatchReadBytes.length).toBeGreaterThan(0);
+    for (const bytes of dispatchReadBytes) {
+      expect(bytes).toBeLessThanOrEqual(MAX_BASE_READ_BYTES);
+    }
+    // At most ONE cold full read per cold read-lane (the scoped fastAppend
+    // base read and the applyEffects full-evidence read each settle their
+    // cursor once); every later dispatch receipt read rides the tail band.
+    expect(fullReceiptReads).toBeLessThanOrEqual(2);
+    expect(bandedReceiptReads).toBeGreaterThanOrEqual(1);
+
+    await getHikouteiInternalLogger().drain();
+    const lines = await readLogLines(logFile);
+    const summaries = logEvents(lines, HIKOUTEI_LOG_EVENTS.SHEETS_REQUEST_SUMMARY);
+    expect(summaries.length).toBeGreaterThanOrEqual(1);
+    for (const summary of summaries) {
+      expect((summary.counts as Record<string, number>).readResponseBytesMax ?? 0)
+        .toBeLessThanOrEqual(MAX_BASE_READ_BYTES);
+    }
+
+    // (c) read lanes recorded across the burst passes. EACH lane is
+    // asserted positively on its own — an aggregate `sum > 0` would still
+    // pass if two of the three lanes silently stopped being recorded.
+    // Measured here: every dispatch run-read-ahead feeds the preflight
+    // lane, the supervisor's polling-paced table reads feed the polling
+    // lane, and the inline post-condition verify read of a non-deletion
+    // write feeds the write lane, so all three are populated by
+    // construction in this scenario.
+    const laneTotal = (field: string) => summaries.reduce(
+      (sum, line) => sum + ((line.counts as Record<string, number>)?.[field] ?? 0),
+      0,
+    );
+    const readsPreflight = laneTotal("readsPreflight");
+    const readsPolling = laneTotal("readsPolling");
+    const readsWriteLane = laneTotal("readsWriteLane");
+    expect(readsPreflight, "preflight read lane silently unrecorded").toBeGreaterThanOrEqual(1);
+    expect(readsPolling, "polling read lane silently unrecorded").toBeGreaterThanOrEqual(1);
+    expect(readsWriteLane, "write-lane read silently unrecorded").toBeGreaterThanOrEqual(1);
+
+    // (d) no quota pressure without injected faults.
+    expect(laneTotal("rateLimited")).toBe(0);
+    expect(laneTotal("refused")).toBe(0);
+
+    // RECORD ONLY: steady-state effects/s over the flush+drain span (this
+    // includes the one-time provisioning window, so it is a conservative
+    // lower bound), the max single BASE read, and the lane breakdown.
+    const effectsPerSecond = Math.round((BURST_SIZE / elapsedMs) * 1000);
+    console.info(
+      `[burst-e2e] effects=${BURST_SIZE} passes=${passes + 1} elapsedMs=${elapsedMs} ` +
+      `effects/s~${effectsPerSecond} dispatchReadBytesMax=${Math.max(...dispatchReadBytes)} ` +
+      `dispatchReads=${dispatchReadBytes.length} receiptReads(full=${fullReceiptReads},banded=${bandedReceiptReads}) ` +
+      `lanes(preflight=${readsPreflight},` +
+      `polling=${readsPolling},write=${readsWriteLane}) 429/refused=0`,
+    );
+  }, 60_000);
 });
 /**
  * Bootstrap gating regression (review finding, High/performance): logging is

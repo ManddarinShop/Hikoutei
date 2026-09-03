@@ -6,7 +6,10 @@
  * (guard/schema/repair outcomes) contribute no requests, inline mode
  * verifies written rows with a re-read, and deferred mode relies on the
  * atomic target+receipt batch. Response-loss recovery classifies effects
- * through a fresh target+receipt read.
+ * through a scoped band read of the probed rows plus the cursor-banded
+ * receipts, falling back to the historical whole-table + full-receipt read
+ * whenever the band evidence cannot decide (see
+ * `readEffectPostconditions`).
  *
  * The flow is split into a `preflightApplyEffects` read+plan stage and an
  * `applyPreparedEffects` write+verify stage so a read-ahead worker can run
@@ -34,6 +37,7 @@ import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/she
 import type { Presence } from "@hikoutei/contracts/state/index.js";
 import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
+import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS } from "../model/preflightFields.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
 import { planEffectBatch } from "../model/planner.js";
@@ -52,7 +56,7 @@ import {
   resolveCombinedApplyBudget,
   type CombinedApplyRoute,
 } from "../model/batchBuilder.js";
-import { classifyPostcondition } from "../model/postcondition.js";
+import { classifyPostcondition, probeTargetRowNumber } from "../model/postcondition.js";
 import {
   definitionForPhysicalSheet,
   effectRouteOptions,
@@ -61,7 +65,16 @@ import {
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
-import { readPreflight, readPreflightForRoutes, refreshReceiptForWrite } from "./preflightOp.js";
+import {
+  enumeratePreflightSheets,
+  readPreflight,
+  readPreflightDataForEnumeratedRoutes,
+  readPreflightForRoutes,
+  refreshReceiptForWrite,
+  verifyPreflightContexts,
+  type PreflightRouteInput,
+  type PreflightVerifyPass,
+} from "./preflightOp.js";
 
 /**
  * Derived per-route identity of one provider effect so effects spanning
@@ -293,6 +306,11 @@ async function preflightSingleRoute(
   const definition = definitionForPhysicalSheet(deps, request.physicalSheetId);
   validateRoute(request, definition);
   const routeOptions = effectRouteOptions(definition);
+  // Historical single paced data read (enumeration + one whole-table
+  // full-evidence read): the apply path keeps the committed request budget.
+  // The only steady-state reduction here is the receipt tab, read through
+  // the provider's tail-band cursor inside the SAME request (see
+  // `ReceiptReadCursor` and the cumulative receipt memo).
   const context = await readPreflight(deps, request, definition, routeOptions);
   const plans = planEffectBatch({ ...request, effects: prepared.bounded }, context);
   const includeReceipts = prepared.postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
@@ -386,6 +404,11 @@ async function applyPreparedSingleRoute(
     // when at least one included plan needs verification (a non-deletion
     // write); a deletion-only batch skips the read entirely.
     if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE && included.some((plan) => plan.verify)) {
+      // The inline verify is the historical whole-table full-evidence read
+      // (paced on the WRITE lane, receipt tab still read through the cursor
+      // in the same request): the just-written row's values and both
+      // number-format sources come from one snapshot, exactly like before
+      // the payload-reduction work.
       const verifyContext = await readPreflight(deps, request, definition, routeOptions, "write");
       included.forEach((plan, index) => {
         if (!plan.verify || plan.mutation === undefined || plan.mutation.kind === "delete") return;
@@ -561,15 +584,16 @@ async function preflightMultiRoute(
       group,
     };
   });
-  const contexts = await readPreflightForRoutes(
-    deps,
-    routeSpecs.map((spec) => ({
-      sheetName: spec.subRequest.sheetName,
-      registeredRange: spec.subRequest.registeredRange,
-      definition: spec.definition,
-      routeOptions: spec.routeOptions,
-    })),
-  );
+  const routeArgs = routeSpecs.map((spec) => ({
+    sheetName: spec.subRequest.sheetName,
+    registeredRange: spec.subRequest.registeredRange,
+    definition: spec.definition,
+    routeOptions: spec.routeOptions,
+  }));
+  // Historical shared whole-table full-evidence read (enumeration + ONE
+  // ranged data read); the receipt tab rides the provider's tail-band
+  // cursor inside the same request.
+  const contexts = await readPreflightForRoutes(deps, routeArgs);
   const combinedRoutes: CombinedApplyRoute[] = routeSpecs.map((spec) => {
     const context = contexts.get(spec.subRequest.sheetName);
     if (context === undefined) {
@@ -677,7 +701,41 @@ export async function readEffectPostcondition(
   return result.postcondition;
 }
 
-/** Classifies a recovery batch with one shared target+receipt read. */
+/**
+ * Classifies a recovery batch with ONE scoped target-band + receipt-band read.
+ *
+ * The probe consumer (`classifyPostcondition`) only ever inspects the row
+ * `findProbeRow` locates by anchor/identity, and that row's receipt. So the
+ * read is scoped like the steady-state fast-append base: header + tab-wide
+ * key-column bands (single ranged, cursor-banded receipt request), then ONE
+ * format-evidenced row-band verification read for the located rows. The
+ * historical whole-table full-evidence + FULL-receipt read runs unchanged
+ * whenever the band evidence cannot decide:
+ * - the receipt coverage of THIS dispatch is genuinely unknown: the cursor
+ *   was live before the base read but went absent DURING it (the memo
+ *   over-capacity drop is the only such path, and it leaves this dispatch's
+ *   parsed receipts partial). A live cursor after the read proves COMPLETE
+ *   coverage — the append-only tab plus the sentinel-trusted band merged
+ *   into the cumulative memo, or an untrusted band was already settled by
+ *   the model's own in-read full receipt parse — so a missing receipt is
+ *   provable and classifies `unapplied` from the band alone. A cold cursor
+ *   is provable too: its base read ran the full receipt parse. Deciding a
+ *   provable miss through the full fallback was the drain blocker: the
+ *   whole-table read is what times out at scale, the timeout does not reset
+ *   the cursor, and every redrive probe repeated it, leaving
+ *   delivery-uncertain heads permanently blocking;
+ * - any route deferred its identity duplicate/format evidence to the
+ *   verification pass (`identityNeedsFormatEvidence`): a landed create could
+ *   be located under a format-dependent identity string and hashed from
+ *   partial base cells, which only the whole-table read resolves exactly;
+ * - a route's band plan overflows the shared range budget (handled INSIDE
+ *   `verifyPreflightContexts` by one consolidated whole-table full-evidence
+ *   read from the same enumeration).
+ * At scale the whole-table fallback read is what times out today (target tabs
+ * past ~80k rows / ~110k receipts exceeded the 10s read budget with the
+ * full-evidence mask); it stays the correctness answer for the unknown-
+ * coverage gaps above, the scoped bands are the throughput fix.
+ */
 export async function readEffectPostconditions(
   deps: GoogleSheetsApiProviderDeps,
   request: ReadSyncEffectPostconditionsRequest,
@@ -700,32 +758,84 @@ export async function readEffectPostconditions(
     validateRoute(subRequest, definition);
     return { subRequest, definition, routeOptions: effectRouteOptions(definition), group };
   });
-  const contexts = await readPreflightForRoutes(
+  const routeInputs: readonly PreflightRouteInput[] = routes.map((route) => ({
+    sheetName: route.subRequest.sheetName,
+    registeredRange: route.subRequest.registeredRange,
+    definition: route.definition,
+    routeOptions: route.routeOptions,
+  }));
+  // Capture the cursor posture BEFORE any probe read. A live pre-read cursor
+  // that is ABSENT again after the base read means the dispatch lost its
+  // cumulative memo mid-read (the over-capacity drop), so this dispatch's
+  // parsed receipts are partial and only the full fallback may decide a
+  // miss. Every other posture is complete: a cold base read performed the
+  // historical full receipt parse, and a still-live cursor means the
+  // sentinel-trusted band merged into (or the model already settled with) a
+  // full parse — under append-only growth the memo then covers every row.
+  const coverageIsBanded = deps.receiptReadCursor.bandStartRow() !== undefined;
+  // The probe verifies a just-written row, so every read is paced on the
+  // WRITE limiter (serializes against writes), exactly like the historical
+  // probe read. ONE enumeration is shared by the base read, the band
+  // verification, and any whole-table fallback so a fallback can never stack
+  // a second enumeration onto the leased request budget.
+  const sheets = await enumeratePreflightSheets(deps, "write");
+  const baseContexts = await readPreflightDataForEnumeratedRoutes(
     deps,
-    routes.map((route) => ({
-      sheetName: route.subRequest.sheetName,
-      registeredRange: route.subRequest.registeredRange,
-      definition: route.definition,
-      routeOptions: route.routeOptions,
-    })),
+    sheets,
+    routeInputs,
     SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
-    // The postcondition-recovery read verifies a just-written row, so it is
-    // paced on the WRITE limiter (serializes against writes) instead of the
-    // read burst.
     "write",
+    GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS,
+    { scoped: true },
   );
+  const probeContexts = routes.map((route) => requireProbeContext(baseContexts, route));
+  // A pre-read band that lost its cursor mid-read (capacity drop) leaves
+  // genuinely unknown coverage: a receipt miss may simply sit below the
+  // dropped memo. Anything else has complete coverage, so a miss is
+  // provable and the band decides it (see the docblock above).
+  const receiptMissIsProvable =
+    !coverageIsBanded || deps.receiptReadCursor.bandStartRow() !== undefined;
+  const bandEvidenceSufficient =
+    !probeContexts.some((context) => context.identityNeedsFormatEvidence) &&
+    (receiptMissIsProvable || routes.every((route, index) =>
+      route.group.every((effect) => probeContexts[index]!.receipts.has(effect.effectId))));
+  let contexts: readonly PreflightContext[];
+  if (bandEvidenceSufficient) {
+    contexts = await verifyPreflightContexts(
+      deps,
+      routes.map((route, index): PreflightVerifyPass => ({
+        context: probeContexts[index]!,
+        // Locate each effect's row against the base key-column indexes; the
+        // verification read re-fetches those rows full-width WITH formats so
+        // every hashed cell's value and both format sources share one
+        // snapshot (same contract as the steady-state scoped base read).
+        targetRowNumbers: route.group
+          .map((effect) => probeTargetRowNumber(probeContexts[index]!, effect))
+          .filter((row): row is number => row !== undefined),
+        route: routeInputs[index]!,
+      })),
+      sheets,
+      "write",
+    );
+  } else {
+    // Band evidence cannot decide (see the gate above): run the historical
+    // probe read UNCHANGED — whole-table full-evidence target ranges plus
+    // the FULL `A1:F1048576` receipt read (no cursor), paced on the write
+    // lane and built from the SAME enumeration.
+    const fullContexts = await readPreflightDataForEnumeratedRoutes(
+      deps,
+      sheets,
+      routeInputs,
+      SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
+      "write",
+      GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+      { scoped: false, receiptCursor: false },
+    );
+    contexts = routes.map((route) => requireProbeContext(fullContexts, route));
+  }
   const results: SyncEffectPostconditionResult[] = [];
-  for (const route of routes) {
-    const context = contexts.get(route.subRequest.sheetName);
-    if (context === undefined) {
-      invalidProviderState(
-        `preflight context is missing for ${route.subRequest.sheetName}`,
-        {
-          operation: SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
-          reason: SYNC_INVALID_PROVIDER_REASONS.MISSING_TAB,
-        },
-      );
-    }
+  for (const [index, route] of routes.entries()) {
+    const context = contexts[index]!;
     for (const effect of route.group) {
       results.push({
         effectId: effect.effectId,
@@ -735,6 +845,24 @@ export async function readEffectPostconditions(
     }
   }
   return results;
+}
+
+/** Resolves one route's probe context, failing closed on a missing tab. */
+function requireProbeContext(
+  contexts: ReadonlyMap<string, PreflightContext>,
+  route: { readonly subRequest: { readonly sheetName: string } },
+): PreflightContext {
+  const context = contexts.get(route.subRequest.sheetName);
+  if (context === undefined) {
+    invalidProviderState(
+      `preflight context is missing for ${route.subRequest.sheetName}`,
+      {
+        operation: SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
+        reason: SYNC_INVALID_PROVIDER_REASONS.MISSING_TAB,
+      },
+    );
+  }
+  return context;
 }
 
 /**

@@ -51,7 +51,16 @@ import {
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
-import { readPreflight, readPreflightForRoutes, refreshReceiptForWrite } from "./preflightOp.js";
+import {
+  enumeratePreflightSheets,
+  readPreflightDataForEnumeratedRoutes,
+  refreshReceiptForWrite,
+  verifyPreflightContext,
+  verifyPreflightContexts,
+  type PreflightRouteInput,
+} from "./preflightOp.js";
+import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS } from "../model/preflightFields.js";
+import { identitySerialAliases } from "../model/preflightVerify.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 
 /** Appends rows through one idempotent, atomic target+receipt batch. */
@@ -150,7 +159,7 @@ async function fastAppendSingleRoute(
   if (routeOptions.identityField.kind !== "present") {
     // Fail fast before any preflight read: the fast path never materializes
     // anchor metadata, so a route without a registered identity cannot
-    // locate or guard its rows on replay. Kept ahead of readPreflight so the
+    // locate or guard its rows on replay. Kept ahead of the preflight reads so the
     // legacy single-tab path rejects an identity-less route without burning
     // enumeration/ranged API reads.
     throw new SyncSheetsContractError(
@@ -158,7 +167,41 @@ async function fastAppendSingleRoute(
       "fast append requires a registered identityField for route " + request.physicalSheetId,
     );
   }
-  const context = await readPreflight(deps, request, definition, routeOptions);
+  const route: PreflightRouteInput = {
+    sheetName: request.sheetName,
+    registeredRange: request.registeredRange,
+    definition,
+    routeOptions,
+  };
+  // ONE enumeration shared by the base read and any whole-table recovery
+  // read: a verification-overflow fallback must never stack a second
+  // enumeration onto the leased request budget.
+  const sheets = await enumeratePreflightSheets(deps);
+  const baseContexts = await readPreflightDataForEnumeratedRoutes(
+    deps, sheets, [route], undefined, "preflight",
+    GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, { scoped: true },
+  );
+  const baseContext = baseContexts.get(request.sheetName);
+  if (baseContext === undefined) {
+    invalidProviderState(`preflight context is missing for ${request.sheetName}`);
+  }
+  // Scoped verification read before replay/pending classification: every
+  // receipt-replay row and (when identity cells need format evidence) the
+  // whole identity column come from ONE atomic format-evidenced request, so
+  // the replay full-row hash and identity dedupe see exactly what the
+  // historical full-mask read saw. Non-scoped base contexts (receipt-init
+  // downgrade, key-row-gap fallback) already carry whole-table full evidence
+  // and skip the read — and a band plan that overflows the range budget
+  // re-reads this route whole-table full-evidence from the SAME enumeration,
+  // keeping the leased dispatch inside the historical paced-request budget
+  // (enumeration + base read + at most one conditional third read + write).
+  const context = await verifyPreflightContext(
+    deps,
+    sheets,
+    baseContext,
+    collectAppendReplayRows(baseContext, bounded, routeOptions.identityField),
+    route,
+  );
   const prepared = prepareFastAppend(deps, request, definition, routeOptions, context, bounded);
   let deferredSuffix = false;
   const updatedAt = new Date(deps.now()).toISOString();
@@ -266,7 +309,7 @@ async function fastAppendMultiRoute(
   // Fail fast on EVERY route's identity field before the shared preflight
   // read: the fast path never materializes anchor metadata, so any route
   // without a registered identity cannot locate or guard its rows on replay.
-  // Kept ahead of readPreflightForRoutes so an identity-less route is rejected
+  // Kept ahead of the shared preflight reads so an identity-less route is rejected
   // without burning the shared enumeration/ranged API reads.
   for (const spec of specs) {
     if (spec.routeOptions.identityField.kind !== "present") {
@@ -276,25 +319,36 @@ async function fastAppendMultiRoute(
       );
     }
   }
-  const contexts = await readPreflightForRoutes(
-    deps,
-    specs.map((spec) => ({
-      sheetName: spec.subRequest.sheetName,
-      registeredRange: spec.subRequest.registeredRange,
-      definition: spec.definition,
-      routeOptions: spec.routeOptions,
-    })),
-  );
-  const prepared = specs.map((spec) => {
-    const context = contexts.get(spec.subRequest.sheetName);
-    if (context === undefined) {
+  const baseRouteArgs: readonly PreflightRouteInput[] = specs.map((spec) => ({
+    sheetName: spec.subRequest.sheetName,
+    registeredRange: spec.subRequest.registeredRange,
+    definition: spec.definition,
+    routeOptions: spec.routeOptions,
+  }));
+  // ONE enumeration shared by the base read and the consolidated
+  // full-evidence recovery read (see `verifyPreflightContexts`): overflow
+  // routes re-read from this enumeration instead of re-entering the
+  // per-route preflight (which stacked one enumeration + one full read per
+  // overflow route and blew the leased call budget).
+  const sheets = await enumeratePreflightSheets(deps);
+  const baseContexts = await readPreflightDataForEnumeratedRoutes(
+    deps, sheets, baseRouteArgs,
+    undefined, "preflight", GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, { scoped: true });
+  const verifiedContexts = await verifyPreflightContexts(deps, specs.map((spec, index) => {
+    const baseContext = baseContexts.get(spec.subRequest.sheetName);
+    if (baseContext === undefined) {
       invalidProviderState(`preflight context is missing for ${spec.subRequest.sheetName}`);
     }
     return {
-      context,
-      prepared: prepareFastAppend(deps, spec.subRequest, spec.definition, effectRouteOptions(spec.definition), context, spec.group),
+      context: baseContext,
+      targetRowNumbers: collectAppendReplayRows(baseContext, spec.group, spec.routeOptions.identityField),
+      route: baseRouteArgs[index]!,
     };
-  });
+  }), sheets);
+  const prepared = specs.map((spec, index) => ({
+    context: verifiedContexts[index]!,
+    prepared: prepareFastAppend(deps, spec.subRequest, spec.definition, spec.routeOptions, verifiedContexts[index]!, spec.group),
+  }));
   const appendingRoutes: CombinedAppendRoute[] = prepared.map((entry) => ({
     context: entry.context,
     rows: entry.prepared.pendingRows,
@@ -494,6 +548,37 @@ function prepareFastAppend(
   const pendingRows: WorkingRow[] = pending.map((row, index) =>
     toAppendWorkingRow(row, context.nextAppendRow + index));
   return { resultsById, pendingRows, pendingReceipts };
+}
+
+/**
+ * Over-approximates the fast-append replay rows: every bounded row that
+ * already carries a receipt resolves (by its visible identity, mirroring
+ * `findRowByIdentity` on the base indexes) to the sheet row whose FULL
+ * visible cells the replay hash will be computed from. ISO date identities
+ * additionally band their raw-serial alias: under the values-only base read
+ * a canonical-date identity cell is keyed by its serial number string, and
+ * the format-aware verification index resolves it back to the ISO string.
+ */
+function collectAppendReplayRows(
+  context: PreflightContext,
+  rows: readonly FastAppendRow[],
+  identityField: Presence<string>,
+): number[] {
+  if (identityField.kind !== "present") return [];
+  const rowNumbers: number[] = [];
+  for (const row of rows) {
+    if (!context.receipts.has(row.effectId)) continue;
+    const identity = identityFromNormalizedCell(row.fields[identityField.value] ?? null);
+    if (identity === null) continue;
+    for (const candidate of [identity, ...identitySerialAliases(identity)]) {
+      for (const existing of context.rows) {
+        if (existing.identity.kind === "present" && existing.identity.value === candidate) {
+          rowNumbers.push(existing.rowNumber);
+        }
+      }
+    }
+  }
+  return rowNumbers;
 }
 
 /** Builds the fixed-shape receipt record used by the fast-append path. */

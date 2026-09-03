@@ -74,6 +74,10 @@ export interface VisibleStateSqlRow {
   readonly confirmed_entity_revision: number | null;
 }
 
+export interface PendingEffectSqlRow {
+  readonly row_binding_id: string;
+}
+
 export interface MappedPollingRows {
   readonly bindings: readonly RowBindingSqlRow[];
   readonly entities: readonly EntitySqlRow[];
@@ -81,6 +85,12 @@ export interface MappedPollingRows {
   readonly businessKeys: readonly BusinessKeySqlRow[];
   readonly conflicts: readonly ConflictSqlRow[];
   readonly visible: readonly VisibleStateSqlRow[];
+  /**
+   * Bindings whose Sheet effect is still in the outbox (not yet delivered
+   * or superseded). The check-column gate uses it to keep an in-flight OWN
+   * write from reading as a false human-input mismatch.
+   */
+  readonly pendingEffects: readonly PendingEffectSqlRow[];
 }
 
 /** Reads all SQLite rows needed before User_Input snapshot inspection. */
@@ -146,7 +156,28 @@ export async function readMappedPollingRows(
      WHERE projection = ? AND physical_sheet_id IN (${placeholders(physicalSheetIds)})`,
     [SYNC_PROJECTIONS.USER_INPUT, ...physicalSheetIds],
   );
-  return { bindings, entities, fields, businessKeys, conflicts, visible };
+  // Undelivered outbox effects per binding. These are the statuses where
+  // delivery of an OWN write is still in flight (queued, claimed, uncertain,
+  // or awaiting retry), so the remote row legitimately still shows the
+  // pre-write values; conflict-blocked/blocked-candidate rows keep normal
+  // polling observation. Statuses follow the outbox kernel CHECK constraint.
+  const pendingEffects = await sql.all<PendingEffectSqlRow>(
+    `SELECT DISTINCT row_binding_id
+     FROM sheet_effect_outbox
+     WHERE logical_sheet_id IN (${placeholders(logicalSheetIds)})
+       AND row_binding_id IS NOT NULL
+       AND status IN ('pending', 'processing', 'delivery_uncertain', 'failed')`,
+    logicalSheetIds,
+  );
+  return {
+    bindings,
+    entities,
+    fields,
+    businessKeys,
+    conflicts,
+    visible,
+    pendingEffects,
+  };
 }
 
 function placeholders(values: readonly string[]): string {

@@ -43,6 +43,7 @@ import type {
   FastAppendRowsRequest,
   FastAppendRowsResult,
   ReadSyncEffectPostconditionsRequest,
+  ReadSyncRowChecksRequest,
   ReadSyncSnapshotRequest,
   ReadSyncTableRowsRequest,
   PreparedApplyEffects,
@@ -51,8 +52,10 @@ import type {
   SyncEffectResult,
   SyncEffectWorkerProvider,
   SyncObservedSnapshot,
+  SyncRowChecksResult,
   SyncSheetsObservationBatchProvider,
   SyncSheetsObservationProvider,
+  SyncSheetsRowChecksReader,
   SyncSheetsSnapshot,
   SyncSheetsTableReader,
   SyncProjectionEffect,
@@ -75,6 +78,7 @@ import {
   GoogleSheetsApiHttpTransport,
   type GoogleSheetsApiTransport,
 } from "./transport/googleSheetsApiTransport.js";
+import { ReceiptReadCursor } from "./model/receiptCursor.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "./transport/rateLimiter.js";
 import type { GoogleSheetsApiProviderDeps } from "./operations/shared.js";
 import { PromiseTailLock } from "./operations/shared.js";
@@ -95,6 +99,9 @@ import {
   readRowsBatch,
   readSnapshot,
 } from "./operations/readRows.js";
+import {
+  readRowChecksBatch,
+} from "./operations/rowChecks.js";
 import {
   ensureRowAnchors,
 } from "./operations/anchors.js";
@@ -142,6 +149,7 @@ export class GoogleSheetsApiSyncProvider
     SyncSheetsObservationProvider,
     SyncSheetsObservationBatchProvider,
     SyncSheetsTableReader,
+    SyncSheetsRowChecksReader,
     SyncSheetsProvisioner {
   private readonly spreadsheetId: string;
   private readonly definitions: readonly RegisteredSyncProjectionDefinition[];
@@ -232,6 +240,7 @@ export class GoogleSheetsApiSyncProvider
       providerNonce: "provider:" + randomUUID(),
       preparedStateRegistry: new WeakSet<object>(),
       receiptInitLock: new PromiseTailLock(),
+      receiptReadCursor: new ReceiptReadCursor(),
       definitions: this.definitions,
       transport: this.transport,
       readTimeoutMs: this.readTimeoutMs,
@@ -330,6 +339,19 @@ export class GoogleSheetsApiSyncProvider
     requests: readonly ReadSyncTableRowsRequest[],
   ): Promise<readonly SyncTableRowsResult[]> {
     return readRowsBatch(this.deps, requests);
+  }
+
+  /**
+   * Reads ONLY the identity + anchor + row-check column bands of several
+   * User_Input tabs through ONE narrow `spreadsheets.get` (the check-column
+   * polling gate). Lock-free like every value read; a tab without the provisioned
+   * check header answers `checks_unavailable` so polling falls back to the
+   * historical whole-table observation (mixed mode).
+   */
+  public async readRowChecksBatch(
+    requests: readonly ReadSyncRowChecksRequest[],
+  ): Promise<readonly SyncRowChecksResult[]> {
+    return readRowChecksBatch(this.deps, requests);
   }
 
   // -------------------------------------------------------------------------
