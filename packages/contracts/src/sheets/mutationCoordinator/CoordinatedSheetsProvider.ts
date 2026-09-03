@@ -36,6 +36,7 @@
 
 import {
   isSyncSheetsObservationBatchProvider,
+  isSyncSheetsRowChecksReader,
 } from "../syncSheets.js";
 import type {
   ApplySyncEffectsRequest,
@@ -46,11 +47,13 @@ import type {
   FastAppendRowsResult,
   PreparedApplyEffects,
   ReadSyncEffectPostconditionsRequest,
+  ReadSyncRowChecksRequest,
   ReadSyncSnapshotRequest,
   ReadSyncTableRowsRequest,
   SyncEffectPostcondition,
   SyncProjectionEffect,
   SyncEffectPostconditionResult,
+  SyncRowChecksResult,
   SyncSheetsSnapshot,
   SyncObservedSnapshot,
   SyncSheetsProvider,
@@ -138,12 +141,26 @@ export class CoordinatedSheetsProvider<TInner extends CoordinatedSheetsInner>
   private readonly onLaneEvent: ((event: CoordinatorLaneEvent) => void) | undefined;
   private readonly now: () => number;
   private readonly lanes = new Map<string, AsyncMutex>();
+  /**
+   * Narrow row-check read (the formula check-column polling gate), exposed
+   * ONLY when the inner provider supports it. Lock-free like every value
+   * read (never waits on a mutation lane). `isSyncSheetsRowChecksReader`
+   * against the coordinator therefore reports the INNER's capability, which
+   * is what polling's feature detection needs.
+   */
+  public readonly readRowChecksBatch?: (
+    requests: readonly ReadSyncRowChecksRequest[],
+  ) => Promise<readonly SyncRowChecksResult[]>;
 
   public constructor(options: CoordinatedSheetsProviderOptions<TInner>) {
     this.inner = options.inner;
     this.resolveKey = options.mutationKeyForPhysicalSheet ?? (() => DEFAULT_LANE_KEY);
     this.onLaneEvent = options.onLaneEvent;
     this.now = options.clock ?? Date.now;
+    const inner = options.inner;
+    if (isSyncSheetsRowChecksReader(inner)) {
+      this.readRowChecksBatch = (requests) => inner.readRowChecksBatch(requests);
+    }
   }
 
   /** Returns a snapshot of all known lane metrics; diagnostic only. */

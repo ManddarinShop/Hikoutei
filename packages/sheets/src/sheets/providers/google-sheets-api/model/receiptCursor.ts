@@ -44,7 +44,11 @@
  * durable-then-ack coupling only buys savings across a process restart (one
  * full receipt read paid once per restart), while every multi-process and
  * crash-desync case above is already proven safe by the append-only +
- * shift-not-overwrite + probe-always-full-read invariants. Keeping the cursor
+ * shift-not-overwrite invariants plus the probe rule that a live cursor
+ * after the base read proves complete memo coverage (a receipt miss is then
+ * provable and decides `unapplied` from the band), while any coverage the
+ * read itself invalidated falls back to one full receipt read (see
+ * `readEffectPostconditions`). Keeping the cursor
  * inside the provider also keeps the Sheets adapter free of storage-schema
  * ownership (a fence-coupled cursor would require outbox-kernel, contracts,
  * and storage API changes far outside this optimization's scope).

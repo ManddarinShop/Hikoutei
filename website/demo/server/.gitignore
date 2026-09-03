@@ -5,3 +5,4 @@ node_modules/
 .demo-service-account.json
 __*.mjs
 __smoke.cjs
+demo.sqlite*

@@ -27,6 +27,7 @@ import type { PreflightContext } from "./preflightContext.js";
 import type { EffectPlan, PlanMutation, PlannedReceipt, WorkingRow } from "./plannerContracts.js";
 import { toApiUserEnteredValue } from "./valueNormalization.js";
 import { allocateSheetId } from "./sheetIdAllocator.js";
+import { buildRowCheckFormula } from "./rowCheckFormula.js";
 
 /** One built batch plus its serialized byte size. */
 export interface BuiltApplyBatch {
@@ -520,6 +521,35 @@ function pushAppendWrites(
           ? { userEnteredValue: { stringValue: row.anchor.value } }
           : null,
       ]),
+      fields: "userEnteredValue",
+    });
+  }
+
+  // The row-check formula column (User_Input tabs provisioned with one):
+  // one token-join formula per appended row, referencing THAT row's user
+  // data columns (the registered data span; the system row-id column stays
+  // out).
+  // The sheet recalcs it from then on, so a human edit to any data cell of
+  // the row changes the visible check string, and inbound polling detects
+  // the edit by reading only this narrow column (see rowCheckFormula.ts).
+  // Skipped entirely when the preflight saw no provisioned check header
+  // (legacy tabs stay byte-identical and never receive stray formulas).
+  const checkColumn = context.checkColumn;
+  if (checkColumn !== undefined && columnCount >= 1) {
+    requests.push({
+      kind: "updateCells",
+      sheetId,
+      startRowIndex: first.rowNumber - 1,
+      startColumnIndex: checkColumn - 1,
+      rows: ordered.map((_, offset) => [{
+        userEnteredValue: {
+          formulaValue: buildRowCheckFormula(
+            startColumn + 1,
+            startColumn + columnCount,
+            first.rowNumber + offset,
+          ),
+        },
+      }]),
       fields: "userEnteredValue",
     });
   }

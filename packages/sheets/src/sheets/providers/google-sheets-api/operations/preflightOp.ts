@@ -94,8 +94,9 @@ export async function readPreflight(
    * bands). `receiptCursor`: read the receipt tab through this provider's
    * tail-band cursor (same paced request, never an extra call). Defaults to
    * the historical whole-table full-evidence shape WITH the receipt cursor;
-   * only the postcondition-recovery probe opts the cursor out (it must be
-   * able to see receipts below any cursor without memo support).
+   * the postcondition-recovery probe rides the cursor too, and every
+   * whole-table fallback/evidence gap answers with an explicit
+   * `receiptCursor: false` full read (see `readEffectPostconditions`).
    */
   options: { readonly scoped?: boolean; readonly receiptCursor?: boolean } = {},
 ): Promise<PreflightContext> {
@@ -333,12 +334,20 @@ export async function verifyPreflightContexts(
     }
   } else if (shared.length > 0) {
     const rawMeta = createRawResponseMeta(deps);
-    const dataRaw = await runRead(deps, () => deps.transport.getSpreadsheet({
-      spreadsheetId: deps.spreadsheetId,
-      ranges: shared.flatMap((entry) => [...entry.ranges]),
-      fields: GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
-      timeoutMs: deps.readTimeoutMs,
-    }), pacing, rawMeta.meta);
+    // The RAW document is measured INSIDE the paced task: `runRead` emits its
+    // telemetry event when the task resolves, so a measurement taken after
+    // the awaited call would land one event too late (same ordering the
+    // model-level preflight reads follow).
+    const dataRaw = await runRead(deps, async () => {
+      const raw = await deps.transport.getSpreadsheet({
+        spreadsheetId: deps.spreadsheetId,
+        ranges: shared.flatMap((entry) => [...entry.ranges]),
+        fields: GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+        timeoutMs: deps.readTimeoutMs,
+      });
+      rawMeta.onRawResponse?.(raw);
+      return raw;
+    }, pacing, rawMeta.meta);
     const dataDocument = parseSpreadsheetDocument(dataRaw, "preflight verification");
     for (const entry of shared) {
       const pass = passes[entry.index]!;

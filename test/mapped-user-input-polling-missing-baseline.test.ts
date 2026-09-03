@@ -181,6 +181,7 @@ function state(): MappedPollingState {
         }],
       ])],
     ]),
+    pendingDeliveryBindingIds: new Set<string>(),
   };
 }
 

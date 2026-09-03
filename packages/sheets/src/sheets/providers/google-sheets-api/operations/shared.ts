@@ -94,9 +94,10 @@ export interface GoogleSheetsApiProviderDeps {
   readonly transport: GoogleSheetsApiTransport;
   /**
    * Per-provider receipt READ cursor (see `model/receiptCursor.ts`). Steady
-   * state apply/fast-append preflights read only the receipt tail band this
-   * cursor opens; postcondition probes, receipt-refresh, and every
-   * full-evidence fallback keep the historical full receipt read.
+   * state apply/fast-append preflights AND postcondition probes read only the
+   * receipt tail band this cursor opens; the receipt-refresh path and the
+   * probe's whole-table evidence fallback keep the historical full receipt
+   * read.
    */
   readonly receiptReadCursor: ReceiptReadCursor;
   readonly readTimeoutMs: number;

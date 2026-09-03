@@ -23,6 +23,7 @@ import type {
   ConflictSqlRow,
   EntityFieldSqlRow,
   EntitySqlRow,
+  PendingEffectSqlRow,
   RowBindingSqlRow,
   VisibleStateSqlRow,
 } from "./MikroOrmUserInputPollingSql.js";
@@ -39,6 +40,14 @@ export interface MappedPollingState {
   readonly businessKeysByLogicalAndField: ReadonlyMap<string, ReadonlyMap<string, ReadonlyMap<string, string>>>;
   readonly conflictsByBindingAndField: ReadonlyMap<string, ReadonlyMap<string, SyncConflict>>;
   readonly visibleRevisionsByPhysicalAndBinding: ReadonlyMap<string, ReadonlyMap<string, VisibleProjectionState>>;
+  /**
+   * Row bindings with an outbox effect whose delivery is still in flight
+   * (pending/processing/delivery-uncertain/retryable-failed). The check-
+   * column gate suppresses a mismatch on these rows: the remote still
+   * (correctly) shows the PRE-write values, and treating that as human
+   * input would fabricate a conflict against an own write.
+   */
+  readonly pendingDeliveryBindingIds: ReadonlySet<string>;
 }
 
 export interface RowBindingStateRecord {
@@ -70,6 +79,7 @@ export function buildPollingState(
   businessKeyRows: readonly BusinessKeySqlRow[],
   conflictRows: readonly ConflictSqlRow[],
   visibleRows: readonly VisibleStateSqlRow[],
+  pendingEffectRows: readonly PendingEffectSqlRow[],
 ): MappedPollingState {
   return {
     bindingsByEntityId: buildRowBindings(bindingRows),
@@ -77,6 +87,7 @@ export function buildPollingState(
     businessKeysByLogicalAndField: buildBusinessKeyIndex(businessKeyRows),
     conflictsByBindingAndField: buildConflicts(conflictRows),
     visibleRevisionsByPhysicalAndBinding: buildVisibleRevisions(visibleRows),
+    pendingDeliveryBindingIds: new Set(pendingEffectRows.map((row) => row.row_binding_id)),
   };
 }
 

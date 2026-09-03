@@ -58,6 +58,8 @@ import {
   gridRowCells,
   readAnchorIndex,
   requireGridDataForSheet,
+  requireSheetGrids,
+  synthesizeScopedTargetGrid,
 } from "./preflightRows.js";
 import type {
   ParsedGridData,
@@ -74,6 +76,16 @@ import {
 export interface ObservationGridTarget {
   readonly sheetName: string;
   readonly registeredRange: string;
+  /**
+   * Optional row-level scoping (the check-column polling gate). When
+   * present, the tab is read as the header row plus row bands covering
+   * ONLY these 1-based physical rows (full registered width), and the
+   * returned grid is the geometric synthesis of those bands: rows outside
+   * the bands resolve blank and are skipped by every downstream rule. A
+   * band plan that would exceed the shared per-request range budget
+   * degrades to the historical whole-table range (correct by construction).
+   */
+  readonly rowNumbers?: readonly number[];
 }
 
 /** Validated grid plus sheet identity for one observed tab. */
@@ -151,8 +163,22 @@ export async function readTabGrids(
 ): Promise<ReadonlyMap<string, ObservedTab>> {
   const tabs = new Map<string, ObservedTab>();
   if (targets.length === 0) return tabs;
-  const ranges = targets.map((target) =>
-    `${quoteA1SheetName(target.sheetName)}!A1:${rangeEndColumnLetters(target.registeredRange)}1048576`);
+  const ranges: string[] = [];
+  // Per-target request order is preserved so the parsed per-sheet grid list
+  // can be synthesized back into one logical grid.
+  const bandedTargets = new Map<string, { readonly range: { readonly startColumn: number; readonly columnCount: number } }>();
+  for (const target of targets) {
+    const parsed = parseRegisteredRange(target.registeredRange);
+    const bandRanges = target.rowNumbers === undefined
+      ? []
+      : rowBandRanges(target.sheetName, parsed, target.rowNumbers);
+    if (bandRanges.length === 0) {
+      ranges.push(`${quoteA1SheetName(target.sheetName)}!A1:${rangeEndColumnLetters(target.registeredRange)}1048576`);
+      continue;
+    }
+    bandedTargets.set(target.sheetName, { range: parsed });
+    ranges.push(...bandRanges);
+  }
   const request: GoogleSheetsApiGetSpreadsheetRequest = {
     spreadsheetId,
     ranges,
@@ -178,6 +204,22 @@ export async function readTabGrids(
       // so it keeps the safe unclassified default.
       invalidProviderState(`Registered sync sheet does not exist: ${target.sheetName}`);
     }
+    const banded = bandedTargets.get(target.sheetName);
+    if (banded !== undefined) {
+      // Banded reads return one GridData per requested band; merge them
+      // geometrically into one dense logical grid so the historical header,
+      // blank-row, anchor, and cell-classification rules run unchanged over
+      // the cells that were actually requested (same synthesis the scoped
+      // preflight base read uses).
+      const grids = requireSheetGrids(document, sheet.sheetId);
+      tabs.set(target.sheetName, {
+        sheetId: sheet.sheetId,
+        title: sheet.title,
+        grid: synthesizeScopedTargetGrid(grids, banded.range),
+        merges: sheet.merges ?? [],
+      });
+      continue;
+    }
     // Fail closed unless the reply carries exactly one GridData for the
     // requested range shape: a missing grid violated the structural
     // expectation and a multi-grid reply does not match this reader's
@@ -191,6 +233,43 @@ export async function readTabGrids(
     });
   }
   return tabs;
+}
+
+/** Hard cap on ranges per `spreadsheets.get` (shared with preflight verify). */
+const MAX_OBSERVATION_BAND_RANGES = 40;
+
+/**
+ * Header row + grouped contiguous row bands over the full registered width
+ * for one banded observation read. Returns an empty array (the caller
+ * degrades to the whole-table range) when there are no rows or the band
+ * plan would overflow the per-request range budget.
+ */
+function rowBandRanges(
+  sheetName: string,
+  range: { readonly startColumn: number; readonly columnCount: number },
+  rowNumbers: readonly number[],
+): string[] {
+  const sorted = [...new Set(rowNumbers.filter((row) => row >= 2))].sort((a, b) => a - b);
+  if (sorted.length === 0) return [];
+  const quote = quoteA1SheetName(sheetName);
+  const firstLetter = columnLetters(range.startColumn);
+  const lastLetter = columnLetters(range.startColumn + range.columnCount - 1);
+  const bands: string[] = [`${quote}!${firstLetter}1:${lastLetter}1`];
+  let runStart = sorted[0]!;
+  let previous = runStart;
+  for (let index = 1; index <= sorted.length; index += 1) {
+    const row = sorted[index];
+    if (row !== undefined && row === previous + 1) {
+      previous = row;
+      continue;
+    }
+    bands.push(`${quote}!${firstLetter}${runStart}:${lastLetter}${previous}`);
+    if (row === undefined) break;
+    runStart = row;
+    previous = row;
+  }
+  if (bands.length > MAX_OBSERVATION_BAND_RANGES) return [];
+  return bands;
 }
 
 function findSheetByTitle(

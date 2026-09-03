@@ -154,6 +154,47 @@ export function synthesizeScopedTargetGrid(
   return { startRow: 0, startColumn: range.startColumn - 1, rowData };
 }
 
+/**
+ * Returns the 1-based absolute column of the row-check formula column of
+ * one registered range, or `undefined` for projections without one. The
+ * check column lives DIRECTLY AFTER the registered range (outside every
+ * range-scoped read/hash rule) and only User_Input tabs carry it.
+ *
+ * This is the UNVERIFIED geometric position: the column is only USED once
+ * `buildRouteContext` has seen the `__hikoutei_row_check` header cell there
+ * (a provisioned tab); legacy tabs keep `PreflightContext.checkColumn`
+ * undefined and receive no formula writes.
+ */
+export function checkColumnFor(
+  registeredRange: string,
+  projection: string,
+): number | undefined {
+  if (projection !== SYNC_PROJECTIONS.USER_INPUT) return undefined;
+  const range = parseRegisteredRange(registeredRange);
+  return range.startColumn + range.columnCount;
+}
+
+/**
+ * Picks the whole-table grid of a full-shape read from an ordered
+ * per-range grid list. The registered-span grid (starts at the range's
+ * first cell) must appear EXACTLY once — a duplicate is the proven
+ * malformed multi-grid reply a single-range reader fails closed on — while
+ * additional out-of-range probe bands (the row-check header cell) are
+ * tolerated because the full-shape user_input read requests them.
+ */
+export function pickRegisteredGrid(
+  grids: readonly ParsedGridData[],
+  range: { readonly startColumn: number; readonly columnCount: number },
+  sheetId: number,
+): ParsedGridData {
+  const candidates = grids.filter((grid) =>
+    grid.startRow === 0 && grid.startColumn === range.startColumn - 1);
+  if (candidates.length !== 1) {
+    invalidProviderState(`expected exactly one grid for sheet ${sheetId}`, GET_REPLY_MALFORMED);
+  }
+  return candidates[0]!;
+}
+
 /** Normalizes nonblank grid rows into typed preflight rows. */
 export function readRows(
   data: ParsedGridData,

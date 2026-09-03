@@ -291,6 +291,8 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     const inputTab = spreadsheet.findTab("Users_Input");
     expect(inputTab?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
     expect(inputTab?.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
+    // The row-check column header lands directly AFTER the registered range.
+    expect(inputTab?.cell(0, 3)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_check");
     const conflictsTab = spreadsheet.findTab("Users_Conflicts");
     expect(conflictsTab?.cell(0, 12)?.userEnteredValue?.stringValue).toBe("Status");
   });
@@ -299,7 +301,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
     spreadsheet.addTab("Users_Input", {
-      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id", "__hikoutei_row_check"],
     });
     spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
     const transport = new StubSheetsTransport(spreadsheet);
@@ -310,6 +312,87 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
     expect(result.createdSheets).toEqual([]);
     expect(result.initializedHeaders).toEqual([]);
+  });
+
+  it("initializes the row-check header on a content tab provisioned without it", async () => {
+    // Migration path: a tab provisioned by a version predating the check
+    // column keeps its exact registered headers (verified, no re-provision
+    // failure) and receives ONLY the additive check-column header cell.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const inputTab = spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending"]],
+    });
+    spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    const result = await provider.provisionRegistry(provisionRoutes());
+
+    expect(result.createdSheets).toEqual([]);
+    expect(result.initializedHeaders).toEqual([]);
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0] ?? [];
+    expect(batch).toHaveLength(1);
+    const write = batch[0];
+    expect(write?.kind).toBe("updateCells");
+    if (write?.kind === "updateCells") {
+      expect(write.startRowIndex).toBe(0);
+      // Registered range A:C (id, status, row-id): the check column is D.
+      expect(write.startColumnIndex).toBe(3);
+    }
+    // The write goes through the stub, so a retry sees a fully provisioned
+    // tab and mutates nothing.
+    expect(inputTab.cell(0, 3)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_check");
+    const retry = new StubSheetsTransport(spreadsheet);
+    const retryProvider = buildProvider(retry);
+    await retryProvider.provisionRegistry(provisionRoutes());
+    expect(retry.batchUpdateCalls).toBe(0);
+  });
+
+  it("fails closed when the row-check column slot holds a foreign header", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id", "Developer Notes"],
+      rows: [["u1", "pending"]],
+    });
+    spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.provisionRegistry(provisionRoutes()))
+      .rejects.toThrow(/row-check column D holds a foreign header/);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("grows a narrow grid with addDimension before the check-column header write", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const inputTab = spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending"]],
+    });
+    // A grid that ends exactly at the registered range cannot receive the
+    // header `updateCells` (updateCells never grows the grid: proven 400),
+    // so the batch must carry an explicit addDimension FIRST.
+    inputTab.gridColumnCount = 3;
+    spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await provider.provisionRegistry(provisionRoutes());
+
+    const batch = transport.appliedBatchUpdates[0] ?? [];
+    expect(batch.map((request) => request.kind)).toEqual(["addDimension", "updateCells"]);
+    const grow = batch[0];
+    if (grow?.kind !== "addDimension") throw new Error("expected addDimension first");
+    expect(grow.dimension).toBe("COLUMNS");
+    expect(grow.startIndex).toBe(3);
+    expect(grow.endIndex).toBe(4);
+    expect(inputTab.gridColumnCount).toBe(4);
+    expect(inputTab.cell(0, 3)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_check");
   });
 
   it("rejects a legacy User_Input content tab without the system column", async () => {
