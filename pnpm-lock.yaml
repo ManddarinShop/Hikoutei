@@ -15,7 +15,7 @@ importers:
         specifier: ^14.0.0
         version: 14.0.0
       '@hikoutei/ikisaki':
-        specifier: 0.1.9
+        specifier: 0.1.10
         version: link:packages/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
@@ -79,7 +79,7 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: 0.9.25
+        specifier: 0.9.26
         version: link:../..
     devDependencies:
       '@types/node':
@@ -136,7 +136,7 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: 0.9.25
+        specifier: 0.9.26
         version: link:../..
 
   packages/sheets:
@@ -167,7 +167,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.9
+        specifier: 0.1.10
         version: link:../ikisaki
       '@mikro-orm/core':
         specifier: 7.1.7
@@ -186,7 +186,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.9
+        specifier: 0.1.10
         version: link:../ikisaki
       '@hikoutei/storage':
         specifier: 0.1.0
