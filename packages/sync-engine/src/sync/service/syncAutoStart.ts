@@ -120,6 +120,15 @@ export const SYNC_ENV_KEYS = {
    * test transport never uses the pool identities.
    */
   CREDENTIAL_POOL_FILES: "HIKOUTEI_SYNC_CREDENTIALS",
+  /**
+   * Optional worker pass concurrency: the maximum number of route-disjoint
+   * dispatch units a single worker pass runs concurrently. Absent or blank
+   * means the safe default (1 = the historical fully-sequential pass).
+   * Values must be plain decimal integers between 1 and 8; same-route
+   * serialization is enforced structurally regardless of the value. Real-
+   * provider path only — an injected test transport never consults it.
+   */
+  MAX_CONCURRENT_UNITS: "HIKOUTEI_SYNC_MAX_CONCURRENT_UNITS",
 } as const;
 
 /**
@@ -393,6 +402,11 @@ export async function createTypedSheetsWithSync(
     const rateLimitIntervalMs = options.transport === undefined
       ? resolveSyncRateLimitIntervalMs(env)
       : undefined;
+    // Worker pass concurrency override: same real-provider gate as the pacing
+    // override (injected stub transports stay deterministic and unpaced).
+    const maxConcurrentUnits = options.transport === undefined
+      ? resolveSyncMaxConcurrentUnits(env)
+      : undefined;
     // NOTE: the credential pool (`serviceAccountKeyFiles`) is resolved and
     // validated at the TOP of this block — see the pool-first comment above.
     const projections = withAdoptedTabOverrides(
@@ -439,6 +453,7 @@ export async function createTypedSheetsWithSync(
           },
       pollingIntervalMs,
       pollingFullScanIntervalMs,
+      ...(maxConcurrentUnits === undefined ? {} : { maxConcurrentUnits }),
       ...(options.adopt === undefined ? {} : { adopt: toInternalAdoptSpec(options.adopt) }),
     });
     logHikouteiInternalEvent({
@@ -834,6 +849,39 @@ export function resolveSyncRateLimitIntervalMs(
       HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
       `Sync start failed: ${SYNC_ENV_KEYS.RATE_LIMIT_INTERVAL_MS} must be an integer between ` +
         `${MIN_SYNC_RATE_LIMIT_INTERVAL_MS} and ${MAX_SYNC_RATE_LIMIT_INTERVAL_MS} ms — current value: ${raw}`,
+    );
+  }
+  return value;
+}
+
+/** Upper bound for the worker concurrency env override (sanity, not quota). */
+export const MAX_SYNC_CONCURRENT_UNITS = 8;
+
+/**
+ * `HIKOUTEI_SYNC_MAX_CONCURRENT_UNITS` is the internal override for the
+ * worker pass's concurrent route-disjoint dispatch units. Absent or blank
+ * means the safe default (1 = the historical fully-sequential pass). A
+ * present value must be a plain decimal integer between 1 and 8; values
+ * outside those bounds fail closed with the stable startup code so a
+ * mistyped override can never silently raise concurrency. The key stays
+ * internal and is never part of the root public API.
+ */
+export function resolveSyncMaxConcurrentUnits(
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined {
+  const raw = env[SYNC_ENV_KEYS.MAX_CONCURRENT_UNITS];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  if (!/^\d+$/.test(raw)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      `Sync start failed: ${SYNC_ENV_KEYS.MAX_CONCURRENT_UNITS} must be an integer between 1 and 8 — current value: ${raw}`,
+    );
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 8) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+      `Sync start failed: ${SYNC_ENV_KEYS.MAX_CONCURRENT_UNITS} must be an integer between 1 and 8 — current value: ${raw}`,
     );
   }
   return value;
