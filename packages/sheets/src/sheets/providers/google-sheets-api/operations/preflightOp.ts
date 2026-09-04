@@ -66,6 +66,7 @@ import type { GoogleSheetsApiGetSpreadsheetRequest } from "../transport/googleSh
 import type { SnapshotBuildTarget } from "../model/observation.js";
 import {
   createRawResponseMeta,
+  credentialBinding,
   definitionForPhysicalSheet,
   runRead,
   validateRoute,
@@ -114,9 +115,9 @@ export async function readPreflight(
   // EACH band request of the data read separately (zero estimate cost
   // without a telemetry sink).
   const enumeration = createRawResponseMeta(deps);
-  const sheets = await runRead(deps, () =>
+  const sheets = await runRead(deps, (credentialIndex) =>
     enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs,
-      enumeration.onRawResponse), pacing, enumeration.meta);
+      enumeration.onRawResponse, credentialIndex), pacing, enumeration.meta);
   return readPreflightData(
     createEngineRuntime(deps, pacing, "preflight data"),
     {
@@ -157,9 +158,9 @@ export async function enumeratePreflightSheets(
   pacing: RequestStartPacing = "preflight",
 ): Promise<readonly ParsedSheet[]> {
   const enumeration = createRawResponseMeta(deps);
-  return runRead(deps, () =>
+  return runRead(deps, (credentialIndex) =>
     enumerateSheetProperties(deps.transport, deps.spreadsheetId, deps.readTimeoutMs,
-      enumeration.onRawResponse), pacing, enumeration.meta);
+      enumeration.onRawResponse, credentialIndex), pacing, enumeration.meta);
 }
 
 /** Maps route inputs to the model-level per-route preflight options. */
@@ -432,7 +433,10 @@ export async function refreshReceiptForWrite(
   };
   let dataDocument: ParsedSpreadsheetDocument;
   try {
-    const dataRaw = await runRead(deps, () => deps.transport.getSpreadsheet(dataRequest), "write");
+    const dataRaw = await runRead(deps, (credentialIndex) => deps.transport.getSpreadsheet({
+      ...dataRequest,
+      ...credentialBinding(credentialIndex),
+    }), "write");
     dataDocument = parseSpreadsheetDocument(dataRaw, "grid data");
   } catch (error: unknown) {
     // The real API rejects a range that names a missing tab with a proven

@@ -31,7 +31,7 @@ import {
   SyncSheetsContractError,
 } from "@hikoutei/contracts/sheets/errors.js";
 import { SYNC_FAST_APPEND_STATUSES } from "@hikoutei/contracts/sheets/constants.js";
-import { absentValue, PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
+import { absentValue, type Presence } from "@hikoutei/contracts/state/index.js";
 import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
@@ -47,11 +47,16 @@ import {
 import {
   definitionForPhysicalSheet,
   effectRouteOptions,
-  requireValidBatchUpdateReply,
-  runWrite,
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
+import {
+  executeBatchUpdate,
+  executePreparedWrite,
+  groupByRouteKey,
+  receiptInitNeeded,
+  refreshFirstRouteContext,
+} from "./writeEngine.js";
 import {
   enumeratePreflightSheets,
   readPreflightDataForEnumeratedRoutes,
@@ -81,7 +86,7 @@ export async function fastAppendRows(
   }
   const bounded = request.rows.slice(0, GOOGLE_SHEETS_API_DEFAULTS.MAX_APPEND_ROWS_PER_REQUEST);
   validateAppendRows(bounded);
-  const groups = groupRowsByRoute(request, bounded);
+  const groups = groupByRouteKey(bounded, (row) => rowRouteKey(request, row));
   if (groups.length === 1) {
     const single = groups[0]!;
     const first = single[0];
@@ -97,45 +102,17 @@ export async function fastAppendRows(
 }
 
 /**
- * Groups rows by their own route (falling back to the request route when a
- * row carries no route fields, the legacy single-tab shape).
+ * The route key of one row (its own route overrides, else the request route):
+ * the canonical `routeKeyOf` shape so grouping and absorbed-probe matching
+ * can never disagree on key format.
  */
-function groupRowsByRoute(
-  request: FastAppendRowsRequest,
-  rows: readonly FastAppendRow[],
-): readonly (readonly FastAppendRow[])[] {
-  const groups = new Map<string, FastAppendRow[]>();
-  for (const row of rows) {
-    const key = rowRouteKey(request, row);
-    const group = groups.get(key);
-    if (group === undefined) {
-      groups.set(key, [row]);
-    } else {
-      group.push(row);
-    }
-  }
-  return [...groups.values()];
-}
-
 function rowRouteKey(request: FastAppendRowsRequest, row: FastAppendRow): string {
-  return [
-    row.physicalSheetId ?? request.physicalSheetId,
-    row.projection ?? request.projection,
-    row.sheetName ?? request.sheetName,
-    row.registeredRange ?? request.registeredRange,
-    row.schemaVersion ?? request.schemaVersion,
-  ].join("\u0000");
+  return routeKeyOf(rowRoute(request, row));
 }
 
 /** The request-level route key (no per-row overrides). */
 function requestRouteKey(request: FastAppendRowsRequest): string {
-  return [
-    request.physicalSheetId,
-    request.projection,
-    request.sheetName,
-    request.registeredRange,
-    request.schemaVersion,
-  ].join("\u0000");
+  return routeKeyOf(request);
 }
 
 /** The route fields one row belongs to (row overrides, then request). */
@@ -257,9 +234,9 @@ async function fastAppendSingleRoute(
       deps.maxBatchBytes,
     );
     deferredSuffix = resolution.includeCount < prepared.pendingRows.length;
-    // Writes the target+receipt batch against `ctx`. Extracted so the shared
-    // receipt-tab initialization guard (below) can wrap refresh + write as one
-    // atomic unit.
+    // Writes the target+receipt batch against `ctx` (the preflight context or
+    // its receipt-refreshed variant) and records the APPLIED results for the
+    // included prefix.
     const writeBatch = async (ctx: PreflightContext): Promise<void> => {
       if (resolution.includeCount <= 0) return;
       const batch = buildAppendBatchRequests(
@@ -269,62 +246,29 @@ async function fastAppendSingleRoute(
         { updatedAt },
       );
       if (batch.requests.length > 0) {
-        const response = await runWrite(deps, () =>
-          deps.transport.batchUpdate({
-            spreadsheetId: deps.spreadsheetId,
-            requests: batch.requests,
-          }), {
-          requestCount: batch.requests.length,
-          bodyBytes: batch.bytes,
+        await executeBatchUpdate(deps, batch, {
           requestedEffects: request.rows.length,
           includedEffects: resolution.includeCount,
         });
-        requireValidBatchUpdateReply(response, batch.requests.length);
-        for (let i = 0; i < resolution.includeCount; i += 1) {
-          const receipt = prepared.pendingReceipts[i];
-          if (receipt !== undefined) {
-            prepared.resultsById.set(receipt.effectId, {
-              effectId: receipt.effectId,
-              status: SYNC_FAST_APPEND_STATUSES.APPLIED,
-              visibleHash: receipt.visibleHash,
-              visibleRevision: receipt.visibleRevision,
-            });
-          }
-        }
+        markAppendedResults([prepared], resolution.includeCount);
       }
     };
-    // A read-ahead preflight may have observed the shared receipt tab before a
-    // concurrent write created it. Two stale preflights on the same spreadsheet
-    // would otherwise both emit a duplicate addSheet and the second would fail
-    // with a 400. Serialize refresh + the batch that creates the tab on the
-    // per-spreadsheet receipt-init lock so the first writer creates it and
-    // later writers refresh to see it present and append instead. Steady state
-    // (receipt present at preflight) never takes this lock.
-    //
-    // Stale `pendingRows` are safe here by the same-route serialization
-    // invariant: the WHOLE fast-append operation (this preflight read, the
-    // replay/identity planning in prepareFastAppend, and the write) runs inside
-    // one coordinator mutation lane (`CoordinatedSheetsProvider.fastAppendRows`
-    // -> runMutation; the dispatcher's fast-append path serializes through
-    // `runSerializedInner`/`runSerializedInnerForRoutes` the same way), and the
-    // worker never overlaps a same-route unit. A second same-route call's
-    // preflight therefore cannot run before this write completes, so it sees
-    // the first call's receipts and identities and classifies them as replays
-    // in prepareFastAppend instead of re-pending them; the refresh below can
-    // only observe receipts from OTHER routes (different tabs), whose identities
-    // can never collide with this route's pending rows. The lock exists for the
-    // cross-route shared-receipt-tab addSheet hazard, not for target-row
-    // duplication. Even for unserialized direct callers, an out-of-order
-    // same-route append batch cannot lose or overwrite the earlier writer's
-    // rows: appends reserve rows with insertDimension (shift, not overwrite).
-    if (context.receiptSheetId.kind === PRESENCE_KINDS.ABSENT) {
-      await deps.receiptInitLock.run(async () => {
-        const refreshed = await refreshReceiptForWrite(deps, context);
-        await writeBatch(refreshed);
-      });
-    } else {
-      await writeBatch(context);
-    }
+    // Receipt-init guard (see `executePreparedWrite`): this batch's pending
+    // receipts may create the shared receipt tab, so when the preflight saw it
+    // absent the refresh + batch run as one atomic section on the
+    // per-spreadsheet lock. Stale `pendingRows` are safe by the same-route
+    // serialization invariant: the WHOLE fast-append operation (preflight read,
+    // replay/identity planning, write) runs inside one coordinator mutation
+    // lane, so the refresh below can only observe receipts from OTHER routes,
+    // whose identities can never collide with this route's pending rows. The
+    // lock exists for the cross-route shared-receipt-tab addSheet hazard, not
+    // for target-row duplication.
+    await executePreparedWrite(deps, {
+      context,
+      needsReceiptInit: receiptInitNeeded(context),
+      refresh: (ctx) => refreshReceiptForWrite(deps, ctx),
+      write: writeBatch,
+    });
   }
   return collectAppendResults(prepared.resultsById, bounded, bounded.length < request.rows.length || deferredSuffix, probeResults);
 }
@@ -444,7 +388,7 @@ async function fastAppendMultiRoute(
     context: verifiedContexts[index]!,
     prepared: prepareFastAppend(deps, spec.subRequest, spec.definition, spec.routeOptions, verifiedContexts[index]!, spec.group),
   }));
-  const appendingRoutes: CombinedAppendRoute[] = prepared.map((entry) => ({
+  const appendingRoutes: readonly CombinedAppendRoute[] = prepared.map((entry) => ({
     context: entry.context,
     rows: entry.prepared.pendingRows,
     receipts: entry.prepared.pendingReceipts,
@@ -459,9 +403,10 @@ async function fastAppendMultiRoute(
       deps.maxBatchBytes,
     );
     deferredSuffix = resolution.includeCount < totalPending;
-    // Writes the combined multi-tab batch against `routes`. Extracted so the
-    // shared receipt-tab initialization guard (below) can wrap refresh + write
-    // as one atomic unit.
+    // Writes the combined multi-tab batch against `routes` (the preflight
+    // contexts or the variant whose first route carries the receipt-refreshed
+    // context) and records the APPLIED results across the flat included
+    // prefix, route by route.
     const writeCombined = async (routes: readonly CombinedAppendRoute[]): Promise<void> => {
       if (resolution.includeCount <= 0) return;
       const batch = buildCombinedAppendRequests(
@@ -469,54 +414,29 @@ async function fastAppendMultiRoute(
         { updatedAt },
       );
       if (batch.requests.length > 0) {
-        const response = await runWrite(deps, () =>
-          deps.transport.batchUpdate({
-            spreadsheetId: deps.spreadsheetId,
-            requests: batch.requests,
-          }), {
-          requestCount: batch.requests.length,
-          bodyBytes: batch.bytes,
+        await executeBatchUpdate(deps, batch, {
           requestedEffects: request.rows.length,
           includedEffects: resolution.includeCount,
         });
-        requireValidBatchUpdateReply(response, batch.requests.length);
-        let remaining = resolution.includeCount;
-        for (const entry of prepared) {
-          const take = Math.min(entry.prepared.pendingRows.length, remaining);
-          for (let i = 0; i < take; i += 1) {
-            const receipt = entry.prepared.pendingReceipts[i];
-            if (receipt !== undefined) {
-              entry.prepared.resultsById.set(receipt.effectId, {
-                effectId: receipt.effectId,
-                status: SYNC_FAST_APPEND_STATUSES.APPLIED,
-                visibleHash: receipt.visibleHash,
-                visibleRevision: receipt.visibleRevision,
-              });
-            }
-          }
-          remaining -= take;
-        }
+        markAppendedResults(
+          prepared.map((entry) => entry.prepared),
+          resolution.includeCount,
+        );
       }
     };
-    // A read-ahead preflight may have observed the shared receipt tab before a
-    // concurrent write created it. Two stale multi-route preflights on the same
-    // spreadsheet would otherwise both emit a duplicate addSheet. Serialize
-    // refresh + the combined batch on the per-spreadsheet receipt-init lock so
-    // the first writer creates the tab and later writers refresh to append
-    // instead. Steady state (receipt present at preflight) never takes this
-    // lock.
-    const needsReceiptInit = appendingRoutes[0]?.context.receiptSheetId.kind === PRESENCE_KINDS.ABSENT;
-    if (needsReceiptInit) {
-      await deps.receiptInitLock.run(async () => {
-        const first = appendingRoutes[0]!;
-        const refreshed = await refreshReceiptForWrite(deps, first.context);
-        const refreshedRoutes = appendingRoutes.map((route, index) =>
-          index === 0 ? { ...route, context: refreshed } : route);
-        await writeCombined(refreshedRoutes);
-      });
-    } else {
-      await writeCombined(appendingRoutes);
-    }
+    // Receipt-init guard (see `executePreparedWrite`): the combined batch's
+    // receipts may create the shared receipt tab, so when the first route's
+    // preflight saw it absent the refresh + combined batch run as one atomic
+    // section on the per-spreadsheet lock (provisioning gives every route of
+    // one batch the same receipt-tab posture, so refreshing the first
+    // context covers all routes).
+    await executePreparedWrite(deps, {
+      context: appendingRoutes,
+      needsReceiptInit: appendingRoutes[0] !== undefined &&
+        receiptInitNeeded(appendingRoutes[0].context),
+      refresh: (routes) => refreshFirstRouteContext(deps, routes),
+      write: writeCombined,
+    });
   }
   const byId = new Map<string, FastAppendRowResult>();
   for (const entry of prepared) {
@@ -525,6 +445,36 @@ async function fastAppendMultiRoute(
   return collectAppendResults(
     byId, bounded, bounded.length < request.rows.length || deferredSuffix, probeResults,
   );
+}
+
+/**
+ * Records the APPLIED fast-append result for each receipt in the flat
+ * budget-fitting prefix, consuming the pending lists route by route (the
+ * single-route path is the one-entry case of the same distribution).
+ */
+function markAppendedResults(
+  entries: readonly Pick<
+    ReturnType<typeof prepareFastAppend>,
+    "resultsById" | "pendingReceipts"
+  >[],
+  includeCount: number,
+): void {
+  let remaining = includeCount;
+  for (const entry of entries) {
+    const take = Math.min(entry.pendingReceipts.length, remaining);
+    for (let i = 0; i < take; i += 1) {
+      const receipt = entry.pendingReceipts[i];
+      if (receipt !== undefined) {
+        entry.resultsById.set(receipt.effectId, {
+          effectId: receipt.effectId,
+          status: SYNC_FAST_APPEND_STATUSES.APPLIED,
+          visibleHash: receipt.visibleHash,
+          visibleRevision: receipt.visibleRevision,
+        });
+      }
+    }
+    remaining -= take;
+  }
 }
 
 /** Slices the flat combined append route list to a shared prefix count. */

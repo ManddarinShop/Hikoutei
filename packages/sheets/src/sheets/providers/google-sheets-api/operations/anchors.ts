@@ -23,6 +23,7 @@ import {
 } from "../model/observation.js";
 import { anchorColumnFor } from "../model/preflightRows.js";
 import {
+  credentialBinding,
   definitionForPhysicalSheet,
   requireValidBatchUpdateReply,
   runWrite,
@@ -84,10 +85,11 @@ export async function writeAnchors(
     rows: [[{ userEnteredValue: { stringValue: planned.anchor } }]],
     fields: "userEnteredValue",
   }));
-  const response = await runWrite(deps, () =>
+  const response = await runWrite(deps, (credentialIndex) =>
     deps.transport.batchUpdate({
       spreadsheetId: deps.spreadsheetId,
       requests,
+      ...credentialBinding(credentialIndex),
     }));
   requireValidBatchUpdateReply(response, requests.length);
 }

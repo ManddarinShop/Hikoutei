@@ -2533,10 +2533,10 @@ describe("adaptive batch controller", () => {
       responseLoss: true,
     });
     expect(controller.limitFor("route-a")).toBe(50);
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       controller.observe("route-a", { durationMs: 10, responseSucceeded: true, responseLoss: false });
     }
-    expect(controller.limitFor("route-a")).toBe(55);
+    expect(controller.limitFor("route-a")).toBe(75);
   });
 
   it("exposes a read-only limits snapshot without creating or mutating route state", () => {
@@ -2604,11 +2604,11 @@ describe("adaptive batch controller", () => {
       coalesceWindowMs: 0,
       highLatencyThresholdMs: 1_000,
     });
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       controller.observePreflight("route-fast", { durationMs: 5, succeeded: true });
       controller.observe("route-fast", { durationMs: 5, responseSucceeded: true, responseLoss: false });
     }
-    expect(controller.limitFor("route-fast")).toBe(105);
+    expect(controller.limitFor("route-fast")).toBe(125);
   });
 
   it("clears buffered preflight latency when a prepared unit is abandoned (fence loss)", () => {

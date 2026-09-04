@@ -94,6 +94,52 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
   MAX_EFFECTS_PER_REQUEST: 1_000,
   /** Append row cap per request, matching the worker's bulk claim window. */
   MAX_APPEND_ROWS_PER_REQUEST: 1_000,
+  // -------------------------------------------------------------------------
+  // Adaptive quota governor (transport layer, request-START gating only).
+  // The binding quota for the deployed per-user project was measured as 60
+  // READs/min: a 30k-effect burst peaked near 69 reads/min, producing 429s
+  // on ~4.67% of reads and a delivery-uncertain requeue spiral. Interval
+  // pacing alone cannot hold a per-minute ceiling, so a sliding-window
+  // budget and 429 AIMD feedback gate request starts on top of it. The
+  // budgets are DISABLED by default (Infinity) to keep the shipped defaults
+  // behavior-identical to the pre-governor pacing (the 800 ms interval
+  // already allows up to 75 starts/min, so any finite per-minute default
+  // below that would locally refuse healthy workloads with zero 429s);
+  // operators facing a measured per-minute quota ceiling opt in via the
+  // RECOMMENDED_* values below.
+  // -------------------------------------------------------------------------
+  /** Sliding window the per-minute budgets enforce over. */
+  QUOTA_BUDGET_WINDOW_MS: 60_000,
+  /**
+   * Per-window request-start budget for the READ lane. DISABLED by default
+   * (Infinity) for zero behavior change; the RECOMMENDED value below is
+   * 45/min (0.75x the measured binding 60/min per-user read quota).
+   */
+  QUOTA_READ_BUDGET_PER_WINDOW: Number.POSITIVE_INFINITY,
+  /** Recommended READ budget for a measured 60/min per-user quota (0.75x). */
+  RECOMMENDED_QUOTA_READ_BUDGET_PER_WINDOW: 45,
+  /**
+   * Per-window request-start budget for the WRITE lane. DISABLED by default
+   * (Infinity); the RECOMMENDED value below is 10/min, well above the
+   * measured 2-5/min write demand.
+   */
+  QUOTA_WRITE_BUDGET_PER_WINDOW: Number.POSITIVE_INFINITY,
+  /** Recommended WRITE budget for the measured 2-5/min write demand. */
+  RECOMMENDED_QUOTA_WRITE_BUDGET_PER_WINDOW: 10,
+  /** HTTP status that marks a quota-limited (AIMD signal) response. */
+  QUOTA_LIMIT_HTTP_STATUS: 429,
+  /** google.rpc code that marks a quota-limited response when no status is present. */
+  QUOTA_LIMIT_REMOTE_CODE: "RESOURCE_EXHAUSTED",
+  /** Multiplicative decrease: pacing interval factor per observed 429. */
+  QUOTA_BACKOFF_GROWTH_FACTOR: 2,
+  /** Ceiling for the AIMD pacing multiplier (interval never exceeds 4x base). */
+  QUOTA_BACKOFF_MAX_MULTIPLIER: 4,
+  /** Additive increase: pacing multiplier divisor per recovery step. */
+  QUOTA_RECOVERY_STEP_FACTOR: 2,
+  /** Successful request starts of quiet before one recovery step. */
+  QUOTA_RECOVERY_SUCCESS_THRESHOLD: 25,
+  /** Milliseconds since the last 429 that alone earns a recovery step. */
+  QUOTA_RECOVERY_QUIET_MS: 10_000,
 } as const;
 
 /** REST `CellFormat.numberFormat` object written by the provider. */
@@ -200,8 +246,25 @@ export type GoogleSheetsApiWriteRequest =
     readonly sheetId: number;
   };
 
+/**
+ * Optional pool-identity binding carried by every transport request.
+ *
+ * When the provider runs with a credential pool (N > 1 service accounts),
+ * request-start admission selects the pacing slot index and threads it here
+ * so the transport signs the call with the SAME credential the admission
+ * paced against — the budget/interval an identity respected and the client
+ * that hits the wire can never disagree. Absent means "no pool binding":
+ * a single-credential provider (the historical default) never sets it, and
+ * the transport then falls back to its own round-robin cursor over the pool
+ * (or its single default client).
+ */
+export interface GoogleSheetsApiCredentialBinding {
+  /** Zero-based index into the transport's credential pool. */
+  readonly credentialIndex?: number;
+}
+
 /** Request shape of one `spreadsheets.get` call. */
-export interface GoogleSheetsApiGetSpreadsheetRequest {
+export interface GoogleSheetsApiGetSpreadsheetRequest extends GoogleSheetsApiCredentialBinding {
   readonly spreadsheetId: string;
   readonly ranges: readonly string[];
   readonly fields: string;
@@ -214,13 +277,13 @@ export interface GoogleSheetsApiGetSpreadsheetRequest {
 }
 
 /** Request shape of one `spreadsheets.batchUpdate` call. */
-export interface GoogleSheetsApiBatchUpdateRequest {
+export interface GoogleSheetsApiBatchUpdateRequest extends GoogleSheetsApiCredentialBinding {
   readonly spreadsheetId: string;
   readonly requests: readonly GoogleSheetsApiWriteRequest[];
 }
 
 /** Request shape of one `spreadsheets.values.get` call. */
-export interface GoogleSheetsApiValuesGetRequest {
+export interface GoogleSheetsApiValuesGetRequest extends GoogleSheetsApiCredentialBinding {
   readonly spreadsheetId: string;
   readonly range: string;
   readonly timeoutMs?: number;
@@ -260,6 +323,13 @@ export interface GoogleSheetsApiRequestEvent {
   readonly code: Presence<string>;
   /** Pacing wait before the request-start slot was granted (0 when none). */
   readonly pacingWaitMs?: number;
+  /**
+   * Pool identity (zero-based credential index) this request was admitted
+   * AND signed with. Absent on the single-credential path, so events stay
+   * byte-identical to the pre-pool behavior; only the index is ever
+   * reported — never an email, client id, or file path.
+   */
+  readonly credentialIndex?: number;
   /** Number of batchUpdate requests in the written batch. */
   readonly requestCount?: number;
   /** Serialized batchUpdate body-size estimate in bytes. */
@@ -282,6 +352,18 @@ export interface GoogleSheetsApiRequestEvent {
 export interface GoogleSheetsApiProviderOptions {
   /** Stub transport for tests; omitted builds the real ADC-backed client. */
   readonly transport?: GoogleSheetsApiTransport;
+  /**
+   * Service-account key-file pool: each entry is a distinct ADC-format JSON
+   * key file and therefore a distinct Google quota principal. When 2+ files
+   * are configured, request-start pacing (interval, per-minute budgets, and
+   * AIMD feedback) runs per identity and outbound calls round-robin across
+   * the pool, multiplying the effective per-user read/write quota by N.
+   * One entry (or absent) keeps the single-credential path byte-identical
+   * to the pre-pool behavior. The provider validates entry SHAPE only; file
+   * readability/structure is validated by the sync auto-start bridge before
+   * startup, and by the transport when it builds each client.
+   */
+  readonly serviceAccountKeyFiles?: readonly string[];
   /** Per-request timeout; defaults to 60 seconds, bounded 1s..120s. */
   readonly requestTimeoutMs?: number;
   /**
@@ -306,6 +388,26 @@ export interface GoogleSheetsApiProviderOptions {
    * the shared write limiter instead of being refused by the read burst.
    */
   readonly requestStartMaxWaitMs?: number;
+  /**
+   * Per-minute request-start budget for the READ lane (sliding window);
+   * DISABLED by default (`QUOTA_READ_BUDGET_PER_WINDOW` = Infinity) so the
+   * shipped pacing matches the pre-budget behavior exactly. Set it to the
+   * documented `RECOMMENDED_QUOTA_READ_BUDGET_PER_WINDOW` (45/min, under the
+   * measured binding 60/min per-user read quota) when a per-minute ceiling
+   * must be enforced. A start whose budget slot lies more than
+   * `requestStartMaxWaitMs` out is refused with the same bounded
+   * delivery-uncertain error as interval pacing; the budget and the lane
+   * pacing SHARE that one admission bound. `Number.POSITIVE_INFINITY`
+   * disables the budget.
+   */
+  readonly quotaReadBudgetPerMinute?: number;
+  /**
+   * Per-minute request-start budget for the WRITE lane; DISABLED by default
+   * like the read budget. `RECOMMENDED_QUOTA_WRITE_BUDGET_PER_WINDOW`
+   * (10/min) sits well above the measured 2-5/min write demand. Same
+   * bounded-admission and disable semantics as the read budget.
+   */
+  readonly quotaWriteBudgetPerMinute?: number;
   /** Serialized batchUpdate byte budget; defaults to ~2 MB. */
   readonly maxBatchBytes?: number;
   /** Injectable clock for limiters and telemetry. */

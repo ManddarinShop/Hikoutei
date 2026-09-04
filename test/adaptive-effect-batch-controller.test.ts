@@ -6,21 +6,24 @@ import {
 } from "@hikoutei/ikisaki";
 
 describe("adaptive effect batch controller", () => {
-  it("starts at fifty-one, halves unhealthy routes, and grows stable routes", () => {
+  it("starts at one hundred, halves unhealthy routes, and grows stable routes", () => {
     const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
 
     expect(controller.limitFor("route-a")).toBe(100);
+    // Latency above the high-latency threshold (120s) is UNHEALTHY: the
+    // batch halves. 30s of cycle time alone no longer shrinks a batch —
+    // a healthy-at-scale cycle must not be punished for being slow.
     controller.observe("route-a", {
-      durationMs: 31_000,
+      durationMs: 121_000,
       responseSucceeded: true,
       responseLoss: false,
     });
     expect(controller.limitFor("route-a")).toBe(50);
 
+    // Stable successes grow +25 per 2 consecutive healthy observations.
     controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
     controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
-    controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
-    expect(controller.limitFor("route-a")).toBe(55);
+    expect(controller.limitFor("route-a")).toBe(75);
   });
 
   it("coalesces only a short burst without holding effect rows in memory", async () => {

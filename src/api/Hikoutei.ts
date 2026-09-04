@@ -21,6 +21,7 @@ import {
   validateTypedSheetsOptions,
   createInternalHikoutei,
   type CreateTypedSheetsOptions,
+  type HikouteiProviderOptions,
   type Hikoutei,
 } from "@hikoutei/sync-engine/api/hikouteiCore.js";
 
@@ -35,6 +36,7 @@ export {
   resolveDefaultDbPath,
   validateTypedSheetsOptions,
   type CreateTypedSheetsOptions,
+  type HikouteiProviderOptions,
   type Hikoutei,
 };
 
@@ -86,6 +88,9 @@ export async function createTypedSheets(
     dbName,
     entities: [...entities],
     env: process.env,
+    ...(options.providerOptions === undefined
+      ? {}
+      : { providerOptions: options.providerOptions }),
   });
   // This factory never passes `adopt`, so the `adopt-dry-run` variant is
   // unreachable here; narrow for the type system only.

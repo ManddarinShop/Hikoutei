@@ -31,7 +31,19 @@ import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import { ReceiptReadCursor } from "../model/receiptCursor.js";
 import type { ReadCalibration } from "../model/readPlan.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "../transport/rateLimiter.js";
+import {
+  RATE_LIMIT_OPTIONS_ERROR_CODES,
+  RateLimitOptionsError,
+  RequestStartLimiter,
+  ReadQoSScheduler,
+} from "../transport/rateLimiter.js";
+import {
+  isQuotaLimitedOutcome,
+  QUOTA_GOVERNOR_LANES,
+  type QuotaGovernorLane,
+  QuotaPacingGovernor,
+  RollingQuotaBudget,
+} from "../transport/quotaGovernor.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
@@ -130,10 +142,41 @@ export interface GoogleSheetsApiProviderDeps {
   /** Write limiter: batchUpdate starts serialize only against writes. */
   readonly writeLimiter: RequestStartLimiter;
   /**
+   * Sliding-window per-minute request-start budget for the READ lane
+   * (getSpreadsheet starts, paced on either read class). Enforced IN
+   * ADDITION to the interval pacing: a start needs both a budget slot and
+   * an interval slot. Postcondition reads paced on the write lane count
+   * against the write budget instead (they are rare recovery traffic).
+   */
+  readonly readBudget: RollingQuotaBudget;
+  /** Sliding-window per-minute request-start budget for the WRITE lane. */
+  readonly writeBudget: RollingQuotaBudget;
+  /**
+   * AIMD pacing feedback: quota-limited (429) responses grow the offending
+   * lane's pacing interval via the limiters' `getIntervalMs`, quiet success
+   * recovers it gradually. Gates request STARTS only; never touches CAS,
+   * prepared state, or result handling.
+   */
+  readonly quotaGovernor: QuotaPacingGovernor;
+  /**
    * Maximum admitted wait for ONE request start: a call whose predicted slot
-   * is further out is refused before transport.
+   * is further out is refused before transport. The per-minute budget gate
+   * and the lane pacing gate SHARE this one bound via a single admission
+   * deadline, so total bounded-admission waiting never exceeds it. On a
+   * pooled run the SAME deadline spans the whole search: each refusal moves
+   * on to the next slot with only the time still remaining, so a busy
+   * identity never blocks a healthy one and one request start still pays at
+   * most one bounded wait.
    */
   readonly maxRequestStartWaitMs: number;
+  /**
+   * Per-credential pacing pool (credential pools with 2+ identities only).
+   * `undefined` — the historical single-credential path — keeps admission
+   * byte-identical: the flat `readScheduler`/`writeLimiter`/budgets/
+   * `quotaGovernor` fields above ARE the one slot, and transport requests
+   * carry no `credentialIndex`.
+   */
+  readonly credentialPacing?: CredentialPacingPool;
   readonly now: () => number;
   readonly onRequest: ((event: GoogleSheetsApiRequestEvent) => void) | undefined;
 }
@@ -152,24 +195,218 @@ export type ReadPacing = "polling" | "preflight";
 export type RequestStartPacing = ReadPacing | "write";
 
 /**
- * Acquires one bounded request-start slot, refusing (and logging one
- * redacted event) when the predicted wait exceeds the configured bound.
- * A refusal NEVER advances the limiter/scheduler horizon and throws the
- * stable delivery-uncertain transport error before any SDK call, so the
- * durable worker requeues instead of firing an unpaced burst.
+ * The complete admission stack for ONE pooled credential.
  *
- * Returns the limiter/scheduler's own measured wait for the granted slot
- * (0 when the slot was already available), so callers report the pacing
- * wait the limiter actually enforced rather than a clock delta.
+ * Google Sheets quota is enforced per principal, so a pool of N service
+ * accounts gets N independent slots: each slot's read scheduler, write
+ * limiter, per-minute budgets, and AIMD governor pace only against that
+ * identity's own horizon. A refusal in one slot never advances that slot's
+ * horizon, and one saturated slot never blocks another.
+ */
+export interface CredentialPacingSlot {
+  readonly readScheduler: ReadQoSScheduler;
+  readonly writeLimiter: RequestStartLimiter;
+  readonly readBudget: RollingQuotaBudget;
+  readonly writeBudget: RollingQuotaBudget;
+  readonly quotaGovernor: QuotaPacingGovernor;
+}
+
+/**
+ * Shared per-provider credential pool: the slot table plus the round-robin
+ * cursor every request start advances. The cursor moves ONE step per request
+ * start at selection time (even when every later slot attempt is refused — no
+ * binding was made, and the rotation only needs to stay even over time); the
+ * admission search then walks the remaining slots from the cursor onward,
+ * trying each at most once under the shared admission deadline.
+ */
+export interface CredentialPacingPool {
+  readonly slots: readonly CredentialPacingSlot[];
+  nextIndex: number;
+}
+
+/**
+ * Builds the `{ credentialIndex }` request decoration that binds one paced
+ * transport call to the identity admission selected. Returns an EMPTY object
+ * on the single-credential path, so un-pooled requests stay byte-identical
+ * to the pre-pool wire contract (the key is absent, not `undefined`).
+ */
+export function credentialBinding(
+  credentialIndex: number | undefined,
+): { credentialIndex?: number } {
+  return credentialIndex === undefined ? {} : { credentialIndex };
+}
+
+/**
+ * Acquires one bounded request-start slot, refusing (and logging one
+ * redacted event) only when EVERY pooled identity refuses within the shared
+ * admission deadline. Round-robin picks the STARTING slot from the pool
+ * cursor, but a budget-or-lane refusal on that slot moves the search on to
+ * the remaining slots (each tried at most once, from the cursor onward) with
+ * only the time still left under the SAME deadline: a busy identity (429 /
+ * backoff / uneven reservations) never blocks a healthy sibling. The request
+ * is bound to the index ACTUALLY admitted, so pacing and signing stay on one
+ * identity. A refusal NEVER advances any limiter/scheduler horizon on any
+ * identity and throws the stable delivery-uncertain transport error before
+ * any SDK call, so the durable worker requeues instead of firing an unpaced
+ * burst.
+ *
+ * Composition order per slot: the per-minute budget gates FIRST (it is the
+ * outer quota ceiling), then the lane's interval pacing — both against that
+ * slot's limiters. A class-pacing refusal AFTER a budget admission leaks
+ * that one budget reservation until the window slides — accepted because
+ * pacing refusals are already rare and the leak over-counts (never
+ * under-counts) the budget, which is the safe direction for quota safety.
+ * AIMD/budget bookkeeping happens only on the slot that was admitted.
+ *
+ * The whole search shares ONE admission budget: a single deadline
+ * (`now + maxRequestStartWaitMs`) is computed once and every gate on every
+ * slot attempt is bounded by the time still remaining, so total
+ * bounded-admission waiting never exceeds `maxRequestStartWaitMs` (the
+ * effect-lease headroom contract assumes exactly one bounded wait per
+ * request start) — on a pooled run as on the single-credential path. A
+ * deadline spent by earlier attempts makes every later gate refuse any
+ * nonzero predicted wait immediately, so the loop itself stays bounded.
+ *
+ * Returns the summed budget + pacing wait for the granted slot (0 when both
+ * were already available) PLUS the admitted identity, so callers bind the
+ * transport call to the credential that was paced (admitted index = signing
+ * client, no skew).
  */
 async function admitRequestStart(
   deps: GoogleSheetsApiProviderDeps,
   pacing: RequestStartPacing,
-): Promise<number> {
+): Promise<RequestStartAdmissionOutcome> {
+  // Validate the bound ONCE before any deadline arithmetic: the limiters
+  // validate their own `maxWaitMs` argument, but this helper pre-derives the
+  // remaining-time bound, so an invalid configured bound (negative,
+  // non-integer, NaN) must fail here with the SAME structured error the
+  // limiters would have thrown when the raw bound reached them.
+  const maxWaitMs = deps.maxRequestStartWaitMs;
+  if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0) {
+    throw new RateLimitOptionsError(
+      RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED,
+    );
+  }
+  const lane = pacing === "write"
+    ? QUOTA_GOVERNOR_LANES.WRITE
+    : QUOTA_GOVERNOR_LANES.READ;
+  // One shared admission deadline for the WHOLE search (every gate, every
+  // slot): each waitForSlot bound is the time still remaining (never above
+  // the validated bound), so bounded waits can never stack past
+  // maxRequestStartWaitMs across slots.
+  const admissionDeadline = deps.now() + maxWaitMs;
+  const pool = deps.credentialPacing;
+  if (pool !== undefined && pool.slots.length >= 2) {
+    // Exactly ONE rotation step is consumed per request start, decided up
+    // front (see CredentialPacingPool) even when every attempt is refused.
+    const startIndex = pool.nextIndex % pool.slots.length;
+    pool.nextIndex = (startIndex + 1) % pool.slots.length;
+    for (let step = 0; step < pool.slots.length; step += 1) {
+      const index = (startIndex + step) % pool.slots.length;
+      const slot = pool.slots[index];
+      if (slot === undefined) {
+        // Unreachable while the provider owns the pool (indexes are always
+        // taken modulo the slot count); fail closed rather than pace
+        // against nothing.
+        invalidProviderState("credential pacing cursor escaped the slot table");
+      }
+      const outcome = await tryAdmitOnSlot(
+        deps, slot, lane, pacing, admissionDeadline, maxWaitMs, index,
+      );
+      if (outcome !== null) {
+        return outcome;
+      }
+    }
+    return refuseRequestStart(deps, pacing);
+  }
+  // Single-credential path (no pool, or a degenerate <2-slot pool): the flat
+  // fields ARE the one slot, NO index is bound, and the attempt order is
+  // byte-identical to the pre-pool admission.
+  const outcome = await tryAdmitOnSlot(deps, {
+    readScheduler: deps.readScheduler,
+    writeLimiter: deps.writeLimiter,
+    readBudget: deps.readBudget,
+    writeBudget: deps.writeBudget,
+    quotaGovernor: deps.quotaGovernor,
+  }, lane, pacing, admissionDeadline, maxWaitMs, undefined);
+  return outcome ?? refuseRequestStart(deps, pacing);
+}
+
+/**
+ * Runs the full budget-then-pacing admission stack on ONE slot under the
+ * shared deadline. Returns `null` when THIS slot refused (either gate) so
+ * the caller can try the next sibling. A budget refusal reserves nothing;
+ * a budget admission reserves PROVISIONALLY and is rolled back when the
+ * later lane gate refuses, so a tried-and-refused slot always leaves its
+ * budgets untouched and only the admitted slot pays AIMD/budget bookkeeping.
+ */
+async function tryAdmitOnSlot(
+  deps: GoogleSheetsApiProviderDeps,
+  slot: CredentialPacingSlot,
+  lane: QuotaGovernorLane,
+  pacing: RequestStartPacing,
+  admissionDeadline: number,
+  maxWaitMs: number,
+  credentialIndex: number | undefined,
+): Promise<RequestStartAdmissionOutcome | null> {
+  const budget = pacing === "write" ? slot.writeBudget : slot.readBudget;
+  const budgetAdmission = await budget.waitForSlot(
+    remainingAdmissionMs(admissionDeadline, deps.now(), maxWaitMs),
+  );
+  if (budgetAdmission.status === "refused") {
+    return null;
+  }
+  const remainingMs = remainingAdmissionMs(admissionDeadline, deps.now(), maxWaitMs);
   const admission = pacing === "write"
-    ? await deps.writeLimiter.waitForSlot(deps.maxRequestStartWaitMs)
-    : await deps.readScheduler.waitForSlot(pacing, deps.maxRequestStartWaitMs);
-  if (admission.status !== "refused") return admission.waitedMs;
+    ? await slot.writeLimiter.waitForSlot(remainingMs)
+    : await slot.readScheduler.waitForSlot(pacing, remainingMs);
+  if (admission.status === "refused") {
+    // The budget reserved provisionally above; this slot never starts a
+    // request, so hand the reservation back. Rollback is identity-matched
+    // and never advances the window (see RollingQuotaBudget.rollback).
+    budget.rollback(budgetAdmission.reservation);
+    return null;
+  }
+  // One successful request START counts toward this lane's AIMD quiet
+  // period on THIS identity's governor (recovery steps advance only while
+  // starts keep succeeding).
+  slot.quotaGovernor.recordRequestStart(lane);
+  return { pacingWaitMs: budgetAdmission.waitedMs + admission.waitedMs, credentialIndex, slot };
+}
+
+/**
+ * Outcome of one bounded admission: the enforced wait, the pooled identity
+ * the wait was paid against (`undefined` on the single-credential path),
+ * and that identity's slot so the transport-error path feeds AIMD feedback
+ * to the SAME governor admission paced.
+ */
+interface RequestStartAdmissionOutcome {
+  readonly pacingWaitMs: number;
+  readonly credentialIndex: number | undefined;
+  readonly slot: CredentialPacingSlot;
+}
+
+/**
+ * Whole-millisecond time still left under the shared admission deadline,
+ * clamped into [0, maxWaitMs]: a spent budget (clock past the deadline) makes
+ * the next gate refuse any nonzero predicted wait, and a backward-moving
+ * clock between the two gates can otherwise re-derive a bound ABOVE the
+ * configured maximum. `maxWaitMs` is pre-validated by the caller, so the
+ * result is always a non-negative safe integer (waitForSlot's own contract).
+ */
+function remainingAdmissionMs(deadline: number, now: number, maxWaitMs: number): number {
+  return Math.min(maxWaitMs, Math.max(0, Math.floor(deadline - now)));
+}
+
+/**
+ * Shared refusal exit for both admission stages: one redacted boundary log
+ * (stable code + lane tag only) and the delivery-uncertain
+ * REQUEST_START_REFUSED error the durable worker requeues through.
+ */
+function refuseRequestStart(
+  deps: GoogleSheetsApiProviderDeps,
+  pacing: RequestStartPacing,
+): never {
   // Boundary record for a locally refused start: only the stable code and the
   // read-class tag are logged (retryable, like the other delivery-uncertain
   // buckets), never a message, payload, id, or URL.
@@ -200,6 +437,11 @@ async function admitRequestStart(
 export interface GoogleSheetsApiRequestMeta {
   /** Pacing wait before the request-start slot was granted (0 when none). */
   readonly pacingWaitMs?: number;
+  /**
+   * Pool identity this request was admitted AND signed with (index only,
+   * never any credential material); absent on the single-credential path.
+   */
+  readonly credentialIndex?: number;
   /** Number of batchUpdate requests in the written batch. */
   readonly requestCount?: number;
   /** Serialized batchUpdate body-size estimate in bytes. */
@@ -267,14 +509,18 @@ export function createRawResponseMeta(deps: GoogleSheetsApiProviderDeps): {
  */
 export async function runRead<T>(
   deps: GoogleSheetsApiProviderDeps,
-  task: () => Promise<T>,
+  /** Receives the admitted pool identity; the task MUST bind it into the
+   * transport request via `credentialBinding` when the pool is active
+   * (`undefined` on the single-credential path). */
+  task: (credentialIndex: number | undefined) => Promise<T>,
   pacing: RequestStartPacing = "polling",
   meta?: GoogleSheetsApiRequestMeta,
 ): Promise<T> {
-  const pacingWaitMs = await admitRequestStart(deps, pacing);
+  const admission = await admitRequestStart(deps, pacing);
+  const { pacingWaitMs, credentialIndex } = admission;
   const startedAt = deps.now();
   try {
-    const result = await task();
+    const result = await task(credentialIndex);
     // Payload-size evidence for the preflight-vs-polling read-gap question:
     // gated on the sink so a telemetry-less deployment pays zero estimate cost.
     // A caller that measured the RAW response document supplies a meta carrier
@@ -289,12 +535,25 @@ export async function runRead<T>(
         : meta.responseBytes);
     emitRequest(deps, "getSpreadsheet", pacing, 1, startedAt, true, absentValue(), absentValue(), {
       pacingWaitMs,
+      ...credentialBinding(credentialIndex),
       ...(responseBytes === undefined ? {} : { responseBytes }),
     });
     return result;
   } catch (error: unknown) {
     const outcome = classifyTransportOutcome(error);
-    emitRequest(deps, "getSpreadsheet", pacing, 1, startedAt, false, outcome.httpStatus, outcome.code, { pacingWaitMs });
+    // AIMD feedback hook: a remote 429/RESOURCE_EXHAUSTED grows THIS lane's
+    // pacing interval on the NEXT reservation of the SAME pooled identity
+    // only; any other failure leaves the governor untouched (the durable
+    // worker's own retry path is unchanged).
+    if (isQuotaLimitedOutcome(outcome)) {
+      admission.slot.quotaGovernor.recordQuotaLimited(
+        pacing === "write" ? QUOTA_GOVERNOR_LANES.WRITE : QUOTA_GOVERNOR_LANES.READ,
+      );
+    }
+    emitRequest(deps, "getSpreadsheet", pacing, 1, startedAt, false, outcome.httpStatus, outcome.code, {
+      pacingWaitMs,
+      ...credentialBinding(credentialIndex),
+    });
     throw error;
   }
 }
@@ -302,26 +561,33 @@ export async function runRead<T>(
 /** Paces ONE `batchUpdate` transport call and emits one write event. */
 export async function runWrite<T>(
   deps: GoogleSheetsApiProviderDeps,
-  task: () => Promise<T>,
+  /** See `runRead`: bind the admitted pool identity into the request. */
+  task: (credentialIndex: number | undefined) => Promise<T>,
   meta?: GoogleSheetsApiRequestMeta,
 ): Promise<T> {
-  const pacingWaitMs = await admitRequestStart(deps, "write");
+  const admission = await admitRequestStart(deps, "write");
+  const { pacingWaitMs, credentialIndex } = admission;
   const startedAt = deps.now();
   try {
-    const result = await task();
+    const result = await task(credentialIndex);
     const responseBytes = deps.onRequest === undefined
       ? undefined
       : estimateJsonBytesOrNull(result);
     emitRequest(deps, "batchUpdate", "write", 1, startedAt, true, absentValue(), absentValue(), {
       pacingWaitMs,
+      ...credentialBinding(credentialIndex),
       ...meta,
       ...(responseBytes === undefined ? {} : { responseBytes }),
     });
     return result;
   } catch (error: unknown) {
     const outcome = classifyTransportOutcome(error);
+    if (isQuotaLimitedOutcome(outcome)) {
+      admission.slot.quotaGovernor.recordQuotaLimited(QUOTA_GOVERNOR_LANES.WRITE);
+    }
     emitRequest(deps, "batchUpdate", "write", 1, startedAt, false, outcome.httpStatus, outcome.code, {
       pacingWaitMs,
+      ...credentialBinding(credentialIndex),
       ...meta,
     });
     throw error;

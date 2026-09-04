@@ -63,12 +63,17 @@ import { classifyPostcondition, probeTargetRowNumber } from "../model/postcondit
 import {
   definitionForPhysicalSheet,
   effectRouteOptions,
-  requireValidBatchUpdateReply,
-  runWrite,
   validateRoute,
   type GoogleSheetsApiProviderDeps,
   type RequestStartPacing,
 } from "./shared.js";
+import {
+  executeBatchUpdate,
+  executePreparedWrite,
+  groupByRouteKey,
+  receiptInitNeeded,
+  refreshFirstRouteContext,
+} from "./writeEngine.js";
 import {
   enumeratePreflightSheets,
   readPreflight,
@@ -188,17 +193,7 @@ export type PreparedApplyEffectsState = PreparedSingleRouteApply | PreparedMulti
 function groupEffectsByRoute(
   effects: readonly SyncProjectionEffect[],
 ): readonly (readonly SyncProjectionEffect[])[] {
-  const groups = new Map<string, SyncProjectionEffect[]>();
-  for (const effect of effects) {
-    const key = effectRouteKey(effect);
-    const group = groups.get(key);
-    if (group === undefined) {
-      groups.set(key, [effect]);
-    } else {
-      group.push(effect);
-    }
-  }
-  return [...groups.values()];
+  return groupByRouteKey(effects, effectRouteKey);
 }
 
 /** Validates and bounds one apply request into its per-route groups. */
@@ -439,17 +434,10 @@ async function applyPreparedSingleRoute(
     if (included.length === 0) return;
     const batch = buildApplyBatchRequests(ctx, included, { updatedAt, includeReceipts });
     if (batch.requests.length === 0) return;
-    const response = await runWrite(deps, () =>
-      deps.transport.batchUpdate({
-        spreadsheetId: deps.spreadsheetId,
-        requests: batch.requests,
-      }), {
-      requestCount: batch.requests.length,
-      bodyBytes: batch.bytes,
+    await executeBatchUpdate(deps, batch, {
       requestedEffects: request.effects.length,
       includedEffects: included.length,
     });
-    requireValidBatchUpdateReply(response, batch.requests.length);
   };
   // A read-ahead preflight may have observed the shared receipt tab before a
   // concurrent write created it. Two stale preflights (possibly on different
@@ -466,24 +454,23 @@ async function applyPreparedSingleRoute(
   // receipt-creating write (target and follow-up) as one atomic unit: in
   // inline mode the follow-up is the only write that creates the receipt tab,
   // so it must run under the same lock as the refresh that re-checks it.
-  const writeAndVerify = async (ctx: PreflightContext): Promise<{
-    readonly writeContext: PreflightContext;
-    readonly verified: ReadonlySet<number>;
-  }> => {
+  const writeAndVerify = async (ctx: PreflightContext): Promise<ReadonlySet<number>> => {
     await writeTarget(ctx);
     const verified = new Set<number>();
     // The inline verify read is the tail of the write: it re-reads the
-    // just-written row, so it is paced on the WRITE limiter (serializes
-    // against writes) rather than competing with the read burst. It only runs
-    // when at least one included plan needs verification (a non-deletion
+    // just-written row. It is paced on the PREFLIGHT (read) lane so it does
+    // not consume a write-lane slot; the worker is single-threaded and
+    // serialized, so the verify still runs immediately after the write and
+    // the read/write request-start limiters are independent classes. It only
+    // runs when at least one included plan needs verification (a non-deletion
     // write); a deletion-only batch skips the read entirely.
     if (postconditionMode === SYNC_POSTCONDITION_MODES.INLINE && included.some((plan) => plan.verify)) {
       // The inline verify is the historical whole-table full-evidence read
-      // (paced on the WRITE lane, receipt tab still read through the cursor
-      // in the same request): the just-written row's values and both
+      // (paced on the PREFLIGHT read lane, receipt tab still read through the
+      // cursor in the same request): the just-written row's values and both
       // number-format sources come from one snapshot, exactly like before
       // the payload-reduction work.
-      const verifyContext = await readPreflight(deps, request, definition, routeOptions, "write");
+      const verifyContext = await readPreflight(deps, request, definition, routeOptions, "preflight");
       included.forEach((plan, index) => {
         if (!plan.verify || plan.mutation === undefined || plan.mutation.kind === "delete") return;
         const row = findProbeRowInContext(verifyContext, plan);
@@ -505,20 +492,13 @@ async function applyPreparedSingleRoute(
       });
       if (verifyReceipts.length > 0) {
         const receiptBatch = buildAppendBatchRequests(ctx, [], verifyReceipts, { updatedAt });
-        const response = await runWrite(deps, () =>
-          deps.transport.batchUpdate({
-            spreadsheetId: deps.spreadsheetId,
-            requests: receiptBatch.requests,
-          }), {
-          requestCount: receiptBatch.requests.length,
-          bodyBytes: receiptBatch.bytes,
+        await executeBatchUpdate(deps, receiptBatch, {
           requestedEffects: 0,
           includedEffects: verifyReceipts.length,
         });
-        requireValidBatchUpdateReply(response, receiptBatch.requests.length);
       }
     }
-    return { writeContext: ctx, verified };
+    return verified;
   };
   // A read-ahead preflight may have observed the shared receipt tab before a
   // concurrent write created it. Two stale preflights (possibly on different
@@ -563,15 +543,14 @@ async function applyPreparedSingleRoute(
   // turn a deterministic no-op into a delivery-uncertain requeue.
   const persistsReceiptOrWrite = included.some((plan) =>
     plan.mutation !== undefined || plan.receipt !== undefined);
-  const { writeContext, verified } =
-    included.length > 0 &&
+  const verified = await executePreparedWrite(deps, {
+    context,
+    needsReceiptInit: included.length > 0 &&
       persistsReceiptOrWrite &&
-      context.receiptSheetId.kind === PRESENCE_KINDS.ABSENT
-      ? await deps.receiptInitLock.run(async () => {
-          const refreshed = await refreshReceiptForWrite(deps, context);
-          return writeAndVerify(refreshed);
-        })
-      : await writeAndVerify(context);
+      receiptInitNeeded(context),
+    refresh: (ctx) => refreshReceiptForWrite(deps, ctx),
+    write: writeAndVerify,
+  });
 
   const schemaErrorIndexSet = new Set(schemaErrorIndices);
   const results: SyncEffectResult[] = [];
@@ -752,12 +731,25 @@ async function applyPreparedMultiRoute(
   // admission can be refused) or its lock.
   const persistsReceiptOrWrite = included.some((route) =>
     route.plans.some((plan) => plan.mutation !== undefined || plan.receipt !== undefined));
-  const needsReceiptInit = included[0]?.context.receiptSheetId.kind === PRESENCE_KINDS.ABSENT &&
-    persistsReceiptOrWrite;
-  const writeIncluded = needsReceiptInit
-    ? await deps.receiptInitLock.run(() =>
-        refreshMultiRouteReceiptAndWrite(deps, included, updatedAt, true, request.effects.length))
-    : await refreshMultiRouteReceiptAndWrite(deps, included, updatedAt, false, request.effects.length);
+  // Writes the combined deferred batch against `routes` (the preflight route
+  // list or the variant whose first context carries the receipt refresh).
+  const writeCombined = async (routes: readonly CombinedApplyRoute[]): Promise<void> => {
+    if (routes.length === 0) return;
+    const batch = buildCombinedApplyRequests(routes, { updatedAt, includeReceipts: true });
+    if (batch.requests.length === 0) return;
+    await executeBatchUpdate(deps, batch, {
+      requestedEffects: request.effects.length,
+      includedEffects: routes.reduce((total, route) => total + route.plans.length, 0),
+    });
+  };
+  await executePreparedWrite(deps, {
+    context: included,
+    needsReceiptInit: included[0] !== undefined &&
+      receiptInitNeeded(included[0].context) &&
+      persistsReceiptOrWrite,
+    refresh: (routes) => refreshFirstRouteContext(deps, routes),
+    write: writeCombined,
+  });
 
   const results: SyncEffectResult[] = [];
   // The combined budget and schema-error indices are in the flat GROUPED
@@ -1097,47 +1089,6 @@ function requireProbeContext(
     );
   }
   return context;
-}
-
-/**
- * Refreshes the shared receipt tab (when a preflight observed it absent) and
- * writes the combined multi-tab batch. Called under the per-spreadsheet
- * receipt-init lock so concurrent writes on the same spreadsheet cannot both
- * emit a duplicate addSheet. Returns the routes with their refreshed
- * contexts (the first tab's context now carries the receipt when present).
- */
-async function refreshMultiRouteReceiptAndWrite(
-  deps: GoogleSheetsApiProviderDeps,
-  included: readonly CombinedApplyRoute[],
-  updatedAt: string,
-  // Passed from the caller's receipt-init decision so a deterministic no-op
-  // batch skips the write-lane refresh entirely (see applyPreparedMultiRoute).
-  needsReceiptInit: boolean,
-  // Effects requested for the whole apply request (the original request
-  // length, not the budget-fitting included prefix).
-  requestedEffects: number,
-): Promise<readonly CombinedApplyRoute[]> {
-  const first = included[0];
-  let writeIncluded = included;
-  if (first !== undefined && needsReceiptInit) {
-    const refreshed = await refreshReceiptForWrite(deps, first.context);
-    writeIncluded = included.map((route, index) => (index === 0 ? { ...route, context: refreshed } : route));
-  }
-  if (writeIncluded.length === 0) return writeIncluded;
-  const batch = buildCombinedApplyRequests(writeIncluded, { updatedAt, includeReceipts: true });
-  if (batch.requests.length === 0) return writeIncluded;
-  const response = await runWrite(deps, () =>
-    deps.transport.batchUpdate({
-      spreadsheetId: deps.spreadsheetId,
-      requests: batch.requests,
-    }), {
-    requestCount: batch.requests.length,
-    bodyBytes: batch.bytes,
-    requestedEffects,
-    includedEffects: writeIncluded.reduce((total, route) => total + route.plans.length, 0),
-  });
-  requireValidBatchUpdateReply(response, batch.requests.length);
-  return writeIncluded;
 }
 
 /** Locates one planned write's row in a fresh verification context. */

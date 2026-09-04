@@ -56,6 +56,80 @@ const syncSpreadsheetConfigured = Boolean(
 );
 
 // ---------------------------------------------------------------------------
+// Provider request telemetry (redacted rolling counters)
+//
+// Fed ONLY by `createTypedSheets({ providerOptions: { onRequest } })`, so the
+// counters stay at zero in local-only mode (no provider is constructed). The
+// sink never holds ids, payloads, or URLs — counts and lane totals only.
+// ---------------------------------------------------------------------------
+
+/** Structural mirror of the redacted request event the demo sink consumes. */
+type RequestEventLike = {
+  readonly operation: "getSpreadsheet" | "batchUpdate";
+  readonly pacing: "polling" | "preflight" | "write";
+  readonly ok: boolean;
+  readonly httpStatus: { readonly kind: "present"; readonly value: number } | { readonly kind: "absent" };
+  readonly code: { readonly kind: "present"; readonly value: string } | { readonly kind: "absent" };
+  readonly pacingWaitMs?: number;
+  /** Pool identity index (redacted: never an email/path); absent un-pooled. */
+  readonly credentialIndex?: number;
+};
+
+/** Stable refusal code (pacing admission refused before transport). */
+const REQUEST_START_REFUSED_CODE = "google_sheets_api_request_start_refused";
+/** Allowlisted remote status the provider reports for a quota rejection. */
+const RATE_LIMIT_REMOTE_CODE = "RESOURCE_EXHAUSTED";
+/** Rolling per-minute bucket window kept for the health gauge. */
+const TELEMETRY_MINUTE_BUCKETS = 10;
+
+const requestTelemetry = {
+  total: 0,
+  ok: 0,
+  failures: 0,
+  http429: 0,
+  http5xx: 0,
+  refused: 0,
+  pacingWaitMsTotal: 0,
+  byOperation: { getSpreadsheet: 0, batchUpdate: 0 } as Record<RequestEventLike["operation"], number>,
+  byPacing: { polling: 0, preflight: 0, write: 0 } as Record<RequestEventLike["pacing"], number>,
+  /** Requests per pooled credential INDEX (identity counts only, no emails). */
+  byCredential: {} as Record<number, number>,
+  /** Completed requests per minute-aligned bucket (oldest first). */
+  perMinute: [] as { minuteStartMs: number; count: number }[],
+};
+
+/** One sink event → counters. Must never throw: telemetry cannot break sync. */
+function recordRequestEvent(event: RequestEventLike): void {
+  requestTelemetry.total += 1;
+  requestTelemetry.byOperation[event.operation] += 1;
+  requestTelemetry.byPacing[event.pacing] += 1;
+  if (event.credentialIndex !== undefined) {
+    const index = event.credentialIndex;
+    requestTelemetry.byCredential[index] = (requestTelemetry.byCredential[index] ?? 0) + 1;
+  }
+  requestTelemetry.pacingWaitMsTotal += event.pacingWaitMs ?? 0;
+  if (event.ok) {
+    requestTelemetry.ok += 1;
+  } else {
+    requestTelemetry.failures += 1;
+    const status = event.httpStatus.kind === "present" ? event.httpStatus.value : 0;
+    const code = event.code.kind === "present" ? event.code.value : "";
+    if (status === 429 || code === RATE_LIMIT_REMOTE_CODE) requestTelemetry.http429 += 1;
+    if (status >= 500 && status <= 599) requestTelemetry.http5xx += 1;
+    if (code === REQUEST_START_REFUSED_CODE) {
+      requestTelemetry.refused += 1;
+    }
+  }
+  const minuteStartMs = Math.floor(Date.now() / 60_000) * 60_000;
+  const last = requestTelemetry.perMinute.at(-1);
+  if (last === undefined || last.minuteStartMs !== minuteStartMs) {
+    requestTelemetry.perMinute.push({ minuteStartMs, count: 0 });
+    if (requestTelemetry.perMinute.length > TELEMETRY_MINUTE_BUCKETS) requestTelemetry.perMinute.shift();
+  }
+  requestTelemetry.perMinute[requestTelemetry.perMinute.length - 1]!.count += 1;
+}
+
+// ---------------------------------------------------------------------------
 // Entity
 // ---------------------------------------------------------------------------
 
@@ -75,7 +149,12 @@ const DemoRequest = defineTypedSheetsEntity({
 // ---------------------------------------------------------------------------
 
 console.log(`[demo] opening Hikoutei (sync: ${syncSpreadsheetConfigured ? "on" : "off"})...`);
-const hikoutei = await createTypedSheets({ dbName: DB_PATH, entities: [DemoRequest] });
+const hikoutei = await createTypedSheets({
+  dbName: DB_PATH,
+  entities: [DemoRequest],
+  // Additive instrumentation hook: inert in local-only mode (see above).
+  providerOptions: { onRequest: recordRequestEvent },
+});
 console.log(`[demo] Hikoutei ready — sync mode: ${syncSpreadsheetConfigured ? "sync" : "local"}`);
 
 // ---------------------------------------------------------------------------
@@ -328,6 +407,21 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     syncMode: syncSpreadsheetConfigured ? "sync" : "local",
     uptimeS: Math.round(process.uptime()),
+    // Redacted provider request telemetry (zero in local-only mode).
+    requestTelemetry: {
+      total: requestTelemetry.total,
+      ok: requestTelemetry.ok,
+      failures: requestTelemetry.failures,
+      http429: requestTelemetry.http429,
+      http5xx: requestTelemetry.http5xx,
+      refused: requestTelemetry.refused,
+      pacingWaitMsTotal: Math.round(requestTelemetry.pacingWaitMsTotal),
+      byOperation: { ...requestTelemetry.byOperation },
+      byPacing: { ...requestTelemetry.byPacing },
+      byCredential: { ...requestTelemetry.byCredential },
+      lastMinuteRequests: requestTelemetry.perMinute.at(-1)?.count ?? 0,
+      perMinute: [...requestTelemetry.perMinute],
+    },
   });
 });
 

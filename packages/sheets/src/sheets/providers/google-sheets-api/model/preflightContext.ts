@@ -236,12 +236,15 @@ export async function enumerateSheetProperties(
   /** Receives the RAW transport document before parsing — telemetry measures
    * the true response size from it (the parsed result loses wire detail). */
   onRawResponse?: (raw: unknown) => void,
+  /** Admitted pool identity to bind this call to (absent = no binding). */
+  credentialIndex?: number,
 ): Promise<readonly ParsedSheet[]> {
   const enumerationRequest: GoogleSheetsApiGetSpreadsheetRequest = {
     spreadsheetId,
     ranges: [],
     fields: GOOGLE_SHEETS_API_ENUMERATION_FIELDS,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(credentialIndex === undefined ? {} : { credentialIndex }),
   };
   const enumerationRaw = await transport.getSpreadsheet(enumerationRequest);
   // Fail-open by construction: telemetry must never change a read outcome.
