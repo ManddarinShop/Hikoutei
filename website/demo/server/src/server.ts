@@ -71,6 +71,8 @@ type RequestEventLike = {
   readonly httpStatus: { readonly kind: "present"; readonly value: number } | { readonly kind: "absent" };
   readonly code: { readonly kind: "present"; readonly value: string } | { readonly kind: "absent" };
   readonly pacingWaitMs?: number;
+  /** Pool identity index (redacted: never an email/path); absent un-pooled. */
+  readonly credentialIndex?: number;
 };
 
 /** Stable refusal code (pacing admission refused before transport). */
@@ -90,6 +92,8 @@ const requestTelemetry = {
   pacingWaitMsTotal: 0,
   byOperation: { getSpreadsheet: 0, batchUpdate: 0 } as Record<RequestEventLike["operation"], number>,
   byPacing: { polling: 0, preflight: 0, write: 0 } as Record<RequestEventLike["pacing"], number>,
+  /** Requests per pooled credential INDEX (identity counts only, no emails). */
+  byCredential: {} as Record<number, number>,
   /** Completed requests per minute-aligned bucket (oldest first). */
   perMinute: [] as { minuteStartMs: number; count: number }[],
 };
@@ -99,6 +103,10 @@ function recordRequestEvent(event: RequestEventLike): void {
   requestTelemetry.total += 1;
   requestTelemetry.byOperation[event.operation] += 1;
   requestTelemetry.byPacing[event.pacing] += 1;
+  if (event.credentialIndex !== undefined) {
+    const index = event.credentialIndex;
+    requestTelemetry.byCredential[index] = (requestTelemetry.byCredential[index] ?? 0) + 1;
+  }
   requestTelemetry.pacingWaitMsTotal += event.pacingWaitMs ?? 0;
   if (event.ok) {
     requestTelemetry.ok += 1;
@@ -410,6 +418,7 @@ app.get("/api/health", (_req, res) => {
       pacingWaitMsTotal: Math.round(requestTelemetry.pacingWaitMsTotal),
       byOperation: { ...requestTelemetry.byOperation },
       byPacing: { ...requestTelemetry.byPacing },
+      byCredential: { ...requestTelemetry.byCredential },
       lastMinuteRequests: requestTelemetry.perMinute.at(-1)?.count ?? 0,
       perMinute: [...requestTelemetry.perMinute],
     },
