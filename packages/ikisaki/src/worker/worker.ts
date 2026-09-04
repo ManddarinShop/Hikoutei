@@ -49,6 +49,7 @@ import {
 } from "./report.js";
 import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
+  DEFAULT_MAX_CONCURRENT_UNITS,
   DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
   EFFECT_BATCH_LIMIT,
@@ -757,14 +758,28 @@ async function runEffectWorker(
       throw error;
     }
   };
-  for (let index = 0; index < dispatchUnits.length; index += 1) {
-    const unit = dispatchUnits[index]!;
-    const next = dispatchUnits[index + 1];
+  /**
+   * Runs one dispatch unit end to end: fence preparation, the optional split
+   * preflight, the remote write, verify, and result persistence.
+   *
+   * The SEQUENTIAL path passes the next queued unit so the read-ahead
+   * pipeline can pre-fire it; the CONCURRENT path always passes `undefined`,
+   * which keeps `fireNextPreflight` inert so the cross-unit read-ahead state
+   * is never populated (the wave scheduler's route-busy gate provides the
+   * same-route ordering the read-ahead sequencing protected in serial mode).
+   * Dispatch-level remote failures settle inside this function (requeue/
+   * recovery, never a throw); only storage/programming errors propagate to
+   * the caller.
+   */
+  const runDispatchUnit = async (
+    unit: EffectDispatchUnit,
+    nextUnit: EffectDispatchUnit | undefined,
+  ): Promise<void> => {
     const group = unit.group;
     if (unit.bucket === "fast-append") {
       if (!(await prepareDispatchFences(group.items))) {
         suppressReadAhead();
-        continue;
+        return;
       }
       await dispatchFastAppendGroup(
         options,
@@ -777,7 +792,7 @@ async function runEffectWorker(
         unitProbes.get(unit),
         recoveryResidual,
       );
-      continue;
+      return;
     }
     if (pendingPreparedUnit === unit) {
       // This unit (B) was preflighted ahead by the previous unit's read-ahead;
@@ -799,7 +814,7 @@ async function runEffectWorker(
           prepareDispatchFences,
           error,
         );
-        continue;
+        return;
       }
       pendingPrepared = undefined;
       pendingPreparedUnit = undefined;
@@ -809,15 +824,15 @@ async function runEffectWorker(
         // genuine write is not charged a read whose write never happened.
         options.batchController?.abandonPreflight?.(group.routeKey);
         suppressReadAhead();
-        continue;
+        return;
       }
-      fireNextPreflight(unit, next);
+      fireNextPreflight(unit, nextUnit);
       await runRegularUnit(
         group,
         () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
         unitProbes.get(unit),
       );
-      continue;
+      return;
     }
     if (supportsSplit(unit)) {
       // Current unit A: complete A's own preflight and its fence/authority
@@ -837,7 +852,7 @@ async function runEffectWorker(
           prepareDispatchFences,
           error,
         );
-        continue;
+        return;
       }
       if (!(await prepareDispatchFences(group.items))) {
         // The preflight succeeded but its write is dropped on fence/authority
@@ -845,27 +860,67 @@ async function runEffectWorker(
         // charged a read whose write never ran.
         options.batchController?.abandonPreflight?.(group.routeKey);
         suppressReadAhead();
-        continue;
+        return;
       }
-      fireNextPreflight(unit, next);
+      fireNextPreflight(unit, nextUnit);
       await runRegularUnit(
         group,
         () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
         unitProbes.get(unit),
       );
-      continue;
+      return;
     }
     // Legacy regular unit (dispatcher implements neither split method).
     if (!(await prepareDispatchFences(group.items))) {
       suppressReadAhead();
-      continue;
+      return;
     }
     await runRegularUnit(
       group,
       () => options.dispatcher.apply(dispatchRequestFor(unit)),
       unitProbes.get(unit),
     );
+  };
+  const maxConcurrentUnits =
+    options.maxConcurrentUnits ?? DEFAULT_MAX_CONCURRENT_UNITS;
+  /**
+   * The route-busy key set ONE concurrent unit holds for its whole dispatch.
+   *
+   * A regular unit owns exactly its physical route key. A fast-append group
+   * is grouped by the PROVIDER-scoped batch key (one spreadsheet-wide atomic
+   * append), so it additionally holds every member effect's PHYSICAL route
+   * key: no regular unit writing to a tab the append touches may overlap it
+   * (appends shift rows and invalidate same-route prepared preflight state).
+   */
+  const routeKeysForUnit = (unit: EffectDispatchUnit): readonly string[] => {
+    const keys = new Set<string>([unit.group.routeKey]);
+    if (unit.bucket === "regular") return [...keys];
+    try {
+      for (const item of unit.group.items) {
+        keys.add(options.dispatcher.routeKeyFor(item.pending));
+      }
+    } catch {
+      // The route predicate is declared never to throw; a violating
+      // dispatcher conservatively holds only the provider-scoped group key
+      // (still serialized against every other holder of that key).
+    }
+    return [...keys];
+  };
+  if (maxConcurrentUnits > DEFAULT_MAX_CONCURRENT_UNITS) {
+    await dispatchUnitsConcurrently(
+      dispatchUnits,
+      routeKeysForUnit,
+      maxConcurrentUnits,
+      (unit) => runDispatchUnit(unit, undefined),
+    );
+  } else {
+    for (let index = 0; index < dispatchUnits.length; index += 1) {
+      // Sequential default (maxConcurrentUnits = 1): the existing read-ahead
+      // pipeline, byte-identical to the pre-concurrency behavior.
+      await runDispatchUnit(dispatchUnits[index]!, dispatchUnits[index + 1]);
+    }
   }
+
   // End-of-pass fallback (design §10.3 D6, §10.4 D4): every recovery
   // candidate the absorption could not settle — cross-route, no matching
   // unit, a unit that failed before its settle, or a dispatcher with no
@@ -895,6 +950,100 @@ async function runEffectWorker(
     operationCounts: countsForItems(dispatchable),
   });
   return freezeReport(report);
+}
+
+/**
+ * One launched unit inside the concurrent wave: the route keys it holds for
+ * its whole dispatch, its settled error (absent while running or on success),
+ * and a back-reference to its own tracker promise so the scheduler can remove
+ * it from the active set after `Promise.race` yields the slot, not the
+ * promise. The tracker never rejects: a unit error is recorded on the slot so
+ * a sibling's completion is never surfaced as an unhandled rejection.
+ */
+interface WaveSlot {
+  readonly index: number;
+  readonly keys: readonly string[];
+  error: Presence<unknown>;
+  done: Promise<WaveSlot>;
+}
+
+/**
+ * Runs dispatch units concurrently under a route-busy wave scheduler.
+ *
+ * Units are scanned in queue (ascending-priority) order and a unit launches
+ * only while fewer than `maxConcurrentUnits` are active AND every route key
+ * it holds is idle, so (a) two units never write one route at the same time
+ * (a route's later unit cannot launch until its predecessor releases the
+ * key), (b) the cross-route overlap is exactly what the route model permits:
+ * separate tabs, with the receipt tab append order-safe under
+ * `insertDimension`. All effects were already claimed sequentially before
+ * this scheduler ran, so concurrent units never contend for a claim; only
+ * short lease-renew/result-settle transactions overlap, which WAL-mode
+ * SQLite tolerates. Dispatch-level remote failures settle inside `runUnit`
+ * (requeue/recovery, never a throw); a unit that still throws (a storage or
+ * programming error) lets every already-launched sibling settle fully, then
+ * rethrows the FIRST such error so the supervisor's pass-error backoff sees
+ * the same pass-abort contract as the sequential path. Units left unstarted
+ * after an abort keep their claims and are recovered by the next pass's
+ * lease sweep, exactly like a mid-pass sequential throw.
+ */
+async function dispatchUnitsConcurrently(
+  units: readonly EffectDispatchUnit[],
+  routeKeysForUnit: (unit: EffectDispatchUnit) => readonly string[],
+  maxConcurrentUnits: number,
+  runUnit: (unit: EffectDispatchUnit) => Promise<void>,
+): Promise<void> {
+  // ponytail: the from-scratch scan is O(units^2); per-pass unit counts are
+  // bounded by the claim window and small, so scheduler CPU is not a hot path.
+  const unitKeys = units.map((unit) => routeKeysForUnit(unit));
+  const started = units.map(() => false);
+  const busy = new Map<string, number>();
+  const active = new Set<Promise<WaveSlot>>();
+  let firstError: Presence<unknown> = absentValue<unknown>();
+  let launched = 0;
+  const launch = (index: number): Promise<WaveSlot> => {
+    const keys = unitKeys[index]!;
+    for (const key of keys) busy.set(key, (busy.get(key) ?? 0) + 1);
+    started[index] = true;
+    launched += 1;
+    const slot: WaveSlot = {
+      index,
+      keys,
+      error: absentValue<unknown>(),
+      done: Promise.resolve(null as never),
+    };
+    slot.done = runUnit(units[index]!).then(
+      () => slot,
+      (error: unknown) => {
+        slot.error = presentValue(error);
+        return slot;
+      },
+    );
+    return slot.done;
+  };
+  while (launched < units.length || active.size > 0) {
+    if (isAbsent(firstError)) {
+      for (let index = 0; index < units.length && active.size < maxConcurrentUnits; index += 1) {
+        if (started[index]) continue;
+        // Route-FIFO: scanning from the queue head means the FIRST eligible
+        // (priority-order) unit always wins a free slot; a later unit sharing
+        // a route with an unstarted predecessor that is merely route-blocked
+        // sees the same busy key and waits too.
+        if (unitKeys[index]!.some((key) => busy.has(key))) continue;
+        active.add(launch(index));
+      }
+    }
+    if (active.size === 0) break; // error drain finished; unstarted units stay claimed
+    const settled = await Promise.race(active);
+    active.delete(settled.done);
+    for (const key of settled.keys) {
+      const holders = (busy.get(key) ?? 0) - 1;
+      if (holders <= 0) busy.delete(key);
+      else busy.set(key, holders);
+    }
+    if (isPresent(settled.error) && isAbsent(firstError)) firstError = settled.error;
+  }
+  if (isPresent(firstError)) throw firstError.value;
 }
 
 /**

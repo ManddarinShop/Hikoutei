@@ -38,6 +38,12 @@ export const EFFECT_BATCH_LIMIT = 300;
  */
 export const MAX_IN_FLIGHT_EFFECTS = EFFECT_BATCH_LIMIT;
 /**
+ * Default dispatch-unit concurrency inside one worker pass. 1 keeps the
+ * sequential read-ahead pipeline (byte-identical legacy behavior); a larger
+ * value lets route-disjoint units overlap.
+ */
+export const DEFAULT_MAX_CONCURRENT_UNITS = 1;
+/**
  * Maximum eligible fast-append rows one worker pass may select/claim in the
  * real provider runtime. The bulk append operation writes the whole reserved
  * target range in one `spreadsheets.batchUpdate` request (an atomic

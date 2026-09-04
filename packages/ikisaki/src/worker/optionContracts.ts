@@ -16,6 +16,7 @@ export const WORKER_OPTIONS_ERROR_CODES = {
   TIME_INVALID: "effect_worker_time_invalid",
   MAX_EFFECTS_POSITIVE_REQUIRED: "effect_worker_max_effects_positive_required",
   MAX_FAST_APPEND_POSITIVE_REQUIRED: "effect_worker_max_fast_append_positive_required",
+  MAX_CONCURRENT_UNITS_POSITIVE_REQUIRED: "effect_worker_max_concurrent_units_positive_required",
   APPEND_INTERVAL_NON_NEGATIVE_REQUIRED: "effect_worker_append_interval_non_negative_required",
   LEASE_DURATION_POSITIVE_REQUIRED: "effect_worker_lease_duration_positive_required",
   WRITER_LEASE_HEADROOM_INVALID: "effect_writer_lease_headroom_invalid",
@@ -34,6 +35,8 @@ const workerOptionsMessages: Record<WorkerOptionsErrorCode, (label?: string) => 
     "effect worker maxEffects must be a positive safe integer",
   [WORKER_OPTIONS_ERROR_CODES.MAX_FAST_APPEND_POSITIVE_REQUIRED]: () =>
     "effect worker maxFastAppendCandidates must be a positive safe integer",
+  [WORKER_OPTIONS_ERROR_CODES.MAX_CONCURRENT_UNITS_POSITIVE_REQUIRED]: () =>
+    "effect worker maxConcurrentUnits must be a positive safe integer",
   [WORKER_OPTIONS_ERROR_CODES.APPEND_INTERVAL_NON_NEGATIVE_REQUIRED]: () =>
     "effect worker appendDispatchIntervalMs must be a non-negative safe integer",
   [WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED]: (label) =>

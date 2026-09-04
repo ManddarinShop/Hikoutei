@@ -471,7 +471,7 @@ export function createEffectWorkerSupervisor<
   const maxEffects = options.maxEffects ?? DEFAULT_MAX_EFFECTS;
   const now = options.now ?? Date.now;
 
-  validateWorkerOptions(workerId, maxEffects, options.maxFastAppendCandidates, options.appendDispatchIntervalMs);
+  validateWorkerOptions(workerId, maxEffects, options.maxFastAppendCandidates, options.appendDispatchIntervalMs, options.maxConcurrentUnits);
   const batchController = options.batchController ?? new AdaptiveEffectBatchController({
     ...(options.appendDispatchIntervalMs === undefined
       ? {}
@@ -501,6 +501,9 @@ export function createEffectWorkerSupervisor<
     ...(options.maxFastAppendCandidates === undefined
       ? {}
       : { maxFastAppendCandidates: options.maxFastAppendCandidates }),
+    ...(options.maxConcurrentUnits === undefined
+      ? {}
+      : { maxConcurrentUnits: options.maxConcurrentUnits }),
     ...(options.appendDispatchIntervalMs === undefined
       ? {}
       : { appendDispatchIntervalMs: options.appendDispatchIntervalMs }),
@@ -559,6 +562,7 @@ function validateWorkerOptions(
   maxEffects: number,
   maxFastAppendCandidates?: number,
   appendDispatchIntervalMs?: number,
+  maxConcurrentUnits?: number,
 ): void {
   if (workerId.length === 0) {
     throw new SupervisionOptionsError(SUPERVISOR_OPTIONS_ERROR_CODES.WORKER_ID_REQUIRED);
@@ -587,6 +591,15 @@ function validateWorkerOptions(
     throw new SupervisionOptionsError(
       SUPERVISOR_OPTIONS_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED,
       "appendDispatchIntervalMs",
+    );
+  }
+  if (
+    maxConcurrentUnits !== undefined &&
+    (!Number.isSafeInteger(maxConcurrentUnits) || maxConcurrentUnits < 1)
+  ) {
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      "maxConcurrentUnits",
     );
   }
 }
