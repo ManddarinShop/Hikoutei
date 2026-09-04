@@ -135,11 +135,11 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
   /** Ceiling for the AIMD pacing multiplier (interval never exceeds 4x base). */
   QUOTA_BACKOFF_MAX_MULTIPLIER: 4,
   /** Additive increase: pacing multiplier divisor per recovery step. */
-  QUOTA_RECOVERY_STEP_FACTOR: 1.1,
+  QUOTA_RECOVERY_STEP_FACTOR: 2,
   /** Successful request starts of quiet before one recovery step. */
-  QUOTA_RECOVERY_SUCCESS_THRESHOLD: 100,
+  QUOTA_RECOVERY_SUCCESS_THRESHOLD: 25,
   /** Milliseconds since the last 429 that alone earns a recovery step. */
-  QUOTA_RECOVERY_QUIET_MS: 60_000,
+  QUOTA_RECOVERY_QUIET_MS: 10_000,
 } as const;
 
 /** REST `CellFormat.numberFormat` object written by the provider. */

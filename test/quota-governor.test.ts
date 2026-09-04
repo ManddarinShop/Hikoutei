@@ -192,28 +192,30 @@ describe("QuotaPacingGovernor", () => {
     expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE)).toBe(1_000);
   });
 
-  it("recovers in ~10% steps after the success threshold and never below base", () => {
+  it("recovers by halving per quiet window after the success threshold and never below base", () => {
     let now = 0;
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 1_000, now: () => now });
+    // TWO 429s put the lane at the 4x cap: recovery must pass through an
+    // intermediate (recovery) step before landing on nominal.
     governor.recordQuotaLimited(QUOTA_GOVERNOR_LANES.READ);
-    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(2_000);
+    governor.recordQuotaLimited(QUOTA_GOVERNOR_LANES.READ);
+    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(4_000);
 
     // Fewer than the threshold of successes (and no quiet elapsed time): no
     // step yet — one 429 cannot be answered by an immediate undo.
     for (let i = 0; i < GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_SUCCESS_THRESHOLD - 1; i += 1) {
       governor.recordRequestStart(QUOTA_GOVERNOR_LANES.READ);
     }
-    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(2_000);
+    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(4_000);
     governor.recordRequestStart(QUOTA_GOVERNOR_LANES.READ);
-    const firstStep = 2_000 / GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_STEP_FACTOR;
-    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(Math.round(firstStep));
+    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(2_000);
     expect(governor.stateFor(QUOTA_GOVERNOR_LANES.READ).status).toBe(
       QUOTA_PACING_STATES.RECOVERY,
     );
 
-    // Each further quiet batch of successes steps down again until the base,
+    // Each further quiet batch of successes halves again until the base,
     // and the floor is exact: recovery lands on nominal at 1x, never below.
-    for (let i = 0; i < 1000; i += 1) {
+    for (let i = 0; i < 1_000; i += 1) {
       governor.recordRequestStart(QUOTA_GOVERNOR_LANES.READ);
     }
     expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(1_000);
@@ -228,11 +230,15 @@ describe("QuotaPacingGovernor", () => {
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 1_000, now: () => now });
     governor.recordQuotaLimited(QUOTA_GOVERNOR_LANES.WRITE);
     // A stalled lane that resumes after the quiet window steps down on its
-    // FIRST successful start instead of waiting for a full success batch.
+    // FIRST successful start. With QUOTA_RECOVERY_STEP_FACTOR = 2, a single
+    // 429's 2x backoff recovers fully to nominal in ONE step.
     now = 10_000 + GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_QUIET_MS + 1;
     governor.recordRequestStart(QUOTA_GOVERNOR_LANES.WRITE);
-    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE)).toBeLessThan(2_000);
-    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE)).toBeGreaterThan(1_000);
+    expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE)).toBe(1_000);
+    expect(governor.stateFor(QUOTA_GOVERNOR_LANES.WRITE)).toEqual({
+      status: QUOTA_PACING_STATES.NOMINAL,
+      multiplier: 1,
+    });
   });
 
   it("recovers lazily on observation with NO request starts at all", () => {
