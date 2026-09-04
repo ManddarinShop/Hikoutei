@@ -31,7 +31,18 @@ import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import { ReceiptReadCursor } from "../model/receiptCursor.js";
 import type { ReadCalibration } from "../model/readPlan.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "../transport/rateLimiter.js";
+import {
+  RATE_LIMIT_OPTIONS_ERROR_CODES,
+  RateLimitOptionsError,
+  RequestStartLimiter,
+  ReadQoSScheduler,
+} from "../transport/rateLimiter.js";
+import {
+  isQuotaLimitedOutcome,
+  QUOTA_GOVERNOR_LANES,
+  QuotaPacingGovernor,
+  RollingQuotaBudget,
+} from "../transport/quotaGovernor.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
@@ -130,8 +141,27 @@ export interface GoogleSheetsApiProviderDeps {
   /** Write limiter: batchUpdate starts serialize only against writes. */
   readonly writeLimiter: RequestStartLimiter;
   /**
+   * Sliding-window per-minute request-start budget for the READ lane
+   * (getSpreadsheet starts, paced on either read class). Enforced IN
+   * ADDITION to the interval pacing: a start needs both a budget slot and
+   * an interval slot. Postcondition reads paced on the write lane count
+   * against the write budget instead (they are rare recovery traffic).
+   */
+  readonly readBudget: RollingQuotaBudget;
+  /** Sliding-window per-minute request-start budget for the WRITE lane. */
+  readonly writeBudget: RollingQuotaBudget;
+  /**
+   * AIMD pacing feedback: quota-limited (429) responses grow the offending
+   * lane's pacing interval via the limiters' `getIntervalMs`, quiet success
+   * recovers it gradually. Gates request STARTS only; never touches CAS,
+   * prepared state, or result handling.
+   */
+  readonly quotaGovernor: QuotaPacingGovernor;
+  /**
    * Maximum admitted wait for ONE request start: a call whose predicted slot
-   * is further out is refused before transport.
+   * is further out is refused before transport. The per-minute budget gate
+   * and the lane pacing gate SHARE this one bound via a single admission
+   * deadline, so total bounded-admission waiting never exceeds it.
    */
   readonly maxRequestStartWaitMs: number;
   readonly now: () => number;
@@ -158,18 +188,85 @@ export type RequestStartPacing = ReadPacing | "write";
  * stable delivery-uncertain transport error before any SDK call, so the
  * durable worker requeues instead of firing an unpaced burst.
  *
- * Returns the limiter/scheduler's own measured wait for the granted slot
- * (0 when the slot was already available), so callers report the pacing
- * wait the limiter actually enforced rather than a clock delta.
+ * Composition order: the per-minute budget gates FIRST (it is the outer
+ * quota ceiling), then the lane's interval pacing. A class-pacing refusal
+ * AFTER a budget admission leaks that one budget reservation until the
+ * window slides — accepted because pacing refusals are already rare and
+ * the leak over-counts (never under-counts) the budget, which is the safe
+ * direction for quota safety.
+ *
+ * The two gates share ONE admission budget: a single deadline
+ * (`now + maxRequestStartWaitMs`) is computed once and each gate is only
+ * allowed to wait its remaining time, so the SUMMED bounded-admission wait
+ * across both gates never exceeds `maxRequestStartWaitMs` (the effect-lease
+ * headroom contract assumes exactly one bounded wait per request start).
+ *
+ * Returns the summed budget + pacing wait for the granted slot (0 when both
+ * were already available), so callers report the wait actually enforced.
  */
 async function admitRequestStart(
   deps: GoogleSheetsApiProviderDeps,
   pacing: RequestStartPacing,
 ): Promise<number> {
+  const lane = pacing === "write"
+    ? QUOTA_GOVERNOR_LANES.WRITE
+    : QUOTA_GOVERNOR_LANES.READ;
+  const budget = pacing === "write" ? deps.writeBudget : deps.readBudget;
+  // Validate the bound ONCE before any deadline arithmetic: the limiters
+  // validate their own `maxWaitMs` argument, but this helper pre-derives the
+  // remaining-time bound, so an invalid configured bound (negative,
+  // non-integer, NaN) must fail here with the SAME structured error the
+  // limiters would have thrown when the raw bound reached them.
+  const maxWaitMs = deps.maxRequestStartWaitMs;
+  if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0) {
+    throw new RateLimitOptionsError(
+      RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED,
+    );
+  }
+  // One shared admission deadline for BOTH gates: each waitForSlot bound is
+  // the time still remaining (never above the validated bound), so the two
+  // bounded waits cannot stack past maxRequestStartWaitMs.
+  const admissionDeadline = deps.now() + maxWaitMs;
+  const budgetAdmission = await budget.waitForSlot(
+    remainingAdmissionMs(admissionDeadline, deps.now(), maxWaitMs),
+  );
+  if (budgetAdmission.status === "refused") {
+    return refuseRequestStart(deps, pacing);
+  }
+  const remainingMs = remainingAdmissionMs(admissionDeadline, deps.now(), maxWaitMs);
   const admission = pacing === "write"
-    ? await deps.writeLimiter.waitForSlot(deps.maxRequestStartWaitMs)
-    : await deps.readScheduler.waitForSlot(pacing, deps.maxRequestStartWaitMs);
-  if (admission.status !== "refused") return admission.waitedMs;
+    ? await deps.writeLimiter.waitForSlot(remainingMs)
+    : await deps.readScheduler.waitForSlot(pacing, remainingMs);
+  if (admission.status === "refused") {
+    return refuseRequestStart(deps, pacing);
+  }
+  // One successful request START counts toward this lane's AIMD quiet
+  // period (recovery steps advance only while starts keep succeeding).
+  deps.quotaGovernor.recordRequestStart(lane);
+  return budgetAdmission.waitedMs + admission.waitedMs;
+}
+
+/**
+ * Whole-millisecond time still left under the shared admission deadline,
+ * clamped into [0, maxWaitMs]: a spent budget (clock past the deadline) makes
+ * the next gate refuse any nonzero predicted wait, and a backward-moving
+ * clock between the two gates can otherwise re-derive a bound ABOVE the
+ * configured maximum. `maxWaitMs` is pre-validated by the caller, so the
+ * result is always a non-negative safe integer (waitForSlot's own contract).
+ */
+function remainingAdmissionMs(deadline: number, now: number, maxWaitMs: number): number {
+  return Math.min(maxWaitMs, Math.max(0, Math.floor(deadline - now)));
+}
+
+/**
+ * Shared refusal exit for both admission stages: one redacted boundary log
+ * (stable code + lane tag only) and the delivery-uncertain
+ * REQUEST_START_REFUSED error the durable worker requeues through.
+ */
+function refuseRequestStart(
+  deps: GoogleSheetsApiProviderDeps,
+  pacing: RequestStartPacing,
+): never {
   // Boundary record for a locally refused start: only the stable code and the
   // read-class tag are logged (retryable, like the other delivery-uncertain
   // buckets), never a message, payload, id, or URL.
@@ -294,6 +391,14 @@ export async function runRead<T>(
     return result;
   } catch (error: unknown) {
     const outcome = classifyTransportOutcome(error);
+    // AIMD feedback hook: a remote 429/RESOURCE_EXHAUSTED grows THIS lane's
+    // pacing interval on the next reservation; any other failure leaves the
+    // governor untouched (the durable worker's own retry path is unchanged).
+    if (isQuotaLimitedOutcome(outcome)) {
+      deps.quotaGovernor.recordQuotaLimited(
+        pacing === "write" ? QUOTA_GOVERNOR_LANES.WRITE : QUOTA_GOVERNOR_LANES.READ,
+      );
+    }
     emitRequest(deps, "getSpreadsheet", pacing, 1, startedAt, false, outcome.httpStatus, outcome.code, { pacingWaitMs });
     throw error;
   }
@@ -320,6 +425,9 @@ export async function runWrite<T>(
     return result;
   } catch (error: unknown) {
     const outcome = classifyTransportOutcome(error);
+    if (isQuotaLimitedOutcome(outcome)) {
+      deps.quotaGovernor.recordQuotaLimited(QUOTA_GOVERNOR_LANES.WRITE);
+    }
     emitRequest(deps, "batchUpdate", "write", 1, startedAt, false, outcome.httpStatus, outcome.code, {
       pacingWaitMs,
       ...meta,

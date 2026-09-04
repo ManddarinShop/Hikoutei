@@ -53,7 +53,16 @@ import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-shee
 import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
 import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
 import { readEffectPostcondition } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/applyEffects.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import {
+  RATE_LIMIT_OPTIONS_ERROR_CODES,
+  RateLimitOptionsError,
+  RequestStartLimiter,
+  ReadQoSScheduler,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import {
+  QuotaPacingGovernor,
+  RollingQuotaBudget,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/quotaGovernor.js";
 import {
   GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
   GOOGLE_SHEETS_API_ENUMERATION_FIELDS,
@@ -1864,6 +1873,11 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       maxBatchBytes: 2_000_000,
       readScheduler,
       writeLimiter,
+      // Budgets and the governor are the subjects of dedicated pacing tests
+      // below; this raw-deps pacing probe pins interval-lane behavior only.
+      readBudget: new RollingQuotaBudget({ maxStartsPerWindow: Number.POSITIVE_INFINITY, windowMs: 60_000, now: () => now }),
+      writeBudget: new RollingQuotaBudget({ maxStartsPerWindow: Number.POSITIVE_INFINITY, windowMs: 60_000, now: () => now }),
+      quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 1_100, now: () => now }),
       maxRequestStartWaitMs: 1_100,
       now: () => now,
       onRequest: undefined,
@@ -1915,6 +1929,114 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     const lateWrite = await runWrite(deps, () =>
       transport.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requests: [] }));
     expect(lateWrite).toBeDefined();
+  });
+
+  it("validates the admission bound before deadline arithmetic and caps the remaining-time bound", async () => {
+    // The shared-deadline helper pre-derives each gate's remaining-time
+    // bound, so an invalid CONFIGURED bound (negative, non-integer, NaN) must
+    // fail with the SAME structured error the limiters would throw — not be
+    // floored/clamped into validity before the limiters see it.
+    const buildDeps = (
+      maxRequestStartWaitMs: number,
+      now: () => number,
+      writeLimiter: RequestStartLimiter,
+    ): GoogleSheetsApiProviderDeps => ({
+      spreadsheetId: SPREADSHEET_ID,
+      providerNonce: "provider:test",
+      preparedStateRegistry: new WeakSet<object>(),
+      definitions: [SYSTEM_DEFINITION],
+      transport: new StubSheetsTransport(new StubSpreadsheet()),
+      receiptInitLock: new PromiseTailLock(),
+      receiptReadCursor: new ReceiptReadCursor(),
+      sheetRowBounds: new Map<string, number>(),
+      readCalibration: createReadCalibration(),
+      readTimeoutMs: 60_000,
+      maxBatchBytes: 2_000_000,
+      readScheduler: new ReadQoSScheduler({
+        intervalMs: 0,
+        now,
+        sleep: async () => undefined,
+      }),
+      writeLimiter,
+      readBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now,
+      }),
+      writeBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now,
+      }),
+      quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 0, now }),
+      maxRequestStartWaitMs,
+      now,
+      onRequest: undefined,
+    });
+    for (const invalid of [-1, 1.5, Number.NaN]) {
+      await expect(runWrite(buildDeps(invalid, Date.now, new RequestStartLimiter({ intervalMs: 0 })), () =>
+        Promise.resolve({ replies: [] }))).rejects.toThrow(RateLimitOptionsError);
+    }
+
+    // A backward-moving clock BETWEEN the budget gate's bound read and the
+    // lane gate's bound read must not re-derive a remaining-time bound ABOVE
+    // the configured maximum: the lane gate's bound is capped at
+    // maxRequestStartWaitMs. deps.now() is called once for the shared
+    // deadline, once for the budget gate's bound, then once for the lane
+    // gate's bound — so the rewind lands exactly between the second and
+    // third reads. The budget/governor/scheduler internals get a SEPARATE
+    // constant clock so only the three deps.now() reads are controlled.
+    let depsClockCalls = 0;
+    const seenLaneBounds: number[] = [];
+    const recordingLimiter = {
+      waitForSlot: async (bound: number) => {
+        seenLaneBounds.push(bound);
+        return { status: "admitted" as const, waitedMs: 0 };
+      },
+      lastStart: () => undefined,
+    } as unknown as RequestStartLimiter;
+    const constantNow = (): number => 1_000_000;
+    const backwardNow = (): number => {
+      depsClockCalls += 1;
+      // Calls 1 (deadline) and 2 (budget bound) are at T; from call 3 (the
+      // lane bound read) the clock falls BACKWARD 5 seconds.
+      return depsClockCalls < 3 ? 1_000_000 : 995_000;
+    };
+    const backwardDeps: GoogleSheetsApiProviderDeps = {
+      spreadsheetId: SPREADSHEET_ID,
+      providerNonce: "provider:test",
+      preparedStateRegistry: new WeakSet<object>(),
+      definitions: [SYSTEM_DEFINITION],
+      transport: new StubSheetsTransport(new StubSpreadsheet()),
+      receiptInitLock: new PromiseTailLock(),
+      receiptReadCursor: new ReceiptReadCursor(),
+      sheetRowBounds: new Map<string, number>(),
+      readCalibration: createReadCalibration(),
+      readTimeoutMs: 60_000,
+      maxBatchBytes: 2_000_000,
+      readScheduler: new ReadQoSScheduler({ intervalMs: 0, now: constantNow, sleep: async () => undefined }),
+      writeLimiter: recordingLimiter,
+      readBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now: constantNow,
+      }),
+      writeBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now: constantNow,
+      }),
+      quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 0, now: constantNow }),
+      maxRequestStartWaitMs: 1_100,
+      now: backwardNow,
+      onRequest: undefined,
+    };
+    await expect(runWrite(backwardDeps, () => Promise.resolve({ replies: [] }))).resolves.toBeDefined();
+    expect(seenLaneBounds.length).toBe(1);
+    // Uncapped, the backward clock would re-derive 6_100ms (deadline 1_001_100
+    // minus the rewound 995_000); the cap keeps it at the configured 1_100ms
+    // bound.
+    expect(seenLaneBounds[0]).toBe(1_100);
   });
 
   it("applies the read timeout to every getSpreadsheet call but not writes", async () => {

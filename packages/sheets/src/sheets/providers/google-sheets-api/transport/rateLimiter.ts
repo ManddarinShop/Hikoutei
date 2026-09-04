@@ -21,6 +21,7 @@ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
 export const RATE_LIMIT_OPTIONS_ERROR_CODES = {
   INTERVAL_NON_NEGATIVE_REQUIRED: "rate_limiter_interval_non_negative_required",
   MAX_WAIT_NON_NEGATIVE_REQUIRED: "rate_limiter_max_wait_non_negative_required",
+  BUDGET_POSITIVE_INTEGER_REQUIRED: "rate_limiter_budget_positive_integer_required",
 } as const;
 
 /** Union type derived from the rate-limit error code table. */
@@ -43,11 +44,21 @@ const RATE_LIMIT_OPTIONS_MESSAGE_REGISTRY: Record<RateLimitOptionErrorCode, stri
     "request-start interval must be a non-negative safe integer",
   [RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED]:
     "maximum request-start wait must be a non-negative safe integer",
+  [RATE_LIMIT_OPTIONS_ERROR_CODES.BUDGET_POSITIVE_INTEGER_REQUIRED]:
+    "quota budget rate and window must be positive safe integers",
 };
 
 export interface RequestStartLimiterOptions {
   /** Minimum interval between two request starts of this limiter class. */
   readonly intervalMs: number;
+  /**
+   * Optional live interval source consulted at EVERY reservation (the
+   * quota-pacing governor). When present, its value paces this limiter
+   * instead of the fixed `intervalMs`, so an AIMD multiplier takes effect on
+   * the next start without reconstructing the limiter. Defaults to the fixed
+   * `intervalMs` (governor disabled or at 1x: zero behavior change).
+   */
+  readonly getIntervalMs?: () => number;
   /** Injectable clock for deterministic tests; defaults to Date.now. */
   readonly now?: () => number;
   /** Injectable sleep used while waiting for the next slot. */
@@ -80,6 +91,7 @@ export type RequestStartAdmission =
  */
 export class RequestStartLimiter {
   private readonly intervalMs: number;
+  private readonly getIntervalMs: (() => number) | undefined;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private lastStartAt: number | undefined;
@@ -89,8 +101,14 @@ export class RequestStartLimiter {
       throw new RateLimitOptionsError(RATE_LIMIT_OPTIONS_ERROR_CODES.INTERVAL_NON_NEGATIVE_REQUIRED);
     }
     this.intervalMs = options.intervalMs;
+    this.getIntervalMs = options.getIntervalMs;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? DEFAULT_SLEEP;
+  }
+
+  /** Effective pacing interval NOW: governor-multiplied when wired. */
+  private currentIntervalMs(): number {
+    return this.getIntervalMs?.() ?? this.intervalMs;
   }
 
   /** Returns the last recorded request start, when one exists. */
@@ -137,7 +155,7 @@ export class RequestStartLimiter {
     const now = this.now();
     const nextStart = this.lastStartAt === undefined
       ? now
-      : Math.max(now, this.lastStartAt + this.intervalMs);
+      : Math.max(now, this.lastStartAt + this.currentIntervalMs());
     const waited = Math.max(0, nextStart - now);
     if (maxWaitMs !== undefined && waited > maxWaitMs) {
       // Refused WITHOUT reserving: lastStartAt stays untouched, so a later
@@ -188,6 +206,7 @@ interface ReadQoSQueued {
  */
 export class ReadQoSScheduler {
   private readonly intervalMs: number;
+  private readonly getIntervalMs: (() => number) | undefined;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   /** Shared request-start horizon for BOTH read classes. */
@@ -204,8 +223,14 @@ export class ReadQoSScheduler {
       throw new RateLimitOptionsError(RATE_LIMIT_OPTIONS_ERROR_CODES.INTERVAL_NON_NEGATIVE_REQUIRED);
     }
     this.intervalMs = options.intervalMs;
+    this.getIntervalMs = options.getIntervalMs;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? DEFAULT_SLEEP;
+  }
+
+  /** Effective shared-read pacing interval NOW (governor-aware). */
+  private currentIntervalMs(): number {
+    return this.getIntervalMs?.() ?? this.intervalMs;
   }
 
   /** Returns the last recorded shared request start, when one exists. */
@@ -281,7 +306,7 @@ export class ReadQoSScheduler {
       const now = this.now();
       const nextStart = this.lastStartAt === undefined
         ? now
-        : Math.max(now, this.lastStartAt + this.intervalMs);
+        : Math.max(now, this.lastStartAt + this.currentIntervalMs());
       const waited = Math.max(0, nextStart - now);
       if (waited > waiter.maxWaitMs) {
         // Refused without reserving: the shared horizon stays untouched so a

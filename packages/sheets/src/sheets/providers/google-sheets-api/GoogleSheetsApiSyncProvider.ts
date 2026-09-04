@@ -81,6 +81,11 @@ import {
 import { ReceiptReadCursor } from "./model/receiptCursor.js";
 import { createReadCalibration } from "./model/readPlan.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "./transport/rateLimiter.js";
+import {
+  QUOTA_GOVERNOR_LANES,
+  QuotaPacingGovernor,
+  RollingQuotaBudget,
+} from "./transport/quotaGovernor.js";
 import type { GoogleSheetsApiProviderDeps } from "./operations/shared.js";
 import { PromiseTailLock } from "./operations/shared.js";
 import {
@@ -160,6 +165,9 @@ export class GoogleSheetsApiSyncProvider
   private readonly maxBatchBytes: number;
   private readonly readScheduler: ReadQoSScheduler;
   private readonly writeLimiter: RequestStartLimiter;
+  private readonly readBudget: RollingQuotaBudget;
+  private readonly writeBudget: RollingQuotaBudget;
+  private readonly quotaGovernor: QuotaPacingGovernor;
   /** Bounded admission: independent max request-start wait (default 5,000
    * ms), separate from the pacing interval. */
   private readonly maxRequestStartWaitMs: number;
@@ -211,6 +219,21 @@ export class GoogleSheetsApiSyncProvider
     const intervalMs = options.rateLimitIntervalMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_INTERVAL_MS;
     const maxAdmissionWaitMs = options.requestStartMaxWaitMs
       ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_START_MAX_ADMISSION_WAIT_MS;
+    const readBudgetPerMinute = options.quotaReadBudgetPerMinute
+      ?? GOOGLE_SHEETS_API_DEFAULTS.QUOTA_READ_BUDGET_PER_WINDOW;
+    const writeBudgetPerMinute = options.quotaWriteBudgetPerMinute
+      ?? GOOGLE_SHEETS_API_DEFAULTS.QUOTA_WRITE_BUDGET_PER_WINDOW;
+    for (const budget of [readBudgetPerMinute, writeBudgetPerMinute]) {
+      if (
+        budget !== Number.POSITIVE_INFINITY &&
+        (!Number.isSafeInteger(budget) || budget < 1)
+      ) {
+        invalidProviderRequest(
+          "Google Sheets API sync provider",
+          "quota budget must be a positive safe integer or Infinity",
+        );
+      }
+    }
     this.spreadsheetId = options.spreadsheetId;
     this.definitions = options.definitions;
     this.transport = options.transport ?? new GoogleSheetsApiHttpTransport({ requestTimeoutMs });
@@ -218,13 +241,33 @@ export class GoogleSheetsApiSyncProvider
     this.readTimeoutMs = readTimeoutMs;
     this.maxBatchBytes = maxBatchBytes;
     this.now = options.now ?? Date.now;
+    // Adaptive quota governor: the AIMD multiplier starts at 1x, so with no
+    // 429 ever observed the lanes pace exactly as before this wiring existed.
+    this.quotaGovernor = new QuotaPacingGovernor({
+      baseIntervalMs: intervalMs,
+      now: this.now,
+    });
+    this.readBudget = new RollingQuotaBudget({
+      maxStartsPerWindow: readBudgetPerMinute,
+      windowMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BUDGET_WINDOW_MS,
+      now: this.now,
+      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+    });
+    this.writeBudget = new RollingQuotaBudget({
+      maxStartsPerWindow: writeBudgetPerMinute,
+      windowMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BUDGET_WINDOW_MS,
+      now: this.now,
+      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+    });
     this.readScheduler = new ReadQoSScheduler({
       intervalMs,
+      getIntervalMs: () => this.quotaGovernor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ),
       now: this.now,
       ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     });
     this.writeLimiter = new RequestStartLimiter({
       intervalMs,
+      getIntervalMs: () => this.quotaGovernor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE),
       now: this.now,
       ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     });
@@ -250,6 +293,9 @@ export class GoogleSheetsApiSyncProvider
       maxBatchBytes: this.maxBatchBytes,
       readScheduler: this.readScheduler,
       writeLimiter: this.writeLimiter,
+      readBudget: this.readBudget,
+      writeBudget: this.writeBudget,
+      quotaGovernor: this.quotaGovernor,
       maxRequestStartWaitMs: this.maxRequestStartWaitMs,
       now: this.now,
       onRequest: this.onRequest,

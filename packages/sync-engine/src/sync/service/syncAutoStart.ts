@@ -31,6 +31,7 @@ import {
 import {
   validateTypedSheetsOptions,
   type Hikoutei,
+  type HikouteiProviderOptions,
 } from "../../api/hikouteiCore.js";
 import { requireSyncEngineLocalRuntime } from "./compositionPorts.js";
 import {
@@ -208,6 +209,14 @@ export interface SyncAutoStartOptions {
    * (fail-closed, D5), and the normal sync service starts.
    */
   readonly adopt?: AdoptSpec;
+  /**
+   * Public provider subset forwarded verbatim into the sync-service
+   * `googleSheetsApi` settings (real-transport path only). `onRequest` here
+   * chains AFTER the engine's internal request-telemetry sink (see
+   * `remoteProvider.ts`); a per-request env pacing override still wins over
+   * `providerOptions.rateLimitIntervalMs`.
+   */
+  readonly providerOptions?: HikouteiProviderOptions;
 }
 
 /** Local-only result: no sync service was started (env absent or blank). */
@@ -353,10 +362,23 @@ export async function createTypedSheetsWithSync(
       // consult HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS, so local/fake suites
       // stay immune to a misconfigured or invalid override in the host env.
       googleSheetsApi: options.transport === undefined
-        ? (rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs })
+        ? {
+          ...options.providerOptions,
+          ...(rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs }),
+        }
         : {
+            // Test-injection path: the stub transport and ZERO pacing stay
+            // pinned AFTER the spread so providerOptions can only ADD the
+            // telemetry sink (onRequest) and timeout knobs, never override
+            // the transport or reintroduce pacing/env sensitivity.
+            ...options.providerOptions,
             transport: options.transport,
             rateLimitIntervalMs: 0,
+            // Pin the per-minute budgets OFF explicitly (not via defaults):
+            // the stub branch must stay fully unpaced regardless of future
+            // default-budget changes.
+            quotaReadBudgetPerMinute: Number.POSITIVE_INFINITY,
+            quotaWriteBudgetPerMinute: Number.POSITIVE_INFINITY,
           },
       pollingIntervalMs,
       pollingFullScanIntervalMs,
