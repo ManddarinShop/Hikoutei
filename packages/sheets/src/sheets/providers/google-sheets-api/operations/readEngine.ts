@@ -36,6 +36,7 @@ import { enumerateSheetProperties } from "../model/preflightContext.js";
 import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
 import {
   createRawResponseMeta,
+  credentialBinding,
   runRead,
   type GoogleSheetsApiProviderDeps,
   type RequestStartPacing,
@@ -67,12 +68,13 @@ export function createBandedGet(
       // event when the task resolves, so a later measurement would land one
       // event too late.
       const rawMeta = createRawResponseMeta(deps);
-      const raw = await runRead(deps, async () => {
+      const raw = await runRead(deps, async (credentialIndex) => {
         const response = await deps.transport.getSpreadsheet({
           spreadsheetId: deps.spreadsheetId,
           ranges,
           fields,
           ...(deps.readTimeoutMs === undefined ? {} : { timeoutMs: deps.readTimeoutMs }),
+          ...credentialBinding(credentialIndex),
         });
         rawMeta.onRawResponse?.(response);
         return response;
@@ -145,9 +147,10 @@ export async function ensureSheetRowBounds(
 ): Promise<void> {
   if (titles.every((title) => deps.sheetRowBounds.has(title))) return;
   const enumeration = createRawResponseMeta(deps);
-  const sheets = await runRead(deps, () =>
+  const sheets = await runRead(deps, (credentialIndex) =>
     enumerateSheetProperties(
       deps.transport, deps.spreadsheetId, deps.readTimeoutMs, enumeration.onRawResponse,
+      credentialIndex,
     ), pacing, enumeration.meta);
   for (const sheet of sheets) {
     const rowCount = sheet.gridProperties?.rowCount;

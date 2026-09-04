@@ -33,6 +33,7 @@ import {
   quoteA1SheetName,
 } from "../model/valueNormalization.js";
 import {
+  credentialBinding,
   requireValidBatchUpdateReply,
   runRead,
   runWrite,
@@ -61,12 +62,13 @@ export async function provisionRegistry(
   validateProvisionRegistrations(registrations);
 
   // Enumerate every tab (no ranges, hidden included) with grid dimensions.
-  const enumerationRaw = await runRead(deps, () =>
+  const enumerationRaw = await runRead(deps, (credentialIndex) =>
     deps.transport.getSpreadsheet({
       spreadsheetId: deps.spreadsheetId,
       ranges: [],
       fields: GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
       timeoutMs: deps.readTimeoutMs,
+      ...credentialBinding(credentialIndex),
     }));
   const sheets = parseSpreadsheetDocument(enumerationRaw, "provisioning enumeration");
   const existingByTitle = new Map(
@@ -89,12 +91,13 @@ export async function provisionRegistry(
       const endColumn = provisionGridEndColumn(registration, existing);
       return `${quoteA1SheetName(registration.sheetName)}!A1:${columnLetters(endColumn)}1048576`;
     });
-    const dataRaw = await runRead(deps, () =>
+    const dataRaw = await runRead(deps, (credentialIndex) =>
       deps.transport.getSpreadsheet({
         spreadsheetId: deps.spreadsheetId,
         ranges,
         fields: GOOGLE_SHEETS_API_PROVISION_FIELDS,
         timeoutMs: deps.readTimeoutMs,
+        ...credentialBinding(credentialIndex),
       }));
     const document = parseSpreadsheetDocument(dataRaw, "provisioning grid");
     for (const registration of dataTargets) {
@@ -187,10 +190,11 @@ export async function provisionRegistry(
   }
 
   if (requests.length > 0) {
-    const response = await runWrite(deps, () =>
+    const response = await runWrite(deps, (credentialIndex) =>
       deps.transport.batchUpdate({
         spreadsheetId: deps.spreadsheetId,
         requests,
+        ...credentialBinding(credentialIndex),
       }));
     requireValidBatchUpdateReply(response, requests.length);
   }

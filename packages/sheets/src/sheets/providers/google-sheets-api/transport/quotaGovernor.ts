@@ -36,9 +36,7 @@ import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/contracts/sheets/googleShe
 import { PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
 import {
   RATE_LIMIT_OPTIONS_ERROR_CODES,
-  RateLimitOptionsError,
-  type RequestStartAdmission,
-} from "./rateLimiter.js";
+  RateLimitOptionsError, } from "./rateLimiter.js";
 
 /** Lanes the governor paces: the shared read timeline and the write lane. */
 export const QUOTA_GOVERNOR_LANES = {
@@ -264,14 +262,38 @@ const DEFAULT_SLEEP = (ms: number): Promise<void> =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Opaque handle for ONE provisional budget reservation returned by
+ * `waitForSlot`. Passed back to {@link RollingQuotaBudget.rollback} when a
+ * downstream admission gate refuses after the budget already reserved, so a
+ * refused request never keeps consuming budget. The token is matched by
+ * OBJECT IDENTITY, never by its timestamp, so a rollback can never release
+ * a different (live) reservation, and a repeated rollback is a no-op.
+ */
+export interface BudgetReservation {
+  /** Internal: the reserved start time, read only by the owning budget. */
+  readonly reservedAt: number;
+}
+
+/** Admitted result of `RollingQuotaBudget.waitForSlot` (adds the rollback token). */
+export type RollingQuotaBudgetAdmission =
+  | { readonly status: "admitted"; readonly waitedMs: number; readonly reservation: BudgetReservation }
+  | { readonly status: "refused"; readonly waitedMs: number; readonly nextStartAt: number };
+
+/**
  * Sliding-window per-minute request-start budget for ONE lane.
  *
  * Reservations, not completed requests, occupy the window: an admitted
  * caller records the slot it will start at, so a burst of concurrent
  * callers arriving in the same tick each consumes one of the remaining
  * budget slots and the deep ones are refused by the bounded wait, exactly
- * like the interval limiters. A refusal records NOTHING, so the window can
- * never be poisoned forward by refused callers.
+ * like the interval limiters. A budget refusal records NOTHING, so the
+ * window can never be poisoned forward by refused callers.
+ *
+ * A budget ADMISSION reserves provisionally: a caller that later has to
+ * refuse on a downstream gate (e.g. the pacing lane) hands the reservation
+ * token to `rollback`, which removes exactly that entry. Rollback never
+ * advances (or otherwise touches) the window and can never free a live
+ * reservation belonging to another caller.
  *
  * The earliest legal start when the window already holds `max` reservations
  * is `starts[n - max] + windowMs`: at that instant all but the `max - 1`
@@ -282,8 +304,16 @@ export class RollingQuotaBudget {
   private readonly windowMs: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
-  /** Reserved start times, kept non-decreasing. */
-  private starts: number[] = [];
+  /**
+   * Reserved start times, kept in chronological (non-decreasing `reservedAt`)
+   * order at all times. Rollback splices its own entry out (order survives)
+   * and every new reservation is inserted at its sorted position rather than
+   * blindly appended: a rolled-back older slot must never let a later caller
+   * land BEHIND a queued future reservation, or the prefix expiry scan would
+   * stop at the future entry and retain the trailing expired one forever,
+   * leaking budget capacity.
+   */
+  private starts: BudgetReservation[] = [];
 
   public constructor(options: RollingQuotaBudgetOptions) {
     const validRate =
@@ -316,7 +346,7 @@ export class RollingQuotaBudget {
    * reserved nothing. The decision and the reservation happen synchronously
    * before any await, so concurrent callers can never double-book one slot.
    */
-  public async waitForSlot(maxWaitMs: number): Promise<RequestStartAdmission> {
+  public async waitForSlot(maxWaitMs: number): Promise<RollingQuotaBudgetAdmission> {
     if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0) {
       throw new RateLimitOptionsError(
         RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED,
@@ -328,7 +358,7 @@ export class RollingQuotaBudget {
     let firstLive = 0;
     for (;;) {
       const candidate = this.starts[firstLive];
-      if (candidate === undefined || candidate > cutoff) break;
+      if (candidate === undefined || candidate.reservedAt > cutoff) break;
       firstLive += 1;
     }
     if (firstLive > 0) {
@@ -338,20 +368,51 @@ export class RollingQuotaBudget {
     if (this.starts.length >= this.maxStartsPerWindow) {
       // Window holds its full budget: the earliest legal start is the moment
       // the OLDEST still-counted reservation ages out of the trailing window.
-      // The index is in range (length >= max >= 1); the `?? now` arm only
+      // The index is in range (length >= max >= 1); the fallback arm only
       // answers `noUncheckedIndexedAccess` and is unreachable.
-      const anchor = this.starts[this.starts.length - this.maxStartsPerWindow] ?? now;
-      nextStart = Math.max(now, anchor + this.windowMs);
+      const anchor = this.starts[this.starts.length - this.maxStartsPerWindow];
+      nextStart = Math.max(now, (anchor?.reservedAt ?? now) + this.windowMs);
     }
     const waited = Math.max(0, nextStart - now);
     if (waited > maxWaitMs) {
       // Refused WITHOUT reserving: the window keeps only admitted slots.
       return { status: "refused", waitedMs: waited, nextStartAt: nextStart };
     }
-    this.starts.push(nextStart);
+    const reservation: BudgetReservation = { reservedAt: nextStart };
+    this.insertReservation(reservation);
     if (waited > 0) {
       await this.sleep(waited);
     }
-    return { status: "admitted", waitedMs: waited };
+    return { status: "admitted", waitedMs: waited, reservation };
+  }
+
+  /**
+   * Inserts one reservation keeping {@link starts} chronologically ordered.
+   * The common case (slot at or after every existing entry) is a plain push;
+   * only an out-of-order arrival after a rollback walks back from the tail,
+   * which is bounded by the window budget (a few hundred entries per minute).
+   */
+  private insertReservation(reservation: BudgetReservation): void {
+    let index = this.starts.length;
+    while (index > 0 && this.starts[index - 1]!.reservedAt > reservation.reservedAt) {
+      index -= 1;
+    }
+    this.starts.splice(index, 0, reservation);
+  }
+
+  /**
+   * Rolls back one PROVISIONAL budget reservation returned by `waitForSlot`
+   * whose caller never reached request start (e.g. a downstream pacing-lane
+   * refusal). Invariants: the removal is matched by object identity, so it
+   * can never release a different live reservation; a token that was already
+   * rolled back or aged out of the window is a no-op (no double release);
+   * rollback never advances the window (remaining reservations and their
+   * timestamps are untouched).
+   */
+  public rollback(reservation: BudgetReservation): void {
+    const index = this.starts.indexOf(reservation);
+    if (index !== -1) {
+      this.starts.splice(index, 1);
+    }
   }
 }

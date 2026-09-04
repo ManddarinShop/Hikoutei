@@ -104,6 +104,22 @@ export const SYNC_ENV_KEYS = {
    * default (800 ms). Internal only — never part of the root public API.
    */
   RATE_LIMIT_INTERVAL_MS: "HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS",
+  /**
+   * Optional service-account credential POOL: a comma-separated list of
+   * ADC-format key-file paths, each a distinct Google quota principal. When
+   * set, per-identity pacing and round-robin signing multiply the effective
+   * per-user quota by the pool size. Absent (or blank) keeps the single
+   * `GOOGLE_APPLICATION_CREDENTIALS` credential exactly as before. An
+   * explicit pool overrides `providerOptions.serviceAccountKeyFiles`, like
+   * the pacing env override does for `rateLimitIntervalMs`; conversely, a
+   * NONEMPTY `providerOptions.serviceAccountKeyFiles` with this env key
+   * unset also forms the effective pool (ADC is then not required). The pool
+   * is RESOLVED AND VALIDATED on every startup path (it replaces the
+   * mandatory `GOOGLE_APPLICATION_CREDENTIALS` gate); the file list is
+   * PLUMBED into the provider only on the real-provider path — an injected
+   * test transport never uses the pool identities.
+   */
+  CREDENTIAL_POOL_FILES: "HIKOUTEI_SYNC_CREDENTIALS",
 } as const;
 
 /**
@@ -246,7 +262,7 @@ export interface AdoptDryRunResult {
 export type TypedSheetsWithSyncResult = LocalSyncRuntimeResult | RunningSyncServiceResult | AdoptDryRunResult;
 
 /** Required service-account fields validated before any remote contact. */
-const REQUIRED_CREDENTIAL_FIELDS = ["type", "client_email", "private_key"] as const;
+const REQUIRED_CREDENTIAL_FIELDS = ["type", "client_email", "private_key", "project_id"] as const;
 
 const SPREADSHEET_PATH_SEGMENT = "d";
 const SPREADSHEET_PARENT_SEGMENT = "spreadsheets";
@@ -323,9 +339,43 @@ export async function createTypedSheetsWithSync(
   // The client_email read here is retained for the 403 access-denied message.
   let clientEmail = "";
   try {
-    ({ clientEmail } = await validateSyncCredentialsFile(
-      env[SYNC_ENV_KEYS.CREDENTIALS_FILE],
-    ));
+    // Resolve the EFFECTIVE credential pool FIRST — env (`HIKOUTEI_SYNC_
+    // CREDENTIALS`) takes precedence, else a non-empty
+    // `providerOptions.serviceAccountKeyFiles` — so a valid pool-only
+    // deployment starts without `GOOGLE_APPLICATION_CREDENTIALS`: the primary
+    // ADC file is mandatory only when NO pool is configured from either
+    // source. With a pool, the 403 message names the FIRST pooled identity
+    // (every pool identity must be shared on the sheet anyway, so slot 0's
+    // email is the most actionable single hint) — never the ADC identity,
+    // which worker/adoption signing do not use. Every listed file is
+    // validated (readable + required service-account fields) BEFORE startup
+    // so a misconfigured pool fails fast with a stable HikouteiError;
+    // validation reads contents but never logs emails or key material beyond
+    // path-bearing messages. Like the always-enforced ADC gate this replaces,
+    // the pool is resolved even for an injected test transport (startup
+    // validation); it is PLUMBED into the provider only on the real-provider
+    // path.
+    const envPool = await resolveSyncCredentialPoolEnv(env);
+    const providerOptionPool = options.providerOptions?.serviceAccountKeyFiles;
+    const providerOptionPoolFiles =
+      providerOptionPool !== undefined && providerOptionPool.length > 0
+        ? providerOptionPool
+        : undefined;
+    const serviceAccountKeyFiles = envPool ?? providerOptionPoolFiles;
+    if (serviceAccountKeyFiles !== undefined) {
+      if (envPool === undefined) {
+        // providerOptions-supplied pool: same fail-closed whole-list check
+        // the env path applies inside `resolveSyncCredentialPoolEnv`.
+        for (const file of serviceAccountKeyFiles) {
+          await validateSyncCredentialsFile(file);
+        }
+      }
+      ({ clientEmail } = await validateSyncCredentialsFile(serviceAccountKeyFiles[0]));
+    } else {
+      ({ clientEmail } = await validateSyncCredentialsFile(
+        env[SYNC_ENV_KEYS.CREDENTIALS_FILE],
+      ));
+    }
     const pollingIntervalMs = parseIntervalEnv(
       env,
       SYNC_ENV_KEYS.POLLING_INTERVAL_MS,
@@ -343,6 +393,8 @@ export async function createTypedSheetsWithSync(
     const rateLimitIntervalMs = options.transport === undefined
       ? resolveSyncRateLimitIntervalMs(env)
       : undefined;
+    // NOTE: the credential pool (`serviceAccountKeyFiles`) is resolved and
+    // validated at the TOP of this block — see the pool-first comment above.
     const projections = withAdoptedTabOverrides(
       buildSyncProjections(options.entities, spreadsheetId),
       options.entities,
@@ -365,6 +417,11 @@ export async function createTypedSheetsWithSync(
         ? {
           ...options.providerOptions,
           ...(rateLimitIntervalMs === undefined ? {} : { rateLimitIntervalMs }),
+          // Real-provider path only: an injected stub transport is un-paced
+          // and never signs with pool identities.
+          ...(serviceAccountKeyFiles === undefined
+            ? {}
+            : { serviceAccountKeyFiles }),
         }
         : {
             // Test-injection path: the stub transport and ZERO pacing stay
@@ -561,6 +618,49 @@ export async function validateSyncCredentialsFile(
     );
   }
   return { clientEmail: record.client_email as string };
+}
+
+/**
+ * Parses and validates `HIKOUTEI_SYNC_CREDENTIALS`: a comma-separated list
+ * of service-account key-file paths forming the credential pool.
+ *
+ * Every entry is validated through the same fail-closed file check as the
+ * primary ADC credentials (readable JSON with the required service-account
+ * fields) BEFORE any remote contact, so a misconfigured pool fails fast with
+ * a stable `HikouteiError`. Returns `undefined` only when the key is absent
+ * or genuinely blank (empty/whitespace-only — the single-credential path,
+ * zero behavior change). A NON-blank value with an empty segment (e.g.
+ * `",,"` or `"a.json,,b.json"`) is rejected instead of being silently
+ * filtered into "unset": a typo'd pool must never degrade to the primary
+ * credential without a word. Diagnostics carry paths only — never client
+ * emails or key material.
+ */
+export async function resolveSyncCredentialPoolEnv(
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<readonly string[] | undefined> {
+  const raw = env[SYNC_ENV_KEYS.CREDENTIAL_POOL_FILES];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const files: string[] = [];
+  for (const entry of raw.split(",")) {
+    const file = entry.trim();
+    if (file === "") {
+      // Structured, redacted refusal: the raw value could legitimately
+      // contain paths, so only the stable code and a schema hint are
+      // reported — never the parsed segments.
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FIELD_MISSING,
+        `${SYNC_ENV_KEYS.CREDENTIAL_POOL_FILES} is invalid: empty list entry ` +
+          "(remove stray commas or unset the variable)",
+      );
+    }
+    files.push(file);
+  }
+  for (const file of files) {
+    // Awaited sequentially on purpose: every file is validated (and the
+    // FIRST failure names only its path) before the pool is accepted.
+    await validateSyncCredentialsFile(file);
+  }
+  return files;
 }
 
 /**

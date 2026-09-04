@@ -88,6 +88,10 @@ import {
 } from "./transport/quotaGovernor.js";
 import type { GoogleSheetsApiProviderDeps } from "./operations/shared.js";
 import { PromiseTailLock } from "./operations/shared.js";
+import type {
+  CredentialPacingPool,
+  CredentialPacingSlot,
+} from "./operations/shared.js";
 import {
   fastAppendRows,
 } from "./operations/fastAppend.js";
@@ -173,6 +177,8 @@ export class GoogleSheetsApiSyncProvider
   private readonly maxRequestStartWaitMs: number;
   private readonly now: () => number;
   private readonly onRequest: ((event: GoogleSheetsApiRequestEvent) => void) | undefined;
+  /** Per-identity pacing pool (2+ credentials only); undefined single-slot. */
+  private readonly credentialPacing: CredentialPacingPool | undefined;
   private readonly deps: GoogleSheetsApiProviderDeps;
 
   public constructor(options: GoogleSheetsApiSyncProviderOptions) {
@@ -234,43 +240,84 @@ export class GoogleSheetsApiSyncProvider
         );
       }
     }
+    // Credential-pool shape validation: every entry must be a non-empty
+    // path string. File readability/structure is validated by the sync
+    // auto-start bridge before startup and by the transport when it builds
+    // each client; an injected stub transport never touches the files.
+    const serviceAccountKeyFiles = options.serviceAccountKeyFiles ?? [];
+    for (const keyFile of serviceAccountKeyFiles) {
+      if (typeof keyFile !== "string" || keyFile.trim() === "") {
+        invalidProviderRequest(
+          "Google Sheets API sync provider",
+          "serviceAccountKeyFiles entries must be non-empty paths",
+        );
+      }
+    }
     this.spreadsheetId = options.spreadsheetId;
     this.definitions = options.definitions;
-    this.transport = options.transport ?? new GoogleSheetsApiHttpTransport({ requestTimeoutMs });
+    this.transport = options.transport ?? new GoogleSheetsApiHttpTransport({
+      requestTimeoutMs,
+      ...(serviceAccountKeyFiles.length === 0
+        ? {}
+        : { serviceAccountKeyFiles }),
+    });
     this.transportTimeoutMs = requestTimeoutMs;
     this.readTimeoutMs = readTimeoutMs;
     this.maxBatchBytes = maxBatchBytes;
     this.now = options.now ?? Date.now;
-    // Adaptive quota governor: the AIMD multiplier starts at 1x, so with no
-    // 429 ever observed the lanes pace exactly as before this wiring existed.
-    this.quotaGovernor = new QuotaPacingGovernor({
-      baseIntervalMs: intervalMs,
-      now: this.now,
-    });
-    this.readBudget = new RollingQuotaBudget({
-      maxStartsPerWindow: readBudgetPerMinute,
-      windowMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BUDGET_WINDOW_MS,
-      now: this.now,
-      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
-    });
-    this.writeBudget = new RollingQuotaBudget({
-      maxStartsPerWindow: writeBudgetPerMinute,
-      windowMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BUDGET_WINDOW_MS,
-      now: this.now,
-      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
-    });
-    this.readScheduler = new ReadQoSScheduler({
-      intervalMs,
-      getIntervalMs: () => this.quotaGovernor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ),
-      now: this.now,
-      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
-    });
-    this.writeLimiter = new RequestStartLimiter({
-      intervalMs,
-      getIntervalMs: () => this.quotaGovernor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE),
-      now: this.now,
-      ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
-    });
+    // One complete admission stack per pooled credential. Google Sheets
+    // quota is per principal, so N service accounts pace N independent
+    // identities; the round-robin selection in `admitRequestStart` binds
+    // each request's pacing AND its signing client to the same index. With
+    // one credential (or an unset pool) the flat single-slot wiring below
+    // is byte-identical to the pre-pool provider.
+    const slotCount = Math.max(serviceAccountKeyFiles.length, 1);
+    const slots: CredentialPacingSlot[] = [];
+    for (let slot = 0; slot < slotCount; slot += 1) {
+      // Adaptive quota governor: the AIMD multiplier starts at 1x, so with
+      // no 429 ever observed each lane paces exactly as before this wiring
+      // existed.
+      const quotaGovernor = new QuotaPacingGovernor({
+        baseIntervalMs: intervalMs,
+        now: this.now,
+      });
+      slots.push({
+        quotaGovernor,
+        readBudget: new RollingQuotaBudget({
+          maxStartsPerWindow: readBudgetPerMinute,
+          windowMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BUDGET_WINDOW_MS,
+          now: this.now,
+          ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+        }),
+        writeBudget: new RollingQuotaBudget({
+          maxStartsPerWindow: writeBudgetPerMinute,
+          windowMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BUDGET_WINDOW_MS,
+          now: this.now,
+          ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+        }),
+        readScheduler: new ReadQoSScheduler({
+          intervalMs,
+          getIntervalMs: () => quotaGovernor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ),
+          now: this.now,
+          ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+        }),
+        writeLimiter: new RequestStartLimiter({
+          intervalMs,
+          getIntervalMs: () => quotaGovernor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE),
+          now: this.now,
+          ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+        }),
+      });
+    }
+    const slot0 = slots[0] as CredentialPacingSlot;
+    this.quotaGovernor = slot0.quotaGovernor;
+    this.readBudget = slot0.readBudget;
+    this.writeBudget = slot0.writeBudget;
+    this.readScheduler = slot0.readScheduler;
+    this.writeLimiter = slot0.writeLimiter;
+    this.credentialPacing = slotCount < 2
+      ? undefined
+      : { slots, nextIndex: 0 };
     // Admission bound is independent of the pacing interval: a postcondition
     // read (paced on the WRITE limiter) is allowed to wait a few intervals for
     // the write slot, while the interval still spaces request STARTS for quota
@@ -297,6 +344,9 @@ export class GoogleSheetsApiSyncProvider
       writeBudget: this.writeBudget,
       quotaGovernor: this.quotaGovernor,
       maxRequestStartWaitMs: this.maxRequestStartWaitMs,
+      ...(this.credentialPacing === undefined
+        ? {}
+        : { credentialPacing: this.credentialPacing }),
       now: this.now,
       onRequest: this.onRequest,
     };

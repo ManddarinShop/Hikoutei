@@ -42,9 +42,15 @@ describe("RollingQuotaBudget", () => {
       sleep: async () => undefined,
     });
 
-    expect(await budget.waitForSlot(0)).toEqual({ status: "admitted", waitedMs: 0 });
-    expect(await budget.waitForSlot(0)).toEqual({ status: "admitted", waitedMs: 0 });
-    expect(await budget.waitForSlot(0)).toEqual({ status: "admitted", waitedMs: 0 });
+    expect(await budget.waitForSlot(0)).toEqual(
+      expect.objectContaining({ status: "admitted", waitedMs: 0 }),
+    );
+    expect(await budget.waitForSlot(0)).toEqual(
+      expect.objectContaining({ status: "admitted", waitedMs: 0 }),
+    );
+    expect(await budget.waitForSlot(0)).toEqual(
+      expect.objectContaining({ status: "admitted", waitedMs: 0 }),
+    );
     // Window holds its full budget: the fourth start is refused a slot a
     // whole window out, and the refusal reserves NOTHING.
     expect(await budget.waitForSlot(0)).toEqual({
@@ -106,7 +112,9 @@ describe("RollingQuotaBudget", () => {
     // window bound is exclusive), so a fresh caller is admitted immediately
     // despite the earlier refusals: refusals poisoned nothing.
     now = 60_000;
-    expect(await budget.waitForSlot(0)).toEqual({ status: "admitted", waitedMs: 0 });
+    expect(await budget.waitForSlot(0)).toEqual(
+      expect.objectContaining({ status: "admitted", waitedMs: 0 }),
+    );
   });
 
   it("waits for the window slot when the bounded wait covers it", async () => {
@@ -119,10 +127,98 @@ describe("RollingQuotaBudget", () => {
         now += ms;
       },
     });
-    expect(await budget.waitForSlot(2_000)).toEqual({ status: "admitted", waitedMs: 0 });
+    expect(await budget.waitForSlot(2_000)).toEqual(
+      expect.objectContaining({ status: "admitted", waitedMs: 0 }),
+    );
     // Second caller: its slot is the moment the first ages out.
-    expect(await budget.waitForSlot(2_000)).toEqual({ status: "admitted", waitedMs: 1_000 });
+    expect(await budget.waitForSlot(2_000)).toEqual(
+      expect.objectContaining({ status: "admitted", waitedMs: 1_000 }),
+    );
     expect(now).toBe(1_000);
+  });
+
+  it("rolls back a provisional reservation without advancing the window", async () => {
+    // Frozen clock, budget 1/window: after an admitted reservation the window
+    // is full until t=1_000. A rollback must free EXACTLY that reservation:
+    // the window stays at its original position (no advance), a later caller
+    // admits instantly at the SAME slot, and re-rolling back the released
+    // token can never free a different live reservation.
+    const budget = new RollingQuotaBudget({
+      maxStartsPerWindow: 1,
+      windowMs: 1_000,
+      now: () => 0,
+      sleep: async () => undefined,
+    });
+    const first = await budget.waitForSlot(1_000);
+    if (first.status !== "admitted") {
+      throw new Error("expected the first caller to be admitted");
+    }
+    expect(budget.reservedCount()).toBe(1);
+    expect((await budget.waitForSlot(0)).status).toBe("refused");
+
+    budget.rollback(first.reservation);
+    expect(budget.reservedCount()).toBe(0);
+    // Same position, no advance: the retry admits at t=0 with zero wait
+    // (pre-rollback it could only start at t=1_000).
+    const retry = await budget.waitForSlot(0);
+    expect(retry).toEqual(
+      expect.objectContaining({ status: "admitted", waitedMs: 0 }),
+    );
+    // Double-rollback safety: the already-released token is a no-op and
+    // leaves the LIVE retry reservation counted.
+    budget.rollback(first.reservation);
+    expect(budget.reservedCount()).toBe(1);
+    // The live token rolls back exactly once, freeing its own slot.
+    if (retry.status !== "admitted") {
+      throw new Error("expected the retry to be admitted");
+    }
+    budget.rollback(retry.reservation);
+    expect(budget.reservedCount()).toBe(0);
+  });
+
+  it("keeps reservations chronological across rollback + out-of-order re-admission", async () => {
+    // Terra round-3 regression: rollback removed an OLDER reservation while
+    // a later queued (future-`reservedAt`) reservation stayed in the list, so
+    // a new reservation could be appended BEHIND it. The prefix expiry scan
+    // stops at the first future entry, so the trailing expired entry was
+    // retained forever and leaked budget capacity (a later caller was
+    // refused even though only one live reservation remained).
+    let now = 0;
+    const budget = new RollingQuotaBudget({
+      maxStartsPerWindow: 2,
+      windowMs: 1_000,
+      now: () => now,
+      sleep: async () => undefined,
+    });
+    const w = await budget.waitForSlot(0); // warm-up reservation @0
+    const a = await budget.waitForSlot(0); // A @0 — window now full
+    const b = await budget.waitForSlot(2_000); // queued: B reserved @1_000
+    if (w.status !== "admitted" || a.status !== "admitted" || b.status !== "admitted") {
+      throw new Error("expected the warm-up, A, and queued B to be admitted");
+    }
+    // Roll back the OLDER reservations: only the future-queued B remains.
+    budget.rollback(w.reservation);
+    budget.rollback(a.reservation); // [B@1_000]
+    // C now reserves @0 — EARLIER than the trailing queued B, so a blind
+    // append would break the chronological order.
+    const c = await budget.waitForSlot(0);
+    if (c.status !== "admitted") {
+      throw new Error("expected C to be admitted after the rollbacks");
+    }
+
+    // C must age out on its OWN schedule: past t=1_001 only B is live, so a
+    // new caller admits immediately instead of being blocked behind a leaked
+    // expired entry (pre-fix: the scan stopped at B, C leaked, and the
+    // still-full window refused D at nextStart=2_001).
+    now = 1_001;
+    const d = await budget.waitForSlot(0);
+    expect(d).toEqual(expect.objectContaining({ status: "admitted", waitedMs: 0 }));
+    // Both live reservations remain (expired C was swept, not leaked).
+    expect(budget.reservedCount()).toBe(2);
+    // Rolling back the already-aged-out token is a no-op: it can never free
+    // the live D reservation behind it.
+    budget.rollback(c.reservation);
+    expect(budget.reservedCount()).toBe(2);
   });
 
   it("treats an Infinity budget as unlimited and rejects invalid rates", async () => {

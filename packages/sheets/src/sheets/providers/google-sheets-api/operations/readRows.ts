@@ -49,6 +49,7 @@ import {
   quoteA1SheetName,
 } from "../model/valueNormalization.js";
 import {
+  credentialBinding,
   definitionForPhysicalSheet,
   requireValidBatchUpdateReply,
   runRead,
@@ -96,13 +97,14 @@ export async function readRowsBatch(
     }
     return { request, definition };
   });
-  const raw = await runRead(deps, () =>
+  const raw = await runRead(deps, (credentialIndex) =>
     deps.transport.getSpreadsheet({
       spreadsheetId: deps.spreadsheetId,
       ranges: routes.map(({ request }) =>
         `${quoteA1SheetName(request.sheetName)}!A1:${rangeEndColumnLetters(request.registeredRange)}1048576`),
       fields: GOOGLE_SHEETS_API_VALUES_FIELDS,
       timeoutMs: deps.readTimeoutMs,
+      ...credentialBinding(credentialIndex),
     }));
   const document = parseSpreadsheetDocument(raw, "table read");
   const results: SyncTableRowsResult[] = [];
@@ -222,10 +224,11 @@ export async function observeSnapshots(
         });
       }
     }
-    const response = await runWrite(deps, () =>
+    const response = await runWrite(deps, (credentialIndex) =>
       deps.transport.batchUpdate({
         spreadsheetId: deps.spreadsheetId,
         requests: anchorRequests,
+        ...credentialBinding(credentialIndex),
       }));
     requireValidBatchUpdateReply(response, anchorRequests.length);
 

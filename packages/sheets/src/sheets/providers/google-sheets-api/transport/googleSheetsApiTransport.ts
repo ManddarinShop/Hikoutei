@@ -10,6 +10,7 @@
  */
 
 import { GoogleAuth } from "google-auth-library";
+import { readFileSync } from "node:fs";
 import { sheets, type sheets_v4 } from "@googleapis/sheets";
 import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
@@ -25,6 +26,7 @@ import { GOOGLE_SHEETS_API_SCOPES } from "../constants.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
+  invalidProviderRequest,
 } from "../errors.js";
 import {
   parseRawErrorRecord,
@@ -60,15 +62,53 @@ export type {
 } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 
 /** Auth type accepted by the sheets factory (may resolve to a nested version). */
-type SheetsAuth = NonNullable<Parameters<typeof sheets>[0]["auth"]>;
+export type SheetsAuth = NonNullable<Parameters<typeof sheets>[0]["auth"]>;
+
+/**
+ * Advances (and returns) the next round-robin client index for a pool.
+ *
+ * Shared by the HTTP transport's own fallback cursor and the credential-pool
+ * tests: a preferred (provider-admitted) index is returned WITHOUT advancing
+ * the cursor, so admission-bound calls never skew the fallback rotation.
+ * The cursor is a mutable carrier so callers keep the rotation across
+ * requests; `clientCount` must be ≥ 1.
+ */
+export function nextPooledClientIndex(
+  cursor: { next: number },
+  clientCount: number,
+  preferredIndex: number | undefined,
+): number {
+  if (preferredIndex !== undefined) {
+    return preferredIndex;
+  }
+  const index = cursor.next % clientCount;
+  cursor.next = (index + 1) % clientCount;
+  return index;
+}
 
 /** Options for the real HTTP transport backed by @googleapis/sheets. */
 export interface GoogleSheetsApiHttpTransportOptions {
   /**
    * Injected auth for tests/alternate credentials. Defaults to Application
    * Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` service account).
+   * Ignored when `authPool`/`serviceAccountKeyFiles` build a pool.
    */
   readonly auth?: SheetsAuth;
+  /**
+   * Injected credential pool (one auth per Google quota principal). When
+   * non-empty it replaces the single `auth`/ADC client; each pool entry gets
+   * its own `sheets()` client. Provided for credential-free tests and for
+   * callers that own auth construction; production wiring uses
+   * `serviceAccountKeyFiles` instead.
+   */
+  readonly authPool?: readonly SheetsAuth[];
+  /**
+   * Service-account key-file pool: each entry is read and turned into its
+   * own `GoogleAuth` client at construction (fail fast on unreadable or
+   * malformed files). Error messages carry the PATH only — never the file
+   * contents, client email, or any key material.
+   */
+  readonly serviceAccountKeyFiles?: readonly string[];
   readonly requestTimeoutMs: number;
 }
 
@@ -81,26 +121,63 @@ export interface GoogleSheetsApiHttpTransportOptions {
  * `GoogleSheetsApiTransportError` before leaving this module.
  */
 export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
-  private readonly client: ReturnType<typeof sheets>;
+  private readonly clients: readonly ReturnType<typeof sheets>[];
+  /** Fallback rotation cursor for requests WITHOUT an admitted index. */
+  private readonly poolCursor: { next: number } = { next: 0 };
   private readonly requestTimeoutMs: number;
 
   public constructor(options: GoogleSheetsApiHttpTransportOptions) {
     // google-auth-library may resolve to a version nested under googleapis-common
     // that differs from the top-level one; the boundary cast keeps the SDK
     // version mismatch contained in this module.
-    const auth = options.auth ??
-      (new GoogleAuth({ scopes: [...GOOGLE_SHEETS_API_SCOPES] }) as unknown as SheetsAuth);
+    const pool: SheetsAuth[] = [...(options.authPool ?? [])];
+    for (const keyFile of options.serviceAccountKeyFiles ?? []) {
+      pool.push(loadServiceAccountAuth(keyFile));
+    }
+    if (pool.length === 0) {
+      pool.push(options.auth ??
+        (new GoogleAuth({ scopes: [...GOOGLE_SHEETS_API_SCOPES] }) as unknown as SheetsAuth));
+    }
     // The sheets factory accepts GoogleAuth; the narrow wrapper below owns the
-    // SDK boundary so no other provider code touches the client type.
-    this.client = sheets({ version: "v4", auth });
+    // SDK boundary so no other provider code touches the client type. One
+    // client per pooled credential; a 1-client pool is the historical
+    // single-auth transport (no rotation ever changes the selection).
+    this.clients = pool.map((auth) => sheets({ version: "v4", auth }));
     this.requestTimeoutMs = options.requestTimeoutMs;
+  }
+
+  /**
+   * Picks the client for one request: the admitted pool identity when the
+   * request carries a `credentialIndex` (provider-bound admission and
+   * signing), otherwise the next round-robin entry (or the single default
+   * client, byte-identical to the pre-pool transport).
+   */
+  private clientFor(credentialIndex: number | undefined): ReturnType<typeof sheets> {
+    if (credentialIndex !== undefined) {
+      const client = this.clients[credentialIndex];
+      if (client === undefined) {
+        // Fail CLOSED before any wire contact: signing with a different
+        // identity than the one admission paced against would silently
+        // defeat the per-identity quota contract.
+        invalidProviderRequest(
+          "Google Sheets API transport",
+          "credentialIndex is outside the client pool",
+        );
+      }
+      return client;
+    }
+    if (this.clients.length === 1) {
+      return this.clients[0] as ReturnType<typeof sheets>;
+    }
+    const index = nextPooledClientIndex(this.poolCursor, this.clients.length, undefined);
+    return this.clients[index] as ReturnType<typeof sheets>;
   }
 
   public async getSpreadsheet(
     request: GoogleSheetsApiGetSpreadsheetRequest,
   ): Promise<unknown> {
     try {
-      const response = await this.client.spreadsheets.get(
+      const response = await this.clientFor(request.credentialIndex).spreadsheets.get(
         {
           spreadsheetId: request.spreadsheetId,
           ranges: [...request.ranges],
@@ -120,7 +197,7 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
     request: GoogleSheetsApiValuesGetRequest,
   ): Promise<GoogleSheetsApiValuesGetResponse> {
     try {
-      const response = await this.client.spreadsheets.values.get(
+      const response = await this.clientFor(request.credentialIndex).spreadsheets.values.get(
         {
           spreadsheetId: request.spreadsheetId,
           range: request.range,
@@ -139,7 +216,7 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
     request: GoogleSheetsApiBatchUpdateRequest,
   ): Promise<unknown> {
     try {
-      const response = await this.client.spreadsheets.batchUpdate(
+      const response = await this.clientFor(request.credentialIndex).spreadsheets.batchUpdate(
         {
           spreadsheetId: request.spreadsheetId,
           // The body comes from the same builder that
@@ -156,6 +233,73 @@ export class GoogleSheetsApiHttpTransport implements GoogleSheetsApiTransport {
       throw mapped;
     }
   }
+}
+
+/**
+ * Required service-account key-file fields, checked by SHAPE (non-blank
+ * string) only at load. Mirrors the sync auto-start bridge's mandatory
+ * validation so a pool file that slips past the bridge still cannot build a
+ * broken client.
+ */
+const SERVICE_ACCOUNT_KEY_FIELDS = ["type", "client_email", "private_key", "project_id"] as const;
+
+/**
+ * Builds one pooled `GoogleAuth` from a service-account key file.
+ *
+ * Reads, JSON-parses, and SHAPE-validates the file at transport construction
+ * so a misconfigured pool fails fast and locally — a malformed key file must
+ * never create a client that only breaks on first use. Required
+ * service-account fields (`type`, `client_email`, `private_key`,
+ * `project_id` as non-blank strings) are checked by shape only; failure
+ * messages carry the path only, and the file contents (client email, private
+ * key) never leave this function — the parsed JSON goes straight into
+ * `GoogleAuth.credentials`.
+ */
+function loadServiceAccountAuth(keyFile: string): SheetsAuth {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(keyFile, "utf8")) as unknown;
+  } catch {
+    throw new GoogleSheetsApiTransportError(
+      GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR,
+      `Unable to read the service-account key file: ${keyFile}`,
+      absentValue(),
+      absentValue(),
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new GoogleSheetsApiTransportError(
+      GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR,
+      `Service-account key file is not a JSON object: ${keyFile}`,
+      absentValue(),
+      absentValue(),
+    );
+  }
+  // Validate the service-account shape ONCE at load: without this, ANY JSON
+  // object builds a GoogleAuth client and the failure surfaces mid-run on
+  // first signing attempt instead of at construction. Shape check only —
+  // no field value is ever logged or embedded in an error message.
+  const record = parsed as Record<string, unknown>;
+  const invalidFields = SERVICE_ACCOUNT_KEY_FIELDS.filter(
+    (field) => typeof record[field] !== "string" || (record[field] as string).trim() === "",
+  );
+  if (invalidFields.length > 0) {
+    throw new GoogleSheetsApiTransportError(
+      GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.NETWORK_ERROR,
+      // Field NAMES are non-sensitive schema info; values never appear.
+      `Service-account key file is missing required fields (${invalidFields.join(", ")}): ${keyFile}`,
+      absentValue(),
+      absentValue(),
+    );
+  }
+  // The parsed key JSON goes straight into GoogleAuth.credentials; the cast
+  // keeps the google-auth-library version-shape mismatch inside this module
+  // (same boundary-cast rationale as the SheetsAuth alias above). The file
+  // contents never appear in any log or error message.
+  return new GoogleAuth({
+    scopes: [...GOOGLE_SHEETS_API_SCOPES],
+    credentials: parsed,
+  } as unknown as ConstructorParameters<typeof GoogleAuth>[0]) as unknown as SheetsAuth;
 }
 
 /**

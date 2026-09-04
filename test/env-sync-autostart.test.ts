@@ -1829,3 +1829,126 @@ describe("env-driven sync auto-start", () => {
     });
   });
 });
+
+describe("pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC)", () => {
+  const tempDirs: string[] = [];
+  const startedServices: InternalSyncService[] = [];
+
+  afterEach(async () => {
+    while (startedServices.length > 0) {
+      const service = startedServices.pop()!;
+      await service.close().catch(() => undefined);
+      await service.hikoutei.close().catch(() => undefined);
+    }
+    while (tempDirs.length > 0) {
+      rmSync(tempDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function writePoolKey(dir: string, name: string, email: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify({
+      type: "service_account",
+      project_id: "hikoutei-test",
+      private_key_id: "k1",
+      private_key: "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
+      client_email: email,
+      token_uri: "https://oauth2.googleapis.com/token",
+    }));
+    return path;
+  }
+
+  it("starts with a valid pool and NO GOOGLE_APPLICATION_CREDENTIALS", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-start-"));
+    tempDirs.push(dir);
+    const a = writePoolKey(dir, "sa-a.json", "pool-a@example.com");
+    const b = writePoolKey(dir, "sa-b.json", "pool-b@example.com");
+    const spreadsheet = new StubSpreadsheet();
+    const result = await createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-1/edit",
+        [SYNC_ENV_KEYS.CREDENTIAL_POOL_FILES]: `${a},${b}`,
+        // GOOGLE_APPLICATION_CREDENTIALS deliberately UNSET: pool resolution
+        // is validated FIRST, so the ADC file is only required when no pool
+        // is configured.
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+    });
+    expect(result.kind).toBe("sync");
+    if (result.kind === "sync") {
+      startedServices.push(result.service);
+    }
+  });
+
+  it("starts with a providerOptions-only pool (no env pool, no ADC)", async () => {
+    // Terra round-3 regression: the EFFECTIVE pool is resolved from the env
+    // first, else providerOptions.serviceAccountKeyFiles. A non-empty
+    // providerOptions pool must skip the ADC requirement on the startup path
+    // exactly like the env pool does (worker/adoption signing already uses
+    // the providerOptions pool, so requiring ADC here was inconsistent).
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-start-"));
+    tempDirs.push(dir);
+    const a = writePoolKey(dir, "sa-po-a.json", "po-a@example.com");
+    const b = writePoolKey(dir, "sa-po-b.json", "po-b@example.com");
+    const spreadsheet = new StubSpreadsheet();
+    const result = await createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-3/edit",
+        // HIKOUTEI_SYNC_CREDENTIALS and GOOGLE_APPLICATION_CREDENTIALS
+        // both deliberately UNSET: only providerOptions carries the pool.
+      },
+      providerOptions: { serviceAccountKeyFiles: [a, b] },
+      transport: new StubSheetsTransport(spreadsheet),
+    });
+    expect(result.kind).toBe("sync");
+    if (result.kind === "sync") {
+      startedServices.push(result.service);
+    }
+  });
+
+  it("names the providerOptions pool slot-0 identity in the 403 hint", async () => {
+    // The 403 access-denied hint must derive from the EFFECTIVE pool's slot 0
+    // (the identity startup validation and adoption signing ride), never
+    // from ADC — the ADC file does not exist in this deployment shape.
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-403-"));
+    tempDirs.push(dir);
+    const a = writePoolKey(dir, "sa-hint-a.json", "hint-slot-0@example.com");
+    const b = writePoolKey(dir, "sa-hint-b.json", "hint-slot-1@example.com");
+    const transport = new StubSheetsTransport(new StubSpreadsheet());
+    transport.fault = { kind: "http", status: 403, apiErrorStatus: "PERMISSION_DENIED" };
+    await expect(createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-4/edit",
+      },
+      providerOptions: { serviceAccountKeyFiles: [a, b] },
+      transport,
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.SYNC_SPREADSHEET_ACCESS_DENIED,
+      message: expect.stringContaining("hint-slot-0@example.com"),
+    });
+  });
+
+  it("still fails closed without a pool AND without ADC credentials", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-2/edit",
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
+    });
+  });
+});

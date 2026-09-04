@@ -122,7 +122,18 @@ function createSyncEnginePorts(): SyncEngineCompositionPorts {
     createAdoptionReaderTransport(
       providerOptions: GoogleSheetsApiProviderOptions | undefined,
     ): GoogleSheetsApiAdoptionReader {
+      // Adoption is a read-only ONE-SHOT bootstrap path (existing-tab
+      // enumeration/values before the worker exists), so it never needs the
+      // pool's per-identity pacing/AIMD (those live in the sync provider's
+      // transport). But a pool-only deployment has no ADC file: the reader
+      // must sign as the FIRST pooled identity — the same principal the
+      // startup 403 hint names — or adoption fails with the wrong-principal
+      // error. Passing only keyFiles[0] builds a single-client transport:
+      // deterministic slot 0, never the fallback round-robin. Without a
+      // pool, this stays the historical ADC-only reader.
+      const poolKeyFile = providerOptions?.serviceAccountKeyFiles?.[0];
       return new GoogleSheetsApiHttpTransport({
+        ...(poolKeyFile === undefined ? {} : { serviceAccountKeyFiles: [poolKeyFile] }),
         requestTimeoutMs:
           providerOptions?.requestTimeoutMs ?? GOOGLE_SHEETS_API_DEFAULTS.REQUEST_TIMEOUT_MS,
       });

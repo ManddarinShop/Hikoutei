@@ -32,6 +32,7 @@ import type { BuiltApplyBatch } from "../model/batchBuilder.js";
 import type { PreflightContext } from "../model/preflightContext.js";
 import { refreshReceiptForWrite } from "./preflightOp.js";
 import {
+  credentialBinding,
   requireValidBatchUpdateReply,
   runWrite,
   type GoogleSheetsApiProviderDeps,
@@ -62,10 +63,11 @@ export async function executeBatchUpdate(
   batch: BuiltApplyBatch,
   telemetry: WriteBatchTelemetry,
 ): Promise<void> {
-  const response = await runWrite(deps, () =>
+  const response = await runWrite(deps, (credentialIndex) =>
     deps.transport.batchUpdate({
       spreadsheetId: deps.spreadsheetId,
       requests: batch.requests,
+      ...credentialBinding(credentialIndex),
     }), {
     requestCount: batch.requests.length,
     bodyBytes: batch.bytes,

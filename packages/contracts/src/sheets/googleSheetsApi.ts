@@ -246,8 +246,25 @@ export type GoogleSheetsApiWriteRequest =
     readonly sheetId: number;
   };
 
+/**
+ * Optional pool-identity binding carried by every transport request.
+ *
+ * When the provider runs with a credential pool (N > 1 service accounts),
+ * request-start admission selects the pacing slot index and threads it here
+ * so the transport signs the call with the SAME credential the admission
+ * paced against — the budget/interval an identity respected and the client
+ * that hits the wire can never disagree. Absent means "no pool binding":
+ * a single-credential provider (the historical default) never sets it, and
+ * the transport then falls back to its own round-robin cursor over the pool
+ * (or its single default client).
+ */
+export interface GoogleSheetsApiCredentialBinding {
+  /** Zero-based index into the transport's credential pool. */
+  readonly credentialIndex?: number;
+}
+
 /** Request shape of one `spreadsheets.get` call. */
-export interface GoogleSheetsApiGetSpreadsheetRequest {
+export interface GoogleSheetsApiGetSpreadsheetRequest extends GoogleSheetsApiCredentialBinding {
   readonly spreadsheetId: string;
   readonly ranges: readonly string[];
   readonly fields: string;
@@ -260,13 +277,13 @@ export interface GoogleSheetsApiGetSpreadsheetRequest {
 }
 
 /** Request shape of one `spreadsheets.batchUpdate` call. */
-export interface GoogleSheetsApiBatchUpdateRequest {
+export interface GoogleSheetsApiBatchUpdateRequest extends GoogleSheetsApiCredentialBinding {
   readonly spreadsheetId: string;
   readonly requests: readonly GoogleSheetsApiWriteRequest[];
 }
 
 /** Request shape of one `spreadsheets.values.get` call. */
-export interface GoogleSheetsApiValuesGetRequest {
+export interface GoogleSheetsApiValuesGetRequest extends GoogleSheetsApiCredentialBinding {
   readonly spreadsheetId: string;
   readonly range: string;
   readonly timeoutMs?: number;
@@ -306,6 +323,13 @@ export interface GoogleSheetsApiRequestEvent {
   readonly code: Presence<string>;
   /** Pacing wait before the request-start slot was granted (0 when none). */
   readonly pacingWaitMs?: number;
+  /**
+   * Pool identity (zero-based credential index) this request was admitted
+   * AND signed with. Absent on the single-credential path, so events stay
+   * byte-identical to the pre-pool behavior; only the index is ever
+   * reported — never an email, client id, or file path.
+   */
+  readonly credentialIndex?: number;
   /** Number of batchUpdate requests in the written batch. */
   readonly requestCount?: number;
   /** Serialized batchUpdate body-size estimate in bytes. */
@@ -328,6 +352,18 @@ export interface GoogleSheetsApiRequestEvent {
 export interface GoogleSheetsApiProviderOptions {
   /** Stub transport for tests; omitted builds the real ADC-backed client. */
   readonly transport?: GoogleSheetsApiTransport;
+  /**
+   * Service-account key-file pool: each entry is a distinct ADC-format JSON
+   * key file and therefore a distinct Google quota principal. When 2+ files
+   * are configured, request-start pacing (interval, per-minute budgets, and
+   * AIMD feedback) runs per identity and outbound calls round-robin across
+   * the pool, multiplying the effective per-user read/write quota by N.
+   * One entry (or absent) keeps the single-credential path byte-identical
+   * to the pre-pool behavior. The provider validates entry SHAPE only; file
+   * readability/structure is validated by the sync auto-start bridge before
+   * startup, and by the transport when it builds each client.
+   */
+  readonly serviceAccountKeyFiles?: readonly string[];
   /** Per-request timeout; defaults to 60 seconds, bounded 1s..120s. */
   readonly requestTimeoutMs?: number;
   /**
