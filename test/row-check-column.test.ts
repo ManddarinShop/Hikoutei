@@ -529,17 +529,38 @@ describe("rowNumbers-scoped observation (targeted full-field band read)", () => 
     expect(observed?.anchors.existing).toBe(2);
   });
 
-  it("degrades to the historical whole-table range when the band plan overflows the budget", async () => {
+  it("expands an over-budget band plan into sequential band requests (no whole-table degradation)", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedInputTab(spreadsheet);
     const transport = new StubSheetsTransport(spreadsheet);
     const provider = buildProvider(transport);
-    // 45 scattered rows would need 45 band ranges + header (> 40 budget).
+    // 45 scattered rows need 45 band ranges + header (> 40 per-request
+    // budget): the unified engine SPREADS the plan across sequential
+    // requests instead of degrading to one uncapped whole-table read.
     const rowNumbers = Array.from({ length: 45 }, (_, index) => index * 2 + 2);
 
-    await provider.observeSnapshots([inputSnapshotRequest({ rowNumbers })]);
-    const last = transport.getSpreadsheetRequests[transport.getSpreadsheetRequests.length - 1];
-    expect(last?.ranges).toEqual(["'Users_Input'!A1:D1048576"]);
+    const [observed] = await provider.observeSnapshots([inputSnapshotRequest({ rowNumbers })]);
+    const dataCalls = transport.getSpreadsheetRequests.filter((request) => request.ranges.length > 0);
+    const bandRanges = dataCalls.flatMap((request) => [...request.ranges]);
+    // Header + every requested row exactly once, ≤ 40 ranges per request,
+    // and no whole-table range anywhere.
+    expect(dataCalls.every((request) => request.ranges.length <= 40)).toBe(true);
+    expect(bandRanges.filter((range) => range.endsWith(":D1"))).toHaveLength(1);
+    const covered = bandRanges
+      .flatMap((range) => {
+        const match = /!A(\d+):D(\d+)$/.exec(range);
+        if (match === null) return [];
+        return Array.from({ length: Number(match[2]) - Number(match[1]) + 1 },
+          (_, offset) => Number(match[1]) + offset);
+      })
+      .filter((row) => row >= 2);
+    expect([...new Set(covered)].sort((a, b) => a - b))
+      .toEqual([...rowNumbers].sort((a, b) => a - b));
+    // The banded reply reassembles into one logical grid the historical
+    // snapshot rules run over (this fixture's tab is header-only, so every
+    // targeted row resolves blank — the point is the plan covered them all
+    // without one uncapped whole-table request).
+    expect(observed?.snapshot.rows).toHaveLength(0);
   });
 });
 

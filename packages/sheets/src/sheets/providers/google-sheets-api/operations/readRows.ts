@@ -49,7 +49,6 @@ import {
   quoteA1SheetName,
 } from "../model/valueNormalization.js";
 import {
-  createRawResponseMeta,
   definitionForPhysicalSheet,
   requireValidBatchUpdateReply,
   runRead,
@@ -57,6 +56,7 @@ import {
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
+import { createEngineRuntime, ensureSheetRowBounds } from "./readEngine.js";
 import { observationTargetFor } from "./preflightOp.js";
 
 /** Reads one registered table's literal values with one REST read. */
@@ -270,25 +270,23 @@ export async function readObservedTabs(
   const fields = lightweight
     ? GOOGLE_SHEETS_API_LIGHTWEIGHT_OBSERVATION_FIELDS
     : GOOGLE_SHEETS_API_OBSERVATION_FIELDS;
-  // The RAW transport document is measured (not the parsed Map result) so the
-  // telemetry responseBytes reflect the true payload size for the
-  // preflight-vs-polling read-gap question. The measurement is gated on the
-  // telemetry sink exactly like runRead's own estimate: a logging-off
-  // deployment must never stringify the multi-MB raw document.
-  const capture = createRawResponseMeta(deps);
-  const tabs = await runRead(deps, () =>
-    readTabGrids(
-      deps.transport,
-      deps.spreadsheetId,
-      requests.map((request) => ({
-        sheetName: request.sheetName,
-        registeredRange: request.registeredRange,
-        ...(request.rowNumbers === undefined ? {} : { rowNumbers: request.rowNumbers }),
-      })),
-      fields,
-      deps.readTimeoutMs,
-      capture.onRawResponse,
-    ), "polling", capture.meta);
+  // Unified read engine: the batch's bands run as sequential paced polling
+  // requests (one telemetry event + RAW responseBytes measurement each),
+  // with every tab's all-row band chunked against its authoritative row
+  // bound. Cold titles are settled by ONE range-less metadata enumeration
+  // on the polling lane (once per title per provider instance; every later
+  // response's gridProperties refreshes the cache).
+  await ensureSheetRowBounds(deps, "polling", requests.map((request) => request.sheetName));
+  const engine = createEngineRuntime(deps, "polling", "observation grid");
+  const tabs = await readTabGrids(
+    engine,
+    requests.map((request) => ({
+      sheetName: request.sheetName,
+      registeredRange: request.registeredRange,
+      ...(request.rowNumbers === undefined ? {} : { rowNumbers: request.rowNumbers }),
+    })),
+    fields,
+  );
   return tabs;
 }
 

@@ -27,12 +27,14 @@ import type {
   SyncEffectPostconditionResult,
   SyncEffectResult,
   SyncProjectionEffect,
+  SyncProjection,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { SYNC_POSTCONDITION_MODES } from "@hikoutei/contracts/sheets/constants.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
 } from "@hikoutei/contracts/sheets/errors.js";
+import type { SyncMissingTabOperation } from "@hikoutei/contracts/sheets/errors.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import type { Presence } from "@hikoutei/contracts/state/index.js";
 import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
@@ -40,6 +42,7 @@ import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "..
 import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS } from "../model/preflightFields.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
+import type { ParsedSheet } from "../model/preflightContext.js";
 import { planEffectBatch } from "../model/planner.js";
 import { currentHash } from "../model/plannerWorkingRow.js";
 import {
@@ -64,12 +67,12 @@ import {
   runWrite,
   validateRoute,
   type GoogleSheetsApiProviderDeps,
+  type RequestStartPacing,
 } from "./shared.js";
 import {
   enumeratePreflightSheets,
   readPreflight,
   readPreflightDataForEnumeratedRoutes,
-  readPreflightForRoutes,
   refreshReceiptForWrite,
   verifyPreflightContexts,
   type PreflightRouteInput,
@@ -77,17 +80,39 @@ import {
 } from "./preflightOp.js";
 
 /**
+ * Route identity from the five route-defining fields. Shared by the effect
+ * grouping (`effectRouteKey`), the fast-append row grouping, and the
+ * absorbed-probe route matching so a probe effect and its batch route can
+ * only ever agree on one canonical key shape.
+ */
+export function routeKeyOf(route: {
+  readonly physicalSheetId: string;
+  readonly projection: SyncProjection;
+  readonly sheetName: string;
+  readonly registeredRange: string;
+  readonly schemaVersion: number;
+}): string {
+  return [
+    route.physicalSheetId,
+    route.projection,
+    route.sheetName,
+    route.registeredRange,
+    route.schemaVersion,
+  ].join("\u0000");
+}
+
+/**
  * Derived per-route identity of one provider effect so effects spanning
  * multiple tabs can be grouped and planned against their own tab context.
  */
 export function effectRouteKey(effect: SyncProjectionEffect): string {
-  return [
-    effect.physicalSheetId,
-    effect.projection,
-    effect.payload.sheetName,
-    effect.payload.registeredRange,
-    effect.payload.schemaVersion,
-  ].join("\u0000");
+  return routeKeyOf({
+    physicalSheetId: effect.physicalSheetId,
+    projection: effect.projection,
+    sheetName: effect.payload.sheetName,
+    registeredRange: effect.payload.registeredRange,
+    schemaVersion: effect.payload.schemaVersion,
+  });
 }
 
 /**
@@ -120,6 +145,15 @@ export interface PreparedSingleRouteApply extends PreparedApplyEffects {
   readonly included: readonly EffectPlan[];
   /** Receipt timestamp resolved at preflight so budget and write agree. */
   readonly updatedAt: string;
+  /**
+   * Classifications for the request's absorbed same-route probe effects,
+   * decided at preflight on this batch's own reads (design §10.3 D2). The
+   * write stage echoes them into the result unchanged: a probe effect is a
+   * different effectId than any batch effect, so this batch's write cannot
+   * invalidate the pre-write evidence, and the worker settles each verdict
+   * through the unchanged fenced transitions.
+   */
+  readonly probeResults: readonly SyncEffectPostconditionResult[];
 }
 
 /**
@@ -143,6 +177,8 @@ export interface PreparedMultiRouteApply extends PreparedApplyEffects {
   readonly included: readonly CombinedApplyRoute[];
   /** Receipt timestamp written at preflight time so budget and write agree. */
   readonly updatedAt: string;
+  /** Absorbed probe classifications (see `PreparedSingleRouteApply.probeResults`). */
+  readonly probeResults: readonly SyncEffectPostconditionResult[];
 }
 
 /** Concrete prepared-apply state narrowed by the runtime `kind` guard. */
@@ -265,6 +301,7 @@ function isPreparedSingleRouteApply(value: unknown): value is PreparedSingleRout
     Array.isArray(value.bounded) &&
     isRecord(value.context) &&
     Array.isArray(value.included) &&
+    Array.isArray(value.probeResults) &&
     typeof value.updatedAt === "string";
 }
 
@@ -278,6 +315,7 @@ function isPreparedMultiRouteApply(value: unknown): value is PreparedMultiRouteA
     Array.isArray(value.bounded) &&
     Array.isArray(value.combinedRoutes) &&
     Array.isArray(value.included) &&
+    Array.isArray(value.probeResults) &&
     typeof value.updatedAt === "string";
 }
 
@@ -310,8 +348,33 @@ async function preflightSingleRoute(
   // full-evidence read): the apply path keeps the committed request budget.
   // The only steady-state reduction here is the receipt tab, read through
   // the provider's tail-band cursor inside the SAME request (see
-  // `ReceiptReadCursor` and the cumulative receipt memo).
-  const context = await readPreflight(deps, request, definition, routeOptions);
+  // `ReceiptReadCursor` and the cumulative receipt memo). The enumeration is
+  // held here (not buried inside `readPreflight`) so absorbed probes can
+  // reuse it for their ONE coverage-unknown fallback read (design §10.5 D7).
+  const routeInput: PreflightRouteInput = {
+    sheetName: request.sheetName,
+    registeredRange: request.registeredRange,
+    definition,
+    routeOptions,
+  };
+  // Capture the cursor posture BEFORE the batch's receipt-band read: the
+  // absorbed probes' provable-miss gate compares it with the post-read state
+  // (same rule as `readEffectPostconditions`).
+  const preReadReceiptBanded = deps.receiptReadCursor.bandStartRow() !== undefined;
+  const sheets = await enumeratePreflightSheets(deps);
+  const contexts = await readPreflightDataForEnumeratedRoutes(
+    deps,
+    sheets,
+    [routeInput],
+    undefined,
+    "preflight",
+    GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+    {},
+  );
+  const context = contexts.get(request.sheetName);
+  if (context === undefined) {
+    invalidProviderState(`preflight context is missing for ${request.sheetName}`);
+  }
   const plans = planEffectBatch({ ...request, effects: prepared.bounded }, context);
   const includeReceipts = prepared.postconditionMode === SYNC_POSTCONDITION_MODES.DEFERRED;
   const updatedAt = new Date(deps.now()).toISOString();
@@ -323,6 +386,16 @@ async function preflightSingleRoute(
   const includedStart = resolution.schemaErrorIndices.length;
   const includedEffects = prepared.bounded.slice(includedStart, resolution.includeCount);
   const included = planEffectBatch({ ...request, effects: includedEffects }, context);
+  // Same-route absorbed probes (design §10.3 D1/D2): delivery-uncertain
+  // effects riding this batch's reads instead of a standalone probe pass.
+  const probeGroups = groupProbeEffectsByRoute(request.probeEffects);
+  const probeEffects = probeGroups.get(routeKeyOf(request));
+  const probeResults = await classifyAbsorbedProbesForBatch(deps, {
+    preReadReceiptBanded,
+    sheets,
+    operation: SYNC_INVALID_PROVIDER_OPERATIONS.PREFLIGHT,
+    routes: probeEffects === undefined ? [] : [{ routeInput, context, effects: probeEffects }],
+  });
   return {
     kind: "single",
     spreadsheetId: deps.spreadsheetId,
@@ -337,6 +410,7 @@ async function preflightSingleRoute(
     schemaErrorIndices: resolution.schemaErrorIndices,
     included,
     updatedAt,
+    probeResults,
   };
 }
 
@@ -538,6 +612,9 @@ async function applyPreparedSingleRoute(
     results,
     snapshotHash: absentValue(),
     hasMore: bounded.length < request.effects.length || results.length < bounded.length,
+    // Echo the preflight-decided absorbed probe verdicts unchanged (they were
+    // classified on this batch's own reads before any write).
+    ...(prepared.probeResults.length > 0 ? { probeResults: prepared.probeResults } : {}),
   };
 }
 
@@ -592,8 +669,15 @@ async function preflightMultiRoute(
   }));
   // Historical shared whole-table full-evidence read (enumeration + ONE
   // ranged data read); the receipt tab rides the provider's tail-band
-  // cursor inside the same request.
-  const contexts = await readPreflightForRoutes(deps, routeArgs);
+  // cursor inside the same request. The enumeration is held here (not
+  // buried inside `readPreflightForRoutes`) so absorbed probes can reuse it
+  // for their ONE coverage-unknown fallback read (design §10.5 D7).
+  const preReadReceiptBanded = deps.receiptReadCursor.bandStartRow() !== undefined;
+  const sheets = await enumeratePreflightSheets(deps);
+  const contexts = await readPreflightDataForEnumeratedRoutes(
+    deps, sheets, routeArgs, undefined, "preflight",
+    GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, {},
+  );
   const combinedRoutes: CombinedApplyRoute[] = routeSpecs.map((spec) => {
     const context = contexts.get(spec.subRequest.sheetName);
     if (context === undefined) {
@@ -615,6 +699,24 @@ async function preflightMultiRoute(
     resolution.schemaErrorIndices.length,
     resolution.includeCount,
   );
+  // Same-route absorbed probes: match each probe group to one route spec of
+  // this combined batch; groups for other routes stay unclassified so the
+  // worker's standalone probe fallback still runs them (design §10.3 D1/D6).
+  const probeGroups = groupProbeEffectsByRoute(request.probeEffects);
+  const probeRoutes = routeSpecs.flatMap((spec, index) => {
+    const effects = probeGroups.get(routeKeyOf(spec.subRequest));
+    return effects === undefined ? [] : [{
+      routeInput: routeArgs[index]!,
+      context: combinedRoutes[index]!.context,
+      effects,
+    }];
+  });
+  const probeResults = await classifyAbsorbedProbesForBatch(deps, {
+    preReadReceiptBanded,
+    sheets,
+    operation: SYNC_INVALID_PROVIDER_OPERATIONS.PREFLIGHT,
+    routes: probeRoutes,
+  });
   return {
     kind: "multi",
     spreadsheetId: deps.spreadsheetId,
@@ -627,6 +729,7 @@ async function preflightMultiRoute(
     schemaErrorIndices: resolution.schemaErrorIndices,
     included,
     updatedAt,
+    probeResults,
   };
 }
 
@@ -679,6 +782,8 @@ async function applyPreparedMultiRoute(
     results,
     snapshotHash: absentValue(),
     hasMore: bounded.length < request.effects.length || results.length < bounded.length,
+    // Echo the preflight-decided absorbed probe verdicts unchanged.
+    ...(prepared.probeResults.length > 0 ? { probeResults: prepared.probeResults } : {}),
   };
 }
 
@@ -792,15 +897,14 @@ export async function readEffectPostconditions(
   // A pre-read band that lost its cursor mid-read (capacity drop) leaves
   // genuinely unknown coverage: a receipt miss may simply sit below the
   // dropped memo. Anything else has complete coverage, so a miss is
-  // provable and the band decides it (see the docblock above).
-  const receiptMissIsProvable =
-    !coverageIsBanded || deps.receiptReadCursor.bandStartRow() !== undefined;
-  const bandEvidenceSufficient =
-    !probeContexts.some((context) => context.identityNeedsFormatEvidence) &&
-    (receiptMissIsProvable || routes.every((route, index) =>
-      route.group.every((effect) => probeContexts[index]!.receipts.has(effect.effectId))));
+  // provable and the band decides it (see `absorbedProbePlan`, which runs
+  // this exact gate for absorbed probes too).
+  const plan = absorbedProbePlan(deps, coverageIsBanded, routes.map((route, index) => ({
+    context: probeContexts[index]!,
+    effects: route.group,
+  })));
   let contexts: readonly PreflightContext[];
-  if (bandEvidenceSufficient) {
+  if (plan.status === "bands") {
     contexts = await verifyPreflightContexts(
       deps,
       routes.map((route, index): PreflightVerifyPass => ({
@@ -809,12 +913,8 @@ export async function readEffectPostconditions(
         // verification read re-fetches those rows full-width WITH formats so
         // every hashed cell's value and both format sources share one
         // snapshot (same contract as the steady-state scoped base read).
-        targetRowNumbers: route.group
-          .map((effect) => probeTargetRowNumber(probeContexts[index]!, effect))
-          .filter((row): row is number => row !== undefined),
-        route: routeInputs[index]!,
+        targetRowNumbers: plan.targetRowNumbers[index]!,
       })),
-      sheets,
       "write",
     );
   } else {
@@ -833,18 +933,152 @@ export async function readEffectPostconditions(
     );
     contexts = routes.map((route) => requireProbeContext(fullContexts, route));
   }
+  return classifyAbsorbedProbes(routes.map((route, index) => ({
+    context: contexts[index]!,
+    effects: route.group,
+  })));
+}
+
+/** Groups probe effects by their own provider route key (design §10.3 D1). */
+export function groupProbeEffectsByRoute(
+  probeEffects: readonly SyncProjectionEffect[] | undefined,
+): ReadonlyMap<string, readonly SyncProjectionEffect[]> {
+  const groups = new Map<string, SyncProjectionEffect[]>();
+  for (const effect of probeEffects ?? []) {
+    const key = effectRouteKey(effect);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [effect]);
+    else group.push(effect);
+  }
+  return groups;
+}
+
+/** One route's absorbed-probe inputs: the batch-read context and the effects. */
+export interface AbsorbedProbeRoute {
+  readonly context: PreflightContext;
+  readonly effects: readonly SyncProjectionEffect[];
+}
+
+/**
+ * Decides whether a batch's already-read route contexts can decide the
+ * absorbed probes, and which rows their verification pass must cover.
+ *
+ * This is the standalone probe's provable-miss gate (`readEffectPostconditions`)
+ * verbatim, applied to the absorbed context (design §10.3 D2, §10.5 D6):
+ * a receipt miss is provable when the cursor was cold before the batch's
+ * base read (that read performed the full receipt parse) or is still live
+ * after it (the sentinel-trusted band merged into the cumulative memo); a
+ * route that deferred identity format evidence can only be decided by the
+ * whole-table read. `bands` carries one locate-row list per route (rows the
+ * format-evidenced verification pass must fetch for that route's probes);
+ * `unknown_coverage` tells the caller to run the full fallback read (or the
+ * standalone probe) instead — absorption never relaxes the decision rules.
+ */
+export function absorbedProbePlan(
+  deps: GoogleSheetsApiProviderDeps,
+  preReadReceiptBanded: boolean,
+  routes: readonly AbsorbedProbeRoute[],
+): {
+  readonly status: "bands";
+  readonly targetRowNumbers: readonly (readonly number[])[];
+} | {
+  readonly status: "unknown_coverage";
+} {
+  const receiptMissIsProvable =
+    !preReadReceiptBanded || deps.receiptReadCursor.bandStartRow() !== undefined;
+  const bandEvidenceSufficient =
+    !routes.some((route) => route.context.identityNeedsFormatEvidence) &&
+    (receiptMissIsProvable ||
+      routes.every((route) => route.effects.every((effect) =>
+        route.context.receipts.has(effect.effectId))));
+  if (!bandEvidenceSufficient) return { status: "unknown_coverage" };
+  return {
+    status: "bands",
+    targetRowNumbers: routes.map((route) => route.effects
+      .map((effect) => probeTargetRowNumber(route.context, effect))
+      .filter((row): row is number => row !== undefined)),
+  };
+}
+
+/**
+ * Classifies each absorbed probe effect on its route's evidence context.
+ *
+ * Runs the SAME `classifyPostcondition` the standalone probe runs (applied /
+ * unapplied / changed / unavailable with identical reasons); only the read
+ * source differs. Callers feed the verified (or full-fallback) contexts, and
+ * the results settle through the unchanged worker transition paths.
+ */
+export function classifyAbsorbedProbes(
+  routes: readonly AbsorbedProbeRoute[],
+): readonly SyncEffectPostconditionResult[] {
   const results: SyncEffectPostconditionResult[] = [];
-  for (const [index, route] of routes.entries()) {
-    const context = contexts[index]!;
-    for (const effect of route.group) {
+  for (const route of routes) {
+    for (const effect of route.effects) {
       results.push({
         effectId: effect.effectId,
         payloadHash: effect.payloadHash,
-        postcondition: classifyPostcondition(context, effect, context.receipts),
+        postcondition: classifyPostcondition(route.context, effect, route.context.receipts),
       });
     }
   }
   return results;
+}
+
+/**
+ * The absorbed probes' ONE coverage-unknown fallback read (design §10.5 D7).
+ *
+ * Whole-table full evidence plus the FULL cursor-less receipt read, built
+ * from the BATCH's already-taken enumeration: the fallback adds exactly one
+ * ranged read on the batch's lane and never a second enumeration, so the
+ * leased request budget keeps counting like the standalone probe's rule.
+ */
+export async function readAbsorbedProbeFallbackContexts(
+  deps: GoogleSheetsApiProviderDeps,
+  sheets: readonly ParsedSheet[],
+  routeInputs: readonly PreflightRouteInput[],
+  operation?: SyncMissingTabOperation,
+  pacing: RequestStartPacing = "preflight",
+): Promise<ReadonlyMap<string, PreflightContext>> {
+  return readPreflightDataForEnumeratedRoutes(
+    deps,
+    sheets,
+    routeInputs,
+    operation,
+    pacing,
+    GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
+    { scoped: false, receiptCursor: false },
+  );
+}
+
+/**
+ * Decides absorbed probes for a batch whose contexts already carry whole-table
+ * full evidence (the regular apply preflight): no row-band verification is
+ * needed, so the only branch is the provable-miss gate → optional ONE full
+ * fallback read → classification on the same classifier as the standalone
+ * probe.
+ */
+export async function classifyAbsorbedProbesForBatch(
+  deps: GoogleSheetsApiProviderDeps,
+  input: {
+    readonly preReadReceiptBanded: boolean;
+    readonly sheets: readonly ParsedSheet[];
+    readonly routes: readonly (AbsorbedProbeRoute & { readonly routeInput: PreflightRouteInput })[];
+    readonly operation?: SyncMissingTabOperation;
+    readonly pacing?: RequestStartPacing;
+  },
+): Promise<readonly SyncEffectPostconditionResult[]> {
+  if (input.routes.length === 0) return [];
+  const plan = absorbedProbePlan(deps, input.preReadReceiptBanded, input.routes);
+  if (plan.status === "bands") return classifyAbsorbedProbes(input.routes);
+  const fallbackContexts = await readAbsorbedProbeFallbackContexts(
+    deps, input.sheets,
+    input.routes.map((route) => route.routeInput),
+    input.operation, input.pacing,
+  );
+  return classifyAbsorbedProbes(input.routes.map((route) => ({
+    context: requireProbeContext(fallbackContexts, { subRequest: { sheetName: route.routeInput.sheetName } }),
+    effects: route.effects,
+  })));
 }
 
 /** Resolves one route's probe context, failing closed on a missing tab. */

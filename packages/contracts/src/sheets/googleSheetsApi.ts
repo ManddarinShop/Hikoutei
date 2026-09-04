@@ -28,10 +28,14 @@ export const GOOGLE_SHEETS_API_DEFAULTS = {
   MIN_REQUEST_TIMEOUT_MS: 1_000,
   MAX_REQUEST_TIMEOUT_MS: 120_000,
   /**
-   * Default per-READ-request timeout (every getSpreadsheet call). Reads are
-   * bounded much shorter than writes so a slow-but-working effect dispatch
-   * (up to three sequential paced calls: two preflight reads plus one write)
-   * cannot outlive its effect lease.
+   * Default per-READ-request timeout (every getSpreadsheet call). Since the
+   * unified read engine this bounds ONE BAND, not one logical read: a large
+   * tab is streamed as sequential size-capped band requests, so a timeout
+   * fails one bounded band (durable retry) instead of an all-or-nothing
+   * multi-megabyte single request. Reads stay much shorter than writes so a
+   * slow-but-working effect dispatch cannot outlive its effect lease; the
+   * per-request 3 MB/5 MB estimate caps keep each band's expected stream
+   * time far below this bound.
    */
   READ_TIMEOUT_MS: 10_000,
   /** Upper bound for read timeouts; reads must stay well under the lease. */

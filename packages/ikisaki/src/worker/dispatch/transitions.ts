@@ -218,32 +218,103 @@ export async function recoverUnknownResults(
       continue;
     }
     const byEffectId = new Map(results.map((result) => [result.effectId, result]));
-    for (const item of group.items) {
-      const result = lookupResult(byEffectId.get(item.pending.effect_id));
-      if (
-        result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
-        result.value.payloadHash !== item.pending.payload_hash
-      ) {
-        await deferDeliveryUncertain(
-          storage,
-          liveFence(),
-          item,
-          WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
-          "Provider postcondition batch did not return the expected effect evidence.",
-          report,
-        );
-        continue;
-      }
-      await settleUnknownPostcondition(
-        options,
+    await settleProbeResultsForItems(options, storage, liveFence, group.items, byEffectId, report);
+  }
+}
+
+/**
+ * Settles claimed items from the standalone probe's result set.
+ *
+ * A missing or payload-hash-mismatched entry is a provider contract gap: the
+ * probe RAN but returned no durable evidence for that effect, so the item is
+ * deferred (`deferDeliveryUncertain`), never blindly redriven. Every present
+ * entry settles through `settleUnknownPostcondition`. The absorbed path uses
+ * its own uncovered-entry fallback (`settleAbsorbedProbeResults`).
+ */
+async function settleProbeResultsForItems(
+  options: EffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: () => FencingContext,
+  items: readonly ClaimedEffect[],
+  byEffectId: ReadonlyMap<string, PostconditionResult>,
+  report: MutableReport,
+): Promise<void> {
+  for (const item of items) {
+    const result = lookupResult(byEffectId.get(item.pending.effect_id));
+    if (
+      result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
+      result.value.payloadHash !== item.pending.payload_hash
+    ) {
+      await deferDeliveryUncertain(
         storage,
-        liveFence(),
+        fence(),
         item,
-        result.value.postcondition,
+        WORKER_ERROR_CODES.POSTCONDITION_READ_FAILED,
+        "Provider postcondition batch did not return the expected effect evidence.",
         report,
       );
+      continue;
     }
+    await settleUnknownPostcondition(
+      options,
+      storage,
+      fence(),
+      item,
+      result.value.postcondition,
+      report,
+    );
   }
+}
+
+/**
+ * Settles delivery-uncertain items from probe results carried by one batch
+ * dispatch (`probeEffects` absorption, design §10.3).
+ *
+ * Returns the items that were NOT settled this call so the worker can run
+ * them through the standalone `recoverUnknownResults` probe at the end of
+ * the pass (D6 fail-closed): an absent, EMPTY, or PARTIAL result set means
+ * the dispatcher did not absorb every probe (older/fake dispatcher, provider
+ * route mismatch, or an envelope that simply omitted an effect), and each
+ * uncovered item keeps the standalone fallback — a missing entry is never
+ * deferred as a contract gap here because absorption may simply not have
+ * covered it. Only items whose entry is present AND payload-hash matched
+ * settle, through the unchanged `settleUnknownPostcondition` transitions
+ * (D2: absorption changes the read source, never the rules). Transitions
+ * are CAS-fenced exactly like the standalone path: a lost race requeues,
+ * it does not double-settle.
+ */
+export async function settleAbsorbedProbeResults(
+  options: EffectWorkerBaseOptions,
+  storage: EffectWorkerStorage,
+  fence: () => FencingContext,
+  items: readonly ClaimedEffect[],
+  results: readonly PostconditionResult[] | undefined,
+  report: MutableReport,
+): Promise<readonly ClaimedEffect[]> {
+  if (items.length === 0) return [];
+  const byEffectId = new Map((results ?? []).map((result) => [result.effectId, result]));
+  const residual: ClaimedEffect[] = [];
+  for (const item of items) {
+    const result = lookupResult(byEffectId.get(item.pending.effect_id));
+    if (
+      result.kind === LOOKUP_RESULT_KINDS.NOT_FOUND ||
+      result.value.payloadHash !== item.pending.payload_hash
+    ) {
+      // Uncovered (missing entry or stale payload hash): fall back to the
+      // standalone probe instead of settling or deferring on partial evidence.
+      residual.push(item);
+      continue;
+    }
+    await settleUnknownPostcondition(
+      options,
+      storage,
+      fence(),
+      item,
+      result.value.postcondition,
+      report,
+    );
+  }
+  return residual;
 }
 
 /** Settles one response-loss effect from its classified read-back outcome. */

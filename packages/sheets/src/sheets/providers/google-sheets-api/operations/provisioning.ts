@@ -321,7 +321,7 @@ function provisionHeaderCells(registration: SyncSheetsProvisionRoute): {
 function ensureRowCheckHeader(
   requests: GoogleSheetsApiWriteRequest[],
   grid: ParsedGridData,
-  existing: { readonly sheetId: number; readonly gridProperties?: { readonly rowCount: number; readonly columnCount: number } },
+  existing: { readonly sheetId: number; readonly gridProperties?: { readonly rowCount?: number; readonly columnCount?: number } },
   registration: SyncSheetsProvisionRoute,
   checkColumn: number,
 ): void {
@@ -362,7 +362,7 @@ function ensureRowCheckHeader(
  */
 function provisionGridEndColumn(
   registration: SyncSheetsProvisionRoute,
-  existing: { readonly gridProperties?: { readonly rowCount: number; readonly columnCount: number } },
+  existing: { readonly gridProperties?: { readonly rowCount?: number; readonly columnCount?: number } },
 ): number {
   const parsed = parseRegisteredRange(registration.registeredRange);
   const registeredEnd = parsed.startColumn + parsed.columnCount - 1;

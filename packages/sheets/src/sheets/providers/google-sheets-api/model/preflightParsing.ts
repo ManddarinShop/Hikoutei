@@ -104,9 +104,21 @@ function parseSheetEntry(value: unknown, label: string): ParsedSheet {
         invalidProviderState(`${label}.properties.gridProperties is invalid`, GET_REPLY_MALFORMED);
       }
       const gridRecord = gridProperties as Record<string, unknown>;
+      // Per-field optionality: the response carries EXACTLY the dimensions
+      // the requesting field mask named (the real API honors the mask), so
+      // a `gridProperties(rowCount)`-only mask must parse without a
+      // columnCount. A gridProperties wrapper naming no known dimension is
+      // treated as absent.
+      const rowCount = optionalPositiveIntegerOrUndefined(
+        gridRecord.rowCount, `${label}.properties.gridProperties.rowCount`,
+      );
+      const columnCount = optionalPositiveIntegerOrUndefined(
+        gridRecord.columnCount, `${label}.properties.gridProperties.columnCount`,
+      );
+      if (rowCount === undefined && columnCount === undefined) return undefined;
       return {
-        rowCount: optionalPositiveInteger(gridRecord.rowCount, `${label}.properties.gridProperties.rowCount`),
-        columnCount: optionalPositiveInteger(gridRecord.columnCount, `${label}.properties.gridProperties.columnCount`),
+        ...(rowCount === undefined ? {} : { rowCount }),
+        ...(columnCount === undefined ? {} : { columnCount }),
       };
     })();
   // Merged regions are a sheet-level `merges` GridRange array in the API
@@ -123,6 +135,18 @@ function parseSheetEntry(value: unknown, label: string): ParsedSheet {
 }
 
 function optionalPositiveInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    invalidProviderState(`${label} is invalid`, GET_REPLY_MALFORMED);
+  }
+  return value;
+}
+
+/** Positive-integer check for an OMITTED-or-present field (mask-driven). */
+function optionalPositiveIntegerOrUndefined(
+  value: unknown,
+  label: string,
+): number | undefined {
+  if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
     invalidProviderState(`${label} is invalid`, GET_REPLY_MALFORMED);
   }

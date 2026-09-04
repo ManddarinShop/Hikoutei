@@ -21,6 +21,7 @@ import {
   type FastAppendRowsResult,
   type FastAppendRow,
   type FastAppendRowResult,
+  type SyncEffectPostconditionResult,
   type SyncProjection,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
@@ -59,6 +60,13 @@ import {
   verifyPreflightContexts,
   type PreflightRouteInput,
 } from "./preflightOp.js";
+import {
+  absorbedProbePlan,
+  classifyAbsorbedProbes,
+  groupProbeEffectsByRoute,
+  readAbsorbedProbeFallbackContexts,
+  routeKeyOf,
+} from "./applyEffects.js";
 import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS } from "../model/preflightFields.js";
 import { identitySerialAliases } from "../model/preflightVerify.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
@@ -176,6 +184,10 @@ async function fastAppendSingleRoute(
   // ONE enumeration shared by the base read and any whole-table recovery
   // read: a verification-overflow fallback must never stack a second
   // enumeration onto the leased request budget.
+  // Capture the cursor posture BEFORE the batch's banded receipt read: the
+  // absorbed probes' provable-miss gate compares it with the post-read state
+  // (the standalone probe's rule, design §10.3 D2 / §10.5 D6).
+  const preReadReceiptBanded = deps.receiptReadCursor.bandStartRow() !== undefined;
   const sheets = await enumeratePreflightSheets(deps);
   const baseContexts = await readPreflightDataForEnumeratedRoutes(
     deps, sheets, [route], undefined, "preflight",
@@ -195,13 +207,41 @@ async function fastAppendSingleRoute(
   // re-reads this route whole-table full-evidence from the SAME enumeration,
   // keeping the leased dispatch inside the historical paced-request budget
   // (enumeration + base read + at most one conditional third read + write).
-  const context = await verifyPreflightContext(
-    deps,
-    sheets,
-    baseContext,
-    collectAppendReplayRows(baseContext, bounded, routeOptions.identityField),
-    route,
-  );
+  const replayTargets = collectAppendReplayRows(baseContext, bounded, routeOptions.identityField);
+  // Same-route absorbed probes (design §10.3 D2): when this batch carries
+  // delivery-uncertain probe effects for THIS route, their locate rows ride
+  // the batch's ONE conditional verification read and they are classified
+  // from the verified context with the unchanged postcondition classifier.
+  // A coverage-unknown gate result instead costs exactly ONE whole-table
+  // fallback read from this batch's existing enumeration (D6/D7); cross-
+  // route probe groups stay unclassified so the worker's standalone probe
+  // fallback still runs them (D1).
+  const probeEffects = groupProbeEffectsByRoute(request.probeEffects).get(requestRouteKey(request));
+  let context: PreflightContext;
+  let probeResults: readonly SyncEffectPostconditionResult[] | undefined;
+  if (probeEffects === undefined || probeEffects.length === 0) {
+    context = await verifyPreflightContext(deps, baseContext, replayTargets);
+  } else {
+    const plan = absorbedProbePlan(deps, preReadReceiptBanded, [
+      { context: baseContext, effects: probeEffects },
+    ]);
+    if (plan.status === "bands") {
+      context = await verifyPreflightContext(
+        deps, baseContext, [...replayTargets, ...plan.targetRowNumbers[0]!],
+      );
+      probeResults = classifyAbsorbedProbes([{ context, effects: probeEffects }]);
+    } else {
+      context = await verifyPreflightContext(deps, baseContext, replayTargets);
+      const fallbackContexts = await readAbsorbedProbeFallbackContexts(
+        deps, sheets, [route], SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
+      );
+      const fallbackContext = fallbackContexts.get(request.sheetName);
+      if (fallbackContext === undefined) {
+        invalidProviderState(`probe fallback context is missing for ${request.sheetName}`);
+      }
+      probeResults = classifyAbsorbedProbes([{ context: fallbackContext, effects: probeEffects }]);
+    }
+  }
   const prepared = prepareFastAppend(deps, request, definition, routeOptions, context, bounded);
   let deferredSuffix = false;
   const updatedAt = new Date(deps.now()).toISOString();
@@ -286,7 +326,7 @@ async function fastAppendSingleRoute(
       await writeBatch(context);
     }
   }
-  return collectAppendResults(prepared.resultsById, bounded, bounded.length < request.rows.length || deferredSuffix);
+  return collectAppendResults(prepared.resultsById, bounded, bounded.length < request.rows.length || deferredSuffix, probeResults);
 }
 
 /** Appends rows spanning MULTIPLE tabs in ONE enumerate + read + batch. */
@@ -330,21 +370,76 @@ async function fastAppendMultiRoute(
   // routes re-read from this enumeration instead of re-entering the
   // per-route preflight (which stacked one enumeration + one full read per
   // overflow route and blew the leased call budget).
+  // Cursor posture BEFORE the batch's banded receipt read (absorbed-probe
+  // provable-miss gate; same rule as the single-route path and the
+  // standalone probe).
+  const preReadReceiptBanded = deps.receiptReadCursor.bandStartRow() !== undefined;
   const sheets = await enumeratePreflightSheets(deps);
   const baseContexts = await readPreflightDataForEnumeratedRoutes(
     deps, sheets, baseRouteArgs,
     undefined, "preflight", GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, { scoped: true });
-  const verifiedContexts = await verifyPreflightContexts(deps, specs.map((spec, index) => {
+  const specBaseContexts = specs.map((spec) => {
     const baseContext = baseContexts.get(spec.subRequest.sheetName);
     if (baseContext === undefined) {
       invalidProviderState(`preflight context is missing for ${spec.subRequest.sheetName}`);
     }
-    return {
-      context: baseContext,
-      targetRowNumbers: collectAppendReplayRows(baseContext, spec.group, spec.routeOptions.identityField),
-      route: baseRouteArgs[index]!,
-    };
-  }), sheets);
+    return baseContext;
+  });
+  // Same-route absorbed probes (design §10.3 D2): each append route picks up
+  // the probe-effect group that matches its own route key; their locate rows
+  // merge into this batch's ONE conditional verification read, and unknown
+  // coverage costs one consolidated whole-table fallback read from this
+  // batch's existing enumeration (D6/D7). Unmatched groups stay unclassified
+  // (worker standalone-probe fallback, D1).
+  const probeGroups = groupProbeEffectsByRoute(request.probeEffects);
+  const absorbed = specs.flatMap((spec, index) => {
+    const effects = probeGroups.get(routeKeyOf(spec.subRequest));
+    return effects === undefined || effects.length === 0
+      ? []
+      : [{ index, routeInput: baseRouteArgs[index]!, effects }];
+  });
+  const probePlan = absorbed.length === 0
+    ? undefined
+    : absorbedProbePlan(deps, preReadReceiptBanded, absorbed.map((entry) => ({
+      context: specBaseContexts[entry.index]!,
+      effects: entry.effects,
+    })));
+  const mergedProbeTargetsBySpec = new Map<number, readonly number[]>();
+  if (probePlan !== undefined && probePlan.status === "bands") {
+    absorbed.forEach((entry, absorbedIndex) => {
+      mergedProbeTargetsBySpec.set(entry.index, probePlan.targetRowNumbers[absorbedIndex]!);
+    });
+  }
+  const verifiedContexts = await verifyPreflightContexts(deps, specs.map((spec, index) => ({
+    context: specBaseContexts[index]!,
+    targetRowNumbers: [
+      ...collectAppendReplayRows(specBaseContexts[index]!, spec.group, spec.routeOptions.identityField),
+      ...(mergedProbeTargetsBySpec.get(index) ?? []),
+    ],
+  })));
+  let probeResults: readonly SyncEffectPostconditionResult[] | undefined;
+  if (probePlan !== undefined) {
+    if (probePlan.status === "bands") {
+      probeResults = classifyAbsorbedProbes(absorbed.map((entry) => ({
+        context: verifiedContexts[entry.index]!,
+        effects: entry.effects,
+      })));
+    } else {
+      const fallbackContexts = await readAbsorbedProbeFallbackContexts(
+        deps, sheets, absorbed.map((entry) => entry.routeInput),
+        SYNC_INVALID_PROVIDER_OPERATIONS.POSTCONDITION_READ,
+      );
+      probeResults = classifyAbsorbedProbes(absorbed.map((entry) => {
+        const fallbackContext = fallbackContexts.get(entry.routeInput.sheetName);
+        if (fallbackContext === undefined) {
+          invalidProviderState(
+            `probe fallback context is missing for ${entry.routeInput.sheetName}`,
+          );
+        }
+        return { context: fallbackContext, effects: entry.effects };
+      }));
+    }
+  }
   const prepared = specs.map((spec, index) => ({
     context: verifiedContexts[index]!,
     prepared: prepareFastAppend(deps, spec.subRequest, spec.definition, spec.routeOptions, verifiedContexts[index]!, spec.group),
@@ -427,7 +522,9 @@ async function fastAppendMultiRoute(
   for (const entry of prepared) {
     for (const [effectId, result] of entry.prepared.resultsById) byId.set(effectId, result);
   }
-  return collectAppendResults(byId, bounded, bounded.length < request.rows.length || deferredSuffix);
+  return collectAppendResults(
+    byId, bounded, bounded.length < request.rows.length || deferredSuffix, probeResults,
+  );
 }
 
 /** Slices the flat combined append route list to a shared prefix count. */
@@ -597,6 +694,7 @@ function collectAppendResults(
   byId: Map<string, FastAppendRowResult>,
   bounded: readonly FastAppendRow[],
   hasMore: boolean,
+  probeResults: readonly SyncEffectPostconditionResult[] | undefined,
 ): FastAppendRowsResult {
   const results: FastAppendRowResult[] = [];
   for (const row of bounded) {
@@ -604,7 +702,11 @@ function collectAppendResults(
     if (result === undefined) continue;
     results.push(result);
   }
-  return { results, hasMore };
+  return {
+    results,
+    hasMore,
+    ...(probeResults === undefined || probeResults.length === 0 ? {} : { probeResults }),
+  };
 }
 
 /** Validates the append rows before any remote read or write. */

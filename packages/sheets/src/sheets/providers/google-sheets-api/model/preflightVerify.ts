@@ -46,6 +46,13 @@ import {
   indexRows,
   resolveGridCell,
 } from "./preflightRows.js";
+import {
+  MAX_READ_CELLS_PER_RANGE,
+  MAX_READ_RANGES_PER_REQUEST,
+  planRowBands,
+  type PlannedRange,
+  type ReadCalibration,
+} from "./readPlan.js";
 import type {
   ParsedGridData,
   PreflightContext,
@@ -53,20 +60,24 @@ import type {
 } from "./preflightContext.js";
 
 /**
- * Hard cap on ranges per `spreadsheets.get` kept well below the API's
- * request-shape limits; exceeding it switches the dispatch to the
- * whole-table full-evidence fallback instead.
+ * Hard cap on ranges per `spreadsheets.get`, shared engine-wide (the
+ * historical per-lane copies unified into `MAX_READ_RANGES_PER_REQUEST`).
  */
-export const MAX_VERIFY_RANGES_PER_REQUEST = 40;
+export const MAX_VERIFY_RANGES_PER_REQUEST = MAX_READ_RANGES_PER_REQUEST;
 
 /** The real API rejects a single requested range above 10,000 cells. */
-export const MAX_VERIFY_CELLS_PER_RANGE = 9_500;
+export const MAX_VERIFY_CELLS_PER_RANGE = MAX_READ_CELLS_PER_RANGE;
 
-/** Discriminated outcome of planning one route's verification read. */
+/**
+ * Discriminated outcome of planning one route's verification read. The
+ * pre-engine `overflow` member (and its whole-table full-evidence fallback)
+ * is REMOVED: a band plan exceeding the per-request range/byte budget now
+ * expands into additional sequential band requests instead of degrading to
+ * one uncapped whole-table read (unified read engine §5 step 5).
+ */
 export type PreflightVerificationPlan =
   | { readonly kind: "none" }
-  | { readonly kind: "overflow" }
-  | { readonly kind: "ranges"; readonly ranges: readonly string[] };
+  | { readonly kind: "ranges"; readonly items: readonly PlannedRange[] };
 
 /** Serial-string aliases of an ISO-shaped identity (empty otherwise). */
 export function identitySerialAliases(identity: string): readonly string[] {
@@ -80,24 +91,30 @@ export function identitySerialAliases(identity: string): readonly string[] {
  * CAS/replay rows plus, when the route's identity cells need format
  * evidence, the whole identity column band. Returns `"none"` when no
  * verification read is needed at all (pure-insert batch, no numeric
- * identity) and `"overflow"` when the range budget would be exceeded (the
- * caller falls back to a whole-table full-evidence read).
+ * identity). Every band is chunked to the shared per-range cell cap AND
+ * the per-evidence-class byte budget; a plan exceeding one request's range
+ * budget expands into additional sequential requests at packing time (the
+ * caller never degrades to a whole-table read).
+ *
+ * `exactLastRow` band ends are CLOSED (the planned extent is proven by the
+ * context/target set), so every hashed cell still sits in exactly one band
+ * of one server snapshot.
  */
 export function planPreflightVerification(
   context: PreflightContext,
   targetRowNumbers: readonly number[],
+  calibration: ReadCalibration,
 ): PreflightVerificationPlan {
-  const ranges: string[] = [];
+  const items: PlannedRange[] = [];
   if (context.identityNeedsFormatEvidence) {
-    ranges.push(...identityColumnRanges(context));
+    items.push(...identityColumnItems(context, calibration));
   }
   const targets = [...new Set(targetRowNumbers)].sort((a, b) => a - b);
   if (targets.length > 0) {
-    ranges.push(...rowBands(context, targets));
+    items.push(...rowBandItems(context, targets, calibration));
   }
-  if (ranges.length === 0) return { kind: "none" };
-  if (ranges.length > MAX_VERIFY_RANGES_PER_REQUEST) return { kind: "overflow" };
-  return { kind: "ranges", ranges };
+  if (items.length === 0) return { kind: "none" };
+  return { kind: "ranges", items };
 }
 
 /**
@@ -268,20 +285,38 @@ function identityColumnPosition(context: PreflightContext): number | undefined {
   return offset === undefined ? undefined : context.startColumn + offset;
 }
 
-/** The identity-column full-data-row band ranges (one column, all rows). */
-function identityColumnRanges(context: PreflightContext): string[] {
+/** The identity-column full-data-row bands (one column, rows 2..last). */
+function identityColumnItems(
+  context: PreflightContext,
+  calibration: ReadCalibration,
+): PlannedRange[] {
   const column = identityColumnPosition(context);
   const lastRow = context.rows.length === 0
     ? 0
     : context.rows[context.rows.length - 1]!.rowNumber;
   if (column === undefined || lastRow < 2) return [];
   const letter = columnLetters(column);
-  const rowsPerRange = MAX_VERIFY_CELLS_PER_RANGE; // single column
-  return bandedStrings(context.title, letter, letter, 2, lastRow, rowsPerRange);
+  return planRowBands({
+    quote: `${quoteA1SheetName(context.title)}!`,
+    firstLetter: letter,
+    lastLetter: letter,
+    columnCount: 1,
+    fromRow: 2,
+    rowBound: lastRow,
+    // The planned extent is proven by the context rows: close the last band
+    // at `lastRow` instead of staying open (no unbounded extra rows).
+    exactLastRow: lastRow,
+    evidence: "values+formats",
+    calibration,
+  });
 }
 
-/** Row-band ranges over the full registered column span of the route. */
-function rowBands(context: PreflightContext, sortedRows: readonly number[]): string[] {
+/** Row-band plans over the full registered column span of the route. */
+function rowBandItems(
+  context: PreflightContext,
+  sortedRows: readonly number[],
+  calibration: ReadCalibration,
+): PlannedRange[] {
   const first = context.startColumn;
   const last = context.anchorColumn !== undefined
     ? Math.max(context.anchorColumn, context.startColumn + context.headers.length - 1)
@@ -290,51 +325,39 @@ function rowBands(context: PreflightContext, sortedRows: readonly number[]): str
   if (columnCount < 1) {
     invalidProviderState("verification column span is invalid", GET_REPLY_MALFORMED);
   }
-  const rowsPerRange = Math.max(1, Math.floor(MAX_VERIFY_CELLS_PER_RANGE / columnCount));
-  const ranges: string[] = [];
+  const quote = `${quoteA1SheetName(context.title)}!`;
+  const firstLetter = columnLetters(first);
+  const lastLetter = columnLetters(last);
+  const items: PlannedRange[] = [];
+  // Merge contiguous runs (the historical behavior), then chunk each run at
+  // the cell/byte caps. The run END is the proven extent, so bands close.
   let runStart = sortedRows[0]!;
   let previous = runStart;
-  const flush = (): void => {
-    ranges.push(...bandedStrings(
-      context.title,
-      columnLetters(first),
-      columnLetters(last),
-      runStart,
-      previous,
-      rowsPerRange,
-    ));
+  const flush = (end: number): void => {
+    items.push(...planRowBands({
+      quote,
+      firstLetter,
+      lastLetter,
+      columnCount,
+      fromRow: runStart,
+      rowBound: end,
+      exactLastRow: end,
+      evidence: "values+formats",
+      calibration,
+    }));
   };
-  for (let index = 1; index < sortedRows.length; index += 1) {
-    const row = sortedRows[index]!;
+  for (let index = 1; index <= sortedRows.length; index += 1) {
+    const row = sortedRows[index] ?? Number.NaN;
     if (row === previous + 1) {
       previous = row;
       continue;
     }
-    flush();
+    flush(previous);
+    if (Number.isNaN(row)) break;
     runStart = row;
     previous = row;
   }
-  flush();
-  return ranges;
-}
-
-/** A1 range strings for [firstRow,lastRow] split at `rowsPerRange`. */
-function bandedStrings(
-  title: string,
-  firstLetter: string,
-  lastLetter: string,
-  firstRow: number,
-  lastRow: number,
-  rowsPerRange: number,
-): string[] {
-  const ranges: string[] = [];
-  let start = firstRow;
-  while (start <= lastRow) {
-    const end = Math.min(start + rowsPerRange - 1, lastRow);
-    ranges.push(`${quoteA1SheetName(title)}!${firstLetter}${start}:${lastLetter}${end}`);
-    start = end + 1;
-  }
-  return ranges;
+  return items;
 }
 
 /**

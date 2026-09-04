@@ -231,6 +231,19 @@ export interface ApplySyncEffectsRequest {
    * selects deferred verification so recovery/reconciliation owns read-back.
    */
   readonly postconditionMode?: SyncPostconditionMode;
+  /**
+   * Optional same-route delivery-uncertain probe effects absorbed into this
+   * batch's reads (unified read engine Phase 4, design §10.3 D1/D2).
+   *
+   * These effects are NEVER written by this call. The batch's enumeration,
+   * base read, and (where the batch runs one) verification pass double as the
+   * recovery probe's evidence read, and each probe effect is classified from
+   * the absorbed context with the unchanged `classifyPostcondition` rules.
+   * A probe effect whose route does not match one of this request's routes is
+   * left unclassified (absent from `probeResults`) so the caller falls back to
+   * the standalone probe: absorption never widens beyond the same-route gate.
+   */
+  readonly probeEffects?: readonly SyncProjectionEffect[];
 }
 
 /** A batch may intentionally return only a prefix when its budget is exhausted. */
@@ -241,6 +254,12 @@ export interface ApplySyncEffectsResult {
   readonly hasMore: boolean;
   /** Optional phase timing returned by newer Code.gs deployments. */
   readonly timing?: SyncSheetsTiming;
+  /**
+   * Read-back classifications for the request's absorbed `probeEffects` (one
+   * per probe effect the batch could classify), absent when none were carried
+   * or absorbed. Missing entries keep the caller's standalone-probe fallback.
+   */
+  readonly probeResults?: readonly SyncEffectPostconditionResult[];
 }
 
 /** Read-back classification used after a response is lost or a lease expires. */
@@ -303,6 +322,13 @@ export interface FastAppendRowsRequest {
   readonly projection: SyncProjection;
   readonly schemaVersion: number;
   readonly rows: readonly FastAppendRow[];
+  /**
+   * Optional same-route delivery-uncertain probe effects absorbed into this
+   * append's reads (unified read engine Phase 4; see
+   * `ApplySyncEffectsRequest.probeEffects`). Never appended by this call;
+   * classified from the batch's base + merged verification evidence.
+   */
+  readonly probeEffects?: readonly SyncProjectionEffect[];
 }
 
 /** Result of one bounded fast-append batch. */
@@ -312,6 +338,11 @@ export interface FastAppendRowsResult {
   readonly hasMore: boolean;
   /** Optional phase timing returned by newer Code.gs deployments. */
   readonly timing?: SyncSheetsTiming;
+  /**
+   * Read-back classifications for the request's absorbed `probeEffects`
+   * (see `ApplySyncEffectsResult.probeResults`).
+   */
+  readonly probeResults?: readonly SyncEffectPostconditionResult[];
 }
 
 /** Request used to classify several response-loss effects with one Sheet read. */

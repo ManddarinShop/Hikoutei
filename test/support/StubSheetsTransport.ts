@@ -403,6 +403,11 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
     const includeEffectiveValue = request.fields.includes("effectiveValue");
     const includeFormattedValue = request.fields.includes("formattedValue");
     const includeDataValidation = request.fields.includes("dataValidation");
+    // The real API returns ONLY the grid dimensions the field mask named
+    // (proven live: a `gridProperties(rowCount)`-only mask carries no
+    // columnCount). Mirror that per-dimension mask semantics so bound
+    // planning is exercised against the REAL response shape.
+    const gridMask = gridPropertiesMask(request.fields);
     const sheets = visible.map((sheet) => {
       // The real API returns ONE cropped GridData per requested range of the
       // sheet (in request order), each carrying its own startRow/startColumn
@@ -417,15 +422,25 @@ export class StubSheetsTransport implements GoogleSheetsApiTransport {
         includeFormattedValue,
         includeDataValidation,
       }));
+      // The REAL API returns exactly the sheet-properties dimensions the
+      // field mask named (proven live: a `gridProperties(rowCount)`-only
+      // mask carries NO columnCount). Mirror that per-field masking so
+      // mask/parse drift cannot hide behind an over-generous stub.
       return {
         properties: {
           sheetId: sheet.sheetId,
           title: sheet.title,
           hidden: sheet.hidden,
-          gridProperties: {
-            rowCount: Math.max(sheet.lastContentRow() + 1, 1000),
-            columnCount: sheet.gridColumns(),
-          },
+          ...(gridMask === undefined ? {} : {
+            gridProperties: {
+              ...(gridMask.rowCount
+                ? { rowCount: Math.max(sheet.lastContentRow() + 1, 1000) }
+                : {}),
+              ...(gridMask.columnCount
+                ? { columnCount: sheet.gridColumns() }
+                : {}),
+            },
+          }),
         },
         // Merged regions live on the SHEET object as `merges` GridRange
         // entries (real wire shape); GridData has no mergedCells field.
@@ -556,6 +571,21 @@ function mergeCovers(sheet: StubSheet, row: number, col: number): boolean {
   return sheet.mergedRanges.some((range) =>
     row >= range.startRowIndex && row < range.endRowIndex &&
     col >= range.startColumnIndex && col < range.endColumnIndex);
+}
+
+/**
+ * Parses the gridProperties dimensions named by a `spreadsheets.get` field
+ * mask (`gridProperties(rowCount)`, `gridProperties.rowCount`,
+ * `gridProperties(rowCount,columnCount)`); returns `undefined` when the mask
+ * names no grid dimension at all (the real API then omits `gridProperties`).
+ */
+function gridPropertiesMask(
+  fields: string,
+): { readonly rowCount: boolean; readonly columnCount: boolean } | undefined {
+  const rowCount = /gridProperties\(.*\browCount\b|gridProperties\.rowCount\b/.test(fields);
+  const columnCount = /gridProperties\(.*\bcolumnCount\b|gridProperties\.columnCount\b/.test(fields);
+  if (!rowCount && !columnCount) return undefined;
+  return { rowCount, columnCount };
 }
 
 /** True when a built wire cell carries no wrappers (a blank `{}` CellData). */

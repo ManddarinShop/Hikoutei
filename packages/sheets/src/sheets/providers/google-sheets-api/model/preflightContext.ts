@@ -42,6 +42,15 @@ import {
 } from "./valueNormalization.js";
 import type { ReceiptReadCursor } from "./receiptCursor.js";
 import {
+  authoritativeRowBound,
+  packReadRequests,
+  planRowBands,
+  type EngineRuntime,
+  type PlannedRange,
+  type ReadCalibration,
+  type ReadEvidence,
+} from "./readPlan.js";
+import {
   apiNumberValue,
   apiStringValue,
   parseSheetPropertiesDocument,
@@ -55,7 +64,6 @@ import {
   indexRows,
   pickRegisteredGrid,
   readRows,
-  requireGridDataForSheet,
   requireSheetByTitle,
   requireSheetGrids,
   requireSingleGrid,
@@ -173,10 +181,15 @@ export interface ParsedSheet {
   readonly sheetId: number;
   readonly title: string;
   readonly hidden: boolean;
-  /** Grid dimensions when the requesting mask included gridProperties. */
+  /**
+   * Grid dimensions when the requesting mask included gridProperties. The
+   * REAL API returns exactly the dimensions the field mask named (proven
+   * live: a `gridProperties(rowCount)`-only mask carries no columnCount),
+   * so each dimension is optional; a present malformed wrapper fails closed.
+   */
   readonly gridProperties?: {
-    readonly rowCount: number;
-    readonly columnCount: number;
+    readonly rowCount?: number;
+    readonly columnCount?: number;
   };
   /** Merged ranges when the requesting mask included sheets.merges. */
   readonly merges?: readonly ParsedMergedCell[];
@@ -272,43 +285,63 @@ export interface PreflightReadShape {
 export const LEGACY_PREFLIGHT_READ_SHAPE: PreflightReadShape = { scoped: false };
 
 /**
- * Builds the preflight ranges for one or more routes, deduplicating target
- * tabs and adding the shared receipt tab once. The multi-route call reads
- * ALL needed tabs in a single ranged `getSpreadsheet`, so the enumerations
- * and ranged reads are shared across the routes of one spreadsheet.
+ * Builds the PLANNED preflight ranges for one or more routes, deduplicating
+ * target tabs and adding the shared receipt tab once. The multi-route call
+ * reads ALL needed tabs, so the enumerations and ranged reads are shared
+ * across the routes of one spreadsheet.
  *
- * In the scoped shape each target tab contributes the header row plus one
- * 1-column band per tab-wide key column (identity and/or anchor); a route
- * with neither key column keeps its historical full-width range (fail-safe:
- * nothing is known to be provable from a column-scoped read). The receipt
- * band starts at `receiptBandStart` when a trusted cursor row exists.
+ * Phase 1 (unified read engine): every all-row band is planned against the
+ * authoritative row bound (`rowBounds`, the enumerated
+ * `gridProperties.rowCount`) and chunked to the shared per-range cell cap
+ * and per-request byte estimate. A span that fits one chunk collapses to
+ * the byte-identical historical OPEN band (`X2:X1048576`); a tab whose bound
+ * exceeds one chunk expands into sequential bands whose LAST band stays
+ * open so a stale-low bound can never truncate coverage. With no bound for
+ * a title (a transport that never reports `gridProperties`) the historical
+ * single open band is planned unchanged (correct, un-banded).
  */
 export function buildPreflightRanges(
   routes: readonly PreflightRouteOptions[],
   receiptSheet: ParsedSheet | undefined,
   shape: PreflightReadShape = LEGACY_PREFLIGHT_READ_SHAPE,
   receiptBandStart: number | undefined = undefined,
-): readonly string[] {
+  rowBounds: ReadonlyMap<string, number> = new Map(),
+  calibration: ReadCalibration | undefined = undefined,
+  evidence: ReadEvidence = "values-only",
+): readonly PlannedRange[] {
   const seen = new Set<string>();
-  const ranges: string[] = [];
-  for (const route of routes) {
-    for (const target of scopedOrFullTargetRanges(route, shape.scoped)) {
-      if (seen.has(target)) continue;
-      seen.add(target);
-      ranges.push(target);
+  const ranges: PlannedRange[] = [];
+  const push = (items: readonly PlannedRange[]): void => {
+    for (const item of items) {
+      if (seen.has(item.range)) continue;
+      seen.add(item.range);
+      ranges.push(item);
     }
+  };
+  for (const route of routes) {
+    push(scopedOrFullTargetRanges(route, shape.scoped, rowBounds, calibration, evidence));
   }
   if (receiptSheet !== undefined) {
-    const receiptQuote = quoteA1SheetName(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
-    const lastReceiptColumn = columnLetters(GOOGLE_SHEETS_API_RECEIPT_HEADERS.length);
-    ranges.push(
-      receiptBandStart === undefined || receiptBandStart < 2
-        ? `${receiptQuote}!A1:${lastReceiptColumn}1048576`
-        : `${receiptQuote}!A${receiptBandStart}:${lastReceiptColumn}1048576`,
-    );
+    const receiptQuote = `${quoteA1SheetName(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)}!`;
+    push(planRowBands({
+      quote: receiptQuote,
+      firstLetter: "A",
+      lastLetter: columnLetters(GOOGLE_SHEETS_API_RECEIPT_HEADERS.length),
+      columnCount: GOOGLE_SHEETS_API_RECEIPT_HEADERS.length,
+      fromRow: receiptBandStart === undefined || receiptBandStart < 2 ? 1 : receiptBandStart,
+      rowBound: rowBounds.get(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME),
+      evidence,
+      ...(calibration === undefined ? { calibration: NO_CALIBRATION } : { calibration }),
+    }));
   }
   return ranges;
 }
+
+/** Planning stand-in for callers that pass no calibration (never inflates). */
+const NO_CALIBRATION = {
+  ratioFor: () => 1,
+  observe: () => undefined,
+} as const;
 
 /**
  * True when one route's TARGET read is column-scoped (header row + key-column
@@ -328,25 +361,46 @@ export function routeUsesColumnScope(
   return anchorColumnFor(route.registeredRange, route.projection) !== undefined;
 }
 
-/** One route's target ranges for the requested read shape. */
+/** One route's planned target ranges for the requested read shape. */
 function scopedOrFullTargetRanges(
   route: PreflightRouteOptions,
   scoped: boolean,
-): readonly string[] {
+  rowBounds: ReadonlyMap<string, number>,
+  calibration: ReadCalibration | undefined,
+  evidence: ReadEvidence,
+): PlannedRange[] {
   const parsedRange = parseRegisteredRange(route.registeredRange);
   const lastColumn = parsedRange.startColumn + parsedRange.columnCount - 1;
-  const quote = quoteA1SheetName(route.sheetName);
-  const full = `${quote}!A1:${columnLetters(lastColumn)}1048576`;
+  const quote = `${quoteA1SheetName(route.sheetName)}!`;
+  const calib = calibration ?? NO_CALIBRATION;
+  const bound = rowBounds.get(route.sheetName);
+  const fullSpan = (): PlannedRange[] => planRowBands({
+    quote,
+    firstLetter: "A",
+    lastLetter: columnLetters(lastColumn),
+    columnCount: lastColumn,
+    fromRow: 1,
+    rowBound: bound,
+    evidence,
+    calibration: calib,
+  });
   // A user_input route's read additionally probes the single cell where a
   // provisioned row-check column header would sit (one 1-cell band; the
   // header is the only evidence that separates "provisioned" from "legacy",
   // and the probe never grows any existing range).
   const checkProbe = checkColumnFor(route.registeredRange, route.projection);
-  const checkProbeRange = checkProbe === undefined
+  const checkProbeItem: PlannedRange[] = checkProbe === undefined
     ? []
-    : [`${quote}!${columnLetters(checkProbe)}1:${columnLetters(checkProbe)}1`];
-  if (!scoped) return [full, ...checkProbeRange];
-  const headerRow = `${quote}!A1:${columnLetters(lastColumn)}1`;
+    : [{
+      range: `${quote}${columnLetters(checkProbe)}1:${columnLetters(checkProbe)}1`,
+      cells: 1,
+    }];
+  if (!scoped) return [...fullSpan(), ...checkProbeItem];
+  const lastLetter = columnLetters(lastColumn);
+  const headerBand: PlannedRange[] = [{
+    range: `${quote}A1:${lastLetter}1`,
+    cells: lastColumn,
+  }];
   const columns: number[] = [];
   if (route.identityField.kind === "present") {
     const offset = route.headers.indexOf(route.identityField.value);
@@ -355,71 +409,55 @@ function scopedOrFullTargetRanges(
   const anchorColumn = anchorColumnFor(route.registeredRange, route.projection);
   if (anchorColumn !== undefined) columns.push(anchorColumn);
   // A route whose registered range holds NEITHER key column cannot prove
-  // dedupe/append identity from a column-scoped read: keep the full range.
-  if (columns.length === 0) return [full, ...checkProbeRange];
-  const ranges: string[] = [headerRow];
+  // dedupe/append identity from a column-scoped read: keep the full span.
+  if (columns.length === 0) return [...fullSpan(), ...checkProbeItem];
+  const ranges: PlannedRange[] = [...headerBand];
   for (const column of new Set(columns)) {
     const letter = columnLetters(column);
-    ranges.push(`${quote}!${letter}2:${letter}1048576`);
+    ranges.push(...planRowBands({
+      quote,
+      firstLetter: letter,
+      lastLetter: letter,
+      columnCount: 1,
+      fromRow: 2,
+      rowBound: bound,
+      evidence,
+      calibration: calib,
+    }));
   }
-  ranges.push(...checkProbeRange);
+  ranges.push(...checkProbeItem);
   return ranges;
-}
-
-/**
- * Fetches ONE preflight data document (all route target tabs plus the shared
- * receipt tab in one ranged `spreadsheets.get`). `receiptBandStart` (1-based)
- * restricts the receipt tab read to its tail band; undefined reads the
- * historical full `A1:F1048576` range.
- */
-async function fetchPreflightDocument(
-  transport: GoogleSheetsApiTransport,
-  routes: readonly PreflightRouteOptions[],
-  receiptSheet: ParsedSheet | undefined,
-  fields: string,
-  timeoutMs: number | undefined,
-  onRawResponse: ((raw: unknown) => void) | undefined,
-  shape: PreflightReadShape,
-  receiptBandStart: number | undefined,
-): Promise<ParsedSpreadsheetDocument> {
-  const dataRequest: GoogleSheetsApiGetSpreadsheetRequest = {
-    spreadsheetId: routes[0]?.spreadsheetId ?? "",
-    ranges: buildPreflightRanges(routes, receiptSheet, shape, receiptBandStart),
-    fields,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-  };
-  const dataRaw = await transport.getSpreadsheet(dataRequest);
-  // Fail-open by construction: telemetry must never change a read outcome.
-  if (onRawResponse !== undefined) {
-    try {
-      onRawResponse(dataRaw);
-    } catch {
-      // Swallowed deliberately — size estimation is observational only.
-    }
-  }
-  return parseSpreadsheetDocument(dataRaw, "grid data");
 }
 
 /**
  * Reads the preflight document(s) and builds every route's context, applying
  * the receipt-read cursor and its cumulative receipt memo.
  *
+ * Phase 1 (unified read engine): the logical read runs through the engine
+ * runtime — the planned bands of one build() execute as SEQUENTIAL paced
+ * requests on the lane's pacing class when the authoritative row bound
+ * forces chunking, and the per-range grids reassemble into one logical
+ * document before parsing. A small tab is still exactly ONE request
+ * (byte-identical single open-ended ranges).
+ *
  * A banded read is trusted only when a parsed receipt sits EXACTLY at the
  * cursor row (the sentinel: the last known-applied receipt, proving the
  * cursor has not run ahead of the tab). A blank/shifted sentinel, a missing
  * band grid, or a transport rejection of the banded range (e.g. a cursor
  * beyond a shrunk tab) falls back to ONE historical full receipt read —
- * byte-identical to the pre-cursor behavior. A successful read merges every
- * parsed receipt into the cursor's cumulative memo and advances the cursor
- * to the parsed tail; the contexts then expose the MEMO (not just the band),
- * so a re-dispatched effect is replay-recognizable no matter how many cursor
- * advances have passed its receipt row. The cursor is NEVER advanced by a
- * write. Memo overflow or a receipt-coverage conflict resets the cursor and
- * settles coverage with one full receipt read (see `ReceiptReadCursor`).
+ * the full read is itself band-planned against the receipt tab's bound and
+ * its bands are merged through `readReceiptsAggregate` (one cross-band
+ * header/duplicate contract, then the unchanged cursor ladder). A
+ * successful read merges every parsed receipt into the cursor's cumulative
+ * memo and advances the cursor to the parsed tail; the contexts then expose
+ * the MEMO (not just the band), so a re-dispatched effect is
+ * replay-recognizable no matter how many cursor advances have passed its
+ * receipt row. The cursor is NEVER advanced by a write. Memo overflow or a
+ * receipt-coverage conflict resets the cursor and settles coverage with one
+ * full receipt read (see `ReceiptReadCursor`).
  *
- * Two scoped-mode downgrades keep the leased dispatch inside the historical
- * paced-request budget (enumeration + base read + at most one conditional
- * third read + write):
+ * Two scoped-mode downgrades keep their historical REPLACE-the-scoped-read
+ * semantics (never stack), each re-planned through the engine:
  * - while the shared receipt tab does not exist yet, the scoped column read
  *   is replaced by the historical whole-table full-evidence read (the
  *   stale-receipt-init branch already spends the third read on the refresh);
@@ -429,13 +467,11 @@ async function fetchPreflightDocument(
  *   the historical fail-closed validation over it instead of scoping.
  */
 async function readPreflightContextsWithCursor(
-  transport: GoogleSheetsApiTransport,
+  engine: EngineRuntime,
   routes: readonly PreflightRouteOptions[],
   sheets: readonly ParsedSheet[],
   receiptSheet: ParsedSheet | undefined,
-  timeoutMs: number | undefined,
   operation: SyncMissingTabOperation | undefined,
-  onRawResponse: ((raw: unknown) => void) | undefined,
   fields: string,
   shape: PreflightReadShape,
 ): Promise<Map<string, PreflightContext>> {
@@ -449,6 +485,16 @@ async function readPreflightContextsWithCursor(
     : shape;
   const effectiveFields = scopedDowngrade ? GOOGLE_SHEETS_API_PREFLIGHT_FIELDS : fields;
   const cursor = effectiveShape.cursor;
+  // Authoritative row bounds: the enumeration's committed
+  // `gridProperties.rowCount` (exact for this dispatch), falling back to the
+  // provider-instance cache the engine keeps warm from every response.
+  const rowBounds = new Map<string, number>();
+  const titles = routes.map((route) => route.sheetName);
+  if (receiptSheet !== undefined) titles.push(receiptSheet.title);
+  for (const title of titles) {
+    const bound = authoritativeRowBound(sheets, engine.rowBounds, title);
+    if (bound !== undefined) rowBounds.set(title, bound);
+  }
   // At the memo ceiling the band would expose an incomplete coverage map:
   // drop the cursor FIRST so this dispatch already runs the historical full
   // receipt read (its parsed map is complete on its own).
@@ -459,9 +505,15 @@ async function readPreflightContextsWithCursor(
     buildShape: PreflightReadShape = effectiveShape,
     buildFields: string = effectiveFields,
   ): Promise<Map<string, PreflightContext>> => {
-    const dataDocument = await fetchPreflightDocument(
-      transport, routes, receiptSheet, buildFields, timeoutMs, onRawResponse, buildShape, receiptBandStart,
+    const evidence: ReadEvidence = buildFields === GOOGLE_SHEETS_API_PREFLIGHT_FIELDS
+      ? "values+formats"
+      : "values-only";
+    const planned = buildPreflightRanges(
+      routes, receiptSheet, buildShape, receiptBandStart,
+      rowBounds, engine.calibration, evidence,
     );
+    const get = engine.makeGet(buildFields, evidence);
+    const dataDocument = await get(packReadRequests(planned, evidence, engine.calibration));
     const contexts = new Map<string, PreflightContext>();
     for (const route of routes) {
       contexts.set(
@@ -562,15 +614,16 @@ function isRejectedReadRange(error: unknown): boolean {
     error.status.value === 400;
 }
 
-/** Builds one preflight context for a single route from an enumerated doc. */
+/**
+ * Builds one preflight context for a single route from an enumerated sheet
+ * list. The data read runs through the engine runtime (paced band requests
+ * on the lane the runtime was built for), so a chunked plan is sequential
+ * but lands as ONE reassembled logical document for the context builders.
+ */
 export async function readPreflightData(
-  transport: GoogleSheetsApiTransport,
+  engine: EngineRuntime,
   route: PreflightRouteOptions,
   sheets: readonly ParsedSheet[],
-  timeoutMs?: number,
-  /** Receives the RAW transport document before parsing — telemetry measures
-   * the true response size from it (the parsed context loses wire detail). */
-  onRawResponse?: (raw: unknown) => void,
   /** Field mask override; defaults to the values-only base mask. The
    * oversized-verification fallback passes the full-evidence preflight mask
    * to reproduce the historical whole-table read exactly. */
@@ -580,7 +633,7 @@ export async function readPreflightData(
 ): Promise<PreflightContext> {
   const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
   const contexts = await readPreflightContextsWithCursor(
-    transport, [route], sheets, receiptSheet, timeoutMs, undefined, onRawResponse, fields, shape,
+    engine, [route], sheets, receiptSheet, undefined, fields, shape,
   );
   const context = contexts.get(route.sheetName);
   if (context === undefined) {
@@ -590,21 +643,17 @@ export async function readPreflightData(
 }
 
 /**
- * Reads one ranged getSpreadsheet across ALL needed tabs and builds a
+ * Executes the planned reads across ALL needed tabs and builds a
  * PreflightContext for each route (keyed by its sheetName), sharing the
  * read across the routes of one spreadsheet. `operation` classifies an
  * invalid provider state (e.g. a missing tab) detected while building a
  * route context.
  */
 export async function readPreflightDataForRoutes(
-  transport: GoogleSheetsApiTransport,
+  engine: EngineRuntime,
   routes: readonly PreflightRouteOptions[],
   sheets: readonly ParsedSheet[],
-  timeoutMs?: number,
   operation?: SyncMissingTabOperation,
-  /** Receives the RAW transport document before parsing — telemetry measures
-   * the true response size from it (the parsed result loses wire detail). */
-  onRawResponse?: (raw: unknown) => void,
   /** Field mask override; defaults to the values-only base mask (see
    * `readPreflightData`). */
   fields: string = GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS,
@@ -614,7 +663,7 @@ export async function readPreflightDataForRoutes(
 ): Promise<ReadonlyMap<string, PreflightContext>> {
   const receiptSheet = findSheetByTitle(sheets, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME);
   return readPreflightContextsWithCursor(
-    transport, routes, sheets, receiptSheet, timeoutMs, operation, onRawResponse, fields, shape,
+    engine, routes, sheets, receiptSheet, operation, fields, shape,
   );
 }
 
@@ -635,7 +684,12 @@ export function buildRouteContext(
   // blank-row, anchor, and normalization rules run unchanged over the cells
   // that were actually requested.
   const targetGrids = requireSheetGrids(dataDocument, targetSheet.sheetId);
-  const targetData = shape.scoped
+  const targetData = shape.scoped || targetGrids.length > 1
+    // A banded full-shape read (chunked against the authoritative row
+    // bound) returns one GridData per band; synthesize them into the one
+    // dense logical grid the historical header/blank-row/anchor rules run
+    // over, exactly like the scoped path. Single-grid full reads keep the
+    // strict `pickRegisteredGrid` malformed-reply contract.
     ? synthesizeScopedTargetGrid(targetGrids, parsedRange)
     : pickRegisteredGrid(targetGrids, parsedRange, targetSheet.sheetId);
   const anchorColumn = anchorColumnFor(route.registeredRange, route.projection);
@@ -693,11 +747,17 @@ export function buildRouteContext(
     const receiptGrids = receiptBandStart === undefined
       ? requireSheetGrids(dataDocument, receiptSheet.sheetId)
       : dataDocument.grids.get(receiptSheet.sheetId) ?? [];
-    const receiptData = receiptBandStart === undefined
-      ? requireSingleGrid(receiptGrids, receiptSheet.sheetId)
-      : receiptGrids[0];
-    if (receiptData !== undefined) {
-      const parsedReceipts = readReceipts(receiptData);
+    if (receiptBandStart === undefined && receiptGrids.length === 0) {
+      // A full-shape read must answer with at least the header grid; an
+      // empty grid list is the proven malformed reply (same contract the
+      // historical `requireSingleGrid` enforced).
+      requireSingleGrid(receiptGrids, receiptSheet.sheetId);
+    }
+    if (receiptGrids.length > 0) {
+      // Cross-band aggregate: one header contract, one global duplicate
+      // effectId check, and the EXACT aggregate first/last parsed rows the
+      // cursor sentinel ladder trusts (see `readReceiptsAggregate`).
+      const parsedReceipts = readReceiptsAggregate(receiptGrids);
       receipts = parsedReceipts.receipts;
       receiptLastRow = parsedReceipts.lastRow;
       receiptFirstRow = parsedReceipts.firstParsedRow;
@@ -734,6 +794,46 @@ export function buildRouteContext(
 // ---------------------------------------------------------------------------
 // Receipt parsing
 // ---------------------------------------------------------------------------
+
+/**
+ * Aggregates the receipt grids of ONE logical receipt read (a full or banded
+ * tail read may span several sequential band requests; each band is one
+ * GridData in request order).
+ *
+ * The aggregate preserves the EXACT contract a single-grid `readReceipts`
+ * parse gives the cursor ladder, so band-splitting can never weaken
+ * dedupe/replay:
+ * - the header is validated fail-closed exactly when the FIRST grid starts
+ *   at the header row (a full read validates once, on band one; tail bands
+ *   start below the header and never check it);
+ * - a duplicate effectId ANYWHERE across the bands fails closed, exactly
+ *   like an in-band duplicate (the append-only tab has no legal duplicate);
+ * - the result carries the ordered merged map plus the aggregate's EXACT
+ *   first parsed row (the first nonblank receipt row of the first band that
+ *   holds one — the value the cursor sentinel compares against
+ *   `bandStartRow`) and last content row across all bands.
+ */
+export function readReceiptsAggregate(grids: readonly ParsedGridData[]): {
+  readonly receipts: ReadonlyMap<string, PreflightReceipt>;
+  readonly lastRow: number;
+  readonly firstParsedRow: number | undefined;
+} {
+  const receipts = new Map<string, PreflightReceipt>();
+  let lastRow = 1;
+  let firstParsedRow: number | undefined;
+  for (const grid of grids) {
+    const parsed = readReceipts(grid);
+    lastRow = Math.max(lastRow, parsed.lastRow);
+    if (firstParsedRow === undefined) firstParsedRow = parsed.firstParsedRow;
+    for (const [effectId, receipt] of parsed.receipts) {
+      if (receipts.has(effectId)) {
+        invalidProviderState(`receipt sheet contains duplicate effectId: ${effectId}`);
+      }
+      receipts.set(effectId, receipt);
+    }
+  }
+  return { receipts, lastRow, firstParsedRow };
+}
 
 /**
  * Parses and validates the hidden receipt tab grid.

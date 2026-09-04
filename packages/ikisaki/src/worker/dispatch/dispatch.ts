@@ -27,6 +27,7 @@ import {
   completeApplied,
   completeFailure,
   recoverUnknownResults,
+  settleAbsorbedProbeResults,
 } from "./transitions.js";
 import {
   emitProviderTiming,
@@ -73,10 +74,27 @@ export async function handleProviderDispatchError(
 }
 
 /**
+ * Delivery-uncertain recovery effects attached to one dispatch unit so their
+ * probe reads are absorbed into the unit's own batch reads (Phase 4, design
+ * §10.3). `consumed` is set once the unit's dispatch ran the settle attempt
+ * (success or failure); an unconsumed attachment's items are requeued to the
+ * standalone end-of-pass probe by the worker.
+ */
+export interface UnitProbeAttachment {
+  readonly items: readonly ClaimedEffect[];
+  consumed: boolean;
+}
+
+/**
  * Dispatches append-only rows through the idempotent dispatcher batch
  * operation. A lost response is still returned to recovery; the provider
  * receipt batch lets the next attempt classify an already committed write
  * without appending again.
+ *
+ * When supplied, `probes` carries the same-route recovery effects absorbed
+ * into this append's provider call; their classifications settle through the
+ * unchanged transitions, and any item the dispatcher did not settle is
+ * pushed to `probeResidual` for the worker's standalone probe fallback.
  *
  * When the append throttle is configured, the request waits only the time
  * remaining since the previous append request started; regular apply dispatch
@@ -93,6 +111,8 @@ export async function dispatchFastAppendGroup(
   report: MutableReport,
   beforeRecovery?: () => Promise<boolean>,
   renewEffectLeases?: EffectLeaseRenewal,
+  probes?: UnitProbeAttachment,
+  probeResidual?: ClaimedEffect[],
 ): Promise<void> {
   const throttleStartedAt = Date.now();
   const throttledMs = await options.batchController?.waitForAppendThrottle(throttleStartedAt) ?? 0;
@@ -111,13 +131,18 @@ export async function dispatchFastAppendGroup(
   const requestRouteKey = group.routeKey;
   const batchLimit = options.batchController?.beginDispatch(requestRouteKey, providerStartedAt)
     ?? group.items.length;
+  const probeItems = probes?.items ?? [];
   try {
     const renewGroupLeases = renewEffectLeases;
     outcome = await options.dispatcher.fastAppend({
       routeKey: requestRouteKey,
       effects: group.items.map((item) => item.pending),
+      ...(probeItems.length === 0 ? {} : { probeEffects: probeItems.map((item) => item.pending) }),
       ...(renewGroupLeases === undefined ? {} : {
-        beforeRemoteDispatch: () => renewGroupLeases(group.items),
+        // The absorbed probe leases renew with the batch so a long lane wait
+        // cannot expire a claimed head mid-pass; a failed renewal aborts the
+        // whole dispatch (the probes then fall back to the standalone pass).
+        beforeRemoteDispatch: () => renewGroupLeases([...group.items, ...probeItems]),
       }),
     });
   } catch (error: unknown) {
@@ -144,6 +169,14 @@ export async function dispatchFastAppendGroup(
       ...fence,
       now: options.clock?.() ?? fence.now + Math.max(0, Date.now() - providerStartedAt),
     };
+    // The append never returned a result envelope, so no probe was settled:
+    // hand the absorbed items back for the standalone end-of-pass probe. A
+    // caller without a residual sink leaves them claimed; the durable lease
+    // sweep recovers them exactly like any aborted pass (fail-closed).
+    if (probes !== undefined && !probes.consumed && probeItems.length > 0) {
+      probes.consumed = true;
+      probeResidual?.push(...probeItems);
+    }
     await handleProviderDispatchError(
       options,
       storage,
@@ -175,6 +208,21 @@ export async function dispatchFastAppendGroup(
     responseLoss: !outcome.hasMore && outcome.results.length !== group.items.length,
   });
   emitProviderTiming(options, outcome.timing);
+  // Settle the absorbed same-route probes from this append's own reads
+  // BEFORE persisting the append's results: the verdicts came from the
+  // pre-write evidence and settle through the unchanged fenced transitions.
+  if (probes !== undefined && !probes.consumed && probeItems.length > 0) {
+    probes.consumed = true;
+    const unsettled = await settleAbsorbedProbeResults(
+      options,
+      storage,
+      () => resultFence,
+      probeItems,
+      outcome.probeResults,
+      report,
+    );
+    probeResidual?.push(...unsettled);
+  }
   emitWorkerTiming(options, {
     scope: TIMING_SCOPES.WORKER,
     phase: "append_provider_dispatch",

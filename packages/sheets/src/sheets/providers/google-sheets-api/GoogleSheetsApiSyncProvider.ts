@@ -79,6 +79,7 @@ import {
   type GoogleSheetsApiTransport,
 } from "./transport/googleSheetsApiTransport.js";
 import { ReceiptReadCursor } from "./model/receiptCursor.js";
+import { createReadCalibration } from "./model/readPlan.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "./transport/rateLimiter.js";
 import type { GoogleSheetsApiProviderDeps } from "./operations/shared.js";
 import { PromiseTailLock } from "./operations/shared.js";
@@ -241,6 +242,8 @@ export class GoogleSheetsApiSyncProvider
       preparedStateRegistry: new WeakSet<object>(),
       receiptInitLock: new PromiseTailLock(),
       receiptReadCursor: new ReceiptReadCursor(),
+      sheetRowBounds: new Map<string, number>(),
+      readCalibration: createReadCalibration(),
       definitions: this.definitions,
       transport: this.transport,
       readTimeoutMs: this.readTimeoutMs,

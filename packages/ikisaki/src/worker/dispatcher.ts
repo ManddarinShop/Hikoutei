@@ -33,6 +33,22 @@ export interface DispatchRequest {
   readonly routeKey: string;
   readonly effects: readonly PendingEffect[];
   /**
+   * Optional delivery-uncertain recovery effects the worker absorbs into
+   * this batch's dispatch (unified read engine Phase 4, design §10.3).
+   *
+   * These rows are NEVER dispatched/written by this call: the worker claims
+   * them as recovery candidates and attaches each same-route group to the
+   * first dispatch unit of that route, so the batch's own reads double as
+   * the recovery probe's evidence read and the dispatcher returns their
+   * classifications in `probeResults` for the worker's unchanged transitions.
+   * A dispatcher that does not absorb (older host, fake, or cross-route
+   * mismatch) simply returns no `probeResults`, and the worker falls back to
+   * the standalone `readPostconditions` probe. The host must pass these
+   * effects' payloads to the provider's `probeEffects` request fields and
+   * must NOT include them in `effects`.
+   */
+  readonly probeEffects?: readonly PendingEffect[];
+  /**
    * Optional lease-renewal hook the HOST dispatcher must invoke immediately
    * before the provider remote call, after every internal serialization lane
    * and limiter wait the host applies.
@@ -79,6 +95,13 @@ export interface FastAppendOutcome {
   readonly hasMore: boolean;
   /** Optional phase timing returned by newer provider deployments. */
   readonly timing?: ProviderTiming;
+  /**
+   * Classifications for the request's absorbed `probeEffects` (one entry per
+   * absorbed probe effect the batch could decide), absent when none were
+   * carried or absorbed; missing entries keep the worker's standalone-probe
+   * fallback.
+   */
+  readonly probeResults?: readonly PostconditionResult[];
 }
 
 /** Per-effect outcome of one regular apply call. */
@@ -149,6 +172,11 @@ export interface ApplyOutcome {
   readonly hasMore: boolean;
   /** Optional phase timing returned by newer provider deployments. */
   readonly timing?: ProviderTiming;
+  /**
+   * Classifications for the request's absorbed `probeEffects` (see
+   * `FastAppendOutcome.probeResults`).
+   */
+  readonly probeResults?: readonly PostconditionResult[];
 }
 
 /**
