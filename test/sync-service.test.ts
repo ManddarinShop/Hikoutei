@@ -178,9 +178,14 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     await service.effectSupervisor.runOnce();
     // Without an explicit batch controller the worker chunks the regular
     // route at EFFECT_BATCH_LIMIT (300); the adaptive controller starts at
-    // its INITIAL (100) and grows toward the cap.
+    // its INITIAL (100) and grows toward the cap (never exceeding MAXIMUM,
+    // never shrinking below INITIAL without a real failure).
     expect(regularLimits.length).toBeGreaterThan(0);
-    for (const limit of regularLimits) expect(limit).toBe(100);
+    expect(regularLimits[0]).toBe(100);
+    for (const limit of regularLimits.slice(1)) {
+      expect(limit).toBeGreaterThanOrEqual(100);
+      expect(limit).toBeLessThanOrEqual(1_000);
+    }
   });
 
   it("uses the googleSheetsApi timeout for lease-headroom validation", async () => {

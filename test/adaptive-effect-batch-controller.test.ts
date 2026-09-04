@@ -23,7 +23,7 @@ describe("adaptive effect batch controller", () => {
     // Stable successes grow +25 per 2 consecutive healthy observations.
     controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
     controller.observe("route-a", { durationMs: 100, responseSucceeded: true, responseLoss: false });
-    expect(controller.limitFor("route-a")).toBe(75);
+    expect(controller.limitFor("route-a")).toBe(150);
   });
 
   it("coalesces only a short burst without holding effect rows in memory", async () => {

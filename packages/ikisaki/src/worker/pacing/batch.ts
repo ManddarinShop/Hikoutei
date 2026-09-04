@@ -13,8 +13,8 @@ export const ADAPTIVE_EFFECT_BATCH_LIMITS = {
 
 export const DEFAULT_EFFECT_BATCH_COALESCE_WINDOW_MS = 500;
 export const EFFECT_BATCH_HIGH_LATENCY_THRESHOLD_MS = 120_000;
-export const EFFECT_BATCH_STABLE_SUCCESSES_TO_GROW = 2;
-export const EFFECT_BATCH_GROWTH_STEP = 25;
+export const EFFECT_BATCH_STABLE_SUCCESSES_TO_GROW = 1;
+export const EFFECT_BATCH_GROWTH_STEP = 50;
 export interface AdaptiveEffectBatchObservation {
   readonly durationMs: number;
   readonly responseSucceeded: boolean;

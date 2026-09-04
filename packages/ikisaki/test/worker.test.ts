@@ -2536,7 +2536,7 @@ describe("adaptive batch controller", () => {
     for (let index = 0; index < 2; index += 1) {
       controller.observe("route-a", { durationMs: 10, responseSucceeded: true, responseLoss: false });
     }
-    expect(controller.limitFor("route-a")).toBe(75);
+    expect(controller.limitFor("route-a")).toBe(150);
   });
 
   it("exposes a read-only limits snapshot without creating or mutating route state", () => {
@@ -2545,11 +2545,11 @@ describe("adaptive batch controller", () => {
     expect(controller.limitsSnapshot()).toEqual({});
     controller.observe("route-b", { durationMs: 10, responseSucceeded: true, responseLoss: false });
     controller.observePreflight("route-a", { durationMs: 5, succeeded: false });
-    expect(controller.limitsSnapshot()).toEqual({ "route-a": 50, "route-b": 100 });
+    expect(controller.limitsSnapshot()).toEqual({ "route-a": 50, "route-b": 150 });
     // Mutating the copy cannot reach the controller's policy state.
     const snapshot = controller.limitsSnapshot();
     snapshot["route-b"] = 999;
-    expect(controller.limitFor("route-b")).toBe(100);
+    expect(controller.limitFor("route-b")).toBe(150);
   });
 
   it("rejects invalid adaptive batch limit configurations", () => {
@@ -2608,7 +2608,7 @@ describe("adaptive batch controller", () => {
       controller.observePreflight("route-fast", { durationMs: 5, succeeded: true });
       controller.observe("route-fast", { durationMs: 5, responseSucceeded: true, responseLoss: false });
     }
-    expect(controller.limitFor("route-fast")).toBe(125);
+    expect(controller.limitFor("route-fast")).toBe(200);
   });
 
   it("clears buffered preflight latency when a prepared unit is abandoned (fence loss)", () => {
@@ -2626,7 +2626,7 @@ describe("adaptive batch controller", () => {
     // instead of being pushed over the latency threshold by a stale read whose
     // write never ran.
     controller.observe("route-abandoned", { durationMs: 20, responseSucceeded: true, responseLoss: false });
-    expect(controller.limitFor("route-abandoned")).toBe(100);
+    expect(controller.limitFor("route-abandoned")).toBe(150);
     // Without the clear, the 90ms read would have pushed 20+90=110 over the
     // 100ms threshold and halved the limit instead.
   });
@@ -2663,7 +2663,7 @@ describe("adaptive batch controller", () => {
       maxEffects: 5,
       batchController: partialController,
     });
-    expect(partialController.limitFor(routeKey)).toBe(100);
+    expect(partialController.limitFor(routeKey)).toBe(150);
 
     // hasMore=false with a missing result: the provider claims completion but
     // did not acknowledge every effect, so delivery-uncertain recovery backs
@@ -2736,7 +2736,7 @@ describe("adaptive batch controller", () => {
       batchController: controller,
     });
 
-    expect(controller.limitFor(routeKey)).toBe(100);
+    expect(controller.limitFor(routeKey)).toBe(150);
     expect(report).toMatchObject({ applied: 1, deferred: 1, requeued: 0, failed: 0 });
     await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
