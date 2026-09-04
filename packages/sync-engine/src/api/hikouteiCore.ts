@@ -11,6 +11,7 @@
  */
 
 import type { ScalarEntityPersistenceProvider } from "@hikoutei/contracts/storage/scalar.js";
+import type { GoogleSheetsApiProviderOptions } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import type { EntityManager } from "./EntityManager.js";
 import { createEntityManager } from "./internalEntityManager.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
@@ -38,6 +39,24 @@ const HIKOUTEI_DB_PATH_ENV = "HIKOUTEI_DB_PATH";
 /** SQLite path used when neither `dbName` nor the env var is set. */
 const DEFAULT_DB_PATH = "./hikoutei.sqlite";
 
+/**
+ * Application-settable Google Sheets provider options for a sync-enabled
+ * runtime (the `HIKOUTEI_SYNC_SPREADSHEET_URL` path).
+ *
+ * This is a strict subset of the internal provider contract: the test-only
+ * injection hooks (`transport`, `now`, `sleep`) are NOT part of the public
+ * surface. `onRequest` receives redacted per-request telemetry events (never
+ * ids, payloads, or URLs); it fires only while the sync worker/polling makes
+ * real Google API calls, so a local-only runtime never emits it. Timeouts are
+ * validated fail-closed by the sync-service bootstrap. The
+ * `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` env override, when set, wins over
+ * `rateLimitIntervalMs`.
+ */
+export type HikouteiProviderOptions = Omit<
+  GoogleSheetsApiProviderOptions,
+  "transport" | "now" | "sleep"
+>;
+
 /** Options for opening the local Hikoutei runtime. */
 export interface CreateTypedSheetsOptions {
   /**
@@ -54,6 +73,13 @@ export interface CreateTypedSheetsOptions {
    * time of the call, in registration order.
    */
   readonly entities?: readonly HikouteiEntity[];
+  /**
+   * Optional Google Sheets provider tuning/telemetry for the SYNC path only.
+   * When `HIKOUTEI_SYNC_SPREADSHEET_URL` is absent this field is inert (a
+   * local-only runtime constructs no provider), preserving byte-identical
+   * local behavior. See {@link HikouteiProviderOptions}.
+   */
+  readonly providerOptions?: HikouteiProviderOptions;
 }
 
 /**
@@ -391,5 +417,25 @@ export function validateTypedSheetsOptions(options: CreateTypedSheetsOptions): v
       HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
       "createTypedSheets() entities must be an array.",
     );
+  }
+  // Untrusted-caller boundary: providerOptions is plain JS at this point, so
+  // reject a non-object bag and a non-callable onRequest fail-closed instead
+  // of letting the sync worker crash on a late invocation.
+  if (options.providerOptions !== undefined) {
+    if (options.providerOptions === null || typeof options.providerOptions !== "object") {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+        "createTypedSheets() providerOptions must be an object.",
+      );
+    }
+    if (
+      options.providerOptions.onRequest !== undefined
+      && typeof options.providerOptions.onRequest !== "function"
+    ) {
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+        "createTypedSheets() providerOptions.onRequest must be a function.",
+      );
+    }
   }
 }

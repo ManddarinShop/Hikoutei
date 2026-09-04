@@ -1793,4 +1793,39 @@ describe("env-driven sync auto-start", () => {
       }
     }
   });
+
+  it("forwards providerOptions.onRequest to the sync provider's request sink", async () => {
+    // The public telemetry hook must reach the provider's redacted sink:
+    // startup provisioning performs real (stubbed) transport calls, so the
+    // sink fires without any flush.
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const { transport } = newTransport();
+    const events: { readonly operation: string; readonly ok: boolean }[] = [];
+    const result = await createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: syncEnv(credentialsPath),
+      transport,
+      providerOptions: { onRequest: (event) => events.push(event) },
+    });
+    const service = requireSyncResult(result);
+    services.push(service);
+    expect(transport.getSpreadsheetCalls).toBeGreaterThan(0);
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) =>
+      event.operation === "getSpreadsheet" || event.operation === "batchUpdate"
+    )).toBe(true);
+  });
+
+  it("rejects a non-callable providerOptions.onRequest at the public boundary", async () => {
+    // Boundary validation runs before any env/transport decision, so this
+    // fails closed without starting anything.
+    await expect(createTypedSheets({
+      dbName: ":memory:",
+      entities: [User],
+      providerOptions: { onRequest: "not-a-function" as never },
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+    });
+  });
 });

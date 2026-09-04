@@ -154,6 +154,15 @@ export interface CreateTypedSheetsWithSyncOptions {
   // Public API diagnostic type — literal level union is the external contract, not an internalLog emission site.
   readonly onDiagnostic?: (level: "info" | "error", message: string) => void;
   readonly adopt?: AdoptSpec;
+  /**
+   * Provider telemetry/tuning forwarded to the sync-service provider wiring
+   * (real-transport path only; inert in local-only mode). Mirrors the public
+   * `CreateTypedSheetsOptions.providerOptions` contract: the internal bridge
+   * accepts the full `GoogleSheetsApiProviderOptions`, so this narrower
+   * public shape flows through with zero cast, and the wrapper's call site
+   * pins the assignability.
+   */
+  readonly providerOptions?: import("./Hikoutei.js").HikouteiProviderOptions;
 }
 
 /**
@@ -186,6 +195,9 @@ export async function createTypedSheetsWithSync(
       : { env: options.env }),
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
     ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
+    ...(options.providerOptions === undefined
+      ? {}
+      : { providerOptions: options.providerOptions }),
   });
   // Drop the internal service handle from the public result: the runtime
   // handle is the application-facing contract.
