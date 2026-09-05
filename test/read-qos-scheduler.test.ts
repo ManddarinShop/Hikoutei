@@ -17,7 +17,7 @@ import {
   RateLimitOptionsError,
   ReadQoSScheduler,
   RequestStartLimiter,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+} from "@hikoutei/ikisaki";
 
 describe("ReadQoSScheduler", () => {
   it("shares ONE timeline and interval across both read classes", async () => {

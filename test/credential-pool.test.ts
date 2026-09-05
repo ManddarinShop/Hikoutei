@@ -41,12 +41,12 @@ import {
 import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
 import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
 import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/ikisaki";
 import {
   QUOTA_GOVERNOR_LANES,
   QuotaPacingGovernor,
   RollingQuotaBudget,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/quotaGovernor.js";
+} from "@hikoutei/ikisaki";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,

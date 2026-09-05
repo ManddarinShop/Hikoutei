@@ -107,6 +107,9 @@ importers:
 
   packages/contracts:
     dependencies:
+      '@hikoutei/ikisaki':
+        specifier: 0.1.13
+        version: link:../ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
         version: 0.1.0
@@ -119,6 +122,10 @@ importers:
         version: 24.13.3
 
   packages/ikisaki:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -147,6 +154,9 @@ importers:
       '@hikoutei/contracts':
         specifier: 0.1.0
         version: link:../contracts
+      '@hikoutei/ikisaki':
+        specifier: 0.1.13
+        version: link:../ikisaki
       '@hikoutei/sync-engine':
         specifier: 0.1.0
         version: link:../sync-engine

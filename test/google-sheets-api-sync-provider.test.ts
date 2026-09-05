@@ -58,11 +58,11 @@ import {
   RateLimitOptionsError,
   RequestStartLimiter,
   ReadQoSScheduler,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+} from "@hikoutei/ikisaki";
 import {
   QuotaPacingGovernor,
   RollingQuotaBudget,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/quotaGovernor.js";
+} from "@hikoutei/ikisaki";
 import {
   GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
   GOOGLE_SHEETS_API_ENUMERATION_FIELDS,

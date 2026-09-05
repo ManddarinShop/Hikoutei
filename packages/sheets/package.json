@@ -38,6 +38,7 @@
   "dependencies": {
     "@googleapis/sheets": "^14.0.0",
     "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/ikisaki": "0.1.13",
     "@hikoutei/sync-engine": "0.1.0",
     "google-auth-library": "^11.0.0",
     "zod": "^4.4.3"
