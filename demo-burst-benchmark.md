@@ -231,3 +231,33 @@ SQLite 인입은 전 라운드 공통으로 무결 (p50 2ms, 실패 0) — 병�
 1. 시나리오 실패(invalid-human-input, multi-field-human-edit, no-op-human-edit 등)는 **develop에도 존재하는 사전 존재 문제** — 동일 시드로 동일 지점 실패. credential pool·동시 디스패치·배치 1,000 변경 무관.
 2. feature 브랜치가 **3.5배 더 진행** 후 임계 도달 — 새 안정성 장치(거버너·풀·동시성)가 이 환경에서 더 안정적이었음.
 3. 소크의 라이브 멀티테이블 CLI 경로는 워크스페이스 재구성 이후 `distFallback` 스테일 경로로 실행 불가 상태였음 — 이번에 최초 실측. **human-edit 시나리오의 `scenario-error` 정밀 분석은 별도 과제** (내부 로그: feature `projection_outbox_blocked` ×1, develop `transport.request_failed` ×31).
+
+# 소크 검증 라운드 (23차~29차): human-edit 시나리오 결함의 완전한 여정
+
+## 발견 과정
+
+12차 소크(동일 시드 A/B)에서 human-edit 시나리오 11건 실패 — develop 대조군도 동일 실패 → **사전 존재 문제** 확정. 실패 기록이 전부 불투명한 `scenario-error`라 원인을 모름.
+
+## 1단계: 진단 계측 (14차)
+모든 시나리오 실패가 안정 태그(`reasonTag` + `failureKinds` 24종) 기록 → 실제 사유 식별: **`DirectSheetsError (identity_shifted)`**. 직접 편집 시임이 행 이동을 감지하고 성공 보고를 거부 — 설계대로 작동한 것.
+
+## 2단계: identity_shifted 재분류
+경합 결과를 관측 불가로 분류하던 것을 **기대 과도 상태**(`skipped` + `identity-shifted-transient`)로 — 단, 직접쓰기 거절에만 (read 에러 오분류 3건은 Terra 지적 후 수정).
+
+## 3단계: 진짜 결함 발견 (18차, 시트 vs SQLite 직접 쿼리)
+인간 값은 **OPEN 충돌로 보존** (`sync_conflict`에 user_value) — 유실 아님. 발견된 실제 결함 1개: **terminally `failed` effect가 인바운드 억제 세트에 남아 흡수를 영구 차단** → `MikroOrmUserInputPollingSql.ts`에서 `failed` 제거 (pending/processing/delivery_uncertain만 유지). 회귀 테스트 추가.
+
+## 4단계: cleanup 계층 수정 2건
+- **conflict-recorded 결과 수용**: 행만 보던 관측이 충돌 레코드를 정상 결과로 인정
+- **resolve-then-delete**: OPEN 충돌이 있는 행 삭제 시 먼저 system-wins 해소 → 해소 후 삭제
+- **outbox-drain 대기**: 삭제 전 바인딩 아웃박스가 비기를 bounded 대기, 만료 시 `cleanup-outbox-busy` 기록
+
+## 29차 최종 (20분 완주, 조기 종료 없음)
+
+| 항목 | 12차 | **29차** |
+|---|---|---|
+| 중단 사유 | max-consecutive-failures | **duration-budget-reached (정상)** |
+| 연산 / 수렴 | 728, 0실패 / 7-7 | **728, 0실패 / 7-7** |
+| 시나리오 실패 | 11 | **5** (전부 관측/정리 타임아웃) |
+
+잔여 5건은 전부 관측 창 만료 계열 (cleanup-proof-timeout ×3, cleanup-outbox-busy ×1, human-rejection-non-stale ×1) — 분류는 정확하고, 지연을 줄이는 이슈 #469가 진짜 처방.
