@@ -15,8 +15,9 @@ export type ReleaseVersionResult =
 export function computeReleaseVersion(input: ReleaseVersionInput): ReleaseVersionResult;
 
 /**
- * Normalizes `X.Y.Z-dev.N` (or passes through `X.Y.Z`) to the numeric base a
- * stable release bumps; rejects any other prerelease/build metadata.
+ * Normalizes `X.Y.Z-dev.N` (legacy) or `X.Y.Z-dev` (current), or passes through
+ * `X.Y.Z`, to the numeric base a stable release bumps; rejects any other
+ * prerelease/build metadata.
  */
 export function normalizeStableBaseVersion(value: unknown): ReleaseVersionResult;
 
