@@ -39,7 +39,7 @@
     "@googleapis/sheets": "^14.0.0",
     "@hikoutei/sync-engine": "0.1.0",
     "google-auth-library": "^11.0.0",
-    "hikoutei": "0.9.33-dev.4"
+    "hikoutei": "0.10.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"
