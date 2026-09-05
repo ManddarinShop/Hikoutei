@@ -157,16 +157,20 @@ export async function readMappedPollingRows(
     [SYNC_PROJECTIONS.USER_INPUT, ...physicalSheetIds],
   );
   // Undelivered outbox effects per binding. These are the statuses where
-  // delivery of an OWN write is still in flight (queued, claimed, uncertain,
-  // or awaiting retry), so the remote row legitimately still shows the
-  // pre-write values; conflict-blocked/blocked-candidate rows keep normal
-  // polling observation. Statuses follow the outbox kernel CHECK constraint.
+  // delivery of an OWN write is still in flight (queued, claimed, or
+  // uncertain), so the remote row legitimately still shows the pre-write
+  // values; conflict-blocked/blocked-candidate rows keep normal polling
+  // observation. TERMINALLY FAILED effects are deliberately NOT in the
+  // set: a failed effect will never deliver, so suppressing on it starves
+  // inbound ingestion for the entire redrive window — and forever when the
+  // failure is never superseded. The redrive's successor re-suppresses
+  // when it is created. Statuses follow the outbox kernel CHECK constraint.
   const pendingEffects = await sql.all<PendingEffectSqlRow>(
     `SELECT DISTINCT row_binding_id
      FROM sheet_effect_outbox
      WHERE logical_sheet_id IN (${placeholders(logicalSheetIds)})
        AND row_binding_id IS NOT NULL
-       AND status IN ('pending', 'processing', 'delivery_uncertain', 'failed')`,
+       AND status IN ('pending', 'processing', 'delivery_uncertain')`,
     logicalSheetIds,
   );
   return {
