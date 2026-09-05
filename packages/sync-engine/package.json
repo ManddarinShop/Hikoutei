@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "@hikoutei/contracts": "0.1.0",
-    "@hikoutei/ikisaki": "0.1.12",
+    "@hikoutei/ikisaki": "0.1.13",
     "@hikoutei/storage": "0.1.0"
   },
   "devDependencies": {
