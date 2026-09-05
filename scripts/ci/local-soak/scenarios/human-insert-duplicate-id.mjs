@@ -11,13 +11,14 @@
  * The direct insert seam (`insertInputRow`) rejects an already-existing id
  * with the stable `identity_shifted` status class BEFORE writing (the
  * pre-write validation rejects a duplicate identity and never writes), so
- * the fail-closed rejection is EXPECTED evidence (expectedErrors 1); any
- * OTHER rejection (transport/validation) or a non-rejected insert is a real
- * failure. The action uses the public EntityManager for the dedicated row
+ * a clean exact-identity rejection is an EXPECTED TRANSIENT of the
+ * multi-writer soak (a truthful `identity-shifted-transient` skip, never a
+ * failure); any OTHER rejection (transport/validation) or a non-rejected
+ * insert is a real failure. The action uses the public EntityManager for the dedicated row
  * and the direct-Sheet seam for the insert, so it runs only in live mode.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -78,9 +79,9 @@ export function plan({ cycle, order, rng, activeEntities }) {
 /**
  * Live action: creates a DEDICATED existing row, awaits its projection, then
  * attempts a direct human row-insert with the SAME id. The seam rejects the
- * duplicate with `identity_shifted` BEFORE writing (fail closed), which is
- * EXPECTED evidence (expectedErrors 1); a non-rejected insert or a
- * non-identity rejection is a real failure. It then verifies the existing row
+ * duplicate with `identity_shifted` BEFORE writing (fail closed); a
+ * non-rejected insert or a non-identity rejection is a real failure. It then
+ * verifies the existing row
  * was NOT overwritten and NO duplicate row appeared via a bounded authority
  * observation. The dedicated row is removed in a GUARANTEED finally path so
  * the final SQLite state matches the deterministic replay.
@@ -148,6 +149,7 @@ export async function execute({ plan, context }) {
         // failure.
         let insertRejected = false;
         let identityShifted = false;
+        let insertError;
         try {
           await client.insertInputRow({
             spreadsheetId: context.live.spreadsheetId,
@@ -159,7 +161,10 @@ export async function execute({ plan, context }) {
           insertRejected = true;
           // The shared direct-seam evidence check: the real seam surfaces
           // the fail-closed guard as `statusClass`, the fake seam as `code`.
+          // The rejection reason is retained so a clean exact-identity
+          // rejection resolves to the transient record (with its reasonTag).
           identityShifted = isIdentityShiftedEvidence(error);
+          if (identityShifted) insertError = error;
         }
         if (!insertRejected) {
           // The seam did NOT reject the duplicate: a duplicate projection or
@@ -193,7 +198,11 @@ export async function execute({ plan, context }) {
               failureKinds.add("sheet-duplicate-leaked");
               result = { status: "failed", expectedErrors: 1, failures, reason: "scenario-error" };
             } else {
-              result = { status: "ok", expectedErrors: 1, failures: 0 };
+              // A clean exact-identity rejection whose no-overwrite checks
+              // passed is the expected multi-writer transient: resolve to
+              // the transient record (accumulated real failures above
+              // already won over it).
+              result = identityShiftedTransientResult(insertError);
             }
           } else if (outcome === "duplicate" || outcome === "overwritten") {
             failures += 1;
@@ -201,8 +210,10 @@ export async function execute({ plan, context }) {
             result = { status: "failed", expectedErrors: 1, failures, reason: "scenario-error" };
           } else {
             // The authority could not settle on a single unchanged row within
-            // the bound: a truthful skip, never an unobserved ok.
-            result = { status: "skipped", expectedErrors: 1, failures: 0, reason: "winner-not-verified" };
+            // the bound: the direct insert was still a clean exact-identity
+            // rejection, so resolve to the transient record (never an
+            // unobserved ok).
+            result = identityShiftedTransientResult(insertError);
           }
         }
       }

@@ -114,8 +114,10 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable CAS/stale/conflict
  * evidence: a rejected local write or human multi-field write is an expected
  * stale-write compare-and-set conflict only when its error carries one of
- * the exact guard/hash-mismatch codes; a validation, transport, or
- * direct-write rejection (including `identity_shifted`) is a real failure.
+ * the exact guard/hash-mismatch codes; a validation, transport, or other
+ * direct-write rejection is a real failure. An exact `identity_shifted`
+ * rejection of the direct human write is the expected multi-writer
+ * transient (a truthful `identity-shifted-transient` skip, never a failure).
  * The scenario then verifies the observable invariants: no duplicate rows
  * for the race id, and the human fields are not silently lost (a bounded
  * observation). A partial application (some human fields landed, others

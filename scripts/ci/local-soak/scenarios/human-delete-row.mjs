@@ -81,10 +81,12 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable stale/CAS/conflict
  * evidence: a rejected public update is an expected stale-write compare-and-
  * set conflict only when its error carries one of the exact guard/hash-
- * mismatch codes; a validation, transport, or direct-write rejection is a
- * real failure. A rejected human delete is expected only on the same exact
- * CAS/stale evidence; any other delete rejection (including the direct
- * client's `identity_shifted` fail-closed guard) is a real failure. The
+ * mismatch codes; a validation, transport, or other direct-write rejection
+ * is a real failure. A rejected human delete is expected only on the same
+ * exact CAS/stale evidence; any other delete rejection is a real failure,
+ * except an exact `identity_shifted` rejection of the direct delete, which
+ * is the expected multi-writer transient (a truthful
+ * `identity-shifted-transient` skip, never a failure). The
  * oracle is NEVER updated from an unproven winner — the dedicated row is
  * removed (in a guaranteed finally path) so the final SQLite state matches
  * the deterministic replay.
