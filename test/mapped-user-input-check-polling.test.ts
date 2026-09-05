@@ -239,6 +239,83 @@ describe("inspectChecksPollingTable", () => {
     expect(decision.rowNumbers).toEqual([2]);
   });
 
+  it("does NOT skip a mismatching row whose only outbox evidence is terminally failed", async () => {
+    // A FAILED outbox effect will never deliver, so its binding must not
+    // suppress inbound observation: the failed version of the race row
+    // must escalate for conflict/adoption instead of being skipped for
+    // the whole redrive window (live benchmark rounds 15-18: terminally
+    // failed bindings starved ingestion past every observation window).
+    const orm = await createOrm();
+    try {
+      const storage = createMikroOrmSqliteAdapter(orm);
+      await migrateMikroOrmSqliteStorageSchema(storage);
+      const writer = deterministicWriter("failed-binding");
+      await seedStore(storage, writer);
+      await storage.transaction(async ({ sql }) => {
+        sql.run(
+          `INSERT INTO sheet_effect_outbox (
+            effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+            projection, row_binding_id, conflict_id, target_kind, target_id,
+            target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
+            expected_visible_revision, expected_visible_hash, repair_guard_hash,
+            source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
+            stream_sequence, predecessor_effect_id, status, attempts, claim_token,
+            writer_epoch, supersedes_effect_id, last_error_code, last_error_message,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "effect-failed-u2",
+            "candidate_reconcile",
+            "commit-failed-u2",
+            "check-gate-sheet",
+            "check-gate-input",
+            "user_input",
+            "binding-u2",
+            null,
+            "projection_row",
+            "projection-row:check-gate-input:binding-u2",
+            1,
+            null,
+            null,
+            1,
+            computeSyncVisibleHash({ id: ID_2, status: PENDING }),
+            null,
+            null,
+            JSON.stringify({ sheetName: "Gate_Input", rows: [] }),
+            "payload-failed-u2",
+            "dedupe-failed-u2",
+            1,
+            null,
+            "failed",
+            1,
+            null,
+            0,
+            null,
+            "delivery_uncertain_timeout",
+            null,
+            0,
+          ],
+        );
+      });
+      // The sheet shows a DIRECT HUMAN EDIT on u2's status cell (the
+      // input tab's B3 cell), while u2's only outbox row is terminally
+      // failed: the poll must escalate u2 for conflict/adoption.
+      const { transport } = seedGateSheet(true);
+      const provider = gateProvider(transport);
+      const report = await pollMappedUserInputWithMikroOrm({
+        storage,
+        provider,
+        mappings: [mapping],
+        writer,
+        mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
+      });
+      expect(report.changedRows).toBe(1);
+      expect(report.changedRows + report.appliedRows + report.conflictRows).toBeGreaterThan(0);
+    } finally {
+      await orm.close(true);
+    }
+  });
+
   it("skips a mismatching row whose own write delivery is still in flight", () => {
     // The Sheet still shows the PRE-write value while the outbox effect is
     // undelivered; treating that as human input would fabricate a conflict
