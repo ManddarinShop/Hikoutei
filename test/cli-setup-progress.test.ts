@@ -19,14 +19,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_KEY_FILE_NAME } from "../src/cli/setupFlow.js";
-import { SETUP_STATE_FILE_NAME, SETUP_STATE_VERSION } from "../src/cli/checkpoint.js";
-import { SETUP_ERROR_CODES, type SetupErrorCode } from "../src/cli/errors.js";
+import { DEFAULT_KEY_FILE_NAME } from "@hikoutei/cli/setupFlow.js";
+import { SETUP_STATE_FILE_NAME, SETUP_STATE_VERSION } from "@hikoutei/cli/checkpoint.js";
+import { SETUP_ERROR_CODES, type SetupErrorCode } from "@hikoutei/cli/errors.js";
 import {
   createSaAccessVerifier,
   SA_VERIFY_MAX_ATTEMPTS,
   type SaAccessVerifier,
-} from "../src/cli/saVerify.js";
+} from "@hikoutei/cli/saVerify.js";
 import {
   boundedCheckReporter,
   BOUNDED_CHECK_MAX_ATTEMPTS,
@@ -49,20 +49,20 @@ import {
   type SetupProgressPhase,
   type SetupProgressSink,
   type SetupProgressSource,
-} from "../src/cli/setupProgress.js";
+} from "@hikoutei/cli/setupProgress.js";
 import {
   KEY_SETTLE_MAX_ATTEMPTS,
   KEY_SETTLE_POLL_DELAYS_MS,
   settleServiceAccountKey,
   type KeyCreatePermission,
-} from "../src/cli/keyProvision.js";
-import { runSetup, type RunSetupOptions, type SetupResult } from "../src/cli/setupFlow.js";
-import type { PlannedCommand } from "../src/cli/flowResult.js";
-import { runSetupCli, type RunSetupCliContext } from "../src/cli/setup.js";
-import type { GcloudRunner, GcloudRunResult } from "../src/cli/gcloudRunner.js";
-import type { HumanSheetApiFactory, MarkerFileInfo, ShareOutcome } from "../src/cli/sheetsFactory.js";
-import { HIKOUTEI_SETUP_MARKER_KEY, SPREADSHEET_MIME_TYPE } from "../src/cli/sheetsFactory.js";
-import type { TokenInfo, TokenValidator } from "../src/cli/humanAuth.js";
+} from "@hikoutei/cli/keyProvision.js";
+import { runSetup, type RunSetupOptions, type SetupResult } from "@hikoutei/cli/setupFlow.js";
+import type { PlannedCommand } from "@hikoutei/cli/flowResult.js";
+import { runSetupCli, type RunSetupCliContext } from "@hikoutei/cli/setup.js";
+import type { GcloudRunner, GcloudRunResult } from "@hikoutei/cli/gcloudRunner.js";
+import type { HumanSheetApiFactory, MarkerFileInfo, ShareOutcome } from "@hikoutei/cli/sheetsFactory.js";
+import { HIKOUTEI_SETUP_MARKER_KEY, SPREADSHEET_MIME_TYPE } from "@hikoutei/cli/sheetsFactory.js";
+import type { TokenInfo, TokenValidator } from "@hikoutei/cli/humanAuth.js";
 
 const OWNER = "owner@example.com";
 const TOKEN = "ya29.fake-token";

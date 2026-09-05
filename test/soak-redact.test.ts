@@ -12,12 +12,15 @@ import { describe, expect, it } from "vitest";
 import {
   FAILURE_REASON_CODES,
   isKnownStatusClass,
+  KNOWN_FAILURE_KINDS,
   KNOWN_REASON_CODES,
   KNOWN_STABLE_CLASSES,
   KNOWN_STABLE_CODES,
   KNOWN_TABLE_NAMES,
   sanitizeCounts,
   sanitizeErrorClass,
+  sanitizeErrorTag,
+  sanitizeFailureKind,
   sanitizeReason,
   sanitizeRecordFields,
   sanitizeStableCode,
@@ -96,6 +99,10 @@ describe("soak redaction: reasons", () => {
     expect(KNOWN_REASON_CODES).toContain("cycle-error");
     expect(KNOWN_REASON_CODES).toContain("reopen-cleanup-failed");
     expect(KNOWN_REASON_CODES).toContain("human-edit-not-accepted");
+    // The identity-shifted transient skip reason (a direct human-write
+    // rejection whose evidence is exactly the seam's fail-closed
+    // `identity_shifted` guard) is an allowlisted skip reason.
+    expect(KNOWN_REASON_CODES).toContain("identity-shifted-transient");
     for (const reason of KNOWN_REASON_CODES) {
       expect(sanitizeReason(reason)).toBe(reason);
     }
@@ -117,6 +124,61 @@ describe("soak redaction: table names", () => {
     // Identifier-shaped but unknown names still collapse to unknown so a
     // future entity rename cannot leak before review.
     expect(sanitizeTableName("soak_secret_table")).toBe("unknown");
+  });
+});
+
+describe("soak redaction: scenario failure kinds and stable error tags", () => {
+  it("passes the allowlisted failure kinds and maps everything else to unknown", () => {
+    for (const kind of KNOWN_FAILURE_KINDS) {
+      expect(sanitizeFailureKind(kind)).toBe(kind);
+    }
+    expect(sanitizeFailureKind("duplicate-rows")).toBe("duplicate-rows");
+    expect(sanitizeFailureKind("not-a-real-kind")).toBe("unknown");
+    for (const secret of SECRETS) {
+      expect(sanitizeFailureKind(secret)).toBe("unknown");
+    }
+    expect(sanitizeFailureKind(undefined)).toBe("unknown");
+    expect(sanitizeFailureKind(42)).toBe("unknown");
+  });
+
+  it("passes canonical stable error tags and collapses crafted ones", () => {
+    expect(sanitizeErrorTag("Error")).toBe("Error");
+    expect(sanitizeErrorTag("TypeError")).toBe("TypeError");
+    expect(sanitizeErrorTag("unknown")).toBe("unknown");
+    expect(sanitizeErrorTag("HikouteiError (invalid_scalar_value)")).toBe(
+      "HikouteiError (invalid_scalar_value)",
+    );
+    expect(sanitizeErrorTag("Error (visible_guard_mismatch)")).toBe(
+      "Error (visible_guard_mismatch)",
+    );
+    expect(sanitizeErrorTag("Error (deadline_expired)")).toBe("Error (deadline_expired)");
+    // Unknown class, unknown inner stable, or malformed shape collapse.
+    expect(sanitizeErrorTag("MyPathError")).toBe("unknown");
+    expect(sanitizeErrorTag("Error (some-secret-token)")).toBe("unknown");
+    expect(sanitizeErrorTag("Error (/home/me/credentials.json)")).toBe("unknown");
+    expect(sanitizeErrorTag("")).toBe("unknown");
+    expect(sanitizeErrorTag(undefined)).toBe("unknown");
+    for (const secret of SECRETS) {
+      expect(sanitizeErrorTag(secret)).toBe("unknown");
+    }
+  });
+
+  it("the record walker keeps reasonTag/failureKinds and collapses injected text", () => {
+    const sanitized = sanitizeRecordFields({
+      status: "failed",
+      failures: 1,
+      reasonTag: "Error (candidate_guard_mismatch)",
+      failureKinds: ["partial-landing", "bogus-kind", 7],
+    }) as Record<string, unknown>;
+    expect(sanitized.reasonTag).toBe("Error (candidate_guard_mismatch)");
+    // Non-string entries drop; the unknown kind collapses to the fixed
+    // category; the list stays deduplicated and sorted.
+    expect(sanitized.failureKinds).toEqual(["partial-landing", "unknown"]);
+    // A crafted free-text tag never survives the walker.
+    const crafted = sanitizeRecordFields({
+      reasonTag: "Error (https://docs.google.com/spreadsheets/d/1AbC/edit)",
+    }) as Record<string, unknown>;
+    expect(crafted.reasonTag).toBe("unknown");
   });
 });
 

@@ -5,6 +5,8 @@
  * them and throws this typed error so the worker can decide between the
  * terminal failure path (the remote proved the operation did not run) and
  * the postcondition probe path (the remote state is unknown).
+ *
+ * Option-validation error contracts live in `optionContracts.ts`.
  */
 
 /** Stable classification of one failed remote dispatch. */
@@ -47,3 +49,20 @@ export class DispatchTransportError extends Error implements DispatchTransportOu
 export function isDispatchTransportError(error: unknown): error is DispatchTransportError {
   return error instanceof DispatchTransportError;
 }
+
+// Re-export option contracts so existing `./errors.js` import paths still
+// resolve. Direct consumers should prefer `./optionContracts.js`.
+export {
+  ADAPTIVE_BATCH_ERROR_CODES,
+  AdaptiveBatchOptionsError,
+  PROVIDER_BATCH_LIMIT_ERROR_CODES,
+  ProviderBatchLimitError,
+  SUPERVISOR_OPTIONS_ERROR_CODES,
+  SupervisionOptionsError,
+  WORKER_OPTIONS_ERROR_CODES,
+  WorkerOptionsError,
+  type AdaptiveBatchErrorCode,
+  type ProviderBatchLimitErrorCode,
+  type SupervisorOptionsErrorCode,
+  type WorkerOptionsErrorCode,
+} from "./optionContracts.js";

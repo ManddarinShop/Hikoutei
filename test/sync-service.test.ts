@@ -7,23 +7,23 @@ import { defineTypedSheetsEntity } from "../src/index.js";
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
-import { SYNC_SERVICE_ERROR_CODES } from "../src/application/sync/service/errors.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
+import { SYNC_SERVICE_ERROR_CODES } from "@hikoutei/sync-engine/sync/service/errors.js";
 import {
   applyEffectResultWithAdapter,
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "@hikoutei/ikisaki";
-import { presentValue } from "../src/shared/state/index.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
-import { runReconciliationScan } from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
+import { presentValue } from "@hikoutei/contracts/state/index.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
+import { runReconciliationScan } from "@hikoutei/sync-engine/sync/outbound/reconciliation/ReconciliationScanner.js";
 import type {
   SyncSheetsProvisioner,
   SyncSheetsProvisionRoute,
-} from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
-import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
-import type { SyncTimingEvent } from "../src/application/sync/telemetry/syncTiming.js";
+} from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { SyncTimingEvent } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import {
   StubSpreadsheet,
@@ -178,9 +178,14 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     await service.effectSupervisor.runOnce();
     // Without an explicit batch controller the worker chunks the regular
     // route at EFFECT_BATCH_LIMIT (300); the adaptive controller starts at
-    // its INITIAL (100) and grows toward the cap.
+    // its INITIAL (100) and grows toward the cap (never exceeding MAXIMUM,
+    // never shrinking below INITIAL without a real failure).
     expect(regularLimits.length).toBeGreaterThan(0);
-    for (const limit of regularLimits) expect(limit).toBe(100);
+    expect(regularLimits[0]).toBe(100);
+    for (const limit of regularLimits.slice(1)) {
+      expect(limit).toBeGreaterThanOrEqual(100);
+      expect(limit).toBeLessThanOrEqual(1_000);
+    }
   });
 
   it("uses the googleSheetsApi timeout for lease-headroom validation", async () => {

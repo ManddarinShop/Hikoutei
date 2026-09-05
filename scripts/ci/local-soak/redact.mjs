@@ -199,6 +199,12 @@ export const KNOWN_REASON_CODES = Object.freeze([
   // delete provably committed), with no silent loss: the race outcome is a
   // verified ok.
   "race-winner-verified",
+  // The human value never landed in the authority row, but an OPEN
+  // sync_conflict records the exact human field value: the edit was ingested
+  // as a conflict (the outbox-gated poll observes the row only after the
+  // effect cycle completes), which the scenario hypothesis accepts as a
+  // consistent outcome. Recorded as ok with an empty failureKinds channel.
+  "conflict-recorded",
   // The invalid human input's dedicated row projection never appeared in the
   // Sheet within the bounded window, so the invalid write was never attempted
   // (the scenario records a truthful skip).
@@ -215,6 +221,12 @@ export const KNOWN_REASON_CODES = Object.freeze([
   // the human edit landed on the intended identity row, or every rejection
   // was the fail-closed `identity_shifted` guard (a verified ok).
   "guard-invariant-verified",
+  // A direct human-write rejection whose evidence is exactly the seam's
+  // fail-closed `identity_shifted` guard: an EXPECTED TRANSIENT of the
+  // adversarial multi-writer soak (rows shifted under the write, the seam
+  // proved no silent success). Recorded as a truthful skip, never a
+  // failure; the stable DirectSheetsError tag rides the reasonTag channel.
+  "identity-shifted-transient",
   // The sheet-corruption-detection scenario: the injected corruption WAS
   // detected and reported by the read seam (one expected error; nothing
   // was repaired — `repaired: false` is the #194 defect evidence).
@@ -363,6 +375,90 @@ export function sanitizeReason(candidate) {
 }
 
 /**
+ * Stable internal-failure kinds a scenario's own failure counters may
+ * record. Each mutating scenario classifies every `failures += 1` site with
+ * one of these fixed kinds so a redacted artifact says WHICH invariant
+ * fired without ever recording a raw error message, id, value, or payload.
+ * Unknown kinds collapse to the fixed `unknown` category.
+ */
+export const KNOWN_FAILURE_KINDS = Object.freeze([
+  // Shared race classification kinds.
+  "local-rejection-non-stale",
+  "human-rejection-non-stale",
+  "human-write-rejected",
+  "duplicate-rows",
+  "row-missing",
+  "partial-landing",
+  "silent-loss",
+  // Cleanup accounting kinds.
+  "cleanup-proof-timeout",
+  "cleanup-delete-failed",
+  // A conflict-recorded cleanup whose bounded resolve wait expired: the row
+  // is kept (never deleted through a blocking conflict) and surfaced as
+  // this distinct real failure kind.
+  "cleanup-unresolved-conflict",
+  // A cleanup whose bounded outbox-drain wait expired with candidate effects
+  // for the row's binding still in flight: the row is kept (never deleted
+  // through a blocked outbox — the #381 protection covers outbox state) and
+  // surfaced as this distinct real failure kind.
+  "cleanup-outbox-busy",
+  // human-delete-row authority-retention kinds.
+  "authority-row-lost",
+  "retention-unobserved",
+  // human-edit-public-delete delete-winner kinds.
+  "deleted-row-resurrected",
+  "delete-never-won",
+  // human-insert-duplicate-id kinds.
+  "duplicate-insert-accepted",
+  "duplicate-rejection-unexpected",
+  "sheet-duplicate-leaked",
+  "row-overwritten",
+  // no-op-human-edit kinds.
+  "noop-write-rejected",
+  "noop-value-changed",
+  // shiftedHumanEdit identity-invariant kinds.
+  "edit-rejected-unexpected",
+  "edit-not-landed",
+  "shifter-rejected-unexpected",
+  // invalidHumanInput / sheetCorruptionDetection hunted-corruption kinds.
+  "invalid-accepted",
+  "corruption-missed",
+]);
+
+/**
+ * Maps one candidate failure kind to the artifact-safe value: the kind
+ * itself when allowlisted, otherwise the fixed `unknown` category.
+ */
+export function sanitizeFailureKind(candidate) {
+  return typeof candidate === "string" && KNOWN_FAILURE_KINDS.includes(candidate)
+    ? candidate
+    : "unknown";
+}
+
+/**
+ * Maps one candidate stable error tag (the `stableErrorTag` output shape:
+ * `Class` or `Class (code)`) to the artifact-safe value. The class must be
+ * on the class allowlist and the parenthesized stable part, when present,
+ * must be an allowlisted code or status class; anything else collapses to
+ * the fixed `unknown` category so a crafted tag can never smuggle free
+ * text into a durable artifact.
+ */
+export function sanitizeErrorTag(candidate) {
+  if (typeof candidate !== "string" || candidate.length === 0) return "unknown";
+  if (candidate === "unknown") return "unknown";
+  const match = /^([^()]+)(?: \(([^()]+)\))?$/.exec(candidate);
+  if (match === null) return "unknown";
+  const errorClass = sanitizeErrorClass(match[1]);
+  if (errorClass === "unknown") return "unknown";
+  if (match[2] === undefined) return errorClass;
+  const stable = sanitizeStableCode(match[2]);
+  if (stable !== "unknown") return `${errorClass} (${stable})`;
+  const statusClass = sanitizeStatusClass(match[2]);
+  if (statusClass !== "unknown") return `${errorClass} (${statusClass})`;
+  return "unknown";
+}
+
+/**
  * Maps one candidate table/entity name to the artifact-safe value.
  *
  * Only the soak vocabulary passes; identifier-shaped but unknown names
@@ -445,6 +541,27 @@ export function sanitizeRecordFields(value) {
     }
     if (key === "errorClass") {
       result[key] = sanitizeErrorClass(entryValue);
+      continue;
+    }
+    if (key === "reasonTag") {
+      // The stable error tag of a scenario throw (Class or Class (code));
+      // unknown-shaped tags collapse to the fixed `unknown` category.
+      if (typeof entryValue === "string" && entryValue.length > 0) {
+        result[key] = sanitizeErrorTag(entryValue);
+      }
+      continue;
+    }
+    if (key === "failureKinds") {
+      // Deduplicated, sorted allowlisted failure kinds; unknown kinds
+      // collapse to the fixed `unknown` category, non-string entries drop.
+      if (Array.isArray(entryValue)) {
+        const kinds = [...new Set(
+          entryValue
+            .filter((kind) => typeof kind === "string" && kind.length > 0)
+            .map(sanitizeFailureKind),
+        )].sort();
+        if (kinds.length > 0) result[key] = kinds;
+      }
       continue;
     }
     if (key === "statusClass") {

@@ -1,0 +1,47 @@
+{
+  "name": "@hikoutei/cli",
+  "version": "0.1.0",
+  "description": "Setup and adoption command line for the Hikoutei typed repository (service-side provisioning; not part of the library API). Published through the root package: the reconcile codemod bundles this dist into the root dist/cli/** bin (P8-D2 phase 2).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/packages/cli/src/*.d.ts",
+      "import": "./dist/packages/cli/src/*.js"
+    },
+    "./*": {
+      "types": "./dist/packages/cli/src/*.d.ts",
+      "import": "./dist/packages/cli/src/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@googleapis/drive": "^21.0.0",
+    "@googleapis/sheets": "^14.0.0",
+    "@hikoutei/sync-engine": "0.1.0",
+    "google-auth-library": "^11.0.0",
+    "hikoutei": "0.9.33-dev.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

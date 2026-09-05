@@ -6,11 +6,11 @@
  * byte-identical to the codes the host application has always persisted.
  */
 
-import type { EffectStatus } from "../constants.js";
+import type { EffectStatus } from "../contract/constants.js";
 import {
   EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
-} from "../constants.js";
-import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contracts.js";
+} from "../contract/constants.js";
+import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contract/contracts.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
 /** Outbound writer lease must outlive the longest remote effect request. */
@@ -30,13 +30,19 @@ export const DEFAULT_EFFECT_LEASE_DURATION_MS = 120_000;
  * does not turn one route into repeated partial (`hasMore`) responses and the
  * deferred/requeue churn they cause.
  */
-export const EFFECT_BATCH_LIMIT = 300;
+export const EFFECT_BATCH_LIMIT = 1_000;
 /**
  * Maximum number of effects leased before dispatch starts. Selection may use a
  * larger SQLite upper bound, but a worker pass must not lease an unbounded
  * backlog while a remote batch is in flight.
  */
 export const MAX_IN_FLIGHT_EFFECTS = EFFECT_BATCH_LIMIT;
+/**
+ * Default dispatch-unit concurrency inside one worker pass. 1 keeps the
+ * sequential read-ahead pipeline (byte-identical legacy behavior); a larger
+ * value lets route-disjoint units overlap.
+ */
+export const DEFAULT_MAX_CONCURRENT_UNITS = 1;
 /**
  * Maximum eligible fast-append rows one worker pass may select/claim in the
  * real provider runtime. The bulk append operation writes the whole reserved
@@ -94,6 +100,10 @@ export const WORKER_ERROR_CODES = {
   REPAIR_REPLAN_FAILED: "repair_replan_failed",
   REPAIR_REPLAN_DEFERRED: "repair_replan_deferred",
   PROVIDER_CAPABILITY_MISSING: "provider_capability_missing",
+  /** Provider acknowledged a bounded batch before this effect. */
+  PROVIDER_BATCH_DEFERRED: "provider_batch_deferred",
+  /** Requeued after writer-lease recovery; no provider acknowledgement. */
+  LEASE_RECOVERED_REQUEUE: "lease_recovered_requeue",
 } as const;
 
 export type WorkerErrorCode =

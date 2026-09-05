@@ -18,13 +18,15 @@ import {
   EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
   EFFECT_TARGET_KINDS as KERNEL_EFFECT_TARGET_KINDS,
   STORAGE_ERROR_CODES as KERNEL_STORAGE_ERROR_CODES,
+  TIMING_OPERATION_KINDS as KERNEL_TIMING_OPERATION_KINDS,
 } from "@hikoutei/ikisaki";
+import { SYNC_TIMING_OPERATION_KINDS } from "@hikoutei/contracts/sheets/timing.js";
 import {
   EFFECT_KINDS as HOST_EFFECT_KINDS,
   EFFECT_STATUSES as HOST_EFFECT_STATUSES,
   EFFECT_TARGET_KINDS as HOST_EFFECT_TARGET_KINDS,
-} from "../src/domain/model/constants.js";
-import { STORAGE_ERROR_CODES as HOST_STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { STORAGE_ERROR_CODES as HOST_STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 
 /** Constant tables are plain string-keyed string maps at runtime. */
 type StringConstantTable = Readonly<Record<string, string>>;
@@ -68,6 +70,18 @@ describe("outbox kernel / host persisted-contract drift", () => {
       KERNEL_EFFECT_STATUSES,
       HOST_EFFECT_STATUSES,
       "EFFECT_STATUSES",
+    );
+  });
+
+  it("keeps provider timing kind values byte-identical for the shared keys", () => {
+    // P8-B: the contracts leaf mirrors the kernel provider-timing kinds so
+    // the sheets sync contract (`timing?: SyncProviderTiming`) stays
+    // kernel-independent; the host telemetry module still aliases the kernel
+    // `ProviderTiming` type and both must remain structurally identical.
+    assertSharedValuesEqual(
+      KERNEL_TIMING_OPERATION_KINDS,
+      SYNC_TIMING_OPERATION_KINDS,
+      "TIMING_OPERATION_KINDS",
     );
   });
 });

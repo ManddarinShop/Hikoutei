@@ -21,13 +21,13 @@ import {
 import {
   createHikouteiInternalLogger,
   HIKOUTEI_LOG_ENV_KEYS,
-} from "../src/shared/observability/internalLog.js";
+} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "../src/shared/observability/logEvents.js";
+} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
 import {
   LOGGED_COMPONENT_NAMES,
   LOGGED_EVENT_NAMES,
@@ -364,7 +364,8 @@ describe("soak log collection: logger contract mirror", () => {
     // un-reviewed value admitted.
     expect(LOGGED_FIELD_NAMES).toEqual([
       "ts", "level", "event", "component", "code", "table", "errorClass",
-      "retryable", "attempts", "durationMs", "counts",
+      "providerOperation", "pacing", "retryable", "attempts", "durationMs",
+      "counts",
     ]);
     expect(LOGGED_LEVELS).toEqual(["debug", "info", "warn", "error"]);
     expect([...LOGGED_EVENT_NAMES].sort()).toEqual(

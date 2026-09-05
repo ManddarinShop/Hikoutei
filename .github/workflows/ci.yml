@@ -28,11 +28,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Verify public Kohkai dependency
         shell: bash
@@ -43,20 +47,23 @@ jobs:
           published_kohkai_version="$(npm view "@hikoutei/kohkai@$kohkai_version" version --registry=https://registry.npmjs.org)"
           test "$published_kohkai_version" = "$kohkai_version"
 
+      # npm pack / npm init / npm install below are deliberate: they act on
+      # packed tarballs and throwaway consumer dirs (registry behavior), not
+      # on the repository install. Publishing model flips later (P8-DD).
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck production code
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Typecheck tests
-        run: npm run typecheck:test
+        run: pnpm run typecheck:test
 
       - name: Run unit and contract tests
-        run: npm test
+        run: pnpm test
 
       - name: Build package
-        run: npm run build
+        run: pnpm run build
 
       - name: Run repository internal sync/provider E2E (fake)
         shell: bash

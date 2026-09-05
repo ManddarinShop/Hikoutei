@@ -14,10 +14,14 @@ import {
   appendPendingEffectsWithSql,
   applyEffectResultWithAdapter,
   applyEffectResultWithSql,
+  assertProjectionConfirmationTargetWithSql,
+  awaitTakeoverableWriterLeaseWithAdapter,
   claimEffectWithAdapter,
   claimEffectWithSql,
   claimWriterLeaseWithAdapter,
   claimWriterLeaseWithSql,
+  renewWriterLeaseWithAdapter,
+  renewWriterLeaseWithSql,
   findPendingEffectsByTargetWithSql,
   hasPendingOrProcessingEffectsWithSql,
   listReadyEffectsWithAdapter,
@@ -41,7 +45,14 @@ import {
   type PendingEffect,
   type SqlExecutor,
 } from "../src/index.js";
-import { APPLICABILITY_KINDS, EFFECT_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS, WRITER_LEASE_CLAIM_RESULT_KINDS } from "../src/index.js";
+import {
+  APPLICABILITY_KINDS,
+  EFFECT_KINDS,
+  LOOKUP_RESULT_KINDS,
+  PRESENCE_KINDS,
+  WRITER_LEASE_CLAIM_RESULT_KINDS,
+  WRITER_LEASE_RENEW_RESULT_KINDS,
+} from "../src/index.js";
 import {
   claimTestFence,
   createKernelStore,
@@ -789,6 +800,42 @@ describe("consistency-queue kernel", () => {
         code: STORAGE_ERROR_CODES.INVALID_PROJECTION_CONFIRMATION,
       });
     });
+
+    it("throws INVALID_PENDING_EFFECT for a malformed claimed effect kind", async () => {
+      const adapter = createKernelStore();
+      const fence = await claimTestFence(adapter);
+      const effect = newEffect({
+        effectKind: "malformed_kind" as typeof EFFECT_KINDS[keyof typeof EFFECT_KINDS],
+        rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" },
+      });
+      await appendPendingEffectsWithAdapter(adapter, fence, [effect]);
+      await claimEffectWithAdapter(adapter, {
+        ...fence,
+        effectId: effect.effectId,
+        claimToken: "claim-1",
+        leaseDurationMs: 30_000,
+      });
+
+      await expect(
+        withSql(adapter, (sql) =>
+          assertProjectionConfirmationTargetWithSql(
+            sql,
+            effect.effectId,
+            "claim-1",
+            {
+              physicalSheetId: "physical-1",
+              projection: "system_state",
+              rowBindingId: "binding-1",
+              visibleRevision: 1,
+              visibleHash: "visible-hash-1",
+              entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
+              fieldHashes: {},
+            },
+          )),
+      ).rejects.toMatchObject({
+        code: STORAGE_ERROR_CODES.INVALID_PENDING_EFFECT,
+      });
+    });
   });
 
   describe("stream ordering", () => {
@@ -1014,6 +1061,507 @@ describe("consistency-queue kernel", () => {
       const staleOk = await withSql(adapter, (sql) =>
         appendPendingEffectsWithSql(sql, fence, [newEffect()]));
       expect(staleOk).toBe(false);
+    });
+  });
+
+  describe("writer lease heartbeat takeover", () => {
+    // Timestamps need headroom over TEST_NOW so the stale bound stays
+    // non-negative: staleBefore = now - 15_000.
+    const HB_NOW = 1_000_000;
+    const HB_LEASE_MS = 60_000;
+    const STALE_BOUND = HB_NOW - 15_000;
+
+    /** Seeds one lease row with explicit heartbeat evidence via direct SQL. */
+    async function seedLease(
+      adapter: NodeSqliteTestAdapter,
+      options: {
+        writerId: string;
+        leaseUntil: number;
+        heartbeatAt: number | null;
+        writerEpoch?: number;
+      },
+    ): Promise<void> {
+      const epoch = options.writerEpoch ?? 1;
+      await adapter.read(({ sql }) =>
+        sql.run(
+          "INSERT INTO writer_lease (role, writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
+          [TEST_ROLE, options.writerId, epoch, `fence-${epoch}:${options.writerId}`, options.leaseUntil, options.heartbeatAt],
+        ));
+    }
+
+    async function readLeaseRow(
+      adapter: NodeSqliteTestAdapter,
+    ): Promise<{
+      readonly writer_id: string;
+      readonly writer_epoch: number;
+      readonly fencing_token: string;
+      readonly lease_until: number;
+      readonly heartbeat_at: number | null;
+    } | undefined> {
+      return adapter.read(({ sql }) => sql.get(
+        "SELECT writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at FROM writer_lease WHERE role = ?",
+        [TEST_ROLE],
+      ));
+    }
+
+    it("rejects a takeover while the lease AND heartbeat are both fresh", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: STALE_BOUND + 1,
+      });
+      const claim = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(claim).toEqual({ kind: "not_claimed", reason: "active_writer" });
+    });
+
+    it("takes over a LIVE lease whose heartbeat is stale: epoch + 1, new token, heartbeat restamped", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: STALE_BOUND - 1,
+      });
+      const claim = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(claim.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+      if (claim.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) throw new Error("expected takeover");
+      expect(claim.lease.writerEpoch).toBe(2);
+      expect(claim.lease.fencingToken).toBe("fence-2:writer-2");
+      // The takeover row itself carries fresh evidence for the NEXT restart.
+      const row = await readLeaseRow(adapter);
+      expect(row).toMatchObject({
+        writer_id: "writer-2",
+        writer_epoch: 2,
+        lease_until: HB_NOW + HB_LEASE_MS,
+        heartbeat_at: HB_NOW,
+      });
+    });
+
+    it("keeps the expiry-only rule for NULL-heartbeat rows (legacy databases)", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: null,
+      });
+      // Live lease with NULL heartbeat: NOT takeable even with evidence bounds.
+      const live = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(live).toEqual({ kind: "not_claimed", reason: "active_writer" });
+
+      // Expired NULL-heartbeat row: takeover through the legacy rule.
+      await adapter.read(({ sql }) => sql.run(
+        "UPDATE writer_lease SET lease_until = ? WHERE role = ?",
+        [HB_NOW - 1, TEST_ROLE],
+      ));
+      const expired = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+          heartbeatStaleBeforeMs: STALE_BOUND,
+        }));
+      expect(expired.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+    });
+
+    it("without heartbeatStaleBeforeMs the stale heartbeat never grants takeover (legacy callers)", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: 0,
+      });
+      const claim = await withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+        }));
+      expect(claim).toEqual({ kind: "not_claimed", reason: "active_writer" });
+    });
+
+    it("rejects a negative heartbeatStaleBeforeMs with INVALID_WRITER_LEASE_OPTIONS", async () => {
+      const adapter = createKernelStore();
+      await expect(withSql(adapter, (sql) =>
+        claimWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: TEST_NOW,
+          heartbeatStaleBeforeMs: -1,
+        }))).rejects.toMatchObject({ code: STORAGE_ERROR_CODES.INVALID_WRITER_LEASE_OPTIONS });
+    });
+
+    it("renew-only heartbeat renews the caller's OWN lease and stamps heartbeat_at without bumping the epoch", async () => {
+      const adapter = createKernelStore();
+      const first = await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW,
+      });
+      expect(first.kind).toBe(WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED);
+
+      const renewAt = HB_NOW + 5_000;
+      const renewal = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: renewAt,
+        }));
+      expect(renewal.kind).toBe(WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED);
+      if (renewal.kind !== WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED) throw new Error("expected renewal");
+      // Epoch and fencing token are UNCHANGED by a renewal.
+      expect(renewal.lease.writerEpoch).toBe(1);
+      expect(renewal.lease.fencingToken).toBe("fence-1:writer-1");
+      expect(renewal.lease.leaseUntil).toBe(renewAt + HB_LEASE_MS);
+      const row = await readLeaseRow(adapter);
+      expect(row).toMatchObject({ heartbeat_at: renewAt });
+    });
+
+    it("renew-only heartbeat NEVER takes over another writer's stale-heartbeat lease", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: HB_NOW + HB_LEASE_MS,
+        heartbeatAt: 0,
+      });
+      const renewal = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-2",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+        }));
+      expect(renewal).toEqual({ kind: "not_held" });
+      // The dead writer's row is untouched: takeover stays the claim path's job.
+      const row = await readLeaseRow(adapter);
+      expect(row).toMatchObject({ writer_id: "writer-1", heartbeat_at: 0 });
+    });
+
+    it("renew-only heartbeat reports not_held for an expired or missing lease", async () => {
+      const adapter = createKernelStore();
+      const missing = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW,
+        }));
+      expect(missing).toEqual({ kind: "not_held" });
+
+      await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW,
+      });
+      const expired = await withSql(adapter, (sql) =>
+        renewWriterLeaseWithSql(sql, {
+          role: TEST_ROLE,
+          writerId: "writer-1",
+          leaseDurationMs: HB_LEASE_MS,
+          now: HB_NOW + HB_LEASE_MS + 1,
+        }));
+      expect(expired).toEqual({ kind: "not_held" });
+    });
+
+    it("renew-only heartbeat works through the adapter transaction path", async () => {
+      const adapter = createKernelStore();
+      await claimWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW,
+      });
+      const renewal = await renewWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-1",
+        leaseDurationMs: HB_LEASE_MS,
+        now: HB_NOW + 5_000,
+      });
+      expect(renewal.kind).toBe(WRITER_LEASE_RENEW_RESULT_KINDS.RENEWED);
+    });
+  });
+
+  describe("startup takeover wait gate", () => {
+    // Large timestamps so the stale bound stays non-negative.
+    const GATE_NOW = 1_000_000;
+    const GATE_LEASE_MS = 60_000;
+    const GATE_STALE_MS = 15_000;
+    const GATE_MAX_WAIT_MS = 25_000;
+
+    /** Seeds one lease row with explicit heartbeat evidence via direct SQL. */
+    async function seedLease(
+      adapter: NodeSqliteTestAdapter,
+      options: {
+        writerId: string;
+        leaseUntil: number;
+        heartbeatAt: number | null;
+        writerEpoch?: number;
+      },
+    ): Promise<void> {
+      const epoch = options.writerEpoch ?? 1;
+      await adapter.read(({ sql }) =>
+        sql.run(
+          "INSERT INTO writer_lease (role, writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
+          [TEST_ROLE, options.writerId, epoch, `fence-${epoch}:${options.writerId}`, options.leaseUntil, options.heartbeatAt],
+        ));
+    }
+
+    async function readLeaseRow(
+      adapter: NodeSqliteTestAdapter,
+    ): Promise<{
+      readonly writer_id: string;
+      readonly writer_epoch: number;
+      readonly fencing_token: string;
+      readonly lease_until: number;
+      readonly heartbeat_at: number | null;
+    } | undefined> {
+      return adapter.read(({ sql }) => sql.get(
+        "SELECT writer_id, writer_epoch, fencing_token, lease_until, heartbeat_at FROM writer_lease WHERE role = ?",
+        [TEST_ROLE],
+      ));
+    }
+
+    /**
+     * Fake clock + fake wait: advancing the clock simulates real time
+     * passing. `onAdvance` (optional) lets a test simulate a live writer
+     * re-stamping its heartbeat as the clock moves.
+     */
+    function fakeClock(start: number, onAdvance?: (now: number) => Promise<void>) {
+      const state = {
+        current: start,
+        sleeps: [] as number[],
+        now: () => state.current,
+        wait: async (ms: number) => {
+          state.sleeps.push(ms);
+          state.current += ms;
+          if (onAdvance !== undefined) await onAdvance(state.current);
+        },
+      };
+      return state;
+    }
+
+    it("waits a frozen heartbeat until it goes stale, then reports ready", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: GATE_NOW + GATE_LEASE_MS,
+        heartbeatAt: GATE_NOW - 3_000,
+      });
+      const clock = fakeClock(GATE_NOW);
+      const result = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+      });
+      // staleAt = (GATE_NOW - 3000) + 15000 = GATE_NOW + 12000.
+      expect(result).toEqual({ kind: "ready", waitedMs: 12_000 });
+      expect(clock.sleeps).toEqual([12_000]);
+    });
+
+    it("fires onWaitEntry once, before the first sleep, and never on an immediate ready", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: GATE_NOW + GATE_LEASE_MS,
+        heartbeatAt: GATE_NOW - 3_000,
+      });
+      const events: string[] = [];
+      const clock = fakeClock(GATE_NOW);
+      const result = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: async (ms) => {
+          events.push("sleep");
+          await clock.wait(ms);
+        },
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+        onWaitEntry: () => {
+          events.push("entry");
+        },
+      });
+      expect(result.kind).toBe("ready");
+      // The warning-visible moment is WAIT ENTRY: fired before any sleep.
+      expect(events).toEqual(["entry", "sleep"]);
+
+      // Second call: the lease is now stale at the fake clock — immediate
+      // ready must not fire the callback.
+      const events2: string[] = [];
+      const result2 = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+        onWaitEntry: () => {
+          events2.push("entry");
+        },
+      });
+      expect(result2.kind).toBe("ready");
+      expect(events2).toEqual([]);
+    });
+
+    it("reports wait_cap_reached when a live writer keeps its heartbeat moving", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: GATE_NOW + GATE_LEASE_MS,
+        heartbeatAt: GATE_NOW,
+      });
+      // A live writer re-stamps heartbeat_at to the current clock on every
+      // wait, so the stale bound never trips and the cap is reached.
+      const clock = fakeClock(GATE_NOW, async (now) => {
+        await adapter.read(({ sql }) => sql.run(
+          "UPDATE writer_lease SET heartbeat_at = ? WHERE role = ?",
+          [now, TEST_ROLE],
+        ));
+      });
+      let entryCalls = 0;
+      const result = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+        onWaitEntry: () => {
+          entryCalls += 1;
+        },
+      });
+      expect(result).toEqual({
+        kind: "failed",
+        reason: "wait_cap_reached",
+        waitedMs: GATE_MAX_WAIT_MS,
+      });
+      // A multi-iteration wait still fires the entry callback exactly once.
+      expect(entryCalls).toBe(1);
+      expect(clock.sleeps.length).toBeGreaterThan(1);
+    });
+
+    it("fails immediately on a live NULL-heartbeat (legacy) lease with zero wait", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: GATE_NOW + GATE_LEASE_MS,
+        heartbeatAt: null,
+      });
+      const clock = fakeClock(GATE_NOW);
+      const result = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+      });
+      expect(result).toEqual({ kind: "failed", reason: "live_legacy_lease", waitedMs: 0 });
+      expect(clock.sleeps).toEqual([]);
+    });
+
+    it("reports ready once the lease expires during the wait", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: GATE_NOW + 5_000,
+        heartbeatAt: GATE_NOW - 3_000,
+      });
+      const clock = fakeClock(GATE_NOW);
+      const result = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+      });
+      expect(result.kind).toBe("ready");
+    });
+
+    it("reports ready immediately when no lease row exists", async () => {
+      const adapter = createKernelStore();
+      const clock = fakeClock(GATE_NOW);
+      const result = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+      });
+      expect(result).toEqual({ kind: "ready", waitedMs: 0 });
+      expect(clock.sleeps).toEqual([]);
+    });
+
+    it("reports ready immediately when the live lease is owned by the caller's own writerId", async () => {
+      // A startup that claims-then-reclaims one role (multi-entity adoption
+      // seeding) must never wait out its OWN fresh lease; the claim CAS
+      // renews it. Without the short-circuit this would hit the wait cap.
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-me",
+        leaseUntil: GATE_NOW + GATE_LEASE_MS,
+        heartbeatAt: GATE_NOW,
+      });
+      const clock = fakeClock(GATE_NOW);
+      const result = await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        writerId: "writer-me",
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+      });
+      expect(result).toEqual({ kind: "ready", waitedMs: 0 });
+      expect(clock.sleeps).toEqual([]);
+    });
+
+    it("makes no writes: the seeded lease row is byte-identical afterwards", async () => {
+      const adapter = createKernelStore();
+      await seedLease(adapter, {
+        writerId: "writer-1",
+        leaseUntil: GATE_NOW + GATE_LEASE_MS,
+        heartbeatAt: GATE_NOW - 3_000,
+      });
+      const clock = fakeClock(GATE_NOW);
+      await awaitTakeoverableWriterLeaseWithAdapter(adapter, {
+        role: TEST_ROLE,
+        now: clock.now,
+        wait: clock.wait,
+        staleMs: GATE_STALE_MS,
+        maxWaitMs: GATE_MAX_WAIT_MS,
+      });
+      const row = await readLeaseRow(adapter);
+      expect(row).toEqual({
+        writer_id: "writer-1",
+        writer_epoch: 1,
+        fencing_token: "fence-1:writer-1",
+        lease_until: GATE_NOW + GATE_LEASE_MS,
+        heartbeat_at: GATE_NOW - 3_000,
+      });
     });
   });
 

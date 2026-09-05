@@ -4,21 +4,21 @@ import {
   FIELD_OWNERSHIPS,
   QUARANTINE_REASONS,
   ROW_OPERATIONS,
-} from "../src/domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   CanonicalEntityState,
   ObservedRowChange,
-} from "../src/domain/model/types.js";
+} from "@hikoutei/contracts/domain/model/types.js";
 import {
   quarantineRow,
   quarantineSystemRow,
-} from "../src/domain/evaluate/quarantine.js";
+} from "@hikoutei/contracts/domain/evaluate/quarantine.js";
 import {
   QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
   QUARANTINE_REPAIR_STATUSES,
   ROW_OUTCOMES,
-} from "../src/domain/evaluate/constants.js";
-import type { OwnershipCheckResult } from "../src/domain/evaluate/preconditions.js";
+} from "@hikoutei/contracts/domain/evaluate/constants.js";
+import type { OwnershipCheckResult } from "@hikoutei/contracts/domain/evaluate/preconditions.js";
 
 const row: ObservedRowChange = {
   rowBindingId: "binding-1",

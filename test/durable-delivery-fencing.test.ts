@@ -12,10 +12,10 @@ import {
 import {
   ensureSpreadsheetAuthorityWithAdapter,
   readSpreadsheetAuthorityWithAdapter,
-} from "../src/infrastructure/storage/sync/shared/spreadsheetAuthority.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
+} from "@hikoutei/storage/storage/sync/shared/spreadsheetAuthority.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 
 describe("durable delivery and spreadsheet fencing", () => {
@@ -32,7 +32,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     await migrateSqliteSchema(adapter);
 
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 6 });
+      .resolves.toEqual({ user_version: 8 });
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sheet_effect_outbox)",
     ));
@@ -117,8 +117,8 @@ describe("durable delivery and spreadsheet fencing", () => {
     // does not exist yet); the rebuild must run and then recreate the index.
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 4,
-      toVersion: 6,
-      appliedVersions: [5, 6],
+      toVersion: 8,
+      appliedVersions: [5, 6, 7, 8],
     });
 
     const columns = await adapter.read(({ sql }) => sql.all<{ readonly name: string }>(

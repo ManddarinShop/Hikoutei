@@ -29,6 +29,8 @@ export const LOGGED_FIELD_NAMES = Object.freeze([
   "code",
   "table",
   "errorClass",
+  "providerOperation",
+  "pacing",
   "retryable",
   "attempts",
   "durationMs",
@@ -58,6 +60,10 @@ export const LOGGED_EVENT_NAMES = Object.freeze([
   "hikoutei.reconciliation.scan_failed",
   "hikoutei.polling.pass_failed",
   "hikoutei.polling.pass_summary",
+  "hikoutei.writer_lease.unavailable",
+  "hikoutei.writer_lease.heartbeat",
+  "hikoutei.sheets.request",
+  "hikoutei.sheets.request_summary",
 ]);
 
 /** Stable component tags the logger may write (mirror of HIKOUTEI_LOG_COMPONENTS). */
@@ -70,10 +76,12 @@ export const LOGGED_COMPONENT_NAMES = Object.freeze([
   "outbox",
   "reconciliation",
   "polling",
+  "sheets",
 ]);
 
 /**
  * Stable error codes the logger may write (mirror of HIKOUTEI_LOG_STABLE_CODES).
+ * Kept in sync with the source table; Phase-1 deletions removed stale codes.
  */
 export const LOGGED_STABLE_CODES = Object.freeze([
   // Public Hikoutei API lifecycle/sync codes.
@@ -113,11 +121,16 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "invalid_sync_projection_config",
   "sync_provider_unavailable",
   "sync_service_startup_failed",
-  "sync_service_closed",
   // Existing-sheet adoption codes.
   "existing_sheet_adoption_dry_run_report",
-  "existing_sheet_adoption_not_implemented",
   "existing_sheet_adoption_cell_kind_mismatch",
+  // SyncPollingSupervisor option validation codes.
+  "sync_polling_positive_integer_required",
+  "sync_polling_backoff_order_invalid",
+  // Persisted outbox-value contract violation codes.
+  "unsupported_sync_effect_kind",
+  "unsupported_sync_projection",
+  "unsupported_sync_effect_target_kind",
   // Storage/schema/effect codes.
   "invalid_writer_lease_options",
   "invalid_sync_registration",
@@ -127,7 +140,6 @@ export const LOGGED_STABLE_CODES = Object.freeze([
   "invalid_observation_input",
   "observation_storage_inconsistent",
   "observation_audit_serialization_failed",
-  "invalid_read_only_observation",
   "invalid_effect_options",
   "invalid_pending_effect",
   "effect_write_failed",
@@ -200,6 +212,8 @@ export const LOGGED_STABLE_CLASSES = Object.freeze([
   "TypedSheetsOrmError",
   "SyncSheetsContractError",
   "SyncServiceError",
+  "PollingSupervisorOptionsError",
+  "SyncEffectContractError",
   "StorageError",
   "EvaluationContractError",
   "StableEncodingError",
@@ -231,6 +245,25 @@ export const LOGGED_STABLE_CLASSES = Object.freeze([
   "UniqueConstraintViolationException",
 ]);
 
+/**
+ * Allowlisted provider-operation tags the logger may write (mirror of the
+ * internalLog providerOperation allowlist: the invalid-provider-state
+ * classification constants plus the Google Sheets transport operation
+ * names used by the request-telemetry events).
+ */
+export const LOGGED_PROVIDER_OPERATIONS = Object.freeze([
+  "preflight",
+  "batch_update_reply",
+  "get_reply",
+  "postcondition_read",
+  "unclassified",
+  "getSpreadsheet",
+  "batchUpdate",
+]);
+
+/** Allowlisted request-start pacing lanes the logger may write. */
+export const LOGGED_PACING_LANES = Object.freeze(["polling", "preflight", "write"]);
+
 /** Identifier shape shared by table names and counts keys. */
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
@@ -243,6 +276,8 @@ const EVENT_SET = new Set(LOGGED_EVENT_NAMES);
 const COMPONENT_SET = new Set(LOGGED_COMPONENT_NAMES);
 const CODE_SET = new Set(LOGGED_STABLE_CODES);
 const CLASS_SET = new Set(LOGGED_STABLE_CLASSES);
+const PROVIDER_OPERATION_SET = new Set(LOGGED_PROVIDER_OPERATIONS);
+const PACING_SET = new Set(LOGGED_PACING_LANES);
 
 /** Result of validating one raw line. */
 export const LOG_LINE_VALIDATION = Object.freeze({
@@ -298,6 +333,13 @@ export function sanitizeCollectedLogLine(rawLine) {
   if (record.errorClass !== undefined && !CLASS_SET.has(record.errorClass)) {
     return { status: "invalid", reason: "error-class-unsafe" };
   }
+  if (record.providerOperation !== undefined &&
+      !PROVIDER_OPERATION_SET.has(record.providerOperation)) {
+    return { status: "invalid", reason: "provider-operation-unsafe" };
+  }
+  if (record.pacing !== undefined && !PACING_SET.has(record.pacing)) {
+    return { status: "invalid", reason: "pacing-unsafe" };
+  }
   if (record.retryable !== undefined && typeof record.retryable !== "boolean") {
     return { status: "invalid", reason: "retryable-unsafe" };
   }
@@ -331,6 +373,8 @@ export function sanitizeCollectedLogLine(rawLine) {
     ...(record.code === undefined ? {} : { code: record.code }),
     ...(record.table === undefined ? {} : { table: record.table }),
     ...(record.errorClass === undefined ? {} : { errorClass: record.errorClass }),
+    ...(record.providerOperation === undefined ? {} : { providerOperation: record.providerOperation }),
+    ...(record.pacing === undefined ? {} : { pacing: record.pacing }),
     ...(record.retryable === undefined ? {} : { retryable: record.retryable }),
     ...(record.attempts === undefined ? {} : { attempts: record.attempts }),
     ...(record.durationMs === undefined ? {} : { durationMs: record.durationMs }),

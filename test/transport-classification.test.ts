@@ -2,15 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import {
   TRANSPORT_OUTCOME_KINDS,
   TRANSPORT_OUTCOME_UNKNOWN_CODE,
   classifyTransportOutcome,
   isDeliveryUncertainOutcome,
   sanitizeTransportRemoteCode,
-} from "../src/application/sync/sheetsContract/transportOutcome.js";
-import { absentValue, presentValue } from "../src/shared/state/index.js";
+} from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { absentValue, presentValue } from "@hikoutei/contracts/state/index.js";
 
 function transportError(
   code: GoogleSheetsApiTransportError["code"],

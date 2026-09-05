@@ -24,7 +24,7 @@ import {
   HikouteiError,
 } from "../src/index.js";
 import type { HikouteiEntity, HikouteiErrorCode, HikouteiPropertyOptions } from "../src/index.js";
-import { initializeMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { initializeMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import {
   buildSyncProjections,
   createTypedSheetsWithSync,
@@ -37,14 +37,20 @@ import {
   validateSyncCredentialsFile,
   type SyncDiagnosticLevel,
   type TypedSheetsWithSyncResult,
-} from "../src/application/sync/service/syncAutoStart.js";
-import type { InternalSyncService } from "../src/application/sync/service/SyncServiceBootstrap.js";
-import { GOOGLE_SHEETS_API_DEFAULTS } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
+} from "@hikoutei/composition/syncAutoStart.js";
+import type { InternalSyncService } from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
+import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
+import { GoogleSheetsApiSyncProvider } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
+import type { FastAppendRow } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
+  StubSheet,
   StubSheetsTransport,
   StubSpreadsheet,
+  stubCellToNormalized,
   stubRowFields,
+  toStubCell,
 } from "./support/StubSheetsTransport.js";
+import { SYSTEM_HEADERS } from "./support/googleSheetsFixtures.js";
 
 const User = defineTypedSheetsEntity({
   name: "SyncAutoUser",
@@ -92,10 +98,33 @@ const InspectionSchema = defineEntity({
   properties: { id: p.string().primary() },
 });
 
+/**
+ * Generality variant for the burst e2e: a DATE column and a BOOLEAN column
+ * alongside the string fields, guarding the demo-overfit concern (the live
+ * demo carried string columns only, so the date serial + number-format
+ * evidence path and the boolean value path were never proven at burst
+ * scale). The boolean is the CHECKBOX-shaped column: the configured
+ * checkbox-header/data-validation evidence is exercised by the dedicated
+ * checkbox-route test below (the env-driven service never surfaces
+ * `checkboxHeaders` — it is provider-route configuration).
+ */
+const GeneralityUser = defineTypedSheetsEntity({
+  name: "SyncAutoGenerality",
+  tableName: "sync_auto_generality",
+  properties: {
+    id: { type: "string", primary: true },
+    status: { type: "string" },
+    dueAt: { type: "date" },
+    done: { type: "boolean" },
+  },
+});
+
+const GENERALITY_SYSTEM_TAB = "SyncAutoGenerality_System";
+const GENERALITY_INPUT_TAB = "SyncAutoGenerality_Input";
+
 const SYSTEM_TAB = "SyncAutoUser_System";
 const INPUT_TAB = "SyncAutoUser_Input";
 const CONFLICTS_TAB = "SyncAutoUser_Conflicts";
-const SYSTEM_HEADERS = ["id", "status", "__typed_sheets_deleted"] as const;
 const INPUT_HEADERS = ["id", "status"] as const;
 
 interface CapturedDiagnostic {
@@ -227,10 +256,117 @@ describe("env-driven sync auto-start", () => {
       sql.run("UPDATE writer_lease SET lease_until = 0", []));
   }
 
+  /**
+   * Simulates a CRASHED runtime (not a graceful stop) on a CLOSED db: both
+   * lease rows keep a FUTURE `lease_until` while the heartbeat is frozen
+   * `ageMs` in the past, so only the stale-heartbeat takeover evidence rule
+   * (or the startup wait gate for a young heartbeat) lets the next runtime
+   * claim. Must run AFTER `hikoutei.close()`: graceful stop expires this
+   * runtime's leases, which would erase the crashed state. Default `ageMs`
+   * (≈ now) freezes the heartbeat at ~0, the fully stale case; a small
+   * `ageMs` (e.g. 3_000) reproduces a crash→relaunch WITHIN the stale
+   * window, the Exp-6-runB startup failure the gate must bridge.
+   */
+  function simulateCrashedWriterLeases(dbName: string, ageMs = Date.now()): void {
+    const raw = openRawSqlite(dbName);
+    try {
+      raw.prepare(
+        "UPDATE writer_lease SET lease_until = ?, heartbeat_at = ?",
+      ).run(Date.now() + 10 * 60_000, Date.now() - ageMs);
+    } finally {
+      raw.close();
+    }
+  }
+
   function tempDbName(label: string): string {
     const db = join(tmpdir(), `hikoutei-sync-${label}-${randomUUID()}.sqlite`);
     dbFiles.push(db);
     return db;
+  }
+
+  /** Name of the hidden internal receipt tab (direct-provider constant). */
+  const RECEIPT_TAB = "__typed_sheets_internal_effect_receipts";
+
+  /** The receipt-tab range requested by one read (undefined if absent). */
+  function receiptRangeOf(request: { readonly ranges: readonly string[] }): string | undefined {
+    return request.ranges.find((range) => range.includes(RECEIPT_TAB));
+  }
+
+  /**
+   * Census of receipt-tab READ ranges across a slice of recorded transport
+   * requests: `full` counts the historical whole-tab range, `banded` counts
+   * tail-band reads (start row >= 2). The provider may pay ONE cold full
+   * read per cold read-lane before the cursor settles; steady dispatches
+   * must band.
+   */
+  function receiptReadCensus(requests: readonly { readonly ranges: readonly string[] }[]): {
+    readonly full: number;
+    readonly banded: number;
+  } {
+    let full = 0;
+    let banded = 0;
+    for (const request of requests) {
+      const range = receiptRangeOf(request);
+      if (range === undefined) continue;
+      if (range.includes("!A1:F")) full += 1;
+      else banded += 1;
+    }
+    return { full, banded };
+  }
+
+  /**
+   * Flushes `count` entities in ONE transaction and drains the durable
+   * outbox through manual worker passes; returns the measured span and the
+   * pass count so callers can RECORD (never assert) steady-state effects/s.
+   */
+  async function burstAndDrain(
+    service: InternalSyncService,
+    prefix: string,
+    count: number,
+    maxPasses = 40,
+  ): Promise<{ readonly elapsedMs: number; readonly passes: number }> {
+    const startedAt = Date.now();
+    const em = service.hikoutei.em.fork();
+    for (let index = 0; index < count; index += 1) {
+      em.persist(em.create(User, {
+        id: `${prefix}-${String(index).padStart(4, "0")}`,
+        status: "pending",
+      }));
+    }
+    await em.flush();
+    for (let pass = 0; pass < maxPasses; pass += 1) {
+      await service.effectSupervisor.runOnce();
+      const pending = await service.storage.read(({ sql }) =>
+        sql.get<{ readonly count: number }>(
+          "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE status = 'pending'",
+        ));
+      if ((pending?.count ?? 0) === 0) {
+        return { elapsedMs: Math.max(1, Date.now() - startedAt), passes: pass + 1 };
+      }
+    }
+    throw new Error("burst effect outbox did not drain within the pass budget");
+  }
+
+  /** Every distinct id-column value of one stub tab (row 1 = header). */
+  function tabIds(tab: StubSheet): Set<string> {
+    const ids = new Set<string>();
+    for (const [key, cell] of tab.cells) {
+      const [row, col] = key.split(",").map(Number) as [number, number];
+      if (col !== 0 || row === 0) continue;
+      const value = cell.userEnteredValue?.stringValue;
+      if (value !== undefined) ids.add(value);
+    }
+    return ids;
+  }
+
+  /**
+   * Loads the `node:sqlite` builtin outside the bundler's module graph (a
+   * static import fails under Vite — see
+   * packages/ikisaki/test/support/nodeSqliteAdapter.ts).
+   */
+  function openRawSqlite(path: string): InstanceType<typeof import("node:sqlite").DatabaseSync> {
+    const nodeSqlite = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
+    return new nodeSqlite.DatabaseSync(path);
   }
 
   // -------------------------------------------------------------------------
@@ -1086,6 +1222,73 @@ describe("env-driven sync auto-start", () => {
     await session3.hikoutei.close();
   });
 
+  it("takes over a CRASHED runtime's writer leases via stale heartbeat and drains immediately (restart-stall fix)", async () => {
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const dbName = tempDbName("heartbeat-restart");
+    const { spreadsheet, transport } = newTransport();
+
+    // Session 1: provision + deliver u1, then close (graceful; rows remain).
+    const session1 = await openSync(transport, credentialsPath, dbName);
+    await createUser(session1, "u1", "pending");
+    await drainOutbox(session1);
+    await session1.hikoutei.close();
+    const systemTab = spreadsheet.findTab(SYSTEM_TAB);
+    expect(systemTab).toBeDefined();
+
+    // Simulate a CRASH: both lease rows keep a FUTURE lease window but the
+    // heartbeat is frozen — the exact pre-fix restart-stall state (the old
+    // behavior stalled every claim for the full lease duration). Applied
+    // AFTER close: graceful stop expires this runtime's own leases.
+    simulateCrashedWriterLeases(dbName);
+
+    // Session 2: stale-heartbeat takeover evidence must let every claim path
+    // (startup registration, mapped flush, effect worker) take over at once.
+    const session2 = await openSync(transport, credentialsPath, dbName);
+    await createUser(session2, "u2", "pending");
+    await drainOutbox(session2);
+
+    expect(stubRowFields(systemTab as never, 3, [...SYSTEM_HEADERS]).id).toEqual({
+      kind: "string",
+      value: "u2",
+    });
+    expect(stubRowFields(systemTab as never, 4, [...SYSTEM_HEADERS]).id).toBeNull();
+    await session2.hikoutei.close();
+  });
+
+  it("relaunches IMMEDIATELY after a crash (heartbeat 3s old, lease still live) via the startup wait gate", async () => {
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const dbName = tempDbName("startup-gate-relaunch");
+    const { spreadsheet, transport } = newTransport();
+
+    // Session 1: provision + deliver u1, then close (graceful; rows remain).
+    const session1 = await openSync(transport, credentialsPath, dbName);
+    await createUser(session1, "u1", "pending");
+    await drainOutbox(session1);
+    await session1.hikoutei.close();
+    // Simulate a crash 3s ago AFTER close: lease_until stays in the future
+    // and the heartbeat is only 3s old — NOT yet stale (stale bound is 15s).
+    // The old code failed this exact scenario at startup registration with
+    // sync_startup_failed (live repro Exp 6 runB); the startup wait gate
+    // must wait out the remaining stale window and then succeed.
+    simulateCrashedWriterLeases(dbName, 3_000);
+    const systemTab = spreadsheet.findTab(SYSTEM_TAB);
+    expect(systemTab).toBeDefined();
+
+    // Session 2: the gate waits ~12s for the frozen heartbeat to go stale,
+    // then the claim CAS takes over. openSync must SUCCEED (not exit with
+    // sync_startup_failed).
+    const session2 = await openSync(transport, credentialsPath, dbName);
+    await createUser(session2, "u2", "pending");
+    await drainOutbox(session2);
+
+    expect(stubRowFields(systemTab as never, 3, [...SYSTEM_HEADERS]).id).toEqual({
+      kind: "string",
+      value: "u2",
+    });
+    expect(stubRowFields(systemTab as never, 4, [...SYSTEM_HEADERS]).id).toBeNull();
+    await session2.hikoutei.close();
+  }, 30_000);
+
   it("records a human edit during downtime as a durable OPEN conflict and resolves only after a later same-field canonical advance (issue #196)", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const dbName = tempDbName("conflict");
@@ -1190,7 +1393,335 @@ describe("env-driven sync auto-start", () => {
     await session2.hikoutei.close();
   });
 
+  // -------------------------------------------------------------------------
+  // Burst-scale crash restart (receipt cursor cold-read + banding)
+  // -------------------------------------------------------------------------
 
+  /**
+   * Crash-restart structural guard: after a crashed session drained a burst,
+   * the reopened runtime's receipt-cursor state is process-local (the
+   * provider's `ReceiptReadCursor` is in-memory), so the FIRST dispatch
+   * after reopen must pay at most one cold whole-tab receipt read per cold
+   * read-lane and every LATER dispatch must request the tail band — the
+   * deep history is never re-read pass after pass. Effects must still land
+   * exactly once across the restart (no duplicate target rows, no duplicate
+   * ids). Read-shape counts come from the stub transport's recorded ranges;
+   * effects/s is RECORDED, never wall-clock-asserted.
+   */
+  it("restarts a crashed burst runtime with one cold full receipt read, then bands, and lands every effect once", async () => {
+    const BURST_SIZE = 200;
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const dbName = tempDbName("burst-crash-restart");
+    const { spreadsheet, transport } = newTransport();
+
+    // Session 1: provision + drain a 200-entity burst (400 outbox effects:
+    // system-state + user-input route per entity).
+    const session1 = await openSync(transport, credentialsPath, dbName);
+    const first = await burstAndDrain(session1, "s1", BURST_SIZE);
+    await session1.hikoutei.close();
+
+    // Simulate the crash AFTER close (frozen heartbeat, live lease window).
+    simulateCrashedWriterLeases(dbName);
+
+    // Session 2: stale-heartbeat takeover, then a SECOND burst on the same
+    // db and the same in-memory spreadsheet (the remote survived the crash).
+    const requestsAtReopen = transport.getSpreadsheetRequests.length;
+    const session2 = await openSync(transport, credentialsPath, dbName);
+    const requestsAtFirstDispatch = transport.getSpreadsheetRequests.length;
+    const second = await burstAndDrain(session2, "s2", BURST_SIZE);
+
+    // (1) Read shape after reopen: at most ONE cold full receipt read per
+    // cold read-lane, and the steady dispatches band over the history.
+    const reopen = transport.getSpreadsheetRequests.slice(requestsAtFirstDispatch);
+    const census = receiptReadCensus(reopen);
+    expect(census.full).toBeLessThanOrEqual(2);
+    expect(census.banded).toBeGreaterThanOrEqual(2);
+    // Every banded range starts at or after the appended history (never the
+    // whole tab again): parse the first banded range's start row.
+    const bandedRange = reopen
+      .map(receiptRangeOf)
+      .find((range) => range !== undefined && !range.includes("!A1:F"));
+    expect(bandedRange).toBeDefined();
+
+    // (2) Every effect landed exactly once across the restart: the system
+    // and input tabs carry the 400 distinct ids with no duplicates, and
+    // nothing from session 1 was re-appended.
+    const systemTab = spreadsheet.findTab(SYSTEM_TAB);
+    const inputTab = spreadsheet.findTab(INPUT_TAB);
+    if (systemTab === undefined || inputTab === undefined) throw new Error("burst tabs missing");
+    const expectedIds = new Set<string>([
+      ...Array.from({ length: BURST_SIZE }, (_, i) => `s1-${String(i).padStart(4, "0")}`),
+      ...Array.from({ length: BURST_SIZE }, (_, i) => `s2-${String(i).padStart(4, "0")}`),
+    ]);
+    expect(tabIds(systemTab)).toEqual(expectedIds);
+    expect(tabIds(inputTab)).toEqual(expectedIds);
+    // The receipt tab holds exactly one receipt per outbox effect (2 routes
+    // per entity) plus the header row — duplicate dispatches would have
+    // either appended duplicate receipts or shifted the count.
+    const receiptTab = spreadsheet.findTab(RECEIPT_TAB);
+    if (receiptTab === undefined) throw new Error("receipt tab missing");
+    expect(receiptTab.lastContentRow()).toBe(BURST_SIZE * 4);
+
+    // RECORD ONLY: steady-state effects/s for both sessions (flush+drain
+    // spans; session 1 includes one-time provisioning, so it is a lower
+    // bound) and the post-reopen read census.
+    console.info(
+      `[burst-restart-e2e] session1 effects=${BURST_SIZE * 2} elapsedMs=${first.elapsedMs} ` +
+      `effects/s~${Math.round((BURST_SIZE * 2 / first.elapsedMs) * 1000)} passes=${first.passes} | ` +
+      `session2 effects=${BURST_SIZE * 2} elapsedMs=${second.elapsedMs} ` +
+      `effects/s~${Math.round((BURST_SIZE * 2 / second.elapsedMs) * 1000)} passes=${second.passes} | ` +
+      `post-reopen receiptReads(full=${census.full},banded=${census.banded}) ` +
+      `readsSinceReopen=${transport.getSpreadsheetRequests.length - requestsAtReopen}`,
+    );
+    await session2.hikoutei.close();
+  }, 60_000);
+
+  // -------------------------------------------------------------------------
+  // Generality variant: DATE + CHECKBOX columns under burst + human edit
+  // -------------------------------------------------------------------------
+
+  /**
+   * Guards the demo-overfit concern: the live demo shape was string-columns
+   * only. This runs a burst on an entity carrying a DATE column (stored as
+   * a serial + canonical number-format — the format-evidence path) and a
+   * checkbox-shaped BOOLEAN column, then a human edit to EXISTING rows
+   * between sessions, and asserts conflict detection still fires with the
+   * narrowed (banded) reads: the diverged date cell is classified from the
+   * number-format evidence into an OPEN conflict and the queued canonical
+   * date must not silently overwrite the human edit; the undelivered boolean
+   * flip is classified into its own OPEN conflict and its write is gated the
+   * same way; effects for the non-conflicting rows all land exactly once.
+   * effects/s and the read census are RECORDED.
+   */
+  it("detects human edits on DATE and boolean columns under narrowed reads after a burst (generality variant)", async () => {
+    const BURST_SIZE = 40;
+    const BASELINE_ISO = "2024-01-05T00:00:00.000Z";
+    const CANONICAL_UPDATE_ISO = "2024-02-02T00:00:00.000Z";
+    const HUMAN_EDIT_ISO = "2099-12-31T00:00:00.000Z";
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const dbName = tempDbName("generality");
+    const { spreadsheet, transport } = newTransport();
+
+    // Session 1: burst-deliver 40 date+boolean rows, observe a polling
+    // baseline, then queue a canonical update to the DATE and boolean
+    // columns of one row before shutdown (SQLite moves past the baseline
+    // while the sheet still shows the old values).
+    const startedAt = Date.now();
+    const session1 = await openSync(
+      transport, credentialsPath, dbName, [], {}, [GeneralityUser],
+    );
+    const em0 = session1.hikoutei.em.fork();
+    for (let index = 0; index < BURST_SIZE; index += 1) {
+      em0.persist(em0.create(GeneralityUser, {
+        id: `g-${String(index).padStart(3, "0")}`,
+        status: "pending",
+        dueAt: new Date(BASELINE_ISO),
+        done: false,
+      }));
+    }
+    await em0.flush();
+    let burstPasses = 0;
+    for (; burstPasses < 40; burstPasses += 1) {
+      await session1.effectSupervisor.runOnce();
+      const pending = await session1.storage.read(({ sql }) =>
+        sql.get<{ readonly count: number }>(
+          "SELECT COUNT(*) AS count FROM sheet_effect_outbox WHERE status = 'pending'",
+        ));
+      if ((pending?.count ?? 0) === 0) break;
+    }
+    const burstElapsedMs = Math.max(1, Date.now() - startedAt);
+    await session1.pollingSupervisor.runOnce();
+    await session1.stop();
+    const em1 = session1.hikoutei.em.fork();
+    const target = await em1.findOne(GeneralityUser, { id: "g-003" });
+    if (target === null) throw new Error("expected the session-1 entity");
+    target.dueAt = new Date(CANONICAL_UPDATE_ISO);
+    target.done = true;
+    await em1.flush();
+    await expireWriterLeases(session1);
+    await session1.hikoutei.close();
+
+    // Human edit during downtime: a DIFFERENT date on the conflicted row
+    // (entered through the real Sheets date UI: serial + canonical number
+    // format). The boolean column diverges the other way: the canonical
+    // flip is queued while the sheet still shows the baseline false, so
+    // BOTH scalar evidence paths (date format + bool value) are exercised
+    // under the narrowed reads.
+    const inputTab = spreadsheet.findTab(GENERALITY_INPUT_TAB);
+    if (inputTab === undefined) throw new Error("input tab missing");
+    const rowIndexOf = (id: string): number => {
+      for (const [key, cell] of inputTab.cells) {
+        const [row, col] = key.split(",").map(Number) as [number, number];
+        if (col === 0 && cell.userEnteredValue?.stringValue === id) return row;
+      }
+      throw new Error(`row for ${id} not found`);
+    };
+    // Input columns: id, status, dueAt, done, __hikoutei_row_id.
+    inputTab.cells.set(`${rowIndexOf("g-003")},2`, toStubCell({ kind: "date", value: HUMAN_EDIT_ISO }));
+    // The boolean column is deliberately NOT human-edited: its canonical
+    // false -> true flip sits UNDELIVERED in the outbox across the restart.
+    // The evaluator skips observed cells that match the canonical value-for-
+    // value (MikroOrmUserInputPollingInspection stableHash rule), so the
+    // provable boolean contract at restart is: the still-stale sheet value
+    // diverges from the advanced canonical, `done` gets classified into its
+    // own OPEN conflict alongside `dueAt`, and the conflicted write is
+    // gated rather than slipped through on CAS-clean baseline evidence.
+    const requestsBeforeSession2 = transport.getSpreadsheetRequests.length;
+
+    // Session 2: startup classification must fire the conflict for the
+    // diverged DATE field even with the receipt-banded narrowed reads.
+    const session2 = await openSync(
+      transport, credentialsPath, dbName, [], {}, [GeneralityUser],
+    );
+    await session2.pollingSupervisor.runOnce();
+    await session2.effectSupervisor.runOnce().catch(() => undefined);
+    const conflicts = await session2.storage.read(({ sql }) =>
+      sql.all<{ readonly field_name: string; readonly status: string }>(
+        "SELECT field_name, status FROM sync_conflict WHERE logical_sheet_id = ?",
+        ["entity:sync_auto_generality"],
+      ));
+    expect(conflicts.some((conflict) =>
+      conflict.field_name === "dueAt" && conflict.status === "OPEN")).toBe(true);
+    // The undelivered boolean flip is classified too: `done` carries its own
+    // OPEN conflict row (value-level divergence from the advanced canonical),
+    // proving the boolean path goes through the same evidence machinery as
+    // the date instead of a silent bypass.
+    expect(conflicts.some((conflict) =>
+      conflict.field_name === "done" && conflict.status === "OPEN")).toBe(true);
+
+    // The queued canonical update must NOT silently overwrite the human
+    // date value (stale-write protection with format evidence).
+    for (let pass = 0; pass < 6; pass += 1) {
+      await session2.effectSupervisor.runOnce().catch(() => undefined);
+    }
+    const dueAtCell = inputTab.cell(rowIndexOf("g-003"), 2);
+    expect(stubCellToNormalized(dueAtCell)).toEqual({ kind: "date", value: HUMAN_EDIT_ISO });
+    // The boolean flip does NOT silently pass either: with its own OPEN
+    // conflict pending, the dispatcher gates the done write and the sheet
+    // keeps the stale baseline false until resolution — SQLite stays the
+    // authority (done=true) exactly like the human-diverged date cell.
+    const doneCell = inputTab.cell(rowIndexOf("g-003"), 3);
+    expect(stubCellToNormalized(doneCell)).toEqual({ kind: "boolean", value: false });
+
+    // Non-conflicting rows still landed exactly once: 40 distinct ids.
+    const systemTab = spreadsheet.findTab(GENERALITY_SYSTEM_TAB);
+    if (systemTab === undefined) throw new Error("system tab missing");
+    expect(tabIds(systemTab).size).toBe(BURST_SIZE);
+
+    // The narrowed reads held after reopen: at most one cold full receipt
+    // read per read-lane, and the dispatch window banded.
+    const census = receiptReadCensus(
+      transport.getSpreadsheetRequests.slice(requestsBeforeSession2),
+    );
+    expect(census.full).toBeLessThanOrEqual(2);
+    expect(census.banded).toBeGreaterThanOrEqual(1);
+
+    // RECORD ONLY: burst effects/s (includes one-time provisioning) and the
+    // session-2 read census under the date/checkbox shape.
+    console.info(
+      `[generality-e2e] burst effects=${BURST_SIZE * 2} passes=${burstPasses + 1} ` +
+      `elapsedMs=${burstElapsedMs} effects/s~${Math.round((BURST_SIZE * 2 / burstElapsedMs) * 1000)} | ` +
+      `session2 receiptReads(full=${census.full},banded=${census.banded}) ` +
+      `conflicts=[${conflicts.map((conflict) => `${conflict.field_name}:${conflict.status}`).join(",")}]`,
+    );
+    await session2.hikoutei.close();
+  }, 60_000);
+
+  /**
+   * Checkbox data-validation evidence for the generality shape (review
+   * finding): the env-driven service never surfaces `checkboxHeaders` (it is
+   * provider-route configuration), so this drives the REAL Google Sheets API
+   * provider directly with the Generality route configured
+   * `checkboxHeaders: ["done"]` and asserts the append batch carries the
+   * checkbox evidence: a strict setDataValidation request scoped to the done
+   * column of the appended row, plus the value landing as a native boolean
+   * cell. A twin append on a route WITHOUT checkbox configuration emits
+   * zero validation ranges, proving the evidence is attributed to the
+   * checkbox route config and not incidentally present.
+   */
+  it("carries checkbox data-validation evidence only for a configured checkbox route", async () => {
+    // The checkbox evidence rides the same batch-builder append path the
+    // service uses (pushAppendWrites), so the SYSTEM-shaped route carries
+    // the checkbox column: fastAppend requires a registered identityField,
+    // which only the system_state/sync_conflicts routes derive.
+    const inputHeaders = ["id", "status", "dueAt", "done", "__typed_sheets_deleted"];
+    const physicalSheetId = "entity:sync_auto_generality:system_state";
+    const appendRows = {
+      physicalSheetId,
+      sheetName: GENERALITY_SYSTEM_TAB,
+      registeredRange: "A:E",
+      projection: "system_state" as const,
+      schemaVersion: 1,
+      rows: [{
+        effectId: "generality-checkbox-1",
+        payloadHash: "payload-generality-checkbox-1",
+        anchor: "anchor-generality-checkbox-1",
+        fields: {
+          id: { kind: "string", value: "cb-001" },
+          status: { kind: "string", value: "pending" },
+          dueAt: { kind: "date", value: "2024-01-05T00:00:00.000Z" },
+          done: { kind: "boolean", value: true },
+          __typed_sheets_deleted: { kind: "boolean", value: false },
+        },
+      }] satisfies FastAppendRow[],
+    };
+    const buildCheckboxProvider = (checkboxHeaders: readonly string[] | undefined) => {
+      const sheet = new StubSpreadsheet();
+      sheet.addTab(GENERALITY_SYSTEM_TAB, { headers: inputHeaders });
+      const providerTransport = new StubSheetsTransport(sheet);
+      const provider = new GoogleSheetsApiSyncProvider({
+        spreadsheetId: "generality-checkbox-e2e",
+        definitions: [{
+          sheet: {
+            logicalSheetId: "entity:sync_auto_generality",
+            physicalSheetId,
+            spreadsheetId: "generality-checkbox-e2e",
+            tabName: GENERALITY_SYSTEM_TAB,
+            registeredRange: "A:E",
+            projection: "system_state",
+            schemaVersion: 1,
+            ownershipManifestJson: "{}",
+            businessKeyField: "id",
+            anchorMode: "business_key",
+          },
+          headers: inputHeaders,
+          ...(checkboxHeaders === undefined ? {} : { checkboxHeaders }),
+        }],
+        transport: providerTransport,
+        requestTimeoutMs: 60_000,
+        rateLimitIntervalMs: 0,
+      });
+      return { sheet, provider };
+    };
+
+    // Configured checkbox route: the append carries the checkbox evidence.
+    const configured = buildCheckboxProvider(["done"]);
+    const applied = await configured.provider.fastAppendRows(appendRows);
+    expect(applied.results[0]?.status).toBe("applied");
+    const checkboxTab = configured.sheet.findTab(GENERALITY_SYSTEM_TAB);
+    if (checkboxTab === undefined) throw new Error("checkbox tab missing");
+    // setDataValidation scoped to the done column (header index 3) of
+    // exactly the appended row (wire rows 1..2, half-open).
+    expect(checkboxTab.dataValidationRanges).toHaveLength(1);
+    expect(checkboxTab.dataValidationRanges[0]).toMatchObject({
+      startRowIndex: 1,
+      endRowIndex: 2,
+      startColumnIndex: 3,
+      endColumnIndex: 4,
+    });
+    // The checkbox value lands as a native boolean cell, not a string.
+    expect(checkboxTab.cell(1, 3)?.userEnteredValue?.boolValue).toBe(true);
+
+    // Twin route WITHOUT checkbox config: identical append, zero ranges.
+    const unconfigured = buildCheckboxProvider(undefined);
+    expect((await unconfigured.provider.fastAppendRows({
+      ...appendRows,
+      rows: appendRows.rows.map((row) => ({ ...row, effectId: "generality-no-checkbox-1" })),
+    })).results[0]?.status).toBe("applied");
+    const plainTab = unconfigured.sheet.findTab(GENERALITY_SYSTEM_TAB);
+    if (plainTab === undefined) throw new Error("plain tab missing");
+    expect(plainTab.dataValidationRanges).toHaveLength(0);
+  });
 
   // -------------------------------------------------------------------------
   // Public createTypedSheets wiring
@@ -1261,5 +1792,163 @@ describe("env-driven sync auto-start", () => {
         process.env.GOOGLE_APPLICATION_CREDENTIALS = previousCredentials;
       }
     }
+  });
+
+  it("forwards providerOptions.onRequest to the sync provider's request sink", async () => {
+    // The public telemetry hook must reach the provider's redacted sink:
+    // startup provisioning performs real (stubbed) transport calls, so the
+    // sink fires without any flush.
+    const credentialsPath = writeCredentialsFile(credentialsDir());
+    const { transport } = newTransport();
+    const events: { readonly operation: string; readonly ok: boolean }[] = [];
+    const result = await createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: syncEnv(credentialsPath),
+      transport,
+      providerOptions: { onRequest: (event) => events.push(event) },
+    });
+    const service = requireSyncResult(result);
+    services.push(service);
+    expect(transport.getSpreadsheetCalls).toBeGreaterThan(0);
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) =>
+      event.operation === "getSpreadsheet" || event.operation === "batchUpdate"
+    )).toBe(true);
+  });
+
+  it("rejects a non-callable providerOptions.onRequest at the public boundary", async () => {
+    // Boundary validation runs before any env/transport decision, so this
+    // fails closed without starting anything.
+    await expect(createTypedSheets({
+      dbName: ":memory:",
+      entities: [User],
+      providerOptions: { onRequest: "not-a-function" as never },
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+    });
+  });
+});
+
+describe("pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC)", () => {
+  const tempDirs: string[] = [];
+  const startedServices: InternalSyncService[] = [];
+
+  afterEach(async () => {
+    while (startedServices.length > 0) {
+      const service = startedServices.pop()!;
+      await service.close().catch(() => undefined);
+      await service.hikoutei.close().catch(() => undefined);
+    }
+    while (tempDirs.length > 0) {
+      rmSync(tempDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function writePoolKey(dir: string, name: string, email: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify({
+      type: "service_account",
+      project_id: "hikoutei-test",
+      private_key_id: "k1",
+      private_key: "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
+      client_email: email,
+      token_uri: "https://oauth2.googleapis.com/token",
+    }));
+    return path;
+  }
+
+  it("starts with a valid pool and NO GOOGLE_APPLICATION_CREDENTIALS", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-start-"));
+    tempDirs.push(dir);
+    const a = writePoolKey(dir, "sa-a.json", "pool-a@example.com");
+    const b = writePoolKey(dir, "sa-b.json", "pool-b@example.com");
+    const spreadsheet = new StubSpreadsheet();
+    const result = await createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-1/edit",
+        [SYNC_ENV_KEYS.CREDENTIAL_POOL_FILES]: `${a},${b}`,
+        // GOOGLE_APPLICATION_CREDENTIALS deliberately UNSET: pool resolution
+        // is validated FIRST, so the ADC file is only required when no pool
+        // is configured.
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+    });
+    expect(result.kind).toBe("sync");
+    if (result.kind === "sync") {
+      startedServices.push(result.service);
+    }
+  });
+
+  it("starts with a providerOptions-only pool (no env pool, no ADC)", async () => {
+    // Terra round-3 regression: the EFFECTIVE pool is resolved from the env
+    // first, else providerOptions.serviceAccountKeyFiles. A non-empty
+    // providerOptions pool must skip the ADC requirement on the startup path
+    // exactly like the env pool does (worker/adoption signing already uses
+    // the providerOptions pool, so requiring ADC here was inconsistent).
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-start-"));
+    tempDirs.push(dir);
+    const a = writePoolKey(dir, "sa-po-a.json", "po-a@example.com");
+    const b = writePoolKey(dir, "sa-po-b.json", "po-b@example.com");
+    const spreadsheet = new StubSpreadsheet();
+    const result = await createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-3/edit",
+        // HIKOUTEI_SYNC_CREDENTIALS and GOOGLE_APPLICATION_CREDENTIALS
+        // both deliberately UNSET: only providerOptions carries the pool.
+      },
+      providerOptions: { serviceAccountKeyFiles: [a, b] },
+      transport: new StubSheetsTransport(spreadsheet),
+    });
+    expect(result.kind).toBe("sync");
+    if (result.kind === "sync") {
+      startedServices.push(result.service);
+    }
+  });
+
+  it("names the providerOptions pool slot-0 identity in the 403 hint", async () => {
+    // The 403 access-denied hint must derive from the EFFECTIVE pool's slot 0
+    // (the identity startup validation and adoption signing ride), never
+    // from ADC — the ADC file does not exist in this deployment shape.
+    const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-403-"));
+    tempDirs.push(dir);
+    const a = writePoolKey(dir, "sa-hint-a.json", "hint-slot-0@example.com");
+    const b = writePoolKey(dir, "sa-hint-b.json", "hint-slot-1@example.com");
+    const transport = new StubSheetsTransport(new StubSpreadsheet());
+    transport.fault = { kind: "http", status: 403, apiErrorStatus: "PERMISSION_DENIED" };
+    await expect(createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-4/edit",
+      },
+      providerOptions: { serviceAccountKeyFiles: [a, b] },
+      transport,
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.SYNC_SPREADSHEET_ACCESS_DENIED,
+      message: expect.stringContaining("hint-slot-0@example.com"),
+    });
+  });
+
+  it("still fails closed without a pool AND without ADC credentials", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    await expect(createTypedSheetsWithSync({
+      dbName: ":memory:",
+      entities: [User],
+      env: {
+        [SYNC_ENV_KEYS.SPREADSHEET_URL]:
+          "https://docs.google.com/spreadsheets/d/pool-only-2/edit",
+      },
+      transport: new StubSheetsTransport(spreadsheet),
+    })).rejects.toMatchObject({
+      code: HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
+    });
   });
 });

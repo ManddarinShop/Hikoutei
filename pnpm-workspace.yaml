@@ -1,0 +1,22 @@
+# P8-D1: pnpm workspace source of truth.
+# `packages/*` matches every physical workspace package that currently has a
+# manifest: ikisaki, hikoutei-contracts, mcp (create-hikoutei has no manifest
+# and is not a pnpm package). Root src/** stays part of the root package
+# (hikoutei) until P8-D2 physically moves components into packages/.
+packages:
+  - packages/*
+
+# vitest depends on esbuild, whose postinstall downloads the platform
+# binary. pnpm blocks lifecycle scripts by default; allow esbuild so vitest
+# can actually run (parity with the previous npm install behavior).
+allowBuilds:
+  esbuild: true
+
+# P8-D1: link workspace packages for exact-version deps.
+# The root package pins "@hikoutei/ikisaki": "0.1.5" (published version, no
+# workspace: protocol). pnpm's default (linkWorkspacePackages=false) would
+# fetch that spec from the registry instead of linking the local workspace
+# package, breaking typecheck against local ikisaki sources. With true, a
+# version spec that matches a workspace package resolves to the workspace
+# link — the same behavior npm workspaces gave us.
+linkWorkspacePackages: true

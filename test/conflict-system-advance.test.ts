@@ -29,7 +29,7 @@ import {
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
 import {
   claimEffectWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -37,33 +37,33 @@ import {
   appendPendingEffectsWithSql,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "@hikoutei/ikisaki";
-import { presentValue, absentValue, notApplicableValue } from "../src/shared/state/index.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+import { presentValue, absentValue, notApplicableValue } from "@hikoutei/contracts/state/index.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
   SYNC_CONFLICT_RESOLUTIONS,
-} from "../src/application/sync/sheetsContract/conflictProjection.js";
+} from "@hikoutei/storage/sync/sheetsContract/conflictProjection.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import { createCandidateReconcileEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
-import { runUserInputCleanupScan } from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
-import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import { createCandidateReconcileEffect } from "@hikoutei/storage/sync/outbound/projection/ProjectionEffectFactory.js";
+import { runUserInputCleanupScan } from "@hikoutei/sync-engine/sync/outbound/reconciliation/CleanupScanner.js";
+import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 import {
   advanceCandidateVisibleEvidence,
   promoteCandidateVisibleEvidence,
   unavailableCandidateVisibleEvidence,
-} from "../src/infrastructure/storage/state/resolution/candidateEvidence.js";
-import { readConflictWithSql } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+} from "@hikoutei/storage/storage/state/resolution/candidateEvidence.js";
+import { readConflictWithSql } from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
 import {
   CANDIDATE_VISIBLE_EVIDENCE_STATUSES,
   CONFLICT_STATUSES,
   type ConflictStatus,
-} from "../src/domain/model/constants.js";
-import type { SyncConflict } from "../src/domain/model/types.js";
-import type { SyncSheetsProvisioner } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import type { SyncConflict } from "@hikoutei/contracts/domain/model/types.js";
+import type { SyncSheetsProvisioner } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const User = defineTypedSheetsEntity({
@@ -1952,10 +1952,10 @@ describe("issue #196 audit projection state union", () => {
 
   it("rejects one-sided stored evidence when a conflict row is promoted", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
     );
     const { migrateMikroOrmSqliteStorageSchema } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
     );
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -2015,10 +2015,10 @@ describe("issue #196 audit projection state union", () => {
 
   it("migrates a v5 store to v6 additively, preserves legacy rows, and stays idempotent", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
     );
     const { migrateMikroOrmSqliteStorageSchema } = await import(
-      "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
     );
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -2085,8 +2085,8 @@ describe("issue #196 audit projection state union", () => {
     // and the new evidence columns start NULL (never guessed).
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 5,
-      toVersion: 6,
-      appliedVersions: [6],
+      toVersion: 8,
+      appliedVersions: [6, 7, 8],
     });
     await expect(adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sync_conflict)",
@@ -2117,8 +2117,8 @@ describe("issue #196 audit projection state union", () => {
 
     // Idempotent: a second migration applies nothing.
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-      fromVersion: 6,
-      toVersion: 6,
+      fromVersion: 8,
+      toVersion: 8,
       appliedVersions: [],
     });
 
@@ -2130,5 +2130,72 @@ describe("issue #196 audit projection state union", () => {
     expect(conflict.value.candidateVisibleEvidence.status).toBe(
       CANDIDATE_VISIBLE_EVIDENCE_STATUSES.UNAVAILABLE,
     );
+  });
+
+  it("drops real legacy quarantine repair data in the v5→v7 multi-hop path and keeps the surviving columns intact", async () => {
+    const { initializeMikroOrmSqliteAdapter } = await import(
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
+    );
+    const { migrateMikroOrmSqliteStorageSchema } = await import(
+        "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js"
+    );
+    const adapter = await initializeMikroOrmSqliteAdapter({
+      dbName: ":memory:",
+      entities: [MigrationOrder],
+    });
+    openAdapters.push(adapter);
+
+    // Build the current store, then re-introduce the historical v5 quarantine
+    // shape: the three legacy repair columns WITH real persisted values (the
+    // v5 writer did write them) so the multi-hop path drops data-bearing
+    // columns, not empty ones.
+    await migrateMikroOrmSqliteStorageSchema(adapter);
+    await adapter.transaction(async ({ sql }) => {
+      await sql.run("ALTER TABLE quarantine_record ADD COLUMN repair_fields_json TEXT NOT NULL DEFAULT '[]'");
+      await sql.run("ALTER TABLE quarantine_record ADD COLUMN repair_state TEXT");
+      await sql.run("ALTER TABLE quarantine_record ADD COLUMN candidate_payload_json TEXT");
+      await sql.run("PRAGMA user_version = 5");
+      const now = Date.now();
+      await sql.run(
+        "INSERT INTO sheet_registry (sheet_id, schema_version, ownership_manifest_json, business_key_field) VALUES (?, ?, ?, ?)",
+        ["logical-legacy", 1, "{}", "id"],
+      );
+      await sql.run(
+        "INSERT INTO quarantine_record (quarantine_id, event_id, observation_id, logical_sheet_id, row_binding_id, reason, before_row_json, after_row_json, fields_json, repair_fields_json, repair_state, candidate_payload_json, created_at, updated_at) VALUES (?, NULL, NULL, ?, ?, 'duplicate', NULL, NULL, '{}', '[\"field-a\"]', 'pending', 'payload-evidence', ?, ?)",
+        ["quar-legacy-v5", "logical-legacy", "binding-legacy-v5", now, now],
+      );
+    });
+
+    // The v5→v6→v7 multi-hop migration still reports both applied versions.
+    await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
+      fromVersion: 5,
+      toVersion: 8,
+      appliedVersions: [6, 7, 8],
+    });
+
+    // The repair columns (and their data) are gone for good.
+    await expect(adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
+      "PRAGMA table_info(quarantine_record)",
+    ))).resolves.not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "repair_fields_json" }),
+      expect.objectContaining({ name: "repair_state" }),
+      expect.objectContaining({ name: "candidate_payload_json" }),
+    ]));
+
+    // Surviving columns of the legacy quarantine row are untouched.
+    await expect(adapter.read(({ sql }) => sql.get<{
+      readonly logical_sheet_id: string;
+      readonly row_binding_id: string;
+      readonly reason: string;
+      readonly fields_json: string;
+    }>(
+      "SELECT logical_sheet_id, row_binding_id, reason, fields_json FROM quarantine_record WHERE quarantine_id = ?",
+      ["quar-legacy-v5"],
+    ))).resolves.toEqual({
+      logical_sheet_id: "logical-legacy",
+      row_binding_id: "binding-legacy-v5",
+      reason: "duplicate",
+      fields_json: "{}",
+    });
   });
 });

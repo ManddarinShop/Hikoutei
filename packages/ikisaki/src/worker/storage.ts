@@ -1,5 +1,9 @@
-/** Persistence port used by the shared effect-worker state machine. */
+/**
+ * Persistence port and adapter implementation for the shared
+ * effect-worker state machine.
+ */
 
+import type { SqlStorageAdapter } from "../sql/sql.js";
 import type {
   ApplyResultOptions,
   ClaimEffectOptions,
@@ -9,12 +13,27 @@ import type {
   PendingEffect,
   RenewEffectLeaseOptions,
   RetryClaimedEffectOptions,
-} from "../contracts.js";
+} from "../contract/contracts.js";
 import type {
   ClaimLeaseOptions,
   FencingContext,
   WriterLeaseClaimResult,
-} from "../writerLease.js";
+} from "../outbox/writerLease.js";
+import {
+  claimEffectWithAdapter,
+  applyEffectResultWithAdapter,
+  markDeliveryUncertainWithAdapter,
+  renewEffectLeaseWithAdapter,
+  recoverExpiredLeasesWithAdapter,
+  listReadyEffectsWithAdapter,
+  listReadyFastAppendEffectsWithAdapter,
+  releaseUnprocessedEffectWithAdapter,
+  retryClaimedEffectWithAdapter,
+  supersedeAndReplanWithAdapter,
+} from "../outbox/outbox.js";
+import {
+  claimWriterLeaseWithAdapter,
+} from "../outbox/writerLease.js";
 
 /** Persistence operations used by the shared effect-worker state machine. */
 export interface EffectWorkerStorage {
@@ -30,6 +49,7 @@ export interface EffectWorkerStorage {
     options: Pick<FencingContext, "role" | "writerEpoch" | "fencingToken" | "now"> & {
       readonly effectId: string;
       readonly claimToken: string;
+      readonly reason?: "provider_batch" | "lease_recovered";
     },
   ): Promise<boolean>;
   retryClaimedEffect(options: RetryClaimedEffectOptions): Promise<boolean>;
@@ -38,4 +58,28 @@ export interface EffectWorkerStorage {
     oldEffectId: string,
     newEffect: NewEffect,
   ): Promise<void>;
+}
+
+/**
+ * Creates an `EffectWorkerStorage` backed by an adapter-owned SQL connection.
+ *
+ * This is the adapter-compatible storage boundary used by the worker pipeline;
+ * it never opens its own database beside a host connection.
+ */
+export function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWorkerStorage {
+  return {
+    claimWriterLease: (options) => claimWriterLeaseWithAdapter(storage, options),
+    recoverExpiredLeases: (fence) => recoverExpiredLeasesWithAdapter(storage, fence),
+    listReadyEffects: (limit, now) => listReadyEffectsWithAdapter(storage, limit, now),
+    listReadyFastAppendEffects: (limit, now) => listReadyFastAppendEffectsWithAdapter(storage, limit, now),
+    claimEffect: (options) => claimEffectWithAdapter(storage, options),
+    markDeliveryUncertain: (options) => markDeliveryUncertainWithAdapter(storage, options),
+    renewEffectLease: (options) => renewEffectLeaseWithAdapter(storage, options),
+    applyEffectResult: (options) => applyEffectResultWithAdapter(storage, options),
+    releaseUnprocessedEffect: (options) => releaseUnprocessedEffectWithAdapter(storage, options),
+    retryClaimedEffect: (options) => retryClaimedEffectWithAdapter(storage, options),
+    supersedeAndReplan: (fence, oldEffectId, newEffect) => {
+      return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
+    },
+  };
 }

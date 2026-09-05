@@ -1,31 +1,145 @@
 {
-  "hash": "367a1c72",
-  "configHash": "98b71bdc",
-  "lockfileHash": "7c178425",
-  "browserHash": "111ed7db",
+  "hash": "ad73b57c",
+  "configHash": "253b92a9",
+  "lockfileHash": "e4605b4c",
+  "browserHash": "1deccb1e",
   "optimized": {
     "vue": {
       "src": "../../../node_modules/vue/dist/vue.runtime.esm-bundler.js",
       "file": "vue.js",
-      "fileHash": "aeba8c62",
+      "fileHash": "38c8f4fe",
       "needsInterop": false
     },
     "vitepress > @vue/devtools-api": {
       "src": "../../../node_modules/@vue/devtools-api/dist/index.js",
       "file": "vitepress___@vue_devtools-api.js",
-      "fileHash": "0fc6919e",
+      "fileHash": "ab6886bc",
       "needsInterop": false
     },
     "vitepress > @vueuse/core": {
       "src": "../../../node_modules/@vueuse/core/index.mjs",
       "file": "vitepress___@vueuse_core.js",
-      "fileHash": "844f90a9",
+      "fileHash": "90d60973",
+      "needsInterop": false
+    },
+    "react-dom/client": {
+      "src": "../../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "72df7dcd",
+      "needsInterop": true
+    },
+    "react": {
+      "src": "../../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "8c4869df",
+      "needsInterop": true
+    },
+    "motion/react": {
+      "src": "../../../node_modules/motion/dist/es/react.mjs",
+      "file": "motion_react.js",
+      "fileHash": "4ddc9980",
+      "needsInterop": false
+    },
+    "@visx/grid": {
+      "src": "../../../node_modules/@visx/grid/esm/index.js",
+      "file": "@visx_grid.js",
+      "fileHash": "f4d30fa6",
+      "needsInterop": false
+    },
+    "react-dom": {
+      "src": "../../../node_modules/react-dom/index.js",
+      "file": "react-dom.js",
+      "fileHash": "ffda709d",
+      "needsInterop": true
+    },
+    "@visx/responsive": {
+      "src": "../../../node_modules/@visx/responsive/esm/index.js",
+      "file": "@visx_responsive.js",
+      "fileHash": "4a3dc5dc",
+      "needsInterop": false
+    },
+    "@visx/curve": {
+      "src": "../../../node_modules/@visx/curve/esm/index.js",
+      "file": "@visx_curve.js",
+      "fileHash": "3af34640",
+      "needsInterop": false
+    },
+    "@visx/shape": {
+      "src": "../../../node_modules/@visx/shape/esm/index.js",
+      "file": "@visx_shape.js",
+      "fileHash": "10387099",
+      "needsInterop": false
+    },
+    "@visx/event": {
+      "src": "../../../node_modules/@visx/event/esm/index.js",
+      "file": "@visx_event.js",
+      "fileHash": "a4b3493f",
+      "needsInterop": false
+    },
+    "@visx/scale": {
+      "src": "../../../node_modules/@visx/scale/esm/index.js",
+      "file": "@visx_scale.js",
+      "fileHash": "79246414",
+      "needsInterop": false
+    },
+    "clsx": {
+      "src": "../../../node_modules/clsx/dist/clsx.mjs",
+      "file": "clsx.js",
+      "fileHash": "c3f93b6d",
+      "needsInterop": false
+    },
+    "tailwind-merge": {
+      "src": "../../../node_modules/tailwind-merge/dist/bundle-mjs.mjs",
+      "file": "tailwind-merge.js",
+      "fileHash": "7fd05055",
+      "needsInterop": false
+    },
+    "d3-array": {
+      "src": "../../../node_modules/d3-array/src/index.js",
+      "file": "d3-array.js",
+      "fileHash": "cd6cc989",
+      "needsInterop": false
+    },
+    "d3-shape": {
+      "src": "../../../node_modules/d3-shape/src/index.js",
+      "file": "d3-shape.js",
+      "fileHash": "1acf4905",
       "needsInterop": false
     }
   },
   "chunks": {
     "chunk-TUPNW6KC": {
       "file": "chunk-TUPNW6KC.js"
+    },
+    "chunk-YDJ567T4": {
+      "file": "chunk-YDJ567T4.js"
+    },
+    "chunk-J7BS2OSU": {
+      "file": "chunk-J7BS2OSU.js"
+    },
+    "chunk-JNOOTWYN": {
+      "file": "chunk-JNOOTWYN.js"
+    },
+    "chunk-CVCTGI67": {
+      "file": "chunk-CVCTGI67.js"
+    },
+    "chunk-UHWCQHRD": {
+      "file": "chunk-UHWCQHRD.js"
+    },
+    "chunk-X6Z6NCW2": {
+      "file": "chunk-X6Z6NCW2.js"
+    },
+    "chunk-PXWL2EMG": {
+      "file": "chunk-PXWL2EMG.js"
+    },
+    "chunk-JMBNEEIE": {
+      "file": "chunk-JMBNEEIE.js"
+    },
+    "chunk-I4SLUZSC": {
+      "file": "chunk-I4SLUZSC.js"
+    },
+    "chunk-DC5AMYBS": {
+      "file": "chunk-DC5AMYBS.js"
     }
   }
 }

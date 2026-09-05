@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // P8-D2 phase 2: the cli is the published package's bin, so it consumes
+    // the PUBLIC root entrypoint by package name (`hikoutei`) and the engine
+    // entity-registry internals by package specifier. The `hikoutei` paths
+    // entry maps to the root SOURCE (the root dist is emitted last in the
+    // build chain), which makes this program reach into root src and span
+    // rootDir to the repo root; the transient dist/src/** mirror is never
+    // bundled (the reconcile codemod copies only the package's own subtree
+    // onto dist/cli/**). At runtime the bundled bin resolves `hikoutei`
+    // through Node package self-reference inside the published artifact.
+    "rootDir": "../..",
+    "outDir": "dist",
+    "baseUrl": "../..",
+    "paths": {
+      "hikoutei": ["src/index.ts"],
+      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["packages/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["packages/composition/src/*"],
+      "@hikoutei/contracts/*": ["packages/contracts/src/*"]
+    },
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

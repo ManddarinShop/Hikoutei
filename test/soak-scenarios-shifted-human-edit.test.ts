@@ -16,6 +16,8 @@ import * as shiftedHumanEdit from "../scripts/ci/local-soak/scenarios/shiftedHum
 import { SOAK_ENTITY_ORDER } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { SYSTEM_WINS_RESOLVE_SUFFIX } from "../scripts/ci/local-soak/errors.mjs";
+import { FakeEm, liveContext } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded sleeps so the projection polls terminate
 // quickly and deterministically (a real poll would be ~1s each). The real
@@ -69,35 +71,6 @@ function racePlan(overrides: Partial<PlanLike> = {}): PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {}
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** The stable fail-closed guard error the direct client throws. */
 function shiftedError(): Error {
@@ -185,18 +158,6 @@ class FakeClient {
   }
 }
 
-/** Builds a live execution context wired to the fake seams. */
-function liveContext(plan: PlanLike, client: FakeClient, em: FakeEm, deadlineAtMs?: number): Record<string, unknown> {
-  return {
-    seed: 1,
-    cycle: 1,
-    activeEntities: SOAK_ENTITY_ORDER,
-    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
-    em,
-    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
-    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
-  };
-}
 
 /**
  * Projects every entity the fake EM persists into the fake _Input tab
@@ -379,6 +340,8 @@ describe("shiftedHumanEdit scenario", () => {
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
     expect(result.status).toBe("failed");
     expect(result.failures).toBe(1);
+    // The stable diagnostic kind names WHICH invariant fired.
+    expect(result.failureKinds).toEqual(["edit-rejected-unexpected"]);
     expect(em.rows()).toEqual([]);
   });
 
@@ -432,5 +395,111 @@ describe("shiftedHumanEdit scenario", () => {
     expect(result.status).toBe("failed");
     expect(result.failures).toBe(1);
     expect(em.rows()).toEqual([]);
+  });
+
+  it("accepts an OPEN sync_conflict as conflict-recorded when the resolved edit is not on the intended identity", async () => {
+    // Core harness fix: the resolved edit's value is not observable on the
+    // intended Sheet identity, but it was ingested as an OPEN sync_conflict
+    // — recorded on the intended binding, not written to the wrong identity.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    wireProjection(em, client, plan);
+    client.misplaceMutate = true;
+    // The conflict record clears once the cleanup's system-wins advance
+    // lands (the stored value carries the resolve suffix), modeling the
+    // worker applying the acknowledge_system resolution.
+    const oracleMutations: unknown[] = [];
+    const context = {
+      ...liveContext(plan, client, em),
+      oracle: { applyMutation: (mutation: unknown) => oracleMutations.push(mutation) },
+      queryConflictRows: async () => {
+        const value = em.store.get(plan.target.targetId)?.[plan.target.field];
+        const resolved = typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX);
+        return resolved ? [] : [{
+          fieldName: plan.target.field,
+          userValue: plan.humanValue,
+          status: "OPEN",
+        }];
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    // The resolve-then-delete cleanup removed both dedicated rows and
+    // mirrored both deletes into the oracle.
+    expect(em.rows()).toEqual([]);
+    expect(oracleMutations).toContainEqual({
+      op: "delete",
+      entity: plan.target.entityName,
+      id: plan.target.targetId,
+    });
+    expect(oracleMutations).toContainEqual({
+      op: "delete",
+      entity: plan.target.entityName,
+      id: plan.target.shifterId,
+    });
+  });
+
+  it("records cleanup-unresolved-conflict and keeps both rows when the conflict never clears", async () => {
+    // The resolve-then-delete cleanup advances the race row's field, but the
+    // conflict record never leaves the blocking state within the bound. Both
+    // dedicated rows must be KEPT — never deleted through a blocking
+    // conflict — and the distinct stable kind recorded as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    wireProjection(em, client, plan);
+    client.misplaceMutate = true;
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryConflictRows: async () => [{
+        fieldName: plan.target.field,
+        userValue: plan.humanValue,
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-unresolved-conflict"]);
+    // Both dedicated rows are kept, and the resolve attempt advanced the
+    // race row's conflicted field through the EM.
+    expect(em.rows().length).toBe(2);
+    const kept = em.store.get(plan.target.targetId)?.[plan.target.field];
+    expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
+  });
+
+  it("records cleanup-outbox-busy and keeps both rows when either binding outbox never drains", async () => {
+    // The race verifies cleanly (`guard-invariant-verified`, no conflict),
+    // but a candidate effect for one dedicated binding is stuck in flight
+    // past the bounded drain wait. Both rows must be KEPT — never deleted
+    // through a blocked outbox — with the distinct stable kind as a real
+    // failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    wireProjection(em, client, plan);
+    const seen: string[] = [];
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryOutboxInflightCount: async (targetId: string) => {
+        seen.push(targetId);
+        return 1;
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("guard-invariant-verified");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    // The single bounded wait covers both dedicated bindings, and both
+    // rows are kept (never deleted through the blocked outbox).
+    expect(seen).toContain(plan.target.targetId);
+    expect(em.rows().length).toBe(2);
   });
 });

@@ -26,10 +26,10 @@ import { defineTypedSheetsEntity } from "../src/index.js";
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
-import { SyncPollingSupervisor } from "../src/application/sync/service/SyncPollingSupervisor.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
+import { SyncPollingSupervisor } from "@hikoutei/sync-engine/sync/service/SyncPollingSupervisor.js";
 import { readSystemStateDrainReadinessWithAdapter } from "@hikoutei/ikisaki";
-import type { MappedUserInputPollingReport } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { MappedUserInputPollingReport } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,

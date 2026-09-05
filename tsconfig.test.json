@@ -9,12 +9,27 @@
       // in the test typecheck that resolves to the current source tree so
       // it never depends on a stale ./dist build.
       "hikoutei": ["./src/index.ts"],
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
+      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      "@hikoutei/contracts/*": ["./packages/contracts/src/*"],
+      // P8-D2 phase 2: every moved leaf compiles from SOURCE in the test
+      // program (rootDir "." covers all trees), so typecheck/test never
+      // depend on a stale package dist (P8-D2 phase 2 bridge removal).
+      "@hikoutei/storage/*": ["./packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["./packages/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["./packages/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["./packages/composition/src/*"],
+      "@hikoutei/cli/*": ["./packages/cli/src/*"]
     }
   },
   "include": [
     "src/**/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "packages/contracts/src/**/*.ts",
+    "packages/storage/src/**/*.ts",
+    "packages/sheets/src/**/*.ts",
+    "packages/sync-engine/src/**/*.ts",
+    "packages/composition/src/**/*.ts",
+    "packages/cli/src/**/*.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

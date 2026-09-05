@@ -40,6 +40,10 @@ import { sanitizeScenarioRecord } from "../scripts/ci/local-soak/scenarios/scena
 import { validateCycleRecordShape, validateOperationRecordShape } from "../scripts/ci/local-soak/resumeHistorySchema.mjs";
 import { validateCycleScenarioBatch } from "../scripts/ci/local-soak/resumeHistoryProof.mjs";
 import { KNOWN_REASON_CODES, isKnownStatusClass, sanitizeStatusClass } from "../scripts/ci/local-soak/redact.mjs";
+import {
+  identityShiftedTransientResult,
+  isIdentityShiftedEvidence,
+} from "../scripts/ci/local-soak/errors.mjs";
 
 /**
  * A usable direct-Sheet client: a non-null, non-array object exposing the
@@ -367,9 +371,39 @@ describe("scenario execution wrapper (stub)", () => {
     const record = await runScenario({ entry: batch.scenarios[0]!, context: liveContext() });
     expect(record.status).toBe("failed");
     expect(record.reason).toBe("scenario-error");
+    // The thrown reason's STABLE tag (class + allowlisted code only) is
+    // recorded so a `scenario-error` says WHICH error shape fired; the raw
+    // message never reaches the record.
+    expect(record.reasonTag).toBe("Error");
+    expect(JSON.stringify(record)).not.toContain("boom");
     expect(record.failures).toBe(1);
     expect(record.expectedErrors).toBe(0);
     expect(record.id).toBe("scenario-stub-thrower");
+  });
+
+  it("passes a scenario's own diagnostic tags through the redaction allowlists", async () => {
+    // A scenario that swallows a throw internally records its own stable
+    // reasonTag/failureKinds; the wrapper passes the allowlisted values
+    // through and collapses any crafted free text to `unknown`.
+    const tagger = {
+      ...STUB_ALPHA,
+      id: "scenario-stub-tagger",
+      TAG: "stub-tagger",
+      plan: () => ({ tag: "stub-tagger", jitterMs: 1, target: { entityName: "SoakCustomer" } }),
+      execute: async () => ({
+        failures: 2,
+        reasonTag: "TypeError (visible_guard_mismatch)",
+        failureKinds: ["duplicate-rows", "not-a-real-kind", "duplicate-rows", "/Users/me/secret.log"],
+      }),
+    };
+    const batch = composeScenarioBatch({ seed: 23, cycle: 1, registry: [tagger] });
+    const record = await runScenario({ entry: batch.scenarios[0]!, context: liveContext() });
+    expect(record.status).toBe("failed");
+    expect(record.reasonTag).toBe("TypeError (visible_guard_mismatch)");
+    // Deduplicated; the unknown and secret-like kinds both collapse to the
+    // single fixed `unknown` category. Sorted.
+    expect(record.failureKinds).toEqual(["duplicate-rows", "unknown"]);
+    expect(JSON.stringify(record)).not.toContain("secret.log");
   });
 
   it("keeps a truthful skipped status and reason (never ok)", async () => {
@@ -525,6 +559,41 @@ describe("scenario record redaction and resume schema (stub-derived vocab)", () 
     expect(sanitizeScenarioRecord("scenario-stub-alpha")).toBeUndefined();
     expect(sanitizeScenarioRecord([1])).toBeUndefined();
   });
+
+  it("passes allowlisted reasonTag/failureKinds and collapses crafted diagnostic text", () => {
+    const sanitized = sanitizeScenarioRecord({
+      id: "scenario-stub-alpha",
+      phase: "after-prologue",
+      order: 0,
+      tag: "stub-alpha",
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      cleanupFailures: 0,
+      targetTable: "soak_customers",
+      reason: "scenario-error",
+      reasonTag: "Error (visible_guard_mismatch)",
+      failureKinds: ["silent-loss", "ya29.jwt-secret-token"],
+    })!;
+    expect(sanitized.reasonTag).toBe("Error (visible_guard_mismatch)");
+    // The secret-like kind collapses to the fixed `unknown` category; the
+    // allowlisted kind survives. Sorted, deduplicated.
+    expect(sanitized.failureKinds).toEqual(["silent-loss", "unknown"]);
+    // A crafted free-text tag never survives.
+    const crafted = sanitizeScenarioRecord({
+      id: "scenario-stub-alpha",
+      phase: "after-prologue",
+      order: 0,
+      tag: "stub-alpha",
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      cleanupFailures: 0,
+      reasonTag: "Error (/home/me/.config/credentials.json)",
+    })!;
+    expect(crafted.reasonTag).toBe("unknown");
+    expect(crafted.failureKinds).toBeUndefined();
+  });
 });
 
 describe("resume scenario-section schema consistency (stub-derived vocab)", () => {
@@ -575,6 +644,86 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
   }
 
   it("accepts a valid stub-derived scenario section", () => {
+    expect(validateCycleRecordShape(validCycleRecord(), STUB_VOCAB)).toEqual({ ok: true });
+  });
+
+  it("accepts allowlisted reasonTag/failureKinds diagnostics and rejects forged ones", () => {
+    const valid = validCycleRecord();
+    valid.scenarios[1] = {
+      ...valid.scenarios[1],
+      reasonTag: "TypeError",
+      failureKinds: ["local-rejection-non-stale"],
+    };
+    expect(validateCycleRecordShape(valid, STUB_VOCAB)).toEqual({ ok: true });
+    // A crafted free-text tag is a tampered record.
+    const forgedTag = validCycleRecord();
+    forgedTag.scenarios[1] = {
+      ...forgedTag.scenarios[1],
+      reasonTag: "TypeError (/secret/path.log)",
+    };
+    expect(rejectionOf(validateCycleRecordShape(forgedTag, STUB_VOCAB))).toMatch(/reasonTag/);
+    // An unknown failure kind and an empty kinds array are both rejected.
+    const forgedKinds = validCycleRecord();
+    forgedKinds.scenarios[1] = {
+      ...forgedKinds.scenarios[1],
+      failureKinds: ["totally-unknown-kind"],
+    };
+    expect(rejectionOf(validateCycleRecordShape(forgedKinds, STUB_VOCAB))).toMatch(/failureKinds/);
+    const emptyKinds = validCycleRecord();
+    emptyKinds.scenarios[1] = { ...emptyKinds.scenarios[1], failureKinds: [] };
+    expect(rejectionOf(validateCycleRecordShape(emptyKinds, STUB_VOCAB))).toMatch(/failureKinds/);
+  });
+
+  it("sanitizer failureKinds output round-trips through the resume schema", () => {
+    // Mixed known/unknown/duplicate/unsorted kinds collapse to the canonical
+    // form (only the kinds list is asserted — the stub id is foreign to the
+    // real registry, so the id field itself is not part of this round-trip).
+    const sanitized = sanitizeScenarioRecord({
+      id: "scenario-stub-alpha",
+      phase: "after-prologue",
+      order: 0,
+      tag: "stub-alpha",
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      cleanupFailures: 0,
+      targetTable: "soak_customers",
+      failureKinds: ["silent-loss", "bogus-kind", "silent-loss", "duplicate-rows"],
+    })!;
+    expect(sanitized.failureKinds).toEqual(["duplicate-rows", "silent-loss", "unknown"]);
+    // The canonical output validates (attached to the already-failed stub entry).
+    const canonical = validCycleRecord();
+    canonical.scenarios[1] = { ...canonical.scenarios[1], failureKinds: sanitized.failureKinds };
+    expect(validateCycleRecordShape(canonical, STUB_VOCAB)).toEqual({ ok: true });
+    // Forged non-canonical arrays are rejected even though every entry is allowlisted.
+    for (const forged of [["silent-loss", "silent-loss"], ["silent-loss", "duplicate-rows"]]) {
+      const record = validCycleRecord();
+      record.scenarios[1] = { ...record.scenarios[1], failureKinds: forged };
+      expect(rejectionOf(validateCycleRecordShape(record, STUB_VOCAB))).toMatch(/failureKinds/);
+    }
+  });
+
+  it("omits failureKinds when only null/empty/non-string kinds are supplied", () => {
+    // Boundary: inputs that normalize to nothing must omit the field — never
+    // emit `[]` (which the resume schema rejects) — matching the redactor's
+    // omit-when-empty policy, so both canonical emitters agree on the empty
+    // boundary.
+    for (const failureKinds of [[null], [""], [], [null, ""], [undefined, 42]]) {
+      const sanitized = sanitizeScenarioRecord({
+        id: "scenario-stub-alpha",
+        phase: "after-prologue",
+        order: 0,
+        tag: "stub-alpha",
+        status: "failed",
+        expectedErrors: 0,
+        failures: 1,
+        cleanupFailures: 0,
+        targetTable: "soak_customers",
+        failureKinds,
+      })!;
+      expect(sanitized).not.toHaveProperty("failureKinds");
+    }
+    // The canonical omit form — a record without failureKinds — validates.
     expect(validateCycleRecordShape(validCycleRecord(), STUB_VOCAB)).toEqual({ ok: true });
   });
 
@@ -728,6 +877,45 @@ describe("known reason vocabulary stays scenario-agnostic", () => {
     for (const reason of ["reopen-skipped", "recovery-not-observed", "scenario-error", "local-mode"]) {
       expect(KNOWN_REASON_CODES).toContain(reason);
     }
+    // The identity-shifted transient skip is an allowlisted reason, and the
+    // shared transient record carries it with a sanitized stable reasonTag.
+    expect(KNOWN_REASON_CODES).toContain("identity-shifted-transient");
+  });
+});
+
+describe("identity-shifted transient evidence classification", () => {
+  it("accepts ONLY the stable identity_shifted guard evidence", () => {
+    // The real seam's DirectSheetsError shape and the fake seam's code both
+    // count; any other class/code/transport error never does.
+    expect(isIdentityShiftedEvidence(
+      Object.assign(new Error("shifted"), { name: "DirectSheetsError", statusClass: "identity_shifted" }),
+    )).toBe(true);
+    expect(isIdentityShiftedEvidence(
+      Object.assign(new Error("shifted"), { code: "identity_shifted" }),
+    )).toBe(true);
+    expect(isIdentityShiftedEvidence(new Error("boom"))).toBe(false);
+    expect(isIdentityShiftedEvidence(
+      Object.assign(new Error("transport"), { statusClass: "network" }),
+    )).toBe(false);
+    expect(isIdentityShiftedEvidence(
+      Object.assign(new Error("missing"), { statusClass: "missing_identity" }),
+    )).toBe(false);
+    expect(isIdentityShiftedEvidence("identity_shifted")).toBe(false);
+    expect(isIdentityShiftedEvidence(null)).toBe(false);
+    expect(isIdentityShiftedEvidence(undefined)).toBe(false);
+  });
+
+  it("builds a truthful skipped transient record with a stable reasonTag", () => {
+    const record = identityShiftedTransientResult(
+      Object.assign(new Error("raw-secret-message"), { name: "DirectSheetsError", statusClass: "identity_shifted" }),
+    );
+    expect(record.status).toBe("skipped");
+    expect(record.failures).toBe(0);
+    expect(record.expectedErrors).toBe(0);
+    expect(record.reason).toBe("identity-shifted-transient");
+    expect(record.reasonTag).toBe("DirectSheetsError (identity_shifted)");
+    // The record stays artifact-safe: no raw message/id ever appears.
+    expect(JSON.stringify(record)).not.toContain("raw-secret-message");
   });
 });
 

@@ -29,6 +29,7 @@ export function classifyRaceOutcome(input: object): Promise<{
   expectedErrors: number;
   failures: number;
   reason: string;
+  failureKinds?: string[];
 }>;
 
 /** Live action: race a human edit against a shifting row delete. */
@@ -38,6 +39,8 @@ export function execute(input: { plan: object; context: object }): Promise<{
   failures: number;
   cleanupFailures?: number;
   reason?: string;
+  reasonTag?: string;
+  failureKinds?: string[];
 }>;
 
 /** Scenario-level proof that a resolved edit landed on the intended identity. */

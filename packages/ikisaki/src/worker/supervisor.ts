@@ -9,14 +9,31 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  SUPERVISOR_OPTIONS_ERROR_CODES,
+  SupervisionOptionsError,
+} from "./optionContracts.js";
+import {
   runEffectWorkerWithAdapter,
 } from "./worker.js";
 import type { EffectWorkerWithAdapterOptions } from "./options.js";
 import type { WorkerReport } from "./report.js";
 import {
+  hasImmediateProgress,
+  isResponseLossRetryLoop,
+} from "./report.js";
+import {
   AdaptiveEffectBatchController,
   type AdaptiveEffectBatchController as AdaptiveEffectBatchControllerType,
-} from "./batch.js";
+} from "./pacing/batch.js";
+import {
+  createWriterLeaseHeartbeat,
+  type WriterLeaseHeartbeatEvent,
+  type WriterLeaseHeartbeatHandle,
+} from "./leaseHeartbeat.js";
+import {
+  DEFAULT_WORKER_ROLE,
+  DEFAULT_WRITER_LEASE_DURATION_MS,
+} from "./constants.js";
 
 /**
  * Conservative generic default for the SQLite selection upper bound when a
@@ -98,6 +115,10 @@ export interface EffectWorkerSupervisorLoopOptions<
   readonly reconciliation?: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>;
   readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
+  /** Called once when the background loop starts (heartbeat wiring hook). */
+  readonly onLoopStart?: () => void;
+  /** Awaited once when the background loop stops (heartbeat teardown hook). */
+  readonly onLoopStop?: () => Promise<void> | void;
 }
 
 /** Worker options with a clock supplied by the supervisor on every pass. */
@@ -122,6 +143,10 @@ export type CreateEffectWorkerSupervisorOptions<
   readonly reconciliation?: EffectWorkerSupervisorReconciliationOptions<TReconciliationReport>;
   readonly onReport?: (report: WorkerReport) => void;
   readonly onError?: (error: unknown) => void;
+  /** Override for the background writer-lease heartbeat cadence. */
+  readonly writerLeaseHeartbeatIntervalMs?: number;
+  /** Receives every heartbeat tick outcome (renewed / not held). */
+  readonly onWriterLeaseHeartbeat?: (event: WriterLeaseHeartbeatEvent) => void;
 };
 
 /**
@@ -145,6 +170,8 @@ export class EffectWorkerSupervisor<
   private readonly reconciliationIntervalMs: number;
   private readonly onReport: ((report: WorkerReport) => void) | undefined;
   private readonly onError: ((error: unknown) => void) | undefined;
+  private readonly onLoopStart: (() => void) | undefined;
+  private readonly onLoopStop: (() => Promise<void> | void) | undefined;
   private running = false;
   private acceptingPasses = true;
   private loopPromise: Promise<void> | undefined;
@@ -161,19 +188,19 @@ export class EffectWorkerSupervisor<
     this.runPass = options.runPass;
     this.idleIntervalMs = requirePositiveSafeInteger(
       options.idleIntervalMs ?? DEFAULT_IDLE_INTERVAL_MS,
-      "sync effect supervisor idle interval",
+      "idle interval",
     );
     this.errorBackoffInitialMs = requirePositiveSafeInteger(
       options.errorBackoffInitialMs ?? DEFAULT_ERROR_BACKOFF_INITIAL_MS,
-      "sync effect supervisor error backoff",
+      "error backoff",
     );
     this.errorBackoffMaxMs = requirePositiveSafeInteger(
       options.errorBackoffMaxMs ?? DEFAULT_ERROR_BACKOFF_MAX_MS,
-      "sync effect supervisor maximum error backoff",
+      "maximum error backoff",
     );
     if (this.errorBackoffMaxMs < this.errorBackoffInitialMs) {
-      throw new RangeError(
-        "sync effect supervisor maximum error backoff must be at least the initial backoff",
+      throw new SupervisionOptionsError(
+        SUPERVISOR_OPTIONS_ERROR_CODES.BACKOFF_ORDER_INVALID,
       );
     }
     this.random = options.random ?? Math.random;
@@ -182,16 +209,18 @@ export class EffectWorkerSupervisor<
     this.reconciliation = options.reconciliation;
     this.reconciliationIntervalMs = requirePositiveSafeInteger(
       options.reconciliation?.intervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS,
-      "sync effect supervisor reconciliation interval",
+      "reconciliation interval",
     );
     this.initialReconciliationDelayMs = requireNonNegativeSafeInteger(
       options.reconciliation?.initialReconciliationDelayMs ?? 0,
-      "sync effect supervisor initial reconciliation delay",
+      "initial reconciliation delay",
     );
     this.isFirstScanReady = options.reconciliation?.isFirstScanReady;
     this.firstScanPending = options.reconciliation !== undefined;
     this.onReport = options.onReport;
     this.onError = options.onError;
+    this.onLoopStart = options.onLoopStart;
+    this.onLoopStop = options.onLoopStop;
   }
 
   /** Starts the background drain loop; repeated calls are harmless. */
@@ -202,6 +231,7 @@ export class EffectWorkerSupervisor<
     // immediately after the first pass, exactly like the legacy schedule).
     this.nextReconciliationAt = this.now() + this.initialReconciliationDelayMs;
     this.firstScanPending = this.reconciliation !== undefined;
+    this.onLoopStart?.();
     this.loopPromise = this.runLoop();
   }
 
@@ -242,6 +272,11 @@ export class EffectWorkerSupervisor<
       const inFlightReconciliation = this.inFlightReconciliation;
       if (inFlightReconciliation !== undefined) {
         await inFlightReconciliation.catch(() => undefined);
+      }
+      try {
+        await this.onLoopStop?.();
+      } catch {
+        // Teardown hooks must never break stop().
       }
       this.loopPromise = undefined;
     })();
@@ -436,7 +471,7 @@ export function createEffectWorkerSupervisor<
   const maxEffects = options.maxEffects ?? DEFAULT_MAX_EFFECTS;
   const now = options.now ?? Date.now;
 
-  validateWorkerOptions(workerId, maxEffects, options.maxFastAppendCandidates, options.appendDispatchIntervalMs);
+  validateWorkerOptions(workerId, maxEffects, options.maxFastAppendCandidates, options.appendDispatchIntervalMs, options.maxConcurrentUnits);
   const batchController = options.batchController ?? new AdaptiveEffectBatchController({
     ...(options.appendDispatchIntervalMs === undefined
       ? {}
@@ -454,6 +489,9 @@ export function createEffectWorkerSupervisor<
     ...(options.writerLeaseDurationMs === undefined
       ? {}
       : { writerLeaseDurationMs: options.writerLeaseDurationMs }),
+    ...(options.writerLeaseHeartbeatStaleMs === undefined
+      ? {}
+      : { writerLeaseHeartbeatStaleMs: options.writerLeaseHeartbeatStaleMs }),
     ...(options.effectLeaseDurationMs === undefined
       ? {}
       : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
@@ -463,6 +501,9 @@ export function createEffectWorkerSupervisor<
     ...(options.maxFastAppendCandidates === undefined
       ? {}
       : { maxFastAppendCandidates: options.maxFastAppendCandidates }),
+    ...(options.maxConcurrentUnits === undefined
+      ? {}
+      : { maxConcurrentUnits: options.maxConcurrentUnits }),
     ...(options.appendDispatchIntervalMs === undefined
       ? {}
       : { appendDispatchIntervalMs: options.appendDispatchIntervalMs }),
@@ -472,39 +513,39 @@ export function createEffectWorkerSupervisor<
     ...(options.onTiming === undefined ? {} : { onTiming: options.onTiming }),
   } satisfies EffectWorkerWithAdapterOptions;
 
+  // Background writer-lease heartbeat: keeps `writer_lease.heartbeat_at`
+  // fresh (and the lease renewed) for as long as this supervisor runs, so a
+  // NEW process after a crash takes the lease over within the stale-evidence
+  // bound instead of waiting out the full lease duration. Strictly renew-only:
+  // the timer never claims or takes over; takeover decisions stay with the
+  // worker pass's claim path.
+  let heartbeat: WriterLeaseHeartbeatHandle | undefined;
   return new EffectWorkerSupervisor({
     ...options,
     now,
+    onLoopStart: () => {
+      if (heartbeat !== undefined) return;
+      heartbeat = createWriterLeaseHeartbeat({
+        storage: options.storage,
+        role: options.writerRole ?? DEFAULT_WORKER_ROLE,
+        writerId: workerId,
+        leaseDurationMs: options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS,
+        ...(options.writerLeaseHeartbeatIntervalMs === undefined
+          ? {}
+          : { intervalMs: options.writerLeaseHeartbeatIntervalMs }),
+        now,
+        ...(options.onWriterLeaseHeartbeat === undefined
+          ? {}
+          : { onEvent: options.onWriterLeaseHeartbeat }),
+        ...(options.onError === undefined ? {} : { onError: options.onError }),
+      });
+    },
+    onLoopStop: () => heartbeat?.stop() ?? Promise.resolve(),
     runPass: () => runEffectWorkerWithAdapter({ ...workerOptions, now: now() }),
   });
 }
 
-function hasImmediateProgress(report: WorkerReport): boolean {
-  return report.claimed > 0;
-}
 
-/**
- * A pass claimed work but reached no terminal state and only requeued it is a
- * response-loss / postcondition-unapplied retry loop against the remote.
- * `requeued` always implies `deferred` in the worker, so it covers both the
- * fast-append and regular recovery paths. Forward progress elsewhere (an
- * applied/superseded/conflicted/blocked/replanned/failed effect) keeps the
- * drain loop running immediately.
- */
-function isResponseLossRetryLoop(report: WorkerReport): boolean {
-  return report.claimed > 0 &&
-    report.requeued > 0 &&
-    !hasForwardProgress(report);
-}
-
-function hasForwardProgress(report: WorkerReport): boolean {
-  return report.applied > 0 ||
-    report.superseded > 0 ||
-    report.conflicted > 0 ||
-    report.blockedCandidate > 0 ||
-    report.replanned > 0 ||
-    report.failed > 0;
-}
 
 function nextBackoff(current: number, maximum: number): number {
   return Math.min(maximum, current * 2);
@@ -521,20 +562,25 @@ function validateWorkerOptions(
   maxEffects: number,
   maxFastAppendCandidates?: number,
   appendDispatchIntervalMs?: number,
+  maxConcurrentUnits?: number,
 ): void {
   if (workerId.length === 0) {
-    throw new RangeError("sync effect supervisor worker ID is required");
+    throw new SupervisionOptionsError(SUPERVISOR_OPTIONS_ERROR_CODES.WORKER_ID_REQUIRED);
   }
   if (!Number.isSafeInteger(maxEffects) || maxEffects < 1) {
-    throw new RangeError("sync effect supervisor maxEffects must be a positive safe integer");
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      "maxEffects",
+    );
   }
   if (
     maxFastAppendCandidates !== undefined &&
     (!Number.isSafeInteger(maxFastAppendCandidates) ||
       maxFastAppendCandidates < 1)
   ) {
-    throw new RangeError(
-      "sync effect supervisor maxFastAppendCandidates must be a positive safe integer",
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      "maxFastAppendCandidates",
     );
   }
   if (
@@ -542,22 +588,38 @@ function validateWorkerOptions(
     (!Number.isSafeInteger(appendDispatchIntervalMs) ||
       appendDispatchIntervalMs < 0)
   ) {
-    throw new RangeError(
-      "sync effect supervisor appendDispatchIntervalMs must be a non-negative safe integer",
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED,
+      "appendDispatchIntervalMs",
+    );
+  }
+  if (
+    maxConcurrentUnits !== undefined &&
+    (!Number.isSafeInteger(maxConcurrentUnits) || maxConcurrentUnits < 1)
+  ) {
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      "maxConcurrentUnits",
     );
   }
 }
 
-function requirePositiveSafeInteger(value: number, name: string): number {
+function requirePositiveSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
-    throw new RangeError(name + " must be a positive safe integer");
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      label,
+    );
   }
   return value;
 }
 
-function requireNonNegativeSafeInteger(value: number, name: string): number {
+function requireNonNegativeSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RangeError(name + " must be a non-negative safe integer");
+    throw new SupervisionOptionsError(
+      SUPERVISOR_OPTIONS_ERROR_CODES.NON_NEGATIVE_INTEGER_REQUIRED,
+      label,
+    );
   }
   return value;
 }

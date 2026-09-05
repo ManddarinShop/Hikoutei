@@ -8,12 +8,12 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import {
   runReconciliationScan,
   RECONCILIATION_DEFAULTS,
-} from "../src/application/sync/outbound/reconciliation/ReconciliationScanner.js";
+} from "@hikoutei/sync-engine/sync/outbound/reconciliation/ReconciliationScanner.js";
 import {
   appendPendingEffectsWithAdapter,
   claimWriterLeaseWithAdapter,
@@ -25,11 +25,11 @@ import {
 } from "@hikoutei/ikisaki";
 import {
   readReconciliationCorrectionStateWithAdapter,
-} from "../src/infrastructure/storage/sync/outbound/reconciliationSql.js";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
-import { createSystemProjectionEffect } from "../src/application/sync/outbound/projection/ProjectionEffectFactory.js";
-import { computeSyncVisibleHash, parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
+} from "@hikoutei/storage/storage/sync/outbound/reconciliationSql.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
+import { createSystemProjectionEffect } from "@hikoutei/storage/sync/outbound/projection/ProjectionEffectFactory.js";
+import { computeSyncVisibleHash, parseSyncProjectionEffectPayload } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 
 const EntitySchema = defineEntity({
   name: "ReconciliationEntity",

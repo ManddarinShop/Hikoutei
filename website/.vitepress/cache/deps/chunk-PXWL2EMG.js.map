@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../../node_modules/@visx/point/esm/Point.js"],
+  "sourcesContent": ["export default class Point {\n  x = 0;\n  y = 0;\n  constructor(_ref) {\n    let {\n      x = 0,\n      y = 0\n    } = _ref;\n    this.x = x;\n    this.y = y;\n  }\n  value() {\n    return {\n      x: this.x,\n      y: this.y\n    };\n  }\n  toArray() {\n    return [this.x, this.y];\n  }\n}"],
+  "mappings": ";;;;;AAAA,IAAqB,QAArB,MAA2B;AAAA,EAGzB,YAAY,MAAM;AAFlB,6BAAI;AACJ,6BAAI;AAEF,QAAI;AAAA,MACF,IAAI;AAAA,MACJ,IAAI;AAAA,IACN,IAAI;AACJ,SAAK,IAAI;AACT,SAAK,IAAI;AAAA,EACX;AAAA,EACA,QAAQ;AACN,WAAO;AAAA,MACL,GAAG,KAAK;AAAA,MACR,GAAG,KAAK;AAAA,IACV;AAAA,EACF;AAAA,EACA,UAAU;AACR,WAAO,CAAC,KAAK,GAAG,KAAK,CAAC;AAAA,EACxB;AACF;",
+  "names": []
+}

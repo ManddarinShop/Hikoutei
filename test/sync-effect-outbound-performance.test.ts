@@ -7,12 +7,12 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
   type SyncProjectionEffect,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   appendPendingEffectsWithAdapter,
   chunkEffectGroups,
@@ -24,10 +24,10 @@ import {
   type NewEffect,
   type PendingEffect,
 } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher, sheetsRouteKeyFor } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { SheetsEffectDispatcher, sheetsRouteKeyFor } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 
 const PerfOrderSchema = defineEntity({
   name: "OutboundPerfOrder",

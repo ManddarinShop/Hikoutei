@@ -14,6 +14,8 @@ import * as multiFieldHumanEdit from "../scripts/ci/local-soak/scenarios/multi-f
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { SYSTEM_WINS_RESOLVE_SUFFIX } from "../scripts/ci/local-soak/errors.mjs";
+import { FakeEm, liveContext, projectHumanFieldsRow as projectPersistedRow } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
 // terminate quickly and deterministically (a real poll would be ~1s each).
@@ -69,50 +71,6 @@ function racePlan(overrides: Partial<PlanLike> = {}): PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-  findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
-  /** Throws on the flush whose 1-based call index matches. */
-  flushBehavior: ((flushIndex: number) => void) | undefined;
-  #flushIndex = 0;
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {
-    this.#flushIndex += 1;
-    if (this.flushBehavior !== undefined) this.flushBehavior(this.#flushIndex);
-  }
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
-    if (this.findOneOverride !== undefined) {
-      const overridden = this.findOneOverride(filter.id);
-      if (overridden !== null && overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? null : row;
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** A fake direct-Sheet client backed by in-memory tab state. */
 class FakeClient {
@@ -162,45 +120,6 @@ class FakeClient {
   }
 }
 
-/** Builds a live execution context wired to the fake seams. */
-function liveContext(
-  plan: PlanLike,
-  client: FakeClient,
-  em: FakeEm,
-  deadlineAtMs?: number,
-): Record<string, unknown> {
-  return {
-    seed: 1,
-    cycle: 1,
-    activeEntities: SOAK_ENTITY_ORDER,
-    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
-    em,
-    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
-    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
-  };
-}
-
-/**
- * Mirrors the localHumanWriteRace test's authoritative-value pattern: hook
- * the fake EntityManager's `persist` so the dedicated race row's human
- * fields are projected into the fake _Input tab at the exact cell-strings
- * the row will carry once the sync worker projects it. `awaitInputProjection`
- * resolves on the first poll, so the race proceeds deterministically.
- */
-function projectPersistedRow(em: FakeEm, client: FakeClient, plan: PlanLike): void {
-  const originalPersist = em.persist.bind(em);
-  em.persist = (entity: Record<string, unknown>) => {
-    const headers = ["id", ...plan.humanFields];
-    const values: Record<string, string> = { id: plan.target.targetId };
-    for (const field of plan.humanFields) {
-      const value = entity[field];
-      values[field] = value === null || value === undefined ? "" : String(value);
-    }
-    client.ensureTab(`${plan.target.entityName}_Input`, headers);
-    client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, values);
-    originalPersist(entity);
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Tests.
@@ -379,6 +298,11 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("scenario-error");
     expect(result.failures).toBeGreaterThanOrEqual(1);
+    // Stable diagnostic kinds: the non-stale human rejection and the cleanup
+    // settle-proof timeout that left the row in place.
+    expect(result.failureKinds).toEqual(
+      expect.arrayContaining(["human-rejection-non-stale", "cleanup-proof-timeout"]),
+    );
     // The human write STARTED and rejected with a non-stale code, so its
     // remote outcome is uncertain (it may have mutated before rejecting). The
     // cleanup must NOT delete the row without complete landing proof; when the
@@ -388,28 +312,35 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.cleanupFailures).toBeGreaterThan(0);
   });
 
-  it("cannot finish ok when the human multi-field write detects an identity shift", async () => {
+  it("records an identity-shifted human multi-field rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human write with
-    // the stable `identity_shifted` class when a value landed on the wrong
-    // identity. That is NOT stale-write/CAS evidence, so the scenario must
-    // fail (never a verified race-winner ok) — a collateral write is never
-    // silently accepted.
+    // the stable `identity_shifted` class when a CONCURRENT actor shifted
+    // the tab mid-write. The seam proved no silent success, so this is an
+    // EXPECTED TRANSIENT of the adversarial multi-writer environment: a
+    // truthful skip (never a failure). The value itself landed late (the
+    // worker applies it after the unprovable write), so the settle proof
+    // succeeds and the guaranteed cleanup still removes the dedicated row.
     const plan = racePlan();
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
-    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBeGreaterThanOrEqual(1);
-    // The human write STARTED and rejected with `identity_shifted`, so its
-    // remote outcome is uncertain (a value may have landed on the wrong
-    // identity). The cleanup must NOT delete the row without complete landing
-    // proof; when the proof times out the row is left in place and surfaced as
-    // a cleanup failure (the #381 race).
-    expect(em.rows().length).toBe(1);
-    expect(result.cleanupFailures).toBeGreaterThan(0);
+    // Simulate the delayed inbound application: the human fields land in
+    // the authority on the local update's commit flush (the value was
+    // written remotely but its landing on the intended identity could not
+    // be proven by the seam's postcondition read).
+    em.flushBehavior = (index) => {
+      if (index === 2) {
+        const row = em.store.get(plan.target.targetId);
+        if (row !== undefined) Object.assign(row, plan.humanValues);
+      }
+    };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
+    // The landing proof completes, so the guaranteed cleanup removes the row.
+    expect(em.rows()).toEqual([]);
   });
 
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
@@ -595,5 +526,170 @@ describe("multiFieldHumanEdit scenario", () => {
     // The dedicated row is still cleaned up (the local update ran; the human
     // write never started, so there is no in-flight observation to protect).
     expect(em.rows()).toEqual([]);
+  });
+
+  it("accepts OPEN sync_conflicts carrying the human values as conflict-recorded (ok)", async () => {
+    // Core harness fix: when an outbox effect for the binding is in flight,
+    // the poll gate deliberately skips the row and the human edit is
+    // ingested only after the effect cycle completes — as OPEN conflicts.
+    // A row-only observation would misclassify that as silent loss; the
+    // conflict-recorded outcome is consistent (apply atomically OR record
+    // as a conflict), so it must report ok with 0 failures.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The authority NEVER shows the human values (the row is skipped while
+    // the effect is in flight), but the ingestion completed as OPEN
+    // sync_conflicts carrying the exact human values. Records clear per
+    // field once the cleanup's system-wins advance lands on it, modeling
+    // the worker applying each acknowledge_system resolution.
+    const closesPerField = async () => plan.humanFields
+      .filter((field) => {
+        const value = em.store.get(plan.target.targetId)?.[field];
+        return !(typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX));
+      })
+      .map((field) => ({
+        fieldName: field,
+        userValue: plan.humanValues[field],
+        status: "OPEN",
+      }));
+    const oracleMutations: unknown[] = [];
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 300),
+      oracle: { applyMutation: (mutation: unknown) => oracleMutations.push(mutation) },
+      queryConflictRows: closesPerField,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(result.expectedErrors).toBe(0);
+    // The conflict-recorded outcome carries no failure kinds.
+    expect(result.failureKinds).toBeUndefined();
+    // The resolve-then-delete cleanup removed the dedicated row and mirrored
+    // the delete into the oracle (never deleted through OPEN conflicts).
+    expect(em.rows()).toEqual([]);
+    expect(oracleMutations).toContainEqual({
+      op: "delete",
+      entity: plan.target.entityName,
+      id: plan.target.targetId,
+    });
+  });
+
+  it("accepts a mixed outcome: one field landed, the other conflict-recorded (ok)", async () => {
+    // All human values accounted — one landed in the row, the other recorded
+    // as an OPEN conflict — is the consistent outcome, never partial loss.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // Only the first human field ever lands in the authority: seed it right
+    // after the dedicated row is created, so every read observes the partial
+    // landing through live refs (no findOne copy that would hide the
+    // cleanup's resolve advance from the conflict stub).
+    const landedField = plan.humanFields[0]!;
+    const recordedField = plan.humanFields[1]!;
+    em.flushBehavior = (index) => {
+      if (index === 1) {
+        em.store.get(plan.target.targetId)![landedField] = plan.humanValues[landedField];
+      }
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 300),
+      queryConflictRows: async () => {
+        const value = em.store.get(plan.target.targetId)?.[recordedField];
+        const resolved = typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX);
+        return resolved ? [] : [{
+          fieldName: recordedField,
+          userValue: plan.humanValues[recordedField],
+          status: "OPEN",
+        }];
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("records cleanup-unresolved-conflict and keeps the row when the conflicts never clear", async () => {
+    // The resolve-then-delete cleanup advances every human field, but the
+    // conflict records never leave the blocking state within the bound. The
+    // row must be KEPT — never deleted through blocking conflicts — and the
+    // distinct stable kind recorded as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryConflictRows: async () => plan.humanFields.map((field) => ({
+        fieldName: field,
+        userValue: plan.humanValues[field],
+        status: "OPEN",
+      })),
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-unresolved-conflict"]);
+    // The row is kept (never tombstoned under the blocking conflicts), and
+    // the resolve attempt advanced every human field through the EM.
+    expect(em.rows().length).toBe(1);
+    const kept = em.store.get(plan.target.targetId);
+    for (const field of plan.humanFields) {
+      const value = kept?.[field];
+      expect(typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
+    }
+  });
+
+  it("records cleanup-outbox-busy and keeps the landed row when the binding outbox never drains", async () => {
+    // The human edit landed (the settle proof passes immediately), but a
+    // candidate effect for the binding is stuck in flight past the bounded
+    // drain wait. The row must be KEPT — never deleted through a blocked
+    // outbox — with the distinct stable kind as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    em.findOneOverride = (id) => {
+      const row = em.store.get(id);
+      return row ? { ...row, ...plan.humanValues } : null;
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    expect(em.rows().length).toBe(1);
+  });
+
+  it("still reports silent-loss when the human value is neither landed nor conflict-recorded", async () => {
+    // The negative control: an ACCEPTED human write whose value never lands
+    // AND has no OPEN conflict record is genuinely lost — still a failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 120),
+      queryConflictRows: async () => [],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.failures).toBeGreaterThanOrEqual(1);
+    expect(result.failureKinds).toEqual(expect.arrayContaining(["silent-loss"]));
+    // No landing and no conflict record: the settle proof times out and the
+    // row is left in place (never tombstoned under an unproven outcome).
+    expect(em.rows().length).toBe(1);
   });
 });

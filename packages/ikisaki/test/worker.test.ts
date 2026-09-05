@@ -14,7 +14,14 @@ import {
   appendPendingEffectsWithAdapter,
   claimEffectWithAdapter,
   createEffectWorkerSupervisor,
+  EffectWorkerSupervisor,
+  AdaptiveBatchOptionsError,
   DispatchTransportError,
+  KernelInputError,
+  SUPERVISOR_OPTIONS_ERROR_CODES,
+  SupervisionOptionsError,
+  WORKER_OPTIONS_ERROR_CODES,
+  WorkerOptionsError,
   EFFECT_BATCH_LIMIT,
   markDeliveryUncertainWithAdapter,
   runEffectWorkerWithAdapter,
@@ -30,18 +37,24 @@ import {
   presentValue,
   absentValue,
   WORKER_ERROR_CODES,
+  SYNC_EFFECT_RECOVERY_ERROR_CODES,
   type WorkerReport,
 } from "../src/index.js";
 import {
   claimTestFence,
   createKernelStore,
   newEffect,
+  TEST_NOW,
+  TEST_ROLE,
 } from "./support/kernelFixtures.js";
 import type { NodeSqliteTestAdapter } from "./support/nodeSqliteAdapter.js";
 import type {
   SqlStorageAdapter,
   SqlStorageContext,
-} from "../src/sql.js";
+} from "../src/sql/sql.js";
+import { chunkEffectGroups } from "../src/worker/dispatch/routing.js";
+import { ProviderBatchLimitError } from "../src/worker/optionContracts.js";
+import { requireSemanticString } from "../src/contract/identity.js";
 
 /**
  * Wraps a kernel store so the FIRST result-persistence transaction after the
@@ -268,6 +281,60 @@ describe("effect worker", () => {
     expect(dispatcher.fastAppendCalls).toBe(0);
     await expect(outboxStatus(adapter, "worker-a")).resolves.toBe("applied");
     await expect(outboxStatus(adapter, "worker-b")).resolves.toBe("applied");
+  });
+
+  it("takes over a dead writer's stale-heartbeat lease within one pass (restart-stall fix)", async () => {
+    const adapter = createKernelStore();
+    // "Dead" writer: lease still nominally alive, heartbeat frozen in the past.
+    const deadFence = await claimTestFence(adapter, 1_000, "dead-writer");
+    await appendPendingEffectsWithAdapter(adapter, deadFence, [regularEffect("takeover-x")]);
+    await adapter.read(({ sql }) =>
+      sql.run("UPDATE writer_lease SET heartbeat_at = 0", []));
+
+    const dispatcher = new FakeDispatcher();
+    // now = 30_000: lease_until (61_000) is still in the FUTURE, but the
+    // heartbeat (0) is far older than the 15_000 stale bound → takeable.
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      writerRole: TEST_ROLE,
+      workerId: "worker-2",
+      now: 30_000,
+      maxEffects: 5,
+    });
+
+    expect(report.leaseClaimFailureReason).toBeUndefined();
+    expect(report.lease.kind).toBe("present");
+    if (report.lease.kind !== "present") throw new Error("expected claim");
+    expect(report.lease.value.writerEpoch).toBe(2);
+    expect(report.claimed).toBe(1);
+    expect(report.applied).toBe(1);
+    await expect(outboxStatus(adapter, "takeover-x")).resolves.toBe("applied");
+  });
+
+  it("reports active_writer and claims nothing while a LIVE writer's lease and heartbeat are fresh", async () => {
+    const adapter = createKernelStore();
+    const liveFence = await claimTestFence(adapter, 1_000, "live-writer");
+    await appendPendingEffectsWithAdapter(adapter, liveFence, [regularEffect("blocked-x")]);
+    // Heartbeat fresh relative to the pass clock (now = 30_000, stale bound 15_000).
+    await adapter.read(({ sql }) =>
+      sql.run("UPDATE writer_lease SET heartbeat_at = ?", [29_000]));
+
+    const dispatcher = new FakeDispatcher();
+    const report = await runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      writerRole: TEST_ROLE,
+      workerId: "worker-2",
+      now: 30_000,
+      maxEffects: 5,
+    });
+
+    expect(report.lease.kind).toBe("absent");
+    expect(report.leaseClaimFailureReason).toBe("active_writer");
+    expect(report.claimed).toBe(0);
+    expect(dispatcher.applyCalls).toBe(0);
+    await expect(outboxStatus(adapter, "blocked-x")).resolves.toBe("pending");
   });
 
   it("renews the effect lease inside the before-remote hook before the provider result", async () => {
@@ -921,6 +988,9 @@ describe("effect worker", () => {
     expect(dispatcher.probeCalls).toBe(0);
     await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 
   it("emits hasMore, requested, and acknowledged counts on fast-append timing", async () => {
@@ -965,6 +1035,11 @@ describe("effect worker", () => {
     expect(dispatchEvent?.responseSucceeded).toBe(true);
     expect(dispatchEvent?.requestedEffects).toBe(2);
     expect(dispatchEvent?.acknowledgedEffects).toBe(1);
+    // Regression: the suffix released by the hasMore path must carry
+    // the provider_batch_deferred error code in the persisted row.
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 
   it("fails an effect per-effect when the dispatcher candidate predicate throws", async () => {
@@ -1103,6 +1178,68 @@ describe("effect worker", () => {
       effectLeaseDurationMs: 120_000,
       requestTimeoutMs: 120_000,
     })).rejects.toThrow("effectLeaseDurationMs must exceed requestTimeoutMs by 30 seconds");
+  });
+
+  it("rejects invalid lease duration with the original message and error code", async () => {
+    const adapter = createKernelStore();
+    const dispatcher = new FakeDispatcher();
+    try {
+      await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "worker-1",
+        now: 1_000,
+        maxEffects: 1,
+        writerLeaseDurationMs: 0,
+      });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkerOptionsError);
+      expect((error as WorkerOptionsError).code).toBe(WORKER_OPTIONS_ERROR_CODES.LEASE_DURATION_POSITIVE_REQUIRED);
+      expect((error as WorkerOptionsError).message).toBe("writerLeaseDurationMs must be a positive safe integer");
+    }
+  });
+
+  it("throws WorkerOptionsError with code for invalid worker options", async () => {
+    const adapter = createKernelStore();
+    const dispatcher = new FakeDispatcher();
+    try {
+      await runEffectWorkerWithAdapter({
+        storage: adapter,
+        dispatcher,
+        workerId: "",
+        now: 1_000,
+        maxEffects: 5,
+      });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkerOptionsError);
+      expect((error as WorkerOptionsError).code).toBe(WORKER_OPTIONS_ERROR_CODES.WORKER_ID_REQUIRED);
+    }
+  });
+
+  it("throws KernelInputError with code for invalid semantic string", () => {
+    try {
+      requireSemanticString(123, "test field");
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(KernelInputError);
+      expect((error as KernelInputError).code).toBe("kernel_non_empty_string_required");
+      expect((error as KernelInputError).message).toBe("test field must be a non-empty string");
+    }
+  });
+
+  it("throws ProviderBatchLimitError with code when chunkEffectGroups receives a non-positive limit", () => {
+    try {
+      chunkEffectGroups(
+        [{ routeKey: "r", items: [{ pending: {} as any, claimToken: "c", invalidPayloadError: { kind: "absent" } } as any] }],
+        0,
+      );
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderBatchLimitError);
+      expect((error as ProviderBatchLimitError).code).toBe("provider_batch_limit_positive_integer_required");
+    }
   });
 
   it("supervisor runs one pass and stops", async () => {
@@ -1365,6 +1502,121 @@ describe("effect worker", () => {
     ]);
     await expect(outboxStatus(adapter, "blocked-append")).resolves.toBe("pending");
   });
+
+  it("persists lease_recovered_requeue when a renewed item is released after mixed lease-renewal recovery", async () => {
+    // Regression: worker.ts:280 mixed lease-renewal path must persist
+    // LEASE_RECOVERED_REQUEUE, not PROVIDER_BATCH_DEFERRED.
+    // The worker's beforeRemoteDispatch hook calls renewDispatchEffectLeases:
+    // when some renewals fail and others succeed, the renewed items are
+    // released with reason "lease_recovered" and the not-renewed items are
+    // recovered through recoverExpiredLeases.  This test exercises that
+    // actual worker path instead of calling releaseUnprocessedEffect directly.
+    //
+    // To trigger the mixed renewal path, we intercept the adapter's
+    // transaction to expire effect-1's lease immediately after the worker
+    // claims it (via claimEffect SQL), so that renewEffectLease fails for
+    // effect-1 during beforeRemoteDispatch while effect-2's renewal succeeds.
+    const adapter = createKernelStore();
+    const fence = await claimTestFence(adapter);
+    const effect1 = newEffect({ effectId: "lease-rr-1", targetId: "entity-lease-rr-1" });
+    const effect2 = newEffect({ effectId: "lease-rr-2", targetId: "entity-lease-rr-2" });
+    await appendPendingEffectsWithAdapter(adapter, fence, [effect1, effect2]);
+
+    // Adapter wrapper: after every transaction completes, if effect-1 has been
+    // claimed (status = 'processing') but its lease_until is still in the
+    // future, expire it in a follow-up write.  This ensures the worker's
+    // beforeRemoteDispatch hook sees an expired lease for effect-1 when it
+    // tries to renew.  The expiry runs AFTER the committing transaction so it
+    // is not overwritten by the in-transaction renewal.
+    let effect1Expired = false;
+    const wrappedAdapter: SqlStorageAdapter = {
+      read: adapter.read.bind(adapter),
+      async transaction<T>(op: (context: SqlStorageContext) => Promise<T>) {
+        const result = await adapter.transaction(op);
+        if (!effect1Expired) {
+          await adapter.transaction(async ({ sql }) => {
+            await sql.run(
+              `UPDATE sheet_effect_outbox
+               SET lease_until = ?
+               WHERE effect_id = ? AND status = 'processing'
+                 AND lease_until IS NOT NULL AND lease_until > ?`,
+              [TEST_NOW + 5_000, effect1.effectId, TEST_NOW + 5_000],
+            );
+          });
+          // Check if the expiry actually took effect (effect-1 was claimed)
+          const row = await adapter.read(async ({ sql }) => {
+            return sql.get<{ readonly lease_until: number | null }>(
+              "SELECT lease_until FROM sheet_effect_outbox WHERE effect_id = ?",
+              [effect1.effectId],
+            );
+          });
+          if (row !== undefined && row.lease_until !== null && row.lease_until <= TEST_NOW + 5_000) {
+            effect1Expired = true;
+          }
+        }
+        return result;
+      },
+    };
+
+    // FakeDispatcher with a custom apply that manually invokes the
+    // beforeRemoteDispatch hook.  When the hook returns false (mixed
+    // renewal), return empty results so the worker proceeds to recovery
+    // without a remote write.
+    const dispatcher = new FakeDispatcher({
+      invokeBeforeRemote: false,
+      isFastAppendCandidate: () => false,
+      apply: async (request) => {
+        const renewed = await request.beforeRemoteDispatch?.() ?? true;
+        if (!renewed) {
+          return { hasMore: false, results: [] };
+        }
+        return {
+          hasMore: false,
+          results: request.effects.map((effect) => ({
+            effectId: effect.effect_id,
+            payloadHash: effect.payload_hash,
+            status: "applied" as const,
+            visibleRevision: 1,
+            visibleHash: "visible-1",
+            fieldHashes: {},
+          })),
+        };
+      },
+    });
+
+    const report = await runEffectWorkerWithAdapter({
+      storage: wrappedAdapter,
+      dispatcher,
+      workerId: "worker-rr",
+      now: TEST_NOW + 40_000,
+      maxEffects: 10,
+    });
+
+    // The worker selected and claimed both effects, then the mixed renewal
+    // hook released effect-2 and recovered effect-1.
+    expect(report.selected).toBe(2);
+    expect(report.claimed).toBe(2);
+
+    // effect-2: released back to pending with LEASE_RECOVERED_REQUEUE.
+    await expect(outboxLastError(adapter, effect2.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.LEASE_RECOVERED_REQUEUE,
+    );
+    const row2 = await outboxError(adapter, effect2.effectId);
+    expect(row2?.last_error_message).toBe(
+      "Requeued after writer-lease recovery; no provider acknowledgement.",
+    );
+    expect(row2?.status).toBe("pending");
+
+    // effect-1: lease expired, recovered to delivery_uncertain.
+    await expect(outboxLastError(adapter, effect1.effectId)).resolves.toBe(
+      SYNC_EFFECT_RECOVERY_ERROR_CODES.LEASE_EXPIRED_REQUIRES_POSTCONDITION,
+    );
+    const row1 = await outboxError(adapter, effect1.effectId);
+    expect(row1?.status).toBe("delivery_uncertain");
+
+    // No remote apply was executed — the hook aborted before dispatch.
+    expect(dispatcher.applyCalls).toBe(1);
+  });
 });
 
 describe("reconciliation first-scan scheduling", () => {
@@ -1565,6 +1817,41 @@ describe("reconciliation first-scan scheduling", () => {
         run: async () => ({ effectsEnqueued: 0 }),
       },
     })).toThrow("initial reconciliation delay must be a non-negative safe integer");
+  });
+
+  it("throws SupervisionOptionsError with code for invalid reconciliation delay", () => {
+    const adapter = createKernelStore();
+    try {
+      createEffectWorkerSupervisor({
+        storage: adapter,
+        dispatcher: new FakeDispatcher(),
+        workerId: "recon-worker",
+        reconciliation: {
+          initialReconciliationDelayMs: -1,
+          run: async () => ({ effectsEnqueued: 0 }),
+        },
+      });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SupervisionOptionsError);
+      expect((error as SupervisionOptionsError).code).toBe("sync_effect_supervisor_non_negative_integer_required");
+    }
+  });
+
+  it("rejects non-positive reconciliation interval with the typed error code", () => {
+    expect.assertions(3);
+    try {
+      new EffectWorkerSupervisor({
+        runPass: () => Promise.resolve() as never,
+        reconciliation: { intervalMs: 0, run: () => Promise.resolve() as never },
+      });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(SupervisionOptionsError);
+      expect((error as SupervisionOptionsError).code).toBe(
+        SUPERVISOR_OPTIONS_ERROR_CODES.POSITIVE_INTEGER_REQUIRED,
+      );
+      expect((error as Error).message).toBe("sync effect supervisor reconciliation interval must be a positive safe integer");
+    }
   });
 
   describe("split read-ahead pipeline (preflight + applyPrepared)", () => {
@@ -2246,10 +2533,23 @@ describe("adaptive batch controller", () => {
       responseLoss: true,
     });
     expect(controller.limitFor("route-a")).toBe(50);
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       controller.observe("route-a", { durationMs: 10, responseSucceeded: true, responseLoss: false });
     }
-    expect(controller.limitFor("route-a")).toBe(55);
+    expect(controller.limitFor("route-a")).toBe(150);
+  });
+
+  it("exposes a read-only limits snapshot without creating or mutating route state", () => {
+    const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
+    // Untouched controller: empty snapshot (the accessor creates no routes).
+    expect(controller.limitsSnapshot()).toEqual({});
+    controller.observe("route-b", { durationMs: 10, responseSucceeded: true, responseLoss: false });
+    controller.observePreflight("route-a", { durationMs: 5, succeeded: false });
+    expect(controller.limitsSnapshot()).toEqual({ "route-a": 50, "route-b": 150 });
+    // Mutating the copy cannot reach the controller's policy state.
+    const snapshot = controller.limitsSnapshot();
+    snapshot["route-b"] = 999;
+    expect(controller.limitFor("route-b")).toBe(150);
   });
 
   it("rejects invalid adaptive batch limit configurations", () => {
@@ -2257,6 +2557,23 @@ describe("adaptive batch controller", () => {
       .toThrow("adaptive effect batch limits must satisfy minimum <= initial <= maximum");
     expect(() => new AdaptiveEffectBatchController({ initial: 0 }))
       .toThrow("adaptive initial must be a positive safe integer");
+  });
+
+  it("throws AdaptiveBatchOptionsError with code for invalid batch limits", () => {
+    try {
+      new AdaptiveEffectBatchController({ minimum: 20, maximum: 5 });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AdaptiveBatchOptionsError);
+      expect((error as AdaptiveBatchOptionsError).code).toBe("adaptive_limit_order_invalid");
+    }
+    try {
+      new AdaptiveEffectBatchController({ initial: 0 });
+      expect.fail("expected throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AdaptiveBatchOptionsError);
+      expect((error as AdaptiveBatchOptionsError).code).toBe("adaptive_positive_integer_required");
+    }
   });
 
   it("backs a route off when its preflight read fails", () => {
@@ -2287,11 +2604,11 @@ describe("adaptive batch controller", () => {
       coalesceWindowMs: 0,
       highLatencyThresholdMs: 1_000,
     });
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 2; index += 1) {
       controller.observePreflight("route-fast", { durationMs: 5, succeeded: true });
       controller.observe("route-fast", { durationMs: 5, responseSucceeded: true, responseLoss: false });
     }
-    expect(controller.limitFor("route-fast")).toBe(105);
+    expect(controller.limitFor("route-fast")).toBe(200);
   });
 
   it("clears buffered preflight latency when a prepared unit is abandoned (fence loss)", () => {
@@ -2309,7 +2626,7 @@ describe("adaptive batch controller", () => {
     // instead of being pushed over the latency threshold by a stale read whose
     // write never ran.
     controller.observe("route-abandoned", { durationMs: 20, responseSucceeded: true, responseLoss: false });
-    expect(controller.limitFor("route-abandoned")).toBe(100);
+    expect(controller.limitFor("route-abandoned")).toBe(150);
     // Without the clear, the 90ms read would have pushed 20+90=110 over the
     // 100ms threshold and halved the limit instead.
   });
@@ -2346,7 +2663,7 @@ describe("adaptive batch controller", () => {
       maxEffects: 5,
       batchController: partialController,
     });
-    expect(partialController.limitFor(routeKey)).toBe(100);
+    expect(partialController.limitFor(routeKey)).toBe(150);
 
     // hasMore=false with a missing result: the provider claims completion but
     // did not acknowledge every effect, so delivery-uncertain recovery backs
@@ -2419,10 +2736,13 @@ describe("adaptive batch controller", () => {
       batchController: controller,
     });
 
-    expect(controller.limitFor(routeKey)).toBe(100);
+    expect(controller.limitFor(routeKey)).toBe(150);
     expect(report).toMatchObject({ applied: 1, deferred: 1, requeued: 0, failed: 0 });
     await expect(outboxStatus(adapter, first.effectId)).resolves.toBe("applied");
     await expect(outboxStatus(adapter, suffix.effectId)).resolves.toBe("pending");
+    await expect(outboxLastError(adapter, suffix.effectId)).resolves.toBe(
+      WORKER_ERROR_CODES.PROVIDER_BATCH_DEFERRED,
+    );
   });
 });
 
@@ -2442,6 +2762,16 @@ function outboxStatus(adapter: NodeSqliteTestAdapter, effectId: string): Promise
       [effectId],
     );
     return row?.status;
+  });
+}
+
+function outboxLastError(adapter: NodeSqliteTestAdapter, effectId: string): Promise<string | undefined> {
+  return adapter.read(async ({ sql }) => {
+    const row = await sql.get<{ readonly last_error_code: string | null }>(
+      "SELECT last_error_code FROM sheet_effect_outbox WHERE effect_id = ?",
+      [effectId],
+    );
+    return row?.last_error_code ?? undefined;
   });
 }
 

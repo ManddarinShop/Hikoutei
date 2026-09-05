@@ -1,11 +1,9 @@
 /**
- * End-to-end soak runner test against the LOCAL source tree.
+ * Unit-style soak runner tests against the LOCAL source tree.
  *
- * Runs the real `runLocalMultiTableSoak` loop for a short deterministic
- * budget (the same shape as the documented 6h/24h executions, scaled down):
- * the explicit numeric operations summary, the reopen cadence (every 60th
- * cycle the runtime closes and reopens), the resume path, and the redaction
- * of every artifact line. No credentials and no live Sheets are involved.
+ * Exercises the projection-readiness pieces in isolation: projection id
+ * extraction (including blank-id row accounting) and the System_State
+ * readiness barrier. No credentials and no live Sheets are involved.
  */
 
 
@@ -45,18 +43,17 @@ import {
   planResumeRecovery,
   RECOVERY_REASONS,
   replayDeterministicHistory,
-  runLocalMultiTableSoak,
   stableErrorTag,
   SYSTEM_STATE_READINESS_POLL_MS,
   waitForRuntimeSystemStateReadiness,
 } from "../scripts/ci/local-soak/runner.mjs";
 import { describeSoakFailure } from "../scripts/ci/run-local-multitable-soak.mjs";
-import { resetHikouteiInternalLoggerForTests } from "../src/shared/observability/internalLog.js";
+import { resetHikouteiInternalLoggerForTests } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
 import {
   createInternalSyncService,
   type InternalSyncService,
-} from "../src/application/sync/service/SyncServiceBootstrap.js";
-import { readRuntimeSystemStateReadiness } from "../src/application/sync/service/systemStateReadiness.js";
+} from "@hikoutei/sync-engine/sync/service/SyncServiceBootstrap.js";
+import { readRuntimeSystemStateReadiness } from "@hikoutei/sync-engine/sync/service/systemStateReadiness.js";
 import {
   StubSpreadsheet,
   StubSheetsTransport,
@@ -64,7 +61,6 @@ import {
 
 import {
   SYMLINK_SUPPORTED,
-  describeLongSoak,
   SHORT_DURATION_HOURS,
   soakTestBeforeAll,
   soakTestBeforeEach,

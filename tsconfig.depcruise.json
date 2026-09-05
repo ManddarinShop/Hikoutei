@@ -1,0 +1,40 @@
+{
+  // Resolution-only TypeScript config for the dependency-cruiser audit
+  // (`audit:deps`). It is NEVER used for emit or typecheck.
+  //
+  // Why this file exists: tsconfig.json deliberately carries no private
+  // workspace-package `paths` (it must stay an emit-compatible program), and
+  // with dep-cruiser pointed at it every `@hikoutei/{contracts,storage,sheets,
+  // sync-engine,composition,cli}/*` import resolved as `could-not-resolve`,
+  // so the package-boundary rules silently policed NOTHING. This config
+  // mirrors the source paths map from tsconfig.test.json so each workspace
+  // edge resolves to the leaf SOURCE (the same tree the scan walks) and the
+  // forbidden rules actually match the 500+ cross-package edges.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "hikoutei": ["./src/index.ts"],
+      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      // The two externals the leaf packages import: mapped to their installed
+      // dirs so dep-cruiser resolves them (without entries they fall out as
+      // could-not-resolve even though the real compiler resolves them fine
+      // through NodeNext exports). The paths are version-stable via the
+      // pnpm workspace links.
+      "zod": ["./packages/contracts/node_modules/zod"],
+      "@hikoutei/kohkai": ["./packages/contracts/node_modules/@hikoutei/kohkai"],
+      "@hikoutei/contracts/*": ["./packages/contracts/src/*"],
+      "@hikoutei/storage/*": ["./packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["./packages/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["./packages/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["./packages/composition/src/*"],
+      "@hikoutei/cli/*": ["./packages/cli/src/*"]
+    }
+  }
+}

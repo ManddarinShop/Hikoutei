@@ -19,9 +19,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineTypedSheetsEntity } from "../src/index.js";
-import { getEntityDescriptor } from "../src/api/entity.js";
+import { getEntityDescriptor } from "@hikoutei/sync-engine/api/entity.js";
 import { createInternalHikoutei } from "../src/api/Hikoutei.js";
-import type { ScalarEntityPersistenceProvider } from "../src/adapter/persistence/contracts/scalar.js";
+import type { ScalarEntityPersistenceProvider } from "@hikoutei/contracts/storage/scalar.js";
+import { ScriptedCloseProvider } from "./support/scriptedCloseProvider.js";
 
 /**
  * Test-only controls for the mocked process logger drain: `holdDrain`
@@ -35,8 +36,11 @@ const loggerHooks = vi.hoisted(() => ({
   drainCalls: 0,
 }));
 
-vi.mock("../src/shared/observability/internalLog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/shared/observability/internalLog.js")>();
+// Mock the ENGINE module path directly: since P8-D2 the runtime core lives
+// in `@hikoutei/sync-engine` and imports its sibling observability module
+// relatively, so mocking the root re-export shim would not reach it.
+vi.mock("@hikoutei/sync-engine/shared/observability/internalLog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@hikoutei/sync-engine/shared/observability/internalLog.js")>();
   return {
     ...actual,
     getHikouteiInternalLogger: () => ({
@@ -110,32 +114,6 @@ class GatedCloseProvider implements ScalarEntityPersistenceProvider {
  * Provider with scripted close behavior: `close()` fails the first
  * `failuresBeforeSuccess` calls with the recorded original error, then
  * succeeds.
- */
-class ScriptedCloseProvider implements ScalarEntityPersistenceProvider {
-  closeCalls = 0;
-  readonly originalCloseError = new Error("scripted-provider-close-failure");
-  constructor(private readonly failuresBeforeSuccess: number) {}
-
-  async close(): Promise<void> {
-    this.closeCalls += 1;
-    if (this.closeCalls <= this.failuresBeforeSuccess) {
-      throw this.originalCloseError;
-    }
-  }
-
-  async beginTransaction(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-  async read(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-  async count(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-  async readSnapshot(): Promise<never> {
-    throw new Error("unused in close tests");
-  }
-}
 
 /** Builds a runtime over a scripted provider with an optional beforeClose. */
 function openRuntime(provider: ScalarEntityPersistenceProvider, beforeClose?: () => Promise<void>) {

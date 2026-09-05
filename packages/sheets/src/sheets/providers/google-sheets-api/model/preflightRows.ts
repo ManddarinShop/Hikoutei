@@ -1,0 +1,461 @@
+/**
+ * Preflight row normalization, indexes, and sheet/grid lookup.
+ *
+ * Nonblank target rows are normalized into typed `PreflightRow` values with
+ * their anchor evidence and visible identity; the identity index fails closed
+ * on duplicates while the anchor index keeps only the FIRST row per anchor
+ * value (duplicated anchors are evidence, never rewritten), and both derive
+ * the next append row. Sheet and grid lookup helpers resolve titles to
+ * validated grids for the preflight data read and the observation/
+ * provisioning readers.
+ */
+
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import type { Presence } from "@hikoutei/contracts/state/index.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
+import {
+  SYNC_INVALID_PROVIDER_OPERATIONS,
+  missingTabClassification,
+  type SyncMissingTabOperation,
+} from "@hikoutei/contracts/sheets/errors.js";
+import {
+  GOOGLE_SHEETS_API_ROW_ID_HEADER,
+} from "../constants.js";
+import {
+  invalidProviderState,
+  GET_REPLY_MALFORMED,
+} from "../errors.js";
+import { apiStringValue, requireApiContainer } from "./preflightParsing.js";
+import {
+  identityFromNormalizedCell,
+  isBlankApiCell,
+  normalizedCellFromApiValue,
+  parseRegisteredRange,
+} from "./valueNormalization.js";
+import type {
+  ParsedCellNumberFormat,
+  ParsedGridData,
+  ParsedRowData,
+  ParsedSheet,
+  ParsedSpreadsheetDocument,
+  PreflightRow,
+} from "./preflightContext.js";
+
+/**
+ * Resolves a tab by title or fails closed when it is absent from an
+ * enumeration. `operation` classifies the missing-tab invalid state so the
+ * caller's step (preflight vs postcondition recovery) is reported; it
+ * defaults to the preflight step.
+ */
+export function requireSheetByTitle(
+  sheets: readonly ParsedSheet[],
+  title: string,
+  operation?: SyncMissingTabOperation,
+): ParsedSheet {
+  const sheet = findSheetByTitle(sheets, title);
+  if (sheet === undefined) {
+    invalidProviderState(
+      `Registered sync sheet does not exist: ${title}`,
+      missingTabClassification(operation ?? SYNC_INVALID_PROVIDER_OPERATIONS.PREFLIGHT),
+    );
+  }
+  return sheet;
+}
+
+export function findSheetByTitle(
+  sheets: readonly ParsedSheet[],
+  title: string,
+): ParsedSheet | undefined {
+  return sheets.find((sheet) => sheet.title === title);
+}
+
+export function requireGridDataForSheet(
+  document: ParsedSpreadsheetDocument,
+  sheetId: number,
+): ParsedGridData {
+  return requireSingleGrid(requireSheetGrids(document, sheetId), sheetId);
+}
+
+/** Returns the ordered per-range grid list of one sheet, failing closed. */
+export function requireSheetGrids(
+  document: ParsedSpreadsheetDocument,
+  sheetId: number,
+): readonly ParsedGridData[] {
+  const grids = document.grids.get(sheetId);
+  if (grids === undefined) {
+    invalidProviderState(`grid data is missing for sheet ${sheetId}`, GET_REPLY_MALFORMED);
+  }
+  return grids;
+}
+
+/** Takes the single grid a one-range reader must have received. */
+export function requireSingleGrid(
+  grids: readonly ParsedGridData[],
+  sheetId: number,
+): ParsedGridData {
+  // Single-range readers take the one grid the API returns per requested
+  // range; a multi-grid response for these readers means the document does
+  // not match the request shape and must fail closed.
+  if (grids.length !== 1) {
+    invalidProviderState(`expected exactly one grid for sheet ${sheetId}`, GET_REPLY_MALFORMED);
+  }
+  return grids[0]!;
+}
+
+/**
+ * Resolves the raw CellData at one absolute 1-based coordinate across an
+ * ordered per-range GridData list of one sheet. The first range covering the
+ * coordinate wins; ranges of one request share one sheet snapshot, so
+ * overlapping ranges never mix evidence. Out of every band → `null`.
+ */
+export function resolveGridCell(
+  grids: readonly ParsedGridData[],
+  rowNumber: number,
+  absoluteColumn: number,
+): unknown {
+  for (const grid of grids) {
+    const rowIndex = rowNumber - grid.startRow - 1;
+    if (rowIndex < 0 || rowIndex >= grid.rowData.length) continue;
+    const values = grid.rowData[rowIndex]!.values;
+    const columnIndex = absoluteColumn - 1 - grid.startColumn;
+    if (columnIndex < 0 || columnIndex >= values.length) continue;
+    const cell = values[columnIndex];
+    if (cell === undefined) return null;
+    return cell;
+  }
+  return null;
+}
+
+/**
+ * Merges a scoped preflight read's per-range grids (one header row plus one
+ * 1-column band per tab-wide key column) into ONE dense logical grid over
+ * the full registered range, so the historical header/blank-row/anchor
+ * normalization runs unchanged. Columns outside the requested bands resolve
+ * to blank cells (`null`) — they are only ever hashed for rows the scoped
+ * verification read re-reads with full width and formats.
+ */
+export function synthesizeScopedTargetGrid(
+  grids: readonly ParsedGridData[],
+  range: { readonly startColumn: number; readonly columnCount: number },
+): ParsedGridData {
+  let maxRow = 1;
+  for (const grid of grids) {
+    maxRow = Math.max(maxRow, grid.startRow + grid.rowData.length);
+  }
+  const rowData: ParsedRowData[] = [];
+  for (let rowNumber = 1; rowNumber <= maxRow; rowNumber += 1) {
+    const values: unknown[] = [];
+    for (let offset = 0; offset < range.columnCount; offset += 1) {
+      values.push(resolveGridCell(grids, rowNumber, range.startColumn + offset));
+    }
+    rowData.push({ values });
+  }
+  return { startRow: 0, startColumn: range.startColumn - 1, rowData };
+}
+
+/**
+ * Returns the 1-based absolute column of the row-check formula column of
+ * one registered range, or `undefined` for projections without one. The
+ * check column lives DIRECTLY AFTER the registered range (outside every
+ * range-scoped read/hash rule) and only User_Input tabs carry it.
+ *
+ * This is the UNVERIFIED geometric position: the column is only USED once
+ * `buildRouteContext` has seen the `__hikoutei_row_check` header cell there
+ * (a provisioned tab); legacy tabs keep `PreflightContext.checkColumn`
+ * undefined and receive no formula writes.
+ */
+export function checkColumnFor(
+  registeredRange: string,
+  projection: string,
+): number | undefined {
+  if (projection !== SYNC_PROJECTIONS.USER_INPUT) return undefined;
+  const range = parseRegisteredRange(registeredRange);
+  return range.startColumn + range.columnCount;
+}
+
+/**
+ * Picks the whole-table grid of a full-shape read from an ordered
+ * per-range grid list. The registered-span grid (starts at the range's
+ * first cell) must appear EXACTLY once — a duplicate is the proven
+ * malformed multi-grid reply a single-range reader fails closed on — while
+ * additional out-of-range probe bands (the row-check header cell) are
+ * tolerated because the full-shape user_input read requests them.
+ */
+export function pickRegisteredGrid(
+  grids: readonly ParsedGridData[],
+  range: { readonly startColumn: number; readonly columnCount: number },
+  sheetId: number,
+): ParsedGridData {
+  const candidates = grids.filter((grid) =>
+    grid.startRow === 0 && grid.startColumn === range.startColumn - 1);
+  if (candidates.length !== 1) {
+    invalidProviderState(`expected exactly one grid for sheet ${sheetId}`, GET_REPLY_MALFORMED);
+  }
+  return candidates[0]!;
+}
+
+/** Normalizes nonblank grid rows into typed preflight rows. */
+export function readRows(
+  data: ParsedGridData,
+  range: { readonly startColumn: number; readonly columnCount: number },
+  headers: readonly string[],
+  identityField: Presence<string>,
+  anchorColumn: number | undefined,
+  /**
+   * Scoped-read blank rule. The full-width read treats any nonblank user
+   * field as row content; a column-scoped read only sees the key columns.
+   * With a registered identity the rule is identity-cell nonblank: the
+   * provider always writes the identity on its content rows, so a key-blank
+   * row inside the content area is a human-drift candidate that the caller
+   * detects via the contiguity check and answers with a whole-table
+   * full-evidence re-read (non-key content can never be silently skipped;
+   * see `hasScopedKeyRowGap` in `preflightContext.ts`). Without a registered
+   * identity there is no required-identity validation to preserve, so the
+   * anchor cell marks content (an anchor-only row stays blank, matching the
+   * historical system-column rule). A hidden row BELOW the last visible key
+   * row cannot be detected from narrowed columns at all: appends shift it
+   * down (`insertDimension`, never overwrite) and the inbound observation
+   * path still gates it — the pre-cursor whole-table read is the upgrade
+   * path if a deployment needs that case refused too.
+   */
+  scoped = false,
+): readonly PreflightRow[] {
+  const anchorsByRow = readAnchorIndex(data, anchorColumn);
+  const userFieldCount = anchorColumn === undefined
+    ? range.columnCount
+    : range.columnCount - 1;
+  const identityColumnIndex = identityField.kind === "present"
+    ? headers.indexOf(identityField.value)
+    : -1;
+  const rows: PreflightRow[] = [];
+  for (let rowIndex = 0; rowIndex < data.rowData.length; rowIndex += 1) {
+    const rowNumber = data.startRow + 1 + rowIndex;
+    if (rowNumber < 2) continue;
+    const rawRow = data.rowData[rowIndex];
+    if (rawRow === undefined) continue;
+    const values = gridRowCells(data, rowNumber, range.startColumn, range.columnCount);
+    // The system row-id column is invisible to the blank-row rule: a row
+    // whose user fields are all blank stays blank even when the anchor cell
+    // still holds its UUID (same semantics as metadata anchors).
+    const isContent = scoped
+      ? (identityColumnIndex >= 0
+        ? !isBlankApiCell(values[identityColumnIndex] ?? null)
+        : anchorColumn !== undefined && !isBlankApiCell(values[userFieldCount] ?? null))
+      : values.slice(0, userFieldCount).every((value) => isBlankApiCell(value)) === false;
+    if (!isContent) continue;
+
+    const cells: Record<string, NormalizedCell> = {};
+    headers.forEach((header, columnIndex) => {
+      const value = values[columnIndex];
+      const numberFormat = apiCellNumberFormat(value);
+      cells[header] = normalizedCellFromApiValue(
+        value === null || value === undefined
+          ? undefined
+          : (value as Record<string, unknown>).userEnteredValue,
+        numberFormat,
+      );
+    });
+
+    const anchors = anchorsByRow.get(rowNumber);
+    if (anchors !== undefined && anchors.length > 1) {
+      invalidProviderState(`row has multiple sync anchors: ${rowNumber}`);
+    }
+    const firstAnchor = anchors === undefined || anchors.length === 0
+      ? undefined
+      : (anchors[0] ?? undefined);
+    const physicalAnchor: Presence<string> = firstAnchor === undefined
+      ? absentValue()
+      : presentValue(firstAnchor);
+
+    let identity: Presence<string> = absentValue();
+    if (identityField.kind === "present") {
+      const identityCell = cells[identityField.value];
+      const value = identityFromNormalizedCell(identityCell ?? null);
+      if (value !== null) identity = presentValue(value);
+    }
+
+    rows.push({ rowNumber, physicalAnchor, cells, identity });
+  }
+  return rows;
+}
+
+/**
+ * Builds the row -> anchor-list index from the system row-id column.
+ *
+ * The anchor is the LAST column cell value of the user_input registered
+ * range: any non-empty string value counts as the row's anchor (the column
+ * position is the identity proof; the `sync-anchor:` prefix is the format of
+ * observation- and append-assigned anchors, but flush-derived anchors keep
+ * the mapping's deterministic format such as `entity:<id>`). The header row
+ * is skipped so the `__hikoutei_row_id` header cell never becomes a
+ * pseudo-anchor. Blank cells, whitespace-only cells, empty strings, and
+ * non-string values are not anchors and are treated as missing by the
+ * caller. `anchorColumn` is 1-based; projections without a system column
+ * pass `undefined` and yield no anchors.
+ */
+export function readAnchorIndex(
+  data: ParsedGridData,
+  anchorColumn: number | undefined,
+): ReadonlyMap<number, readonly string[]> {
+  const byRow = new Map<number, string[]>();
+  if (anchorColumn === undefined) return byRow;
+  for (let rowIndex = 0; rowIndex < data.rowData.length; rowIndex += 1) {
+    const rowNumber = data.startRow + 1 + rowIndex;
+    if (rowNumber < 2) continue;
+    const [value] = gridRowCells(data, rowNumber, anchorColumn, 1);
+    const anchor = anchorFromColumnValue(value);
+    if (anchor !== undefined) byRow.set(rowNumber, [anchor]);
+  }
+  return byRow;
+}
+
+/** Extracts one anchor value from a system-column cell, if any. */
+export function anchorFromColumnValue(value: unknown): string | undefined {
+  const raw = apiStringValue(value);
+  // Whitespace-only cells count as missing (re-anchored), mirroring the
+  // header validation's trim rule for the system column.
+  if (raw === undefined || raw.trim().length === 0) return undefined;
+  return raw;
+}
+
+/**
+ * Returns the 1-based system row-id column of one registered range, or
+ * `undefined` for projections without a system column (only user_input tabs
+ * carry one, always as the LAST column of the registered range).
+ */
+export function anchorColumnFor(
+  registeredRange: string,
+  projection: string,
+): number | undefined {
+  if (projection !== SYNC_PROJECTIONS.USER_INPUT) return undefined;
+  const range = parseRegisteredRange(registeredRange);
+  return range.startColumn + range.columnCount - 1;
+}
+
+export function indexRows(
+  rows: readonly PreflightRow[],
+  options: { readonly deferIdentityDupFailClosed: boolean } = {
+    deferIdentityDupFailClosed: false,
+  },
+): {
+  readonly byAnchor: ReadonlyMap<string, PreflightRow>;
+  readonly byIdentity: ReadonlyMap<string, PreflightRow>;
+  readonly nextAppendRow: number;
+} {
+  const byAnchor = new Map<string, PreflightRow>();
+  const byIdentity = new Map<string, PreflightRow>();
+  for (const row of rows) {
+    if (row.physicalAnchor.kind === "present") {
+      // Duplicated anchors are evidence, never rewritten: a human copy-paste
+      // copies the UUID cell, so only the FIRST row carrying each anchor
+      // value enters the index and later rows fall back to identity/targetId
+      // lookup in findWorkingRow. The duplicate itself is still reported by
+      // the observation/anchor-ensure evidence path.
+      if (!byAnchor.has(row.physicalAnchor.value)) {
+        byAnchor.set(row.physicalAnchor.value, row);
+      }
+    }
+    if (row.identity.kind === "present") {
+      const existing = byIdentity.get(row.identity.value);
+      if (existing !== undefined) {
+        if (!options.deferIdentityDupFailClosed) {
+          invalidProviderState(
+            `sync identity is duplicated: ${row.identity.value} at rows ${existing.rowNumber} and ${row.rowNumber}`,
+          );
+        }
+        // Deferred: the values-only base read cannot tell a real duplicate
+        // from one identity that a number format would renormalize to a
+        // date string. Keep the FIRST row (mirrors the anchor rule) and let
+        // the format-aware verification re-index decide.
+        continue;
+      }
+      byIdentity.set(row.identity.value, row);
+    }
+  }
+  // The API omits trailing empty rows from grid data, so the last nonblank
+  // row is the sheet's last content row; appends start one row below it
+  // (min row 2, matching the Apps Script nextAppendRow = max(lastRow + 1, 2)).
+  // Computed from the normalized rows (not grid rowData) so a row whose only
+  // remaining content is the system anchor cell does not extend the append
+  // position, exactly like the metadata-anchor era.
+  const lastRow = rows.length === 0 ? undefined : rows[rows.length - 1]?.rowNumber;
+  const lastContentRow = lastRow === undefined ? 0 : lastRow;
+  return {
+    byAnchor,
+    byIdentity,
+    nextAppendRow: Math.max(lastContentRow + 1, 2),
+  };
+}
+
+/**
+ * Reads the visible cells of one 1-based row over the registered range.
+ *
+ * `null` entries mark blank cells, matching the sparse values arrays the API
+ * returns (a row's values array may be narrower than the requested range).
+ */
+export function gridRowCells(
+  data: ParsedGridData,
+  rowNumber: number,
+  startColumn: number,
+  columnCount: number,
+): readonly unknown[] {
+  const rowIndex = rowNumber - data.startRow - 1;
+  const rawRow = data.rowData[rowIndex];
+  if (rawRow === undefined) {
+    return Array.from({ length: columnCount }, () => null);
+  }
+  const values = rawRow.values;
+  const cells: unknown[] = [];
+  for (let offset = 0; offset < columnCount; offset += 1) {
+    const column = startColumn - 1 + offset - data.startColumn;
+    const value = values[column];
+    cells.push(value === undefined ? null : value);
+  }
+  return cells;
+}
+
+/**
+ * Extracts the number format of one API cell, if any.
+ *
+ * The REST API models `CellFormat.numberFormat` as a `{ type, pattern }`
+ * object, never a bare string. Every present wrapper (`userEnteredFormat`,
+ * `effectiveFormat`, and their nested `numberFormat` containers) is
+ * validated before preference, so a valid entered format can never hide a
+ * malformed effective format; the user-entered format wins over the
+ * effective format only when both are well-formed.
+ */
+export function apiCellNumberFormat(value: unknown): ParsedCellNumberFormat | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const cell = value as Record<string, unknown>;
+  // Validate BOTH present format containers and BOTH present nested
+  // numberFormat containers up front so a malformed lower-priority effective
+  // format/numberFormat can never be hidden by a valid entered format.
+  const entered = requireApiContainer(cell.userEnteredFormat, "cell userEnteredFormat must be an object");
+  const effective = requireApiContainer(cell.effectiveFormat, "cell effectiveFormat must be an object");
+  const enteredFormat = entered === undefined
+    ? undefined
+    : parseCellNumberFormat(entered.numberFormat);
+  const effectiveFormat = effective === undefined
+    ? undefined
+    : parseCellNumberFormat(effective.numberFormat);
+  if (enteredFormat !== undefined) return enteredFormat;
+  return effectiveFormat;
+}
+
+/** Validates one SDK `numberFormat` object (type plus optional pattern). */
+function parseCellNumberFormat(value: unknown): ParsedCellNumberFormat | undefined {
+  // An omitted numberFormat is legitimate; a present null/primitive wrapper is
+  // malformed and must fail closed instead of silently becoming absent.
+  if (value === undefined) return undefined;
+  const record = requireApiContainer(value, "cell numberFormat must be an object")!;
+  const type = record.type;
+  if (typeof type !== "string" || type.length === 0) {
+    invalidProviderState("cell numberFormat.type is invalid", GET_REPLY_MALFORMED);
+  }
+  const pattern = record.pattern;
+  if (pattern !== undefined && typeof pattern !== "string") {
+    invalidProviderState("cell numberFormat.pattern is invalid", GET_REPLY_MALFORMED);
+  }
+  return { type, pattern };
+}

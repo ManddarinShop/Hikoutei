@@ -22,9 +22,10 @@ import {
   TOMBSTONE_HEADER,
 } from "../constants.mjs";
 import { soakTableNameForEntity } from "../entities.mjs";
+import { stableErrorTag } from "../errors.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { extractProjectionIds } from "../probe.mjs";
-import { sanitizeTableName } from "../redact.mjs";
+import { sanitizeErrorTag, sanitizeFailureKind, sanitizeTableName } from "../redact.mjs";
 import { boundedSleep } from "../timing.mjs";
 
 /** The three scenario execution windows within one standard soak cycle. */
@@ -322,10 +323,10 @@ function isUsableLiveClient(client) {
  *
  * @param {{ id: string, phase: string, order: number, plan?: object, targetTable?: unknown }} entry
  *   the composed scenario entry.
- * @param {unknown} _reason the thrown reason (never recorded verbatim).
+ * @param {unknown} reason the thrown reason (never recorded verbatim).
  * @returns {object} the redacted failed scenario record.
  */
-function failedScenarioRecord(entry, _reason) {
+function failedScenarioRecord(entry, reason) {
   return {
     id: entry.id,
     phase: entry.phase,
@@ -334,6 +335,10 @@ function failedScenarioRecord(entry, _reason) {
     ...(recordTargetTable(entry) === undefined ? {} : { targetTable: recordTargetTable(entry) }),
     status: "failed",
     reason: "scenario-error",
+    // Diagnostic-only stable tag for the thrown reason (class + allowlisted
+    // code/status class, never the message, stack, or any raw value), so a
+    // `scenario-error` record says WHICH error shape fired.
+    reasonTag: sanitizeErrorTag(stableErrorTag(reason)),
     expectedErrors: 0,
     failures: 1,
   };
@@ -438,6 +443,14 @@ export async function runScenario({ entry, context }) {
       ...recordBase,
       status,
       ...(result.reason !== undefined ? { reason: result.reason } : {}),
+      // Pass through the scenario's own diagnostic tags (never raw text):
+      // the stable error tag recorded when the scenario swallowed a throw
+      // into `scenario-error`, and the allowlisted invariant kinds its
+      // internal failure counters fired.
+      ...(typeof result.reasonTag === "string" && result.reasonTag.length > 0
+        ? { reasonTag: sanitizeErrorTag(result.reasonTag) } : {}),
+      ...(Array.isArray(result.failureKinds) && result.failureKinds.length > 0
+        ? { failureKinds: [...new Set(result.failureKinds.map(sanitizeFailureKind))].sort() } : {}),
       expectedErrors,
       failures,
       ...(cleanupFailures > 0 ? { cleanupFailures } : {}),

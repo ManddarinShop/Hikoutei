@@ -148,7 +148,7 @@ async function importInternalLoggerReset() {
   // own URL. Declared here so the catch can evaluate the loader-failure
   // predicate against it.
   const sourceUrl = new URL(
-    "../../../src/shared/observability/internalLog.ts",
+    "../../../packages/sync-engine/src/shared/observability/internalLog.ts",
     import.meta.url,
   );
   try {
@@ -173,7 +173,7 @@ async function importInternalLoggerReset() {
     ) {
       throw error;
     }
-    const distModule = await import("../../../dist/shared/observability/internalLog.js");
+    const distModule = await import("../../../dist/sync-engine/shared/observability/internalLog.js");
     return distModule.resetHikouteiInternalLoggerForTests;
   }
 }

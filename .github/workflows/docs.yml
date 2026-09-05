@@ -20,6 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # website/ is a standalone npm project with its own package-lock.json
+      # (not part of the pnpm workspace); it stays on npm until it is migrated
+      # separately. All repository (pnpm) workflows install with pnpm.
       - uses: actions/setup-node@v4
         with:
           node-version: 20

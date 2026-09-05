@@ -18,8 +18,8 @@
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EFFECT_STATUSES } from "@hikoutei/ikisaki";
-import { CONFLICT_STATUSES } from "../domain/model/constants.js";
-import { isNormalizedCell } from "../shared/encoding/index.js";
+import { CONFLICT_STATUSES } from "@hikoutei/contracts/domain/model/constants.js";
+import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 
 /** Stable machine-readable codes raised by the internal status reader. */
 export const HIKOUTEI_SYNC_STATUS_ERROR_CODES = {
@@ -107,7 +107,7 @@ export interface HikouteiConflictSummary {
 
 /** Options accepted by the read-only status queries. */
 export interface HikouteiSyncStatusOptions {
-  /** SQLite database path, URI, or `:memory:` used by the runtime. */
+  /** SQLite database file path used by the runtime. */
   readonly dbName: string;
 }
 
@@ -123,9 +123,6 @@ export const DEFAULT_CONFLICT_LIST_LIMIT = 50;
 /** Hard upper bound for one conflict page; protects caller context windows. */
 export const MAX_CONFLICT_LIST_LIMIT = 500;
 
-/** In-memory SQLite marker; read-only observability cannot cross connections. */
-const MEMORY_DB_NAME = ":memory:";
-
 /**
  * Reads a delivery/conflict snapshot from the SQLite authority.
  *
@@ -137,7 +134,7 @@ export async function readHikouteiSyncStatus(
   options: HikouteiSyncStatusOptions,
 ): Promise<HikouteiSyncStatus> {
   const dbName = requireValidDbName(options);
-  if (isMemoryDb(dbName) || !existsSync(dbName)) {
+  if (!existsSync(dbName)) {
     return { mode: "local" };
   }
   return withReadOnlyConnection(dbName, (database) => {
@@ -166,7 +163,7 @@ export async function listHikouteiConflicts(
   // Input validation runs before the existence check so malformed arguments
   // always reject, independent of database state.
   const limit = resolveLimit(options.limit);
-  if (isMemoryDb(dbName) || !existsSync(dbName)) {
+  if (!existsSync(dbName)) {
     return [];
   }
   return withReadOnlyConnection(dbName, (database) => {
@@ -219,11 +216,6 @@ function resolveLimit(limit: number | undefined): number {
     );
   }
   return Math.min(limit, MAX_CONFLICT_LIST_LIMIT);
-}
-
-/** True when the path names an in-memory database. */
-function isMemoryDb(dbName: string): boolean {
-  return dbName === MEMORY_DB_NAME || dbName.startsWith("file::memory:");
 }
 
 /** Typed view of the `node:sqlite` built-in used by this module. */

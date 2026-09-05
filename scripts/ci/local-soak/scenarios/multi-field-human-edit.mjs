@@ -12,6 +12,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -113,8 +114,10 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable CAS/stale/conflict
  * evidence: a rejected local write or human multi-field write is an expected
  * stale-write compare-and-set conflict only when its error carries one of
- * the exact guard/hash-mismatch codes; a validation, transport, or
- * direct-write rejection (including `identity_shifted`) is a real failure.
+ * the exact guard/hash-mismatch codes; a validation, transport, or other
+ * direct-write rejection is a real failure. An exact `identity_shifted`
+ * rejection of the direct human write is the expected multi-writer
+ * transient (a truthful `identity-shifted-transient` skip, never a failure).
  * The scenario then verifies the observable invariants: no duplicate rows
  * for the race id, and the human fields are not silently lost (a bounded
  * observation). A partial application (some human fields landed, others
@@ -147,6 +150,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let humanLanded = "not-applied";
   let result;
   // True once the human multi-field write actually resolved (was accepted by
@@ -246,18 +252,28 @@ export async function execute({ plan, context }) {
           })();
       const [localResult, humanResult] = await Promise.allSettled([localPromise, humanPromise]);
       // Classify rejections ONLY by EXACT stale-write/CAS/conflict evidence
-      // (a guard/hash mismatch on the raced row). A validation/transport/
-      // direct-write rejection (including `identity_shifted`) is never an
-      // expected conflict.
+      // (a guard/hash mismatch on the raced row). A validation/transport
+      // rejection is a real failure. The direct seam's fail-closed
+      // `identity_shifted` evidence is an EXPECTED TRANSIENT of the
+      // multi-writer soak (never counted as a failure): the seam proved no
+      // silent success and the write outcome is unobservable, so the
+      // scenario records a truthful skip below.
       if (localResult.status === "rejected" && !isStaleConflictEvidence(localResult.reason)) {
         failures += 1;
+        failureKinds.add("local-rejection-non-stale");
       }
+      let humanTransient;
       if (humanResult.status === "rejected") {
         // A rejected human multi-field write is expected ONLY on exact
-        // CAS/stale evidence (the human edit targeted a row the local update
-        // already shifted). `identity_shifted` and any transport/validation
-        // rejection are real failures.
-        if (!isStaleConflictEvidence(humanResult.reason)) failures += 1;
+        // CAS/stale evidence (the human edit targeted a row the local
+        // update already shifted) or on the transient `identity_shifted`
+        // guard; any transport/validation rejection is a real failure.
+        if (isIdentityShiftedEvidence(humanResult.reason)) {
+          humanTransient = identityShiftedTransientResult(humanResult.reason);
+        } else if (!isStaleConflictEvidence(humanResult.reason)) {
+          failures += 1;
+          failureKinds.add("human-rejection-non-stale");
+        }
       } else if (humanStarted) {
         // Only a write that actually started and resolved can be accepted.
         // A deadline-crossed no-op (humanStarted=false) is never an accepted
@@ -269,7 +285,10 @@ export async function execute({ plan, context }) {
       // fork so the identity-mapped write em never hides an inbound worker
       // projection of the raced row.
       const rows = await context.em.fork().find(token, { id: plan.target.targetId });
-      if (rows.length > 1) failures += 1;
+      if (rows.length > 1) {
+        failures += 1;
+        failureKinds.add("duplicate-rows");
+      }
       // Bounded observation: the human fields must not be silently lost. A
       // partial application (some fields landed, others not) is a failure;
       // an ACCEPTED human write whose fields never land is silent loss.
@@ -278,18 +297,48 @@ export async function execute({ plan, context }) {
       // async-landing wait), so it is passed the current failure count.
       const humanLandedNow = await observeHumanFields(context, token, plan, critical, humanAccepted, failures);
       humanLanded = humanLandedNow;
-      if (humanLanded === "partial") failures += 1;
-      if (humanLanded === "not-applied" && humanAccepted) failures += 1;
+      // Conflict-recorded outcome: when an outbox effect for this binding was
+      // in flight, the poll gate deliberately skips the row and the human
+      // edit is ingested later as an OPEN sync_conflict — a VALID consistent
+      // outcome per the hypothesis. Before counting a row-based
+      // partial/silent-loss failure, every non-landed field is resolved
+      // against the conflict records: landed OR conflict-recorded is
+      // accounted, and only a field with NEITHER is lost.
+      let conflictRecorded = false;
+      if (humanLanded === "partial" || (humanLanded === "not-applied" && humanAccepted)) {
+        const outcome = await resolveHumanFieldsOutcome(context, token, plan, critical);
+        if (outcome === "landed") {
+          humanLanded = "landed";
+        } else if (outcome === "conflict-recorded") {
+          conflictRecorded = true;
+        } else if (humanLanded === "partial") {
+          failures += 1;
+          failureKinds.add("partial-landing");
+        } else {
+          failures += 1;
+          failureKinds.add("silent-loss");
+        }
+      }
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-        : humanLanded === "landed"
+        : humanTransient !== undefined
+          ? humanTransient
+          : humanLanded === "landed"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
+          : conflictRecorded
+          ? { status: "ok", expectedErrors: 0, failures: 0, reason: "conflict-recorded" }
           : deadlineExpired
             ? { status: "skipped", expectedErrors: 0, failures: 0, reason: "deadline-expired" }
             : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated race row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the race,
@@ -304,32 +353,77 @@ export async function execute({ plan, context }) {
     // observation to land before the delete so the removal is ordered after
     // it. This is bounded and never changes the classification above; it
     // only stops the cleanup from racing an accepted-but-unconfirmed write.
-    try {
-      // Only delete the dedicated row when the settle window produced
-      // durable/complete terminal evidence (the accepted write landed, or it
-      // was rejected). When the proof times out the row is NOT deleted —
-      // deleting would tombstone the binding under an in-flight inbound
-      // observation (the #381 race) — and the leftover row is surfaced as a
-      // cleanup failure instead of being silently removed.
-      const safeToDelete = await settleTerminalBeforeCleanup(
-        context, token, plan, critical, humanStarted, humanAccepted, humanLanded,
-      );
-      if (safeToDelete) {
-        await critical(async () => {
-          const rows = await em.find(token, { id: plan.target.targetId });
-          for (const raceRow of rows) {
-            em.remove(raceRow);
-          }
-          await em.flush();
-          context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
-        });
-      } else {
+    // Conflict-recorded rows carry OPEN conflicts that fail a direct delete
+    // closed (projection_outbox_blocked): resolve them via the public EM
+    // first (system-wins advance over every human field + bounded clear
+    // wait). A cleared resolution IS the terminal proof the delete is
+    // ordered after, so the settle window below is skipped (its landing
+    // proof is obsolete once the fields carry transient system-wins
+    // values). When the wait expires the row is kept and surfaced as
+    // `cleanup-unresolved-conflict` — never deleted through a blocking
+    // conflict. Landed/never-started paths keep the settle/delete below
+    // unchanged. After the settle proof, a bounded outbox-drain wait lets
+    // candidate effects for this binding leave the blocking states (a
+    // `race-winner-verified` row with NO conflict still fails closed while
+    // such an effect is in flight). On expiry the row is kept as
+    // `cleanup-outbox-busy` — never deleted through a blocked outbox (the
+    // #381 protection covers outbox state too). Both waits share the settle
+    // budget via the run deadline.
+    let cleanupUnresolved = false;
+    let cleanupResolved = false;
+    if (result?.reason === "conflict-recorded") {
+      const cleared = await resolveRecordedConflicts(context, {
+        token,
+        targetId: plan.target.targetId,
+        fields: plan.humanFields.map((field) => ({ field, expectedValue: plan.humanValues[field] })),
+        critical,
+      });
+      if (!cleared) {
         cleanupFailures += 1;
+        failureKinds.add("cleanup-unresolved-conflict");
+        cleanupUnresolved = true;
+      } else {
+        cleanupResolved = true;
       }
-    } catch {
-      cleanupFailures += 1;
+    }
+    if (!cleanupUnresolved) {
+      try {
+        // Only delete the dedicated row when the settle window produced
+        // durable/complete terminal evidence (the accepted write landed, or it
+        // was rejected). When the proof times out the row is NOT deleted —
+        // deleting would tombstone the binding under an in-flight inbound
+        // observation (the #381 race) — and the leftover row is surfaced as a
+        // cleanup failure instead of being silently removed. The outbox-drain
+        // wait then holds the delete until the binding's candidate effects
+        // leave the blocking states (bounded, same settle budget); on expiry
+        // the row is kept as `cleanup-outbox-busy`.
+        const settled = cleanupResolved || await settleTerminalBeforeCleanup(
+          context, token, plan, critical, humanStarted, humanAccepted, humanLanded,
+        );
+        const drained = settled ? await waitForBindingOutboxDrain(context, plan.target.targetId) : false;
+        if (!settled) {
+          cleanupFailures += 1;
+          failureKinds.add("cleanup-proof-timeout");
+        } else if (!drained) {
+          cleanupFailures += 1;
+          failureKinds.add("cleanup-outbox-busy");
+        } else {
+          await critical(async () => {
+            const rows = await em.find(token, { id: plan.target.targetId });
+            for (const raceRow of rows) {
+              em.remove(raceRow);
+            }
+            await em.flush();
+            context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
+          });
+        }
+      } catch {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
+      }
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -337,9 +431,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**
@@ -356,14 +456,17 @@ export async function execute({ plan, context }) {
  * Every settle read goes through a FRESH fork of the public EntityManager so
  * the identity-mapped write em never hides an inbound worker update. The
  * delete is allowed only on durable/complete terminal evidence: ALL human
- * fields landed (atomic application) across consecutive reads, or the write
- * never started (a truthful bounded skip). When the proof times out the
- * caller must NOT delete (returning false) — deleting would tombstone the
- * binding under an in-flight observation (the #381 race).
+ * fields landed (atomic application) across consecutive reads, every
+ * non-landed field recorded as an OPEN sync_conflict (a recorded conflict IS
+ * terminal — the ingestion completed as a conflict), or the write never
+ * started (a truthful bounded skip). When the proof times out the caller
+ * must NOT delete (returning false) — deleting would tombstone the binding
+ * under an in-flight observation (the #381 race).
  *
  * @returns {Promise<boolean>} true when it is safe to delete the row
- *   (write never started, or confirmed complete landing); false when the
- *   proof timed out and the row must be left in place.
+ *   (write never started, confirmed complete landing, or every non-landed
+ *   field recorded as an OPEN conflict); false when the proof timed out
+ *   and the row must be left in place.
  */
 async function settleTerminalBeforeCleanup(
   context, token, plan, critical, humanStarted, humanAccepted, humanLanded,
@@ -375,6 +478,14 @@ async function settleTerminalBeforeCleanup(
   // A confirmed complete landing is terminal proof: all human fields landed
   // atomically, so the inbound observation is drained and the delete is safe.
   if (humanLanded === "landed") return true;
+  // Immediate terminal proof before the bounded wait: a recorded OPEN
+  // conflict is DURABLE evidence the ingestion already completed as a
+  // conflict, so the cleanup delete is safe without spending the window
+  // (the observation above may have consumed the whole deadline polling a
+  // row the gate deliberately skips). The loop below still re-checks every
+  // iteration for a conflict that lands DURING the settle window.
+  const immediate = await resolveHumanFieldsOutcome(context, token, plan, critical);
+  if (immediate !== "unresolved") return true;
   // Otherwise the remote outcome is uncertain: an accepted write may still be
   // mid-drain, a STARTED write may have rejected AFTER a remote mutation, or a
   // partial landing may precede later field landing. Require complete
@@ -385,19 +496,28 @@ async function settleTerminalBeforeCleanup(
   );
   let landedStreak = 0;
   while (Date.now() < deadline) {
-    let landed = 0;
+    let landedFields = [];
     await critical(async () => {
       const row = await context.em.fork().findOne(token, { id: plan.target.targetId });
       if (row === null) return;
-      landed = plan.humanFields.filter((field) => row[field] === plan.humanValues[field]).length;
+      landedFields = plan.humanFields.filter((field) => row[field] === plan.humanValues[field]);
     });
     // Require COMPLETE evidence: all human fields landed (atomic
     // application), confirmed across consecutive reads (durable) before the
-    // cleanup delete is ordered. A partial landing is not terminal proof.
-    if (landed === plan.humanFields.length) {
+    // cleanup delete is ordered. A partial landing is not terminal proof —
+    // unless every non-landed field is recorded as an OPEN sync_conflict:
+    // the conflict record is itself durable terminal proof (the ingestion
+    // completed as a conflict), so the delete is ordered after it.
+    if (landedFields.length === plan.humanFields.length) {
       landedStreak += 1;
       if (landedStreak >= SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS) return true;
     } else {
+      const missing = plan.humanFields.filter((field) => !landedFields.includes(field));
+      const recorded = await conflictRecordedForFields(
+        context,
+        missing.map((field) => ({ field, expectedValue: plan.humanValues[field] })),
+      );
+      if (missing.every((field) => recorded.has(field))) return true;
       landedStreak = 0;
     }
     await boundedSleep(SCENARIO_OBSERVE_POLL_MS, deadline);
@@ -408,6 +528,38 @@ async function settleTerminalBeforeCleanup(
   // race). The caller records a cleanup failure so the leftover row is
   // surfaced, never silently removed.
   return false;
+}
+
+/**
+ * Resolves the terminal per-field outcome of the human multi-field edit.
+ *
+ * Reads the dedicated row once (fresh fork, under the shared lock) and
+ * resolves every non-landed field against the OPEN sync_conflict records:
+ *
+ * - "landed": ALL human fields show their human values (a late landing
+ *   the bounded observation may have just missed).
+ * - "conflict-recorded": every non-landed field has an OPEN conflict
+ *   record carrying the exact human value (landed OR conflicted covers
+ *   every field — the consistent outcome).
+ * - "unresolved": some field has NEITHER a row landing NOR a conflict
+ *   record (genuinely lost).
+ *
+ * @returns {Promise<"landed" | "conflict-recorded" | "unresolved">}
+ */
+async function resolveHumanFieldsOutcome(context, token, plan, critical) {
+  let landedFields = [];
+  await critical(async () => {
+    const row = await context.em.fork().findOne(token, { id: plan.target.targetId });
+    if (row === null) return;
+    landedFields = plan.humanFields.filter((field) => row[field] === plan.humanValues[field]);
+  });
+  if (landedFields.length === plan.humanFields.length) return "landed";
+  const missing = plan.humanFields.filter((field) => !landedFields.includes(field));
+  const recorded = await conflictRecordedForFields(
+    context,
+    missing.map((field) => ({ field, expectedValue: plan.humanValues[field] })),
+  );
+  return missing.every((field) => recorded.has(field)) ? "conflict-recorded" : "unresolved";
 }
 
 /**

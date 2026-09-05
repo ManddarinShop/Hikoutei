@@ -7,39 +7,39 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
-import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "../src/domain/model/constants.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
+import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
 import { claimWriterLeaseWithAdapter } from "@hikoutei/ikisaki";
 import { EFFECT_STATUSES } from "@hikoutei/ikisaki";
 import {
   NORMALIZED_CELL_KINDS,
-} from "../src/shared/encoding/constants.js";
-import { ROW_OUTCOMES } from "../src/domain/evaluate/constants.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/encoding/constants.js";
+import { ROW_OUTCOMES } from "@hikoutei/contracts/domain/evaluate/constants.js";
+import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
 import { defineTypedSheetsEntity } from "../src/index.js";
-import { getEntityDescriptor } from "../src/api/entity.js";
-import { createEntityManager } from "../src/api/internalEntityManager.js";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { getEntityDescriptor } from "@hikoutei/sync-engine/api/entity.js";
+import { createEntityManager } from "@hikoutei/sync-engine/api/internalEntityManager.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
-import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
-import { typedSheetsEntityRowBindingId } from "../src/application/orm/mapping/identity.js";
-import { planMappedObservationEntityMutation } from "../src/application/orm/mapping/observationMapping.js";
-import { projectionBaseline } from "../src/application/orm/persistence/projection/projectionEffects.js";
-import { projectionRowTargetId } from "../src/application/orm/persistence/support/helpers.js";
+import { defineTypedSheetsEntityMapping } from "@hikoutei/sync-engine/orm/mapping/entityMapping.js";
+import { typedSheetsEntityRowBindingId } from "@hikoutei/sync-engine/orm/mapping/identity.js";
+import { planMappedObservationEntityMutation } from "@hikoutei/storage/orm/mapping/observationMapping.js";
+import { projectionBaseline } from "@hikoutei/storage/orm/persistence/projection/projectionEffects.js";
+import { projectionRowTargetId } from "@hikoutei/storage/orm/persistence/support/helpers.js";
 import {
   createMappedTypedSheetsFlushCoordinator,
   registerTypedSheetsEntityMappings,
-} from "../src/application/orm/persistence/flush/flushCoordinator.js";
+} from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";
 import {
   createMikroOrmSqliteAdapter,
   type MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { MikroOrmScalarPersistenceProvider } from "../src/adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
-import { persistMappedObservedRowWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
-import { parseSyncProjectionEffectPayload } from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { PersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationWriter.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { MikroOrmScalarPersistenceProvider } from "@hikoutei/storage/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { persistMappedObservedRowWithMikroOrm } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmMappedObservation.js";
+import { parseSyncProjectionEffectPayload } from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { PersistObservedRowInput } from "@hikoutei/storage/storage/state/observation/observationWriter.js";
 
 const OrderSchema = defineEntity({
   name: "MappedTypedSheetsOrder",

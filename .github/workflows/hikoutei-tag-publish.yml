@@ -38,10 +38,15 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: pnpm
           registry-url: https://registry.npmjs.org
 
       - name: Read package version
@@ -83,11 +88,11 @@ jobs:
       - name: Install, verify, and build
         run: |
           set -euo pipefail
-          npm ci
-          npm run typecheck
-          npm run typecheck:test
-          npm test
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm run typecheck:test
+          pnpm test
+          pnpm run build
 
       - name: Publish hikoutei (idempotent)
         shell: bash

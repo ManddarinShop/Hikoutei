@@ -1,7 +1,8 @@
-name: Create develop patch release
+name: Create develop prerelease release
 
-# A develop merge advances the patch version and creates a non-production
-# release tag. The tag publish workflow owns npm publication.
+# A develop merge advances the `X.Y.Z-dev.N` prerelease line and creates a
+# non-production release tag. The tag publish workflow owns npm publication
+# under the `dev` dist-tag; `latest` is reserved for the main/stable channel.
 on:
   push:
     branches:
@@ -9,6 +10,7 @@ on:
     paths-ignore:
       - '.github/**'
       - 'docs/**'
+      - 'website/**'
       - 'README.md'
 
 concurrency:
@@ -20,7 +22,7 @@ permissions:
 
 jobs:
   release:
-    name: Version develop patch release
+    name: Version develop prerelease release
     if: >-
       github.actor != 'github-actions[bot]' &&
       !startsWith(github.event.head_commit.message, 'chore(release): bump develop version')
@@ -44,14 +46,18 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN }}
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Verify the merge commit before release work
         shell: bash
@@ -66,42 +72,98 @@ jobs:
 
       - name: Verify the current package
         run: |
-          npm run typecheck
-          npm run typecheck:test
-          npm test
-          npm run build
+          pnpm run typecheck
+          pnpm run typecheck:test
+          pnpm test
+          pnpm run build
 
-      - name: Calculate and apply the patch version
+      - name: Calculate and apply the dev prerelease version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          base_version="$(node -p "require('./package.json').version")"
-          # Never let the develop patch line trail the published npm `latest`
-          # dist-tag. A per-PR recovery publish (hikoutei-tag-publish) can
-          # advance `latest` independently of the develop version counter, which
-          # would otherwise make a develop release that is numerically below the
-          # already-published latest fail its monotonic `latest` check. Base the
-          # next patch on whichever of the local manifest and the published
-          # latest is newer so a develop merge always moves the channel forward.
-          published_latest="$(node scripts/ci/read-npm-dist-tag.mjs \
-            --package=hikoutei --tag=latest 2>/dev/null || true)"
-          effective_base="$base_version"
-          if [[ -n "$published_latest" ]] && node -e '
-            const a = process.argv[1].split(".").map(Number);
-            const b = process.argv[2].split(".").map(Number);
-            for (let i = 0; i < 3; i++) {
-              if (a[i] > b[i]) process.exit(0);
-              if (a[i] < b[i]) process.exit(1);
-            }
-            process.exit(1);
-          ' "$published_latest" "$base_version"; then
-            effective_base="$published_latest"
+          # The committed manifest may already carry a `-dev.N` prerelease;
+          # the base triple is the numeric prefix of that version.
+          base_version="$(node -p "require('./package.json').version.replace(/-dev\\.[0-9]+$/, '')")"
+          # Never let the develop base line trail the published npm `latest`
+          # dist-tag. A stable release or a per-PR recovery publish
+          # (hikoutei-tag-publish) can advance `latest` independently of the
+          # develop version counter, which would otherwise make a develop
+          # release that is numerically below the already-published latest
+          # fail its monotonic channel check. Base the next prerelease on
+          # whichever of the local manifest and the published latest is newer
+          # so a develop merge always moves its channel forward.
+          # Read the published `latest` fail-closed: the helper exits 0 with
+          # the version (found) or an empty value (tag/package missing) and
+          # exits non-zero on any network/auth/malformed-output failure. A
+          # registry failure must abort the release instead of silently
+          # falling back to a base that could re-publish a stale dev counter.
+          if ! published_latest="$(node scripts/ci/read-npm-dist-tag.mjs \
+            --package=hikoutei --tag=latest)"; then
+            echo "Unable to read the npm 'latest' dist-tag; aborting instead of risking a stale prerelease." >&2
+            exit 1
           fi
-          next_version="$(node scripts/ci/release-version.mjs \
-            --base-version="$effective_base" \
-            --bump=patch)"
+          effective_base="$base_version"
+          # Base the next prerelease on whichever of the local base and the
+          # published latest is newer. Comparison goes through the
+          # unit-tested BigInt comparator (semver-monotonic --monotonic: exit
+          # 0 forward/equal, exit 1 backward, exit 3 invalid input) instead of
+          # an inline Number() compare that loses precision for components
+          # >= 2^53. The codes must be branched separately: backward is the
+          # ordinary "local base is ahead" outcome that keeps base_version,
+          # but invalid input is a malformed version that must abort the
+          # release rather than silently keep a base built from garbage.
+          if [[ -n "$published_latest" ]]; then
+            monotonic_status=0
+            node scripts/ci/semver-monotonic.mjs \
+              --monotonic --current="$base_version" --target="$published_latest" \
+              >/dev/null 2>&1 || monotonic_status=$?
+            case "$monotonic_status" in
+              0)
+                # Forward/equal: the published 'latest' is the newer base.
+                effective_base="$published_latest"
+                ;;
+              1)
+                # Backward: the published 'latest' is behind the local base;
+                # keeping base_version is the intended fallback.
+                ;;
+              *)
+                # Invalid input (3) or an unexpected/unrecognized status must
+                # never silently degrade into the backward fallback.
+                echo "Malformed version input or unexpected monotonic-probe status ($monotonic_status) while comparing local base against the published 'latest' tag; aborting." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          # The dev channel advances via the `-dev.N` counter, not a patch
+          # bump: read the current `dev` dist-tag and increment within the
+          # base triple (a missing dev tag or a tag on another base restarts
+          # the counter at 1). Helpers live in scripts/ci/semver-monotonic.mjs
+          # so the rules are unit-tested instead of re-implemented inline.
+          # Same fail-closed contract as the `latest` read above: `found`
+          # yields the version, `missing` yields empty (first dev write), and
+          # any registry failure aborts instead of restarting the counter.
+          if ! dev_current="$(node scripts/ci/read-npm-dist-tag.mjs \
+            --package=hikoutei --tag=dev)"; then
+            echo "Unable to read the npm 'dev' dist-tag; aborting instead of restarting the dev counter at a stale value." >&2
+            exit 1
+          fi
+          next_version="$(node scripts/ci/semver-monotonic.mjs \
+            --next-dev --base-version="$effective_base" --current-dev-tag="$dev_current")"
           npm version "$next_version" --no-git-tag-version
+          # Pin the cli workspace dependency to the new root release version
+          # so the package can be resolved by npm (which rejects workspace:*
+          # protocol). The cli always lags the root by one release; updating
+          # it here keeps the pin in lockstep (P8-D1).
+          node -e '
+            const fs = require("node:fs");
+            const next = process.argv[1];
+            for (const rel of ["./packages/cli/package.json", "./packages/mcp/package.json"]) {
+              const pkg = JSON.parse(fs.readFileSync(rel, "utf8"));
+              pkg.dependencies["hikoutei"] = next;
+              fs.writeFileSync(rel, JSON.stringify(pkg, null, 2) + "\n");
+            }
+          ' "$next_version"
           # Bump the @hikoutei/ikisaki kernel patch version only when its
           # source or manifest changed since the last develop release, and keep
           # the root dependency in lockstep so hikoutei never references a
@@ -121,13 +183,25 @@ jobs:
             node -e '
               const fs = require("node:fs");
               const next = process.argv[1];
-              const pkgPath = "./package.json";
-              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-              pkg.dependencies["@hikoutei/ikisaki"] = next;
-              fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+              // Root + storage + sync-engine all pin @hikoutei/ikisaki in
+              // lockstep: any consumer that lags will resolve the stale
+              // registry tarball which may lack newly-exported symbols.
+              for (const rel of ["./package.json", "./packages/storage/package.json", "./packages/sync-engine/package.json"]) {
+                const pkg = JSON.parse(fs.readFileSync(rel, "utf8"));
+                pkg.dependencies["@hikoutei/ikisaki"] = next;
+                fs.writeFileSync(rel, JSON.stringify(pkg, null, 2) + "\n");
+              }
             ' "$ikisaki_next_version"
-            npm install --package-lock-only --no-audit --no-fund --ignore-scripts
           fi
+          # Regenerate lockfiles after all manifest changes (root, cli pin,
+          # and optional ikisaki bump) are settled.
+          npm install --package-lock-only --no-audit --no-fund --ignore-scripts
+          # Dual-lockfile transition (P8-D1): package-lock.json is kept until
+          # every consumer of it is flipped; pnpm-lock.yaml is the pnpm
+          # source of truth and must move with the version pins so a
+          # later `pnpm install --frozen-lockfile` still resolves the exact
+          # pins to the workspace package (linkWorkspacePackages: true).
+          pnpm install --lockfile-only
           node -e '
             const expected = process.argv[1];
             const pkg = require("./package.json");
@@ -145,9 +219,12 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only | sort)"
-          expected=$'package-lock.json\npackage.json'
+          expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            expected=$'package-lock.json\npackage.json\npackages/ikisaki/package.json'
+            # packages/storage and packages/sync-engine are included because
+            # their @hikoutei/ikisaki pins must stay in lockstep with the
+            # root dep (same pattern as cli/mcp hikoutei pins; #434/#435).
+            expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/ikisaki/package.json\npackages/mcp/package.json\npackages/storage/package.json\npackages/sync-engine/package.json\npnpm-lock.yaml'
           fi
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
@@ -163,9 +240,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
+          git add package.json package-lock.json packages/cli/package.json packages/mcp/package.json pnpm-lock.yaml
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            git add packages/ikisaki/package.json
+            git add packages/ikisaki/package.json packages/storage/package.json packages/sync-engine/package.json
           fi
           git commit -m "chore(release): bump develop version to $RELEASE_VERSION"
           git tag -a "develop-v$RELEASE_VERSION" \

@@ -15,7 +15,7 @@ import type {
   SqlParameter,
   SqlStorageAdapter,
   SqlStorageContext,
-} from "../../src/sql.js";
+} from "../../src/sql/sql.js";
 
 /**
  * Loads the `node:sqlite` builtin outside the bundler's module graph.
@@ -35,6 +35,12 @@ const { DatabaseSync } = nodeSqlite;
 /** Adapter-owned SQLite fixture with the kernel tables applied. */
 export class NodeSqliteTestAdapter implements SqlStorageAdapter {
   private readonly db: InstanceType<typeof DatabaseSync>;
+  // A single shared connection cannot nest BEGIN blocks, so concurrent
+  // worker paths (maxConcurrentUnits > 1) serialize their write
+  // transactions here. This mirrors the WAL-mode real deployment where
+  // overlapping short transactions queue on the writer lock instead of
+  // failing; long remote dispatch never sits inside a transaction.
+  private transactionTail: Promise<unknown> = Promise.resolve();
 
   constructor() {
     this.db = new DatabaseSync(":memory:", {
@@ -54,15 +60,20 @@ export class NodeSqliteTestAdapter implements SqlStorageAdapter {
 
   /** Runs one atomic write transaction; rolls all callback work back on failure. */
   async transaction<T>(operation: (context: SqlStorageContext) => Promise<T>): Promise<T> {
-    this.db.exec("BEGIN");
-    try {
-      const value = await operation({ sql: new NodeSqliteExecutor(this.db) });
-      this.db.exec("COMMIT");
-      return value;
-    } catch (error: unknown) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    const run = async (): Promise<T> => {
+      this.db.exec("BEGIN");
+      try {
+        const value = await operation({ sql: new NodeSqliteExecutor(this.db) });
+        this.db.exec("COMMIT");
+        return value;
+      } catch (error: unknown) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    };
+    const result = this.transactionTail.then(run, run);
+    this.transactionTail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   /** Closes the underlying connection. */

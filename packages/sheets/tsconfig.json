@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // P8-D2 phase 2: the provider keeps two internal-log imports against the
+    // sync engine's shared/observability modules, mapped to SOURCE like the
+    // storage package's engine map (no build-order dependency). rootDir
+    // spans the repo for that reached-in source emission, which is never
+    // bundled or shipped.
+    "rootDir": "../..",
+    "outDir": "dist",
+    "baseUrl": "../..",
+    "paths": {
+      "@hikoutei/sync-engine/*": ["packages/sync-engine/src/*"],
+      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/sheets/src/*"]
+    },
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

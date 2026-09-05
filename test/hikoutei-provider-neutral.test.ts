@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { defineTypedSheetsEntity, HIKOUTEI_ERROR_CODES } from "../src/index.js";
-import { getEntityDescriptor } from "../src/api/entity.js";
-import { createEntityManager } from "../src/api/internalEntityManager.js";
+import { getEntityDescriptor } from "@hikoutei/sync-engine/api/entity.js";
+import { createEntityManager } from "@hikoutei/sync-engine/api/internalEntityManager.js";
 import type {
   ScalarEntityCountQuery,
   ScalarEntityDelete,
@@ -15,7 +15,7 @@ import type {
   ScalarEntityTransaction,
   ScalarEntityUpdate,
   ScalarEntityValue,
-} from "../src/adapter/persistence/contracts/scalar.js";
+} from "@hikoutei/contracts/storage/scalar.js";
 
 /**
  * A fully in-memory provider-neutral persistence provider.

@@ -11,32 +11,32 @@ import {
   FIELD_OWNERSHIPS,
   QUARANTINE_REASONS,
   ROW_BINDING_STATES,
-} from "../src/domain/model/constants.js";
-import { stableHash } from "../src/shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
-import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { defineTypedSheetsEntityMapping } from "@hikoutei/sync-engine/orm/mapping/entityMapping.js";
 import {
   registerTypedSheetsEntityMappings,
-} from "../src/application/orm/persistence/flush/flushCoordinator.js";
+} from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";
 import {
   MAPPED_USER_INPUT_INVALID_REASONS,
   inspectSnapshot,
   type PreparedRow,
-} from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
-import { pollMappedUserInputWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
-import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import { createMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingInspection.js";
+import { pollMappedUserInputWithMikroOrm } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import type { MappedPollingState } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
+import { createMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../src/application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshots,
   type ReadSyncSnapshotRequest,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const ProbeSchema = defineEntity({
@@ -181,6 +181,7 @@ function state(): MappedPollingState {
         }],
       ])],
     ]),
+    pendingDeliveryBindingIds: new Set<string>(),
   };
 }
 

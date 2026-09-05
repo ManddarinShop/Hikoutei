@@ -9,7 +9,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { RequestStartLimiter } from "../src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import {
+  RATE_LIMIT_OPTIONS_ERROR_CODES,
+  RateLimitOptionsError,
+  RequestStartLimiter,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
 
 describe("RequestStartLimiter", () => {
   it("waits only the remaining interval since the previous start", async () => {
@@ -180,5 +184,36 @@ describe("RequestStartLimiter", () => {
     await expect(bounded.waitForSlot(Number.NaN)).rejects.toThrow(RangeError);
     // The validation never touches the horizon.
     expect(bounded.lastStart()).toBeUndefined();
+  });
+
+  it("throws RateLimitOptionsError with INTERVAL_NON_NEGATIVE_REQUIRED for invalid constructor intervalMs", () => {
+    expect.assertions(3);
+    try {
+      new RequestStartLimiter({ intervalMs: -1 });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(RateLimitOptionsError);
+      expect((error as RateLimitOptionsError).code).toBe(
+        RATE_LIMIT_OPTIONS_ERROR_CODES.INTERVAL_NON_NEGATIVE_REQUIRED,
+      );
+      expect((error as Error).message).toBe(
+        "request-start interval must be a non-negative safe integer",
+      );
+    }
+  });
+
+  it("throws RateLimitOptionsError with MAX_WAIT_NON_NEGATIVE_REQUIRED for invalid maxWaitMs", async () => {
+    expect.assertions(3);
+    const limiter = new RequestStartLimiter({ intervalMs: 1_100 });
+    try {
+      await limiter.waitForSlot(-1);
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(RateLimitOptionsError);
+      expect((error as RateLimitOptionsError).code).toBe(
+        RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED,
+      );
+      expect((error as Error).message).toBe(
+        "maximum request-start wait must be a non-negative safe integer",
+      );
+    }
   });
 });

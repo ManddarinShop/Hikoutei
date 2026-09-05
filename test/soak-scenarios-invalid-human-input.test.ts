@@ -13,6 +13,7 @@ import * as invalidHumanInput from "../scripts/ci/local-soak/scenarios/invalidHu
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { FakeEm, liveContext } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
 // terminate quickly and deterministically (a real poll would be ~1s each).
@@ -47,44 +48,6 @@ interface PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-  findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {}
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
-    if (this.findOneOverride !== undefined) {
-      const overridden = this.findOneOverride(filter.id);
-      if (overridden !== null && overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? null : row;
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** A fake direct-Sheet client backed by in-memory tab state. */
 class FakeClient {
@@ -92,6 +55,10 @@ class FakeClient {
   mutateCalls: { identity: string; headerName: string; value: string }[] = [];
   /** When set, the 1-based mutate call at this index throws. */
   throwOnMutateCall: number | undefined;
+  /** Stable code attached to the thrown mutate error (when set). */
+  throwOnMutateCode: string | undefined;
+  /** When set, every readTabRows call throws this error (a read failure). */
+  throwOnRead: Error | undefined;
   /** When true, mutateInputCell records but does not write the cell. */
   noOpMutate = false;
 
@@ -106,6 +73,7 @@ class FakeClient {
   }
 
   async readTabRows(_spreadsheetId: string, tabName: string): Promise<unknown[][]> {
+    if (this.throwOnRead !== undefined) throw this.throwOnRead;
     const tab = this.tabs.get(tabName);
     if (tab === undefined) return [];
     return [tab.headers, ...[...tab.rows.values()].map((row) => [...row])];
@@ -123,7 +91,9 @@ class FakeClient {
       value: input.value,
     });
     if (this.throwOnMutateCall !== undefined && this.mutateCalls.length === this.throwOnMutateCall) {
-      throw new Error("fake mutate failure");
+      throw this.throwOnMutateCode === undefined
+        ? new Error("fake mutate failure")
+        : Object.assign(new Error("fake mutate failure"), { code: this.throwOnMutateCode });
     }
     if (this.noOpMutate) return { rowNumber: 1 };
     const tab = this.tabs.get(input.tabName);
@@ -135,18 +105,6 @@ class FakeClient {
   }
 }
 
-/** Builds a live execution context wired to the fake seams. */
-function liveContext(plan: PlanLike, client: FakeClient, em: FakeEm, deadlineAtMs?: number): Record<string, unknown> {
-  return {
-    seed: 1,
-    cycle: 1,
-    activeEntities: SOAK_ENTITY_ORDER,
-    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
-    em,
-    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
-    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
-  };
-}
 
 /** Registers the dedicated row in a fake _Input tab at a projected value. */
 function projectRow(
@@ -324,6 +282,48 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(em.rows()).toEqual([]);
   });
 
+  it("records an identity-shifted invalid-write rejection as a transient skip, not a failure", async () => {
+    // The direct client's identity-shift guard rejects the invalid write
+    // with the stable `identity_shifted` class when a CONCURRENT actor
+    // shifted the tab mid-write. The seam proved no silent success, so the
+    // scenario records a truthful transient skip (never a failure); the
+    // guaranteed restore/cleanup still run.
+    const plan = buildPlan(7);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectRow(client, plan);
+    client.throwOnMutateCall = 1;
+    client.throwOnMutateCode = "identity_shifted";
+    const result = await scenarioInput.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
+    // The restore was still attempted (write was attempted) and the
+    // dedicated authority row is removed in cleanup.
+    expect(client.mutateCalls.length).toBe(2);
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("records a readTabRows rejection as failed, never a transient skip", async () => {
+    // Narrowed transient scope: ONLY the direct `mutateInputCell`
+    // rejection may classify as `identity-shifted-transient`. A read
+    // rejection — even one duck-typed with `code: "identity_shifted"` —
+    // rethrows to the normal failure path.
+    const plan = buildPlan(7);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectRow(client, plan);
+    client.throwOnRead = Object.assign(new Error("fake read failure"), {
+      code: "identity_shifted",
+    });
+    const result = await scenarioInput.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
+    // The dedicated authority row is still removed in cleanup.
+    expect(em.rows()).toEqual([]);
+  });
+
   it("guarantees independent cleanup: a failed cell restore still removes the row", async () => {
     const plan = buildPlan(3);
     const client = new FakeClient();
@@ -338,5 +338,39 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(result.cleanupFailures).toBe(1);
     expect(result.failures).toBe(1);
     expect(em.rows()).toEqual([]);
+  });
+
+  it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
+    // The invalid write is provably rejected (an ok verdict), but a
+    // candidate effect for the binding is stuck in flight past the bounded
+    // drain wait. The row must be KEPT — never deleted through a blocked
+    // outbox — with the distinct stable kind as a real failure.
+    const plan = buildPlan(7);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    // Mirror the provable-rejection ok test: persist projects the
+    // authoritative value so the rejection observation settles.
+    const spec = (plan as unknown as { fieldSpec: { type: string } }).fieldSpec;
+    const originalPersist = em.persist.bind(em);
+    em.persist = (entity: Record<string, unknown>) => {
+      const projected = toCellStringForTest(entity[plan.target.field], spec);
+      client.ensureTab(`${plan.target.entityName}_Input`, ["id", plan.target.field]);
+      client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, {
+        id: plan.target.targetId,
+        [plan.target.field]: projected,
+      });
+      originalPersist(entity);
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 400),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenarioInput.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("recovery-not-observed");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    expect(em.rows().length).toBe(1);
   });
 });

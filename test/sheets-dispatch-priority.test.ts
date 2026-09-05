@@ -11,15 +11,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "../src/shared/state/constants.js";
+import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import {
   sheetsDispatchPriorityFor,
   SYNC_DISPATCH_PRIORITIES,
-} from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+} from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   requireSemanticString,
   type PendingEffect,

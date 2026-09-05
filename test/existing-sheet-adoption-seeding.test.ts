@@ -23,42 +23,42 @@ import {
 import {
   FIELD_OWNERSHIPS,
   ROW_BINDING_STATES,
-} from "../src/domain/model/constants.js";
-import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
-import { stableHash } from "../src/shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { presentValue } from "../src/shared/state/constructors.js";
-import type { Presence } from "../src/shared/state/types.js";
-import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { presentValue } from "@hikoutei/contracts/state/constructors.js";
+import type { Presence } from "@hikoutei/contracts/state/types.js";
+import { defineTypedSheetsEntityMapping } from "@hikoutei/sync-engine/orm/mapping/entityMapping.js";
 import {
   registerTypedSheetsEntityMappings,
-} from "../src/application/orm/persistence/flush/flushCoordinator.js";
-import { pollMappedUserInputWithMikroOrm } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
-import { createMikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+} from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";
+import { pollMappedUserInputWithMikroOrm } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
+import { createMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
   SYNC_PROTOCOL_VERSIONS,
-} from "../src/application/sync/sheetsContract/constants.js";
+} from "@hikoutei/contracts/sheets/constants.js";
 import {
   CELL_OBSERVATION_KINDS,
-} from "../src/shared/encoding/constants.js";
-import type { InternalSyncProvider } from "../src/application/sync/service/serviceOptions.js";
+} from "@hikoutei/contracts/encoding/constants.js";
+import type { InternalSyncProvider } from "@hikoutei/sync-engine/sync/service/serviceOptions.js";
 import {
   computeSyncVisibleHash,
   observeSyncSnapshots,
   type ReadSyncSnapshotRequest,
   type SyncObservedSnapshot,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   completeExistingSheetAdoption,
   extractAdoptedSeedRows,
   seedAdoptedEntityRows,
-} from "../src/application/sync/service/adopt/adoptionSeeding.js";
+} from "@hikoutei/sync-engine/sync/service/adopt/adoptionSeeding.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
-} from "../src/application/sync/service/errors.js";
+} from "@hikoutei/sync-engine/sync/service/errors.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const AdoptProbeSchema = defineEntity({

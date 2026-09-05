@@ -132,7 +132,7 @@ treat those names as retired. `src/cli/` is active and owns the setup tool.
 
 ## Development Commands
 
-- Install dependencies: `npm install` (or `npm ci` for a clean install)
+- Install dependencies: `pnpm install --frozen-lockfile` (package management is pnpm, declared in `pnpm-workspace.yaml` + the `packageManager` field; `pnpm publish` is NOT used yet — publishing stays on npm until P8-DD)
 - Run unit tests: `npm test`
 - Run production typecheck: `npm run typecheck`
 - Run test typecheck: `npm run typecheck:test`
@@ -265,6 +265,9 @@ npm run typecheck
 npm run typecheck:test
 npm run build
 ```
+
+(Install with `pnpm install --frozen-lockfile` first; run scripts stay on
+works-everywhere `npm run`.)
 
 When changing Google Sheets integration behavior, add or update focused tests,
 but do not require live Google credentials for the normal test suite.

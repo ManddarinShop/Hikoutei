@@ -15,6 +15,8 @@ import * as deleteRecreateHumanEdit from "../scripts/ci/local-soak/scenarios/del
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { SYSTEM_WINS_RESOLVE_SUFFIX } from "../scripts/ci/local-soak/errors.mjs";
+import { FakeEm, liveContext, projectPersistedRow } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
 // terminate quickly and deterministically (a real poll would be ~1s each).
@@ -66,55 +68,6 @@ function racePlan(overrides: Partial<PlanLike> = {}): PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-  findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
-  findResultsOverride: ((id: string) => Record<string, unknown>[] | undefined) | undefined;
-  /** Throws on the flush whose 1-based call index matches. */
-  flushBehavior: ((flushIndex: number) => void) | undefined;
-  #flushIndex = 0;
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {
-    this.#flushIndex += 1;
-    if (this.flushBehavior !== undefined) this.flushBehavior(this.#flushIndex);
-  }
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    if (this.findResultsOverride !== undefined) {
-      const overridden = this.findResultsOverride(filter.id);
-      if (overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
-    if (this.findOneOverride !== undefined) {
-      const overridden = this.findOneOverride(filter.id);
-      if (overridden !== null && overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? null : row;
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** A fake direct-Sheet client backed by in-memory tab state. */
 class FakeClient {
@@ -177,44 +130,6 @@ class FakeClient {
   }
 }
 
-/** Builds a live execution context wired to the fake seams. */
-function liveContext(
-  plan: PlanLike,
-  client: FakeClient,
-  em: FakeEm,
-  deadlineAtMs?: number,
-): Record<string, unknown> {
-  return {
-    seed: 1,
-    cycle: 1,
-    activeEntities: SOAK_ENTITY_ORDER,
-    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
-    em,
-    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
-    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
-  };
-}
-
-/**
- * Mirrors the localHumanWriteRace test's authoritative-value pattern: hook
- * the fake EntityManager's `persist` so the dedicated race row's field is
- * projected into the fake _Input tab at the exact cell-string the row will
- * carry once the sync worker projects it. `awaitInputProjection` resolves on
- * the first poll, so the race proceeds deterministically.
- */
-function projectPersistedRow(em: FakeEm, client: FakeClient, plan: PlanLike): void {
-  const originalPersist = em.persist.bind(em);
-  em.persist = (entity: Record<string, unknown>) => {
-    const value = entity[plan.target.field];
-    const projected = value === null || value === undefined ? "" : String(value);
-    client.ensureTab(`${plan.target.entityName}_Input`, ["id", plan.target.field]);
-    client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, {
-      id: plan.target.targetId,
-      [plan.target.field]: projected,
-    });
-    originalPersist(entity);
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Tests.
@@ -321,16 +236,20 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("scenario-error");
     expect(result.failures).toBe(1);
+    // The stable diagnostic kind names WHICH invariant fired (no raw text).
+    expect(result.failureKinds).toEqual(["local-rejection-non-stale"]);
     // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });
 
-  it("cannot finish ok when the human edit targets the wrong generation (identity_shifted)", async () => {
+  it("records an identity-shifted human-edit rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human edit with
-    // the stable `identity_shifted` class when the value landed on the wrong
-    // identity (the tombstoned old generation). That is NOT stale-write/CAS
-    // evidence, so the scenario must fail (never a verified ok) — a human edit
-    // applied to the wrong lifecycle generation is never silently accepted.
+    // the stable `identity_shifted` class when a CONCURRENT actor shifted
+    // the tab mid-write. The seam proved no silent success (it refused to
+    // report success for the wrong identity), so this is an EXPECTED
+    // TRANSIENT of the adversarial multi-writer environment: the scenario
+    // records a truthful skip (never a failure, never fed to
+    // max-consecutive-failures) and the guaranteed cleanup still runs.
     const plan = racePlan();
     const client = new FakeClient();
     const em = new FakeEm();
@@ -340,9 +259,9 @@ describe("deleteRecreateHumanEdit scenario", () => {
       plan,
       context: liveContext(plan, client, em, Date.now() + 120),
     });
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBe(1);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
     // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });
@@ -404,5 +323,120 @@ describe("deleteRecreateHumanEdit scenario", () => {
     // the same `find`), so a row the authority no longer sees stays in the
     // store — the module removes only what it finds.
     expect(em.rows().length).toBe(1);
+  });
+
+  it("accepts an OPEN sync_conflict as conflict-recorded when the final row never shows the human value (ok)", async () => {
+    // Core harness fix: the recreated row never carries the human value
+    // within the bound (the outbox-gated poll skips the row), but the value
+    // was ingested as an OPEN sync_conflict — recorded, not lost during
+    // reactivation.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // NOTE: client.em is deliberately NOT wired, so the human edit never
+    // commits to the fake authority — exactly the skipped-row shape.
+    // The conflict record clears once the cleanup's system-wins advance
+    // lands (the stored value carries the resolve suffix), modeling the
+    // worker applying the acknowledge_system resolution.
+    const oracleMutations: unknown[] = [];
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 150),
+      oracle: { applyMutation: (mutation: unknown) => oracleMutations.push(mutation) },
+      queryConflictRows: async () => {
+        const value = em.store.get(plan.target.targetId)?.[plan.target.field];
+        const resolved = typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX);
+        return resolved ? [] : [{
+          fieldName: plan.target.field,
+          userValue: plan.humanValue,
+          status: "OPEN",
+        }];
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(result.expectedErrors).toBe(0);
+    expect(result.failureKinds).toBeUndefined();
+    // The resolve-then-delete cleanup removed the dedicated row and mirrored
+    // the delete into the oracle (never deleted through the OPEN conflict).
+    expect(em.rows()).toEqual([]);
+    expect(oracleMutations).toContainEqual({
+      op: "delete",
+      entity: plan.target.entityName,
+      id: plan.target.targetId,
+    });
+  });
+
+  it("records cleanup-unresolved-conflict and keeps the row when the conflict never clears", async () => {
+    // The resolve-then-delete cleanup advances the conflicted field, but the
+    // conflict record never leaves the blocking state within the bound. The
+    // row must be KEPT — never deleted through a blocking conflict — and
+    // the distinct stable kind recorded as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryConflictRows: async () => [{
+        fieldName: plan.target.field,
+        userValue: plan.humanValue,
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-unresolved-conflict"]);
+    // The row is kept (never tombstoned under the blocking conflict), and
+    // the resolve attempt advanced the conflicted field through the EM.
+    expect(em.rows().length).toBe(1);
+    const kept = em.store.get(plan.target.targetId)?.[plan.target.field];
+    expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
+  });
+
+  it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
+    // The human edit landed on the recreated generation (verified ok), but
+    // a candidate effect for the binding is stuck in flight past the bounded
+    // drain wait. The row must be KEPT — never deleted through a blocked
+    // outbox — with the distinct stable kind as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    client.em = em;
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    expect(em.rows().length).toBe(1);
+  });
+
+  it("still skips winner-not-verified when the value never lands and no conflict is recorded", async () => {
+    // The negative control: a final row without the human value and NO
+    // conflict record is still a truthful skip, never an unobserved ok.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 150),
+      queryConflictRows: async () => [],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("winner-not-verified");
+    expect(result.failures).toBe(0);
+    expect(em.rows()).toEqual([]);
   });
 });

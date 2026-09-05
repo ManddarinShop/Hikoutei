@@ -10,6 +10,7 @@
  * uses the direct-Sheet seam, so it runs only in live mode.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { sleep } from "../timing.mjs";
@@ -83,6 +84,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let failures = 0;
   let cleanupFailures = 0;
+  // Stable diagnostic kinds for the row-count invariant check (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   try {
     for (let index = 0; index < plan.iterations; index += 1) {
@@ -112,6 +116,8 @@ export async function execute({ plan, context }) {
     // exactly one final row.
     const rows = await em.find(token, { id: plan.raceId });
     failures = rows.length !== 1 ? 1 : 0;
+    if (rows.length === 0) failureKinds.add("row-missing");
+    else if (rows.length > 1) failureKinds.add("duplicate-rows");
     result = {
       status: failures > 0 ? "failed" : "ok",
       expectedErrors: 0,
@@ -119,7 +125,13 @@ export async function execute({ plan, context }) {
       reason: "projection-residue-deferred",
     };
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated race row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the loop or
@@ -136,8 +148,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -145,9 +159,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

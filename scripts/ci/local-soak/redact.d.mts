@@ -48,6 +48,15 @@ export function isKnownStatusClass(candidate: unknown): boolean;
 /** Maps a candidate reason category to the artifact-safe value. */
 export function sanitizeReason(candidate: unknown): string;
 
+/** Fixed allowlist of stable internal scenario failure kinds. */
+export const KNOWN_FAILURE_KINDS: readonly string[];
+
+/** Maps a candidate failure kind to the artifact-safe value (`unknown`). */
+export function sanitizeFailureKind(candidate: unknown): string;
+
+/** Maps a candidate stable error tag to the artifact-safe value. */
+export function sanitizeErrorTag(candidate: unknown): string;
+
 /** Maps a candidate table/entity name to the artifact-safe value. */
 export function sanitizeTableName(candidate: unknown): string;
 

@@ -23,6 +23,7 @@
  * scenario hunts and is ALWAYS a failure.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { conflictRecordedForFields, resolveRecordedConflicts, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -110,7 +111,8 @@ export function isIdentityShiftedRejection(error) {
  * - edit rejected otherwise -> failure;
  * - edit resolved -> the value MUST be observable on the intended identity
  *   row (scenario-level proof that a "successful" edit never wrote to the
- *   wrong identity — the #364 invariant); a missing/wrong cell is a failure;
+ *   wrong identity — the #364 invariant); a missing/wrong cell is a failure
+ *   unless the value was ingested as an OPEN sync_conflict (recorded, ok);
  * - shifter delete rejected with `identity_shifted` -> expected (its own
  *   guard failed closed); rejected otherwise -> failure.
  *
@@ -121,19 +123,49 @@ export function isIdentityShiftedRejection(error) {
 export async function classifyRaceOutcome({ plan, editResult, shiftResult, client, spreadsheetId, tabName, context }) {
   let expectedErrors = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
+  // Conflict-recorded outcome: a resolved edit whose value is not observable
+  // on the intended Sheet identity may still have been ingested as an OPEN
+  // sync_conflict after an in-flight outbox cycle — recorded, not written to
+  // the wrong identity. Only the not-landed outcome consults the records.
+  let conflictRecorded = false;
   if (editResult.status === "rejected") {
     if (isIdentityShiftedRejection(editResult.reason)) expectedErrors += 1;
-    else failures += 1;
+    else {
+      failures += 1;
+      failureKinds.add("edit-rejected-unexpected");
+    }
   } else {
     const landed = await verifyEditLanded(client, spreadsheetId, tabName, plan, context);
-    if (!landed) failures += 1;
+    if (!landed) {
+      const recorded = await conflictRecordedForFields(context, [
+        { field: plan.target.field, expectedValue: plan.humanValue },
+      ]);
+      if (recorded.has(plan.target.field)) {
+        conflictRecorded = true;
+      } else {
+        failures += 1;
+        failureKinds.add("edit-not-landed");
+      }
+    }
   }
   if (shiftResult.status === "rejected") {
     if (isIdentityShiftedRejection(shiftResult.reason)) expectedErrors += 1;
-    else failures += 1;
+    else {
+      failures += 1;
+      failureKinds.add("shifter-rejected-unexpected");
+    }
+  }
+  const kinds = [...failureKinds].sort();
+  // A conflict-recorded edit with no other failure is the recorded (not
+  // wrong-identity) outcome: ok with an empty failureKinds channel.
+  if (conflictRecorded && failures === 0) {
+    return { status: "ok", expectedErrors, failures: 0, reason: "conflict-recorded" };
   }
   return failures > 0
-    ? { status: "failed", expectedErrors, failures, reason: "scenario-error" }
+    ? { status: "failed", expectedErrors, failures, reason: "scenario-error", failureKinds: kinds }
     : { status: "ok", expectedErrors, failures: 0, reason: "guard-invariant-verified" };
 }
 
@@ -168,6 +200,14 @@ export async function execute({ plan, context }) {
     ? action()
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
+  // True when the conflict-recorded cleanup's bounded resolve wait expired:
+  // both dedicated rows are kept and the merge below surfaces the distinct
+  // `cleanup-unresolved-conflict` kind instead of `cleanup-delete-failed`.
+  let cleanupUnresolved = false;
+  // True when the bounded outbox-drain wait expired with candidate effects
+  // for either dedicated binding still in flight: both rows are kept and
+  // the merge below surfaces `cleanup-outbox-busy`.
+  let cleanupOutboxBusy = false;
   let result;
   try {
     // DEDICATED shifter row FIRST so its projection appends ABOVE the race
@@ -237,28 +277,84 @@ export async function execute({ plan, context }) {
       }
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // GUARANTEED cleanup: remove BOTH dedicated rows (race + shifter) and
     // mirror the deletes so SQLite and the oracle stay symmetric even when
     // the race or an observation failed. A cleanup failure is recorded
     // separately (cleanupFailures) and never masks the original failure.
-    try {
-      await critical(async () => {
-        const ids = [plan.target.targetId, plan.target.shifterId];
-        for (const id of ids) {
-          const rows = await em.find(token, { id });
-          for (const row of rows) em.remove(row);
-        }
-        await em.flush();
-        for (const id of ids) {
-          context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id });
-        }
+    //
+    // A conflict-recorded race row carries an OPEN conflict that fails a
+    // direct delete closed (projection_outbox_blocked): resolve the race
+    // row via the public EM first (the shifter row has no conflict), and
+    // only then remove both rows. When the wait expires both rows are kept
+    // and surfaced as `cleanup-unresolved-conflict` — never deleted
+    // through a blocking conflict. Before the delete, a bounded
+    // outbox-drain wait lets candidate effects for BOTH bindings leave the
+    // blocking states (a verified row with NO conflict still fails closed
+    // while such an effect is in flight). On expiry both rows are kept as
+    // `cleanup-outbox-busy` — never deleted through a blocked outbox (the
+    // #381 protection covers outbox state too). Both waits share the settle
+    // budget via the run deadline.
+    if (result?.reason === "conflict-recorded") {
+      const cleared = await resolveRecordedConflicts(context, {
+        token,
+        targetId: plan.target.targetId,
+        fields: [{ field: plan.target.field, expectedValue: plan.humanValue }],
+        critical,
       });
-    } catch {
-      cleanupFailures += 1;
+      if (!cleared) {
+        cleanupFailures += 1;
+        cleanupUnresolved = true;
+      }
+    }
+    if (!cleanupUnresolved) {
+      const outboxDrained = await waitForBindingOutboxDrain(
+        context,
+        [plan.target.targetId, plan.target.shifterId],
+      );
+      if (!outboxDrained) {
+        cleanupFailures += 1;
+        cleanupOutboxBusy = true;
+      } else {
+      try {
+        await critical(async () => {
+          const ids = [plan.target.targetId, plan.target.shifterId];
+          for (const id of ids) {
+            const rows = await em.find(token, { id });
+            for (const row of rows) em.remove(row);
+          }
+          await em.flush();
+          for (const id of ids) {
+            context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id });
+          }
+        });
+      } catch {
+        cleanupFailures += 1;
+      }
+      }
     }
   }
+  // Merge the classifier's diagnostic kinds with cleanup accounting so the
+  // durable record names every invariant that fired (allowlisted kinds only).
+  // An unresolved conflict-recorded cleanup surfaces its own distinct kind;
+  // an expired outbox-drain wait surfaces `cleanup-outbox-busy`; any other
+  // cleanup failure is the delete failure.
+  const cleanupKind = cleanupUnresolved
+    ? "cleanup-unresolved-conflict"
+    : cleanupOutboxBusy
+      ? "cleanup-outbox-busy"
+      : "cleanup-delete-failed";
+  const kinds = [...new Set([
+    ...(Array.isArray(result?.failureKinds) ? result.failureKinds : []),
+    ...(cleanupFailures > 0 ? [cleanupKind] : []),
+  ])].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -266,9 +362,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

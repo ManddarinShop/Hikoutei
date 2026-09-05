@@ -88,6 +88,35 @@ Accepted observation writes update canonical state and the application entity
 in the same SQLite transaction. Conflicts, stale writes, duplicate keys, and
 malformed cells remain visible in SQLite evidence tables.
 
+### Polling cadence configuration
+
+Two optional environment variables control the polling cadence of the sync
+auto-start path (`createTypedSheetsWithSync()` and the same env keys read by
+`hikoutei` sync startup). Both default to **60,000 ms** when absent or blank:
+
+| Env var | Option field | Constant | Default |
+| --- | --- | --- | --- |
+| `HIKOUTEI_SYNC_POLLING_INTERVAL_MS` | `options.pollingIntervalMs` | `SYNC_POLLING_INTERVAL_MS` | 60,000 |
+| `HIKOUTEI_SYNC_FULL_SCAN_INTERVAL_MS` | `options.pollingFullScanIntervalMs` | `SYNC_FULL_SCAN_INTERVAL_MS` | 60,000 |
+
+`HIKOUTEI_SYNC_POLLING_INTERVAL_MS` sets how often registered `User_Input`
+projections are polled (the adaptive pass described above);
+`HIKOUTEI_SYNC_FULL_SCAN_INTERVAL_MS` sets the cadence of the metadata safety
+full scan — the pass that escapes the values-only preflight and re-reads the
+table's full metadata to correct structural drift. An explicit option field
+overrides the matching env var; absent values fall back to the constants in
+the cadence table above.
+
+Both variables fail closed on malformed input: the value must be a plain
+decimal integer (a positive safe integer, in milliseconds). Hex (`0x10`),
+exponent (`1e3`), signed, fractional, and whitespace-padded forms are
+rejected with the stable `sync_startup_failed` error code so a mistyped
+override can never silently change the polling behavior.
+
+(Note: `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` is a separate, internal
+request-start pacing override for the direct provider's transport limiters.
+It is deliberately not a cadence knob and is not part of the public API.)
+
 When polling detects a `User_Input` value A against canonical value B, it
 persists the active candidate, candidate-time full-row visible revision/hash,
 and an `OPEN` conflict, then queues an `OPEN` `Sync_Conflicts` audit effect.

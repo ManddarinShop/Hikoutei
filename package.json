@@ -1,6 +1,6 @@
 {
   "name": "hikoutei",
-  "version": "0.9.0",
+  "version": "0.9.33-dev.4",
   "description": "Typed repository and safe write layer for Google Sheets-backed MVPs. SQLite-authoritative entity lifecycle with asynchronous Google Sheets projection.",
   "repository": {
     "type": "git",
@@ -11,6 +11,7 @@
   },
   "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
   "type": "module",
+  "packageManager": "pnpm@11.1.2",
   "engines": {
     "node": ">=22.13"
   },
@@ -34,11 +35,15 @@
   ],
   "scripts": {
     "clean": "node scripts/clean-dist.mjs",
-    "build": "npm run build -w @hikoutei/ikisaki && npm run clean && tsc -p tsconfig.json && npm run build -w spreadsheet-db-mcp",
-    "typecheck": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.json --noEmit",
-    "typecheck:test": "npm run build -w @hikoutei/ikisaki && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json",
-    "test": "npm run build -w @hikoutei/ikisaki && vitest run",
-    "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs"
+    "build": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run build -w @hikoutei/storage && npm run build -w @hikoutei/sheets && npm run build -w @hikoutei/sync-engine && npm run build -w @hikoutei/composition && npm run build -w @hikoutei/cli && npm run clean && tsc -p tsconfig.build.json && node scripts/ci/reconcile-contracts-dist.mjs && node scripts/ci/smoke-contracts-bundle.mjs && npm run build -w spreadsheet-db-mcp",
+    "typecheck": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json",
+    "typecheck:test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json && npm run typecheck -w @hikoutei/storage -w @hikoutei/sheets -w @hikoutei/sync-engine -w @hikoutei/composition -w @hikoutei/cli",
+    "test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run build -w @hikoutei/storage && npm run build -w @hikoutei/sheets && npm run build -w @hikoutei/sync-engine && npm run build -w @hikoutei/composition && vitest run",
+    "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
+    "audit:knip": "knip",
+    "audit:deps": "npx depcruise src packages/contracts packages/storage packages/sheets packages/sync-engine packages/composition packages/cli --config .dependency-cruiser.cjs --output-type err",
+    "audit:unused": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
+    "audit:markers": "node scripts/maintenance/audit-markers.mjs"
   },
   "keywords": [
     "google-sheets",
@@ -58,15 +63,22 @@
   "dependencies": {
     "@googleapis/drive": "^21.0.0",
     "@googleapis/sheets": "^14.0.0",
-    "@hikoutei/ikisaki": "0.1.5",
+    "@hikoutei/ikisaki": "0.1.13",
     "@hikoutei/kohkai": "0.1.0",
     "google-auth-library": "^11.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/sheets": "0.1.0",
+    "@hikoutei/storage": "0.1.0",
+    "@hikoutei/sync-engine": "0.1.0",
+    "@hikoutei/composition": "0.1.0",
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7",
     "@types/node": "^20.14.10",
+    "dependency-cruiser": "18.2.0",
+    "knip": "6.33.0",
     "typescript": "^5.5.3",
     "vitest": "^1.6.0"
   },

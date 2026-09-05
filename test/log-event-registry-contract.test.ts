@@ -1,6 +1,6 @@
 /**
  * Contract tests for the internal log registries
- * (`src/shared/observability/logEvents.ts`).
+ * (`@hikoutei/sync-engine/shared/observability/logEvents.js` — the implementation module).
  *
  * The registries are a deliberate allowlist: an unknown or arbitrary
  * `error.code` or `errorClass` (which could be an ID-like secret) must never
@@ -25,36 +25,42 @@ import {
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "../src/shared/observability/logEvents.js";
-import { formatHikouteiLogLine } from "../src/shared/observability/internalLog.js";
-import { HIKOUTEI_ERROR_CODES, HikouteiError } from "../src/api/errors.js";
+} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+import { formatHikouteiLogLine } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+import { HIKOUTEI_ERROR_CODES, HikouteiError } from "@hikoutei/sync-engine/api/errors.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
   TypedSheetsOrmError,
-} from "../src/application/orm/errors.js";
+} from "@hikoutei/sync-engine/orm/errors.js";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
-} from "../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
+  SYNC_POLLING_ERROR_CODES,
   SyncServiceError,
-} from "../src/application/sync/service/errors.js";
+  PollingSupervisorOptionsError,
+} from "@hikoutei/sync-engine/sync/service/errors.js";
+import {
+  SYNC_EFFECT_CONTRACT_ERROR_CODES,
+  SyncEffectContractError,
+} from "@hikoutei/sync-engine/sync/outbound/errors.js";
 import {
   STORAGE_ERROR_CODES,
   StorageError,
-} from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/storage/storage/errors.js";
 import {
   EVALUATION_ERROR_CODES,
   EvaluationContractError,
-} from "../src/domain/errors/evaluation.js";
+} from "@hikoutei/contracts/domain/errors/evaluation.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { STABLE_ENCODING_ERROR_CODES } from "../src/shared/encoding/constants.js";
-import { StableEncodingError } from "../src/domain/errors/stableEncoding.js";
-import { DuplicateChangedFieldError } from "../src/domain/errors/identity.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
+import { STABLE_ENCODING_ERROR_CODES } from "@hikoutei/contracts/encoding/constants.js";
+import { StableEncodingError } from "@hikoutei/contracts/domain/errors/stableEncoding.js";
+import { DuplicateChangedFieldError } from "@hikoutei/contracts/domain/errors/identity.js";
 
 /** Every stable code a first-party layer can emit (mirrors the registry comment). */
 const TAXONOMY_CODES: readonly string[] = [
@@ -62,6 +68,8 @@ const TAXONOMY_CODES: readonly string[] = [
   ...Object.values(TYPED_SHEETS_ORM_ERROR_CODES),
   ...Object.values(SYNC_SHEETS_ERROR_CODES),
   ...Object.values(SYNC_SERVICE_ERROR_CODES),
+  ...Object.values(SYNC_POLLING_ERROR_CODES),
+  ...Object.values(SYNC_EFFECT_CONTRACT_ERROR_CODES),
   ...Object.values(STORAGE_ERROR_CODES),
   ...Object.values(EVALUATION_ERROR_CODES),
   ...Object.values(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES),
@@ -80,6 +88,8 @@ const BOUNDARY_ERROR_CLASSES: readonly string[] = [
   TypedSheetsOrmError.name,
   SyncSheetsContractError.name,
   SyncServiceError.name,
+  PollingSupervisorOptionsError.name,
+  SyncEffectContractError.name,
   StorageError.name,
   EvaluationContractError.name,
   StableEncodingError.name,

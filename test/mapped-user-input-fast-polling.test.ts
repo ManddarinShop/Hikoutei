@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { FIELD_OWNERSHIPS } from "../src/domain/model/constants.js";
-import { stableHash } from "../src/shared/encoding/stableEncode.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { NORMALIZED_CELL_KINDS } from "../src/shared/encoding/constants.js";
-import { defineTypedSheetsEntityMapping } from "../src/application/orm/mapping/entityMapping.js";
-import { inspectFastPollingTable } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";
-import type { MappedPollingState } from "../src/adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
-import type { SyncTableRowsResult } from "../src/application/sync/sheetsContract/syncSheets.js";
+import { FIELD_OWNERSHIPS } from "@hikoutei/contracts/domain/model/constants.js";
+import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
+import { defineTypedSheetsEntityMapping } from "@hikoutei/sync-engine/orm/mapping/entityMapping.js";
+import { inspectFastPollingTable } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingFastPath.js";
+import type { MappedPollingState } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPollingState.js";
+import type { SyncTableRowsResult } from "@hikoutei/contracts/sheets/syncSheets.js";
 
 interface Probe {
   readonly id: string;
@@ -85,6 +85,7 @@ function state(): MappedPollingState {
     ]),
     conflictsByBindingAndField: new Map(),
     visibleRevisionsByPhysicalAndBinding: new Map(),
+    pendingDeliveryBindingIds: new Set(),
   };
 }
 
@@ -251,6 +252,7 @@ function richState(): MappedPollingState {
     ]),
     conflictsByBindingAndField: new Map(),
     visibleRevisionsByPhysicalAndBinding: new Map(),
+    pendingDeliveryBindingIds: new Set(),
   };
 }
 
@@ -358,6 +360,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
       ]),
       conflictsByBindingAndField: new Map(),
       visibleRevisionsByPhysicalAndBinding: new Map(),
+      pendingDeliveryBindingIds: new Set(),
     };
 
     const decision = inspectFastPollingTable(richMapping, richResult([

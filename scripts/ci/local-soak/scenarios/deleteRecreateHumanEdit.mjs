@@ -13,6 +13,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -81,10 +82,11 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable CAS/stale/conflict evidence
  * via `isStaleConflictEvidence`: a rejected local write or human edit is an
  * expected compare-and-set conflict only when its error carries one of the
- * exact guard/hash-mismatch codes; a validation, transport, or direct-write
- * rejection (including the direct client's `identity_shifted` guard, which
- * means the human edit targeted the wrong lifecycle generation) is a real
- * failure. The oracle is NEVER updated from an unproven winner. The
+ * exact guard/hash-mismatch codes; a validation, transport, or other
+ * direct-write rejection is a real failure. An exact `identity_shifted`
+ * rejection of the direct human write is the expected multi-writer
+ * transient (a truthful `identity-shifted-transient` skip, never a failure).
+ * The oracle is NEVER updated from an unproven winner. The
  * reactivation invariant is verified on the OBSERVABLE authority: EXACTLY one
  * final row for the id (a missing row is as much a failure as a duplicate)
  * AND the human value present in that final row (the human edit is not
@@ -111,6 +113,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   try {
     // Critical section: create the DEDICATED race row and mirror it into the
@@ -195,16 +200,25 @@ export async function execute({ plan, context }) {
           });
       const [localResult, humanResult] = await Promise.allSettled([localPromise, humanPromise]);
       // Classify rejections ONLY by EXACT stale-write/CAS/conflict evidence
-      // (a guard/hash mismatch on the raced row). A validation/transport/
-      // direct-write rejection — including the direct client's
-      // `identity_shifted` guard, which means the human edit targeted the
-      // wrong lifecycle generation — is never an expected conflict.
+      // (a guard/hash mismatch on the raced row). A validation/transport
+      // rejection is never an expected conflict. The direct seam's
+      // fail-closed `identity_shifted` evidence is an EXPECTED TRANSIENT of
+      // the multi-writer soak (the human edit targeted a row another actor
+      // shifted mid-write; the seam proved no silent success): never a
+      // failure, a truthful skip recorded below.
       const localRejected = localResult.status === "rejected";
       if (localRejected && !isStaleConflictEvidence(localResult.reason)) {
         failures += 1;
+        failureKinds.add("local-rejection-non-stale");
       }
-      if (humanResult.status === "rejected" && !isStaleConflictEvidence(humanResult.reason)) {
-        failures += 1;
+      let humanTransient;
+      if (humanResult.status === "rejected") {
+        if (isIdentityShiftedEvidence(humanResult.reason)) {
+          humanTransient = identityShiftedTransientResult(humanResult.reason);
+        } else if (!isStaleConflictEvidence(humanResult.reason)) {
+          failures += 1;
+          failureKinds.add("human-rejection-non-stale");
+        }
       }
       // Observable reactivation invariant: EXACTLY one final row for the id
       // (a missing row is as much a failure as a duplicate) AND the human
@@ -226,35 +240,96 @@ export async function execute({ plan, context }) {
           context,
           critical,
         });
-        if (verification === "missing" || verification === "duplicate") failures += 1;
+        if (verification === "missing" || verification === "duplicate") {
+          failures += 1;
+          failureKinds.add(verification === "missing" ? "row-missing" : "duplicate-rows");
+        }
+      }
+      // Conflict-recorded outcome: the final row never showed the human value
+      // within the bound, but the value may have been ingested as an OPEN
+      // sync_conflict after an in-flight outbox cycle — recorded, not lost.
+      // A missing/duplicate row stays a real failure; only the unobserved
+      // (single row without the value) outcome consults the conflict records.
+      let conflictRecorded = false;
+      if (failures === 0 && humanTransient === undefined && verification === "unobserved") {
+        const recorded = await conflictRecordedForFields(context, [
+          { field: plan.target.field, expectedValue: plan.humanValue },
+        ]);
+        conflictRecorded = recorded.has(plan.target.field);
       }
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-        : verification === "ok"
+        : humanTransient !== undefined
+          ? humanTransient
+          : verification === "ok"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
+          : conflictRecorded
+          ? { status: "ok", expectedErrors: 0, failures: 0, reason: "conflict-recorded" }
           : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated race row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the race,
     // an observation, or an authority read failed. A cleanup failure is
     // recorded separately (cleanupFailures) and never masks the original
     // failure.
-    try {
-      await critical(async () => {
-        const rows = await em.find(token, { id: plan.target.targetId });
-        for (const raceRow of rows) {
-          em.remove(raceRow);
-        }
-        await em.flush();
-        context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
+    //
+    // Conflict-recorded rows carry OPEN conflicts that fail a direct delete
+    // closed (projection_outbox_blocked): resolve them via the public EM
+    // first (system-wins advance + bounded clear wait), and only then
+    // delete. When the wait expires the row is kept and surfaced as
+    // `cleanup-unresolved-conflict` — never deleted through a blocking
+    // conflict. Landed/never-started paths keep the direct delete below.
+    // Before the delete, a bounded outbox-drain wait lets candidate effects
+    // for this binding leave the blocking states (a verified row with NO
+    // conflict still fails closed while such an effect is in flight). On
+    // expiry the row is kept as `cleanup-outbox-busy` — never deleted
+    // through a blocked outbox. Both waits share the settle budget.
+    let cleanupUnresolved = false;
+    if (result?.reason === "conflict-recorded") {
+      const cleared = await resolveRecordedConflicts(context, {
+        token,
+        targetId: plan.target.targetId,
+        fields: [{ field: plan.target.field, expectedValue: plan.humanValue }],
+        critical,
       });
-    } catch {
-      cleanupFailures += 1;
+      if (!cleared) {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-unresolved-conflict");
+        cleanupUnresolved = true;
+      }
+    }
+    if (!cleanupUnresolved) {
+      const outboxDrained = await waitForBindingOutboxDrain(context, plan.target.targetId);
+      if (!outboxDrained) {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-outbox-busy");
+      } else {
+      try {
+        await critical(async () => {
+          const rows = await em.find(token, { id: plan.target.targetId });
+          for (const raceRow of rows) {
+            em.remove(raceRow);
+          }
+          await em.flush();
+          context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
+        });
+      } catch {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
+      }
+      }
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -262,9 +337,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

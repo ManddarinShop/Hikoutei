@@ -9,7 +9,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { SqlStorageAdapter } from "../sql.js";
 import type {
   FencingContext,
   PendingEffect,
@@ -18,23 +17,12 @@ import type {
 import {
   LOOKUP_RESULT_KINDS,
   type Presence,
-} from "../state.js";
+} from "../contract/state.js";
 import {
-  claimEffectWithAdapter,
-  applyEffectResultWithAdapter,
-  markDeliveryUncertainWithAdapter,
-  renewEffectLeaseWithAdapter,
-  recoverExpiredLeasesWithAdapter,
-  listReadyEffectsWithAdapter,
-  listReadyFastAppendEffectsWithAdapter,
-  releaseUnprocessedEffectWithAdapter,
-  retryClaimedEffectWithAdapter,
-  supersedeAndReplanWithAdapter,
-} from "../outbox.js";
-import {
-  claimWriterLeaseWithAdapter,
+  DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
-} from "../writerLease.js";
+  writerLeaseHeartbeatStaleBoundMs,
+} from "../outbox/writerLease.js";
 import type { ClaimedEffect } from "./contracts.js";
 import type {
   Dispatcher,
@@ -48,16 +36,23 @@ import type {
   EffectWorkerWithAdapterOptions,
 } from "./options.js";
 import type { EffectWorkerStorage } from "./storage.js";
+import {
+  createAdapterEffectWorkerStorage,
+} from "./storage.js";
 import type {
   MutableReport,
   WorkerReport,
 } from "./report.js";
 import {
+  mutableReport,
+  freezeReport,
+} from "./report.js";
+import {
   DEFAULT_EFFECT_LEASE_DURATION_MS,
+  DEFAULT_MAX_CONCURRENT_UNITS,
   DEFAULT_WORKER_ROLE,
   DEFAULT_WRITER_LEASE_DURATION_MS,
   EFFECT_BATCH_LIMIT,
-  EFFECT_LEASE_PROVIDER_HEADROOM_MS,
   MAX_IN_FLIGHT_EFFECTS,
   OUTBOX_EFFECT_STATUSES,
   WORKER_ERROR_CODES,
@@ -69,7 +64,6 @@ import {
   lookupResult,
   presentValue,
   safeErrorMessage,
-  throwWorkerError,
 } from "./helpers.js";
 import {
   countsForItems,
@@ -80,17 +74,19 @@ import {
   operationKindsForCounts,
   operationKindsForItems,
   operationKindsForPendingEffects,
-} from "./timing.js";
+} from "./pacing/timing.js";
 import {
   completeFailure,
   completeProviderResult,
   failUnclassifiableItems,
   recoverUnknownResults,
-} from "./transitions.js";
+  settleAbsorbedProbeResults,
+} from "./dispatch/transitions.js";
 import {
   dispatchFastAppendGroup,
   handleProviderDispatchError,
-} from "./dispatch.js";
+  type UnitProbeAttachment,
+} from "./dispatch/dispatch.js";
 import {
   isDispatchTransportError,
 } from "./errors.js";
@@ -102,14 +98,13 @@ import {
   orderDispatchUnits,
   type EffectDispatchUnit,
   type EffectRouteGroup,
-} from "./routing.js";
+} from "./dispatch/routing.js";
 import {
   TIMING_SCOPES,
-} from "./timing.js";
-
-const EMPTY_STRING_LENGTH_ZERO = 0;
-const NON_NEGATIVE_SAFE_INTEGER_MINIMUM = 0;
-const POSITIVE_SAFE_INTEGER_MINIMUM = 1;
+} from "./pacing/timing.js";
+import {
+  validateOptions,
+} from "./validate.js";
 
 /**
  * Processes effects through an adapter-owned SQL connection.
@@ -138,6 +133,8 @@ async function runEffectWorker(
   validateOptions(options);
   const role = options.writerRole ?? DEFAULT_WORKER_ROLE;
   const leaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
+  const heartbeatStaleMs =
+    options.writerLeaseHeartbeatStaleMs ?? DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS;
   const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
   const leaseStartedAt = Date.now();
   const claimResult = await storage.claimWriterLease({
@@ -145,9 +142,11 @@ async function runEffectWorker(
     writerId: options.workerId,
     leaseDurationMs: leaseDuration,
     now: options.now,
+    heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(options.now, heartbeatStaleMs),
   });
   if (claimResult.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) {
     const report = mutableReport(absentValue<WriterLease>());
+    report.leaseClaimFailureReason = claimResult.reason;
     emitWorkerTiming(options, {
       scope: TIMING_SCOPES.WORKER,
       phase: "writer_lease_claim",
@@ -198,6 +197,7 @@ async function runEffectWorker(
       writerId: options.workerId,
       leaseDurationMs: leaseDuration,
       now,
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now, heartbeatStaleMs),
     });
     if (writerRefresh.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) return false;
     if (
@@ -250,6 +250,7 @@ async function runEffectWorker(
       writerId: options.workerId,
       leaseDurationMs: leaseDuration,
       now,
+      heartbeatStaleBeforeMs: writerLeaseHeartbeatStaleBoundMs(now, heartbeatStaleMs),
     });
     if (writerRefresh.kind !== WRITER_LEASE_CLAIM_RESULT_KINDS.CLAIMED) return false;
     if (
@@ -280,6 +281,7 @@ async function runEffectWorker(
         ...currentFence(),
         effectId: item.pending.effect_id,
         claimToken: item.claimToken,
+        reason: "lease_recovered",
       })) report.deferred += 1;
     }
     for (const item of notRenewed) {
@@ -404,16 +406,14 @@ async function runEffectWorker(
     operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
   });
 
-  if (await prepareDispatchFences(recoveryCandidates)) {
-    await recoverUnknownResults(
-      options,
-      storage,
-      currentFence(),
-      recoveryCandidates,
-      report,
-      renewDispatchEffectLeases,
-    );
-  }
+  // Recovery candidates are NOT probed here any more: same-route candidates
+  // are absorbed into the dispatch units' own batch reads below (design
+  // §10.3 D1/D2), and anything the absorption cannot carry (cross-route, no
+  // matching unit, or a unit whose dispatch never settled them) falls back
+  // to the UNCHANGED standalone probe at the end of the pass (D4/D6). The
+  // candidates stay `processing` under their claim for the remainder of the
+  // pass; their leases renew with the batch they ride, and every settle
+  // stays behind the same CAS fence.
 
   const usable = claimed.filter((item) => isAbsent(item.invalidPayloadError));
   for (const invalid of claimed.filter((item) => isPresent(item.invalidPayloadError))) {
@@ -555,6 +555,61 @@ async function runEffectWorker(
     regularGroups,
     options.dispatcher,
   );
+  // Same-route probe absorption (design §10.3 D1): group the claimed
+  // recovery candidates by dispatcher route key and attach each group to
+  // the FIRST dispatch unit that covers its route (a route split into
+  // several chunked units absorbs its candidates once). Candidates with an
+  // invalid payload never ride a batch (the standalone probe closes them);
+  // cross-route or unit-less candidates stay in the end-of-pass residual.
+  const recoveryResidual: ClaimedEffect[] = [];
+  const absorbQueue = new Map<string, ClaimedEffect[]>();
+  try {
+    for (const item of recoveryCandidates) {
+      if (isPresent(item.invalidPayloadError)) {
+        recoveryResidual.push(item);
+        continue;
+      }
+      const key = options.dispatcher.routeKeyFor(item.pending);
+      const group = absorbQueue.get(key);
+      if (group === undefined) absorbQueue.set(key, [item]);
+      else group.push(item);
+    }
+  } catch (error: unknown) {
+    // The route predicate is declared never to throw; a violating dispatcher
+    // forfeits absorption for every candidate (they keep the standalone
+    // probe path, which re-applies the same no-throw guard there).
+    absorbQueue.clear();
+    recoveryResidual.push(...recoveryCandidates.filter(
+      (item) => !recoveryResidual.includes(item),
+    ));
+  }
+  const unitProbes = new Map<EffectDispatchUnit, UnitProbeAttachment>();
+  for (const unit of dispatchUnits) {
+    if (absorbQueue.size === 0) break;
+    const routeKeys = new Set<string>();
+    if (unit.bucket === "regular") {
+      routeKeys.add(unit.group.routeKey);
+    } else {
+      // The fast-append group's own route key is provider-scoped (one
+      // spreadsheet-wide atomic batch), so match per-effect physical routes.
+      try {
+        for (const item of unit.group.items) {
+          routeKeys.add(options.dispatcher.routeKeyFor(item.pending));
+        }
+      } catch {
+        routeKeys.clear();
+      }
+    }
+    const attached: ClaimedEffect[] = [];
+    for (const key of routeKeys) {
+      const group = absorbQueue.get(key);
+      if (group === undefined) continue;
+      attached.push(...group);
+      absorbQueue.delete(key);
+    }
+    if (attached.length > 0) unitProbes.set(unit, { items: attached, consumed: false });
+  }
+  for (const group of absorbQueue.values()) recoveryResidual.push(...group);
   // Read-ahead pipeline: overlap one route's regular preflight (a paced read)
   // with the previous route's write/verify. Only a split-capable regular unit
   // whose route DIFFERS from the current unit is preflighted ahead, so
@@ -567,11 +622,21 @@ async function runEffectWorker(
     unit.bucket === "regular" &&
     options.dispatcher.preflight !== undefined &&
     options.dispatcher.applyPrepared !== undefined;
-  const dispatchRequestFor = (unit: EffectDispatchUnit): DispatchRequest => ({
-    routeKey: unit.group.routeKey,
-    effects: unit.group.items.map((item) => item.pending),
-    beforeRemoteDispatch: () => renewDispatchEffectLeases(unit.group.items),
-  });
+  const dispatchRequestFor = (unit: EffectDispatchUnit): DispatchRequest => {
+    const probes = unitProbes.get(unit);
+    const probeItems = probes?.items ?? [];
+    return {
+      routeKey: unit.group.routeKey,
+      effects: unit.group.items.map((item) => item.pending),
+      ...(probeItems.length === 0 ? {} : {
+        probeEffects: probeItems.map((item) => item.pending),
+      }),
+      beforeRemoteDispatch: () => renewDispatchEffectLeases([
+        ...unit.group.items,
+        ...probeItems,
+      ]),
+    };
+  };
   // Fires a unit's preflight and feeds its latency/outcome into the adaptive
   // batch controller so a slow or failed read backs the route off instead of
   // letting later write successes falsely grow the batch limit.
@@ -671,6 +736,7 @@ async function runEffectWorker(
   const runRegularUnit = async (
     group: EffectRouteGroup,
     remote: () => Promise<ApplyOutcome>,
+    probes: UnitProbeAttachment | undefined,
   ): Promise<boolean> => {
     try {
       const writeOk = await dispatchRegularUnit(
@@ -682,6 +748,8 @@ async function runEffectWorker(
         remote,
         prepareDispatchFences,
         renewDispatchEffectLeases,
+        probes,
+        recoveryResidual,
       );
       if (!writeOk) await settleAndSuppressReadAhead();
       return writeOk;
@@ -690,14 +758,28 @@ async function runEffectWorker(
       throw error;
     }
   };
-  for (let index = 0; index < dispatchUnits.length; index += 1) {
-    const unit = dispatchUnits[index]!;
-    const next = dispatchUnits[index + 1];
+  /**
+   * Runs one dispatch unit end to end: fence preparation, the optional split
+   * preflight, the remote write, verify, and result persistence.
+   *
+   * The SEQUENTIAL path passes the next queued unit so the read-ahead
+   * pipeline can pre-fire it; the CONCURRENT path always passes `undefined`,
+   * which keeps `fireNextPreflight` inert so the cross-unit read-ahead state
+   * is never populated (the wave scheduler's route-busy gate provides the
+   * same-route ordering the read-ahead sequencing protected in serial mode).
+   * Dispatch-level remote failures settle inside this function (requeue/
+   * recovery, never a throw); only storage/programming errors propagate to
+   * the caller.
+   */
+  const runDispatchUnit = async (
+    unit: EffectDispatchUnit,
+    nextUnit: EffectDispatchUnit | undefined,
+  ): Promise<void> => {
     const group = unit.group;
     if (unit.bucket === "fast-append") {
       if (!(await prepareDispatchFences(group.items))) {
         suppressReadAhead();
-        continue;
+        return;
       }
       await dispatchFastAppendGroup(
         options,
@@ -707,8 +789,10 @@ async function runEffectWorker(
         report,
         () => prepareDispatchFences(group.items),
         renewDispatchEffectLeases,
+        unitProbes.get(unit),
+        recoveryResidual,
       );
-      continue;
+      return;
     }
     if (pendingPreparedUnit === unit) {
       // This unit (B) was preflighted ahead by the previous unit's read-ahead;
@@ -730,7 +814,7 @@ async function runEffectWorker(
           prepareDispatchFences,
           error,
         );
-        continue;
+        return;
       }
       pendingPrepared = undefined;
       pendingPreparedUnit = undefined;
@@ -740,14 +824,15 @@ async function runEffectWorker(
         // genuine write is not charged a read whose write never happened.
         options.batchController?.abandonPreflight?.(group.routeKey);
         suppressReadAhead();
-        continue;
+        return;
       }
-      fireNextPreflight(unit, next);
+      fireNextPreflight(unit, nextUnit);
       await runRegularUnit(
         group,
         () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
+        unitProbes.get(unit),
       );
-      continue;
+      return;
     }
     if (supportsSplit(unit)) {
       // Current unit A: complete A's own preflight and its fence/authority
@@ -767,7 +852,7 @@ async function runEffectWorker(
           prepareDispatchFences,
           error,
         );
-        continue;
+        return;
       }
       if (!(await prepareDispatchFences(group.items))) {
         // The preflight succeeded but its write is dropped on fence/authority
@@ -775,24 +860,87 @@ async function runEffectWorker(
         // charged a read whose write never ran.
         options.batchController?.abandonPreflight?.(group.routeKey);
         suppressReadAhead();
-        continue;
+        return;
       }
-      fireNextPreflight(unit, next);
+      fireNextPreflight(unit, nextUnit);
       await runRegularUnit(
         group,
         () => options.dispatcher.applyPrepared!(dispatchRequestFor(unit), prepared),
+        unitProbes.get(unit),
       );
-      continue;
+      return;
     }
     // Legacy regular unit (dispatcher implements neither split method).
     if (!(await prepareDispatchFences(group.items))) {
       suppressReadAhead();
-      continue;
+      return;
     }
     await runRegularUnit(
       group,
       () => options.dispatcher.apply(dispatchRequestFor(unit)),
+      unitProbes.get(unit),
     );
+  };
+  const maxConcurrentUnits =
+    options.maxConcurrentUnits ?? DEFAULT_MAX_CONCURRENT_UNITS;
+  /**
+   * The route-busy key set ONE concurrent unit holds for its whole dispatch.
+   *
+   * A regular unit owns exactly its physical route key. A fast-append group
+   * is grouped by the PROVIDER-scoped batch key (one spreadsheet-wide atomic
+   * append), so it additionally holds every member effect's PHYSICAL route
+   * key: no regular unit writing to a tab the append touches may overlap it
+   * (appends shift rows and invalidate same-route prepared preflight state).
+   */
+  const routeKeysForUnit = (unit: EffectDispatchUnit): readonly string[] => {
+    const keys = new Set<string>([unit.group.routeKey]);
+    if (unit.bucket === "regular") return [...keys];
+    try {
+      for (const item of unit.group.items) {
+        keys.add(options.dispatcher.routeKeyFor(item.pending));
+      }
+    } catch {
+      // The route predicate is declared never to throw; a violating
+      // dispatcher conservatively holds only the provider-scoped group key
+      // (still serialized against every other holder of that key).
+    }
+    return [...keys];
+  };
+  if (maxConcurrentUnits > DEFAULT_MAX_CONCURRENT_UNITS) {
+    await dispatchUnitsConcurrently(
+      dispatchUnits,
+      routeKeysForUnit,
+      maxConcurrentUnits,
+      (unit) => runDispatchUnit(unit, undefined),
+    );
+  } else {
+    for (let index = 0; index < dispatchUnits.length; index += 1) {
+      // Sequential default (maxConcurrentUnits = 1): the existing read-ahead
+      // pipeline, byte-identical to the pre-concurrency behavior.
+      await runDispatchUnit(dispatchUnits[index]!, dispatchUnits[index + 1]);
+    }
+  }
+
+  // End-of-pass fallback (design §10.3 D6, §10.4 D4): every recovery
+  // candidate the absorption could not settle — cross-route, no matching
+  // unit, a unit that failed before its settle, or a dispatcher with no
+  // absorption support — runs through the UNCHANGED standalone probe. An
+  // empty dispatch queue naturally lands every candidate here, so the
+  // end-of-queue idle pass behaves exactly as the pre-absorption path did.
+  for (const probes of unitProbes.values()) {
+    if (!probes.consumed) recoveryResidual.push(...probes.items);
+  }
+  if (recoveryResidual.length > 0) {
+    if (await prepareDispatchFences(recoveryResidual)) {
+      await recoverUnknownResults(
+        options,
+        storage,
+        currentFence(),
+        recoveryResidual,
+        report,
+        renewDispatchEffectLeases,
+      );
+    }
   }
   emitWorkerTiming(options, {
     scope: TIMING_SCOPES.WORKER,
@@ -802,6 +950,100 @@ async function runEffectWorker(
     operationCounts: countsForItems(dispatchable),
   });
   return freezeReport(report);
+}
+
+/**
+ * One launched unit inside the concurrent wave: the route keys it holds for
+ * its whole dispatch, its settled error (absent while running or on success),
+ * and a back-reference to its own tracker promise so the scheduler can remove
+ * it from the active set after `Promise.race` yields the slot, not the
+ * promise. The tracker never rejects: a unit error is recorded on the slot so
+ * a sibling's completion is never surfaced as an unhandled rejection.
+ */
+interface WaveSlot {
+  readonly index: number;
+  readonly keys: readonly string[];
+  error: Presence<unknown>;
+  done: Promise<WaveSlot>;
+}
+
+/**
+ * Runs dispatch units concurrently under a route-busy wave scheduler.
+ *
+ * Units are scanned in queue (ascending-priority) order and a unit launches
+ * only while fewer than `maxConcurrentUnits` are active AND every route key
+ * it holds is idle, so (a) two units never write one route at the same time
+ * (a route's later unit cannot launch until its predecessor releases the
+ * key), (b) the cross-route overlap is exactly what the route model permits:
+ * separate tabs, with the receipt tab append order-safe under
+ * `insertDimension`. All effects were already claimed sequentially before
+ * this scheduler ran, so concurrent units never contend for a claim; only
+ * short lease-renew/result-settle transactions overlap, which WAL-mode
+ * SQLite tolerates. Dispatch-level remote failures settle inside `runUnit`
+ * (requeue/recovery, never a throw); a unit that still throws (a storage or
+ * programming error) lets every already-launched sibling settle fully, then
+ * rethrows the FIRST such error so the supervisor's pass-error backoff sees
+ * the same pass-abort contract as the sequential path. Units left unstarted
+ * after an abort keep their claims and are recovered by the next pass's
+ * lease sweep, exactly like a mid-pass sequential throw.
+ */
+async function dispatchUnitsConcurrently(
+  units: readonly EffectDispatchUnit[],
+  routeKeysForUnit: (unit: EffectDispatchUnit) => readonly string[],
+  maxConcurrentUnits: number,
+  runUnit: (unit: EffectDispatchUnit) => Promise<void>,
+): Promise<void> {
+  // ponytail: the from-scratch scan is O(units^2); per-pass unit counts are
+  // bounded by the claim window and small, so scheduler CPU is not a hot path.
+  const unitKeys = units.map((unit) => routeKeysForUnit(unit));
+  const started = units.map(() => false);
+  const busy = new Map<string, number>();
+  const active = new Set<Promise<WaveSlot>>();
+  let firstError: Presence<unknown> = absentValue<unknown>();
+  let launched = 0;
+  const launch = (index: number): Promise<WaveSlot> => {
+    const keys = unitKeys[index]!;
+    for (const key of keys) busy.set(key, (busy.get(key) ?? 0) + 1);
+    started[index] = true;
+    launched += 1;
+    const slot: WaveSlot = {
+      index,
+      keys,
+      error: absentValue<unknown>(),
+      done: Promise.resolve(null as never),
+    };
+    slot.done = runUnit(units[index]!).then(
+      () => slot,
+      (error: unknown) => {
+        slot.error = presentValue(error);
+        return slot;
+      },
+    );
+    return slot.done;
+  };
+  while (launched < units.length || active.size > 0) {
+    if (isAbsent(firstError)) {
+      for (let index = 0; index < units.length && active.size < maxConcurrentUnits; index += 1) {
+        if (started[index]) continue;
+        // Route-FIFO: scanning from the queue head means the FIRST eligible
+        // (priority-order) unit always wins a free slot; a later unit sharing
+        // a route with an unstarted predecessor that is merely route-blocked
+        // sees the same busy key and waits too.
+        if (unitKeys[index]!.some((key) => busy.has(key))) continue;
+        active.add(launch(index));
+      }
+    }
+    if (active.size === 0) break; // error drain finished; unstarted units stay claimed
+    const settled = await Promise.race(active);
+    active.delete(settled.done);
+    for (const key of settled.keys) {
+      const holders = (busy.get(key) ?? 0) - 1;
+      if (holders <= 0) busy.delete(key);
+      else busy.set(key, holders);
+    }
+    if (isPresent(settled.error) && isAbsent(firstError)) firstError = settled.error;
+  }
+  if (isPresent(firstError)) throw firstError.value;
 }
 
 /**
@@ -825,6 +1067,8 @@ async function dispatchRegularUnit(
   remote: () => Promise<ApplyOutcome>,
   prepareFences: (items: readonly ClaimedEffect[]) => Promise<boolean>,
   renewEffectLeases: EffectLeaseRenewal,
+  probes: UnitProbeAttachment | undefined,
+  probeResidual: ClaimedEffect[],
 ): Promise<boolean> {
   const deferredEffectIds = new Set<string>();
   let outcome: ApplyOutcome;
@@ -858,6 +1102,12 @@ async function dispatchRegularUnit(
     // Remote side may have written the effect before an uncertain transport
     // failure. Explicit remote failures skip recovery because the provider
     // already proved that the operation was rejected.
+    // The absorbed probes got no result envelope either: hand them back for
+    // the standalone end-of-pass fallback probe.
+    if (probes !== undefined && !probes.consumed) {
+      probes.consumed = true;
+      probeResidual.push(...probes.items);
+    }
     await handleProviderDispatchError(
       options,
       storage,
@@ -888,6 +1138,22 @@ async function dispatchRegularUnit(
     responseLoss: !outcome.hasMore && outcome.results.length !== group.items.length,
   });
   emitProviderTiming(options, outcome.timing);
+  // Settle this unit's absorbed same-route probes from the batch's own read
+  // evidence before persisting the unit's results (design §10.3 D2): the
+  // verdicts run the unchanged transitions, and anything the dispatcher did
+  // not return falls back to the standalone end-of-pass probe.
+  if (probes !== undefined && !probes.consumed) {
+    probes.consumed = true;
+    const unsettled = await settleAbsorbedProbeResults(
+      options,
+      storage,
+      fence,
+      probes.items,
+      outcome.probeResults,
+      report,
+    );
+    probeResidual.push(...unsettled);
+  }
   emitWorkerTiming(options, {
     scope: TIMING_SCOPES.WORKER,
     phase: "regular_provider_dispatch",
@@ -911,6 +1177,7 @@ async function dispatchRegularUnit(
         ...fence(),
         effectId: item.pending.effect_id,
         claimToken: item.claimToken,
+        reason: "provider_batch",
       })) {
         report.deferred += 1;
         deferredEffectIds.add(item.pending.effect_id);
@@ -1014,100 +1281,5 @@ async function handlePreflightFailure(
       report.deferred += 1;
       report.requeued += 1;
     }
-  }
-}
-
-function createAdapterEffectWorkerStorage(storage: SqlStorageAdapter): EffectWorkerStorage {
-  return {
-    claimWriterLease: (options) => claimWriterLeaseWithAdapter(storage, options),
-    recoverExpiredLeases: (fence) => recoverExpiredLeasesWithAdapter(storage, fence),
-    listReadyEffects: (limit, now) => listReadyEffectsWithAdapter(storage, limit, now),
-    listReadyFastAppendEffects: (limit, now) => listReadyFastAppendEffectsWithAdapter(storage, limit, now),
-    claimEffect: (options) => claimEffectWithAdapter(storage, options),
-    markDeliveryUncertain: (options) => markDeliveryUncertainWithAdapter(storage, options),
-    renewEffectLease: (options) => renewEffectLeaseWithAdapter(storage, options),
-    applyEffectResult: (options) => applyEffectResultWithAdapter(storage, options),
-    releaseUnprocessedEffect: (options) => releaseUnprocessedEffectWithAdapter(storage, options),
-    retryClaimedEffect: (options) => retryClaimedEffectWithAdapter(storage, options),
-    supersedeAndReplan: (fence, oldEffectId, newEffect) => {
-      return supersedeAndReplanWithAdapter(storage, fence, oldEffectId, newEffect);
-    },
-  };
-}
-
-function mutableReport(lease: Presence<WriterLease>): MutableReport {
-  return {
-    lease,
-    expiredLeasesRecovered: 0,
-    selected: 0,
-    claimed: 0,
-    applied: 0,
-    blockedCandidate: 0,
-    superseded: 0,
-    conflicted: 0,
-    failed: 0,
-    deferred: 0,
-    requeued: 0,
-    replanned: 0,
-    responseLossRecovered: 0,
-  };
-}
-
-function freezeReport(report: MutableReport): WorkerReport {
-  return { ...report };
-}
-
-function validateOptions(options: EffectWorkerBaseOptions): void {
-  if (options.workerId.length === EMPTY_STRING_LENGTH_ZERO) {
-    throwWorkerError("effect worker ID is required");
-  }
-  if (
-    !Number.isSafeInteger(options.now) ||
-    options.now < NON_NEGATIVE_SAFE_INTEGER_MINIMUM
-  ) {
-    throwWorkerError("effect worker time must be a non-negative safe integer");
-  }
-  if (
-    !Number.isSafeInteger(options.maxEffects) ||
-    options.maxEffects < POSITIVE_SAFE_INTEGER_MINIMUM
-  ) {
-    throwWorkerError("effect worker maxEffects must be a positive safe integer");
-  }
-  if (
-    options.maxFastAppendCandidates !== undefined &&
-    (!Number.isSafeInteger(options.maxFastAppendCandidates) ||
-      options.maxFastAppendCandidates < POSITIVE_SAFE_INTEGER_MINIMUM)
-  ) {
-    throwWorkerError("effect worker maxFastAppendCandidates must be a positive safe integer");
-  }
-  if (
-    options.appendDispatchIntervalMs !== undefined &&
-    (!Number.isSafeInteger(options.appendDispatchIntervalMs) ||
-      options.appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)
-  ) {
-    throwWorkerError("effect worker appendDispatchIntervalMs must be a non-negative safe integer");
-  }
-  for (const [name, value] of [
-    ["writerLeaseDurationMs", options.writerLeaseDurationMs],
-    ["effectLeaseDurationMs", options.effectLeaseDurationMs],
-    ["requestTimeoutMs", options.requestTimeoutMs],
-  ] as const) {
-    if (
-      value !== undefined &&
-      (!Number.isSafeInteger(value) || value < POSITIVE_SAFE_INTEGER_MINIMUM)
-    ) {
-      throwWorkerError(name + " must be a positive safe integer");
-    }
-  }
-  const writerLeaseDuration = options.writerLeaseDurationMs ?? DEFAULT_WRITER_LEASE_DURATION_MS;
-  const effectLeaseDuration = options.effectLeaseDurationMs ?? DEFAULT_EFFECT_LEASE_DURATION_MS;
-  if (writerLeaseDuration <= effectLeaseDuration) {
-    throwWorkerError("writerLeaseDurationMs must exceed effectLeaseDurationMs");
-  }
-  if (
-    options.requestTimeoutMs !== undefined &&
-    effectLeaseDuration <= options.requestTimeoutMs + EFFECT_LEASE_PROVIDER_HEADROOM_MS
-  ) {
-    throwWorkerError("effectLeaseDurationMs must exceed requestTimeoutMs by 30 seconds");
   }
 }

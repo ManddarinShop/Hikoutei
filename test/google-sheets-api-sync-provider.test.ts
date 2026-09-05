@@ -17,41 +17,52 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { stableHash } from "../src/shared/encoding/index.js";
-import type { StableValue } from "../src/shared/encoding/types.js";
-import { presentValue, absentValue } from "../src/shared/state/index.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { stableHash } from "@hikoutei/contracts/encoding/index.js";
+import type { StableValue } from "@hikoutei/contracts/encoding/types.js";
+import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
-} from "../src/application/sync/sheetsContract/constants.js";
-import { SYNC_SHEETS_ERROR_CODES } from "../src/application/sync/sheetsContract/errors.js";
+} from "@hikoutei/contracts/sheets/constants.js";
+import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
 import {
   getHikouteiInternalLogger,
   HIKOUTEI_LOG_ENV_KEYS,
   resetHikouteiInternalLoggerForTests,
-} from "../src/shared/observability/internalLog.js";
-import { HIKOUTEI_LOG_EVENTS } from "../src/shared/observability/logEvents.js";
+} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+import { HIKOUTEI_LOG_EVENTS } from "@hikoutei/sync-engine/shared/observability/logEvents.js";
 import type {
   ApplySyncEffectsRequest,
   ReadSyncSnapshotRequest,
   SyncSheetsSnapshot,
   SyncProjectionEffect,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { SyncSheetsProvisionRoute } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { SyncSheetsProvisionRoute } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   GoogleSheetsApiSyncProvider,
   type GoogleSheetsApiRequestEvent,
-} from "../src/adapter/sheets/providers/google-sheets-api/index.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import {
   PromiseTailLock,
   runWrite,
   type GoogleSheetsApiProviderDeps,
-} from "../src/adapter/sheets/providers/google-sheets-api/operations/shared.js";
-import { readRows } from "../src/adapter/sheets/providers/google-sheets-api/operations/readRows.js";
-import { readEffectPostcondition } from "../src/adapter/sheets/providers/google-sheets-api/operations/applyEffects.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "../src/adapter/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
+import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
+import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
+import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
+import { readEffectPostcondition } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/applyEffects.js";
+import {
+  RATE_LIMIT_OPTIONS_ERROR_CODES,
+  RateLimitOptionsError,
+  RequestStartLimiter,
+  ReadQoSScheduler,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import {
+  QuotaPacingGovernor,
+  RollingQuotaBudget,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/quotaGovernor.js";
 import {
   GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
   GOOGLE_SHEETS_API_ENUMERATION_FIELDS,
@@ -60,31 +71,31 @@ import {
   GOOGLE_SHEETS_API_VALUES_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_FIELDS,
   GOOGLE_SHEETS_API_PROVISION_ENUMERATION_FIELDS,
-} from "../src/adapter/sheets/providers/google-sheets-api/model/preflightFields.js";
-import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "../src/adapter/sheets/providers/google-sheets-api/constants.js";
-import { dateSerialFromIso } from "../src/adapter/sheets/providers/google-sheets-api/model/valueNormalization.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
+import { GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
+import { dateSerialFromIso } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
-} from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import {
   TRANSPORT_OUTCOME_KINDS,
   classifyTransportOutcome,
-} from "../src/application/sync/sheetsContract/transportOutcome.js";
-import type { RegisteredSyncProjectionDefinition } from "../src/application/sync/sheetsContract/sheetsProvisioning.js";
+} from "@hikoutei/contracts/sheets/transportOutcome.js";
+import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   StubSheet,
   StubSpreadsheet,
   StubSheetsTransport,
   type StubCell,
 } from "./support/StubSheetsTransport.js";
+import { SYSTEM_HEADERS } from "./support/googleSheetsFixtures.js";
 
 const SPREADSHEET_ID = "stub-spreadsheet";
 const SYSTEM_SHEET_ID = "entity:users:system_state";
 const USER_INPUT_SHEET_ID = "entity:users:user_input";
 const CONFLICT_SHEET_ID = "entity:users:sync_conflicts";
 
-const SYSTEM_HEADERS = ["id", "status", "__typed_sheets_deleted"];
 const USER_INPUT_HEADERS = ["id", "status"];
 const CONFLICT_HEADERS = [
   "Conflict_ID",
@@ -290,6 +301,8 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     const inputTab = spreadsheet.findTab("Users_Input");
     expect(inputTab?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
     expect(inputTab?.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
+    // The row-check column header lands directly AFTER the registered range.
+    expect(inputTab?.cell(0, 3)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_check");
     const conflictsTab = spreadsheet.findTab("Users_Conflicts");
     expect(conflictsTab?.cell(0, 12)?.userEnteredValue?.stringValue).toBe("Status");
   });
@@ -298,7 +311,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
     spreadsheet.addTab("Users_Input", {
-      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id", "__hikoutei_row_check"],
     });
     spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
     const transport = new StubSheetsTransport(spreadsheet);
@@ -309,6 +322,87 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
     expect(result.createdSheets).toEqual([]);
     expect(result.initializedHeaders).toEqual([]);
+  });
+
+  it("initializes the row-check header on a content tab provisioned without it", async () => {
+    // Migration path: a tab provisioned by a version predating the check
+    // column keeps its exact registered headers (verified, no re-provision
+    // failure) and receives ONLY the additive check-column header cell.
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const inputTab = spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending"]],
+    });
+    spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    const result = await provider.provisionRegistry(provisionRoutes());
+
+    expect(result.createdSheets).toEqual([]);
+    expect(result.initializedHeaders).toEqual([]);
+    expect(transport.batchUpdateCalls).toBe(1);
+    const batch = transport.appliedBatchUpdates[0] ?? [];
+    expect(batch).toHaveLength(1);
+    const write = batch[0];
+    expect(write?.kind).toBe("updateCells");
+    if (write?.kind === "updateCells") {
+      expect(write.startRowIndex).toBe(0);
+      // Registered range A:C (id, status, row-id): the check column is D.
+      expect(write.startColumnIndex).toBe(3);
+    }
+    // The write goes through the stub, so a retry sees a fully provisioned
+    // tab and mutates nothing.
+    expect(inputTab.cell(0, 3)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_check");
+    const retry = new StubSheetsTransport(spreadsheet);
+    const retryProvider = buildProvider(retry);
+    await retryProvider.provisionRegistry(provisionRoutes());
+    expect(retry.batchUpdateCalls).toBe(0);
+  });
+
+  it("fails closed when the row-check column slot holds a foreign header", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id", "Developer Notes"],
+      rows: [["u1", "pending"]],
+    });
+    spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await expect(provider.provisionRegistry(provisionRoutes()))
+      .rejects.toThrow(/row-check column D holds a foreign header/);
+    expect(transport.batchUpdateCalls).toBe(0);
+  });
+
+  it("grows a narrow grid with addDimension before the check-column header write", async () => {
+    const spreadsheet = new StubSpreadsheet();
+    spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
+    const inputTab = spreadsheet.addTab("Users_Input", {
+      headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"],
+      rows: [["u1", "pending"]],
+    });
+    // A grid that ends exactly at the registered range cannot receive the
+    // header `updateCells` (updateCells never grows the grid: proven 400),
+    // so the batch must carry an explicit addDimension FIRST.
+    inputTab.gridColumnCount = 3;
+    spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
+    const transport = new StubSheetsTransport(spreadsheet);
+    const provider = buildProvider(transport);
+
+    await provider.provisionRegistry(provisionRoutes());
+
+    const batch = transport.appliedBatchUpdates[0] ?? [];
+    expect(batch.map((request) => request.kind)).toEqual(["addDimension", "updateCells"]);
+    const grow = batch[0];
+    if (grow?.kind !== "addDimension") throw new Error("expected addDimension first");
+    expect(grow.dimension).toBe("COLUMNS");
+    expect(grow.startIndex).toBe(3);
+    expect(grow.endIndex).toBe(4);
+    expect(inputTab.gridColumnCount).toBe(4);
+    expect(inputTab.cell(0, 3)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_check");
   });
 
   it("rejects a legacy User_Input content tab without the system column", async () => {
@@ -1091,7 +1185,9 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     ]);
 
     expect(transport.batchUpdateCalls).toBe(1);
-    expect(transport.getSpreadsheetCalls).toBe(2); // one read + one shared re-read
+    // Unified engine: cold-title bound enumeration + one read + one shared
+    // re-read (the enumeration is once per title per provider instance).
+    expect(transport.getSpreadsheetCalls).toBe(3);
     // Anchors are user_input-only: the system tab gets no anchor writes.
     expect(results.map((result) => result.anchors.assigned)).toEqual([0, 1]);
     expect(results.map((result) => result.snapshot.rows.length)).toEqual([1, 1]);
@@ -1105,10 +1201,10 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     // Row anchors are cell values in the User_Input system column, so no
     // mask requests developer metadata anymore.
     expect(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS).toBe(
-      "sheets.properties(sheetId,title,hidden),sheets.data(startRow,startColumn," +
+      "sheets.properties(sheetId,title,hidden,gridProperties(rowCount)),sheets.data(startRow,startColumn," +
       "rowData.values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat))",
     );
-    expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).toBe("sheets.properties(sheetId,title,hidden)");
+    expect(GOOGLE_SHEETS_API_ENUMERATION_FIELDS).toBe("sheets.properties(sheetId,title,hidden,gridProperties(rowCount))");
     // Merged regions are sheet-level `sheets.merges` GridRange entries in the
     // real API; GridData has no mergedCells field, so the observation mask
     // must request the sheet-level field and never a per-grid mergedCells.
@@ -1770,10 +1866,18 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       definitions: [SYSTEM_DEFINITION],
       transport,
       receiptInitLock: new PromiseTailLock(),
+      receiptReadCursor: new ReceiptReadCursor(),
+      sheetRowBounds: new Map<string, number>(),
+      readCalibration: createReadCalibration(),
       readTimeoutMs: 60_000,
       maxBatchBytes: 2_000_000,
       readScheduler,
       writeLimiter,
+      // Budgets and the governor are the subjects of dedicated pacing tests
+      // below; this raw-deps pacing probe pins interval-lane behavior only.
+      readBudget: new RollingQuotaBudget({ maxStartsPerWindow: Number.POSITIVE_INFINITY, windowMs: 60_000, now: () => now }),
+      writeBudget: new RollingQuotaBudget({ maxStartsPerWindow: Number.POSITIVE_INFINITY, windowMs: 60_000, now: () => now }),
+      quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 1_100, now: () => now }),
       maxRequestStartWaitMs: 1_100,
       now: () => now,
       onRequest: undefined,
@@ -1825,6 +1929,114 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     const lateWrite = await runWrite(deps, () =>
       transport.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requests: [] }));
     expect(lateWrite).toBeDefined();
+  });
+
+  it("validates the admission bound before deadline arithmetic and caps the remaining-time bound", async () => {
+    // The shared-deadline helper pre-derives each gate's remaining-time
+    // bound, so an invalid CONFIGURED bound (negative, non-integer, NaN) must
+    // fail with the SAME structured error the limiters would throw — not be
+    // floored/clamped into validity before the limiters see it.
+    const buildDeps = (
+      maxRequestStartWaitMs: number,
+      now: () => number,
+      writeLimiter: RequestStartLimiter,
+    ): GoogleSheetsApiProviderDeps => ({
+      spreadsheetId: SPREADSHEET_ID,
+      providerNonce: "provider:test",
+      preparedStateRegistry: new WeakSet<object>(),
+      definitions: [SYSTEM_DEFINITION],
+      transport: new StubSheetsTransport(new StubSpreadsheet()),
+      receiptInitLock: new PromiseTailLock(),
+      receiptReadCursor: new ReceiptReadCursor(),
+      sheetRowBounds: new Map<string, number>(),
+      readCalibration: createReadCalibration(),
+      readTimeoutMs: 60_000,
+      maxBatchBytes: 2_000_000,
+      readScheduler: new ReadQoSScheduler({
+        intervalMs: 0,
+        now,
+        sleep: async () => undefined,
+      }),
+      writeLimiter,
+      readBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now,
+      }),
+      writeBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now,
+      }),
+      quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 0, now }),
+      maxRequestStartWaitMs,
+      now,
+      onRequest: undefined,
+    });
+    for (const invalid of [-1, 1.5, Number.NaN]) {
+      await expect(runWrite(buildDeps(invalid, Date.now, new RequestStartLimiter({ intervalMs: 0 })), () =>
+        Promise.resolve({ replies: [] }))).rejects.toThrow(RateLimitOptionsError);
+    }
+
+    // A backward-moving clock BETWEEN the budget gate's bound read and the
+    // lane gate's bound read must not re-derive a remaining-time bound ABOVE
+    // the configured maximum: the lane gate's bound is capped at
+    // maxRequestStartWaitMs. deps.now() is called once for the shared
+    // deadline, once for the budget gate's bound, then once for the lane
+    // gate's bound — so the rewind lands exactly between the second and
+    // third reads. The budget/governor/scheduler internals get a SEPARATE
+    // constant clock so only the three deps.now() reads are controlled.
+    let depsClockCalls = 0;
+    const seenLaneBounds: number[] = [];
+    const recordingLimiter = {
+      waitForSlot: async (bound: number) => {
+        seenLaneBounds.push(bound);
+        return { status: "admitted" as const, waitedMs: 0 };
+      },
+      lastStart: () => undefined,
+    } as unknown as RequestStartLimiter;
+    const constantNow = (): number => 1_000_000;
+    const backwardNow = (): number => {
+      depsClockCalls += 1;
+      // Calls 1 (deadline) and 2 (budget bound) are at T; from call 3 (the
+      // lane bound read) the clock falls BACKWARD 5 seconds.
+      return depsClockCalls < 3 ? 1_000_000 : 995_000;
+    };
+    const backwardDeps: GoogleSheetsApiProviderDeps = {
+      spreadsheetId: SPREADSHEET_ID,
+      providerNonce: "provider:test",
+      preparedStateRegistry: new WeakSet<object>(),
+      definitions: [SYSTEM_DEFINITION],
+      transport: new StubSheetsTransport(new StubSpreadsheet()),
+      receiptInitLock: new PromiseTailLock(),
+      receiptReadCursor: new ReceiptReadCursor(),
+      sheetRowBounds: new Map<string, number>(),
+      readCalibration: createReadCalibration(),
+      readTimeoutMs: 60_000,
+      maxBatchBytes: 2_000_000,
+      readScheduler: new ReadQoSScheduler({ intervalMs: 0, now: constantNow, sleep: async () => undefined }),
+      writeLimiter: recordingLimiter,
+      readBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now: constantNow,
+      }),
+      writeBudget: new RollingQuotaBudget({
+        maxStartsPerWindow: Number.POSITIVE_INFINITY,
+        windowMs: 60_000,
+        now: constantNow,
+      }),
+      quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 0, now: constantNow }),
+      maxRequestStartWaitMs: 1_100,
+      now: backwardNow,
+      onRequest: undefined,
+    };
+    await expect(runWrite(backwardDeps, () => Promise.resolve({ replies: [] }))).resolves.toBeDefined();
+    expect(seenLaneBounds.length).toBe(1);
+    // Uncapped, the backward clock would re-derive 6_100ms (deadline 1_001_100
+    // minus the rewound 995_000); the cap keeps it at the configured 1_100ms
+    // bound.
+    expect(seenLaneBounds[0]).toBe(1_100);
   });
 
   it("applies the read timeout to every getSpreadsheet call but not writes", async () => {

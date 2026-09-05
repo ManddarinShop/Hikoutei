@@ -24,7 +24,7 @@ export type {
   HikouteiEntityInstance,
 } from "./entity.js";
 export { createTypedSheets } from "./Hikoutei.js";
-export type { CreateTypedSheetsOptions, Hikoutei } from "./Hikoutei.js";
+export type { CreateTypedSheetsOptions, HikouteiProviderOptions, Hikoutei } from "./Hikoutei.js";
 export { createTypedSheetsWithSync } from "./syncRuntime.js";
 export type {
   CreateTypedSheetsWithSyncOptions,

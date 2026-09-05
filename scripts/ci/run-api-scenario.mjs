@@ -29,21 +29,25 @@ import { performance } from "node:perf_hooks";
 import { defineEntity, p } from "@mikro-orm/sql";
 // Internal harness imports are resolved from the repository source tree. The
 // package's private dist layout is not treated as an internal compatibility
-// contract.
-const sourceRoot = new URL("../../src/", import.meta.url);
+// contract. P8-D2 phase 2: the api/application clusters now live in the
+// @hikoutei/sync-engine workspace package; the loader resolves both source
+// trees.
 const [entityApi, entityManagerApi, scalarProviderApi, mappedFlushApi, mapping, mappedRuntime, sqliteAdapter, sqliteSchema, provisioning, sheetsDispatcher, encoding, outboxWorker] =
   await Promise.all([
-    import(new URL("./api/entity.js", sourceRoot).href),
-    import(new URL("./api/internalEntityManager.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js", sourceRoot).href),
-    import(new URL("./application/orm/persistence/flush/flushCoordinator.js", sourceRoot).href),
-    import(new URL("./application/orm/mapping/entityMapping.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", sourceRoot).href),
-    import(new URL("./adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", sourceRoot).href),
-    import(new URL("./application/sync/sheetsContract/sheetsProvisioning.js", sourceRoot).href),
-    import(new URL("./application/sync/outbound/SheetsEffectDispatcher.js", sourceRoot).href),
-    import(new URL("./shared/encoding/index.js", sourceRoot).href),
+    import(new URL("../../packages/sync-engine/src/api/entity.js", import.meta.url).href),
+    import(new URL("../../packages/sync-engine/src/api/internalEntityManager.js", import.meta.url).href),
+    // P8-D2 phase 1: the persistence/sheets adapter trees moved into the
+// @hikoutei/storage / @hikoutei/sheets workspace packages; the source-ts-loader
+// still transpiles them (every URL contains "/src/").
+import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js", import.meta.url).href),
+    import(new URL("../../packages/storage/src/orm/persistence/flush/flushCoordinator.js", import.meta.url).href),
+    import(new URL("../../packages/sync-engine/src/orm/mapping/entityMapping.js", import.meta.url).href),
+    import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", import.meta.url).href),
+    import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", import.meta.url).href),
+    import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", import.meta.url).href),
+    import(new URL("../../packages/contracts/src/sheets/sheetsProvisioning.js", import.meta.url).href),
+    import(new URL("../../packages/sync-engine/src/sync/outbound/SheetsEffectDispatcher.js", import.meta.url).href),
+    import(new URL("../../packages/contracts/src/encoding/index.js", import.meta.url).href),
     import("@hikoutei/ikisaki"),
   ]);
 const { defineTypedSheetsEntity } = entityApi;
@@ -64,8 +68,8 @@ const { SheetsEffectDispatcher } = sheetsDispatcher;
 const { runEffectWorkerWithAdapter } = outboxWorker;
 const { stableHash } = encoding;
 const [directSheets, mappedPolling] = await Promise.all([
-  import(new URL("./adapter/sheets/providers/google-sheets-api/index.js", sourceRoot).href),
-  import(new URL("./adapter/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", sourceRoot).href),
+  import(new URL("../../packages/sheets/src/sheets/providers/google-sheets-api/index.js", import.meta.url).href),
+  import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", import.meta.url).href),
 ]);
 const { GoogleSheetsApiSyncProvider, GoogleSheetsApiHttpTransport } = directSheets;
 const { pollMappedUserInputWithMikroOrm } = mappedPolling;
@@ -500,7 +504,6 @@ async function main() {
   const manifest = {
     version: SCENARIO_VERSION,
     backend: options.backend,
-    outbound: "direct",
     prefix,
     sheetNames,
     createdAt: startedAt,
@@ -870,7 +873,6 @@ async function main() {
 
   const report = createReport({
     backend: options.backend,
-    outbound: "direct",
     sheetMatched: backend.sheetMatched,
     prefix,
     startedAt,
@@ -1078,7 +1080,6 @@ async function cleanupFromManifest(options) {
 
 function createReport({
   backend,
-  outbound,
   sheetMatched,
   prefix,
   startedAt,
@@ -1097,7 +1098,6 @@ function createReport({
     scenario: "internal-sync-provider-e2e-lifecycle-and-polling",
     scenarioVersion: SCENARIO_VERSION,
     backend,
-    outbound,
     ...(sheetMatched === undefined ? {} : { sheetMatched }),
     status,
     prefix,
@@ -1135,7 +1135,6 @@ async function writeSummary(summaryPath, report) {
 function parseOptions(arguments_) {
   const options = {
     backend: undefined,
-    outbound: "direct",
     cleanupOnly: false,
     manifest: process.env.HIKOUTEI_CI_MANIFEST,
     output: process.env.HIKOUTEI_CI_OUTPUT,
@@ -1151,15 +1150,11 @@ function parseOptions(arguments_) {
     const [key, inlineValue] = argument.split("=", 2);
     const value = inlineValue ?? arguments_[++index];
     if (key === "--backend") options.backend = value;
-    else if (key === "--outbound") options.outbound = value;
     else if (key === "--manifest") options.manifest = value;
     else if (key === "--output") options.output = value;
     else if (key === "--summary") options.summary = value;
     else if (key === "--prefix") options.prefix = value;
     else throw new Error(`unknown option: ${argument}`);
-  }
-  if (options.outbound !== "direct") {
-    throw new Error("--outbound must be direct (the Apps Script gateway mode was removed)");
   }
   if (options.output === undefined) options.output = path.join(os.tmpdir(), "hikoutei-ci-result.json");
   if (options.manifest === undefined) options.manifest = path.join(os.tmpdir(), "hikoutei-ci-manifest.json");

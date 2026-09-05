@@ -18,6 +18,7 @@ import * as sheetCorruptionDetection from "../scripts/ci/local-soak/scenarios/sh
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { FakeEm, liveContext } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded sleeps (projection wait polls, jitter) so
 // the live action terminates quickly and deterministically (a real poll
@@ -62,35 +63,6 @@ function corruptPlan(kind: string, seed = 7): PlanLike {
 // Fake seams.
 // ---------------------------------------------------------------------------
 
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {}
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** A fake direct-Sheet client backed by in-memory tab state. */
 class FakeClient {
@@ -98,6 +70,10 @@ class FakeClient {
   mutateCalls: { identity: string; headerName: string; value: string }[] = [];
   /** When set, the 1-based deleteInputRowAt call at this index throws. */
   throwOnDeleteAtCall: number | undefined;
+  /** When set, the 1-based mutate call at this index throws with this code. */
+  throwOnMutateCall: { index: number; code: string } | undefined;
+  /** When set, every readTabRows call throws this error (a read failure). */
+  throwOnRead: Error | undefined;
   /** When true, reads after an injection stop surfacing the injected cells. */
   hideInjectionAfterFirstRead = false;
   private injectedWrites: { rowIndex: number; columnIndex: number; value: string }[] | null = null;
@@ -124,6 +100,7 @@ class FakeClient {
   }
 
   async readTabRows(_spreadsheetId: string, tabName: string): Promise<string[][]> {
+    if (this.throwOnRead !== undefined) throw this.throwOnRead;
     const tab = this.tabs.get(tabName);
     if (tab === undefined) return [];
     if (this.hideInjectionAfterFirstRead && this.injectedWrites !== null) {
@@ -156,6 +133,11 @@ class FakeClient {
       headerName: input.headerName,
       value: input.value,
     });
+    if (this.throwOnMutateCall !== undefined && this.mutateCalls.length === this.throwOnMutateCall.index) {
+      throw Object.assign(new Error("fake mutate failure"), {
+        code: this.throwOnMutateCall.code,
+      });
+    }
     const tab = this.tabs.get(input.tabName);
     if (tab === undefined) return { rowNumber: 1 };
     const headers = tab[0] ?? [];
@@ -218,23 +200,6 @@ class FakeClient {
   }
 }
 
-/** Builds a live execution context wired to the fake seams. */
-function liveContext(
-  plan: PlanLike,
-  client: FakeClient,
-  em: FakeEm,
-  deadlineAtMs?: number,
-): Record<string, unknown> {
-  return {
-    seed: 1,
-    cycle: 1,
-    activeEntities: SOAK_ENTITY_ORDER,
-    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
-    em,
-    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
-    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
-  };
-}
 
 /**
  * Hooks `em.persist` so every persisted row is immediately projected into
@@ -498,6 +463,25 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(tabIds(client, plan)).not.toContain(plan.target.dedicatedId);
   });
 
+  it("records an identity-shifted guarded injection rejection as a transient skip, not a failure", async () => {
+    // The guarded write seam rejects the missing-field injection with the
+    // fail-closed `identity_shifted` class when a CONCURRENT actor shifted
+    // the tab mid-write. The seam proved no silent overwrite, so this is
+    // an EXPECTED TRANSIENT of the adversarial multi-writer environment: a
+    // truthful skip (never a failure). The guaranteed cleanup still removes
+    // the dedicated row.
+    const plan = corruptPlan("missing-field");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    hookProjection(plan, client, em);
+    client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
+    expect(em.rows()).toEqual([]);
+  });
+
   it("classifies an injected-but-undetected corruption as failed (guard miss)", async () => {
     // The injection is observable to the verification read but the DETECTION
     // read fails to surface it (the read seam misses the corruption): the
@@ -512,6 +496,26 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(result.failures).toBe(1);
     expect(result.reason).toBe("corruption-missed");
     expect(result.expectedErrors).toBe(0);
+    // Cleanup still removes the dedicated authority row.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("records a readTabRows rejection as failed, never a transient skip", async () => {
+    // Narrowed transient scope: ONLY the direct writes (`mutateInputCell`
+    // / `injectInputCells`) may classify as `identity-shifted-transient`.
+    // A read rejection — even one duck-typed with `code:
+    // "identity_shifted"` — rethrows to the normal failure path.
+    const plan = corruptPlan("duplicate-identity");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    hookProjection(plan, client, em);
+    client.throwOnRead = Object.assign(new Error("fake read failure"), {
+      code: "identity_shifted",
+    });
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
     // Cleanup still removes the dedicated authority row.
     expect(em.rows()).toEqual([]);
   });

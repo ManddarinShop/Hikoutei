@@ -9,23 +9,25 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { HIKOUTEI_ERROR_CODES } from "../src/api/errors.js";
-import { GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "../src/adapter/sheets/providers/google-sheets-api/errors.js";
-import { EVALUATION_ERROR_CODES } from "../src/domain/errors/evaluation.js";
-import { TYPED_SHEETS_ORM_ERROR_CODES } from "../src/application/orm/errors.js";
-import { SYNC_SERVICE_ERROR_CODES } from "../src/application/sync/service/errors.js";
+import { HIKOUTEI_ERROR_CODES } from "@hikoutei/sync-engine/api/errors.js";
+import { GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
+import { EVALUATION_ERROR_CODES } from "@hikoutei/contracts/domain/errors/evaluation.js";
+import { TYPED_SHEETS_ORM_ERROR_CODES } from "@hikoutei/sync-engine/orm/errors.js";
+import { SYNC_SERVICE_ERROR_CODES } from "@hikoutei/sync-engine/sync/service/errors.js";
+import { SYNC_POLLING_ERROR_CODES } from "@hikoutei/sync-engine/sync/service/errors.js";
+import { SYNC_EFFECT_CONTRACT_ERROR_CODES } from "@hikoutei/sync-engine/sync/outbound/errors.js";
 import {
   SYNC_INVALID_PROVIDER_OPERATIONS,
   SYNC_INVALID_PROVIDER_REASONS,
   SYNC_SHEETS_ERROR_CODES,
-} from "../src/application/sync/sheetsContract/errors.js";
-import { STORAGE_ERROR_CODES } from "../src/infrastructure/storage/errors.js";
+} from "@hikoutei/contracts/sheets/errors.js";
+import { STORAGE_ERROR_CODES } from "@hikoutei/storage/storage/errors.js";
 import {
   HIKOUTEI_LOG_PROVIDER_OPERATIONS,
   HIKOUTEI_LOG_PROVIDER_REASONS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "../src/shared/observability/logEvents.js";
+} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
 
 /** Every non-CLI error-code family that can reach a logged boundary. */
 const RUNTIME_ERROR_CODE_FAMILIES = [
@@ -33,6 +35,8 @@ const RUNTIME_ERROR_CODE_FAMILIES = [
   SYNC_SHEETS_ERROR_CODES,
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   SYNC_SERVICE_ERROR_CODES,
+  SYNC_POLLING_ERROR_CODES,
+  SYNC_EFFECT_CONTRACT_ERROR_CODES,
   EVALUATION_ERROR_CODES,
   STORAGE_ERROR_CODES,
   TYPED_SHEETS_ORM_ERROR_CODES,

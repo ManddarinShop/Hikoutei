@@ -1,6 +1,14 @@
 import { defineConfig } from "vitepress";
+import { fileURLToPath } from "node:url";
 
 const SITE_URL = "https://manddarinshop.github.io/Hikoutei";
+// Deploy modes:
+//   GH Pages (default): base /Hikoutei/, live-demo page excluded (no /api
+//   backend there — the demo would render in mock mode and confuse readers).
+//   VM deploy: DOCS_BASE_PATH=/ -> bare-root build, demo page + nav included.
+const IS_VM_DEPLOY = process.env.DOCS_BASE_PATH !== undefined;
+const BASE_PATH = IS_VM_DEPLOY ? process.env.DOCS_BASE_PATH : "/Hikoutei/";
+const DEMO_ROOT = fileURLToPath(new URL("../demo/frontend", import.meta.url));
 
 /**
  * Per-page canonical URL and og:url.
@@ -34,14 +42,25 @@ export default defineConfig({
   title: "Hikoutei",
   description: SITE_DESCRIPTION,
   lang: "en-US",
-  base: "/Hikoutei/",
+  base: BASE_PATH,
+  srcExclude: IS_VM_DEPLOY ? [] : ["demo.md"],
   cleanUrls: true,
+  vite: {
+    esbuild: {
+      jsxInject: "import React from 'react';",
+    },
+    resolve: {
+      alias: {
+        "@": DEMO_ROOT,
+      },
+    },
+  },
   markdown: {
     // High-contrast code blocks in both themes (Linear/Stripe-style dark
     // code on light pages); visibility was poor with light blocks.
     theme: { light: "github-dark", dark: "github-dark" },
   },
-  logo: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%231a88f8'/%3E%3Ctext x='50' y='70' font-size='56' text-anchor='middle' fill='white' font-family='Inter,sans-serif' font-weight='700'%3EH%3C/text%3E%3C/svg%3E",
+  logo: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23533afd'/%3E%3Ctext x='50' y='70' font-size='56' text-anchor='middle' fill='white' font-family='Inter,sans-serif' font-weight='700'%3EH%3C/text%3E%3C/svg%3E",
   head: [
     // og:title and og:description are emitted per page in `transformHead` so
     // each route gets its own metadata; the static list keeps only the
@@ -81,7 +100,7 @@ export default defineConfig({
       "link",
       {
         rel: "icon",
-        href: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%231a88f8'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='Inter,sans-serif' font-weight='700'%3EH%3C/text%3E%3C/svg%3E",
+        href: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23533afd'/%3E%3Ctext x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='Inter,sans-serif' font-weight='700'%3EH%3C/text%3E%3C/svg%3E",
       },
     ],
   ],
@@ -104,6 +123,7 @@ export default defineConfig({
   },
   themeConfig: {
     nav: [
+      ...(IS_VM_DEPLOY ? [{ text: "Live demo", link: "/demo" }] : []),
       { text: "Guide", link: "/guide/quick-start" },
       { text: "Templates", link: "/templates/sheet-approval" },
       { text: "Benchmarks", link: "/guide/benchmarks" },
@@ -115,6 +135,7 @@ export default defineConfig({
           { text: "Google Sheets setup", link: "/guide/setup" },
           { text: "Architecture", link: "/guide/architecture" },
           { text: "Write and synchronization flow", link: "/guide/sync-flow" },
+          { text: "Public type reference", link: "/guide/type-reference" },
           { text: "Benchmarks", link: "/guide/benchmarks" },
           { text: "Limitations", link: "/guide/limitations" },
           { text: "Project status", link: "/guide/status" },
@@ -151,6 +172,7 @@ export default defineConfig({
           { text: "Google Sheets setup", link: "/guide/setup" },
           { text: "Architecture", link: "/guide/architecture" },
           { text: "Write and synchronization flow", link: "/guide/sync-flow" },
+          { text: "Public type reference", link: "/guide/type-reference" },
           {
             text: "Internal consistency model",
             link: "/guide/internal-consistency",

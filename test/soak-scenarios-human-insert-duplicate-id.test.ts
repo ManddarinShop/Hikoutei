@@ -15,6 +15,7 @@ import * as humanInsertDuplicateId from "../scripts/ci/local-soak/scenarios/huma
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { FakeEm, liveContext, projectAllFieldsRow as projectPersistedRow } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
 // terminate quickly and deterministically (a real poll would be ~1s each).
@@ -68,51 +69,6 @@ function dupPlan(): PlanLike {
 // ---------------------------------------------------------------------------
 // Fake seams.
 // ---------------------------------------------------------------------------
-
-/** A fake EntityManager over an in-memory id-keyed store. */
-class FakeEm {
-  store = new Map<string, Record<string, unknown>>();
-  findOneOverride: ((id: string) => Record<string, unknown> | null | undefined) | undefined;
-  /** Throws on the flush whose 1-based call index matches. */
-  flushBehavior: ((flushIndex: number) => void) | undefined;
-  #flushIndex = 0;
-
-  fork(): FakeEm {
-    return this;
-  }
-  create(_token: unknown, row: Record<string, unknown>): Record<string, unknown> {
-    return row;
-  }
-  persist(entity: Record<string, unknown>): void {
-    if (entity !== null && typeof entity === "object" && typeof entity.id === "string") {
-      this.store.set(entity.id, entity);
-    }
-  }
-  async flush(): Promise<void> {
-    this.#flushIndex += 1;
-    if (this.flushBehavior !== undefined) this.flushBehavior(this.#flushIndex);
-  }
-  async find(_token: unknown, filter: { id: string }): Promise<Record<string, unknown>[]> {
-    const row = this.store.get(filter.id);
-    return row === undefined ? [] : [row];
-  }
-  async findOne(_token: unknown, filter: { id: string }): Promise<Record<string, unknown> | null> {
-    if (this.findOneOverride !== undefined) {
-      const overridden = this.findOneOverride(filter.id);
-      if (overridden !== null && overridden !== undefined) return overridden;
-    }
-    const row = this.store.get(filter.id);
-    return row === undefined ? null : row;
-  }
-  remove(row: Record<string, unknown>): void {
-    if (row !== null && typeof row === "object" && typeof row.id === "string") {
-      this.store.delete(row.id);
-    }
-  }
-  rows(): Record<string, unknown>[] {
-    return [...this.store.values()];
-  }
-}
 
 /** A fake direct-Sheet client backed by in-memory tab state. */
 class FakeClient {
@@ -174,75 +130,6 @@ class FakeClient {
   }
 }
 
-/** Builds a live execution context wired to the fake seams. */
-function liveContext(
-  plan: PlanLike,
-  client: FakeClient,
-  em: FakeEm,
-  deadlineAtMs?: number,
-): Record<string, unknown> {
-  return {
-    seed: 1,
-    cycle: 1,
-    activeEntities: SOAK_ENTITY_ORDER,
-    tokenByEntity: new Map([[plan.target.entityName, { entity: plan.target.entityName }]]),
-    em,
-    live: { mode: "live", client, spreadsheetId: "spreadsheet-1" },
-    deadlineAtMs: deadlineAtMs ?? Date.now() + 5000,
-  };
-}
-
-/**
- * The projected Sheet cell string a soak field value carries once the sync
- * worker projects it: booleans as uppercase `TRUE`/`FALSE`, dates as
- * canonical ISO strings, numbers/strings as String(), null as the empty cell.
- * Mirrors the scenario's own `projectedCellString` so the fake projection is
- * indistinguishable from the real Sheet.
- */
-function projectedCell(value: unknown, type: string | undefined): string {
-  if (value === null || value === undefined) return "";
-  if (type === "boolean") return value ? "TRUE" : "FALSE";
-  if (type === "date") {
-    return (value instanceof Date ? value : new Date(value as string | number)).toISOString();
-  }
-  return String(value);
-}
-
-/**
- * Mirrors the localHumanWriteRace test's authoritative-value pattern: hook
- * the fake EntityManager's `persist` so the dedicated row's fields are
- * projected into the fake _Input tab at the exact cell-strings the row will
- * carry once the sync worker projects it. `awaitInputProjection` resolves on
- * the first poll, so the duplicate insert proceeds deterministically.
- *
- * `capture` (optional) records the projected cell strings so a test can
- * assert the typed boolean/date display strings without re-deriving them.
- */
-function projectPersistedRow(
-  em: FakeEm,
-  client: FakeClient,
-  plan: PlanLike,
-  capture?: { values: Record<string, string> },
-): void {
-  const originalPersist = em.persist.bind(em);
-  em.persist = (entity: Record<string, unknown>) => {
-    const fieldPlan = SOAK_FIELD_PLANS[plan.target.entityName]!;
-    const headers = ["id"];
-    const values: Record<string, string> = { id: plan.target.targetId };
-    for (const [field, spec] of Object.entries(fieldPlan)) {
-      if (spec.primary) continue;
-      headers.push(field);
-      values[field] = projectedCell(entity[field], spec.type);
-    }
-    if (capture) capture.values = values;
-    client.ensureTab(`${plan.target.entityName}_Input`, headers);
-    client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, values);
-    originalPersist(entity);
-  };
-}
-
-
-
 // ---------------------------------------------------------------------------
 // Tests.
 // ---------------------------------------------------------------------------
@@ -299,18 +186,20 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(result.failures).toBe(0);
   });
 
-  it("verifies a duplicate insert is rejected (expectedErrors 1) and the existing row is untouched", async () => {
+  it("records a clean exact-identity rejection as the transient skip and leaves the existing row untouched", async () => {
     const plan = dupPlan();
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
-    // The identity conflict was rejected (fail-closed evidence) and the
-    // existing row was not overwritten -> a verified ok with one expected
-    // error, never a failure.
-    expect(result.status).toBe("ok");
-    expect(result.expectedErrors).toBe(1);
+    // A clean exact-identity rejection of the direct insert whose
+    // no-overwrite checks passed is the expected multi-writer transient: a
+    // truthful skip with the rejection's reasonTag, never a failure.
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.expectedErrors).toBe(0);
     expect(result.failures).toBe(0);
+    expect(typeof result.reasonTag).toBe("string");
     // The duplicate insert was attempted exactly once with the same id.
     const calls = client.insertCalls.filter((call) => call.row.id === plan.target.targetId);
     expect(calls.length).toBe(1);
@@ -342,8 +231,9 @@ describe("humanInsertDuplicateId scenario", () => {
     const capture: { values: Record<string, string> } = { values: {} };
     projectPersistedRow(em, client, plan, capture);
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
-    expect(result.status).toBe("ok");
-    expect(result.expectedErrors).toBe(1);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.expectedErrors).toBe(0);
     expect(result.failures).toBe(0);
     // The fake projection carried the typed display strings for the boolean
     // and date fields, and the identity re-read matched them exactly.

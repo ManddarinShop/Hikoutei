@@ -14,7 +14,7 @@ import {
   clearRegisteredEntityTokens,
   getEntityDescriptor,
   getRegisteredEntityTokens,
-} from "../src/api/entity.js";
+} from "@hikoutei/sync-engine/api/entity.js";
 import { resolveDefaultDbPath } from "../src/api/Hikoutei.js";
 
 /**

@@ -7,20 +7,20 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "../src/shared/state/index.js";
-import { stableHash } from "../src/shared/encoding/index.js";
+import { APPLICABILITY_KINDS, LOOKUP_RESULT_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
+import { stableHash } from "@hikoutei/contracts/encoding/index.js";
 import {
   FIELD_OWNERSHIPS,
   ROW_OPERATIONS,
   CONFLICT_STATUSES,
   QUARANTINE_REASONS,
   ROW_BINDING_STATES,
-} from "../src/domain/model/constants.js";
+} from "@hikoutei/contracts/domain/model/constants.js";
 import {
   QUARANTINE_REPAIR_NOT_PLANNED_REASONS,
   QUARANTINE_REPAIR_STATUSES,
   ROW_OUTCOMES,
-} from "../src/domain/evaluate/constants.js";
+} from "@hikoutei/contracts/domain/evaluate/constants.js";
 import {
   applyEffectResultWithAdapter,
   appendPendingEffectsWithSql,
@@ -32,41 +32,41 @@ import {
   WRITER_LEASE_CLAIM_FAILURE_REASONS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
 } from "@hikoutei/ikisaki";
-import { persistObservedRowWithAdapter } from "../src/infrastructure/storage/state/observation/observationWriter.js";
-import { validatePersistObservedRowInput } from "../src/infrastructure/storage/state/observation/observationValidation.js";
+import { persistObservedRowWithAdapter } from "@hikoutei/storage/storage/state/observation/observationWriter.js";
+import { validatePersistObservedRowInput } from "@hikoutei/storage/storage/state/observation/observationValidation.js";
 import {
   CANONICAL_COMMIT_RESULT_KINDS,
   CANONICAL_REACTIVATE_OPERATION,
   commitCanonicalChangesWithSql,
-} from "../src/infrastructure/storage/state/canonical/canonicalCommit.js";
+} from "@hikoutei/storage/storage/state/canonical/canonicalCommit.js";
 import {
   registerSyncSheetWithAdapter,
   requireRegisteredSyncSheetWithAdapter,
-} from "../src/infrastructure/storage/sync/shared/syncRegistry.js";
-import { persistResolutionCommandWithAdapter } from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
-import { renewAutomaticConflictResolutionLeaseWithSql } from "../src/application/sync/inbound/autoSystemConflictResolution.js";
+} from "@hikoutei/storage/storage/sync/shared/syncRegistry.js";
+import { persistResolutionCommandWithAdapter } from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
+import { renewAutomaticConflictResolutionLeaseWithSql } from "@hikoutei/storage/sync/inbound/autoSystemConflictResolution.js";
 import type {
   NewEffect,
 } from "@hikoutei/ikisaki";
 import type {
   PersistObservedRowInput,
-} from "../src/infrastructure/storage/state/observation/observationWriter.js";
+} from "@hikoutei/storage/storage/state/observation/observationWriter.js";
 import type {
   PersistResolutionCommandInput,
-} from "../src/infrastructure/storage/state/resolution/resolutionWriter.js";
+} from "@hikoutei/storage/storage/state/resolution/resolutionWriter.js";
 import {
   initializeMikroOrmSqliteAdapter,
   MikroOrmSqliteAdapter,
-} from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import { migrateMikroOrmSqliteStorageSchema } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+} from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import {
   computeSyncVisibleHash,
   serializeSyncProjectionEffectPayload,
-} from "../src/application/sync/sheetsContract/syncSheets.js";
-import type { SyncProjectionEffect } from "../src/application/sync/sheetsContract/syncSheets.js";
+} from "@hikoutei/contracts/sheets/syncSheets.js";
+import type { SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { runEffectWorkerWithAdapter } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 
 const OrderSchema = defineEntity({
@@ -230,12 +230,12 @@ describe("MikroOrmSqliteAdapter", () => {
     try {
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
         fromVersion: 0,
-        toVersion: 6,
-        appliedVersions: [6],
+        toVersion: 8,
+        appliedVersions: [8],
       });
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-        fromVersion: 6,
-        toVersion: 6,
+        fromVersion: 8,
+        toVersion: 8,
         appliedVersions: [],
       });
       await expect(adapter.read(({ sql }) => {
@@ -247,6 +247,35 @@ describe("MikroOrmSqliteAdapter", () => {
     } finally {
       await adapter.close(true);
     }
+  });
+
+  it("normalizes a suffixed :memory: dbName to the exact in-memory marker (no CWD file)", async () => {
+    // node:sqlite treats ONLY the exact string ":memory:" as in-memory; a
+    // suffixed name like ":memory:<uuid>" silently becomes a real file in the
+    // current working directory (225 stray files proved it).
+    const { existsSync, readdirSync } = await import("node:fs");
+    const before = readdirSync(process.cwd()).filter((name) => name.startsWith(":memory:"));
+    const dbName = ":memory:3f2d1c9a-regression";
+    if (existsSync(dbName)) throw new Error(`stray file already exists: ${dbName}`);
+
+    const adapter = await initializeMikroOrmSqliteAdapter({
+      dbName,
+      entities: [Order],
+    });
+    try {
+      await migrateMikroOrmSqliteStorageSchema(adapter);
+      await expect(adapter.read(({ sql }) => {
+        return sql.get<{ readonly name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+          ["mikro_orm_adapter_order"],
+        );
+      })).resolves.toEqual({ name: "mikro_orm_adapter_order" });
+    } finally {
+      await adapter.close(true);
+    }
+
+    expect(existsSync(dbName)).toBe(false);
+    expect(readdirSync(process.cwd()).filter((name) => name.startsWith(":memory:"))).toEqual(before);
   });
 
   it("rolls the entity and raw outbox SQL back together when the transaction fails", async () => {
@@ -325,12 +354,12 @@ describe("MikroOrmSqliteAdapter", () => {
 
     expect(firstMigration).toEqual({
       fromVersion: 0,
-      toVersion: 6,
-      appliedVersions: [6],
+      toVersion: 8,
+      appliedVersions: [8],
     });
     expect(secondMigration).toEqual({
-      fromVersion: 6,
-      toVersion: 6,
+      fromVersion: 8,
+      toVersion: 8,
       appliedVersions: [],
     });
 
@@ -339,11 +368,11 @@ describe("MikroOrmSqliteAdapter", () => {
     });
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 3,
-      toVersion: 6,
-      appliedVersions: [4, 5, 6],
+      toVersion: 8,
+      appliedVersions: [4, 5, 6, 7, 8],
     });
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 6 });
+      .resolves.toEqual({ user_version: 8 });
 
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
     expect(tables.map((table) => table.name)).toContain("sheet_effect_outbox");

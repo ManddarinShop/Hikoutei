@@ -1,8 +1,8 @@
 /** Construction options for a bounded effect-worker pass. */
 
-import type { SqlStorageAdapter } from "../sql.js";
+import type { SqlStorageAdapter } from "../sql/sql.js";
 import type { Dispatcher, RepairReplanFactory } from "./dispatcher.js";
-import type { TimingSink } from "./timing.js";
+import type { TimingSink } from "./pacing/timing.js";
 
 /** Shared construction options for a bounded effect-worker pass. */
 export interface EffectWorkerBaseOptions {
@@ -12,6 +12,14 @@ export interface EffectWorkerBaseOptions {
   readonly maxEffects: number;
   readonly writerRole?: string;
   readonly writerLeaseDurationMs?: number;
+  /**
+   * Stale-heartbeat takeover evidence bound in ms (feeds
+   * `ClaimLeaseOptions.heartbeatStaleBeforeMs`). Defaults to
+   * `DEFAULT_WRITER_LEASE_HEARTBEAT_STALE_MS`: a writer lease whose owner
+   * last heartbeated more than this long ago (while `lease_until` is still
+   * in the future) is presumed dead and may be taken over by this worker.
+   */
+  readonly writerLeaseHeartbeatStaleMs?: number;
   readonly effectLeaseDurationMs?: number;
   /** Internal transport timeout used to validate lease headroom. */
   readonly requestTimeoutMs?: number;
@@ -30,6 +38,14 @@ export interface EffectWorkerBaseOptions {
    * full provider runtime sets it; the batch controller owns the actual wait.
    */
   readonly appendDispatchIntervalMs?: number;
+  /**
+   * Maximum number of dispatch units run concurrently inside ONE pass
+   * (default 1 = the sequential read-ahead pipeline). Concurrency is gated
+   * per route: units whose route-busy key sets are free may overlap; a
+   * route's later unit never launches before its predecessor completes.
+   * Must be a positive safe integer.
+   */
+  readonly maxConcurrentUnits?: number;
   /** Shared supervisor clock used to refresh fencing timestamps after remote I/O. */
   readonly clock?: () => number;
   readonly makeRepairReplan?: RepairReplanFactory;

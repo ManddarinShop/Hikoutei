@@ -3,7 +3,7 @@
  * resolution (`resolveSystemStateReadinessReader`).
  *
  * The readiness helper is an OPTIONAL internal capability: feature/runtime
- * branches ship `src/application/sync/service/systemStateReadiness.ts`, but
+ * branches ship `packages/sync-engine/src/sync/service/systemStateReadiness.ts`, but
  * base branches (such as `develop`) that have not merged the feature work do
  * not. The runner must keep working there, degrading to an immediate-ready
  * no-op instead of failing to load, while still rethrowing real source or
@@ -57,10 +57,10 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     // specifier, so the load fails with the repo's specific ERR_MODULE_NOT_FOUND
     // shape: an internal `.js` under the source tree, imported from the `.ts`
     // source. That is the one legitimate fallback case.
-    const sourceUrl = "/repo/src/application/sync/service/systemStateReadiness.ts";
+    const sourceUrl = "/repo/packages/sync-engine/src/sync/service/systemStateReadiness.ts";
     const expectedError = Object.assign(
       new Error(
-        "Cannot find module '/repo/src/application/sync/service/systemStateReadiness.js' imported from " +
+        "Cannot find module '/repo/packages/sync-engine/src/sync/service/systemStateReadiness.js' imported from " +
           sourceUrl,
       ),
       { code: "ERR_MODULE_NOT_FOUND" },
@@ -81,7 +81,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     // A real runtime throw from the loaded `.ts` source is NOT the
     // unsupported-loader shape, so it must rethrow even though a stale dist
     // copy exists and canFallBackToDist() is true — never masked.
-    const sourceUrl = "/repo/src/application/sync/service/systemStateReadiness.ts";
+    const sourceUrl = "/repo/packages/sync-engine/src/sync/service/systemStateReadiness.ts";
     const runtimeError = new Error("boom at runtime");
     const loadDist = vi.fn();
     await expect(
@@ -101,7 +101,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     // A REAL dependency failure: ERR_MODULE_NOT_FOUND for a bare package, not
     // for an internal `.js` under the source tree — must rethrow, never masked
     // by a stale dist copy.
-    const sourceUrl = "/repo/src/application/sync/service/systemStateReadiness.ts";
+    const sourceUrl = "/repo/packages/sync-engine/src/sync/service/systemStateReadiness.ts";
     const depError = Object.assign(
       new Error("Cannot find package 'some-missing-pkg' imported from " + sourceUrl),
       { code: "ERR_MODULE_NOT_FOUND", name: "Error" },

@@ -151,8 +151,18 @@ export interface CreateTypedSheetsWithSyncOptions {
   readonly dbName: string;
   readonly entities: readonly HikouteiEntity[];
   readonly env?: Readonly<Record<string, string | undefined>>;
+  // Public API diagnostic type — literal level union is the external contract, not an internalLog emission site.
   readonly onDiagnostic?: (level: "info" | "error", message: string) => void;
   readonly adopt?: AdoptSpec;
+  /**
+   * Provider telemetry/tuning forwarded to the sync-service provider wiring
+   * (real-transport path only; inert in local-only mode). Mirrors the public
+   * `CreateTypedSheetsOptions.providerOptions` contract: the internal bridge
+   * accepts the full `GoogleSheetsApiProviderOptions`, so this narrower
+   * public shape flows through with zero cast, and the wrapper's call site
+   * pins the assignability.
+   */
+  readonly providerOptions?: import("./Hikoutei.js").HikouteiProviderOptions;
 }
 
 /**
@@ -168,15 +178,26 @@ export async function createTypedSheetsWithSync(
   options: CreateTypedSheetsWithSyncOptions,
 ): Promise<TypedSheetsWithSyncResult> {
   // Lazy import: the sync module graph loads only when sync actually starts.
+  // P8-C: routed through the composition root (see packages/composition/src/index.ts).
   const { createTypedSheetsWithSync: bridge } = await import(
-    "../application/sync/service/syncAutoStart.js"
+    "@hikoutei/composition/syncAutoStart.js"
   );
   const result = await bridge({
     dbName: options.dbName,
     entities: [...options.entities],
-    ...(options.env === undefined ? {} : { env: options.env }),
+    // Contract (see CreateTypedSheetsWithSyncOptions): env defaults to
+    // `process.env`, read at call time — exactly like `createTypedSheets()`
+    // in Hikoutei.ts. Omitting the forward would starve the autostart bridge
+    // (its internal default is `{}`) even when the host process env carries
+    // HIKOUTEI_SYNC_SPREADSHEET_URL / GOOGLE_APPLICATION_CREDENTIALS.
+    ...(options.env === undefined
+      ? { env: process.env as Readonly<Record<string, string | undefined>> }
+      : { env: options.env }),
     ...(options.onDiagnostic === undefined ? {} : { onDiagnostic: options.onDiagnostic }),
     ...(options.adopt === undefined ? {} : { adopt: options.adopt }),
+    ...(options.providerOptions === undefined
+      ? {}
+      : { providerOptions: options.providerOptions }),
   });
   // Drop the internal service handle from the public result: the runtime
   // handle is the application-facing contract.

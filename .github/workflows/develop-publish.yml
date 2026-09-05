@@ -1,18 +1,19 @@
 name: Publish develop package
 
-# Triggered by a develop release tag such as develop-v0.3.1. The tag must
-# exactly match the numeric version in package.json and package-lock.json; the
-# separate develop-version workflow creates the version commit and tag.
+# Triggered by a develop release tag such as develop-v0.9.31-dev.1. The tag
+# must exactly match the prerelease version in package.json and
+# package-lock.json; the separate develop-version workflow creates the version
+# commit and tag.
 #
-# The published package is tagged `latest`, so every develop merge becomes the
-# version a plain `npm install hikoutei` resolves. The main/stable channel also
-# publishes `latest` with globally-increasing minor versions; keep the two
-# channels aligned by merging main back into develop after each main release
-# (see docs/ci.md) so the develop patch line never trails the latest tag.
+# Channel contract: the develop channel publishes ONLY `-dev.N` prereleases
+# under the npm `dev` dist-tag, and the release tag must carry the suffix
+# (plain develop-vX.Y.Z tags are rejected fail-closed). The `latest` dist-tag
+# belongs exclusively to the main/stable channel (stable-publish.yml); a
+# plain `npm install hikoutei` never resolves a develop build.
 #
 # The workflow can also be dispatched manually for tag recovery: dispatch
-# with an existing develop release tag (for example develop-v0.8.65) to
-# recover a publish that failed or was skipped. The verify job checks out
+# with an existing develop release tag (for example develop-v0.9.31-dev.4)
+# to recover a publish that failed or was skipped. The verify job checks out
 # that exact tag and builds it in the same run, and publication repairs
 # (instead of failing on) versions that already exist on a registry.
 #
@@ -24,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing develop release tag to verify and publish (e.g. develop-v0.8.65); the tag must already exist in the repository."
+        description: "Existing develop release tag to verify and publish (e.g. develop-v0.9.31-dev.4); the tag must already exist in the repository."
         required: false
         type: string
 
@@ -63,10 +64,17 @@ jobs:
             exit 1
           fi
 
-          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          # A develop publish must carry the -dev.N prerelease suffix; a plain
+          # develop-vX.Y.Z tag is rejected fail-closed so this channel can
+          # never publish a stable-looking version.
+          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)(-dev\.([0-9]+))?$ ]]; then
+            if [[ -z "${BASH_REMATCH[4]:-}" ]]; then
+              echo "Develop release tag must be a -dev.N prerelease (develop-vX.Y.Z-dev.N); plain develop-vX.Y.Z tags are rejected: $tag" >&2
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
           else
-            echo "Develop release tag must be develop-vX.Y.Z: $tag" >&2
+            echo "Develop release tag must be develop-vX.Y.Z-dev.N: $tag" >&2
             exit 1
           fi
 
@@ -84,11 +92,15 @@ jobs:
           ref: ${{ github.event_name == 'push' && github.sha || format('refs/tags/{0}', steps.resolve-mode.outputs.tag) }}
           persist-credentials: false
 
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Validate release tag matches package versions
         shell: bash
@@ -99,10 +111,10 @@ jobs:
         run: |
           set -euo pipefail
           expected_version="$EXPECTED_VERSION"
-          if [[ "$TAG_NAME" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            tag_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          if [[ "$TAG_NAME" =~ ^develop-v([0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+)$ ]]; then
+            tag_version="${BASH_REMATCH[1]}"
           else
-            echo "Develop release tag must be develop-vX.Y.Z: $TAG_NAME" >&2
+            echo "Develop release tag must be develop-vX.Y.Z-dev.N: $TAG_NAME" >&2
             exit 1
           fi
           if [[ "$tag_version" != "$expected_version" ]]; then
@@ -139,19 +151,19 @@ jobs:
           test "$published_kohkai_version" = "$kohkai_version"
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck production code
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Typecheck tests
-        run: npm run typecheck:test
+        run: pnpm run typecheck:test
 
       - name: Run unit and contract tests
-        run: npm test
+        run: pnpm test
 
       - name: Build package
-        run: npm run build
+        run: pnpm run build
 
       - name: Verify package name and contents
         shell: bash
@@ -178,8 +190,22 @@ jobs:
           node -e '
             const pkg = require(process.argv[1]);
             const expected = process.argv[2];
-            const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
-            if (pkg.name !== "hikoutei" || !isStable || pkg.version !== expected) process.exit(1);
+            // Fail closed on the develop channel: only -dev.N prereleases may
+            // be packed, so a stable-looking version never reaches publication.
+            // Each rejection prints a fixed, non-sensitive line before exit;
+            // the actual version/payload is never echoed to the logs.
+            if (pkg.name !== "hikoutei") {
+              process.stderr.write("develop package name must be hikoutei\n");
+              process.exit(1);
+            }
+            if (!/^\d+\.\d+\.\d+-dev\.\d+$/.test(pkg.version)) {
+              process.stderr.write("develop package must be a X.Y.Z-dev.N prerelease; received a stable version\n");
+              process.exit(1);
+            }
+            if (pkg.version !== expected) {
+              process.stderr.write("develop package version does not match the expected release version\n");
+              process.exit(1);
+            }
           ' "$RUNNER_TEMP/hikoutei-develop-package.json" "$EXPECTED_VERSION"
           (cd "$package_dir" && sha256sum "$package_file" > hikoutei-develop-package.sha256)
           # Record the exact commit the release tag points at, plus the
@@ -196,7 +222,9 @@ jobs:
           # lookup in publish still finds exactly one tarball.
           ikisaki_dir="$package_dir/ikisaki"
           mkdir -p "$ikisaki_dir"
-          (cd packages/ikisaki && npm run build && npm pack --silent --pack-destination "$ikisaki_dir")
+          # npm pack here is deliberate (tarball production, registry act
+          # unchanged until P8-DD); the BUILD runs through pnpm.
+          (cd packages/ikisaki && pnpm run build && npm pack --silent --pack-destination "$ikisaki_dir")
           # Exact ikisaki artifact integrity: exactly one tarball whose
           # package name/version match the workspace manifest and the version
           # record the publish job reads. The checksum accompanies the tarball
@@ -335,10 +363,17 @@ jobs:
             exit 1
           fi
 
-          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          # A develop publish must carry the -dev.N prerelease suffix; a plain
+          # develop-vX.Y.Z tag is rejected fail-closed so this channel can
+          # never publish a stable-looking version.
+          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)(-dev\.([0-9]+))?$ ]]; then
+            if [[ -z "${BASH_REMATCH[4]:-}" ]]; then
+              echo "Develop release tag must be a -dev.N prerelease (develop-vX.Y.Z-dev.N); plain develop-vX.Y.Z tags are rejected: $tag" >&2
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
           else
-            echo "Develop release tag must be develop-vX.Y.Z: $tag" >&2
+            echo "Develop release tag must be develop-vX.Y.Z-dev.N: $tag" >&2
             exit 1
           fi
 
@@ -362,6 +397,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          # Publish runs without pnpm on purpose (it only publishes the
+          # verified pre-built tarball). setup-node v5's package-manager-cache
+          # defaults to true and probes pnpm-lock.yaml, failing the job with
+          # "Unable to locate executable file: pnpm"; publish needs no cache.
+          package-manager-cache: false
 
       - name: Download develop package
         uses: actions/download-artifact@v7
@@ -404,7 +444,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CHANNEL_TAG: latest
+          CHANNEL_TAG: dev
           EXPECTED_VERSION: ${{ steps.resolve-mode.outputs.version }}
         run: |
           set -euo pipefail
@@ -424,9 +464,12 @@ jobs:
           fi
           printf '//npm.pkg.github.com/:_authToken=%s\n' "$GH_PACKAGES_TOKEN" > .npmrc
 
-          # Fail-closed inline dist-tag read (no source-controlled scripts):
-          # prints the current tag version, or empty when the tag/package is
-          # absent; any other registry error aborts.
+          # Fail-closed dist-tag read (inline npm queries; the only repository
+          # code executed here is the unit-tested semver-monotonic.mjs
+          # comparator below, from the same verified checkout): prints the
+          # current tag version, or empty when the tag/package is absent; any
+          # other registry error aborts. Accepts stable X.Y.Z and dev-channel
+          # X.Y.Z-dev.N values.
           read_dist_tag() {
             local output
             if output="$(npm view "$1" "dist-tags.$2" --json --registry="$3" 2>&1)"; then
@@ -437,7 +480,7 @@ jobs:
                   const v = JSON.parse(raw);
                   if (typeof v === "string" && v.length > 0) { process.stdout.write(v); process.exit(0); }
                 } catch {}
-                if (/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(raw)) { process.stdout.write(raw); process.exit(0); }
+                if (/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-dev\.(0|[1-9]\d*))?$/.test(raw)) { process.stdout.write(raw); process.exit(0); }
                 process.stderr.write("unexpected dist-tag value: " + raw + "\n");
                 process.exit(1);
               ' "$output"
@@ -449,21 +492,20 @@ jobs:
           }
 
           # Aborts when target would move the channel backward; an empty
-          # current tag (first write) is always allowed.
+          # current tag (first write) is always allowed. Prerelease-aware
+          # ordering (X.Y.Z triple, then the -dev.N counter numerically) lives
+          # in the unit-tested scripts/ci/semver-monotonic.mjs so the dev
+          # channel never moves backward, whichever package is checked.
           check_monotonic() {
             local current="$1" target="$2" label="$3"
             if [[ -z "$current" ]]; then
               echo "$label: no existing tag; first write allowed"
               return 0
             fi
-            if node -e '
-              const [a, b] = process.argv.slice(1).map((v) => v.split(".").map((n) => BigInt(n)));
-              for (let i = 0; i < 3; i++) { if (a[i] > b[i]) process.exit(1); if (a[i] < b[i]) process.exit(0); }
-              process.exit(0);
-            ' "$current" "$target"; then
+            if node scripts/ci/semver-monotonic.mjs --monotonic --current="$current" --target="$target" >/dev/null; then
               echo "$label: current=$current target=$target"
             else
-              echo "refusing to move $label backward: current=$current target=$target" >&2
+              echo "refusing to move $label backward (or invalid version): current=$current target=$target" >&2
               exit 1
             fi
           }
@@ -490,7 +532,7 @@ jobs:
           # 2. npmjs @hikoutei/ikisaki: the verified artifact records the
           #    pinned version; existence decides whether this run publishes it
           #    or only repairs the tag. Channel monotonicity is checked
-          #    whenever this run will write the `latest` channel tag.
+          #    whenever this run will write the channel tag.
           if [[ ! -f "$package_dir/ikisaki/version.txt" ]]; then
             echo "verified artifact is missing the ikisaki version record" >&2
             exit 1
@@ -541,10 +583,11 @@ jobs:
             exit 1
           fi
           if [[ "$IKISAKI_EXISTS" == "1" ]]; then
-            # Version already exists; ensure the `latest` dist-tag
-            # (monotonicity preflighted).
-            npm dist-tag add "@hikoutei/ikisaki@${ikisaki_version}" latest --registry=https://registry.npmjs.org
-            echo "@hikoutei/ikisaki@${ikisaki_version} already published; ensured latest dist-tag."
+            # Version already exists; ensure the channel dist-tag
+            # (monotonicity preflighted). Never touch `latest`: that tag
+            # belongs to the stable channel.
+            npm dist-tag add "@hikoutei/ikisaki@${ikisaki_version}" "$CHANNEL_TAG" --registry=https://registry.npmjs.org
+            echo "@hikoutei/ikisaki@${ikisaki_version} already published; ensured $CHANNEL_TAG dist-tag."
           else
             # The pinned ikisaki version is missing from the registry (the
             # original release never made it there). Verify the exact
@@ -576,8 +619,7 @@ jobs:
               const expected = process.argv[2];
               if (pkg.name !== "@hikoutei/ikisaki" || pkg.version !== expected) process.exit(1);
             ' "$RUNNER_TEMP/hikoutei-ikisaki-package.json" "$ikisaki_version"
-            # Publish the verified pre-built tarball under the `latest`
-            # channel tag.
+            # Publish the verified pre-built tarball under the channel tag.
             npm publish "$ikisaki_tarball" --tag "$CHANNEL_TAG" --access public --provenance
           fi
 
@@ -596,10 +638,11 @@ jobs:
           fi
           expected_version="$EXPECTED_VERSION"
           # The resolve step already validated the mode's version derivation
-          # (develop-vX.Y.Z tag or strict numeric input); re-assert the strict
-          # shape here so a bad resolved value fails before any registry write.
-          if [[ ! "$expected_version" =~ ^([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*)$ ]]; then
-            echo "resolved version must be strict numeric semver X.Y.Z: $expected_version" >&2
+          # (develop-vX.Y.Z-dev.N tag); re-assert the dev-prerelease shape
+          # here so a bad resolved value fails before any registry write. A
+          # stable-looking version on the develop channel fails closed.
+          if [[ ! "$expected_version" =~ ^([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*)-dev\.([0-9]+)$ ]]; then
+            echo "resolved version must be a develop prerelease X.Y.Z-dev.N: $expected_version" >&2
             exit 1
           fi
           package_dir="$RUNNER_TEMP/hikoutei-develop-package"
@@ -627,14 +670,29 @@ jobs:
           node -e '
             const pkg = require(process.argv[1]);
             const expected = process.argv[2];
-            const isStable = /^\d+\.\d+\.\d+$/.test(pkg.version);
-            if (pkg.name !== "hikoutei" || !isStable || pkg.version !== expected) process.exit(1);
+            // Fail closed on the develop channel: only -dev.N prereleases may
+            // be published, so a stable-looking version never reaches the
+            // registry through this workflow. Each rejection prints a fixed,
+            // non-sensitive line before exit; the actual version/payload is
+            // never echoed to the logs.
+            if (pkg.name !== "hikoutei") {
+              process.stderr.write("develop package name must be hikoutei\n");
+              process.exit(1);
+            }
+            if (!/^\d+\.\d+\.\d+-dev\.\d+$/.test(pkg.version)) {
+              process.stderr.write("develop package must be a X.Y.Z-dev.N prerelease; received a stable version\n");
+              process.exit(1);
+            }
+            if (pkg.version !== expected) {
+              process.stderr.write("develop package version does not match the expected release version\n");
+              process.exit(1);
+            }
           ' "$RUNNER_TEMP/hikoutei-develop-package.json" "$expected_version"
           # Existence and channel monotonicity were preflighted (authenticated,
           # before any write); this step consumes those results and never
           # re-queries a registry after a write. Idempotent recovery: a manual
           # retry of an already-published version must not fail the workflow.
-          # When the exact version already exists, repair/ensure the `latest`
+          # When the exact version already exists, repair/ensure the channel
           # dist-tag instead of merely skipping; the preflight step already
           # failed the workflow if the target would move the channel backward.
           if [[ "$ROOT_EXISTS" == "1" ]]; then

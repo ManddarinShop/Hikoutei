@@ -4,11 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   NORMALIZED_CELL_KINDS,
   STABLE_ENCODING_ERROR_CODES,
-} from "../src/shared/encoding/constants.js";
+} from "@hikoutei/contracts/encoding/constants.js";
 import {
   stableEncode,
   stableHash,
-} from "../src/shared/encoding/index.js";
+} from "@hikoutei/contracts/encoding/index.js";
 import {
   canonicalJson as genericCanonicalJson,
   isCanonicalJsonValue,
@@ -16,8 +16,8 @@ import {
   CANONICAL_CODEC_ERROR_CODES,
 } from "@hikoutei/kohkai";
 import { stableEncode as genericStableEncode } from "@hikoutei/kohkai";
-import type { StableValue } from "../src/shared/encoding/types.js";
-import { StableEncodingError } from "../src/domain/errors/index.js";
+import type { StableValue } from "@hikoutei/contracts/encoding/types.js";
+import { StableEncodingError } from "@hikoutei/contracts/domain/errors/index.js";
 
 type CanonicalCodecVector = {
   readonly name: string;

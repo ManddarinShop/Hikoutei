@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { defineTypedSheetsEntity } from "../src/api/entity.js";
+import { defineTypedSheetsEntity } from "@hikoutei/sync-engine/api/entity.js";
 import {
   resolveEntityDescriptors,
   type EntityDescriptorResolutionFailure,
-} from "../src/api/internalEntityRegistry.js";
+} from "@hikoutei/sync-engine/api/internalEntityRegistry.js";
 
 /** Captures structured failures instead of throwing, for direct assertions. */
 function captureResolutionError(): {

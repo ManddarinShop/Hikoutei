@@ -26,23 +26,23 @@ import {
 } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { APPLICABILITY_KINDS } from "../src/shared/state/constants.js";
-import type { NormalizedCell } from "../src/shared/encoding/types.js";
-import { SYNC_PROJECTIONS } from "../src/application/sync/sheetsContract/constants.js";
-import { computeSyncVisibleHash } from "../src/application/sync/sheetsContract/syncSheets.js";
+import { APPLICABILITY_KINDS } from "@hikoutei/contracts/state/constants.js";
+import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
+import { SYNC_POSTCONDITION_MODES, SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
+import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
-import { MikroOrmSqliteAdapter } from "../src/adapter/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
-import type { SqlExecutor } from "../src/adapter/persistence/contracts/sql.js";
-import { migrateSqliteSchema } from "../src/infrastructure/storage/sqlite/migrateSchema.js";
+import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
+import type { SqlExecutor } from "@hikoutei/contracts/storage/sql.js";
+import { migrateSqliteSchema } from "@hikoutei/storage/storage/sqlite/migrateSchema.js";
 import {
   runUserInputCleanupScan,
   type CleanupScanReport,
-} from "../src/application/sync/outbound/reconciliation/CleanupScanner.js";
+} from "@hikoutei/sync-engine/sync/outbound/reconciliation/CleanupScanner.js";
 import {
   listReadyEffectsWithAdapter,
   runEffectWorkerWithAdapter,
 } from "@hikoutei/ikisaki";
-import { SheetsEffectDispatcher } from "../src/application/sync/outbound/SheetsEffectDispatcher.js";
+import { SheetsEffectDispatcher } from "@hikoutei/sync-engine/sync/outbound/SheetsEffectDispatcher.js";
 
 const EntitySchema = defineEntity({
   name: "CleanupEntity",
@@ -165,6 +165,64 @@ describe("runUserInputCleanupScan", () => {
       fenceClaimed: false,
     });
     await expect(listReadyEffectsWithAdapter(adapter, 10)).resolves.toHaveLength(0);
+  });
+
+  it("dispatches a candidate-reconcile batch as one deferred apply and closes it from the applied probe classification", async () => {
+    // Regression for the unified-write-engine deferred routing: a
+    // candidate_reconcile effect on the User_Input CAS route must leave the
+    // dispatcher as ONE applyEffects batch in deferred postcondition mode
+    // (the provider writes target+receipt in one atomic batchUpdate, so no
+    // inline verify read runs), and an effect whose dispatch response was
+    // lost must stay open until the recovery probe classifies it `applied`.
+    // Contract/failure mode: if the dispatcher ever stops requesting deferred
+    // for this route, applyPostconditionMode flips to "inline" and the extra
+    // verify read returns; if the probe close regressed, the outbox row
+    // would sit delivery-uncertain instead of reaching "applied".
+    const { adapter, provider } = await bootstrap({
+      sheetRows: [inputRow("bound-a", "user-1", "stale")],
+      bindings: [
+        binding("binding-a", "bound-a", "active", {
+          entityId: "entity:u1",
+          canonicalFields: { id: cell("user-1"), status: cell("open") },
+        }),
+      ],
+    });
+    // The scan rewrites the drifted bound row from canonical state through a
+    // candidate_reconcile effect on the User_Input route.
+    await runCleanupScan(adapter, provider);
+    const pending = await listReadyEffectsWithAdapter(adapter, 10);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      effect_kind: "candidate_reconcile",
+      projection: "user_input",
+      target_kind: "projection_row",
+    });
+
+    // Make the write dispatch response-uncertain AFTER the fake applies the
+    // row and records its receipt: the effect can then only be closed by the
+    // durable probe classification, exactly like a real transport response
+    // loss on a deferred batch.
+    provider.dropNextResponseAfterApply();
+    const dispatcher = new SheetsEffectDispatcher({ provider, storage: adapter });
+    await expect(runEffectWorkerWithAdapter({
+      storage: adapter,
+      dispatcher,
+      workerId: "worker-deferred",
+      now: 5_000,
+      maxEffects: 10,
+    })).resolves.toMatchObject({ selected: 1, claimed: 1, applied: 1, responseLossRecovered: 1 });
+
+    // One apply call carried the whole reconcile batch, and it requested the
+    // deferred postcondition mode (target+receipt share the provider's single
+    // atomic batch; the fake relabels applied results as acknowledged).
+    expect(provider.applyEffectsCalls).toBe(1);
+    expect(provider.applyPostconditionMode).toBe(SYNC_POSTCONDITION_MODES.DEFERRED);
+    // The close came from the recovery probe reading the receipt-backed row
+    // as applied, not from the lost dispatch response.
+    expect(provider.postconditionBatchReads).toBe(1);
+    await expect(outboxStatus(adapter, pending[0]!.effect_id)).resolves.toBe("applied");
+    expect(provider.readRow("physical-input", "bound-a").fields.status)
+      .toEqual({ kind: "string", value: "open" });
   });
 
   it("deletes empty-ID and orphan rows (including quarantined and duplicated-identity orphans) and keeps the durable evidence", async () => {
@@ -764,7 +822,7 @@ async function seedRegistry(
     }
     for (const quarantine of args.quarantines ?? []) {
       await sql.run(
-        "INSERT INTO quarantine_record (quarantine_id, event_id, observation_id, logical_sheet_id, row_binding_id, reason, before_row_json, after_row_json, fields_json, repair_fields_json, repair_state, candidate_payload_json, created_at, updated_at) VALUES (?, NULL, NULL, ?, ?, 'duplicate', NULL, NULL, '{}', '[]', NULL, NULL, 1_000, 1_000)",
+        "INSERT INTO quarantine_record (quarantine_id, event_id, observation_id, logical_sheet_id, row_binding_id, reason, before_row_json, after_row_json, fields_json, created_at, updated_at) VALUES (?, NULL, NULL, ?, ?, 'duplicate', NULL, NULL, '{}', 1_000, 1_000)",
         [quarantine.quarantineId, "logical-clean", quarantine.bindingId],
       );
     }
