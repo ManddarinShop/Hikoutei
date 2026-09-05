@@ -1,18 +1,21 @@
 name: Publish develop package
 
-# Triggered by a develop release tag such as develop-v0.9.31-dev.1. The tag
+# Triggered by a develop release tag such as develop-v0.10.1-dev. The tag
 # must exactly match the prerelease version in package.json and
 # package-lock.json; the separate develop-version workflow creates the version
 # commit and tag.
 #
-# Channel contract: the develop channel publishes ONLY `-dev.N` prereleases
-# under the npm `dev` dist-tag, and the release tag must carry the suffix
-# (plain develop-vX.Y.Z tags are rejected fail-closed). The `latest` dist-tag
+# Channel contract: the develop channel publishes ONLY `X.Y.Z-dev` prereleases
+# (the patch marches forward from the stable line, e.g. latest 0.10.0 →
+# 0.10.1-dev, then 0.10.2-dev) under the npm `dev` dist-tag, and the release
+# tag must carry the fixed `-dev` suffix (plain develop-vX.Y.Z tags AND legacy
+# develop-vX.Y.Z-dev.N tags are rejected fail-closed; the two formats never
+# mix). The `latest` dist-tag
 # belongs exclusively to the main/stable channel (stable-publish.yml); a
 # plain `npm install hikoutei` never resolves a develop build.
 #
 # The workflow can also be dispatched manually for tag recovery: dispatch
-# with an existing develop release tag (for example develop-v0.9.31-dev.4)
+# with an existing develop release tag (for example develop-v0.10.1-dev)
 # to recover a publish that failed or was skipped. The verify job checks out
 # that exact tag and builds it in the same run, and publication repairs
 # (instead of failing on) versions that already exist on a registry.
@@ -25,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing develop release tag to verify and publish (e.g. develop-v0.9.31-dev.4); the tag must already exist in the repository."
+        description: "Existing develop release tag to verify and publish (e.g. develop-v0.10.1-dev); the tag must already exist in the repository."
         required: false
         type: string
 
@@ -64,17 +67,21 @@ jobs:
             exit 1
           fi
 
-          # A develop publish must carry the -dev.N prerelease suffix; a plain
-          # develop-vX.Y.Z tag is rejected fail-closed so this channel can
-          # never publish a stable-looking version.
-          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)(-dev\.([0-9]+))?$ ]]; then
-            if [[ -z "${BASH_REMATCH[4]:-}" ]]; then
-              echo "Develop release tag must be a -dev.N prerelease (develop-vX.Y.Z-dev.N); plain develop-vX.Y.Z tags are rejected: $tag" >&2
-              exit 1
-            fi
-            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+          # A develop publish must carry the fixed `-dev` prerelease suffix
+          # (e.g. develop-v0.10.1-dev); a plain develop-vX.Y.Z tag is rejected
+          # fail-closed so this channel can never publish a stable-looking
+          # version, and a legacy develop-vX.Y.Z-dev.N tag is rejected
+          # fail-closed so the two formats never mix.
+          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)-dev$ ]]; then
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-dev"
+          elif [[ "$tag" =~ ^develop-v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            echo "Old develop tag format rejected: $tag uses -dev.N; the develop channel now publishes X.Y.Z-dev (e.g. develop-v0.10.1-dev)" >&2
+            exit 1
+          elif [[ "$tag" =~ ^develop-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Develop release tag must be a -dev prerelease (develop-vX.Y.Z-dev); plain develop-vX.Y.Z tags are rejected: $tag" >&2
+            exit 1
           else
-            echo "Develop release tag must be develop-vX.Y.Z-dev.N: $tag" >&2
+            echo "Develop release tag must be develop-vX.Y.Z-dev: $tag" >&2
             exit 1
           fi
 
@@ -111,10 +118,13 @@ jobs:
         run: |
           set -euo pipefail
           expected_version="$EXPECTED_VERSION"
-          if [[ "$TAG_NAME" =~ ^develop-v([0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+)$ ]]; then
+          if [[ "$TAG_NAME" =~ ^develop-v([0-9]+\.[0-9]+\.[0-9]+-dev)$ ]]; then
             tag_version="${BASH_REMATCH[1]}"
+          elif [[ "$TAG_NAME" =~ ^develop-v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            echo "Old develop tag format rejected: legacy -dev.N tags never mix with the X.Y.Z-dev channel: $TAG_NAME" >&2
+            exit 1
           else
-            echo "Develop release tag must be develop-vX.Y.Z-dev.N: $TAG_NAME" >&2
+            echo "Develop release tag must be develop-vX.Y.Z-dev: $TAG_NAME" >&2
             exit 1
           fi
           if [[ "$tag_version" != "$expected_version" ]]; then
@@ -190,7 +200,7 @@ jobs:
           node -e '
             const pkg = require(process.argv[1]);
             const expected = process.argv[2];
-            // Fail closed on the develop channel: only -dev.N prereleases may
+            // Fail closed on the develop channel: only X.Y.Z-dev prereleases may
             // be packed, so a stable-looking version never reaches publication.
             // Each rejection prints a fixed, non-sensitive line before exit;
             // the actual version/payload is never echoed to the logs.
@@ -198,8 +208,8 @@ jobs:
               process.stderr.write("develop package name must be hikoutei\n");
               process.exit(1);
             }
-            if (!/^\d+\.\d+\.\d+-dev\.\d+$/.test(pkg.version)) {
-              process.stderr.write("develop package must be a X.Y.Z-dev.N prerelease; received a stable version\n");
+            if (!/^\d+\.\d+\.\d+-dev$/.test(pkg.version)) {
+              process.stderr.write("develop package must be a X.Y.Z-dev prerelease; received a stable version\n");
               process.exit(1);
             }
             if (pkg.version !== expected) {
@@ -363,17 +373,21 @@ jobs:
             exit 1
           fi
 
-          # A develop publish must carry the -dev.N prerelease suffix; a plain
-          # develop-vX.Y.Z tag is rejected fail-closed so this channel can
-          # never publish a stable-looking version.
-          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)(-dev\.([0-9]+))?$ ]]; then
-            if [[ -z "${BASH_REMATCH[4]:-}" ]]; then
-              echo "Develop release tag must be a -dev.N prerelease (develop-vX.Y.Z-dev.N); plain develop-vX.Y.Z tags are rejected: $tag" >&2
-              exit 1
-            fi
-            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}${BASH_REMATCH[4]}"
+          # A develop publish must carry the fixed `-dev` prerelease suffix
+          # (e.g. develop-v0.10.1-dev); a plain develop-vX.Y.Z tag is rejected
+          # fail-closed so this channel can never publish a stable-looking
+          # version, and a legacy develop-vX.Y.Z-dev.N tag is rejected
+          # fail-closed so the two formats never mix.
+          if [[ "$tag" =~ ^develop-v([0-9]+)\.([0-9]+)\.([0-9]+)-dev$ ]]; then
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}-dev"
+          elif [[ "$tag" =~ ^develop-v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            echo "Old develop tag format rejected: $tag uses -dev.N; the develop channel now publishes X.Y.Z-dev (e.g. develop-v0.10.1-dev)" >&2
+            exit 1
+          elif [[ "$tag" =~ ^develop-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Develop release tag must be a -dev prerelease (develop-vX.Y.Z-dev); plain develop-vX.Y.Z tags are rejected: $tag" >&2
+            exit 1
           else
-            echo "Develop release tag must be develop-vX.Y.Z-dev.N: $tag" >&2
+            echo "Develop release tag must be develop-vX.Y.Z-dev: $tag" >&2
             exit 1
           fi
 
@@ -468,8 +482,8 @@ jobs:
           # code executed here is the unit-tested semver-monotonic.mjs
           # comparator below, from the same verified checkout): prints the
           # current tag version, or empty when the tag/package is absent; any
-          # other registry error aborts. Accepts stable X.Y.Z and dev-channel
-          # X.Y.Z-dev.N values.
+          # other registry error aborts. Accepts stable X.Y.Z, legacy
+          # dev-channel X.Y.Z-dev.N (migration reads), and new X.Y.Z-dev values.
           read_dist_tag() {
             local output
             if output="$(npm view "$1" "dist-tags.$2" --json --registry="$3" 2>&1)"; then
@@ -480,7 +494,7 @@ jobs:
                   const v = JSON.parse(raw);
                   if (typeof v === "string" && v.length > 0) { process.stdout.write(v); process.exit(0); }
                 } catch {}
-                if (/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-dev\.(0|[1-9]\d*))?$/.test(raw)) { process.stdout.write(raw); process.exit(0); }
+                if (/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)((?:-dev\.(0|[1-9]\d*))|(-dev))?$/.test(raw)) { process.stdout.write(raw); process.exit(0); }
                 process.stderr.write("unexpected dist-tag value: " + raw + "\n");
                 process.exit(1);
               ' "$output"
@@ -493,7 +507,9 @@ jobs:
 
           # Aborts when target would move the channel backward; an empty
           # current tag (first write) is always allowed. Prerelease-aware
-          # ordering (X.Y.Z triple, then the -dev.N counter numerically) lives
+          # ordering (numeric X.Y.Z triple first; a `-dev` prerelease is below
+          # its same-triple stable; legacy `-dev.N` still reads above stable)
+          # lives
           # in the unit-tested scripts/ci/semver-monotonic.mjs so the dev
           # channel never moves backward, whichever package is checked.
           check_monotonic() {
@@ -638,11 +654,12 @@ jobs:
           fi
           expected_version="$EXPECTED_VERSION"
           # The resolve step already validated the mode's version derivation
-          # (develop-vX.Y.Z-dev.N tag); re-assert the dev-prerelease shape
+          # (develop-vX.Y.Z-dev tag); re-assert the exact -dev prerelease shape
           # here so a bad resolved value fails before any registry write. A
-          # stable-looking version on the develop channel fails closed.
-          if [[ ! "$expected_version" =~ ^([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*)\.([0-9]|[1-9][0-9]*)-dev\.([0-9]+)$ ]]; then
-            echo "resolved version must be a develop prerelease X.Y.Z-dev.N: $expected_version" >&2
+          # stable-looking version or a legacy -dev.N version on the develop
+          # channel fails closed.
+          if [[ ! "$expected_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
+            echo "resolved version must be a develop prerelease X.Y.Z-dev" >&2
             exit 1
           fi
           package_dir="$RUNNER_TEMP/hikoutei-develop-package"
@@ -670,7 +687,7 @@ jobs:
           node -e '
             const pkg = require(process.argv[1]);
             const expected = process.argv[2];
-            // Fail closed on the develop channel: only -dev.N prereleases may
+            // Fail closed on the develop channel: only X.Y.Z-dev prereleases may
             // be published, so a stable-looking version never reaches the
             // registry through this workflow. Each rejection prints a fixed,
             // non-sensitive line before exit; the actual version/payload is
@@ -679,8 +696,8 @@ jobs:
               process.stderr.write("develop package name must be hikoutei\n");
               process.exit(1);
             }
-            if (!/^\d+\.\d+\.\d+-dev\.\d+$/.test(pkg.version)) {
-              process.stderr.write("develop package must be a X.Y.Z-dev.N prerelease; received a stable version\n");
+            if (!/^\d+\.\d+\.\d+-dev$/.test(pkg.version)) {
+              process.stderr.write("develop package must be a X.Y.Z-dev prerelease; received a stable version\n");
               process.exit(1);
             }
             if (pkg.version !== expected) {

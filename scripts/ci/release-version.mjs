@@ -14,9 +14,9 @@ const RELEASE_VERSION_ERROR_CODES = {
   INVALID_BUMP: "invalid_bump",
 };
 const STABLE_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-/** A develop-channel prerelease carrying the numeric stable base to release. */
+/** A develop-channel prerelease carrying the numeric stable base to release: legacy `-dev.N` or new bare `-dev`. */
 const DEV_BASE_VERSION_PATTERN =
-  /^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-dev\.[0-9]+$/;
+  /^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-dev\.[0-9]+|-dev)$/;
 const RELEASE_BUMPS = new Set(["patch", "minor"]);
 
 function parseStableVersion(value) {
@@ -33,10 +33,11 @@ function parseStableVersion(value) {
 /**
  * Normalizes a manifest version to the numeric base the stable train bumps.
  *
- * A develop→main merge can leave `X.Y.Z-dev.N` in the committed manifest; the
- * stable release must bump its numeric base, so the caller normalizes here
- * before the strict `computeReleaseVersion` path (which stays numeric-only).
- * Foreign prerelease/build metadata is rejected fail-closed.
+ * A develop→main merge can leave `X.Y.Z-dev.N` (legacy) or `X.Y.Z-dev`
+ * (current) in the committed manifest; the stable release must bump its
+ * numeric base, so the caller normalizes here before the strict
+ * `computeReleaseVersion` path (which stays numeric-only). Foreign
+ * prerelease/build metadata is rejected fail-closed.
  *
  * @param {unknown} value
  * @returns {{ status: "valid", version: string } | { status: "invalid", code: string, reason: string }}
@@ -54,7 +55,7 @@ export function normalizeStableBaseVersion(value) {
   return {
     status: "invalid",
     code: RELEASE_VERSION_ERROR_CODES.INVALID_BASE_VERSION,
-    reason: `base version must be numeric X.Y.Z or X.Y.Z-dev.N: ${String(value)}`,
+    reason: `base version must be numeric X.Y.Z, X.Y.Z-dev.N, or X.Y.Z-dev: ${String(value)}`,
   };
 }
 
