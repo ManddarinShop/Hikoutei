@@ -44,6 +44,13 @@ export function validateOptions(options: EffectWorkerBaseOptions): void {
     throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.MAX_FAST_APPEND_POSITIVE_REQUIRED);
   }
   if (
+    options.maxConcurrentUnits !== undefined &&
+    (!Number.isSafeInteger(options.maxConcurrentUnits) ||
+      options.maxConcurrentUnits < POSITIVE_SAFE_INTEGER_MINIMUM)
+  ) {
+    throw new WorkerOptionsError(WORKER_OPTIONS_ERROR_CODES.MAX_CONCURRENT_UNITS_POSITIVE_REQUIRED);
+  }
+  if (
     options.appendDispatchIntervalMs !== undefined &&
     (!Number.isSafeInteger(options.appendDispatchIntervalMs) ||
       options.appendDispatchIntervalMs < NON_NEGATIVE_SAFE_INTEGER_MINIMUM)

@@ -173,7 +173,7 @@ async function importInternalLoggerReset() {
     ) {
       throw error;
     }
-    const distModule = await import("../../../dist/shared/observability/internalLog.js");
+    const distModule = await import("../../../dist/sync-engine/shared/observability/internalLog.js");
     return distModule.resetHikouteiInternalLoggerForTests;
   }
 }

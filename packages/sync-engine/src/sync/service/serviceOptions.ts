@@ -82,6 +82,12 @@ export interface InternalSyncServiceOptions {
   readonly writerId?: string;
   readonly workerId?: string;
   readonly maxEffects?: number;
+  /**
+   * Dispatch-unit concurrency inside one worker pass (default 1 = sequential
+   * read-ahead pipeline). Route-disjoint units may overlap; same-route units
+   * always serialize. Internal tuning knob, not part of the root API.
+   */
+  readonly maxConcurrentUnits?: number;
   /** Internal lease for one remote effect batch; must exceed provider timeout. */
   readonly effectLeaseDurationMs?: number;
   readonly effectIdleIntervalMs?: number;

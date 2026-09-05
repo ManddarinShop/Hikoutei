@@ -30,13 +30,19 @@ export const DEFAULT_EFFECT_LEASE_DURATION_MS = 120_000;
  * does not turn one route into repeated partial (`hasMore`) responses and the
  * deferred/requeue churn they cause.
  */
-export const EFFECT_BATCH_LIMIT = 300;
+export const EFFECT_BATCH_LIMIT = 1_000;
 /**
  * Maximum number of effects leased before dispatch starts. Selection may use a
  * larger SQLite upper bound, but a worker pass must not lease an unbounded
  * backlog while a remote batch is in flight.
  */
 export const MAX_IN_FLIGHT_EFFECTS = EFFECT_BATCH_LIMIT;
+/**
+ * Default dispatch-unit concurrency inside one worker pass. 1 keeps the
+ * sequential read-ahead pipeline (byte-identical legacy behavior); a larger
+ * value lets route-disjoint units overlap.
+ */
+export const DEFAULT_MAX_CONCURRENT_UNITS = 1;
 /**
  * Maximum eligible fast-append rows one worker pass may select/claim in the
  * real provider runtime. The bulk append operation writes the whole reserved

@@ -38,6 +38,14 @@ export interface EffectWorkerBaseOptions {
    * full provider runtime sets it; the batch controller owns the actual wait.
    */
   readonly appendDispatchIntervalMs?: number;
+  /**
+   * Maximum number of dispatch units run concurrently inside ONE pass
+   * (default 1 = the sequential read-ahead pipeline). Concurrency is gated
+   * per route: units whose route-busy key sets are free may overlap; a
+   * route's later unit never launches before its predecessor completes.
+   * Must be a positive safe integer.
+   */
+  readonly maxConcurrentUnits?: number;
   /** Shared supervisor clock used to refresh fencing timestamps after remote I/O. */
   readonly clock?: () => number;
   readonly makeRepairReplan?: RepairReplanFactory;

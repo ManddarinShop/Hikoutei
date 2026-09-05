@@ -314,6 +314,7 @@ function optionalWorkerOptions(
   readonly requestTimeoutMs?: number;
   readonly idleIntervalMs?: number;
   readonly maxFastAppendCandidates?: number;
+  readonly maxConcurrentUnits?: number;
   readonly appendDispatchIntervalMs?: number;
   readonly batchController?: AdaptiveEffectBatchController;
   readonly onTiming?: SyncTimingSink;
@@ -342,6 +343,9 @@ function optionalWorkerOptions(
   return {
     ...(options.workerId === undefined ? {} : { workerId: options.workerId }),
     ...(options.maxEffects === undefined ? {} : { maxEffects: options.maxEffects }),
+    ...(options.maxConcurrentUnits === undefined
+      ? {}
+      : { maxConcurrentUnits: options.maxConcurrentUnits }),
     ...(options.effectLeaseDurationMs === undefined ? {} : { effectLeaseDurationMs: options.effectLeaseDurationMs }),
     ...(outboundTimeoutMs === undefined ? {} : { requestTimeoutMs: outboundTimeoutMs }),
     ...(options.effectIdleIntervalMs === undefined ? {} : { idleIntervalMs: options.effectIdleIntervalMs }),
