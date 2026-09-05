@@ -45,6 +45,34 @@ export {
   type TimingSink,
 } from "./pacing/timing.js";
 
+// --- Request-start pacing (interval limiters + quota governor) ---
+export {
+  RATE_LIMIT_OPTIONS_ERROR_CODES,
+  RateLimitOptionsError,
+  ReadQoSScheduler,
+  RequestStartLimiter,
+  type RateLimitOptionErrorCode,
+  type ReadQoSClass,
+  type RequestStartAdmission,
+  type RequestStartLimiterOptions,
+} from "./pacing/rateLimiter.js";
+
+export {
+  DEFAULT_QUOTA_GOVERNOR_TIMING,
+  QUOTA_GOVERNOR_LANES,
+  QUOTA_PACING_STATES,
+  QuotaPacingGovernor,
+  RollingQuotaBudget,
+  isQuotaLimitedOutcome,
+  type BudgetReservation,
+  type QuotaGovernorLane,
+  type QuotaGovernorTimingDefaults,
+  type QuotaPacingGovernorOptions,
+  type QuotaPacingState,
+  type RollingQuotaBudgetAdmission,
+  type RollingQuotaBudgetOptions,
+} from "./pacing/quotaGovernor.js";
+
 // --- Constants ---
 export {
   APPEND_DISPATCH_THROTTLE_INTERVAL_MS,

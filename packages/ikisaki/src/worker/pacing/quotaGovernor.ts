@@ -32,8 +32,7 @@
  * reserve successive interval slots without any rate cap per window.
  */
 
-import { GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
-import { PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
+import { PRESENCE_KINDS, type Presence } from "../../contract/state.js";
 import {
   RATE_LIMIT_OPTIONS_ERROR_CODES,
   RateLimitOptionsError, } from "./rateLimiter.js";
@@ -90,9 +89,49 @@ interface LaneState {
   steppedDown: boolean;
 }
 
+/**
+ * Quota/backoff markers the governor paces against.
+ *
+ * The Sheets provider owns these numbers and passes its own defaults at
+ * construction; the inlined fallback matches those defaults so direct
+ * constructions behave identically.
+ */
+export interface QuotaGovernorTimingDefaults {
+  /** Multiplicative decrease factor applied per observed quota event. */
+  readonly backoffGrowthFactor: number;
+  /** Ceiling for the AIMD pacing multiplier, as a multiple of base. */
+  readonly backoffMaxMultiplier: number;
+  /** Additive increase divisor per recovery step. */
+  readonly recoveryStepFactor: number;
+  /** Successful starts of quiet before one recovery step. */
+  readonly recoverySuccessThreshold: number;
+  /** Elapsed ms since the last quota event that alone earns a recovery step. */
+  readonly recoveryQuietMs: number;
+  /** HTTP status that marks a quota-limited response. */
+  readonly quotaLimitHttpStatus: number;
+  /** Remote code that marks a quota-limited response without a status. */
+  readonly quotaLimitRemoteCode: string;
+}
+
+/** Fallback markers matching the Sheets provider defaults. */
+export const DEFAULT_QUOTA_GOVERNOR_TIMING: QuotaGovernorTimingDefaults = {
+  backoffGrowthFactor: 2,
+  backoffMaxMultiplier: 4,
+  recoveryStepFactor: 2,
+  recoverySuccessThreshold: 25,
+  recoveryQuietMs: 10_000,
+  quotaLimitHttpStatus: 429,
+  quotaLimitRemoteCode: "RESOURCE_EXHAUSTED",
+};
+
 export interface QuotaPacingGovernorOptions {
   /** Configured base pacing interval for both lanes. */
   readonly baseIntervalMs: number;
+  /**
+   * Quota/backoff markers; the Sheets provider passes its own defaults at
+   * construction. Omitted falls back to the matching inlined markers.
+   */
+  readonly timingDefaults?: QuotaGovernorTimingDefaults;
   /** Injectable clock for deterministic tests; defaults to Date.now. */
   readonly now?: () => number;
 }
@@ -108,11 +147,13 @@ export interface QuotaPacingGovernorOptions {
  */
 export class QuotaPacingGovernor {
   private readonly baseIntervalMs: number;
+  private readonly timing: QuotaGovernorTimingDefaults;
   private readonly now: () => number;
   private readonly lanes: Record<QuotaGovernorLane, LaneState>;
 
   public constructor(options: QuotaPacingGovernorOptions) {
     this.baseIntervalMs = options.baseIntervalMs;
+    this.timing = options.timingDefaults ?? DEFAULT_QUOTA_GOVERNOR_TIMING;
     this.now = options.now ?? Date.now;
     this.lanes = {
       [QUOTA_GOVERNOR_LANES.READ]: {
@@ -149,8 +190,8 @@ export class QuotaPacingGovernor {
   public recordQuotaLimited(lane: QuotaGovernorLane): void {
     const state = this.lanes[lane];
     state.multiplier = Math.min(
-      state.multiplier * GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_GROWTH_FACTOR,
-      GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_MAX_MULTIPLIER,
+      state.multiplier * this.timing.backoffGrowthFactor,
+      this.timing.backoffMaxMultiplier,
     );
     state.lastQuotaEventAt = this.now();
     state.quietStarts = 0;
@@ -171,8 +212,8 @@ export class QuotaPacingGovernor {
     state.quietStarts += 1;
     const quietElapsed = this.now() - state.lastQuotaEventAt;
     if (
-      state.quietStarts < GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_SUCCESS_THRESHOLD &&
-      quietElapsed < GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_QUIET_MS
+      state.quietStarts < this.timing.recoverySuccessThreshold &&
+      quietElapsed < this.timing.recoveryQuietMs
     ) {
       return;
     }
@@ -189,7 +230,7 @@ export class QuotaPacingGovernor {
     if (state.multiplier === 1) return;
     if (
       this.now() - state.lastQuotaEventAt >=
-      GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_QUIET_MS
+      this.timing.recoveryQuietMs
     ) {
       this.stepDown(state);
     }
@@ -198,7 +239,7 @@ export class QuotaPacingGovernor {
   /** One additive-increase step: ~10% down, clamped at nominal (1x). */
   private stepDown(state: LaneState): void {
     state.multiplier = Math.max(
-      state.multiplier / GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_STEP_FACTOR,
+      state.multiplier / this.timing.recoveryStepFactor,
       1,
     );
     state.lastQuotaEventAt = this.now();
@@ -233,13 +274,13 @@ export class QuotaPacingGovernor {
 export function isQuotaLimitedOutcome(outcome: {
   readonly httpStatus: Presence<number>;
   readonly code: Presence<string>;
-}): boolean {
+}, timing: QuotaGovernorTimingDefaults = DEFAULT_QUOTA_GOVERNOR_TIMING): boolean {
   const byStatus =
     outcome.httpStatus.kind === PRESENCE_KINDS.PRESENT &&
-    outcome.httpStatus.value === GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_HTTP_STATUS;
+    outcome.httpStatus.value === timing.quotaLimitHttpStatus;
   const byCode =
     outcome.code.kind === PRESENCE_KINDS.PRESENT &&
-    outcome.code.value === GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_REMOTE_CODE;
+    outcome.code.value === timing.quotaLimitRemoteCode;
   return byStatus || byCode;
 }
 

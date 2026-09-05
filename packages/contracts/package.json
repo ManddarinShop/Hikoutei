@@ -36,6 +36,7 @@
     "typecheck:test": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@hikoutei/ikisaki": "0.1.13",
     "@hikoutei/kohkai": "0.1.0",
     "zod": "^4.4.3"
   },

@@ -80,12 +80,12 @@ import {
 } from "./transport/googleSheetsApiTransport.js";
 import { ReceiptReadCursor } from "./model/receiptCursor.js";
 import { createReadCalibration } from "./model/readPlan.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "./transport/rateLimiter.js";
+import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/ikisaki";
 import {
   QUOTA_GOVERNOR_LANES,
   QuotaPacingGovernor,
   RollingQuotaBudget,
-} from "./transport/quotaGovernor.js";
+} from "@hikoutei/ikisaki";
 import type { GoogleSheetsApiProviderDeps } from "./operations/shared.js";
 import { PromiseTailLock } from "./operations/shared.js";
 import type {
@@ -279,6 +279,15 @@ export class GoogleSheetsApiSyncProvider
       // existed.
       const quotaGovernor = new QuotaPacingGovernor({
         baseIntervalMs: intervalMs,
+        timingDefaults: {
+          backoffGrowthFactor: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_GROWTH_FACTOR,
+          backoffMaxMultiplier: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_MAX_MULTIPLIER,
+          recoveryStepFactor: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_STEP_FACTOR,
+          recoverySuccessThreshold: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_SUCCESS_THRESHOLD,
+          recoveryQuietMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_QUIET_MS,
+          quotaLimitHttpStatus: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_HTTP_STATUS,
+          quotaLimitRemoteCode: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_REMOTE_CODE,
+        },
         now: this.now,
       });
       slots.push({

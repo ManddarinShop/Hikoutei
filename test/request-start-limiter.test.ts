@@ -13,7 +13,7 @@ import {
   RATE_LIMIT_OPTIONS_ERROR_CODES,
   RateLimitOptionsError,
   RequestStartLimiter,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+} from "@hikoutei/ikisaki";
 
 describe("RequestStartLimiter", () => {
   it("waits only the remaining interval since the previous start", async () => {
