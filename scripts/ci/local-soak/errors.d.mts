@@ -31,3 +31,16 @@ export function identityShiftedTransientResult(error: unknown): {
   reason: "identity-shifted-transient";
   reasonTag: string;
 };
+
+/**
+ * Resolves which human fields were ingested as recorded conflicts: the
+ * subset of `fields` whose `field` has an unresolved conflict row with a
+ * decoded `user_value` string-equal to its `expectedValue`. Reads only
+ * `field_name`/`user_value`/`status` (via `context.dbName` read-only, or
+ * the `context.queryConflictRows()` test seam); raw values are compared,
+ * never recorded.
+ */
+export function conflictRecordedForFields(
+  context: object,
+  fields: readonly { field: string; expectedValue: unknown }[],
+): Promise<Set<string>>;

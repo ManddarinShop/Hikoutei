@@ -23,7 +23,7 @@
  * scenario hunts and is ALWAYS a failure.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -111,7 +111,8 @@ export function isIdentityShiftedRejection(error) {
  * - edit rejected otherwise -> failure;
  * - edit resolved -> the value MUST be observable on the intended identity
  *   row (scenario-level proof that a "successful" edit never wrote to the
- *   wrong identity — the #364 invariant); a missing/wrong cell is a failure;
+ *   wrong identity — the #364 invariant); a missing/wrong cell is a failure
+ *   unless the value was ingested as an OPEN sync_conflict (recorded, ok);
  * - shifter delete rejected with `identity_shifted` -> expected (its own
  *   guard failed closed); rejected otherwise -> failure.
  *
@@ -125,6 +126,11 @@ export async function classifyRaceOutcome({ plan, editResult, shiftResult, clien
   // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
   // never raw text) so a failed record says WHICH invariant fired.
   const failureKinds = new Set();
+  // Conflict-recorded outcome: a resolved edit whose value is not observable
+  // on the intended Sheet identity may still have been ingested as an OPEN
+  // sync_conflict after an in-flight outbox cycle — recorded, not written to
+  // the wrong identity. Only the not-landed outcome consults the records.
+  let conflictRecorded = false;
   if (editResult.status === "rejected") {
     if (isIdentityShiftedRejection(editResult.reason)) expectedErrors += 1;
     else {
@@ -134,8 +140,15 @@ export async function classifyRaceOutcome({ plan, editResult, shiftResult, clien
   } else {
     const landed = await verifyEditLanded(client, spreadsheetId, tabName, plan, context);
     if (!landed) {
-      failures += 1;
-      failureKinds.add("edit-not-landed");
+      const recorded = await conflictRecordedForFields(context, [
+        { field: plan.target.field, expectedValue: plan.humanValue },
+      ]);
+      if (recorded.has(plan.target.field)) {
+        conflictRecorded = true;
+      } else {
+        failures += 1;
+        failureKinds.add("edit-not-landed");
+      }
     }
   }
   if (shiftResult.status === "rejected") {
@@ -146,6 +159,11 @@ export async function classifyRaceOutcome({ plan, editResult, shiftResult, clien
     }
   }
   const kinds = [...failureKinds].sort();
+  // A conflict-recorded edit with no other failure is the recorded (not
+  // wrong-identity) outcome: ok with an empty failureKinds channel.
+  if (conflictRecorded && failures === 0) {
+    return { status: "ok", expectedErrors, failures: 0, reason: "conflict-recorded" };
+  }
   return failures > 0
     ? { status: "failed", expectedErrors, failures, reason: "scenario-error", failureKinds: kinds }
     : { status: "ok", expectedErrors, failures: 0, reason: "guard-invariant-verified" };

@@ -336,4 +336,56 @@ describe("localHumanWriteRace scenario", () => {
     // The dedicated row is still removed in cleanup.
     expect(em.rows()).toEqual([]);
   });
+
+  it("accepts an OPEN sync_conflict as conflict-recorded when the winner never settles (ok)", async () => {
+    // Core harness fix: neither candidate value settles in the authority
+    // within the bound (the outbox-gated poll skips the row), but the human
+    // value was ingested as an OPEN sync_conflict — recorded, not lost.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The authority never settles on either candidate value.
+    em.findOneOverride = (id) => {
+      const row = em.store.get(id);
+      return row ? { ...row, [plan.target.field]: "foreign-value" } : null;
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 120),
+      queryConflictRows: async () => [{
+        fieldName: plan.target.field,
+        userValue: plan.humanValue,
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(result.failureKinds).toBeUndefined();
+    // Guaranteed cleanup still removed the dedicated row.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("still skips winner-not-verified when the winner never settles and no conflict is recorded", async () => {
+    // The negative control: an unobserved winner with NO conflict record is
+    // still a truthful skip, never an unobserved ok.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    em.findOneOverride = (id) => {
+      const row = em.store.get(id);
+      return row ? { ...row, [plan.target.field]: "foreign-value" } : null;
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 120),
+      queryConflictRows: async () => [],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("winner-not-verified");
+    expect(result.failures).toBe(0);
+    expect(em.rows()).toEqual([]);
+  });
 });

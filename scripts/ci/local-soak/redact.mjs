@@ -199,6 +199,12 @@ export const KNOWN_REASON_CODES = Object.freeze([
   // delete provably committed), with no silent loss: the race outcome is a
   // verified ok.
   "race-winner-verified",
+  // The human value never landed in the authority row, but an OPEN
+  // sync_conflict records the exact human field value: the edit was ingested
+  // as a conflict (the outbox-gated poll observes the row only after the
+  // effect cycle completes), which the scenario hypothesis accepts as a
+  // consistent outcome. Recorded as ok with an empty failureKinds channel.
+  "conflict-recorded",
   // The invalid human input's dedicated row projection never appeared in the
   // Sheet within the bounded window, so the invalid write was never attempted
   // (the scenario records a truthful skip).

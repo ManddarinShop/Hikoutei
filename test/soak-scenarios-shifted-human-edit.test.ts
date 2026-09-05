@@ -395,4 +395,29 @@ describe("shiftedHumanEdit scenario", () => {
     expect(result.failures).toBe(1);
     expect(em.rows()).toEqual([]);
   });
+
+  it("accepts an OPEN sync_conflict as conflict-recorded when the resolved edit is not on the intended identity", async () => {
+    // Core harness fix: the resolved edit's value is not observable on the
+    // intended Sheet identity, but it was ingested as an OPEN sync_conflict
+    // — recorded on the intended binding, not written to the wrong identity.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    wireProjection(em, client, plan);
+    client.misplaceMutate = true;
+    const context = {
+      ...liveContext(plan, client, em),
+      queryConflictRows: async () => [{
+        fieldName: plan.target.field,
+        userValue: plan.humanValue,
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    // Guaranteed cleanup removed both dedicated rows.
+    expect(em.rows()).toEqual([]);
+  });
 });

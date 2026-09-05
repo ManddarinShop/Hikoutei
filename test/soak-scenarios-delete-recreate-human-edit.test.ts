@@ -323,4 +323,51 @@ describe("deleteRecreateHumanEdit scenario", () => {
     // store — the module removes only what it finds.
     expect(em.rows().length).toBe(1);
   });
+
+  it("accepts an OPEN sync_conflict as conflict-recorded when the final row never shows the human value (ok)", async () => {
+    // Core harness fix: the recreated row never carries the human value
+    // within the bound (the outbox-gated poll skips the row), but the value
+    // was ingested as an OPEN sync_conflict — recorded, not lost during
+    // reactivation.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // NOTE: client.em is deliberately NOT wired, so the human edit never
+    // commits to the fake authority — exactly the skipped-row shape.
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 150),
+      queryConflictRows: async () => [{
+        fieldName: plan.target.field,
+        userValue: plan.humanValue,
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(result.expectedErrors).toBe(0);
+    expect(result.failureKinds).toBeUndefined();
+    // Guaranteed cleanup removes the dedicated row.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("still skips winner-not-verified when the value never lands and no conflict is recorded", async () => {
+    // The negative control: a final row without the human value and NO
+    // conflict record is still a truthful skip, never an unobserved ok.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 150),
+      queryConflictRows: async () => [],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("winner-not-verified");
+    expect(result.failures).toBe(0);
+    expect(em.rows()).toEqual([]);
+  });
 });

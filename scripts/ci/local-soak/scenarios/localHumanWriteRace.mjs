@@ -11,7 +11,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -270,16 +270,27 @@ export async function execute({ plan, context }) {
     }
     // A proven winner (a concrete value in the authority, or a provably
     // committed delete) with no duplicates and no silent loss is a verified
-    // ok; an unprovable winner is a truthful skip (never an unobserved ok).
-    // An identity-shifted transient rejection outranks the ok/skip winner
+    // ok; an unprovable winner is a truthful skip (never an unobserved ok) —
+    // unless the human value was ingested as an OPEN sync_conflict, which is
+    // the recorded (not lost) outcome the hypothesis accepts. An
+    // identity-shifted transient rejection outranks the ok/skip winner
     // verdict (a truthful transient skip), but NEVER outranks real failures
     // counted earlier in this cycle.
+    let conflictRecorded = false;
+    if (failures === 0 && humanTransient === undefined && winner === "unobserved") {
+      const recorded = await conflictRecordedForFields(context, [
+        { field: plan.target.field, expectedValue: plan.humanValue },
+      ]);
+      conflictRecorded = recorded.has(plan.target.field);
+    }
     result = failures > 0
       ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
       : humanTransient !== undefined
         ? humanTransient
         : winner !== "unobserved"
         ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
+        : conflictRecorded
+        ? { status: "ok", expectedErrors: 0, failures: 0, reason: "conflict-recorded" }
         : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {

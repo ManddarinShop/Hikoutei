@@ -12,7 +12,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -297,13 +297,27 @@ export async function execute({ plan, context }) {
       // async-landing wait), so it is passed the current failure count.
       const humanLandedNow = await observeHumanFields(context, token, plan, critical, humanAccepted, failures);
       humanLanded = humanLandedNow;
-      if (humanLanded === "partial") {
-        failures += 1;
-        failureKinds.add("partial-landing");
-      }
-      if (humanLanded === "not-applied" && humanAccepted) {
-        failures += 1;
-        failureKinds.add("silent-loss");
+      // Conflict-recorded outcome: when an outbox effect for this binding was
+      // in flight, the poll gate deliberately skips the row and the human
+      // edit is ingested later as an OPEN sync_conflict — a VALID consistent
+      // outcome per the hypothesis. Before counting a row-based
+      // partial/silent-loss failure, every non-landed field is resolved
+      // against the conflict records: landed OR conflict-recorded is
+      // accounted, and only a field with NEITHER is lost.
+      let conflictRecorded = false;
+      if (humanLanded === "partial" || (humanLanded === "not-applied" && humanAccepted)) {
+        const outcome = await resolveHumanFieldsOutcome(context, token, plan, critical);
+        if (outcome === "landed") {
+          humanLanded = "landed";
+        } else if (outcome === "conflict-recorded") {
+          conflictRecorded = true;
+        } else if (humanLanded === "partial") {
+          failures += 1;
+          failureKinds.add("partial-landing");
+        } else {
+          failures += 1;
+          failureKinds.add("silent-loss");
+        }
       }
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
@@ -311,6 +325,8 @@ export async function execute({ plan, context }) {
           ? humanTransient
           : humanLanded === "landed"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
+          : conflictRecorded
+          ? { status: "ok", expectedErrors: 0, failures: 0, reason: "conflict-recorded" }
           : deadlineExpired
             ? { status: "skipped", expectedErrors: 0, failures: 0, reason: "deadline-expired" }
             : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
@@ -398,14 +414,17 @@ export async function execute({ plan, context }) {
  * Every settle read goes through a FRESH fork of the public EntityManager so
  * the identity-mapped write em never hides an inbound worker update. The
  * delete is allowed only on durable/complete terminal evidence: ALL human
- * fields landed (atomic application) across consecutive reads, or the write
- * never started (a truthful bounded skip). When the proof times out the
- * caller must NOT delete (returning false) — deleting would tombstone the
- * binding under an in-flight observation (the #381 race).
+ * fields landed (atomic application) across consecutive reads, every
+ * non-landed field recorded as an OPEN sync_conflict (a recorded conflict IS
+ * terminal — the ingestion completed as a conflict), or the write never
+ * started (a truthful bounded skip). When the proof times out the caller
+ * must NOT delete (returning false) — deleting would tombstone the binding
+ * under an in-flight observation (the #381 race).
  *
  * @returns {Promise<boolean>} true when it is safe to delete the row
- *   (write never started, or confirmed complete landing); false when the
- *   proof timed out and the row must be left in place.
+ *   (write never started, confirmed complete landing, or every non-landed
+ *   field recorded as an OPEN conflict); false when the proof timed out
+ *   and the row must be left in place.
  */
 async function settleTerminalBeforeCleanup(
   context, token, plan, critical, humanStarted, humanAccepted, humanLanded,
@@ -417,6 +436,14 @@ async function settleTerminalBeforeCleanup(
   // A confirmed complete landing is terminal proof: all human fields landed
   // atomically, so the inbound observation is drained and the delete is safe.
   if (humanLanded === "landed") return true;
+  // Immediate terminal proof before the bounded wait: a recorded OPEN
+  // conflict is DURABLE evidence the ingestion already completed as a
+  // conflict, so the cleanup delete is safe without spending the window
+  // (the observation above may have consumed the whole deadline polling a
+  // row the gate deliberately skips). The loop below still re-checks every
+  // iteration for a conflict that lands DURING the settle window.
+  const immediate = await resolveHumanFieldsOutcome(context, token, plan, critical);
+  if (immediate !== "unresolved") return true;
   // Otherwise the remote outcome is uncertain: an accepted write may still be
   // mid-drain, a STARTED write may have rejected AFTER a remote mutation, or a
   // partial landing may precede later field landing. Require complete
@@ -427,19 +454,28 @@ async function settleTerminalBeforeCleanup(
   );
   let landedStreak = 0;
   while (Date.now() < deadline) {
-    let landed = 0;
+    let landedFields = [];
     await critical(async () => {
       const row = await context.em.fork().findOne(token, { id: plan.target.targetId });
       if (row === null) return;
-      landed = plan.humanFields.filter((field) => row[field] === plan.humanValues[field]).length;
+      landedFields = plan.humanFields.filter((field) => row[field] === plan.humanValues[field]);
     });
     // Require COMPLETE evidence: all human fields landed (atomic
     // application), confirmed across consecutive reads (durable) before the
-    // cleanup delete is ordered. A partial landing is not terminal proof.
-    if (landed === plan.humanFields.length) {
+    // cleanup delete is ordered. A partial landing is not terminal proof —
+    // unless every non-landed field is recorded as an OPEN sync_conflict:
+    // the conflict record is itself durable terminal proof (the ingestion
+    // completed as a conflict), so the delete is ordered after it.
+    if (landedFields.length === plan.humanFields.length) {
       landedStreak += 1;
       if (landedStreak >= SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS) return true;
     } else {
+      const missing = plan.humanFields.filter((field) => !landedFields.includes(field));
+      const recorded = await conflictRecordedForFields(
+        context,
+        missing.map((field) => ({ field, expectedValue: plan.humanValues[field] })),
+      );
+      if (missing.every((field) => recorded.has(field))) return true;
       landedStreak = 0;
     }
     await boundedSleep(SCENARIO_OBSERVE_POLL_MS, deadline);
@@ -450,6 +486,38 @@ async function settleTerminalBeforeCleanup(
   // race). The caller records a cleanup failure so the leftover row is
   // surfaced, never silently removed.
   return false;
+}
+
+/**
+ * Resolves the terminal per-field outcome of the human multi-field edit.
+ *
+ * Reads the dedicated row once (fresh fork, under the shared lock) and
+ * resolves every non-landed field against the OPEN sync_conflict records:
+ *
+ * - "landed": ALL human fields show their human values (a late landing
+ *   the bounded observation may have just missed).
+ * - "conflict-recorded": every non-landed field has an OPEN conflict
+ *   record carrying the exact human value (landed OR conflicted covers
+ *   every field — the consistent outcome).
+ * - "unresolved": some field has NEITHER a row landing NOR a conflict
+ *   record (genuinely lost).
+ *
+ * @returns {Promise<"landed" | "conflict-recorded" | "unresolved">}
+ */
+async function resolveHumanFieldsOutcome(context, token, plan, critical) {
+  let landedFields = [];
+  await critical(async () => {
+    const row = await context.em.fork().findOne(token, { id: plan.target.targetId });
+    if (row === null) return;
+    landedFields = plan.humanFields.filter((field) => row[field] === plan.humanValues[field]);
+  });
+  if (landedFields.length === plan.humanFields.length) return "landed";
+  const missing = plan.humanFields.filter((field) => !landedFields.includes(field));
+  const recorded = await conflictRecordedForFields(
+    context,
+    missing.map((field) => ({ field, expectedValue: plan.humanValues[field] })),
+  );
+  return missing.every((field) => recorded.has(field)) ? "conflict-recorded" : "unresolved";
 }
 
 /**

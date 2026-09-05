@@ -526,4 +526,87 @@ describe("multiFieldHumanEdit scenario", () => {
     // write never started, so there is no in-flight observation to protect).
     expect(em.rows()).toEqual([]);
   });
+
+  it("accepts OPEN sync_conflicts carrying the human values as conflict-recorded (ok)", async () => {
+    // Core harness fix: when an outbox effect for the binding is in flight,
+    // the poll gate deliberately skips the row and the human edit is
+    // ingested only after the effect cycle completes — as OPEN conflicts.
+    // A row-only observation would misclassify that as silent loss; the
+    // conflict-recorded outcome is consistent (apply atomically OR record
+    // as a conflict), so it must report ok with 0 failures.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The authority NEVER shows the human values (the row is skipped while
+    // the effect is in flight), but the ingestion completed as OPEN
+    // sync_conflicts carrying the exact human values.
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 300),
+      queryConflictRows: async () => plan.humanFields.map((field) => ({
+        fieldName: field,
+        userValue: plan.humanValues[field],
+        status: "OPEN",
+      })),
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(result.expectedErrors).toBe(0);
+    // The conflict-recorded outcome carries no failure kinds.
+    expect(result.failureKinds).toBeUndefined();
+    // A recorded OPEN conflict IS terminal proof: the cleanup delete is
+    // ordered after it, so the dedicated row is still removed.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("accepts a mixed outcome: one field landed, the other conflict-recorded (ok)", async () => {
+    // All human values accounted — one landed in the row, the other recorded
+    // as an OPEN conflict — is the consistent outcome, never partial loss.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // Only the first human field ever lands in the authority.
+    const landedField = plan.humanFields[0]!;
+    const recordedField = plan.humanFields[1]!;
+    em.findOneOverride = (id) => {
+      const row = em.store.get(id);
+      return row ? { ...row, [landedField]: plan.humanValues[landedField] } : null;
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 300),
+      queryConflictRows: async () => [{
+        fieldName: recordedField,
+        userValue: plan.humanValues[recordedField],
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("still reports silent-loss when the human value is neither landed nor conflict-recorded", async () => {
+    // The negative control: an ACCEPTED human write whose value never lands
+    // AND has no OPEN conflict record is genuinely lost — still a failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 120),
+      queryConflictRows: async () => [],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.failures).toBeGreaterThanOrEqual(1);
+    expect(result.failureKinds).toEqual(expect.arrayContaining(["silent-loss"]));
+    // No landing and no conflict record: the settle proof times out and the
+    // row is left in place (never tombstoned under an unproven outcome).
+    expect(em.rows().length).toBe(1);
+  });
 });
