@@ -15,6 +15,7 @@ import * as deleteRecreateHumanEdit from "../scripts/ci/local-soak/scenarios/del
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { SYSTEM_WINS_RESOLVE_SUFFIX } from "../scripts/ci/local-soak/errors.mjs";
 import { FakeEm, liveContext, projectPersistedRow } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
@@ -335,13 +336,22 @@ describe("deleteRecreateHumanEdit scenario", () => {
     projectPersistedRow(em, client, plan);
     // NOTE: client.em is deliberately NOT wired, so the human edit never
     // commits to the fake authority — exactly the skipped-row shape.
+    // The conflict record clears once the cleanup's system-wins advance
+    // lands (the stored value carries the resolve suffix), modeling the
+    // worker applying the acknowledge_system resolution.
+    const oracleMutations: unknown[] = [];
     const context = {
       ...liveContext(plan, client, em, Date.now() + 150),
-      queryConflictRows: async () => [{
-        fieldName: plan.target.field,
-        userValue: plan.humanValue,
-        status: "OPEN",
-      }],
+      oracle: { applyMutation: (mutation: unknown) => oracleMutations.push(mutation) },
+      queryConflictRows: async () => {
+        const value = em.store.get(plan.target.targetId)?.[plan.target.field];
+        const resolved = typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX);
+        return resolved ? [] : [{
+          fieldName: plan.target.field,
+          userValue: plan.humanValue,
+          status: "OPEN",
+        }];
+      },
     };
     const result = await scenario.execute({ plan, context });
     expect(result.status).toBe("ok");
@@ -349,8 +359,44 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(result.failures).toBe(0);
     expect(result.expectedErrors).toBe(0);
     expect(result.failureKinds).toBeUndefined();
-    // Guaranteed cleanup removes the dedicated row.
+    // The resolve-then-delete cleanup removed the dedicated row and mirrored
+    // the delete into the oracle (never deleted through the OPEN conflict).
     expect(em.rows()).toEqual([]);
+    expect(oracleMutations).toContainEqual({
+      op: "delete",
+      entity: plan.target.entityName,
+      id: plan.target.targetId,
+    });
+  });
+
+  it("records cleanup-unresolved-conflict and keeps the row when the conflict never clears", async () => {
+    // The resolve-then-delete cleanup advances the conflicted field, but the
+    // conflict record never leaves the blocking state within the bound. The
+    // row must be KEPT — never deleted through a blocking conflict — and
+    // the distinct stable kind recorded as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryConflictRows: async () => [{
+        fieldName: plan.target.field,
+        userValue: plan.humanValue,
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-unresolved-conflict"]);
+    // The row is kept (never tombstoned under the blocking conflict), and
+    // the resolve attempt advanced the conflicted field through the EM.
+    expect(em.rows().length).toBe(1);
+    const kept = em.store.get(plan.target.targetId)?.[plan.target.field];
+    expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
   });
 
   it("still skips winner-not-verified when the value never lands and no conflict is recorded", async () => {

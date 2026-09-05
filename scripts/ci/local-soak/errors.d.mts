@@ -44,3 +44,31 @@ export function conflictRecordedForFields(
   context: object,
   fields: readonly { field: string; expectedValue: unknown }[],
 ): Promise<Set<string>>;
+
+/**
+ * Suffix `systemWinsResolveValue` appends to the current canonical string
+ * value to force a genuine same-field canonical advance (a same-value
+ * re-affirm cannot trigger the implicit system-wins path).
+ */
+export const SYSTEM_WINS_RESOLVE_SUFFIX: string;
+
+/**
+ * Deterministic system-wins advance for one current canonical value:
+ * always differs from `current` while staying type-valid for the field.
+ */
+export function systemWinsResolveValue(current: unknown): unknown;
+
+/**
+ * Resolves OPEN/NEEDS_REBASE conflicts on one dedicated race row via the
+ * public EntityManager (system-wins advance + bounded clear wait).
+ * True when the caller may delete; false when the wait expired (keep row).
+ */
+export function resolveRecordedConflicts(
+  context: object,
+  options: {
+    token: unknown;
+    targetId: string;
+    fields: readonly { field: string; expectedValue: unknown }[];
+    critical?: (action: () => Promise<void>) => Promise<void>;
+  },
+): Promise<boolean>;

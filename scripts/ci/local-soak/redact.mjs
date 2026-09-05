@@ -393,6 +393,10 @@ export const KNOWN_FAILURE_KINDS = Object.freeze([
   // Cleanup accounting kinds.
   "cleanup-proof-timeout",
   "cleanup-delete-failed",
+  // A conflict-recorded cleanup whose bounded resolve wait expired: the row
+  // is kept (never deleted through a blocking conflict) and surfaced as
+  // this distinct real failure kind.
+  "cleanup-unresolved-conflict",
   // human-delete-row authority-retention kinds.
   "authority-row-lost",
   "retention-unobserved",

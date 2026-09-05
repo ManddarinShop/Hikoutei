@@ -3,6 +3,8 @@
  * Depends only on the redaction allowlists.
  */
 import { sanitizeErrorClass, sanitizeStableCode, sanitizeStatusClass } from "./redact.mjs";
+import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "./constants.mjs";
+import { boundedSleep } from "./timing.mjs";
 
 /** Extracts the error name and optional raw code/status class for sanitization. */
 export function describeError(error) {
@@ -172,6 +174,115 @@ async function readOpenConflictRows(context) {
     }
   } catch {
     return [];
+  }
+}
+
+/**
+ * Suffix a conflict-recorded cleanup appends to the current canonical
+ * string value to force a genuine same-field canonical advance.
+ *
+ * A same-value re-affirm CANNOT trigger the library's implicit system-wins
+ * path: `shouldTriggerImplicitSystemWins` requires the committed value to
+ * DIFFER from the conflict's stored canonical value (plus a strict revision
+ * increase), so writing the canonical value back is a silent no-op that
+ * leaves the blocking OPEN conflict in place. The suffixed value always
+ * differs by construction (strictly longer), deterministically, with no new
+ * randomness. Values are never recorded (compared, never stored).
+ */
+export const SYSTEM_WINS_RESOLVE_SUFFIX = "-syswin";
+
+/**
+ * Deterministic system-wins advance for one current canonical value.
+ *
+ * Produces a value that always differs from `current` (the trigger
+ * requirement above) while staying type-valid for the field: strings grow
+ * the resolve suffix, numbers step, booleans flip, dates tick forward. The
+ * row is deleted immediately after the conflicts clear, so this value is
+ * transient; the human value stays preserved in the conflict audit trail.
+ *
+ * @param {unknown} current the current canonical (authority) value.
+ * @returns {unknown} a deterministically different value of the same shape.
+ */
+export function systemWinsResolveValue(current) {
+  if (typeof current === "string") return `${current}${SYSTEM_WINS_RESOLVE_SUFFIX}`;
+  if (typeof current === "number") return current + 1;
+  if (typeof current === "boolean") return !current;
+  if (current instanceof Date) return new Date(current.getTime() + 1000);
+  return `${String(current)}${SYSTEM_WINS_RESOLVE_SUFFIX}`;
+}
+
+/**
+ * Resolves OPEN/NEEDS_REBASE conflicts on one dedicated race row via the
+ * public EntityManager so the guaranteed cleanup can delete it.
+ *
+ * A conflict-recorded race row cannot be deleted directly: the mapped flush
+ * guard fails a delete closed while ANY active candidate pointer exists
+ * (`hasMappedRowActiveCandidateWithSql` blocks regardless of conflict
+ * status, so NEEDS_REBASE still blocks). This advances every given field to
+ * a deterministically different canonical value through a fresh fork and
+ * flushes — the documented implicit system-wins trigger — then waits
+ * (bounded) for the conflicts to leave the blocking query
+ * (`conflictRecordedForFields` empty for these fields).
+ *
+ * The acknowledge_system command applies SYNCHRONOUSLY inside the resolve
+ * flush transaction (conflict RESOLVED, candidate pointer cleared) in the
+ * happy path, so the first poll already clears. Only a deferred command (a
+ * processing/delivery_uncertain predecessor owns the conflict stream) needs
+ * worker polling passes to apply — that is what the bounded wait covers.
+ * The wait never outlives `context.deadlineAtMs` and never deletes through
+ * a blocking conflict: expiry returns false and the caller must keep the
+ * row and record `cleanup-unresolved-conflict`.
+ *
+ * Field names are scenario-known fixed vocab; values compared-not-recorded.
+ *
+ * @param {object} context the scenario execution context (`em`,
+ *   `deadlineAtMs`, `dbName` or `queryConflictRows()`).
+ * @param {object} options `{ token, targetId, fields, critical }`: the EM
+ *   token, the dedicated row id, the conflicted fields in the same shape as
+ *   `conflictRecordedForFields` input, and the shared oracle-lock runner.
+ * @returns {Promise<boolean>} true when the conflicts cleared and the
+ *   caller may delete; false when the bounded wait expired (keep the row).
+ */
+export async function resolveRecordedConflicts(context, { token, targetId, fields, critical }) {
+  const wanted = Array.isArray(fields)
+    ? fields.filter((entry) => entry !== null && typeof entry === "object" &&
+      typeof entry.field === "string")
+    : [];
+  if (wanted.length === 0) return true;
+  if (context?.em === undefined || typeof context.em.fork !== "function") return false;
+  const run = typeof critical === "function" ? critical : (action) => action();
+  let rowMissing = false;
+  try {
+    // Short critical section (no sleeps): the transient system-wins values
+    // must never be observable to a concurrent actor verifying the oracle.
+    await run(async () => {
+      const resolver = context.em.fork();
+      const row = await resolver.findOne(token, { id: targetId });
+      if (row === null || row === undefined) {
+        rowMissing = true;
+        return;
+      }
+      for (const entry of wanted) {
+        row[entry.field] = systemWinsResolveValue(row[entry.field]);
+      }
+      await resolver.flush();
+    });
+  } catch {
+    // No canonical advance happened, so no trigger was planned and no
+    // later poll can clear it: fail fast to the unresolved kind instead of
+    // spending the bounded wait on a conflict that cannot move.
+    return false;
+  }
+  if (rowMissing) return true;
+  const deadline = Math.min(
+    Date.now() + SCENARIO_OBSERVE_TIMEOUT_MS,
+    context?.deadlineAtMs ?? Number.MAX_SAFE_INTEGER,
+  );
+  while (true) {
+    const recorded = await conflictRecordedForFields(context, wanted);
+    if (wanted.every((entry) => !recorded.has(entry.field))) return true;
+    if (Date.now() >= deadline) return false;
+    await boundedSleep(SCENARIO_OBSERVE_POLL_MS, deadline);
   }
 }
 

@@ -11,7 +11,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -307,18 +307,41 @@ export async function execute({ plan, context }) {
     // an observation, or an authority read failed. A cleanup failure is
     // recorded separately (cleanupFailures) and never masks the original
     // failure.
-    try {
-      await critical(async () => {
-        const rows = await em.find(token, { id: plan.target.targetId });
-        for (const raceRow of rows) {
-          em.remove(raceRow);
-        }
-        await em.flush();
-        context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
+    //
+    // Conflict-recorded rows carry OPEN conflicts that fail a direct delete
+    // closed (projection_outbox_blocked): resolve them via the public EM
+    // first (system-wins advance + bounded clear wait), and only then
+    // delete. When the wait expires the row is kept and surfaced as
+    // `cleanup-unresolved-conflict` — never deleted through a blocking
+    // conflict. Landed/never-started paths keep the direct delete below.
+    let cleanupUnresolved = false;
+    if (result?.reason === "conflict-recorded") {
+      const cleared = await resolveRecordedConflicts(context, {
+        token,
+        targetId: plan.target.targetId,
+        fields: [{ field: plan.target.field, expectedValue: plan.humanValue }],
+        critical,
       });
-    } catch {
-      cleanupFailures += 1;
-      failureKinds.add("cleanup-delete-failed");
+      if (!cleared) {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-unresolved-conflict");
+        cleanupUnresolved = true;
+      }
+    }
+    if (!cleanupUnresolved) {
+      try {
+        await critical(async () => {
+          const rows = await em.find(token, { id: plan.target.targetId });
+          for (const raceRow of rows) {
+            em.remove(raceRow);
+          }
+          await em.flush();
+          context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
+        });
+      } catch {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
+      }
     }
   }
   const kinds = [...failureKinds].sort();

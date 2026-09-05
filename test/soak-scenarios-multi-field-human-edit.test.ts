@@ -14,6 +14,7 @@ import * as multiFieldHumanEdit from "../scripts/ci/local-soak/scenarios/multi-f
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { SYSTEM_WINS_RESOLVE_SUFFIX } from "../scripts/ci/local-soak/errors.mjs";
 import { FakeEm, liveContext, projectHumanFieldsRow as projectPersistedRow } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
@@ -540,14 +541,24 @@ describe("multiFieldHumanEdit scenario", () => {
     projectPersistedRow(em, client, plan);
     // The authority NEVER shows the human values (the row is skipped while
     // the effect is in flight), but the ingestion completed as OPEN
-    // sync_conflicts carrying the exact human values.
-    const context = {
-      ...liveContext(plan, client, em, Date.now() + 300),
-      queryConflictRows: async () => plan.humanFields.map((field) => ({
+    // sync_conflicts carrying the exact human values. Records clear per
+    // field once the cleanup's system-wins advance lands on it, modeling
+    // the worker applying each acknowledge_system resolution.
+    const closesPerField = async () => plan.humanFields
+      .filter((field) => {
+        const value = em.store.get(plan.target.targetId)?.[field];
+        return !(typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX));
+      })
+      .map((field) => ({
         fieldName: field,
         userValue: plan.humanValues[field],
         status: "OPEN",
-      })),
+      }));
+    const oracleMutations: unknown[] = [];
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 300),
+      oracle: { applyMutation: (mutation: unknown) => oracleMutations.push(mutation) },
+      queryConflictRows: closesPerField,
     };
     const result = await scenario.execute({ plan, context });
     expect(result.status).toBe("ok");
@@ -556,9 +567,14 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.expectedErrors).toBe(0);
     // The conflict-recorded outcome carries no failure kinds.
     expect(result.failureKinds).toBeUndefined();
-    // A recorded OPEN conflict IS terminal proof: the cleanup delete is
-    // ordered after it, so the dedicated row is still removed.
+    // The resolve-then-delete cleanup removed the dedicated row and mirrored
+    // the delete into the oracle (never deleted through OPEN conflicts).
     expect(em.rows()).toEqual([]);
+    expect(oracleMutations).toContainEqual({
+      op: "delete",
+      entity: plan.target.entityName,
+      id: plan.target.targetId,
+    });
   });
 
   it("accepts a mixed outcome: one field landed, the other conflict-recorded (ok)", async () => {
@@ -568,26 +584,67 @@ describe("multiFieldHumanEdit scenario", () => {
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
-    // Only the first human field ever lands in the authority.
+    // Only the first human field ever lands in the authority: seed it right
+    // after the dedicated row is created, so every read observes the partial
+    // landing through live refs (no findOne copy that would hide the
+    // cleanup's resolve advance from the conflict stub).
     const landedField = plan.humanFields[0]!;
     const recordedField = plan.humanFields[1]!;
-    em.findOneOverride = (id) => {
-      const row = em.store.get(id);
-      return row ? { ...row, [landedField]: plan.humanValues[landedField] } : null;
+    em.flushBehavior = (index) => {
+      if (index === 1) {
+        em.store.get(plan.target.targetId)![landedField] = plan.humanValues[landedField];
+      }
     };
     const context = {
       ...liveContext(plan, client, em, Date.now() + 300),
-      queryConflictRows: async () => [{
-        fieldName: recordedField,
-        userValue: plan.humanValues[recordedField],
-        status: "OPEN",
-      }],
+      queryConflictRows: async () => {
+        const value = em.store.get(plan.target.targetId)?.[recordedField];
+        const resolved = typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX);
+        return resolved ? [] : [{
+          fieldName: recordedField,
+          userValue: plan.humanValues[recordedField],
+          status: "OPEN",
+        }];
+      },
     };
     const result = await scenario.execute({ plan, context });
     expect(result.status).toBe("ok");
     expect(result.reason).toBe("conflict-recorded");
     expect(result.failures).toBe(0);
     expect(em.rows()).toEqual([]);
+  });
+
+  it("records cleanup-unresolved-conflict and keeps the row when the conflicts never clear", async () => {
+    // The resolve-then-delete cleanup advances every human field, but the
+    // conflict records never leave the blocking state within the bound. The
+    // row must be KEPT — never deleted through blocking conflicts — and the
+    // distinct stable kind recorded as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryConflictRows: async () => plan.humanFields.map((field) => ({
+        fieldName: field,
+        userValue: plan.humanValues[field],
+        status: "OPEN",
+      })),
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-unresolved-conflict"]);
+    // The row is kept (never tombstoned under the blocking conflicts), and
+    // the resolve attempt advanced every human field through the EM.
+    expect(em.rows().length).toBe(1);
+    const kept = em.store.get(plan.target.targetId);
+    for (const field of plan.humanFields) {
+      const value = kept?.[field];
+      expect(typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
+    }
   });
 
   it("still reports silent-loss when the human value is neither landed nor conflict-recorded", async () => {

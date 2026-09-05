@@ -23,7 +23,7 @@
  * scenario hunts and is ALWAYS a failure.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { conflictRecordedForFields, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, resolveRecordedConflicts, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -200,6 +200,10 @@ export async function execute({ plan, context }) {
     ? action()
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
+  // True when the conflict-recorded cleanup's bounded resolve wait expired:
+  // both dedicated rows are kept and the merge below surfaces the distinct
+  // `cleanup-unresolved-conflict` kind instead of `cleanup-delete-failed`.
+  let cleanupUnresolved = false;
   let result;
   try {
     // DEDICATED shifter row FIRST so its projection appends ABOVE the race
@@ -281,27 +285,53 @@ export async function execute({ plan, context }) {
     // mirror the deletes so SQLite and the oracle stay symmetric even when
     // the race or an observation failed. A cleanup failure is recorded
     // separately (cleanupFailures) and never masks the original failure.
-    try {
-      await critical(async () => {
-        const ids = [plan.target.targetId, plan.target.shifterId];
-        for (const id of ids) {
-          const rows = await em.find(token, { id });
-          for (const row of rows) em.remove(row);
-        }
-        await em.flush();
-        for (const id of ids) {
-          context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id });
-        }
+    //
+    // A conflict-recorded race row carries an OPEN conflict that fails a
+    // direct delete closed (projection_outbox_blocked): resolve the race
+    // row via the public EM first (the shifter row has no conflict), and
+    // only then remove both rows. When the wait expires both rows are kept
+    // and surfaced as `cleanup-unresolved-conflict` — never deleted
+    // through a blocking conflict.
+    if (result?.reason === "conflict-recorded") {
+      const cleared = await resolveRecordedConflicts(context, {
+        token,
+        targetId: plan.target.targetId,
+        fields: [{ field: plan.target.field, expectedValue: plan.humanValue }],
+        critical,
       });
-    } catch {
-      cleanupFailures += 1;
+      if (!cleared) {
+        cleanupFailures += 1;
+        cleanupUnresolved = true;
+      }
+    }
+    if (!cleanupUnresolved) {
+      try {
+        await critical(async () => {
+          const ids = [plan.target.targetId, plan.target.shifterId];
+          for (const id of ids) {
+            const rows = await em.find(token, { id });
+            for (const row of rows) em.remove(row);
+          }
+          await em.flush();
+          for (const id of ids) {
+            context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id });
+          }
+        });
+      } catch {
+        cleanupFailures += 1;
+      }
     }
   }
   // Merge the classifier's diagnostic kinds with cleanup accounting so the
   // durable record names every invariant that fired (allowlisted kinds only).
+  // An unresolved conflict-recorded cleanup surfaces its own distinct kind;
+  // any other cleanup failure is the delete failure.
+  const cleanupKind = cleanupUnresolved
+    ? "cleanup-unresolved-conflict"
+    : "cleanup-delete-failed";
   const kinds = [...new Set([
     ...(Array.isArray(result?.failureKinds) ? result.failureKinds : []),
-    ...(cleanupFailures > 0 ? ["cleanup-delete-failed"] : []),
+    ...(cleanupFailures > 0 ? [cleanupKind] : []),
   ])].sort();
   if (cleanupFailures > 0) {
     return {
