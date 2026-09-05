@@ -81,10 +81,11 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable CAS/stale/conflict
  * evidence: a rejected delete (or human edit) is an expected compare-and-set
  * conflict only when its error carries one of the exact guard/hash-mismatch
- * codes; a validation, transport, direct-write, or `identity_shifted`
- * rejection is a real failure (an identity shift is the delete-aware baseline
- * mishandling this scenario hunts — a collateral write is never silently
- * accepted). The core invariant is that the delete WINS: the dedicated row
+ * codes; a validation, transport, or other direct-write rejection is a real
+ * failure (a collateral write is never silently accepted). An exact
+ * `identity_shifted` rejection of the direct human write is the expected
+ * multi-writer transient (a truthful `identity-shifted-transient` skip,
+ * never a failure). The core invariant is that the delete WINS: the dedicated row
  * must be ABSENT from the authority after the race (never resurrected by the
  * human edit). The stale-projection residue is DEFERRED to the cycle's
  * convergence check (which already knows the id through the oracle and

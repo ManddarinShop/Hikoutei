@@ -82,10 +82,11 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable CAS/stale/conflict evidence
  * via `isStaleConflictEvidence`: a rejected local write or human edit is an
  * expected compare-and-set conflict only when its error carries one of the
- * exact guard/hash-mismatch codes; a validation, transport, or direct-write
- * rejection (including the direct client's `identity_shifted` guard, which
- * means the human edit targeted the wrong lifecycle generation) is a real
- * failure. The oracle is NEVER updated from an unproven winner. The
+ * exact guard/hash-mismatch codes; a validation, transport, or other
+ * direct-write rejection is a real failure. An exact `identity_shifted`
+ * rejection of the direct human write is the expected multi-writer
+ * transient (a truthful `identity-shifted-transient` skip, never a failure).
+ * The oracle is NEVER updated from an unproven winner. The
  * reactivation invariant is verified on the OBSERVABLE authority: EXACTLY one
  * final row for the id (a missing row is as much a failure as a duplicate)
  * AND the human value present in that final row (the human edit is not
