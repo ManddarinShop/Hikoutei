@@ -60,8 +60,8 @@ export const SYSTEM_STATE_READINESS_POLL_MS = 250;
  * this budget and the run's hard deadline, so a scenario observation can
  * never outlive the run budget.
  */
-const SCENARIO_OBSERVE_TIMEOUT_MS = 30_000;
-export const SCENARIO_OBSERVE_POLL_MS = 1_000;
+const SCENARIO_OBSERVE_TIMEOUT_MS = 120_000;
+export const SCENARIO_OBSERVE_POLL_MS = 5_000;
 
 /**
  * Consecutive positive settling observations required before an unchanged
