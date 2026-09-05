@@ -26,4 +26,6 @@ export function execute(input: { plan: object; context: object }): Promise<{
   expectedErrors: number;
   failures: number;
   reason?: string;
+  reasonTag?: string;
+  failureKinds?: string[];
 }>;

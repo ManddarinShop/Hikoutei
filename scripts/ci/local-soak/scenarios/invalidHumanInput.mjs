@@ -11,6 +11,7 @@
  * be restored. A clear validation rejection is EXPECTED, not a failure.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_REJECTION_SETTLE_OBSERVATIONS } from "../constants.mjs";
@@ -137,6 +138,9 @@ export async function execute({ plan, context }) {
     ? action()
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
+  // Stable diagnostic kinds for every failure site (allowlisted, never raw
+  // text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   let prior;
   // True once the invalid value was actually attempted on the Sheet. The
@@ -213,6 +217,7 @@ export async function execute({ plan, context }) {
       if (outcome === "accepted") {
         // The invalid value silently reached the authority: the corruption/
         // non-recovery failure this scenario hunts.
+        failureKinds.add("invalid-accepted");
         result = { status: "failed", expectedErrors: 0, failures: 1, reason: "invalid-accepted" };
       } else if (outcome === "rejected") {
         // The invalid value was rejected by scalar/required validation
@@ -228,7 +233,22 @@ export async function execute({ plan, context }) {
       }
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    // The direct seam's fail-closed `identity_shifted` evidence on the
+    // invalid write is an EXPECTED TRANSIENT of the multi-writer soak (a
+    // concurrent actor shifted the tab mid-write; the seam proved no silent
+    // success): a truthful skip, never a failure. Any other throw stays a
+    // real scenario error.
+    if (isIdentityShiftedEvidence(error)) {
+      result = identityShiftedTransientResult(error);
+    } else {
+      result = {
+        status: "failed",
+        expectedErrors: 0,
+        failures: 1,
+        reason: "scenario-error",
+        reasonTag: stableErrorTag(error),
+      };
+    }
   } finally {
     // GUARANTEED cleanup, split into INDEPENDENT guarded steps so a failure
     // in one never prevents the other: the cell restoration and the dedicated
@@ -252,6 +272,7 @@ export async function execute({ plan, context }) {
       }
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
     // Step 2: remove the dedicated row + oracle mirror, attempted even when
     // the restoration above failed, so SQLite and the oracle stay symmetric.
@@ -264,8 +285,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -273,9 +296,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

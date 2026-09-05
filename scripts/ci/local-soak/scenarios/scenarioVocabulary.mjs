@@ -16,7 +16,7 @@
  */
 import { SCENARIO_REGISTRY } from "./registry.mjs";
 import { SCENARIO_PHASE_VALUES } from "./scheduler.mjs";
-import { sanitizeReason, sanitizeTableName } from "../redact.mjs";
+import { sanitizeErrorTag, sanitizeFailureKind, sanitizeReason, sanitizeTableName } from "../redact.mjs";
 
 /** Stable scenario execution phases (the scheduler's fixed phase values). */
 export const KNOWN_SCENARIO_PHASES = Object.freeze([...SCENARIO_PHASE_VALUES]);
@@ -135,6 +135,31 @@ export function sanitizeScenarioRecord(value) {
   }
   if (record.reason !== undefined) {
     result.reason = sanitizeReason(record.reason);
+  }
+  // Diagnostic-only stable error tag of a swallowed scenario throw
+  // (`Class` or `Class (code)`); unknown-shaped tags collapse to the fixed
+  // `unknown` category. Never the raw message, stack, or any value.
+  if (record.reasonTag !== undefined) {
+    result.reasonTag = sanitizeErrorTag(record.reasonTag);
+  }
+  // Canonical failureKinds contract (shared with the resume schema): a
+  // non-empty, sorted, deduplicated array of allowlisted kinds where every
+  // unknown kind has collapsed to the single fixed `unknown` category. The
+  // resume schema accepts exactly this shape — `unknown` included, bare
+  // unknown raw kinds rejected, duplicates/unsorted rejected — so sanitizer
+  // output always validates. An absent/empty list, or one that normalizes
+  // to empty (only null/non-string/empty entries), drops the field so
+  // legacy records stay compatible and `[]` (which the schema rejects) is
+  // never emitted — the same omit-when-empty policy as the redactor.
+  if (Array.isArray(record.failureKinds) && record.failureKinds.length > 0) {
+    const kinds = [...new Set(
+      record.failureKinds
+        .filter((kind) => typeof kind === "string" && kind.length > 0)
+        .map(sanitizeFailureKind),
+    )].sort();
+    if (kinds.length > 0) {
+      result.failureKinds = kinds;
+    }
   }
   return result;
 }

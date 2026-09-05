@@ -257,12 +257,13 @@ describe("noOpHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
-  it("cannot finish ok when the no-op write detects an identity shift", async () => {
-    // The direct client's identity-shift guard rejects the write with the
-    // stable `identity_shifted` class when the value landed on the wrong
-    // identity. That is NOT stale-write/CAS evidence, so the scenario must
-    // fail (never a verified no-op ok) — a collateral write is never
-    // silently accepted.
+  it("records an identity-shifted no-op write rejection as a transient skip, not a failure", async () => {
+    // The direct client's identity-shift guard rejects the same-value write
+    // with the stable `identity_shifted` class when a CONCURRENT actor
+    // shifted the tab mid-write. The seam proved no silent success, so this
+    // is an EXPECTED TRANSIENT of the adversarial multi-writer environment:
+    // a truthful skip (never a failure). The false-conflict invariant still
+    // judges a stale/CAS rejection on an UNDISTURBED tab as a real failure.
     const seed = 777;
     const plan = buildPlan(seed);
     const client = new FakeClient();
@@ -270,9 +271,9 @@ describe("noOpHumanEdit scenario", () => {
     projectPersistedRow(em, client, plan);
     client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em, seed) });
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBe(1);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
     // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });

@@ -16,6 +16,10 @@ export interface ScenarioModule {
     failures: number;
     cleanupFailures?: number;
     reason?: string;
+    /** Stable redacted tag when the scenario swallowed a throw. */
+    reasonTag?: string;
+    /** Allowlisted invariant kinds the scenario's failure counters fired. */
+    failureKinds?: string[];
   }>;
   /** Optional deterministic idempotent orphan recovery for a process-death resume. */
   recover?(input: { plan: object; context: object }): Promise<{ removed: number }>;

@@ -70,6 +70,8 @@ class FakeClient {
   mutateCalls: { identity: string; headerName: string; value: string }[] = [];
   /** When set, the 1-based deleteInputRowAt call at this index throws. */
   throwOnDeleteAtCall: number | undefined;
+  /** When set, the 1-based mutate call at this index throws with this code. */
+  throwOnMutateCall: { index: number; code: string } | undefined;
   /** When true, reads after an injection stop surfacing the injected cells. */
   hideInjectionAfterFirstRead = false;
   private injectedWrites: { rowIndex: number; columnIndex: number; value: string }[] | null = null;
@@ -128,6 +130,11 @@ class FakeClient {
       headerName: input.headerName,
       value: input.value,
     });
+    if (this.throwOnMutateCall !== undefined && this.mutateCalls.length === this.throwOnMutateCall.index) {
+      throw Object.assign(new Error("fake mutate failure"), {
+        code: this.throwOnMutateCall.code,
+      });
+    }
     const tab = this.tabs.get(input.tabName);
     if (tab === undefined) return { rowNumber: 1 };
     const headers = tab[0] ?? [];
@@ -451,6 +458,25 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     ]);
     expect(em.rows()).toEqual([]);
     expect(tabIds(client, plan)).not.toContain(plan.target.dedicatedId);
+  });
+
+  it("records an identity-shifted guarded injection rejection as a transient skip, not a failure", async () => {
+    // The guarded write seam rejects the missing-field injection with the
+    // fail-closed `identity_shifted` class when a CONCURRENT actor shifted
+    // the tab mid-write. The seam proved no silent overwrite, so this is
+    // an EXPECTED TRANSIENT of the adversarial multi-writer environment: a
+    // truthful skip (never a failure). The guaranteed cleanup still removes
+    // the dedicated row.
+    const plan = corruptPlan("missing-field");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    hookProjection(plan, client, em);
+    client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
+    expect(em.rows()).toEqual([]);
   });
 
   it("classifies an injected-but-undetected corruption as failed (guard miss)", async () => {

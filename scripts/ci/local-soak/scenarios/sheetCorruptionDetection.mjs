@@ -18,6 +18,7 @@
  * detection, and cleanup); it runs only in live mode.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -200,6 +201,9 @@ export async function execute({ plan, context }) {
     ? action()
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
+  // Stable diagnostic kinds for every failure site (allowlisted, never raw
+  // text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   // The exact raw writes used for the injected EXTRA row (duplicate-identity
   // and shifted-cell only; missing-field writes into the dedicated row
@@ -304,12 +308,29 @@ export async function execute({ plan, context }) {
         } else {
           // INJECTED but NOT DETECTED: the guard missed the corruption it
           // must surface — the real defect this scenario catches.
+          failureKinds.add("corruption-missed");
           result = { status: "failed", expectedErrors: 0, failures: 1, reason: "corruption-missed" };
         }
       }
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    // A direct-write/injection seam rejection with the fail-closed
+    // `identity_shifted` evidence is an EXPECTED TRANSIENT of the
+    // multi-writer soak (a concurrent actor shifted the tab or occupied the
+    // blank injection coordinate; the seam proved no silent overwrite):
+    // a truthful skip, never a failure. Any other throw stays a real
+    // scenario error.
+    if (isIdentityShiftedEvidence(error)) {
+      result = identityShiftedTransientResult(error);
+    } else {
+      result = {
+        status: "failed",
+        expectedErrors: 0,
+        failures: 1,
+        reason: "scenario-error",
+        reasonTag: stableErrorTag(error),
+      };
+    }
   } finally {
     // GUARANTEED cleanup, split into INDEPENDENT guarded steps so a
     // failure in one never prevents the others; each cleanup failure is
@@ -333,6 +354,7 @@ export async function execute({ plan, context }) {
         }
       } catch {
         cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
       }
     }
     // Step 2: remove the dedicated row from the tab by identity. A
@@ -345,7 +367,10 @@ export async function execute({ plan, context }) {
         deadlineAtMs: context.deadlineAtMs,
       });
     } catch (error) {
-      if (error?.statusClass !== "missing_identity") cleanupFailures += 1;
+      if (error?.statusClass !== "missing_identity") {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
+      }
     }
     // Step 3: remove the dedicated row from the authority + oracle mirror
     // so SQLite and the oracle stay symmetric even when a tab step failed.
@@ -358,8 +383,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -367,9 +394,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

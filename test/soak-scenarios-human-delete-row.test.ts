@@ -216,12 +216,13 @@ describe("humanDeleteRow scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
-  it("cannot finish ok when the human delete rejects with identity_shifted", async () => {
+  it("records an identity-shifted human-delete rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human delete with
-    // the stable `identity_shifted` class when the identity is missing or a
-    // non-target identity would be lost. That is NOT stale-write/CAS
-    // evidence, so the scenario must fail (never a verified ok) — a
-    // collateral delete is never silently accepted.
+    // the stable `identity_shifted` class when a concurrent actor shifted
+    // the tab mid-delete. The seam proved no silent success, so this is an
+    // EXPECTED TRANSIENT of the adversarial multi-writer environment: a
+    // truthful skip (never a failure). The authority-retention invariant
+    // still judges real data loss separately.
     const plan = deletePlan();
     const client = new FakeClient();
     const em = new FakeEm();
@@ -231,9 +232,9 @@ describe("humanDeleteRow scenario", () => {
       plan,
       context: liveContext(plan, client, em, Date.now() + 120),
     });
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBe(1);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
     // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });

@@ -339,6 +339,8 @@ describe("shiftedHumanEdit scenario", () => {
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
     expect(result.status).toBe("failed");
     expect(result.failures).toBe(1);
+    // The stable diagnostic kind names WHICH invariant fired.
+    expect(result.failureKinds).toEqual(["edit-rejected-unexpected"]);
     expect(em.rows()).toEqual([]);
   });
 
