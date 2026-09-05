@@ -201,6 +201,10 @@ describe("deleteRecreateRace scenario", () => {
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("scenario-error");
     expect(result.failures).toBe(1);
+    // The swallowed throw records its STABLE tag (class only here), never
+    // the raw message.
+    expect(result.reasonTag).toBe("Error");
+    expect(JSON.stringify(result)).not.toContain("flush failure");
     // Guaranteed cleanup removes the dedicated row.
     expect(em.rows()).toEqual([]);
   });

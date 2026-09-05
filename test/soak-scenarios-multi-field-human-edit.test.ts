@@ -297,6 +297,11 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("scenario-error");
     expect(result.failures).toBeGreaterThanOrEqual(1);
+    // Stable diagnostic kinds: the non-stale human rejection and the cleanup
+    // settle-proof timeout that left the row in place.
+    expect(result.failureKinds).toEqual(
+      expect.arrayContaining(["human-rejection-non-stale", "cleanup-proof-timeout"]),
+    );
     // The human write STARTED and rejected with a non-stale code, so its
     // remote outcome is uncertain (it may have mutated before rejecting). The
     // cleanup must NOT delete the row without complete landing proof; when the
@@ -306,28 +311,35 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.cleanupFailures).toBeGreaterThan(0);
   });
 
-  it("cannot finish ok when the human multi-field write detects an identity shift", async () => {
+  it("records an identity-shifted human multi-field rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human write with
-    // the stable `identity_shifted` class when a value landed on the wrong
-    // identity. That is NOT stale-write/CAS evidence, so the scenario must
-    // fail (never a verified race-winner ok) — a collateral write is never
-    // silently accepted.
+    // the stable `identity_shifted` class when a CONCURRENT actor shifted
+    // the tab mid-write. The seam proved no silent success, so this is an
+    // EXPECTED TRANSIENT of the adversarial multi-writer environment: a
+    // truthful skip (never a failure). The value itself landed late (the
+    // worker applies it after the unprovable write), so the settle proof
+    // succeeds and the guaranteed cleanup still removes the dedicated row.
     const plan = racePlan();
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
-    const result = await scenario.execute({ plan, context: liveContext(plan, client, em, Date.now() + 30) });
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBeGreaterThanOrEqual(1);
-    // The human write STARTED and rejected with `identity_shifted`, so its
-    // remote outcome is uncertain (a value may have landed on the wrong
-    // identity). The cleanup must NOT delete the row without complete landing
-    // proof; when the proof times out the row is left in place and surfaced as
-    // a cleanup failure (the #381 race).
-    expect(em.rows().length).toBe(1);
-    expect(result.cleanupFailures).toBeGreaterThan(0);
+    // Simulate the delayed inbound application: the human fields land in
+    // the authority on the local update's commit flush (the value was
+    // written remotely but its landing on the intended identity could not
+    // be proven by the seam's postcondition read).
+    em.flushBehavior = (index) => {
+      if (index === 2) {
+        const row = em.store.get(plan.target.targetId);
+        if (row !== undefined) Object.assign(row, plan.humanValues);
+      }
+    };
+    const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
+    // The landing proof completes, so the guaranteed cleanup removes the row.
+    expect(em.rows()).toEqual([]);
   });
 
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {

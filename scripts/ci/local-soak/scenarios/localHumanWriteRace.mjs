@@ -11,6 +11,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -110,6 +111,10 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text); recorded on the result as `failureKinds` so a
+  // `scenario-error` record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   // True once the local mutation (update or delete) actually committed to
   // SQLite AND was mirrored into the oracle. Used by the winner resolution
@@ -212,21 +217,31 @@ export async function execute({ plan, context }) {
         });
     const [localResult, humanResult] = await Promise.allSettled([localPromise, humanPromise]);
     // Classify rejections ONLY by EXACT stale-write/CAS/conflict evidence
-    // (a guard/hash mismatch on the raced row). A validation/transport/
-    // direct-write rejection is never an expected conflict.
+    // (a guard/hash mismatch on the raced row). A validation/transport
+    // rejection is a real failure. The direct seam's fail-closed
+    // `identity_shifted` evidence is an EXPECTED TRANSIENT of the
+    // multi-writer soak (never counted as a failure): the seam proved no
+    // silent success and the race outcome is unobservable, so the scenario
+    // records a truthful skip below.
     if (localResult.status === "rejected" && !isStaleConflictEvidence(localResult.reason)) {
       failures += 1;
+      failureKinds.add("local-rejection-non-stale");
     }
+    let humanTransient;
     if (humanResult.status === "rejected") {
-      if (plan.race === "update") {
+      if (isIdentityShiftedEvidence(humanResult.reason)) {
+        humanTransient = identityShiftedTransientResult(humanResult.reason);
+      } else if (plan.race === "update") {
         // A rejected direct human write on an update race is a real
         // transport/direct-write failure, never expected.
         failures += 1;
+        failureKinds.add("human-write-rejected");
       } else if (!isStaleConflictEvidence(humanResult.reason)) {
         // On a delete race the human edit may target a row the local
         // delete already removed — only exact CAS/stale evidence is
         // expected; any other delete rejection is a real failure.
         failures += 1;
+        failureKinds.add("human-rejection-non-stale");
       }
     }
     // Resolve the ACTUAL public-authority winner with a bounded observation
@@ -249,18 +264,32 @@ export async function execute({ plan, context }) {
     // Observable invariant: no duplicate rows for the race id (the race
     // must never produce duplicate projection rows).
     const rows = await em.find(token, { id: plan.target.targetId });
-    if (rows.length > 1) failures += 1;
+    if (rows.length > 1) {
+      failures += 1;
+      failureKinds.add("duplicate-rows");
+    }
     // A proven winner (a concrete value in the authority, or a provably
     // committed delete) with no duplicates and no silent loss is a verified
     // ok; an unprovable winner is a truthful skip (never an unobserved ok).
+    // An identity-shifted transient rejection outranks the ok/skip winner
+    // verdict (a truthful transient skip), but NEVER outranks real failures
+    // counted earlier in this cycle.
     result = failures > 0
       ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-      : winner !== "unobserved"
+      : humanTransient !== undefined
+        ? humanTransient
+        : winner !== "unobserved"
         ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
         : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated race row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the race,
@@ -278,8 +307,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     // A cleanup failure is a real failure: the original status is preserved
     // in `reason` while the failure counter grows by the cleanup failures.
@@ -289,9 +320,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

@@ -17,6 +17,7 @@
  * and the direct-Sheet seam for the insert, so it runs only in live mode.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -103,6 +104,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   let originalRow;
   try {
@@ -153,18 +157,22 @@ export async function execute({ plan, context }) {
           });
         } catch (error) {
           insertRejected = true;
-          identityShifted = isIdentityShiftedRejection(error);
+          // The shared direct-seam evidence check: the real seam surfaces
+          // the fail-closed guard as `statusClass`, the fake seam as `code`.
+          identityShifted = isIdentityShiftedEvidence(error);
         }
         if (!insertRejected) {
           // The seam did NOT reject the duplicate: a duplicate projection or
           // silent overwrite was created — the corruption failure this scenario
           // hunts.
           failures += 1;
+          failureKinds.add("duplicate-insert-accepted");
           result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
         } else if (!identityShifted) {
           // A non-identity_shifted rejection (transport/validation) is a real
           // failure, never an expected fail-closed conflict.
           failures += 1;
+          failureKinds.add("duplicate-rejection-unexpected");
           result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
         } else {
           // The identity conflict was rejected (fail-closed evidence). Verify
@@ -182,12 +190,14 @@ export async function execute({ plan, context }) {
             );
             if (!sheetSingle) {
               failures += 1;
+              failureKinds.add("sheet-duplicate-leaked");
               result = { status: "failed", expectedErrors: 1, failures, reason: "scenario-error" };
             } else {
               result = { status: "ok", expectedErrors: 1, failures: 0 };
             }
           } else if (outcome === "duplicate" || outcome === "overwritten") {
             failures += 1;
+            failureKinds.add(outcome === "duplicate" ? "duplicate-rows" : "row-overwritten");
             result = { status: "failed", expectedErrors: 1, failures, reason: "scenario-error" };
           } else {
             // The authority could not settle on a single unchanged row within
@@ -198,7 +208,13 @@ export async function execute({ plan, context }) {
       }
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated row and mirror the delete so
     // SQLite and the oracle stay symmetric even when the insert, an
@@ -213,8 +229,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -222,23 +240,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
-}
-
-/**
- * True when a rejected direct insert carries the stable `identity_shifted`
- * fail-closed evidence (the pre-write validation rejected a duplicate
- * identity). The real seam surfaces it as `statusClass`; the fake seam in
- * tests surfaces it as `code`, so both are accepted.
- *
- * @param {unknown} error a rejected promise's reason.
- * @returns {boolean}
- */
-function isIdentityShiftedRejection(error) {
-  return error !== null && typeof error === "object" &&
-    (error?.statusClass === "identity_shifted" || error?.code === "identity_shifted");
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

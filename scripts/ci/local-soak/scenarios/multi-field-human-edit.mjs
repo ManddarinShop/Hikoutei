@@ -12,6 +12,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -147,6 +148,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let humanLanded = "not-applied";
   let result;
   // True once the human multi-field write actually resolved (was accepted by
@@ -246,18 +250,28 @@ export async function execute({ plan, context }) {
           })();
       const [localResult, humanResult] = await Promise.allSettled([localPromise, humanPromise]);
       // Classify rejections ONLY by EXACT stale-write/CAS/conflict evidence
-      // (a guard/hash mismatch on the raced row). A validation/transport/
-      // direct-write rejection (including `identity_shifted`) is never an
-      // expected conflict.
+      // (a guard/hash mismatch on the raced row). A validation/transport
+      // rejection is a real failure. The direct seam's fail-closed
+      // `identity_shifted` evidence is an EXPECTED TRANSIENT of the
+      // multi-writer soak (never counted as a failure): the seam proved no
+      // silent success and the write outcome is unobservable, so the
+      // scenario records a truthful skip below.
       if (localResult.status === "rejected" && !isStaleConflictEvidence(localResult.reason)) {
         failures += 1;
+        failureKinds.add("local-rejection-non-stale");
       }
+      let humanTransient;
       if (humanResult.status === "rejected") {
         // A rejected human multi-field write is expected ONLY on exact
-        // CAS/stale evidence (the human edit targeted a row the local update
-        // already shifted). `identity_shifted` and any transport/validation
-        // rejection are real failures.
-        if (!isStaleConflictEvidence(humanResult.reason)) failures += 1;
+        // CAS/stale evidence (the human edit targeted a row the local
+        // update already shifted) or on the transient `identity_shifted`
+        // guard; any transport/validation rejection is a real failure.
+        if (isIdentityShiftedEvidence(humanResult.reason)) {
+          humanTransient = identityShiftedTransientResult(humanResult.reason);
+        } else if (!isStaleConflictEvidence(humanResult.reason)) {
+          failures += 1;
+          failureKinds.add("human-rejection-non-stale");
+        }
       } else if (humanStarted) {
         // Only a write that actually started and resolved can be accepted.
         // A deadline-crossed no-op (humanStarted=false) is never an accepted
@@ -269,7 +283,10 @@ export async function execute({ plan, context }) {
       // fork so the identity-mapped write em never hides an inbound worker
       // projection of the raced row.
       const rows = await context.em.fork().find(token, { id: plan.target.targetId });
-      if (rows.length > 1) failures += 1;
+      if (rows.length > 1) {
+        failures += 1;
+        failureKinds.add("duplicate-rows");
+      }
       // Bounded observation: the human fields must not be silently lost. A
       // partial application (some fields landed, others not) is a failure;
       // an ACCEPTED human write whose fields never land is silent loss.
@@ -278,18 +295,32 @@ export async function execute({ plan, context }) {
       // async-landing wait), so it is passed the current failure count.
       const humanLandedNow = await observeHumanFields(context, token, plan, critical, humanAccepted, failures);
       humanLanded = humanLandedNow;
-      if (humanLanded === "partial") failures += 1;
-      if (humanLanded === "not-applied" && humanAccepted) failures += 1;
+      if (humanLanded === "partial") {
+        failures += 1;
+        failureKinds.add("partial-landing");
+      }
+      if (humanLanded === "not-applied" && humanAccepted) {
+        failures += 1;
+        failureKinds.add("silent-loss");
+      }
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-        : humanLanded === "landed"
+        : humanTransient !== undefined
+          ? humanTransient
+          : humanLanded === "landed"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
           : deadlineExpired
             ? { status: "skipped", expectedErrors: 0, failures: 0, reason: "deadline-expired" }
             : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated race row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the race,
@@ -325,11 +356,14 @@ export async function execute({ plan, context }) {
         });
       } else {
         cleanupFailures += 1;
+        failureKinds.add("cleanup-proof-timeout");
       }
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -337,9 +371,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

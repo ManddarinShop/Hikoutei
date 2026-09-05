@@ -13,6 +13,7 @@
  * the projection stable. It runs only in live mode.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS } from "../constants.mjs";
@@ -130,6 +131,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   try {
     // Critical section: create the DEDICATED no-op row and mirror it into the
@@ -177,14 +181,21 @@ export async function execute({ plan, context }) {
             deadlineAtMs: context.deadlineAtMs,
           });
         } catch (error) {
-          // A no-op write must never reject. Classify ONLY by exact stale/CAS
-          // evidence: a stale/CAS rejection is a FALSE CONFLICT (the exact
-          // failure this scenario hunts); any other rejection (transport,
-          // identity_shifted, validation) is a real failure. Both are failures
-          // for a no-op write.
+          // A no-op write must never reject on stale/CAS evidence: that is
+          // the FALSE CONFLICT this scenario hunts (a real failure). The
+          // direct seam's fail-closed `identity_shifted` evidence is an
+          // EXPECTED TRANSIENT of the multi-writer soak (another actor
+          // shifted the tab mid-write; the seam proved no silent success):
+          // a truthful skip, never a failure. Any other rejection
+          // (transport/validation) stays a real failure.
           writeRejected = true;
-          failures += 1;
-          result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
+          if (isIdentityShiftedEvidence(error)) {
+            result = identityShiftedTransientResult(error);
+          } else {
+            failures += 1;
+            failureKinds.add("noop-write-rejected");
+            result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
+          }
         }
         if (!writeRejected) {
           // Verify the authority value is unchanged (no false conflict, no
@@ -198,6 +209,7 @@ export async function execute({ plan, context }) {
             result = { status: "ok", expectedErrors: 0, failures: 0, reason: "no-op-stable" };
           } else if (outcome === "changed") {
             failures += 1;
+            failureKinds.add("noop-value-changed");
             result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
           } else {
             result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
@@ -207,7 +219,13 @@ export async function execute({ plan, context }) {
     }
   } catch (error) {
     failures = Math.max(failures, 1);
-    result = { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated no-op row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the write,
@@ -225,8 +243,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -234,9 +254,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

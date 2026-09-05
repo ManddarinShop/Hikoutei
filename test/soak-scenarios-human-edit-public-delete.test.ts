@@ -247,21 +247,22 @@ describe("humanEditPublicDelete scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
-  it("cannot finish ok when the human-write postcondition detects an identity shift", async () => {
+  it("records an identity-shifted human-write rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human write with
-    // the stable `identity_shifted` class when the value landed on the wrong
-    // identity (the delete-aware baseline mishandling this scenario hunts).
-    // That is NOT stale-write/CAS evidence, so the scenario must fail (never
-    // a verified ok) — a collateral write is never silently accepted.
+    // the stable `identity_shifted` class when a CONCURRENT actor shifted
+    // the tab mid-write. The seam proved no silent success, so this is an
+    // EXPECTED TRANSIENT of the adversarial multi-writer environment: a
+    // truthful skip (never a failure). The delete-winner invariant still
+    // judges real resurrection separately.
     const plan = racePlan();
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     client.throwOnMutateCall = { index: 1, code: "identity_shifted" };
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBe(1);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
     // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });

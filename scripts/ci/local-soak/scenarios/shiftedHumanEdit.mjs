@@ -23,6 +23,7 @@
  * scenario hunts and is ALWAYS a failure.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -121,19 +122,32 @@ export function isIdentityShiftedRejection(error) {
 export async function classifyRaceOutcome({ plan, editResult, shiftResult, client, spreadsheetId, tabName, context }) {
   let expectedErrors = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   if (editResult.status === "rejected") {
     if (isIdentityShiftedRejection(editResult.reason)) expectedErrors += 1;
-    else failures += 1;
+    else {
+      failures += 1;
+      failureKinds.add("edit-rejected-unexpected");
+    }
   } else {
     const landed = await verifyEditLanded(client, spreadsheetId, tabName, plan, context);
-    if (!landed) failures += 1;
+    if (!landed) {
+      failures += 1;
+      failureKinds.add("edit-not-landed");
+    }
   }
   if (shiftResult.status === "rejected") {
     if (isIdentityShiftedRejection(shiftResult.reason)) expectedErrors += 1;
-    else failures += 1;
+    else {
+      failures += 1;
+      failureKinds.add("shifter-rejected-unexpected");
+    }
   }
+  const kinds = [...failureKinds].sort();
   return failures > 0
-    ? { status: "failed", expectedErrors, failures, reason: "scenario-error" }
+    ? { status: "failed", expectedErrors, failures, reason: "scenario-error", failureKinds: kinds }
     : { status: "ok", expectedErrors, failures: 0, reason: "guard-invariant-verified" };
 }
 
@@ -237,7 +251,13 @@ export async function execute({ plan, context }) {
       }
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // GUARANTEED cleanup: remove BOTH dedicated rows (race + shifter) and
     // mirror the deletes so SQLite and the oracle stay symmetric even when
@@ -259,6 +279,12 @@ export async function execute({ plan, context }) {
       cleanupFailures += 1;
     }
   }
+  // Merge the classifier's diagnostic kinds with cleanup accounting so the
+  // durable record names every invariant that fired (allowlisted kinds only).
+  const kinds = [...new Set([
+    ...(Array.isArray(result?.failureKinds) ? result.failureKinds : []),
+    ...(cleanupFailures > 0 ? ["cleanup-delete-failed"] : []),
+  ])].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -266,9 +292,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

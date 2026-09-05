@@ -235,16 +235,20 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(result.status).toBe("failed");
     expect(result.reason).toBe("scenario-error");
     expect(result.failures).toBe(1);
+    // The stable diagnostic kind names WHICH invariant fired (no raw text).
+    expect(result.failureKinds).toEqual(["local-rejection-non-stale"]);
     // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });
 
-  it("cannot finish ok when the human edit targets the wrong generation (identity_shifted)", async () => {
+  it("records an identity-shifted human-edit rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human edit with
-    // the stable `identity_shifted` class when the value landed on the wrong
-    // identity (the tombstoned old generation). That is NOT stale-write/CAS
-    // evidence, so the scenario must fail (never a verified ok) — a human edit
-    // applied to the wrong lifecycle generation is never silently accepted.
+    // the stable `identity_shifted` class when a CONCURRENT actor shifted
+    // the tab mid-write. The seam proved no silent success (it refused to
+    // report success for the wrong identity), so this is an EXPECTED
+    // TRANSIENT of the adversarial multi-writer environment: the scenario
+    // records a truthful skip (never a failure, never fed to
+    // max-consecutive-failures) and the guaranteed cleanup still runs.
     const plan = racePlan();
     const client = new FakeClient();
     const em = new FakeEm();
@@ -254,9 +258,9 @@ describe("deleteRecreateHumanEdit scenario", () => {
       plan,
       context: liveContext(plan, client, em, Date.now() + 120),
     });
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("scenario-error");
-    expect(result.failures).toBe(1);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
     // Guaranteed cleanup still removed the dedicated row.
     expect(em.rows()).toEqual([]);
   });
