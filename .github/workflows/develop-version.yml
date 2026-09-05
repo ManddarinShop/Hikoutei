@@ -1,7 +1,8 @@
-name: Create develop patch release
+name: Create develop prerelease release
 
-# A develop merge advances the patch version and creates a non-production
-# release tag. The tag publish workflow owns npm publication.
+# A develop merge advances the `X.Y.Z-dev.N` prerelease line and creates a
+# non-production release tag. The tag publish workflow owns npm publication
+# under the `dev` dist-tag; `latest` is reserved for the main/stable channel.
 on:
   push:
     branches:
@@ -21,7 +22,7 @@ permissions:
 
 jobs:
   release:
-    name: Version develop patch release
+    name: Version develop prerelease release
     if: >-
       github.actor != 'github-actions[bot]' &&
       !startsWith(github.event.head_commit.message, 'chore(release): bump develop version')
@@ -76,36 +77,79 @@ jobs:
           pnpm test
           pnpm run build
 
-      - name: Calculate and apply the patch version
+      - name: Calculate and apply the dev prerelease version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          base_version="$(node -p "require('./package.json').version")"
-          # Never let the develop patch line trail the published npm `latest`
-          # dist-tag. A per-PR recovery publish (hikoutei-tag-publish) can
-          # advance `latest` independently of the develop version counter, which
-          # would otherwise make a develop release that is numerically below the
-          # already-published latest fail its monotonic `latest` check. Base the
-          # next patch on whichever of the local manifest and the published
-          # latest is newer so a develop merge always moves the channel forward.
-          published_latest="$(node scripts/ci/read-npm-dist-tag.mjs \
-            --package=hikoutei --tag=latest 2>/dev/null || true)"
-          effective_base="$base_version"
-          if [[ -n "$published_latest" ]] && node -e '
-            const a = process.argv[1].split(".").map(Number);
-            const b = process.argv[2].split(".").map(Number);
-            for (let i = 0; i < 3; i++) {
-              if (a[i] > b[i]) process.exit(0);
-              if (a[i] < b[i]) process.exit(1);
-            }
-            process.exit(1);
-          ' "$published_latest" "$base_version"; then
-            effective_base="$published_latest"
+          # The committed manifest may already carry a `-dev.N` prerelease;
+          # the base triple is the numeric prefix of that version.
+          base_version="$(node -p "require('./package.json').version.replace(/-dev\\.[0-9]+$/, '')")"
+          # Never let the develop base line trail the published npm `latest`
+          # dist-tag. A stable release or a per-PR recovery publish
+          # (hikoutei-tag-publish) can advance `latest` independently of the
+          # develop version counter, which would otherwise make a develop
+          # release that is numerically below the already-published latest
+          # fail its monotonic channel check. Base the next prerelease on
+          # whichever of the local manifest and the published latest is newer
+          # so a develop merge always moves its channel forward.
+          # Read the published `latest` fail-closed: the helper exits 0 with
+          # the version (found) or an empty value (tag/package missing) and
+          # exits non-zero on any network/auth/malformed-output failure. A
+          # registry failure must abort the release instead of silently
+          # falling back to a base that could re-publish a stale dev counter.
+          if ! published_latest="$(node scripts/ci/read-npm-dist-tag.mjs \
+            --package=hikoutei --tag=latest)"; then
+            echo "Unable to read the npm 'latest' dist-tag; aborting instead of risking a stale prerelease." >&2
+            exit 1
           fi
-          next_version="$(node scripts/ci/release-version.mjs \
-            --base-version="$effective_base" \
-            --bump=patch)"
+          effective_base="$base_version"
+          # Base the next prerelease on whichever of the local base and the
+          # published latest is newer. Comparison goes through the
+          # unit-tested BigInt comparator (semver-monotonic --monotonic: exit
+          # 0 forward/equal, exit 1 backward, exit 3 invalid input) instead of
+          # an inline Number() compare that loses precision for components
+          # >= 2^53. The codes must be branched separately: backward is the
+          # ordinary "local base is ahead" outcome that keeps base_version,
+          # but invalid input is a malformed version that must abort the
+          # release rather than silently keep a base built from garbage.
+          if [[ -n "$published_latest" ]]; then
+            monotonic_status=0
+            node scripts/ci/semver-monotonic.mjs \
+              --monotonic --current="$base_version" --target="$published_latest" \
+              >/dev/null 2>&1 || monotonic_status=$?
+            case "$monotonic_status" in
+              0)
+                # Forward/equal: the published 'latest' is the newer base.
+                effective_base="$published_latest"
+                ;;
+              1)
+                # Backward: the published 'latest' is behind the local base;
+                # keeping base_version is the intended fallback.
+                ;;
+              *)
+                # Invalid input (3) or an unexpected/unrecognized status must
+                # never silently degrade into the backward fallback.
+                echo "Malformed version input or unexpected monotonic-probe status ($monotonic_status) while comparing local base against the published 'latest' tag; aborting." >&2
+                exit 1
+                ;;
+            esac
+          fi
+          # The dev channel advances via the `-dev.N` counter, not a patch
+          # bump: read the current `dev` dist-tag and increment within the
+          # base triple (a missing dev tag or a tag on another base restarts
+          # the counter at 1). Helpers live in scripts/ci/semver-monotonic.mjs
+          # so the rules are unit-tested instead of re-implemented inline.
+          # Same fail-closed contract as the `latest` read above: `found`
+          # yields the version, `missing` yields empty (first dev write), and
+          # any registry failure aborts instead of restarting the counter.
+          if ! dev_current="$(node scripts/ci/read-npm-dist-tag.mjs \
+            --package=hikoutei --tag=dev)"; then
+            echo "Unable to read the npm 'dev' dist-tag; aborting instead of restarting the dev counter at a stale value." >&2
+            exit 1
+          fi
+          next_version="$(node scripts/ci/semver-monotonic.mjs \
+            --next-dev --base-version="$effective_base" --current-dev-tag="$dev_current")"
           npm version "$next_version" --no-git-tag-version
           # Pin the cli workspace dependency to the new root release version
           # so the package can be resolved by npm (which rejects workspace:*

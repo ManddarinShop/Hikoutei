@@ -82,7 +82,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base_version="$(node -p "require('./package.json').version")"
+          # A develop→main merge can leave the committed manifest carrying an
+          # `X.Y.Z-dev.N` prerelease; the stable train releases its numeric
+          # base, so normalize the dev suffix here BEFORE the strict minor
+          # bump. release-version.mjs's bump path stays numeric-only; the
+          # --normalize-base mode is a separate unit-tested helper call and
+          # fails closed on foreign prerelease/build metadata.
+          base_version="$(node scripts/ci/release-version.mjs \
+            --normalize-base="$(node -p "require('./package.json').version")")"
           next_version="$(node scripts/ci/release-version.mjs \
             --base-version="$base_version" \
             --bump=minor)"

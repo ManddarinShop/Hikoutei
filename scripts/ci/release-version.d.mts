@@ -14,6 +14,12 @@ export type ReleaseVersionResult =
 /** Computes the next numeric stable version for a branch release. */
 export function computeReleaseVersion(input: ReleaseVersionInput): ReleaseVersionResult;
 
+/**
+ * Normalizes `X.Y.Z-dev.N` (or passes through `X.Y.Z`) to the numeric base a
+ * stable release bumps; rejects any other prerelease/build metadata.
+ */
+export function normalizeStableBaseVersion(value: unknown): ReleaseVersionResult;
+
 export type StableVersionComparisonResult =
   | { status: "valid"; comparison: -1 | 0 | 1 }
   | { status: "invalid"; code: string; reason: string };

@@ -2,11 +2,16 @@
 /**
  * Read one npm dist-tag while distinguishing an absent tag/package from a
  * registry failure. Release workflows must fail closed on network/auth errors
- * instead of treating them as a first publication.
+ * instead of treating them as a first publication. Accepted values are stable
+ * `X.Y.Z` and develop-channel prereleases `X.Y.Z-dev.N`.
  */
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
+
+/** Accepted dist-tag value: stable `X.Y.Z` or develop-channel `X.Y.Z-dev.N`. */
+const CHANNEL_VERSION_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-dev\.(0|[1-9]\d*))?$/;
 
 /**
  * @param {{ status: number | null, stdout: string, stderr: string }} result
@@ -20,13 +25,16 @@ export function parseNpmViewDistTagResult(result) {
     }
     try {
       const value = JSON.parse(stdout);
-      if (typeof value === "string" && value.length > 0) {
+      // A nonempty JSON string alone is not proof of a usable tag value:
+      // only channel versions count as `found`; anything else is malformed
+      // output and must fail closed, never surface as a version.
+      if (typeof value === "string" && CHANNEL_VERSION_PATTERN.test(value)) {
         return { status: "found", version: value };
       }
     } catch {
-      // Some npm versions print a plain value even with --json. Fall through
-      // to the same explicit validation used for the JSON string form.
-      if (/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(stdout)) {
+      // Some npm versions print a plain value even with --json. Apply the
+      // same explicit validation used for the JSON string form.
+      if (CHANNEL_VERSION_PATTERN.test(stdout)) {
         return { status: "found", version: stdout };
       }
     }
