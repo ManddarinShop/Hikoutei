@@ -472,4 +472,34 @@ describe("shiftedHumanEdit scenario", () => {
     const kept = em.store.get(plan.target.targetId)?.[plan.target.field];
     expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
   });
+
+  it("records cleanup-outbox-busy and keeps both rows when either binding outbox never drains", async () => {
+    // The race verifies cleanly (`guard-invariant-verified`, no conflict),
+    // but a candidate effect for one dedicated binding is stuck in flight
+    // past the bounded drain wait. Both rows must be KEPT — never deleted
+    // through a blocked outbox — with the distinct stable kind as a real
+    // failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    wireProjection(em, client, plan);
+    const seen: string[] = [];
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryOutboxInflightCount: async (targetId: string) => {
+        seen.push(targetId);
+        return 1;
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("guard-invariant-verified");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    // The single bounded wait covers both dedicated bindings, and both
+    // rows are kept (never deleted through the blocked outbox).
+    expect(seen).toContain(plan.target.targetId);
+    expect(em.rows().length).toBe(2);
+  });
 });

@@ -421,6 +421,58 @@ describe("localHumanWriteRace scenario", () => {
     expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
   });
 
+  it("waits for the binding outbox to drain, then deletes after a verified winner (ok)", async () => {
+    // Live-evidence regression: a `race-winner-verified` row with NO
+    // conflict still fails closed when candidate effects for its binding
+    // are in flight. The cleanup must wait (bounded) for them to drain and
+    // only then delete — never fail the run over a transiently busy outbox.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The binding effect is in flight for the first polls, then drains
+    // (the worker's delivery completes mid-cleanup).
+    let polls = 0;
+    const context = {
+      ...liveContext(plan, client, em),
+      queryOutboxInflightCount: async () => {
+        polls += 1;
+        return polls <= 2 ? 1 : 0;
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(0);
+    expect(result.cleanupFailures).toBe(0);
+    expect(polls).toBeGreaterThan(2);
+    // The delete ran only after the drain: the dedicated row is gone.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
+    // The binding effect is stuck in flight past the bounded wait (a wedged
+    // candidate cycle). The row must be KEPT — never deleted through a
+    // blocked outbox — and the distinct stable kind recorded as a real
+    // failure (not a skip).
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    // The row is kept (never tombstoned under the blocked outbox).
+    expect(em.rows().length).toBe(1);
+  });
+
   it("still skips winner-not-verified when the winner never settles and no conflict is recorded", async () => {
     // The negative control: an unobserved winner with NO conflict record is
     // still a truthful skip, never an unobserved ok.

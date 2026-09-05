@@ -12,7 +12,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -362,7 +362,13 @@ export async function execute({ plan, context }) {
     // values). When the wait expires the row is kept and surfaced as
     // `cleanup-unresolved-conflict` — never deleted through a blocking
     // conflict. Landed/never-started paths keep the settle/delete below
-    // unchanged.
+    // unchanged. After the settle proof, a bounded outbox-drain wait lets
+    // candidate effects for this binding leave the blocking states (a
+    // `race-winner-verified` row with NO conflict still fails closed while
+    // such an effect is in flight). On expiry the row is kept as
+    // `cleanup-outbox-busy` — never deleted through a blocked outbox (the
+    // #381 protection covers outbox state too). Both waits share the settle
+    // budget via the run deadline.
     let cleanupUnresolved = false;
     let cleanupResolved = false;
     if (result?.reason === "conflict-recorded") {
@@ -387,11 +393,21 @@ export async function execute({ plan, context }) {
         // was rejected). When the proof times out the row is NOT deleted —
         // deleting would tombstone the binding under an in-flight inbound
         // observation (the #381 race) — and the leftover row is surfaced as a
-        // cleanup failure instead of being silently removed.
-        const safeToDelete = cleanupResolved || await settleTerminalBeforeCleanup(
+        // cleanup failure instead of being silently removed. The outbox-drain
+        // wait then holds the delete until the binding's candidate effects
+        // leave the blocking states (bounded, same settle budget); on expiry
+        // the row is kept as `cleanup-outbox-busy`.
+        const settled = cleanupResolved || await settleTerminalBeforeCleanup(
           context, token, plan, critical, humanStarted, humanAccepted, humanLanded,
         );
-        if (safeToDelete) {
+        const drained = settled ? await waitForBindingOutboxDrain(context, plan.target.targetId) : false;
+        if (!settled) {
+          cleanupFailures += 1;
+          failureKinds.add("cleanup-proof-timeout");
+        } else if (!drained) {
+          cleanupFailures += 1;
+          failureKinds.add("cleanup-outbox-busy");
+        } else {
           await critical(async () => {
             const rows = await em.find(token, { id: plan.target.targetId });
             for (const raceRow of rows) {
@@ -400,9 +416,6 @@ export async function execute({ plan, context }) {
             await em.flush();
             context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
           });
-        } else {
-          cleanupFailures += 1;
-          failureKinds.add("cleanup-proof-timeout");
         }
       } catch {
         cleanupFailures += 1;

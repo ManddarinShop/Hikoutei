@@ -397,6 +397,11 @@ export const KNOWN_FAILURE_KINDS = Object.freeze([
   // is kept (never deleted through a blocking conflict) and surfaced as
   // this distinct real failure kind.
   "cleanup-unresolved-conflict",
+  // A cleanup whose bounded outbox-drain wait expired with candidate effects
+  // for the row's binding still in flight: the row is kept (never deleted
+  // through a blocked outbox — the #381 protection covers outbox state) and
+  // surfaced as this distinct real failure kind.
+  "cleanup-outbox-busy",
   // human-delete-row authority-retention kinds.
   "authority-row-lost",
   "retention-unobserved",

@@ -72,3 +72,27 @@ export function resolveRecordedConflicts(
     critical?: (action: () => Promise<void>) => Promise<void>;
   },
 ): Promise<boolean>;
+
+/**
+ * Counts in-flight (blocking) outbox effects for one dedicated race row's
+ * binding (read-only `context.dbName` query, or the
+ * `context.queryOutboxInflightCount(targetId)` test seam). Only the
+ * non-terminal states count (`pending`, `processing`,
+ * `delivery_uncertain`); terminal `failed`/`blocked_candidate` never do.
+ * Fail-safe 0, never throws.
+ */
+export function bindingOutboxInflightCount(
+  context: object,
+  targetId: string,
+): Promise<number>;
+
+/**
+ * Bounded wait for a dedicated race row's binding effects to leave the
+ * blocking outbox states (shares the scenario settle budget, capped by
+ * `context.deadlineAtMs`). True when drained (safe to delete); false when
+ * the budget expired (keep the row, record `cleanup-outbox-busy`).
+ */
+export function waitForBindingOutboxDrain(
+  context: object,
+  targetIdOrIds: string | readonly string[],
+): Promise<boolean>;

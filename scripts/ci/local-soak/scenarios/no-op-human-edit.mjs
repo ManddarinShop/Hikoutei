@@ -13,7 +13,7 @@
  * the projection stable. It runs only in live mode.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_RACE_WINNER_SETTLE_OBSERVATIONS } from "../constants.mjs";
@@ -231,8 +231,18 @@ export async function execute({ plan, context }) {
     // delete so SQLite and the oracle stay symmetric even when the write,
     // an observation, or an authority read failed. A cleanup failure is
     // recorded separately (cleanupFailures) and never masks the original
-    // failure.
+    // failure. Before the delete, a bounded outbox-drain wait lets candidate
+    // effects for this binding leave the blocking states (the delete fails
+    // closed while such an effect is in flight). On expiry the row is kept
+    // as `cleanup-outbox-busy` — never deleted through a blocked outbox
+    // (the #381 protection covers outbox state too). The wait shares the
+    // settle budget via the run deadline.
     try {
+      const outboxDrained = await waitForBindingOutboxDrain(context, plan.target.targetId);
+      if (!outboxDrained) {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-outbox-busy");
+      } else {
       await critical(async () => {
         const rows = await em.find(token, { id: plan.target.targetId });
         for (const noopRow of rows) {
@@ -241,6 +251,7 @@ export async function execute({ plan, context }) {
         await em.flush();
         context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
       });
+      }
     } catch {
       cleanupFailures += 1;
       failureKinds.add("cleanup-delete-failed");

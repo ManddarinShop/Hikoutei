@@ -399,6 +399,29 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
   });
 
+  it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
+    // The human edit landed on the recreated generation (verified ok), but
+    // a candidate effect for the binding is stuck in flight past the bounded
+    // drain wait. The row must be KEPT — never deleted through a blocked
+    // outbox — with the distinct stable kind as a real failure.
+    const plan = racePlan();
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    client.em = em;
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    expect(em.rows().length).toBe(1);
+  });
+
   it("still skips winner-not-verified when the value never lands and no conflict is recorded", async () => {
     // The negative control: a final row without the human value and NO
     // conflict record is still a truthful skip, never an unobserved ok.

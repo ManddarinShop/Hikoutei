@@ -11,7 +11,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -314,6 +314,12 @@ export async function execute({ plan, context }) {
     // delete. When the wait expires the row is kept and surfaced as
     // `cleanup-unresolved-conflict` — never deleted through a blocking
     // conflict. Landed/never-started paths keep the direct delete below.
+    // Before the delete, a bounded outbox-drain wait lets candidate effects
+    // for this binding leave the blocking states: a `race-winner-verified`
+    // row with NO conflict still fails closed while such an effect is in
+    // flight. On expiry the row is kept as `cleanup-outbox-busy` — never
+    // deleted through a blocked outbox (the #381 protection covers outbox
+    // state too). Both waits share the settle budget via the run deadline.
     let cleanupUnresolved = false;
     if (result?.reason === "conflict-recorded") {
       const cleared = await resolveRecordedConflicts(context, {
@@ -329,6 +335,11 @@ export async function execute({ plan, context }) {
       }
     }
     if (!cleanupUnresolved) {
+      const outboxDrained = await waitForBindingOutboxDrain(context, plan.target.targetId);
+      if (!outboxDrained) {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-outbox-busy");
+      } else {
       try {
         await critical(async () => {
           const rows = await em.find(token, { id: plan.target.targetId });
@@ -341,6 +352,7 @@ export async function execute({ plan, context }) {
       } catch {
         cleanupFailures += 1;
         failureKinds.add("cleanup-delete-failed");
+      }
       }
     }
   }

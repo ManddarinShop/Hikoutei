@@ -23,7 +23,7 @@
  * scenario hunts and is ALWAYS a failure.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { conflictRecordedForFields, resolveRecordedConflicts, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, resolveRecordedConflicts, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -204,6 +204,10 @@ export async function execute({ plan, context }) {
   // both dedicated rows are kept and the merge below surfaces the distinct
   // `cleanup-unresolved-conflict` kind instead of `cleanup-delete-failed`.
   let cleanupUnresolved = false;
+  // True when the bounded outbox-drain wait expired with candidate effects
+  // for either dedicated binding still in flight: both rows are kept and
+  // the merge below surfaces `cleanup-outbox-busy`.
+  let cleanupOutboxBusy = false;
   let result;
   try {
     // DEDICATED shifter row FIRST so its projection appends ABOVE the race
@@ -291,7 +295,13 @@ export async function execute({ plan, context }) {
     // row via the public EM first (the shifter row has no conflict), and
     // only then remove both rows. When the wait expires both rows are kept
     // and surfaced as `cleanup-unresolved-conflict` — never deleted
-    // through a blocking conflict.
+    // through a blocking conflict. Before the delete, a bounded
+    // outbox-drain wait lets candidate effects for BOTH bindings leave the
+    // blocking states (a verified row with NO conflict still fails closed
+    // while such an effect is in flight). On expiry both rows are kept as
+    // `cleanup-outbox-busy` — never deleted through a blocked outbox (the
+    // #381 protection covers outbox state too). Both waits share the settle
+    // budget via the run deadline.
     if (result?.reason === "conflict-recorded") {
       const cleared = await resolveRecordedConflicts(context, {
         token,
@@ -305,6 +315,14 @@ export async function execute({ plan, context }) {
       }
     }
     if (!cleanupUnresolved) {
+      const outboxDrained = await waitForBindingOutboxDrain(
+        context,
+        [plan.target.targetId, plan.target.shifterId],
+      );
+      if (!outboxDrained) {
+        cleanupFailures += 1;
+        cleanupOutboxBusy = true;
+      } else {
       try {
         await critical(async () => {
           const ids = [plan.target.targetId, plan.target.shifterId];
@@ -320,15 +338,19 @@ export async function execute({ plan, context }) {
       } catch {
         cleanupFailures += 1;
       }
+      }
     }
   }
   // Merge the classifier's diagnostic kinds with cleanup accounting so the
   // durable record names every invariant that fired (allowlisted kinds only).
   // An unresolved conflict-recorded cleanup surfaces its own distinct kind;
-  // any other cleanup failure is the delete failure.
+  // an expired outbox-drain wait surfaces `cleanup-outbox-busy`; any other
+  // cleanup failure is the delete failure.
   const cleanupKind = cleanupUnresolved
     ? "cleanup-unresolved-conflict"
-    : "cleanup-delete-failed";
+    : cleanupOutboxBusy
+      ? "cleanup-outbox-busy"
+      : "cleanup-delete-failed";
   const kinds = [...new Set([
     ...(Array.isArray(result?.failureKinds) ? result.failureKinds : []),
     ...(cleanupFailures > 0 ? [cleanupKind] : []),
