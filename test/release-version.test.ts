@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareStableVersions,
   computeReleaseVersion,
+  normalizeStableBaseVersion,
 } from "../scripts/ci/release-version.mjs";
 import { parseNpmViewDistTagResult } from "../scripts/ci/read-npm-dist-tag.mjs";
 
@@ -82,6 +83,42 @@ describe("computeReleaseVersion", () => {
   });
 });
 
+describe("normalizeStableBaseVersion", () => {
+  it("passes a numeric stable version through unchanged", () => {
+    expect(normalizeStableBaseVersion("0.9.30")).toStrictEqual({
+      status: "valid",
+      version: "0.9.30",
+    });
+  });
+
+  it("strips the dev prerelease suffix so the main workflow can minor-bump", () => {
+    expect(normalizeStableBaseVersion("0.9.31-dev.7")).toStrictEqual({
+      status: "valid",
+      version: "0.9.31",
+    });
+  });
+
+  it("keeps large numeric components exact", () => {
+    expect(normalizeStableBaseVersion("9007199254740993.0.0-dev.1")).toStrictEqual({
+      status: "valid",
+      version: "9007199254740993.0.0",
+    });
+  });
+
+  it("rejects foreign prerelease, build metadata, and malformed input", () => {
+    for (const value of ["0.9.31-beta.1", "0.9.31+sha.abc", "0.9.31-dev.", "0.9", "v0.9.31", ""]) {
+      expect(normalizeStableBaseVersion(value)).toMatchObject({
+        status: "invalid",
+        code: "invalid_base_version",
+      });
+    }
+  });
+
+  it("rejects non-string input", () => {
+    expect(normalizeStableBaseVersion(undefined)).toMatchObject({ status: "invalid" });
+  });
+});
+
 describe("compareStableVersions", () => {
   it("orders numeric versions for a release channel", () => {
     expect(compareStableVersions("0.3.1", "0.3.2")).toStrictEqual({
@@ -114,6 +151,18 @@ describe("parseNpmViewDistTagResult", () => {
     });
   });
 
+  it("accepts dev-channel prerelease tag values", () => {
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: '"0.9.31-dev.2"\n', stderr: "" })).toStrictEqual({
+      status: "found",
+      version: "0.9.31-dev.2",
+    });
+    // Plain (non-JSON) npm output must parse prerelease values too.
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: "0.9.31-dev.10\n", stderr: "" })).toStrictEqual({
+      status: "found",
+      version: "0.9.31-dev.10",
+    });
+  });
+
   it("accepts an absent tag or package as an empty channel", () => {
     expect(parseNpmViewDistTagResult({ status: 0, stdout: "\n", stderr: "" })).toStrictEqual({
       status: "missing",
@@ -133,6 +182,31 @@ describe("parseNpmViewDistTagResult", () => {
     expect(parseNpmViewDistTagResult({ status: 0, stdout: "not-a-version", stderr: "" })).toMatchObject({
       status: "failed",
       code: "invalid_npm_view_output",
+    });
+  });
+
+  it("classifies unsupported tag values as malformed, never found", () => {
+    // Regression for the develop-version base probe: a nonempty JSON string
+    // used to count as `found` even when it was not a channel version, so
+    // the downstream --monotonic compare received garbage.
+    for (const stdout of ['"next"\n', '"0.9.31-beta.1"\n', '"v1.2.3"\n', '"0.9"\n']) {
+      expect(parseNpmViewDistTagResult({ status: 0, stdout, stderr: "" })).toMatchObject({
+        status: "failed",
+        code: "invalid_npm_view_output",
+      });
+    }
+    // Non-JSON (plain-value) output is validated against the same full
+    // pattern, including the optional -dev.N prerelease.
+    for (const stdout of ["latest\n", "0.9.31-beta.1\n", "0.9.31-dev.x\n"]) {
+      expect(parseNpmViewDistTagResult({ status: 0, stdout, stderr: "" })).toMatchObject({
+        status: "failed",
+        code: "invalid_npm_view_output",
+      });
+    }
+    // The plain-value fallback still accepts both valid channel forms.
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: "0.3.1\n", stderr: "" })).toStrictEqual({
+      status: "found",
+      version: "0.3.1",
     });
   });
 });
@@ -163,6 +237,26 @@ describe("release-version CLI", () => {
     const result = run("--base-version=0.3.0", "--bump=major");
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("release-version:invalid_bump:");
+  });
+
+  it("normalizes a dev prerelease base for the main stable workflow", () => {
+    const result = run("--normalize-base=0.9.31-dev.7");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("0.9.31\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects a non-dev prerelease in normalize mode fail-closed", () => {
+    const result = run("--normalize-base=0.9.31-beta.1");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("release-version:invalid_base_version:");
+  });
+
+  it("rejects combining normalize mode with the strict bump path", () => {
+    const result = run("--normalize-base=0.9.31-dev.7", "--bump=minor");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("release-version:invalid_arguments:");
   });
 
   it("rejects missing or unexpected arguments as usage errors", () => {
