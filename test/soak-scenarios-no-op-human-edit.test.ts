@@ -315,4 +315,27 @@ describe("noOpHumanEdit scenario", () => {
     // The dedicated row is still removed in cleanup.
     expect(em.rows()).toEqual([]);
   });
+
+  it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
+    // The no-op verified stably, but a candidate effect for the binding is
+    // stuck in flight past the bounded drain wait. The row must be KEPT —
+    // never deleted through a blocked outbox — with the distinct stable
+    // kind as a real failure.
+    const seed = 777;
+    const plan = buildPlan(seed);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, seed, Date.now() + 60),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("no-op-stable");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    expect(em.rows().length).toBe(1);
+  });
 });

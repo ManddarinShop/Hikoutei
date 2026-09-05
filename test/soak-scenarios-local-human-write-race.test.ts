@@ -14,6 +14,7 @@ import * as localHumanWriteRace from "../scripts/ci/local-soak/scenarios/localHu
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../scripts/ci/local-soak/entities.mjs";
 import { SeededRandom } from "../scripts/ci/local-soak/prng.mjs";
 import { SCENARIO_REGISTRY } from "../scripts/ci/local-soak/scenarios/registry.mjs";
+import { SYSTEM_WINS_RESOLVE_SUFFIX } from "../scripts/ci/local-soak/errors.mjs";
 import { FakeEm, liveContext, projectPersistedRow } from "./support/soakScenarioFixtures.js";
 
 // Shorten the scenario's bounded observation sleeps so the poll/settle loops
@@ -334,6 +335,163 @@ describe("localHumanWriteRace scenario", () => {
     // No human write was ever attempted against a not-yet-projected row.
     expect(client.mutateCalls).toEqual([]);
     // The dedicated row is still removed in cleanup.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("accepts an OPEN sync_conflict as conflict-recorded when the winner never settles (ok)", async () => {
+    // Core harness fix: neither candidate value settles in the authority
+    // within the bound (the outbox-gated poll skips the row), but the human
+    // value was ingested as an OPEN sync_conflict — recorded, not lost.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The authority never settles on either candidate value: after the local
+    // update commits, reads observe a foreign value (neither candidate).
+    em.flushBehavior = (index) => {
+      if (index === 2) {
+        em.store.get(plan.target.targetId)![plan.target.field] = "foreign-value";
+      }
+    };
+    // The conflict record clears once the cleanup's system-wins advance
+    // lands (the stored value carries the resolve suffix), modeling the
+    // worker applying the acknowledge_system resolution.
+    const oracleMutations: unknown[] = [];
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 300),
+      oracle: { applyMutation: (mutation: unknown) => oracleMutations.push(mutation) },
+      queryConflictRows: async () => {
+        const value = em.store.get(plan.target.targetId)?.[plan.target.field];
+        const resolved = typeof value === "string" && value.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX);
+        return resolved ? [] : [{
+          fieldName: plan.target.field,
+          userValue: plan.humanValue,
+          status: "OPEN",
+        }];
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(0);
+    expect(result.failureKinds).toBeUndefined();
+    // The resolve-then-delete cleanup removed the dedicated row and mirrored
+    // the delete into the oracle (never deleted through the OPEN conflict).
+    expect(em.rows()).toEqual([]);
+    expect(oracleMutations).toContainEqual({
+      op: "delete",
+      entity: plan.target.entityName,
+      id: plan.target.targetId,
+    });
+  });
+
+  it("records cleanup-unresolved-conflict and keeps the row when the conflict never clears", async () => {
+    // The resolve-then-delete cleanup advances the conflicted field, but the
+    // conflict record never leaves the blocking state within the bound (a
+    // deferred acknowledge stuck behind an unsettled predecessor). The row
+    // must be KEPT — never deleted through a blocking conflict — and the
+    // distinct stable kind recorded as a real failure.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    em.flushBehavior = (index) => {
+      if (index === 2) {
+        em.store.get(plan.target.targetId)![plan.target.field] = "foreign-value";
+      }
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryConflictRows: async () => [{
+        fieldName: plan.target.field,
+        userValue: plan.humanValue,
+        status: "OPEN",
+      }],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("conflict-recorded");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-unresolved-conflict"]);
+    // The row is kept (never tombstoned under the blocking conflict), and
+    // the resolve attempt advanced the conflicted field through the EM.
+    expect(em.rows().length).toBe(1);
+    const kept = em.store.get(plan.target.targetId)?.[plan.target.field];
+    expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
+  });
+
+  it("waits for the binding outbox to drain, then deletes after a verified winner (ok)", async () => {
+    // Live-evidence regression: a `race-winner-verified` row with NO
+    // conflict still fails closed when candidate effects for its binding
+    // are in flight. The cleanup must wait (bounded) for them to drain and
+    // only then delete — never fail the run over a transiently busy outbox.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    // The binding effect is in flight for the first polls, then drains
+    // (the worker's delivery completes mid-cleanup).
+    let polls = 0;
+    const context = {
+      ...liveContext(plan, client, em),
+      queryOutboxInflightCount: async () => {
+        polls += 1;
+        return polls <= 2 ? 1 : 0;
+      },
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("ok");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(0);
+    expect(result.cleanupFailures).toBe(0);
+    expect(polls).toBeGreaterThan(2);
+    // The delete ran only after the drain: the dedicated row is gone.
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
+    // The binding effect is stuck in flight past the bounded wait (a wedged
+    // candidate cycle). The row must be KEPT — never deleted through a
+    // blocked outbox — and the distinct stable kind recorded as a real
+    // failure (not a skip).
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 60),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("race-winner-verified");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    // The row is kept (never tombstoned under the blocked outbox).
+    expect(em.rows().length).toBe(1);
+  });
+
+  it("still skips winner-not-verified when the winner never settles and no conflict is recorded", async () => {
+    // The negative control: an unobserved winner with NO conflict record is
+    // still a truthful skip, never an unobserved ok.
+    const plan = racePlan("update");
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectPersistedRow(em, client, plan);
+    em.findOneOverride = (id) => {
+      const row = em.store.get(id);
+      return row ? { ...row, [plan.target.field]: "foreign-value" } : null;
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 120),
+      queryConflictRows: async () => [],
+    };
+    const result = await scenario.execute({ plan, context });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("winner-not-verified");
+    expect(result.failures).toBe(0);
     expect(em.rows()).toEqual([]);
   });
 });

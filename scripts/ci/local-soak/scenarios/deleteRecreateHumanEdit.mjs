@@ -13,7 +13,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
-import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
+import { conflictRecordedForFields, identityShiftedTransientResult, isIdentityShiftedEvidence, resolveRecordedConflicts, stableErrorTag, waitForBindingOutboxDrain } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -245,12 +245,26 @@ export async function execute({ plan, context }) {
           failureKinds.add(verification === "missing" ? "row-missing" : "duplicate-rows");
         }
       }
+      // Conflict-recorded outcome: the final row never showed the human value
+      // within the bound, but the value may have been ingested as an OPEN
+      // sync_conflict after an in-flight outbox cycle — recorded, not lost.
+      // A missing/duplicate row stays a real failure; only the unobserved
+      // (single row without the value) outcome consults the conflict records.
+      let conflictRecorded = false;
+      if (failures === 0 && humanTransient === undefined && verification === "unobserved") {
+        const recorded = await conflictRecordedForFields(context, [
+          { field: plan.target.field, expectedValue: plan.humanValue },
+        ]);
+        conflictRecorded = recorded.has(plan.target.field);
+      }
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
         : humanTransient !== undefined
           ? humanTransient
           : verification === "ok"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
+          : conflictRecorded
+          ? { status: "ok", expectedErrors: 0, failures: 0, reason: "conflict-recorded" }
           : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {
@@ -267,18 +281,52 @@ export async function execute({ plan, context }) {
     // an observation, or an authority read failed. A cleanup failure is
     // recorded separately (cleanupFailures) and never masks the original
     // failure.
-    try {
-      await critical(async () => {
-        const rows = await em.find(token, { id: plan.target.targetId });
-        for (const raceRow of rows) {
-          em.remove(raceRow);
-        }
-        await em.flush();
-        context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
+    //
+    // Conflict-recorded rows carry OPEN conflicts that fail a direct delete
+    // closed (projection_outbox_blocked): resolve them via the public EM
+    // first (system-wins advance + bounded clear wait), and only then
+    // delete. When the wait expires the row is kept and surfaced as
+    // `cleanup-unresolved-conflict` — never deleted through a blocking
+    // conflict. Landed/never-started paths keep the direct delete below.
+    // Before the delete, a bounded outbox-drain wait lets candidate effects
+    // for this binding leave the blocking states (a verified row with NO
+    // conflict still fails closed while such an effect is in flight). On
+    // expiry the row is kept as `cleanup-outbox-busy` — never deleted
+    // through a blocked outbox. Both waits share the settle budget.
+    let cleanupUnresolved = false;
+    if (result?.reason === "conflict-recorded") {
+      const cleared = await resolveRecordedConflicts(context, {
+        token,
+        targetId: plan.target.targetId,
+        fields: [{ field: plan.target.field, expectedValue: plan.humanValue }],
+        critical,
       });
-    } catch {
-      cleanupFailures += 1;
-      failureKinds.add("cleanup-delete-failed");
+      if (!cleared) {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-unresolved-conflict");
+        cleanupUnresolved = true;
+      }
+    }
+    if (!cleanupUnresolved) {
+      const outboxDrained = await waitForBindingOutboxDrain(context, plan.target.targetId);
+      if (!outboxDrained) {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-outbox-busy");
+      } else {
+      try {
+        await critical(async () => {
+          const rows = await em.find(token, { id: plan.target.targetId });
+          for (const raceRow of rows) {
+            em.remove(raceRow);
+          }
+          await em.flush();
+          context.oracle?.applyMutation({ op: "delete", entity: plan.target.entityName, id: plan.target.targetId });
+        });
+      } catch {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
+      }
+      }
     }
   }
   const kinds = [...failureKinds].sort();

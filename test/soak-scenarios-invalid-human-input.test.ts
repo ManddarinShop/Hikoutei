@@ -339,4 +339,38 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(result.failures).toBe(1);
     expect(em.rows()).toEqual([]);
   });
+
+  it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
+    // The invalid write is provably rejected (an ok verdict), but a
+    // candidate effect for the binding is stuck in flight past the bounded
+    // drain wait. The row must be KEPT — never deleted through a blocked
+    // outbox — with the distinct stable kind as a real failure.
+    const plan = buildPlan(7);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    // Mirror the provable-rejection ok test: persist projects the
+    // authoritative value so the rejection observation settles.
+    const spec = (plan as unknown as { fieldSpec: { type: string } }).fieldSpec;
+    const originalPersist = em.persist.bind(em);
+    em.persist = (entity: Record<string, unknown>) => {
+      const projected = toCellStringForTest(entity[plan.target.field], spec);
+      client.ensureTab(`${plan.target.entityName}_Input`, ["id", plan.target.field]);
+      client.setCell(`${plan.target.entityName}_Input`, plan.target.targetId, {
+        id: plan.target.targetId,
+        [plan.target.field]: projected,
+      });
+      originalPersist(entity);
+    };
+    const context = {
+      ...liveContext(plan, client, em, Date.now() + 400),
+      queryOutboxInflightCount: async () => 1,
+    };
+    const result = await scenarioInput.execute({ plan, context });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("recovery-not-observed");
+    expect(result.failures).toBe(1);
+    expect(result.cleanupFailures).toBe(1);
+    expect(result.failureKinds).toEqual(["cleanup-outbox-busy"]);
+    expect(em.rows().length).toBe(1);
+  });
 });
