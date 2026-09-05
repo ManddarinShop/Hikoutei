@@ -14,6 +14,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -80,10 +81,12 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable stale/CAS/conflict
  * evidence: a rejected public update is an expected stale-write compare-and-
  * set conflict only when its error carries one of the exact guard/hash-
- * mismatch codes; a validation, transport, or direct-write rejection is a
- * real failure. A rejected human delete is expected only on the same exact
- * CAS/stale evidence; any other delete rejection (including the direct
- * client's `identity_shifted` fail-closed guard) is a real failure. The
+ * mismatch codes; a validation, transport, or other direct-write rejection
+ * is a real failure. A rejected human delete is expected only on the same
+ * exact CAS/stale evidence; any other delete rejection is a real failure,
+ * except an exact `identity_shifted` rejection of the direct delete, which
+ * is the expected multi-writer transient (a truthful
+ * `identity-shifted-transient` skip, never a failure). The
  * oracle is NEVER updated from an unproven winner — the dedicated row is
  * removed (in a guaranteed finally path) so the final SQLite state matches
  * the deterministic replay.
@@ -114,6 +117,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   try {
     // Critical section: create the DEDICATED row and mirror it into the
@@ -191,14 +197,26 @@ export async function execute({ plan, context }) {
           });
       const [publicResult, humanResult] = await Promise.allSettled([publicPromise, humanPromise]);
       // Classify rejections ONLY by EXACT stale-write/CAS/conflict evidence
-      // (a guard/hash mismatch on the raced row). A validation/transport/
-      // direct-write rejection — including the direct client's
-      // `identity_shifted` fail-closed guard — is never an expected conflict.
+      // (a guard/hash mismatch on the raced row). A validation/transport
+      // rejection is never an expected conflict. The direct seam's
+      // fail-closed `identity_shifted` evidence is an EXPECTED TRANSIENT of
+      // the multi-writer soak (a concurrent actor shifted the tab mid-
+      // delete; the seam proved no silent success): never a failure, a
+      // truthful skip recorded below. The authority-retention invariant
+      // checked after this still judges the REAL data loss the scenario
+      // hunts.
       if (publicResult.status === "rejected" && !isStaleConflictEvidence(publicResult.reason)) {
         failures += 1;
+        failureKinds.add("local-rejection-non-stale");
       }
-      if (humanResult.status === "rejected" && !isStaleConflictEvidence(humanResult.reason)) {
-        failures += 1;
+      let humanTransient;
+      if (humanResult.status === "rejected") {
+        if (isIdentityShiftedEvidence(humanResult.reason)) {
+          humanTransient = identityShiftedTransientResult(humanResult.reason);
+        } else if (!isStaleConflictEvidence(humanResult.reason)) {
+          failures += 1;
+          failureKinds.add("human-rejection-non-stale");
+        }
       }
       // Verify the authority-retention invariant: SQLite is the authority,
       // so a human deleting the row from the Sheet projection MUST NOT erase
@@ -209,16 +227,30 @@ export async function execute({ plan, context }) {
       const verdict = await verifyAuthorityRetained({
         em, token, plan, context, critical,
       });
-      if (verdict === "lost") failures += 1;
-      if (verdict === "unobserved") failures += 1;
+      if (verdict === "lost") {
+        failures += 1;
+        failureKinds.add("authority-row-lost");
+      }
+      if (verdict === "unobserved") {
+        failures += 1;
+        failureKinds.add("retention-unobserved");
+      }
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-        : verdict === "retained"
+        : humanTransient !== undefined
+          ? humanTransient
+          : verdict === "retained"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
           : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated row and mirror the delete so
     // SQLite and the oracle stay symmetric even when the race, an
@@ -235,8 +267,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -244,9 +278,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

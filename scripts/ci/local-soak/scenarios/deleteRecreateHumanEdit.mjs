@@ -13,6 +13,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -81,10 +82,11 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable CAS/stale/conflict evidence
  * via `isStaleConflictEvidence`: a rejected local write or human edit is an
  * expected compare-and-set conflict only when its error carries one of the
- * exact guard/hash-mismatch codes; a validation, transport, or direct-write
- * rejection (including the direct client's `identity_shifted` guard, which
- * means the human edit targeted the wrong lifecycle generation) is a real
- * failure. The oracle is NEVER updated from an unproven winner. The
+ * exact guard/hash-mismatch codes; a validation, transport, or other
+ * direct-write rejection is a real failure. An exact `identity_shifted`
+ * rejection of the direct human write is the expected multi-writer
+ * transient (a truthful `identity-shifted-transient` skip, never a failure).
+ * The oracle is NEVER updated from an unproven winner. The
  * reactivation invariant is verified on the OBSERVABLE authority: EXACTLY one
  * final row for the id (a missing row is as much a failure as a duplicate)
  * AND the human value present in that final row (the human edit is not
@@ -111,6 +113,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   try {
     // Critical section: create the DEDICATED race row and mirror it into the
@@ -195,16 +200,25 @@ export async function execute({ plan, context }) {
           });
       const [localResult, humanResult] = await Promise.allSettled([localPromise, humanPromise]);
       // Classify rejections ONLY by EXACT stale-write/CAS/conflict evidence
-      // (a guard/hash mismatch on the raced row). A validation/transport/
-      // direct-write rejection — including the direct client's
-      // `identity_shifted` guard, which means the human edit targeted the
-      // wrong lifecycle generation — is never an expected conflict.
+      // (a guard/hash mismatch on the raced row). A validation/transport
+      // rejection is never an expected conflict. The direct seam's
+      // fail-closed `identity_shifted` evidence is an EXPECTED TRANSIENT of
+      // the multi-writer soak (the human edit targeted a row another actor
+      // shifted mid-write; the seam proved no silent success): never a
+      // failure, a truthful skip recorded below.
       const localRejected = localResult.status === "rejected";
       if (localRejected && !isStaleConflictEvidence(localResult.reason)) {
         failures += 1;
+        failureKinds.add("local-rejection-non-stale");
       }
-      if (humanResult.status === "rejected" && !isStaleConflictEvidence(humanResult.reason)) {
-        failures += 1;
+      let humanTransient;
+      if (humanResult.status === "rejected") {
+        if (isIdentityShiftedEvidence(humanResult.reason)) {
+          humanTransient = identityShiftedTransientResult(humanResult.reason);
+        } else if (!isStaleConflictEvidence(humanResult.reason)) {
+          failures += 1;
+          failureKinds.add("human-rejection-non-stale");
+        }
       }
       // Observable reactivation invariant: EXACTLY one final row for the id
       // (a missing row is as much a failure as a duplicate) AND the human
@@ -226,16 +240,27 @@ export async function execute({ plan, context }) {
           context,
           critical,
         });
-        if (verification === "missing" || verification === "duplicate") failures += 1;
+        if (verification === "missing" || verification === "duplicate") {
+          failures += 1;
+          failureKinds.add(verification === "missing" ? "row-missing" : "duplicate-rows");
+        }
       }
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-        : verification === "ok"
+        : humanTransient !== undefined
+          ? humanTransient
+          : verification === "ok"
           ? { status: "ok", expectedErrors: 0, failures: 0, reason: "race-winner-verified" }
           : { status: "skipped", expectedErrors: 0, failures: 0, reason: "winner-not-verified" };
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated race row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the race,
@@ -253,8 +278,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -262,9 +289,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

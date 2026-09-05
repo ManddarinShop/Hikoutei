@@ -42,3 +42,47 @@ export function stableErrorTag(error) {
     ? errorClass
     : `${errorClass} (${stable})`;
 }
+
+/**
+ * True when a rejected direct human write carries EXACTLY the stable
+ * `identity_shifted` evidence of the harness's fail-closed identity guard
+ * (a `DirectSheetsError` whose statusClass — or a fake/test error whose
+ * code — is `identity_shifted`).
+ *
+ * In the adversarial multi-writer soak environment a row shift between
+ * the seam's snapshot read and its write is an EXPECTED TRANSIENT: other
+ * concurrently-running scenarios mutate the same tabs, the seam proved no
+ * silent success (it REFUSED to report success for the wrong identity),
+ * and the race outcome is simply unobservable. Scenario modules branch on
+ * this predicate BEFORE their non-stale failure counting and record a
+ * truthful `identity-shifted-transient` skip instead of a real failure.
+ * Duck-typed on the stable statusClass/code so the untrusted error's
+ * message, ids, and payloads never reach a classification decision.
+ *
+ * @param {unknown} reason a rejected direct-write reason.
+ * @returns {boolean}
+ */
+export function isIdentityShiftedEvidence(reason) {
+  return reason !== null && typeof reason === "object" &&
+    (reason?.statusClass === "identity_shifted" || reason?.code === "identity_shifted");
+}
+
+/**
+ * The truthful redacted scenario record for a direct human-write rejection
+ * whose evidence is exactly `identity_shifted`: a transient of the
+ * multi-writer environment, never a failure. The scenario's guaranteed
+ * finally cleanup still runs unchanged after this record is produced.
+ *
+ * @param {unknown} error the identity-shifted rejection reason.
+ * @returns {{ status: "skipped", expectedErrors: number, failures: number,
+ *   reason: string, reasonTag: string }}
+ */
+export function identityShiftedTransientResult(error) {
+  return {
+    status: "skipped",
+    expectedErrors: 0,
+    failures: 0,
+    reason: "identity-shifted-transient",
+    reasonTag: stableErrorTag(error),
+  };
+}

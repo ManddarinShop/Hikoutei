@@ -18,6 +18,7 @@
  * detection, and cleanup); it runs only in live mode.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS } from "../constants.mjs";
@@ -200,6 +201,9 @@ export async function execute({ plan, context }) {
     ? action()
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
+  // Stable diagnostic kinds for every failure site (allowlisted, never raw
+  // text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   // The exact raw writes used for the injected EXTRA row (duplicate-identity
   // and shifted-cell only; missing-field writes into the dedicated row
@@ -225,6 +229,12 @@ export async function execute({ plan, context }) {
     if (!(await awaitInputProjection(client, spreadsheetId, tabName, plan, context))) {
       result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "projection-not-ready" };
     } else {
+      // Narrowed transient scope: ONLY a rejection of a direct write below
+      // (`mutateInputCell` / `injectInputCells`) may classify as the
+      // expected `identity-shifted-transient` (via `writeTransient`). Reads
+      // (projection readiness, snapshot, verification, detection) and setup
+      // rethrow to the normal failure path — a read error is never transient.
+      let writeTransient;
       await boundedSleep(plan.jitterMs ?? 0, context.deadlineAtMs ?? Number.MAX_SAFE_INTEGER);
       if (plan.corruptionKind === "missing-field") {
         // Injection through the GUARDED identity-resolved write seam:
@@ -232,14 +242,27 @@ export async function execute({ plan, context }) {
         // The guarded postcondition proves the blank landed on the
         // intended identity row, so a successful call IS the
         // injection-observable evidence.
-        await client.mutateInputCell({
-          spreadsheetId,
-          tabName,
-          identity: plan.target.dedicatedId,
-          headerName: plan.target.field,
-          value: "",
-          deadlineAtMs: context.deadlineAtMs,
-        });
+        try {
+          await client.mutateInputCell({
+            spreadsheetId,
+            tabName,
+            identity: plan.target.dedicatedId,
+            headerName: plan.target.field,
+            value: "",
+            deadlineAtMs: context.deadlineAtMs,
+          });
+        } catch (error) {
+          // A direct-write rejection with the fail-closed
+          // `identity_shifted` evidence is an EXPECTED TRANSIENT of the
+          // multi-writer soak (a concurrent actor shifted the tab; the seam
+          // proved no silent overwrite): a truthful skip, never a failure.
+          // Any other write rejection rethrows to the failure path.
+          if (isIdentityShiftedEvidence(error)) {
+            writeTransient = identityShiftedTransientResult(error);
+          } else {
+            throw error;
+          }
+        }
       } else {
         // Injection through the RAW corruption seam: copy the dedicated
         // row's cells into the first blank row directly below it — an
@@ -260,24 +283,42 @@ export async function execute({ plan, context }) {
           const writes = plan.corruptionKind === "duplicate-identity"
             ? source.map((value, columnIndex) => ({ rowIndex: targetIndex, columnIndex, value }))
             : source.map((value, columnIndex) => ({ rowIndex: targetIndex, columnIndex: columnIndex + 1, value }));
-          await client.injectInputCells({
-            spreadsheetId,
-            tabName,
-            writes,
-            deadlineAtMs: context.deadlineAtMs,
-          });
-          injectedWrites = writes;
-          // Injection-observable evidence for the raw seam: the injected
-          // cells must be readable back before a clean detection read can
-          // be called a miss (without this proof an unchanged read proves
-          // nothing).
-          const verifyRows = await client.readTabRows(spreadsheetId, tabName, {
-            deadlineAtMs: context.deadlineAtMs,
-          });
-          if (!hasInjectedRow(verifyRows, writes)) {
-            result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "injection-not-observable" };
+          try {
+            await client.injectInputCells({
+              spreadsheetId,
+              tabName,
+              writes,
+              deadlineAtMs: context.deadlineAtMs,
+            });
+          } catch (error) {
+            // Same narrowed scope as the guarded write above: only an exact
+            // `identity_shifted` injection rejection is the expected
+            // transient (a concurrent actor occupied the blank coordinate;
+            // the seam proved no silent overwrite). Any other rejection
+            // rethrows to the failure path.
+            if (isIdentityShiftedEvidence(error)) {
+              writeTransient = identityShiftedTransientResult(error);
+            } else {
+              throw error;
+            }
+          }
+          if (writeTransient === undefined) {
+            injectedWrites = writes;
+            // Injection-observable evidence for the raw seam: the injected
+            // cells must be readable back before a clean detection read can
+            // be called a miss (without this proof an unchanged read proves
+            // nothing).
+            const verifyRows = await client.readTabRows(spreadsheetId, tabName, {
+              deadlineAtMs: context.deadlineAtMs,
+            });
+            if (!hasInjectedRow(verifyRows, writes)) {
+              result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "injection-not-observable" };
+            }
           }
         }
+      }
+      if (writeTransient !== undefined) {
+        result = writeTransient;
       }
       if (result === undefined) {
         // A SEPARATE detection read: the read seam itself must surface the
@@ -304,12 +345,23 @@ export async function execute({ plan, context }) {
         } else {
           // INJECTED but NOT DETECTED: the guard missed the corruption it
           // must surface — the real defect this scenario catches.
+          failureKinds.add("corruption-missed");
           result = { status: "failed", expectedErrors: 0, failures: 1, reason: "corruption-missed" };
         }
       }
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    // Only the direct writes above (`mutateInputCell` / `injectInputCells`)
+    // may classify as the expected transient (handled inline); every other
+    // throw — reads, detection, setup — is a real scenario error, never a
+    // transient.
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // GUARANTEED cleanup, split into INDEPENDENT guarded steps so a
     // failure in one never prevents the others; each cleanup failure is
@@ -333,6 +385,7 @@ export async function execute({ plan, context }) {
         }
       } catch {
         cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
       }
     }
     // Step 2: remove the dedicated row from the tab by identity. A
@@ -345,7 +398,10 @@ export async function execute({ plan, context }) {
         deadlineAtMs: context.deadlineAtMs,
       });
     } catch (error) {
-      if (error?.statusClass !== "missing_identity") cleanupFailures += 1;
+      if (error?.statusClass !== "missing_identity") {
+        cleanupFailures += 1;
+        failureKinds.add("cleanup-delete-failed");
+      }
     }
     // Step 3: remove the dedicated row from the authority + oracle mirror
     // so SQLite and the oracle stay symmetric even when a tab step failed.
@@ -358,8 +414,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -367,9 +425,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

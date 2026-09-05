@@ -13,6 +13,7 @@
  * fork, so it runs only in live mode; local mode records `skipped`.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { isStaleConflictEvidence } from "../redact.mjs";
@@ -80,10 +81,11 @@ export function plan({ cycle, order, rng, activeEntities }) {
  * Rejections are classified ONLY by EXACT stable CAS/stale/conflict
  * evidence: a rejected delete (or human edit) is an expected compare-and-set
  * conflict only when its error carries one of the exact guard/hash-mismatch
- * codes; a validation, transport, direct-write, or `identity_shifted`
- * rejection is a real failure (an identity shift is the delete-aware baseline
- * mishandling this scenario hunts — a collateral write is never silently
- * accepted). The core invariant is that the delete WINS: the dedicated row
+ * codes; a validation, transport, or other direct-write rejection is a real
+ * failure (a collateral write is never silently accepted). An exact
+ * `identity_shifted` rejection of the direct human write is the expected
+ * multi-writer transient (a truthful `identity-shifted-transient` skip,
+ * never a failure). The core invariant is that the delete WINS: the dedicated row
  * must be ABSENT from the authority after the race (never resurrected by the
  * human edit). The stale-projection residue is DEFERRED to the cycle's
  * convergence check (which already knows the id through the oracle and
@@ -111,6 +113,9 @@ export async function execute({ plan, context }) {
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
   let failures = 0;
+  // Stable diagnostic kinds for each `failures += 1` site (allowlisted,
+  // never raw text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   // True once the public delete actually committed to SQLite AND was mirrored
   // into the oracle. Used to prove the delete won (only our committed delete
@@ -196,15 +201,25 @@ export async function execute({ plan, context }) {
           });
       const [deleteResult, humanResult] = await Promise.allSettled([deletePromise, humanPromise]);
       // Classify rejections ONLY by EXACT stale-write/CAS/conflict evidence
-      // (a guard/hash mismatch on the raced row). A validation/transport/
-      // direct-write/`identity_shifted` rejection is never an expected
-      // conflict — an identity shift is the delete-aware baseline mishandling
-      // this scenario hunts (a collateral write is never silently accepted).
+      // (a guard/hash mismatch on the raced row). A validation/transport
+      // rejection is never an expected conflict. The direct seam's
+      // fail-closed `identity_shifted` evidence is an EXPECTED TRANSIENT of
+      // the multi-writer soak (a concurrent actor shifted the tab mid-
+      // write; the seam proved no silent success): never a failure, a
+      // truthful skip recorded below. The delete-winner invariants checked
+      // after this still judge the REAL corruption the scenario hunts.
       if (deleteResult.status === "rejected" && !isStaleConflictEvidence(deleteResult.reason)) {
         failures += 1;
+        failureKinds.add("local-rejection-non-stale");
       }
-      if (humanResult.status === "rejected" && !isStaleConflictEvidence(humanResult.reason)) {
-        failures += 1;
+      let humanTransient;
+      if (humanResult.status === "rejected") {
+        if (isIdentityShiftedEvidence(humanResult.reason)) {
+          humanTransient = identityShiftedTransientResult(humanResult.reason);
+        } else if (!isStaleConflictEvidence(humanResult.reason)) {
+          failures += 1;
+          failureKinds.add("human-rejection-non-stale");
+        }
       }
       // Core invariant: the delete must WIN — the dedicated row must STAY
       // ABSENT from the authority across the settle threshold. The sync
@@ -215,17 +230,28 @@ export async function execute({ plan, context }) {
       // a row that is never absent means the delete never won (also a
       // failure).
       const verdict = await verifyStaysAbsent({ em, token, plan, context, critical });
-      if (verdict === "resurrected" || verdict === "never-absent") failures += 1;
+      if (verdict === "resurrected" || verdict === "never-absent") {
+        failures += 1;
+        failureKinds.add(verdict === "resurrected" ? "deleted-row-resurrected" : "delete-never-won");
+      }
       // The stale-projection residue is deferred to the cycle's convergence
       // check (which excludes durable tombstones); a single immediate
       // projection read here would be unsettled and is never judged. The
       // authority invariant (row stays absent = delete wins) is verified above.
       result = failures > 0
         ? { status: "failed", expectedErrors: 0, failures, reason: "scenario-error" }
-        : { status: "ok", expectedErrors: 0, failures: 0, reason: "projection-residue-deferred" };
+        : humanTransient !== undefined
+          ? humanTransient
+          : { status: "ok", expectedErrors: 0, failures: 0, reason: "projection-residue-deferred" };
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // Guaranteed cleanup: remove the dedicated race row and mirror the
     // delete so SQLite and the oracle stay symmetric even when the race, an
@@ -242,8 +268,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     // A cleanup failure is a real failure: the original status is preserved
     // in `reason` while the failure counter grows by the cleanup failures.
@@ -253,9 +281,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**

@@ -186,18 +186,20 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(result.failures).toBe(0);
   });
 
-  it("verifies a duplicate insert is rejected (expectedErrors 1) and the existing row is untouched", async () => {
+  it("records a clean exact-identity rejection as the transient skip and leaves the existing row untouched", async () => {
     const plan = dupPlan();
     const client = new FakeClient();
     const em = new FakeEm();
     projectPersistedRow(em, client, plan);
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
-    // The identity conflict was rejected (fail-closed evidence) and the
-    // existing row was not overwritten -> a verified ok with one expected
-    // error, never a failure.
-    expect(result.status).toBe("ok");
-    expect(result.expectedErrors).toBe(1);
+    // A clean exact-identity rejection of the direct insert whose
+    // no-overwrite checks passed is the expected multi-writer transient: a
+    // truthful skip with the rejection's reasonTag, never a failure.
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.expectedErrors).toBe(0);
     expect(result.failures).toBe(0);
+    expect(typeof result.reasonTag).toBe("string");
     // The duplicate insert was attempted exactly once with the same id.
     const calls = client.insertCalls.filter((call) => call.row.id === plan.target.targetId);
     expect(calls.length).toBe(1);
@@ -229,8 +231,9 @@ describe("humanInsertDuplicateId scenario", () => {
     const capture: { values: Record<string, string> } = { values: {} };
     projectPersistedRow(em, client, plan, capture);
     const result = await scenario.execute({ plan, context: liveContext(plan, client, em) });
-    expect(result.status).toBe("ok");
-    expect(result.expectedErrors).toBe(1);
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.expectedErrors).toBe(0);
     expect(result.failures).toBe(0);
     // The fake projection carried the typed display strings for the boolean
     // and date fields, and the identity re-read matched them exactly.

@@ -11,11 +11,13 @@ import { readFile } from "node:fs/promises";
 import { OPERATION_KINDS } from "./operations.mjs";
 import {
   KNOWN_ENTITY_NAMES,
+  KNOWN_FAILURE_KINDS,
   KNOWN_REASON_CODES,
   KNOWN_STABLE_CLASSES,
   KNOWN_STABLE_CODES,
   KNOWN_TABLE_NAMES,
   isKnownStatusClass,
+  sanitizeErrorTag,
 } from "./redact.mjs";
 import {
   KNOWN_SCENARIO_IDS,
@@ -216,7 +218,7 @@ function validateScenarioShape(value, vocab = DEFAULT_SCENARIO_VOCAB) {
   }
   const known = new Set([
     "id", "phase", "order", "tag", "status", "expectedErrors", "failures",
-    "cleanupFailures", "reason", "targetTable",
+    "cleanupFailures", "reason", "targetTable", "reasonTag", "failureKinds",
   ]);
   for (const key of Object.keys(value)) {
     if (!known.has(key)) return { ok: false, reason: `unknown scenario field "${key}"` };
@@ -268,6 +270,34 @@ function validateScenarioShape(value, vocab = DEFAULT_SCENARIO_VOCAB) {
   }
   if (value.reason !== undefined && !KNOWN_REASON_CODES.includes(value.reason)) {
     return { ok: false, reason: "scenario.reason is not a known reason category" };
+  }
+  // Diagnostic pass-through: the stable error tag must already be in the
+  // allowlisted sanitizer's canonical shape (a forged free-text tag is a
+  // tampered record), and every failure kind must be on the fixed allowlist.
+  if (value.reasonTag !== undefined &&
+      (typeof value.reasonTag !== "string" ||
+        sanitizeErrorTag(value.reasonTag) !== value.reasonTag)) {
+    return { ok: false, reason: "scenario.reasonTag is not a stable allowlisted error tag" };
+  }
+  // Canonical failureKinds contract (shared with the sanitizer): a
+  // non-empty, sorted, deduplicated array of allowlisted kinds where every
+  // unknown kind has collapsed to the single fixed `unknown` category, so
+  // sanitizer output always validates while forged raw kinds and
+  // non-canonical (duplicate/unsorted) arrays are rejected as tampered.
+  if (value.failureKinds !== undefined) {
+    const kinds = value.failureKinds;
+    if (!Array.isArray(kinds) || kinds.length === 0 ||
+        kinds.some(
+          (kind) => typeof kind !== "string" ||
+            (kind !== "unknown" && !KNOWN_FAILURE_KINDS.includes(kind)),
+        )) {
+      return { ok: false, reason: "scenario.failureKinds must be a non-empty array of known failure kinds" };
+    }
+    for (let index = 1; index < kinds.length; index += 1) {
+      if (kinds[index] <= kinds[index - 1]) {
+        return { ok: false, reason: "scenario.failureKinds must be sorted and deduplicated" };
+      }
+    }
   }
   // HIGH target-table proof: every NEW scenario entry MUST carry a known
   // allowlisted soak table (the plan's active-subset target). A missing or

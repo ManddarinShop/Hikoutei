@@ -55,6 +55,10 @@ class FakeClient {
   mutateCalls: { identity: string; headerName: string; value: string }[] = [];
   /** When set, the 1-based mutate call at this index throws. */
   throwOnMutateCall: number | undefined;
+  /** Stable code attached to the thrown mutate error (when set). */
+  throwOnMutateCode: string | undefined;
+  /** When set, every readTabRows call throws this error (a read failure). */
+  throwOnRead: Error | undefined;
   /** When true, mutateInputCell records but does not write the cell. */
   noOpMutate = false;
 
@@ -69,6 +73,7 @@ class FakeClient {
   }
 
   async readTabRows(_spreadsheetId: string, tabName: string): Promise<unknown[][]> {
+    if (this.throwOnRead !== undefined) throw this.throwOnRead;
     const tab = this.tabs.get(tabName);
     if (tab === undefined) return [];
     return [tab.headers, ...[...tab.rows.values()].map((row) => [...row])];
@@ -86,7 +91,9 @@ class FakeClient {
       value: input.value,
     });
     if (this.throwOnMutateCall !== undefined && this.mutateCalls.length === this.throwOnMutateCall) {
-      throw new Error("fake mutate failure");
+      throw this.throwOnMutateCode === undefined
+        ? new Error("fake mutate failure")
+        : Object.assign(new Error("fake mutate failure"), { code: this.throwOnMutateCode });
     }
     if (this.noOpMutate) return { rowNumber: 1 };
     const tab = this.tabs.get(input.tabName);
@@ -272,6 +279,48 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     // The invalid write was attempted, then the guaranteed cleanup restore.
     expect(client.mutateCalls.length).toBe(2);
     expect(client.mutateCalls[0]!.value).toBe(plan.invalid);
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("records an identity-shifted invalid-write rejection as a transient skip, not a failure", async () => {
+    // The direct client's identity-shift guard rejects the invalid write
+    // with the stable `identity_shifted` class when a CONCURRENT actor
+    // shifted the tab mid-write. The seam proved no silent success, so the
+    // scenario records a truthful transient skip (never a failure); the
+    // guaranteed restore/cleanup still run.
+    const plan = buildPlan(7);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectRow(client, plan);
+    client.throwOnMutateCall = 1;
+    client.throwOnMutateCode = "identity_shifted";
+    const result = await scenarioInput.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("identity-shifted-transient");
+    expect(result.failures).toBe(0);
+    // The restore was still attempted (write was attempted) and the
+    // dedicated authority row is removed in cleanup.
+    expect(client.mutateCalls.length).toBe(2);
+    expect(em.rows()).toEqual([]);
+  });
+
+  it("records a readTabRows rejection as failed, never a transient skip", async () => {
+    // Narrowed transient scope: ONLY the direct `mutateInputCell`
+    // rejection may classify as `identity-shifted-transient`. A read
+    // rejection — even one duck-typed with `code: "identity_shifted"` —
+    // rethrows to the normal failure path.
+    const plan = buildPlan(7);
+    const client = new FakeClient();
+    const em = new FakeEm();
+    projectRow(client, plan);
+    client.throwOnRead = Object.assign(new Error("fake read failure"), {
+      code: "identity_shifted",
+    });
+    const result = await scenarioInput.execute({ plan, context: liveContext(plan, client, em) });
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("scenario-error");
+    expect(result.failures).toBe(1);
+    // The dedicated authority row is still removed in cleanup.
     expect(em.rows()).toEqual([]);
   });
 

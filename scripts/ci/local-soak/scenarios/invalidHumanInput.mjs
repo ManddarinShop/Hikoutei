@@ -11,6 +11,7 @@
  * be restored. A clear validation rejection is EXPECTED, not a failure.
  */
 import { SOAK_ENTITY_ORDER, SOAK_FIELD_PLANS } from "../entities.mjs";
+import { identityShiftedTransientResult, isIdentityShiftedEvidence, stableErrorTag } from "../errors.mjs";
 import { generateRow } from "../operations.mjs";
 import { SeededRandom, deriveSeed } from "../prng.mjs";
 import { SCENARIO_OBSERVE_POLL_MS, SCENARIO_OBSERVE_TIMEOUT_MS, SCENARIO_REJECTION_SETTLE_OBSERVATIONS } from "../constants.mjs";
@@ -137,6 +138,9 @@ export async function execute({ plan, context }) {
     ? action()
     : context.oracleLock.withLock(action);
   let cleanupFailures = 0;
+  // Stable diagnostic kinds for every failure site (allowlisted, never raw
+  // text) so a failed record says WHICH invariant fired.
+  const failureKinds = new Set();
   let result;
   let prior;
   // True once the invalid value was actually attempted on the Sheet. The
@@ -168,30 +172,53 @@ export async function execute({ plan, context }) {
       client, spreadsheetId, tabName, plan.target, context,
     );
     let sheetObservable = false;
+    // Narrowed transient scope: ONLY a rejection of the direct
+    // `mutateInputCell` write below may classify as the expected
+    // `identity-shifted-transient` (via `writeTransient`). Reads (projection
+    // readiness, post-write, observation) and authority work rethrow to the
+    // normal failure path — a read error is never a transient.
+    let writeTransient;
     if (projectionReady) {
       invalidWriteAttempted = true;
       // Consume the plan's jitter so the invalid write lands while normal
       // actors are mid-flight rather than immediately. Bounded by the run
       // deadline so it can never outlive the run budget.
       await boundedSleep(plan.jitterMs ?? 0, context.deadlineAtMs);
-      await client.mutateInputCell({
-        spreadsheetId,
-        tabName,
-        identity: plan.target.targetId,
-        headerName: plan.target.field,
-        value: plan.invalid,
-        deadlineAtMs: context.deadlineAtMs,
-      });
-      // Explicit Sheet-side post-write evidence: the invalid value must be
-      // OBSERVABLE in the cell before an unchanged authority can be called a
-      // rejection. Without this proof the edit may never have landed, so an
-      // unchanged authority proves nothing.
-      const cell = await readInputCell(
-        client, spreadsheetId, tabName, plan.target, context,
-      );
-      sheetObservable = cell !== undefined && cell === plan.invalid;
+      try {
+        await client.mutateInputCell({
+          spreadsheetId,
+          tabName,
+          identity: plan.target.targetId,
+          headerName: plan.target.field,
+          value: plan.invalid,
+          deadlineAtMs: context.deadlineAtMs,
+        });
+      } catch (error) {
+        // The direct seam's fail-closed `identity_shifted` evidence on the
+        // invalid write is an EXPECTED TRANSIENT of the multi-writer soak (a
+        // concurrent actor shifted the tab mid-write; the seam proved no
+        // silent success): a truthful skip, never a failure. Any other write
+        // rejection rethrows to the normal failure path.
+        if (isIdentityShiftedEvidence(error)) {
+          writeTransient = identityShiftedTransientResult(error);
+        } else {
+          throw error;
+        }
+      }
+      if (writeTransient === undefined) {
+        // Explicit Sheet-side post-write evidence: the invalid value must be
+        // OBSERVABLE in the cell before an unchanged authority can be called a
+        // rejection. Without this proof the edit may never have landed, so an
+        // unchanged authority proves nothing.
+        const cell = await readInputCell(
+          client, spreadsheetId, tabName, plan.target, context,
+        );
+        sheetObservable = cell !== undefined && cell === plan.invalid;
+      }
     }
-    if (!projectionReady) {
+    if (writeTransient !== undefined) {
+      result = writeTransient;
+    } else if (!projectionReady) {
       // The row projection never appeared: the invalid write was never
       // attempted, so there is no rejection to classify.
       result = { status: "skipped", expectedErrors: 0, failures: 0, reason: "projection-not-ready" };
@@ -213,6 +240,7 @@ export async function execute({ plan, context }) {
       if (outcome === "accepted") {
         // The invalid value silently reached the authority: the corruption/
         // non-recovery failure this scenario hunts.
+        failureKinds.add("invalid-accepted");
         result = { status: "failed", expectedErrors: 0, failures: 1, reason: "invalid-accepted" };
       } else if (outcome === "rejected") {
         // The invalid value was rejected by scalar/required validation
@@ -228,7 +256,17 @@ export async function execute({ plan, context }) {
       }
     }
   } catch (error) {
-    result = { status: "failed", expectedErrors: 0, failures: 1, reason: "scenario-error" };
+    // Only the direct `mutateInputCell` write above may classify as the
+    // expected transient (handled inline); every other throw — reads,
+    // observation, authority work, setup — is a real scenario error, never
+    // a transient.
+    result = {
+      status: "failed",
+      expectedErrors: 0,
+      failures: 1,
+      reason: "scenario-error",
+      reasonTag: stableErrorTag(error),
+    };
   } finally {
     // GUARANTEED cleanup, split into INDEPENDENT guarded steps so a failure
     // in one never prevents the other: the cell restoration and the dedicated
@@ -252,6 +290,7 @@ export async function execute({ plan, context }) {
       }
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
     // Step 2: remove the dedicated row + oracle mirror, attempted even when
     // the restoration above failed, so SQLite and the oracle stay symmetric.
@@ -264,8 +303,10 @@ export async function execute({ plan, context }) {
       });
     } catch {
       cleanupFailures += 1;
+      failureKinds.add("cleanup-delete-failed");
     }
   }
+  const kinds = [...failureKinds].sort();
   if (cleanupFailures > 0) {
     return {
       status: "failed",
@@ -273,9 +314,15 @@ export async function execute({ plan, context }) {
       failures: (result?.failures ?? 0) + cleanupFailures,
       cleanupFailures,
       reason: result?.reason ?? "scenario-error",
+      ...(result?.reasonTag !== undefined ? { reasonTag: result.reasonTag } : {}),
+      ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
     };
   }
-  return { ...result, cleanupFailures: 0 };
+  return {
+    ...result,
+    cleanupFailures: 0,
+    ...(kinds.length > 0 ? { failureKinds: kinds } : {}),
+  };
 }
 
 /**
