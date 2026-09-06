@@ -49,7 +49,7 @@
 
 /** Leaf-tree alternation shared by the package-space rules. */
 const ENGINE = "packages/library/core/sync-engine/(?:src|dist)";
-const STORAGE = "packages/storage/(?:src|dist)";
+const STORAGE = "packages/library/core/storage/(?:src|dist)";
 
 /** @type {import('dependency-cruiser').IConfiguration} */
 module.exports = {
@@ -62,7 +62,7 @@ module.exports = {
       from: { path: "^packages/library/core/sync-engine/src/" },
       to: {
         path:
-          "^packages/(library/cloud/sheets|composition|library/cloud/cli)/(?:src|dist)/|^src/",
+          "^packages/(library/cloud/sheets|library/core/composition|library/cloud/cli)/(?:src|dist)/|^src/",
       },
     },
     {
@@ -90,12 +90,12 @@ module.exports = {
     {
       name: "storage-layer-not-into-upper-trees",
       comment:
-        "packages/storage/src/storage is the SQLite storage technology layer: it may depend on contracts/ikisaki and itself only — never the engine, composition, cli, the src/orm + src/sync persistence glue, the adapter bridge, or root src.",
+        "packages/library/core/storage/src/storage is the SQLite storage technology layer: it may depend on contracts/ikisaki and itself only — never the engine, composition, cli, the src/orm + src/sync persistence glue, the adapter bridge, or root src.",
       severity: "error",
-      from: { path: "^packages/storage/src/storage/" },
+      from: { path: "^packages/library/core/storage/src/storage/" },
       to: {
         path:
-          `^packages/(library/core/sync-engine|composition|library/cloud/cli)/(?:src|dist)/|^src/|^packages/storage/src/(persistence|orm|sync)/`,
+          `^packages/(library/core/sync-engine|library/core/composition|library/cloud/cli)/(?:src|dist)/|^src/|^packages/library/core/storage/src/(persistence|orm|sync)/`,
       },
     },
     {
@@ -104,7 +104,7 @@ module.exports = {
         "The public API layer stays adapter-free (composition root owns wiring): src/api may consume @hikoutei/sync-engine and @hikoutei/composition but must never import @hikoutei/storage or @hikoutei/sheets.",
       severity: "error",
       from: { path: "^src/api/" },
-      to: { path: "^src/adapter/|^packages/(storage|library/cloud/sheets)/(?:src|dist)/" },
+      to: { path: "^src/adapter/|^packages/(library/core/storage|library/cloud/sheets)/(?:src|dist)/" },
     },
     {
       name: "cli-not-into-adapter-leaves",
@@ -112,7 +112,7 @@ module.exports = {
         "The setup/adoption cli talks to the public root entrypoint (`hikoutei` barrel — the api-bridge) and the engine's registry internals only; concrete adapter leaves (@hikoutei/storage, @hikoutei/sheets) are the composition root's business and are never named from cli code.",
       severity: "error",
       from: { path: "^packages/library/cloud/cli/src/" },
-      to: { path: "^packages/(storage|library/cloud/sheets)/(?:src|dist)/" },
+      to: { path: "^packages/(library/core/storage|library/cloud/sheets)/(?:src|dist)/" },
     },
     {
       name: "domain-shared-leaf",
@@ -127,10 +127,10 @@ module.exports = {
       comment:
         "@hikoutei/contracts is a pure leaf: only node builtins, @hikoutei/kohkai, zod and itself. Workspace/undeclared specifiers that fail to resolve stay flagged (could-not-resolved edges carry the bare specifier, not a node_modules path).",
       severity: "error",
-      from: { path: "^packages/contracts/src/" },
+      from: { path: "^packages/library/core/contracts/src/" },
       to: {
         pathNot:
-          "^packages/contracts/src/|^(node:)?(crypto|zod|@hikoutei/kohkai|@hikoutei/contracts)($|/)|(^|/)node_modules/",
+          "^packages/library/core/contracts/src/|^(node:)?(crypto|zod|@hikoutei/kohkai|@hikoutei/contracts)($|/)|(^|/)node_modules/",
       },
     },
     {

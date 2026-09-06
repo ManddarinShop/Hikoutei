@@ -5,7 +5,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
-    "directory": "packages/storage"
+    "directory": "packages/library/core/storage"
   },
   "bugs": {
     "type": "git",
@@ -19,12 +19,12 @@
   },
   "exports": {
     "./*.js": {
-      "types": "./dist/packages/storage/src/*.d.ts",
-      "import": "./dist/packages/storage/src/*.js"
+      "types": "./dist/packages/library/core/storage/src/*.d.ts",
+      "import": "./dist/packages/library/core/storage/src/*.js"
     },
     "./*": {
-      "types": "./dist/packages/storage/src/*.d.ts",
-      "import": "./dist/packages/storage/src/*.js"
+      "types": "./dist/packages/library/core/storage/src/*.d.ts",
+      "import": "./dist/packages/library/core/storage/src/*.js"
     }
   },
   "files": [

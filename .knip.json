@@ -27,7 +27,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/storage": {
+    "packages/library/core/storage": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -51,7 +51,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/composition": {
+    "packages/library/core/composition": {
       "entry": [
         "src/**/*.ts"
       ],
