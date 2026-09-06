@@ -82,7 +82,7 @@ import {
 import {
   TRANSPORT_OUTCOME_KINDS,
   classifyTransportOutcome,
-} from "@hikoutei/contracts/sheets/transportOutcome.js";
+} from "@hikoutei/ikisaki";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import {
   StubSheet,

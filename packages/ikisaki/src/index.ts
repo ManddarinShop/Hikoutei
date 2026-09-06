@@ -268,12 +268,37 @@ export {
   type CursorReceiptEvidence,
 } from "./evidence/receiptCursor.js";
 
+/** Protocol surface: neutral check-column formula builder. */
+export {
+  buildRowCheckFormula,
+  type RowCheckFormulaVocabulary,
+  type RowCheckTokenTags,
+} from "./evidence/rowCheckFormula.js";
+
 /** Step-1 protocol surface: provider-neutral transport error parsers. */
 export {
   parseRawErrorRecord,
   parseRawErrorText,
   parseRawHttpStatus,
 } from "./transport/rawErrorSchemas.js";
+
+/** Protocol surface: deterministic created-tab id allocation. */
+export {
+  allocateSheetId,
+} from "./transport/sheetIdAllocator.js";
+
+/** Protocol surface: neutral transport-outcome classification. */
+export {
+  TRANSPORT_OUTCOME_KINDS,
+  TRANSPORT_OUTCOME_UNKNOWN_CODE,
+  classifyTransportOutcome,
+  isDeliveryUncertainOutcome,
+  isDeliveryUncertainTransport,
+  sanitizeTransportRemoteCode,
+  type TransportFailureView,
+  type TransportOutcome,
+  type TransportOutcomeKind,
+} from "./transport/transportOutcome.js";
 
 /** Protocol surface: provider-timing contract (contracts shim target). */
 export {

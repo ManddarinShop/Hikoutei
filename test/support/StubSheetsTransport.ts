@@ -36,6 +36,7 @@ import type {
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
   GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
+  GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
@@ -47,9 +48,9 @@ import {
   renderRowCheckCell,
   SYNC_ROW_CHECK_DELIMITER,
 } from "@hikoutei/contracts/sheets/rowCheck.js";
-import { buildRowCheckFormula } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/rowCheckFormula.js";
+import { buildRowCheckFormula } from "@hikoutei/ikisaki";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
-import { dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
+import { columnLetters, dateSerialFromIso, isCanonicalDateNumberFormat, isoFromDateSerial } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 
 /** One stored cell in the in-memory grid (real REST wire shapes). */
 export interface StubCell {
@@ -596,7 +597,7 @@ function isPlainEmptyCell(value: unknown): boolean {
 
 /**
  * The provider-written per-row token formula in the check column (see
- * `model/rowCheckFormula.ts`): one `IF(ISNUMBER(<ref>),"n",...)&LEN(<ref>)
+ * `@hikoutei/ikisaki` `evidence/rowCheckFormula.ts`): one `IF(ISNUMBER(<ref>),"n",...)&LEN(<ref>)
  * &":"&<ref>` term per
  * data column joined by `&"|"&`. The stub EVALUATES it lazily at read time
  * over the current row cells — mirroring the real API's PROVEN behavior
@@ -713,7 +714,13 @@ function evaluateStubRowCheck(
   if (refs.length !== lastCol - firstCol + 1) return undefined;
   // Exact-shape guard: only the generator's own formula text computes; a
   // foreign formula resembling the shape stays fixture-passthrough.
-  if (formula !== buildRowCheckFormula(firstCol + 1, lastCol + 1, Number(writtenRow))) {
+  if (formula !== buildRowCheckFormula(
+    firstCol + 1,
+    lastCol + 1,
+    Number(writtenRow),
+    GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+    columnLetters,
+  )) {
     return undefined;
   }
   // A row shift (insert/deleteDimension) MOVES the formula cell but keeps

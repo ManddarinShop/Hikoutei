@@ -6,7 +6,7 @@
  * or operation arguments are recorded.
  */
 
-import { TRANSPORT_OUTCOME_KINDS, type TransportOutcomeKind } from "../transportOutcome.js";
+import { TRANSPORT_OUTCOME_KINDS, type TransportOutcomeKind } from "@hikoutei/ikisaki";
 
 export { TRANSPORT_OUTCOME_KINDS };
 export type { TransportOutcomeKind };

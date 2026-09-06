@@ -67,7 +67,7 @@ import {
   TRANSPORT_OUTCOME_KINDS,
   type CoordinatorLaneEvent,
 } from "./laneTelemetry.js";
-import { classifyTransportOutcome } from "../transportOutcome.js";
+import { classifyTransportOutcome } from "@hikoutei/ikisaki";
 
 /** Provider boundary the coordinator wraps (effect + observation + table read). */
 export type CoordinatedSheetsInner =

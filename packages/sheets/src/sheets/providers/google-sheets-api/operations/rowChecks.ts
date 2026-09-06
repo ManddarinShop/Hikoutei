@@ -58,7 +58,7 @@ import {
   checkColumnFor,
   resolveGridCell,
 } from "../model/preflightRows.js";
-import { buildRowCheckFormula } from "../model/rowCheckFormula.js";
+import { GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY } from "../constants.js";
 import {
   columnLetters,
   computedValueFromApiCell,
@@ -75,6 +75,7 @@ import {
   ensureSheetRowBounds,
 } from "./shared.js";
 import {
+  buildRowCheckFormula,
   packReadRequests,
   planRowBands,
   type BandEvidence,
@@ -257,6 +258,8 @@ function provenCheckText(
       route.firstDataColumn,
       route.lastDataColumn,
       rowNumber,
+      GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+      columnLetters,
     )) {
     return null;
   }

@@ -371,7 +371,7 @@ function logTransportFailure(error: GoogleSheetsApiTransportError): void {
 /**
  * True when the status kind marks a transient remote condition.
  *
- * Mirrors the shared `isGoogleSheetsApiDeliveryUncertain` boundary: an
+ * Mirrors the shared `isDeliveryUncertainTransport` boundary: an
  * absent status (timeout/network), HTTP 408 (request timeout — the proxy or
  * API may still have committed the write), HTTP 429, and every 5xx are
  * retryable/uncertain; the proven pre-mutation 4xx rejections (400, 401,
