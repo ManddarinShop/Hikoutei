@@ -1,7 +1,7 @@
 {
   "name": "@hikoutei/storage",
   "version": "0.1.0",
-  "description": "Storage + persistence leaves for the Hikoutei typed repository: SQLite storage plumbing, the MikroORM-backed persistence adapter, the mapped flush/observation/projection/conflict persistence bridge, and shared sync timing (P8-D2 phase 2 cycle break; imports contracts/ikisaki only — never the sync engine).",
+  "description": "Storage + persistence leaves for the Hikoutei typed repository: SQLite storage plumbing, the MikroORM-backed persistence adapter, the mapped flush/observation/projection/conflict persistence bridge, and shared sync timing (P8-D2 phase 2 cycle break; imports contracts/ikisaki plus the Sheets conflict-projection tab schema — never the sync engine).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
@@ -38,6 +38,7 @@
   "dependencies": {
     "@hikoutei/contracts": "0.1.0",
     "@hikoutei/ikisaki": "0.1.13",
+    "@hikoutei/sheets": "0.1.0",
     "@mikro-orm/core": "7.1.7",
     "@mikro-orm/sql": "7.1.7"
   },
