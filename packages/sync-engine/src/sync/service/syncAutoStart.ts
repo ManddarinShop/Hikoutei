@@ -22,7 +22,7 @@
  * failure never leaves a half-open runtime behind.
  */
 
-import { readFile } from "node:fs/promises";
+import { loadServiceAccountKeyFile } from "@hikoutei/google-auth/auth/serviceAccountKey.js";
 
 import {
   getEntityDescriptor,
@@ -269,9 +269,6 @@ export interface AdoptDryRunResult {
 }
 
 export type TypedSheetsWithSyncResult = LocalSyncRuntimeResult | RunningSyncServiceResult | AdoptDryRunResult;
-
-/** Required service-account fields validated before any remote contact. */
-const REQUIRED_CREDENTIAL_FIELDS = ["type", "client_email", "private_key", "project_id"] as const;
 
 const SPREADSHEET_PATH_SEGMENT = "d";
 const SPREADSHEET_PARENT_SEGMENT = "spreadsheets";
@@ -578,9 +575,10 @@ function toInternalAdoptSpec(adopt: AdoptSpec): ExistingSheetAdoptionSpec {
 /**
  * Validates the service-account credentials file and returns its client email.
  *
- * Classifies a missing/unreadable file, a non-object JSON payload, and missing
- * required fields into stable `HikouteiError` codes. The file is validated
- * before any remote contact so a misconfigured deployment fails fast with a
+ * Env parsing and stable `HikouteiError` codes stay here; file
+ * loading/validation is owned by the shared `@hikoutei/google-auth` loader
+ * (Batch A) and only mapped to codes below. The file is validated before
+ * any remote contact so a misconfigured deployment fails fast with a
  * precise message instead of an ADC stack trace.
  */
 export async function validateSyncCredentialsFile(
@@ -592,47 +590,35 @@ export async function validateSyncCredentialsFile(
       "Credentials file not found: GOOGLE_APPLICATION_CREDENTIALS is not set",
     );
   }
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (error: unknown) {
-    if (isNodeErrorWithCode(error, "ENOENT")) {
-      throw new HikouteiError(
-        HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
-        `Credentials file not found: ${path}`,
-      );
-    }
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
-      `Sync start failed: unable to read the credentials file: ${path}`,
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_INVALID_JSON,
-      `Credentials file is not valid JSON: ${path}`,
-    );
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_INVALID_JSON,
-      `Credentials file is not valid JSON: ${path}`,
-    );
-  }
-  const record = parsed as Record<string, unknown>;
-  const missing = REQUIRED_CREDENTIAL_FIELDS.filter((field) =>
-    typeof record[field] !== "string" || (record[field] as string).trim() === "");
-  if (missing.length > 0) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FIELD_MISSING,
-      `Credentials file is missing required fields: ${missing.join(", ")}`,
-    );
-  }
-  return { clientEmail: record.client_email as string };
+  const { clientEmail } = await loadServiceAccountKeyFile(path, {
+    fail: (failure) => {
+      switch (failure.kind) {
+        case "read-error":
+          if (failure.code === "ENOENT") {
+            throw new HikouteiError(
+              HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FILE_MISSING,
+              `Credentials file not found: ${failure.path}`,
+            );
+          }
+          throw new HikouteiError(
+            HIKOUTEI_ERROR_CODES.SYNC_STARTUP_FAILED,
+            `Sync start failed: unable to read the credentials file: ${failure.path}`,
+          );
+        case "invalid-json":
+        case "not-object":
+          throw new HikouteiError(
+            HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_INVALID_JSON,
+            `Credentials file is not valid JSON: ${failure.path}`,
+          );
+        case "field-missing":
+          throw new HikouteiError(
+            HIKOUTEI_ERROR_CODES.SYNC_CREDENTIALS_FIELD_MISSING,
+            `Credentials file is missing required fields: ${failure.fields.join(", ")}`,
+          );
+      }
+    },
+  });
+  return { clientEmail };
 }
 
 /**
@@ -965,10 +951,4 @@ function defaultDiagnostic(level: SyncDiagnosticLevel, message: string): void {
   } else {
     console.error(`[hikoutei] sync autostart failed (level=${level})`);
   }
-}
-
-function isNodeErrorWithCode(error: unknown, code: string): boolean {
-  return error !== null &&
-    typeof error === "object" &&
-    (error as { readonly code?: unknown }).code === code;
 }
