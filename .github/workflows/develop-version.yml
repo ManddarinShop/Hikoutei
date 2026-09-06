@@ -169,7 +169,7 @@ jobs:
               // Root + storage + sync-engine all pin @hikoutei/ikisaki in
               // lockstep: any consumer that lags will resolve the stale
               // registry tarball which may lack newly-exported symbols.
-              for (const rel of ["./package.json", "./packages/storage/package.json", "./packages/sync-engine/package.json"]) {
+              for (const rel of ["./package.json", "./packages/storage/package.json", "./packages/library/core/sync-engine/package.json"]) {
                 const pkg = JSON.parse(fs.readFileSync(rel, "utf8"));
                 pkg.dependencies["@hikoutei/ikisaki"] = next;
                 fs.writeFileSync(rel, JSON.stringify(pkg, null, 2) + "\n");
@@ -204,10 +204,10 @@ jobs:
           changed="$(git diff --name-only | sort)"
           expected=$'package-lock.json\npackage.json\npackages/library/cloud/cli/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            # packages/storage and packages/sync-engine are included because
+            # packages/storage and packages/library/core/sync-engine are included because
             # their @hikoutei/ikisaki pins must stay in lockstep with the
             # root dep (same pattern as cli/mcp hikoutei pins; #434/#435).
-            expected=$'package-lock.json\npackage.json\npackages/library/cloud/cli/package.json\npackages/protocol/ikisaki/package.json\npackages/mcp/package.json\npackages/storage/package.json\npackages/sync-engine/package.json\npnpm-lock.yaml'
+            expected=$'package-lock.json\npackage.json\npackages/library/cloud/cli/package.json\npackages/protocol/ikisaki/package.json\npackages/mcp/package.json\npackages/storage/package.json\npackages/library/core/sync-engine/package.json\npnpm-lock.yaml'
           fi
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
@@ -225,7 +225,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json packages/library/cloud/cli/package.json packages/mcp/package.json pnpm-lock.yaml
           if [[ "$IKISAKI_CHANGED" == "true" ]]; then
-            git add packages/protocol/ikisaki/package.json packages/storage/package.json packages/sync-engine/package.json
+            git add packages/protocol/ikisaki/package.json packages/storage/package.json packages/library/core/sync-engine/package.json
           fi
           git commit -m "chore(release): bump develop version to $RELEASE_VERSION"
           git tag -a "develop-v$RELEASE_VERSION" \
