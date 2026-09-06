@@ -96,12 +96,18 @@ class ControllableDispatcher implements Dispatcher {
     return this.options.fastAppendRouteKeyFor?.(effect) ?? this.routeKeyFor(effect);
   }
 
-  public isFastAppendCandidate(effect: PendingEffect): boolean {
-    return effect.expected_visible_revision === 0 &&
-      effect.expected_visible_hash === "" &&
-      effect.effect_kind === "system_projection" &&
-      effect.projection === "system_state" &&
-      effect.target_kind === "entity";
+  public isCandidateProtectedEffect(effect: PendingEffect): boolean {
+    return effect.effect_kind === "candidate_reconcile" ||
+      effect.effect_kind === "user_input_delete";
+  }
+
+  public isRepairEffect(effect: PendingEffect): boolean {
+    return effect.effect_kind === "system_repair";
+  }
+
+  public isDeleteLifecycleEffect(effect: PendingEffect): boolean {
+    return effect.effect_kind === "resolution_delete" ||
+      effect.effect_kind === "user_input_delete";
   }
 
   public dispatchPriorityFor(effect: PendingEffect): number {

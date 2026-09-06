@@ -12,6 +12,7 @@ function rawPendingEffect(overrides: Record<string, unknown> = {}): Record<strin
   return {
     effect_id: "effect-1",
     effect_kind: "system_projection",
+    dispatch_class: "fast-append",
     commit_id: "commit-1",
     logical_sheet_id: "logical-sheet",
     physical_sheet_id: "physical-sheet",
@@ -42,10 +43,17 @@ describe("internal type contract promotion", () => {
     expect(decodePendingEffectRow(rawPendingEffect())).toMatchObject({
       effect_id: "effect-1",
       effect_kind: "system_projection",
+      dispatch_class: "fast-append",
       status: "pending",
     });
 
     expect(() => decodePendingEffectRow(rawPendingEffect({ status: "unknown" })))
+      .toThrowError(StorageError);
+    // An unstamped or unknown dispatch label fails closed instead of
+    // falling back to a default dispatch bucket.
+    expect(() => decodePendingEffectRow(rawPendingEffect({ dispatch_class: null })))
+      .toThrowError(StorageError);
+    expect(() => decodePendingEffectRow(rawPendingEffect({ dispatch_class: "bulk" })))
       .toThrowError(StorageError);
   });
 

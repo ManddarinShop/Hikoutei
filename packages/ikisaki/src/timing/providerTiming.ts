@@ -1,19 +1,15 @@
 /**
- * Mirror of the kernel (`@hikoutei/ikisaki`) provider-timing contract.
+ * Kernel-owned provider-timing contract.
  *
- * The contracts leaf must stay independent of the kernel (the kernel keeps
- * its own `as const` tables and the mirror direction is fixed: contracts
- * mirrors kernel, never the reverse — same pattern as the persisted string
- * tables pinned by `test/outbox-contract-drift.test.ts`). The host's
- * `src/application/sync/telemetry/syncTiming.ts` keeps aliasing the kernel
- * `ProviderTiming` under `SyncSheetsTiming`; the two are structurally
- * identical and the drift guard pins the mirrored kind table key-by-key.
- *
- * Timing is diagnostic only: a sink failure must never change persistence or
- * provider behavior.
+ * Provider-neutral timing vocabulary for one remote provider operation:
+ * lifecycle operation kinds, per-kind counts, and measured phases. The
+ * contracts leaf (`@hikoutei/contracts` `sheets/timing.ts`) re-exports this
+ * module one-way so existing importers keep working; the canonical tables
+ * live here. Timing is diagnostic only: a sink failure must never change
+ * persistence or provider behavior.
  */
 
-/** Lifecycle operation kinds counted by one timing event (kernel mirror). */
+/** Lifecycle operation kinds counted by one timing event. */
 export const SYNC_TIMING_OPERATION_KINDS = {
   APPEND: "append",
   UPDATE: "update",

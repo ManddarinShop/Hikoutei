@@ -47,16 +47,14 @@ import {
 import {
   definitionForPhysicalSheet,
   effectRouteOptions,
-  validateRoute,
-  type GoogleSheetsApiProviderDeps,
-} from "./shared.js";
-import {
   executeBatchUpdate,
   executePreparedWrite,
   groupByRouteKey,
   receiptInitNeeded,
   refreshFirstRouteContext,
-} from "./writeEngine.js";
+  validateRoute,
+  type GoogleSheetsApiProviderDeps,
+} from "./shared.js";
 import {
   enumeratePreflightSheets,
   readPreflightDataForEnumeratedRoutes,
@@ -434,7 +432,7 @@ async function fastAppendMultiRoute(
       context: appendingRoutes,
       needsReceiptInit: appendingRoutes[0] !== undefined &&
         receiptInitNeeded(appendingRoutes[0].context),
-      refresh: (routes) => refreshFirstRouteContext(deps, routes),
+      refresh: (routes) => refreshFirstRouteContext((context: PreflightContext) => refreshReceiptForWrite(deps, context), routes),
       write: writeCombined,
     });
   }

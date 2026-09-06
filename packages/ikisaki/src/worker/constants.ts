@@ -6,10 +6,10 @@
  * byte-identical to the codes the host application has always persisted.
  */
 
-import type { EffectStatus } from "../contract/constants.js";
+import type { OutboxEffectStatus } from "../outbox/effectVocabulary.js";
 import {
-  EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
-} from "../contract/constants.js";
+  OUTBOX_EFFECT_STATUSES as PERSISTED_EFFECT_STATUSES,
+} from "../outbox/effectVocabulary.js";
 import { SYNC_EFFECT_RECOVERY_ERROR_CODES } from "../contract/contracts.js";
 
 export const DEFAULT_WORKER_ROLE = "sync-effect-worker";
@@ -60,15 +60,23 @@ export const FAST_APPEND_BATCH_CANDIDATE_LIMIT = 1_000;
  */
 export const APPEND_DISPATCH_THROTTLE_INTERVAL_MS = 1_100;
 
-/** Subset of kernel effect statuses the worker transitions between. */
+/**
+ * Protocol-owned lifecycle statuses the worker transitions between.
+ *
+ * Full persisted set (the worker emits these and the outbox SQL CHECK in
+ * `sql/schema.ts` requires them); mirrors the entity-owned canonical table
+ * value-for-value, pinned by `test/outbox-contract-drift.test.ts`.
+ */
 export const OUTBOX_EFFECT_STATUSES = {
-  DELIVERY_UNCERTAIN: KERNEL_EFFECT_STATUSES.DELIVERY_UNCERTAIN,
-  FAILED: KERNEL_EFFECT_STATUSES.FAILED,
-  APPLIED: KERNEL_EFFECT_STATUSES.APPLIED,
-  BLOCKED_CANDIDATE: KERNEL_EFFECT_STATUSES.BLOCKED_CANDIDATE,
-  SUPERSEDED: KERNEL_EFFECT_STATUSES.SUPERSEDED,
-  CONFLICT: KERNEL_EFFECT_STATUSES.CONFLICT,
-} as const satisfies Record<string, EffectStatus>;
+  PENDING: PERSISTED_EFFECT_STATUSES.PENDING,
+  PROCESSING: PERSISTED_EFFECT_STATUSES.PROCESSING,
+  DELIVERY_UNCERTAIN: PERSISTED_EFFECT_STATUSES.DELIVERY_UNCERTAIN,
+  FAILED: PERSISTED_EFFECT_STATUSES.FAILED,
+  APPLIED: PERSISTED_EFFECT_STATUSES.APPLIED,
+  BLOCKED_CANDIDATE: PERSISTED_EFFECT_STATUSES.BLOCKED_CANDIDATE,
+  SUPERSEDED: PERSISTED_EFFECT_STATUSES.SUPERSEDED,
+  CONFLICT: PERSISTED_EFFECT_STATUSES.CONFLICT,
+} as const satisfies Record<string, OutboxEffectStatus>;
 
 /**
  * Stable machine-readable worker error codes persisted on outbox rows.

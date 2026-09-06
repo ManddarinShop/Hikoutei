@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import { FIELD_OWNERSHIPS, ROW_OPERATIONS } from "@hikoutei/contracts/domain/model/constants.js";
 import { claimWriterLeaseWithAdapter } from "@hikoutei/ikisaki";
-import { EFFECT_STATUSES } from "@hikoutei/ikisaki";
+import { EFFECT_STATUSES } from "@hikoutei/contracts/domain/model/constants.js";
 import {
   NORMALIZED_CELL_KINDS,
 } from "@hikoutei/contracts/encoding/constants.js";

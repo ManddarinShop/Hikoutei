@@ -1,159 +1,160 @@
 /**
- * Unified read engine executor (design/unified-read-engine.md §3).
+ * Banded read executor: runs an already-packed band plan as SEQUENTIAL
+ * paced requests and reassembles the replies into one logical document.
  *
- * Runs an already-packed band plan as SEQUENTIAL paced `spreadsheets.get`
- * requests on the lane's request-start class and reassembles the replies
- * into one logical document: every requested range's GridData in request
- * order, concatenated per sheet id, so lanes consume band replies through
- * the SAME accessors (`resolveGridCell`, `synthesizeScopedTargetGrid`,
- * `pickRegisteredGrid`) that serve today's multi-range replies. Each band
- * is one server snapshot and consumes exactly one `runRead` slot, so:
- * - telemetry emits ONE event per band with the RAW-document `responseBytes`
- *   (sink-gated exactly like the historical reads) — per-lane, per-band
- *   bytes are observable without any extra plumbing;
- * - a timeout or rejection fails ONE band with the existing
- *   delivery-uncertain classification instead of an all-or-nothing
- *   multi-megabyte single request;
- * - every response's `sheets.properties.gridProperties.rowCount` refreshes
- *   the provider-instance authoritative bounds cache (a ranged GET returns
- *   properties for the intersecting sheets), and `responseBytes ÷
- *   cellsRequested` feeds the per-evidence calibration multiplier, so a
- *   mispredicted band size shrinks the NEXT pass's bands.
+ * The executor is provider-neutral: the adapter supplies one band fetch
+ * (paced transport + parse + telemetry) plus bound/calibration observers,
+ * and the kernel owns the iteration (skip-empty, per-band accounting) and
+ * the reassembly (every requested range's cells in request order,
+ * concatenated per sheet key, last-seen sheet entry wins).
+ *
+ * Each band consumes exactly one adapter fetch slot, so a timeout or
+ * rejection fails ONE band with the adapter's own classification instead of
+ * an all-or-nothing single request, and per-band bytes stay observable
+ * without extra plumbing.
  */
 
 import type {
-  ParsedGridData,
-  ParsedSheet,
-  ParsedSpreadsheetDocument,
-} from "../model/preflightContext.js";
-import type {
+  BandedDocument,
   BandedGet,
+  BandEvidence,
+  BandRange,
   EngineRuntime,
-  PlannedRange,
-  ReadEvidence,
-} from "../model/readPlan.js";
-import { enumerateSheetProperties } from "../model/preflightContext.js";
-import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
-import {
-  createRawResponseMeta,
-  credentialBinding,
-  runRead,
-  type GoogleSheetsApiProviderDeps,
-  type RequestStartPacing,
-} from "./shared.js";
+  ReadCalibration,
+} from "./readPlan.js";
+
+/** One fetched band: parsed sheets plus per-key cell lists. */
+export interface BandFetchResult<TSheet, TGridKey, TGrid> {
+  readonly sheets: readonly TSheet[];
+  readonly grids: ReadonlyMap<TGridKey, readonly TGrid[]>;
+  /** Measured response bytes, when the adapter measures telemetry. */
+  readonly responseBytes: number | undefined;
+}
 
 /**
- * Builds the executor for ONE logical read: fixed field mask, evidence
- * class, pacing lane, and telemetry label. The returned closure owns no
- * state — bounds/calibration updates land on the shared `deps` carriers.
+ * Provider hooks for one logical banded read. `fetchBand` runs the paced
+ * transport call and parses the reply; the observers update the shared
+ * provider-instance carriers (bounds cache, calibration) the planner reads
+ * on the NEXT pass.
  */
-export function createBandedGet(
-  deps: GoogleSheetsApiProviderDeps,
-  pacing: RequestStartPacing,
-  fields: string,
-  evidence: ReadEvidence,
-  label: string,
-): BandedGet {
+export interface BandEngineHooks<TSheet, TGridKey, TGrid> {
+  /** Fetches + parses the band covering these opaque range addresses. */
+  fetchBand(addresses: readonly string[]): Promise<BandFetchResult<TSheet, TGridKey, TGrid>>;
+  /** Stable identity of one fetched sheet (last-seen entry wins). */
+  sheetKey(sheet: TSheet): string;
+  /** Records one fetched sheet's authoritative bound (fresher metadata wins). */
+  noteSheet?(sheet: TSheet): void;
+  /** Feeds `responseBytes ÷ cellsRequested` into the calibration tracker. */
+  noteResponse?(evidence: BandEvidence, cells: number, responseBytes: number | undefined): void;
+}
+
+/**
+ * Builds the executor for ONE logical read: fixed read shape, evidence
+ * class, and provider hooks. The returned closure owns no state —
+ * bounds/calibration updates land on the shared carriers behind the hooks.
+ */
+export function createBandExecutor<TSheet, TGridKey, TGrid>(
+  hooks: BandEngineHooks<TSheet, TGridKey, TGrid>,
+  evidence: BandEvidence,
+): BandedGet<TSheet, TGridKey, TGrid> {
   return async (requests) => {
-    const sheetsByTitle = new Map<string, ParsedSheet>();
-    const grids = new Map<number, ParsedGridData[]>();
+    const sheetsByKey = new Map<string, TSheet>();
+    const grids = new Map<TGridKey, TGrid[]>();
     let executed = 0;
     let bytes = 0;
     for (const request of requests) {
       if (request.length === 0) continue;
-      const ranges = request.map((item) => item.range);
+      const addresses = request.map((item) => item.address);
       const cells = request.reduce((total, item) => total + item.cells, 0);
-      // The RAW document is measured INSIDE the paced task (the awaited-call
-      // ordering the historical reads proved): runRead emits its telemetry
-      // event when the task resolves, so a later measurement would land one
-      // event too late.
-      const rawMeta = createRawResponseMeta(deps);
-      const raw = await runRead(deps, async (credentialIndex) => {
-        const response = await deps.transport.getSpreadsheet({
-          spreadsheetId: deps.spreadsheetId,
-          ranges,
-          fields,
-          ...(deps.readTimeoutMs === undefined ? {} : { timeoutMs: deps.readTimeoutMs }),
-          ...credentialBinding(credentialIndex),
-        });
-        rawMeta.onRawResponse?.(response);
-        return response;
-      }, pacing, rawMeta.meta);
+      const fetched = await hooks.fetchBand(addresses);
       executed += 1;
-      const document = parseSpreadsheetDocument(raw, label);
-      for (const sheet of document.sheets) {
-        // Last-seen properties win (fresher grid metadata); consumers only
-        // read identity/merges from this list, grid data lives in `grids`.
-        sheetsByTitle.set(sheet.title, sheet);
-        const rowCount = sheet.gridProperties?.rowCount;
-        if (rowCount !== undefined) deps.sheetRowBounds.set(sheet.title, rowCount);
+      for (const sheet of fetched.sheets) {
+        // Last-seen entry wins (fresher metadata); consumers read identity
+        // from this list, cell data lives in `grids`.
+        sheetsByKey.set(hooks.sheetKey(sheet), sheet);
+        hooks.noteSheet?.(sheet);
       }
-      for (const [sheetId, list] of document.grids) {
-        const existing = grids.get(sheetId);
-        if (existing === undefined) grids.set(sheetId, [...list]);
+      for (const [key, list] of fetched.grids) {
+        const existing = grids.get(key);
+        if (existing === undefined) grids.set(key, [...list]);
         else existing.push(...list);
       }
-      if (rawMeta.meta.responseBytes !== undefined) {
-        bytes += rawMeta.meta.responseBytes;
-        deps.readCalibration.observe(evidence, cells, rawMeta.meta.responseBytes);
+      if (fetched.responseBytes !== undefined) {
+        bytes += fetched.responseBytes;
+        hooks.noteResponse?.(evidence, cells, fetched.responseBytes);
       }
     }
-    const document: ParsedSpreadsheetDocument & {
-      readonly requests: number;
-      readonly bytes: number;
-    } = {
-      sheets: [...sheetsByTitle.values()],
+    return {
+      sheets: [...sheetsByKey.values()],
       grids,
       requests: executed,
       bytes,
     };
-    return document;
   };
 }
 
 /**
- * Builds the model-facing engine runtime for one logical read on one lane:
- * the fields/evidence → executor factory plus the shared bounds cache and
- * calibration tracker. Model functions receive this instead of a raw
+ * Builds the model-facing engine runtime for one logical read: the
+ * read-shape/evidence → executor factory plus the shared bounds cache and
+ * calibration tracker. Model functions receive this instead of raw
  * transport, which is what lets a single logical read expand into
  * sequential paced band requests WITHOUT the model layer importing the
  * operations layer.
  */
-export function createEngineRuntime(
-  deps: GoogleSheetsApiProviderDeps,
-  pacing: RequestStartPacing,
-  label: string,
-): EngineRuntime {
+export function createEngineRuntime<TSheet, TGridKey, TGrid>(options: {
+  /** Builds the band fetch for one read-shape + evidence combination. */
+  makeFetch: (
+    fields: string,
+    evidence: BandEvidence,
+  ) => BandEngineHooks<TSheet, TGridKey, TGrid>["fetchBand"];
+  /** Provider-instance authoritative row bounds (title → grid rowCount). */
+  rowBounds: ReadonlyMap<string, number>;
+  /** Provider-instance byte-estimate calibration (shared across lanes). */
+  calibration: ReadCalibration;
+  /** Shared bound/calibration observers for every executor this builds. */
+  noteSheet?: BandEngineHooks<TSheet, TGridKey, TGrid>["noteSheet"];
+  noteResponse?: BandEngineHooks<TSheet, TGridKey, TGrid>["noteResponse"];
+  /** Stable identity of one fetched sheet (last-seen entry wins). */
+  sheetKey: BandEngineHooks<TSheet, TGridKey, TGrid>["sheetKey"];
+}): EngineRuntime<TSheet, TGridKey, TGrid> {
   return {
-    makeGet: (fields, evidence) => createBandedGet(deps, pacing, fields, evidence, label),
-    rowBounds: deps.sheetRowBounds,
-    calibration: deps.readCalibration,
+    makeGet: (fields, evidence) => createBandExecutor<TSheet, TGridKey, TGrid>(
+      {
+        fetchBand: options.makeFetch(fields, evidence),
+        sheetKey: options.sheetKey,
+        ...(options.noteSheet === undefined ? {} : { noteSheet: options.noteSheet }),
+        ...(options.noteResponse === undefined ? {} : { noteResponse: options.noteResponse }),
+      },
+      evidence,
+    ),
+    rowBounds: options.rowBounds,
+    calibration: options.calibration,
   };
+}
+
+/** Neutral bound-enumeration carriers for cold title resolution. */
+export interface BandBoundEnumeration {
+  /** True when the provider-instance cache already bounds this title. */
+  hasBound(title: string): boolean;
+  /** Settles cold titles with one metadata enumeration. */
+  enumerate(): Promise<readonly { readonly title: string; readonly rowCount: number | undefined }[]>;
+  /** Records one enumerated bound in the provider-instance cache. */
+  noteBound(title: string, rowCount: number | undefined): void;
 }
 
 /**
  * Ensures every listed tab has an authoritative row bound in the
- * provider-instance cache, settling cold titles with ONE range-less
- * metadata enumeration (`gridProperties.rowCount` is metadata-only). The
- * cache is refreshed by every subsequent engine response's sheet
- * properties, so the enumeration is a once-per-title-per-instance cost —
- * the polling lane has no per-dispatch enumeration of its own and this is
- * where its committed upper bound comes from.
+ * provider-instance cache, settling cold titles with ONE metadata
+ * enumeration. The cache is refreshed by every subsequent engine response,
+ * so the enumeration is a once-per-title-per-instance cost.
  */
-export async function ensureSheetRowBounds(
-  deps: GoogleSheetsApiProviderDeps,
-  pacing: RequestStartPacing,
+export async function ensureBandRowBounds(
+  lanes: BandBoundEnumeration,
   titles: readonly string[],
 ): Promise<void> {
-  if (titles.every((title) => deps.sheetRowBounds.has(title))) return;
-  const enumeration = createRawResponseMeta(deps);
-  const sheets = await runRead(deps, (credentialIndex) =>
-    enumerateSheetProperties(
-      deps.transport, deps.spreadsheetId, deps.readTimeoutMs, enumeration.onRawResponse,
-      credentialIndex,
-    ), pacing, enumeration.meta);
-  for (const sheet of sheets) {
-    const rowCount = sheet.gridProperties?.rowCount;
-    if (rowCount !== undefined) deps.sheetRowBounds.set(sheet.title, rowCount);
+  if (titles.every((title) => lanes.hasBound(title))) return;
+  const enumerated = await lanes.enumerate();
+  for (const sheet of enumerated) {
+    lanes.noteBound(sheet.title, sheet.rowCount);
   }
 }

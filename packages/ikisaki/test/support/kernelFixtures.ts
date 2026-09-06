@@ -52,10 +52,54 @@ export async function claimTestFence(
 
 let effectSequence = 0;
 
+/**
+ * Entity-side dispatch-bucket default for one fixture effect.
+ *
+ * Mirrors the production `classifyDispatchClass` predicate on the
+ * SQL-visible shape so fixtures stamp exactly what the factory would stamp
+ * for the same shape; tests that need the other bucket pass `dispatchClass`
+ * explicitly.
+ */
+function defaultDispatchClass(effect: {
+  readonly effectKind: string;
+  readonly projection: string;
+  readonly targetKind: string;
+  readonly expectedVisibleRevision: number;
+  readonly expectedVisibleHash: string;
+}): NewEffect["dispatchClass"] {
+  if (effect.expectedVisibleRevision !== 0 || effect.expectedVisibleHash !== "") {
+    return "regular";
+  }
+  if (
+    effect.effectKind === "system_projection" &&
+    effect.projection === "system_state" &&
+    effect.targetKind === "entity"
+  ) {
+    return "fast-append";
+  }
+  if (
+    effect.effectKind === "resolution_projection" &&
+    effect.projection === "sync_conflicts" &&
+    effect.targetKind === "conflict"
+  ) {
+    return "fast-append";
+  }
+  return "regular";
+}
+
 /** Builds one opaque pending effect with unique identity and dedupe key. */
 export function newEffect(overrides: Partial<NewEffect> = {}): NewEffect {
   effectSequence += 1;
   const sequence = effectSequence;
+  const { dispatchClass, ...rest } = overrides;
+  const shape = {
+    effectKind: "system_projection",
+    projection: "system_state",
+    targetKind: "entity",
+    expectedVisibleRevision: 0,
+    expectedVisibleHash: "",
+    ...rest,
+  };
   return {
     effectId: `effect-${sequence}`,
     effectKind: "system_projection",
@@ -78,6 +122,7 @@ export function newEffect(overrides: Partial<NewEffect> = {}): NewEffect {
     payloadHash: `payload-hash-${sequence}`,
     effectDedupeKey: `dedupe-${sequence}`,
     streamSequence: sequence,
-    ...overrides,
+    ...rest,
+    dispatchClass: dispatchClass ?? defaultDispatchClass(shape),
   };
 }

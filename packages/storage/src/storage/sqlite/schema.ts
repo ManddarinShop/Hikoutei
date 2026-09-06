@@ -10,6 +10,7 @@
 import {
   EFFECT_OUTBOX_DDL,
   REQUIRED_V5_COLUMNS as KERNEL_REQUIRED_V5_COLUMNS,
+  REQUIRED_V9_COLUMNS as KERNEL_REQUIRED_V9_COLUMNS,
   VISIBLE_STATE_TABLES_DDL,
   WRITER_LEASE_DDL,
 } from "@hikoutei/ikisaki";
@@ -23,7 +24,7 @@ export { REQUIRED_V3_COLUMNS } from "@hikoutei/ikisaki";
 export { syncSchemaV5IndexesDdl } from "@hikoutei/ikisaki";
 
 /** Current durable schema version managed by the provider migration. */
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
@@ -135,6 +136,13 @@ export const REQUIRED_V7_COLUMNS: Readonly<
     "created_at",
     "updated_at",
   ],
+};
+
+/** Entity-stamped opaque dispatch bucket added to the outbox by the v9 migration. */
+export const REQUIRED_V9_COLUMNS: Readonly<
+  Record<"sheet_effect_outbox", readonly string[]>
+> = {
+  ...KERNEL_REQUIRED_V9_COLUMNS,
 };
 
 /**

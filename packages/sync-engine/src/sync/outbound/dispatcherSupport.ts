@@ -141,21 +141,11 @@ export function sheetsPayloadValidationError(effect: PendingEffect): Presence<st
 }
 
 /**
- * Classifies one pending effect as an append-only fast candidate.
- *
- * A fast append requires an empty visible baseline (`createIfMissing` with
- * revision 0 and an empty visible hash) plus a new System_State entity row or
- * a new Sync_Conflicts resolution row.
+ * Entity-side fast-append shape check, retained for dispatch-priority
+ * classification only. Effect creation stamps the opaque `dispatchClass`
+ * label instead (see `classifyDispatchClass` in `ProjectionEffectFactory`);
+ * the protocol worker routes on that label and never calls this function.
  */
-export function isSheetsFastAppendCandidate(effect: PendingEffect): boolean {
-  try {
-    return isFastAppendEffect(toProviderEffect(effect));
-  } catch {
-    return false;
-  }
-}
-
-/** Classifies one converted provider effect as an append-only fast candidate. */
 export function isFastAppendEffect(effect: SyncProjectionEffect): boolean {
   const emptyVisibleBaseline = effect.payload.createIfMissing &&
     effect.expectedVisibleRevision === NON_NEGATIVE_SAFE_INTEGER_MINIMUM &&

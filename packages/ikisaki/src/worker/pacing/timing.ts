@@ -1,7 +1,7 @@
 /** Timing classification and diagnostics emission for one effect-worker pass. */
 
 import type { PendingEffect } from "../../contract/contracts.js";
-import { EFFECT_KINDS } from "../../contract/constants.js";
+import type { Dispatcher } from "../dispatcher.js";
 import type { ClaimedEffect } from "../contracts.js";
 import type { EffectWorkerBaseOptions } from "../options.js";
 import { isAbsent } from "../helpers.js";
@@ -72,13 +72,25 @@ export function emptyOperationCounts(): TimingOperationCounts {
   return { append: 0, update: 0, delete: 0 };
 }
 
-/** Classifies one pending effect's lifecycle operation from kernel fields only. */
-export function timingOperationKindForPending(effect: PendingEffect): TimingOperationKind {
-  if (
-    effect.effect_kind === EFFECT_KINDS.RESOLUTION_DELETE ||
-    effect.effect_kind === EFFECT_KINDS.USER_INPUT_DELETE
-  ) {
-    return TIMING_OPERATION_KINDS.DELETE;
+/**
+ * Classifies one pending effect's lifecycle operation for diagnostics.
+ *
+ * Delete-ness is host-declared via the dispatcher (the kernel never
+ * interprets kinds); the append/update split stays on the neutral
+ * empty-baseline shape. A throwing declaration degrades to the neutral
+ * heuristic (diagnostics only: transitions never consult this function).
+ */
+export function timingOperationKindForPending(
+  effect: PendingEffect,
+  dispatcher: Pick<Dispatcher, "isDeleteLifecycleEffect">,
+): TimingOperationKind {
+  try {
+    if (dispatcher.isDeleteLifecycleEffect(effect)) {
+      return TIMING_OPERATION_KINDS.DELETE;
+    }
+  } catch {
+    // Diagnostics must never change a settlement; fall through to the
+    // neutral baseline heuristic below.
   }
   if (
     effect.expected_visible_revision === 0 &&
@@ -99,28 +111,34 @@ export function countsForOperationKinds(
   };
 }
 
-export function countsForItems(items: readonly ClaimedEffect[]): TimingOperationCounts {
+export function countsForItems(
+  items: readonly ClaimedEffect[],
+  dispatcher: Pick<Dispatcher, "isDeleteLifecycleEffect">,
+): TimingOperationCounts {
   const kinds = items.flatMap((item) =>
-    isAbsent(item.invalidPayloadError) ? [timingOperationKindForPending(item.pending)] : []);
+    isAbsent(item.invalidPayloadError) ? [timingOperationKindForPending(item.pending, dispatcher)] : []);
   return countsForOperationKinds(kinds);
 }
 
 export function operationKindsForItems(
   items: readonly ClaimedEffect[],
+  dispatcher: Pick<Dispatcher, "isDeleteLifecycleEffect">,
 ): readonly TimingOperationKind[] {
-  return operationKindsForCounts(countsForItems(items));
+  return operationKindsForCounts(countsForItems(items, dispatcher));
 }
 
 export function countsForPendingEffects(
   effects: readonly PendingEffect[],
+  dispatcher: Pick<Dispatcher, "isDeleteLifecycleEffect">,
 ): TimingOperationCounts {
-  return countsForOperationKinds(effects.map(timingOperationKindForPending));
+  return countsForOperationKinds(effects.map((effect) => timingOperationKindForPending(effect, dispatcher)));
 }
 
 export function operationKindsForPendingEffects(
   effects: readonly PendingEffect[],
+  dispatcher: Pick<Dispatcher, "isDeleteLifecycleEffect">,
 ): readonly TimingOperationKind[] {
-  return operationKindsForCounts(countsForPendingEffects(effects));
+  return operationKindsForCounts(countsForPendingEffects(effects, dispatcher));
 }
 
 export function operationKindsForCounts(

@@ -144,7 +144,7 @@ async function seedPreV7Rows(sql: SqlExecutor): Promise<void> {
 }
 
 describe("SQLite schema v7 cleanup migration", () => {
-  it("installs the v8 schema fresh: no projection_row_binding, no dead columns, straight version stamp", async () => {
+  it("installs the v9 schema fresh: no projection_row_binding, no dead columns, straight version stamp", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
       entities: [SchemaMigrationOrder],
@@ -153,8 +153,8 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 8,
-      appliedVersions: [8],
+      toVersion: 9,
+      appliedVersions: [9],
     });
 
     expect(await sqliteTableNames(adapter)).not.toContain("projection_row_binding");
@@ -172,8 +172,11 @@ describe("SQLite schema v7 cleanup migration", () => {
     // v8: the writer-lease heartbeat evidence column exists on fresh installs.
     expect(await tableColumnNames(adapter, "writer_lease")).toContain("heartbeat_at");
 
+    // v9: every outbox effect carries the entity-stamped opaque dispatch bucket.
+    expect(await tableColumnNames(adapter, "sheet_effect_outbox")).toContain("dispatch_class");
+
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 8 });
+      .resolves.toEqual({ user_version: 9 });
   });
 
   it("migrates a genuine v6 store to v7 in place: drops the orphan table and dead columns, keeps row data", async () => {
@@ -194,9 +197,12 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 6,
-      toVersion: 8,
-      appliedVersions: [7, 8],
+      toVersion: 9,
+      appliedVersions: [7, 8, 9],
     });
+
+    // The v9 dispatch-bucket column exists after the upgrade.
+    expect(await tableColumnNames(adapter, "sheet_effect_outbox")).toContain("dispatch_class");
 
     // Dropped state is gone for good.
     expect(await sqliteTableNames(adapter)).not.toContain("projection_row_binding");
@@ -236,7 +242,7 @@ describe("SQLite schema v7 cleanup migration", () => {
       created_at: 1_000,
     });
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 8 });
+      .resolves.toEqual({ user_version: 9 });
   });
 
   it("is idempotent on reopen: an already-current database applies no steps", async () => {
@@ -248,8 +254,8 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await migrateSqliteSchema(adapter);
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
-      fromVersion: 8,
-      toVersion: 8,
+      fromVersion: 9,
+      toVersion: 9,
       appliedVersions: [],
     });
     // A current database where the cleanup already happened is also a no-op even
@@ -259,8 +265,8 @@ describe("SQLite schema v7 cleanup migration", () => {
     });
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 6,
-      toVersion: 8,
-      appliedVersions: [7, 8],
+      toVersion: 9,
+      appliedVersions: [7, 8, 9],
     });
   });
 
@@ -273,7 +279,7 @@ describe("SQLite schema v7 cleanup migration", () => {
 
     await migrateSqliteSchema(adapter);
     await adapter.transaction(async ({ sql }) => {
-      await sql.run("PRAGMA user_version = 9");
+      await sql.run("PRAGMA user_version = 10");
     });
     await expect(migrateSqliteSchema(adapter)).rejects.toMatchObject({
       code: STORAGE_ERROR_CODES.SCHEMA_VERSION_TOO_NEW,
@@ -333,8 +339,8 @@ describe("SQLite schema v7 cleanup migration", () => {
     const adapter = await createAdapter();
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 0,
-      toVersion: 8,
-      appliedVersions: [8],
+      toVersion: 9,
+      appliedVersions: [9],
     });
     expect(await sqliteTableNames(adapter)).toContain("schema_migration_orders");
     expect(await sqliteTableNames(adapter)).not.toContain("projection_row_binding");

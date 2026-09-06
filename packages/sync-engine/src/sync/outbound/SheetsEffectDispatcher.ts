@@ -81,7 +81,6 @@ import {
 } from "@hikoutei/contracts/sheets/errors.js";
 import { fromSqlNullable } from "@hikoutei/storage/storage/sqlite/sqlState.js";
 import {
-  isSheetsFastAppendCandidate,
   PreparedDispatchError,
   safeProviderErrorMessage,
   SHEETS_SPREADSHEET_ROUTE_KEY,
@@ -97,7 +96,6 @@ export {
   SHEETS_SPREADSHEET_ROUTE_KEY,
   sheetsRouteKeyFor,
   sheetsPayloadValidationError,
-  isSheetsFastAppendCandidate,
   isFastAppendEffect,
   PreparedDispatchError,
 } from "./dispatcherSupport.js";
@@ -162,8 +160,39 @@ export class SheetsEffectDispatcher implements Dispatcher {
     return SHEETS_SPREADSHEET_ROUTE_KEY;
   }
 
-  public isFastAppendCandidate(effect: PendingEffect): boolean {
-    return isSheetsFastAppendCandidate(effect);
+  /**
+   * Host-declared effect traits for the worker's kind-free transitions.
+   *
+   * Each converts the pending row to a provider effect and reads domain
+   * kinds here (entity side); the worker only ever sees the booleans.
+   * Malformed payloads degrade to false — the worker's own payload
+   * validation already fails them through the invalid-payload path before
+   * any transition consults these traits.
+   */
+  public isCandidateProtectedEffect(effect: PendingEffect): boolean {
+    try {
+      return isCandidateProtectingUserInputEffect(toProviderEffect(effect));
+    } catch {
+      return false;
+    }
+  }
+
+  public isRepairEffect(effect: PendingEffect): boolean {
+    try {
+      return toProviderEffect(effect).effectKind === EFFECT_KINDS.SYSTEM_REPAIR;
+    } catch {
+      return false;
+    }
+  }
+
+  public isDeleteLifecycleEffect(effect: PendingEffect): boolean {
+    try {
+      const effectKind = toProviderEffect(effect).effectKind;
+      return effectKind === EFFECT_KINDS.RESOLUTION_DELETE ||
+        effectKind === EFFECT_KINDS.USER_INPUT_DELETE;
+    } catch {
+      return false;
+    }
   }
 
   public dispatchPriorityFor(effect: PendingEffect): number {

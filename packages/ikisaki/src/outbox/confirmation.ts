@@ -7,10 +7,11 @@
 
 import { STORAGE_ERROR_CODES, StorageError } from "../contract/errors.js";
 import {
-  EFFECT_KINDS,
-  EFFECT_STATUSES,
-} from "../contract/constants.js";
-import type { EffectKind, EffectStatus } from "../contract/constants.js";
+  OUTBOX_EFFECT_KINDS,
+  OUTBOX_EFFECT_STATUSES,
+  type OutboxEffectKind,
+  type OutboxEffectStatus,
+} from "./effectVocabulary.js";
 import {
   isSemanticRevision,
 } from "../contract/identity.js";
@@ -50,6 +51,7 @@ export function validateProjectionConfirmation(confirmation: EffectProjectionCon
     confirmation.visibleRevision < 1 ||
     !isApplicabilityNumber(confirmation.entityRevision) ||
     !isRecord(confirmation.fieldHashes) ||
+    typeof confirmation.deleteRetention !== "boolean" ||
     (confirmation.allowCreateRebaseline !== undefined &&
       typeof confirmation.allowCreateRebaseline !== "boolean")
   ) {
@@ -88,7 +90,7 @@ export function validateApplyResultOptions(options: ApplyResultOptions): void {
       `effect result status ${String(options.status)} is not terminal`,
     );
   }
-  if (options.status !== EFFECT_STATUSES.APPLIED && options.projectionConfirmation !== undefined) {
+  if (options.status !== OUTBOX_EFFECT_STATUSES.APPLIED && options.projectionConfirmation !== undefined) {
     throw new StorageError(
       STORAGE_ERROR_CODES.INVALID_EFFECT_RESULT,
       "only an applied effect may advance confirmed projection state",
@@ -99,28 +101,29 @@ export function validateApplyResultOptions(options: ApplyResultOptions): void {
   }
 }
 
-function isTerminalEffectStatus(value: unknown): value is Exclude<EffectStatus, "pending" | "processing"> {
-  return value === EFFECT_STATUSES.APPLIED ||
-    value === EFFECT_STATUSES.BLOCKED_CANDIDATE ||
-    value === EFFECT_STATUSES.SUPERSEDED ||
-    value === EFFECT_STATUSES.CONFLICT ||
-    value === EFFECT_STATUSES.FAILED;
+function isTerminalEffectStatus(value: unknown): value is Exclude<OutboxEffectStatus, "pending" | "processing"> {
+  return value === OUTBOX_EFFECT_STATUSES.APPLIED ||
+    value === OUTBOX_EFFECT_STATUSES.BLOCKED_CANDIDATE ||
+    value === OUTBOX_EFFECT_STATUSES.SUPERSEDED ||
+    value === OUTBOX_EFFECT_STATUSES.CONFLICT ||
+    value === OUTBOX_EFFECT_STATUSES.FAILED;
 }
 
 /**
- * Verifies that read-back evidence belongs to the effect currently being applied
- * and returns the claimed effect's durable operation kind.
+ * Verifies that read-back evidence belongs to the effect currently being applied.
  *
- * The operation kind comes from the durable outbox row, never from the
- * untrusted provider receipt or payload, so confirmation semantics (for example
- * the delete monotonic rule) are always derived from the claimed effect.
+ * The belonging check reads the durable outbox row, never the untrusted
+ * provider receipt or payload. The claimed row's operation kind is validated
+ * as known (fail-closed on corruption) but never branched on: revision rules
+ * travel on the confirmation itself (`deleteRetention`,
+ * `allowCreateRebaseline`), declared by the dispatcher-owned worker path.
  */
 export async function assertProjectionConfirmationTargetWithSql(
   sql: SqlExecutor,
   effectId: string,
   claimToken: string,
   confirmation: EffectProjectionConfirmation,
-): Promise<EffectKind> {
+): Promise<void> {
   const row = await sql.get<SqlRow>(READ_CLAIMED_EFFECT_TARGET_SQL, [effectId, claimToken]);
   if (
     row === undefined ||
@@ -132,32 +135,31 @@ export async function assertProjectionConfirmationTargetWithSql(
       "projection confirmation does not belong to the claimed effect",
     );
   }
-  return requireEffectKind(row.effect_kind, "claimed effect kind");
+  requireKnownEffectKind(row.effect_kind, "claimed effect kind");
 }
 
-function requireEffectKind(value: unknown, label: string): EffectKind {
-  if (value === EFFECT_KINDS.SYSTEM_PROJECTION ||
-      value === EFFECT_KINDS.CANDIDATE_RECONCILE ||
-      value === EFFECT_KINDS.SYSTEM_REPAIR ||
-      value === EFFECT_KINDS.RESOLUTION_PROJECTION ||
-      value === EFFECT_KINDS.RESOLUTION_DELETE ||
-      value === EFFECT_KINDS.USER_INPUT_DELETE) return value;
+function requireKnownEffectKind(value: unknown, label: string): OutboxEffectKind {
+  if (value === OUTBOX_EFFECT_KINDS.SYSTEM_PROJECTION ||
+      value === OUTBOX_EFFECT_KINDS.CANDIDATE_RECONCILE ||
+      value === OUTBOX_EFFECT_KINDS.SYSTEM_REPAIR ||
+      value === OUTBOX_EFFECT_KINDS.RESOLUTION_PROJECTION ||
+      value === OUTBOX_EFFECT_KINDS.RESOLUTION_DELETE ||
+      value === OUTBOX_EFFECT_KINDS.USER_INPUT_DELETE) return value;
   throwInvalidPendingEffect(`${label} is unsupported`);
 }
 
 /**
  * Writes confirmed row and field state through the active async SQL context.
  *
- * The durable `effectKind` of the claimed effect selects the visible-revision
- * resolution rule (delete monotonic retention, create-if-missing rebase, or
+ * The confirmation's dispatcher-declared rules select the visible-revision
+ * resolution (delete monotonic retention, create-if-missing rebase, or
  * strict backwards rejection).
  */
 export async function writeProjectionConfirmationWithSql(
   sql: SqlExecutor,
   confirmation: EffectProjectionConfirmation,
-  effectKind: EffectKind,
 ): Promise<void> {
-  const visibleRevision = await resolveConfirmationVisibleRevisionWithSql(sql, confirmation, effectKind);
+  const visibleRevision = await resolveConfirmationVisibleRevisionWithSql(sql, confirmation);
   const row = await sql.run(UPSERT_VISIBLE_STATE_SQL, [
     confirmation.physicalSheetId,
     confirmation.projection,
@@ -196,8 +198,8 @@ export async function writeProjectionConfirmationWithSql(
 /**
  * Resolves the durable revision a confirmation may write.
  *
- * - Delete effects (derived from the durable `effectKind`, never the receipt)
- *   read back the pre-delete provider revision, which can be lower than the
+ * - Delete-lifecycle effects (dispatcher-declared `deleteRetention`, never
+ *   the receipt) read back the pre-delete provider revision, which can be lower than the
  *   current durable confirmed revision when a same-ID row was deleted and
  *   re-created: the create rebase advances the durable counter, so the next
  *   delete's receipt legitimately lags it. A delete confirmation therefore
@@ -217,9 +219,8 @@ export async function writeProjectionConfirmationWithSql(
 async function resolveConfirmationVisibleRevisionWithSql(
   sql: SqlExecutor,
   confirmation: EffectProjectionConfirmation,
-  effectKind: EffectKind,
 ): Promise<number> {
-  const isDelete = isDeleteEffectKind(effectKind);
+  const isDelete = confirmation.deleteRetention;
   const isCreateRebase = confirmation.allowCreateRebaseline === true;
   if (!isDelete && !isCreateRebase) {
     return confirmation.visibleRevision;
@@ -239,9 +240,4 @@ async function resolveConfirmationVisibleRevisionWithSql(
     return confirmation.visibleRevision;
   }
   return confirmed + 1;
-}
-
-/** True when the durable effect kind is a projection-row delete. */
-function isDeleteEffectKind(kind: EffectKind): boolean {
-  return kind === EFFECT_KINDS.USER_INPUT_DELETE || kind === EFFECT_KINDS.RESOLUTION_DELETE;
 }

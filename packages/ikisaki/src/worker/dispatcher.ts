@@ -3,9 +3,10 @@
  * and the role interfaces the worker composes into the `Dispatcher`.
  *
  * The worker reasons only about kernel rows and these contracts. It never
- * interprets effect payloads: every payload-derived decision (fast-append
- * candidacy, route keys, evidence validation against the effect target, the
- * User_Input candidate gate) is declared by the dispatcher.
+ * interprets effect payloads: the entity side stamps the opaque dispatch
+ * bucket at creation, and every other payload-derived decision (route keys,
+ * evidence validation against the effect target, the User_Input candidate
+ * gate) is declared by the dispatcher.
  */
 
 import type {
@@ -254,20 +255,15 @@ export interface RepairReplanRequest {
 /** Callback that creates a fresh effect without mutating the old evidence. */
 export type RepairReplanFactory = (request: RepairReplanRequest) => Presence<NewEffect>;
 
-/** Fast-append classification and dispatch role of the dispatcher boundary. */
+/**
+ * Fast-append classification and dispatch role of the dispatcher boundary.
+ *
+ * Bucket routing is NOT declared here: the worker routes SOLELY on the
+ * entity-stamped opaque `dispatchClass` label carried by every pending
+ * effect, so this interface owns only the provider-scoped grouping key,
+ * the priority declaration, and the remote dispatch operations.
+ */
 export interface FastAppendDispatcher {
-  /**
-   * Declares whether one pending effect is eligible for the append-only fast
-   * path.
-   *
-   * No-throw contract: this predicate must never throw and must always return
-   * the boolean candidacy as a value. The worker guards the call defensively,
-   * but a throwing dispatcher forces the affected effects through the
-   * per-effect invalid-payload failure path instead of aborting the pass, so
-   * a compliant dispatcher must report every classification as a return
-   * value.
-   */
-  isFastAppendCandidate(effect: PendingEffect): boolean;
   /**
    * Builds the worker-visible grouping key for fast-append effects.
    *
@@ -332,6 +328,34 @@ export interface EffectDispatcher {
    * value.
    */
   payloadValidationError(effect: PendingEffect): Presence<string>;
+  /**
+   * Declares whether a guard mismatch on one effect must preserve the row
+   * as `blocked_candidate` instead of closing it as `conflict`.
+   *
+   * The host owns which effects protect an active human candidate; the
+   * worker owns the transition. Required (no safe default exists: the two
+   * settlements differ durably), under the same no-throw contract as the
+   * sibling predicates — a throwing declaration fails the affected effect
+   * through the per-effect invalid-payload path instead of aborting the pass.
+   */
+  isCandidateProtectedEffect(effect: PendingEffect): boolean;
+  /**
+   * Declares whether one effect is a writer-replannable repair.
+   *
+   * A changed postcondition on a repair effect attempts the writer-owned
+   * replan; any other effect fails closed. Required under the same
+   * no-throw contract as the sibling predicates.
+   */
+  isRepairEffect(effect: PendingEffect): boolean;
+  /**
+   * Declares whether one effect follows the delete lifecycle.
+   *
+   * Used only for diagnostics timing classification (delete vs
+   * append/update operation counts) and for the delete-monotonic
+   * confirmation rule; never changes a settlement. Required under the same
+   * no-throw contract as the sibling predicates.
+   */
+  isDeleteLifecycleEffect(effect: PendingEffect): boolean;
   /** Dispatches one regular effect batch. */
   apply(request: DispatchRequest): Promise<ApplyOutcome>;
   /**
@@ -387,9 +411,9 @@ export interface AuthorityDispatcher {
 /**
  * The dispatcher boundary implemented by the host application.
  *
- * The dispatcher owns every payload-derived decision: route keys, fast-append
- * candidacy, dispatch priority, payload validation, the User_Input candidate
- * gate, remote evidence validation against effect targets, and transport-outcome
+ * The dispatcher owns every payload-derived decision: route keys, dispatch
+ * priority, payload validation, the User_Input candidate gate, remote
+ * evidence validation against effect targets, and transport-outcome
  * classification. The worker owns selection, claiming, grouping, fence
  * preparation, transitions, and recovery.
  *

@@ -39,6 +39,9 @@ import {
   WORKER_ERROR_CODES,
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
   type WorkerReport,
+  dispatchClassValidationError,
+  isAbsent,
+  isPresent,
 } from "../src/index.js";
 import {
   claimTestFence,
@@ -80,20 +83,10 @@ class ThrowingResultPersistenceAdapter implements SqlStorageAdapter {
   }
 }
 
-/** Fast-append classification that mirrors the kernel's SQL-visible shape. */
-function isAppendShaped(effect: PendingEffect): boolean {
-  return effect.expected_visible_revision === 0 &&
-    effect.expected_visible_hash === "" &&
-    effect.effect_kind === "system_projection" &&
-    effect.projection === "system_state" &&
-    effect.target_kind === "entity";
-}
-
 interface FakeDispatcherOptions {
   readonly apply?: (request: DispatchRequest) => Promise<ApplyOutcome>;
   readonly fastAppend?: (request: DispatchRequest) => Promise<FastAppendOutcome>;
   readonly readPostconditions?: (request: DispatchRequest) => Promise<PostconditionOutcome>;
-  readonly isFastAppendCandidate?: (effect: PendingEffect) => boolean;
   readonly dispatchPriorityFor?: (effect: PendingEffect) => number;
   readonly payloadValidationError?: (effect: PendingEffect) => Presence<string>;
   readonly routeKeyFor?: (effect: PendingEffect) => string;
@@ -171,8 +164,22 @@ class FakeDispatcher implements Dispatcher {
     return this.options.fastAppendRouteKeyFor?.(effect) ?? this.routeKeyFor(effect);
   }
 
-  public isFastAppendCandidate(effect: PendingEffect): boolean {
-    return this.options.isFastAppendCandidate?.(effect) ?? isAppendShaped(effect);
+  /**
+   * Host-declared trait doubles, keyed on the kernel-visible kind strings
+   * (test code, not kernel code, so the domain vocabulary stays here).
+   */
+  public isCandidateProtectedEffect(effect: PendingEffect): boolean {
+    return effect.effect_kind === "candidate_reconcile" ||
+      effect.effect_kind === "user_input_delete";
+  }
+
+  public isRepairEffect(effect: PendingEffect): boolean {
+    return effect.effect_kind === "system_repair";
+  }
+
+  public isDeleteLifecycleEffect(effect: PendingEffect): boolean {
+    return effect.effect_kind === "resolution_delete" ||
+      effect.effect_kind === "user_input_delete";
   }
 
   public dispatchPriorityFor(effect: PendingEffect): number {
@@ -1042,43 +1049,34 @@ describe("effect worker", () => {
     );
   });
 
-  it("fails an effect per-effect when the dispatcher candidate predicate throws", async () => {
+  it("refuses to queue an effect without a stamped dispatch class", async () => {
     const adapter = createKernelStore();
     const fence = await claimTestFence(adapter);
-    const effect = regularEffect("throwing-candidate");
-    await appendPendingEffectsWithAdapter(adapter, fence, [effect]);
+    const effect = {
+      ...regularEffect("unstamped-effect"),
+      dispatchClass: undefined as unknown as NewEffect["dispatchClass"],
+    };
+    // The outbox CHECK constraint rejects the unstamped row, so it can
+    // never enter the queue and be assumed into a dispatch bucket.
+    await expect(
+      appendPendingEffectsWithAdapter(adapter, fence, [effect]),
+    ).rejects.toThrow();
+  });
 
-    const dispatcher = new FakeDispatcher({
-      isFastAppendCandidate: () => {
-        throw new Error("candidate classification failed");
-      },
-    });
-
-    const report = await runEffectWorkerWithAdapter({
-      storage: adapter,
-      dispatcher,
-      workerId: "worker-1",
-      now: 1_000,
-      maxEffects: 5,
-    });
-
-    // A throwing predicate must not abort the pass into supervisor backoff:
-    // the effect is closed per-effect through the invalid-payload failure
-    // path and is never left processing.
-    expect(report).toMatchObject({
-      selected: 1,
-      claimed: 1,
-      applied: 0,
-      failed: 1,
-      deferred: 0,
-      requeued: 0,
-    });
-    expect(dispatcher.applyCalls).toBe(0);
-    expect(dispatcher.fastAppendCalls).toBe(0);
-    await expect(outboxError(adapter, effect.effectId)).resolves.toMatchObject({
-      status: "failed",
-      last_error_code: WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-    });
+  it("fails closed on unstamped or unknown dispatch labels", async () => {
+    const stamped = (label: PendingEffect["dispatch_class"]) => ({
+      dispatch_class: label,
+      effect_id: "effect-label",
+    }) as PendingEffect;
+    expect(isAbsent(dispatchClassValidationError(stamped("fast-append")))).toBe(true);
+    expect(isAbsent(dispatchClassValidationError(stamped("regular")))).toBe(true);
+    expect(isPresent(dispatchClassValidationError({
+      effect_id: "effect-unstamped",
+    } as unknown as PendingEffect))).toBe(true);
+    expect(isPresent(dispatchClassValidationError({
+      dispatch_class: "bogus",
+      effect_id: "effect-bogus",
+    } as unknown as PendingEffect))).toBe(true);
   });
 
   it("fails an effect per-effect when the dispatcher payload validation throws", async () => {
@@ -1293,14 +1291,9 @@ describe("effect worker", () => {
     ]);
 
     const dispatcher = new FakeDispatcher({
-      isFastAppendCandidate: (effect) =>
-        isAppendShaped(effect) ||
-        (effect.projection === "sync_conflicts" &&
-          effect.expected_visible_revision === 0 &&
-          effect.expected_visible_hash === ""),
       dispatchPriorityFor: (effect) => {
         if (effect.projection === "system_state") {
-          return isAppendShaped(effect) ? 0 : 1;
+          return effect.dispatch_class === "fast-append" ? 0 : 1;
         }
         if (effect.projection === "sync_conflicts") return 2;
         return 3;
@@ -1382,11 +1375,6 @@ describe("effect worker", () => {
     await appendPendingEffectsWithAdapter(adapter, fence, [sysAppend, conflictAppend]);
 
     const dispatcher = new FakeDispatcher({
-      isFastAppendCandidate: (effect) =>
-        isAppendShaped(effect) ||
-        (effect.projection === "sync_conflicts" &&
-          effect.expected_visible_revision === 0 &&
-          effect.expected_visible_hash === ""),
       // Spreadsheet-scoped append grouping: every append on this dispatcher's
       // single spreadsheet shares one grouping key.
       fastAppendRouteKeyFor: () => "spreadsheet-scope",
@@ -1428,11 +1416,6 @@ describe("effect worker", () => {
     await appendPendingEffectsWithAdapter(adapter, fence, [appA, appB]);
 
     const dispatcher = new FakeDispatcher({
-      isFastAppendCandidate: (effect) =>
-        isAppendShaped(effect) ||
-        (effect.projection === "sync_conflicts" &&
-          effect.expected_visible_revision === 0 &&
-          effect.expected_visible_hash === ""),
       fastAppendRouteKeyFor: () => "spreadsheet-scope",
       fastAppend: async () => {
         // The ONE atomic multi-route call is rejected as an explicit remote
@@ -1518,8 +1501,16 @@ describe("effect worker", () => {
     // effect-1 during beforeRemoteDispatch while effect-2's renewal succeeds.
     const adapter = createKernelStore();
     const fence = await claimTestFence(adapter);
-    const effect1 = newEffect({ effectId: "lease-rr-1", targetId: "entity-lease-rr-1" });
-    const effect2 = newEffect({ effectId: "lease-rr-2", targetId: "entity-lease-rr-2" });
+    const effect1 = newEffect({
+      effectId: "lease-rr-1",
+      targetId: "entity-lease-rr-1",
+      dispatchClass: "regular",
+    });
+    const effect2 = newEffect({
+      effectId: "lease-rr-2",
+      targetId: "entity-lease-rr-2",
+      dispatchClass: "regular",
+    });
     await appendPendingEffectsWithAdapter(adapter, fence, [effect1, effect2]);
 
     // Adapter wrapper: after every transaction completes, if effect-1 has been
@@ -1564,7 +1555,6 @@ describe("effect worker", () => {
     // without a remote write.
     const dispatcher = new FakeDispatcher({
       invokeBeforeRemote: false,
-      isFastAppendCandidate: () => false,
       apply: async (request) => {
         const renewed = await request.beforeRemoteDispatch?.() ?? true;
         if (!renewed) {

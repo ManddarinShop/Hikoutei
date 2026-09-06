@@ -84,14 +84,14 @@ export const RENEW_EFFECT_LEASE_SQL = `
 
 export const INSERT_PENDING_EFFECT_SQL = `
   INSERT INTO sheet_effect_outbox (
-    effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+    effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
     projection, row_binding_id, conflict_id, target_kind, target_id,
     target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
     expected_visible_revision, expected_visible_hash, repair_guard_hash,
     source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
     stream_sequence, created_at, status
   )
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
   WHERE EXISTS (${FENCE_EXISTS_SQL})
 `;
 
@@ -119,14 +119,14 @@ export const SUPERSEDE_EFFECT_SQL = `
 
 export const INSERT_REPLANNED_EFFECT_SQL = `
   INSERT INTO sheet_effect_outbox (
-    effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+    effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
     projection, row_binding_id, conflict_id, target_kind, target_id,
     target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
     expected_visible_revision, expected_visible_hash, repair_guard_hash,
     source_quarantine_id, payload_json, payload_hash, effect_dedupe_key,
     stream_sequence, predecessor_effect_id, created_at, status
   )
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending'
   WHERE EXISTS (${FENCE_EXISTS_SQL})
 `;
 
@@ -183,7 +183,7 @@ export const MARK_DELIVERY_UNCERTAIN_SQL = `
 `;
 
 export const SELECT_PENDING_EFFECTS_BY_TARGET_SQL = `
-  SELECT effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+  SELECT effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
          projection, row_binding_id, conflict_id, target_kind, target_id,
          target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
          expected_visible_revision, expected_visible_hash, repair_guard_hash,
@@ -206,7 +206,7 @@ export const SELECT_PENDING_EFFECTS_BY_TARGET_SQL = `
 `;
 
 export const SELECT_READY_EFFECTS_SQL = `
-  SELECT effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+  SELECT effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
          projection, row_binding_id, conflict_id, target_kind, target_id,
          target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
          expected_visible_revision, expected_visible_hash, repair_guard_hash,
@@ -242,16 +242,16 @@ export const SELECT_READY_EFFECTS_SQL = `
 `;
 
 /**
- * Bounded head-of-line selection restricted to potential fast-append rows.
+ * Bounded head-of-line selection restricted to fast-append rows.
  *
- * Only the SQL-visible append shape is filtered here (pending status,
- * readiness, predecessor ordering, and the revision-zero baseline on the
- * system-state and sync-conflict routes); the caller re-validates each
- * returned row's payload before claiming. Rows that fail that payload
- * validation drain through the regular claim path instead.
+ * Routing is by the entity-stamped opaque `dispatch_class` label only
+ * (pending status, readiness, and predecessor ordering still apply); the
+ * worker re-validates each returned row's stamped label before claiming.
+ * Rows with an unknown label fail closed through the invalid-payload path
+ * instead of draining through the regular claim path.
  */
 export const SELECT_READY_FAST_APPEND_EFFECTS_SQL = `
-  SELECT effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+  SELECT effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
          projection, row_binding_id, conflict_id, target_kind, target_id,
          target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
          expected_visible_revision, expected_visible_hash, repair_guard_hash,
@@ -261,11 +261,7 @@ export const SELECT_READY_FAST_APPEND_EFFECTS_SQL = `
   FROM sheet_effect_outbox AS candidate
   WHERE candidate.status = 'pending'
     AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= ?)
-    AND candidate.effect_kind IN ('system_projection', 'resolution_projection')
-    AND candidate.projection IN ('system_state', 'sync_conflicts')
-    AND candidate.target_kind IN ('entity', 'conflict')
-    AND candidate.expected_visible_revision = 0
-    AND candidate.expected_visible_hash = ''
+    AND candidate.dispatch_class = 'fast-append'
     AND NOT EXISTS (
       SELECT 1
       FROM sheet_effect_outbox AS predecessor

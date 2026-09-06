@@ -49,8 +49,9 @@ import {
   runWrite,
   type GoogleSheetsApiProviderDeps,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
-import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
-import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
+import { DEFAULT_QUOTA_GOVERNOR_TIMING, ReceiptReadCursor } from "@hikoutei/ikisaki";
+import type { PreflightReceipt } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightContext.js";
+import { createReadCalibration } from "@hikoutei/ikisaki";
 import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
 import { readEffectPostcondition } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/applyEffects.js";
 import {
@@ -1866,7 +1867,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       definitions: [SYSTEM_DEFINITION],
       transport,
       receiptInitLock: new PromiseTailLock(),
-      receiptReadCursor: new ReceiptReadCursor(),
+      receiptReadCursor: new ReceiptReadCursor<PreflightReceipt>(),
       sheetRowBounds: new Map<string, number>(),
       readCalibration: createReadCalibration(),
       readTimeoutMs: 60_000,
@@ -1878,6 +1879,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       readBudget: new RollingQuotaBudget({ maxStartsPerWindow: Number.POSITIVE_INFINITY, windowMs: 60_000, now: () => now }),
       writeBudget: new RollingQuotaBudget({ maxStartsPerWindow: Number.POSITIVE_INFINITY, windowMs: 60_000, now: () => now }),
       quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 1_100, now: () => now }),
+      timingDefaults: DEFAULT_QUOTA_GOVERNOR_TIMING,
       maxRequestStartWaitMs: 1_100,
       now: () => now,
       onRequest: undefined,
@@ -1947,7 +1949,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       definitions: [SYSTEM_DEFINITION],
       transport: new StubSheetsTransport(new StubSpreadsheet()),
       receiptInitLock: new PromiseTailLock(),
-      receiptReadCursor: new ReceiptReadCursor(),
+      receiptReadCursor: new ReceiptReadCursor<PreflightReceipt>(),
       sheetRowBounds: new Map<string, number>(),
       readCalibration: createReadCalibration(),
       readTimeoutMs: 60_000,
@@ -1969,6 +1971,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
         now,
       }),
       quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 0, now }),
+      timingDefaults: DEFAULT_QUOTA_GOVERNOR_TIMING,
       maxRequestStartWaitMs,
       now,
       onRequest: undefined,
@@ -2009,7 +2012,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
       definitions: [SYSTEM_DEFINITION],
       transport: new StubSheetsTransport(new StubSpreadsheet()),
       receiptInitLock: new PromiseTailLock(),
-      receiptReadCursor: new ReceiptReadCursor(),
+      receiptReadCursor: new ReceiptReadCursor<PreflightReceipt>(),
       sheetRowBounds: new Map<string, number>(),
       readCalibration: createReadCalibration(),
       readTimeoutMs: 60_000,
@@ -2027,6 +2030,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
         now: constantNow,
       }),
       quotaGovernor: new QuotaPacingGovernor({ baseIntervalMs: 0, now: constantNow }),
+      timingDefaults: DEFAULT_QUOTA_GOVERNOR_TIMING,
       maxRequestStartWaitMs: 1_100,
       now: backwardNow,
       onRequest: undefined,

@@ -3,11 +3,13 @@
  * operations.
  *
  * The provider class hands one immutable `GoogleSheetsApiProviderDeps` object
- * to every operation function so the class stays a thin facade. Pacing
- * (independent request-start limiters: reads serialize only against reads,
- * writes only against writes), redacted telemetry, route validation against
- * the registered definition, and batchUpdate reply validation live here
- * because every operation shares them.
+ * to every operation function so the class stays a thin facade. Bounded
+ * request-start admission (independent read/write lanes, per-credential
+ * slots) lives in the kernel (`@hikoutei/ikisaki`); the `runRead`/`runWrite`
+ * wrappers here bind that admission to Sheets telemetry, quota-outcome
+ * feedback, and refusal errors. Route validation against the registered
+ * definition and batchUpdate reply validation live here because every
+ * operation shares them.
  */
 
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
@@ -29,20 +31,70 @@ import {
 } from "@hikoutei/sync-engine/shared/observability/logEvents.js";
 import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
-import { ReceiptReadCursor } from "../model/receiptCursor.js";
-import type { ReadCalibration } from "../model/readPlan.js";
 import {
-  RATE_LIMIT_OPTIONS_ERROR_CODES,
-  RateLimitOptionsError,
-  RequestStartLimiter,
+  createEngineRuntime as createNeutralEngineRuntime,
+  ensureBandRowBounds,
+  type BandedGet,
+  type BandEvidence,
+  type EngineRuntime,
+} from "@hikoutei/ikisaki";
+import {
+  executeBatchUpdate as executeNeutralBatchUpdate,
+  executePreparedWrite as executeNeutralPreparedWrite,
+  groupByRouteKey as groupNeutralByRouteKey,
+  receiptInitNeeded as receiptInitNeededNeutral,
+  refreshFirstRouteContext as refreshNeutralFirstRouteContext,
+  type WriteBatchTelemetry,
+} from "@hikoutei/ikisaki";
+import {
+  ReceiptReadCursor,
+  type ReadCalibration,
+} from "@hikoutei/ikisaki";
+import type {
+  ParsedGridData,
+  ParsedSheet,
+  PreflightContext,
+  PreflightReceipt,
+} from "../model/preflightContext.js";
+import {
+  enumerateSheetProperties,
+} from "../model/preflightContext.js";
+import {
+  parseSpreadsheetDocument,
+} from "../model/preflightParsing.js";
+import type { BuiltApplyBatch } from "../model/batchBuilder.js";
+import type {
   ReadQoSScheduler,
+  RequestStartLimiter,
+} from "@hikoutei/ikisaki";
+import {
+  admitRequestStart,
+  credentialBinding,
+  type CredentialPacingPool,
+  type RequestStartPacing,
 } from "@hikoutei/ikisaki";
 import {
   isQuotaLimitedOutcome,
   QUOTA_GOVERNOR_LANES,
-  type QuotaGovernorLane,
-  QuotaPacingGovernor,
-  RollingQuotaBudget,
+  type QuotaGovernorTimingDefaults,
+  type QuotaPacingGovernor,
+  type RollingQuotaBudget,
+} from "@hikoutei/ikisaki";
+
+/**
+ * Re-exports of the neutral request-start admission surface (owned by
+ * `@hikoutei/ikisaki` `worker/pacing/requestAdmission.ts`) so operation
+ * modules keep importing the pacing vocabulary from this shared wiring
+ * module. Route validation, batchUpdate reply validation, and
+ * transport-outcome mapping stay Sheets-owned below.
+ */
+export {
+  credentialBinding,
+  type CredentialPacingPool,
+  type CredentialPacingSlot,
+  type ReadPacing,
+  type RequestStartAdmissionOutcome,
+  type RequestStartPacing,
 } from "@hikoutei/ikisaki";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
@@ -106,13 +158,13 @@ export interface GoogleSheetsApiProviderDeps {
   readonly definitions: readonly RegisteredSyncProjectionDefinition[];
   readonly transport: GoogleSheetsApiTransport;
   /**
-   * Per-provider receipt READ cursor (see `model/receiptCursor.ts`). Steady
-   * state apply/fast-append preflights AND postcondition probes read only the
-   * receipt tail band this cursor opens; the receipt-refresh path and the
-   * probe's whole-table evidence fallback keep the historical full receipt
-   * read.
+   * Per-provider receipt READ cursor (neutral `ReceiptReadCursor` over the
+   * Sheets `PreflightReceipt` evidence). Steady state apply/fast-append
+   * preflights AND postcondition probes read only the receipt tail band
+   * this cursor opens; the receipt-refresh path and the probe's
+   * whole-table evidence fallback keep the historical full receipt read.
    */
-  readonly receiptReadCursor: ReceiptReadCursor;
+  readonly receiptReadCursor: ReceiptReadCursor<PreflightReceipt>;
   /**
    * Per-provider authoritative ROW BOUND cache (sheet title → committed
    * `gridProperties.rowCount`) for the unified read engine's band planning.
@@ -124,7 +176,7 @@ export interface GoogleSheetsApiProviderDeps {
    */
   readonly sheetRowBounds: Map<string, number>;
   /**
-   * Per-provider read-size calibration (see `model/readPlan.ts`): observed
+   * Per-provider read-size calibration (neutral kernel planner): observed
    * `responseBytes ÷ cellsRequested` above a class constant inflates future
    * estimates, shrinking band sizes on the NEXT plan (telemetry-based budget
    * reduction; never grows one request).
@@ -142,6 +194,13 @@ export interface GoogleSheetsApiProviderDeps {
   /** Write limiter: batchUpdate starts serialize only against writes. */
   readonly writeLimiter: RequestStartLimiter;
   /**
+   * The single quota/backoff marker object for this provider: the SAME
+   * object builds every pooled governor AND feeds both
+   * `isQuotaLimitedOutcome` call sites below, so pacing backoff and
+   * quota-outcome classification can never diverge on the markers.
+   */
+  readonly timingDefaults: QuotaGovernorTimingDefaults;
+  /**
    * Sliding-window per-minute request-start budget for the READ lane
    * (getSpreadsheet starts, paced on either read class). Enforced IN
    * ADDITION to the interval pacing: a start needs both a budget slot and
@@ -155,7 +214,8 @@ export interface GoogleSheetsApiProviderDeps {
    * AIMD pacing feedback: quota-limited (429) responses grow the offending
    * lane's pacing interval via the limiters' `getIntervalMs`, quiet success
    * recovers it gradually. Gates request STARTS only; never touches CAS,
-   * prepared state, or result handling.
+   * prepared state, or result handling. Constructed with the single
+   * `timingDefaults` object above (one per pooled identity).
    */
   readonly quotaGovernor: QuotaPacingGovernor;
   /**
@@ -188,215 +248,6 @@ export interface GoogleSheetsApiProviderDeps {
  */
 const REQUEST_START_REFUSED_MESSAGE =
   "Google Sheets API request start refused before transport: the pacing queue exceeds the bounded admission wait.";
-
-/** Read-class pacing selectors routed through the shared read QoS scheduler. */
-export type ReadPacing = "polling" | "preflight";
-/** Any request-start pacing lane (the read classes plus the write lane). */
-export type RequestStartPacing = ReadPacing | "write";
-
-/**
- * The complete admission stack for ONE pooled credential.
- *
- * Google Sheets quota is enforced per principal, so a pool of N service
- * accounts gets N independent slots: each slot's read scheduler, write
- * limiter, per-minute budgets, and AIMD governor pace only against that
- * identity's own horizon. A refusal in one slot never advances that slot's
- * horizon, and one saturated slot never blocks another.
- */
-export interface CredentialPacingSlot {
-  readonly readScheduler: ReadQoSScheduler;
-  readonly writeLimiter: RequestStartLimiter;
-  readonly readBudget: RollingQuotaBudget;
-  readonly writeBudget: RollingQuotaBudget;
-  readonly quotaGovernor: QuotaPacingGovernor;
-}
-
-/**
- * Shared per-provider credential pool: the slot table plus the round-robin
- * cursor every request start advances. The cursor moves ONE step per request
- * start at selection time (even when every later slot attempt is refused — no
- * binding was made, and the rotation only needs to stay even over time); the
- * admission search then walks the remaining slots from the cursor onward,
- * trying each at most once under the shared admission deadline.
- */
-export interface CredentialPacingPool {
-  readonly slots: readonly CredentialPacingSlot[];
-  nextIndex: number;
-}
-
-/**
- * Builds the `{ credentialIndex }` request decoration that binds one paced
- * transport call to the identity admission selected. Returns an EMPTY object
- * on the single-credential path, so un-pooled requests stay byte-identical
- * to the pre-pool wire contract (the key is absent, not `undefined`).
- */
-export function credentialBinding(
-  credentialIndex: number | undefined,
-): { credentialIndex?: number } {
-  return credentialIndex === undefined ? {} : { credentialIndex };
-}
-
-/**
- * Acquires one bounded request-start slot, refusing (and logging one
- * redacted event) only when EVERY pooled identity refuses within the shared
- * admission deadline. Round-robin picks the STARTING slot from the pool
- * cursor, but a budget-or-lane refusal on that slot moves the search on to
- * the remaining slots (each tried at most once, from the cursor onward) with
- * only the time still left under the SAME deadline: a busy identity (429 /
- * backoff / uneven reservations) never blocks a healthy sibling. The request
- * is bound to the index ACTUALLY admitted, so pacing and signing stay on one
- * identity. A refusal NEVER advances any limiter/scheduler horizon on any
- * identity and throws the stable delivery-uncertain transport error before
- * any SDK call, so the durable worker requeues instead of firing an unpaced
- * burst.
- *
- * Composition order per slot: the per-minute budget gates FIRST (it is the
- * outer quota ceiling), then the lane's interval pacing — both against that
- * slot's limiters. A class-pacing refusal AFTER a budget admission leaks
- * that one budget reservation until the window slides — accepted because
- * pacing refusals are already rare and the leak over-counts (never
- * under-counts) the budget, which is the safe direction for quota safety.
- * AIMD/budget bookkeeping happens only on the slot that was admitted.
- *
- * The whole search shares ONE admission budget: a single deadline
- * (`now + maxRequestStartWaitMs`) is computed once and every gate on every
- * slot attempt is bounded by the time still remaining, so total
- * bounded-admission waiting never exceeds `maxRequestStartWaitMs` (the
- * effect-lease headroom contract assumes exactly one bounded wait per
- * request start) — on a pooled run as on the single-credential path. A
- * deadline spent by earlier attempts makes every later gate refuse any
- * nonzero predicted wait immediately, so the loop itself stays bounded.
- *
- * Returns the summed budget + pacing wait for the granted slot (0 when both
- * were already available) PLUS the admitted identity, so callers bind the
- * transport call to the credential that was paced (admitted index = signing
- * client, no skew).
- */
-async function admitRequestStart(
-  deps: GoogleSheetsApiProviderDeps,
-  pacing: RequestStartPacing,
-): Promise<RequestStartAdmissionOutcome> {
-  // Validate the bound ONCE before any deadline arithmetic: the limiters
-  // validate their own `maxWaitMs` argument, but this helper pre-derives the
-  // remaining-time bound, so an invalid configured bound (negative,
-  // non-integer, NaN) must fail here with the SAME structured error the
-  // limiters would have thrown when the raw bound reached them.
-  const maxWaitMs = deps.maxRequestStartWaitMs;
-  if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0) {
-    throw new RateLimitOptionsError(
-      RATE_LIMIT_OPTIONS_ERROR_CODES.MAX_WAIT_NON_NEGATIVE_REQUIRED,
-    );
-  }
-  const lane = pacing === "write"
-    ? QUOTA_GOVERNOR_LANES.WRITE
-    : QUOTA_GOVERNOR_LANES.READ;
-  // One shared admission deadline for the WHOLE search (every gate, every
-  // slot): each waitForSlot bound is the time still remaining (never above
-  // the validated bound), so bounded waits can never stack past
-  // maxRequestStartWaitMs across slots.
-  const admissionDeadline = deps.now() + maxWaitMs;
-  const pool = deps.credentialPacing;
-  if (pool !== undefined && pool.slots.length >= 2) {
-    // Exactly ONE rotation step is consumed per request start, decided up
-    // front (see CredentialPacingPool) even when every attempt is refused.
-    const startIndex = pool.nextIndex % pool.slots.length;
-    pool.nextIndex = (startIndex + 1) % pool.slots.length;
-    for (let step = 0; step < pool.slots.length; step += 1) {
-      const index = (startIndex + step) % pool.slots.length;
-      const slot = pool.slots[index];
-      if (slot === undefined) {
-        // Unreachable while the provider owns the pool (indexes are always
-        // taken modulo the slot count); fail closed rather than pace
-        // against nothing.
-        invalidProviderState("credential pacing cursor escaped the slot table");
-      }
-      const outcome = await tryAdmitOnSlot(
-        deps, slot, lane, pacing, admissionDeadline, maxWaitMs, index,
-      );
-      if (outcome !== null) {
-        return outcome;
-      }
-    }
-    return refuseRequestStart(deps, pacing);
-  }
-  // Single-credential path (no pool, or a degenerate <2-slot pool): the flat
-  // fields ARE the one slot, NO index is bound, and the attempt order is
-  // byte-identical to the pre-pool admission.
-  const outcome = await tryAdmitOnSlot(deps, {
-    readScheduler: deps.readScheduler,
-    writeLimiter: deps.writeLimiter,
-    readBudget: deps.readBudget,
-    writeBudget: deps.writeBudget,
-    quotaGovernor: deps.quotaGovernor,
-  }, lane, pacing, admissionDeadline, maxWaitMs, undefined);
-  return outcome ?? refuseRequestStart(deps, pacing);
-}
-
-/**
- * Runs the full budget-then-pacing admission stack on ONE slot under the
- * shared deadline. Returns `null` when THIS slot refused (either gate) so
- * the caller can try the next sibling. A budget refusal reserves nothing;
- * a budget admission reserves PROVISIONALLY and is rolled back when the
- * later lane gate refuses, so a tried-and-refused slot always leaves its
- * budgets untouched and only the admitted slot pays AIMD/budget bookkeeping.
- */
-async function tryAdmitOnSlot(
-  deps: GoogleSheetsApiProviderDeps,
-  slot: CredentialPacingSlot,
-  lane: QuotaGovernorLane,
-  pacing: RequestStartPacing,
-  admissionDeadline: number,
-  maxWaitMs: number,
-  credentialIndex: number | undefined,
-): Promise<RequestStartAdmissionOutcome | null> {
-  const budget = pacing === "write" ? slot.writeBudget : slot.readBudget;
-  const budgetAdmission = await budget.waitForSlot(
-    remainingAdmissionMs(admissionDeadline, deps.now(), maxWaitMs),
-  );
-  if (budgetAdmission.status === "refused") {
-    return null;
-  }
-  const remainingMs = remainingAdmissionMs(admissionDeadline, deps.now(), maxWaitMs);
-  const admission = pacing === "write"
-    ? await slot.writeLimiter.waitForSlot(remainingMs)
-    : await slot.readScheduler.waitForSlot(pacing, remainingMs);
-  if (admission.status === "refused") {
-    // The budget reserved provisionally above; this slot never starts a
-    // request, so hand the reservation back. Rollback is identity-matched
-    // and never advances the window (see RollingQuotaBudget.rollback).
-    budget.rollback(budgetAdmission.reservation);
-    return null;
-  }
-  // One successful request START counts toward this lane's AIMD quiet
-  // period on THIS identity's governor (recovery steps advance only while
-  // starts keep succeeding).
-  slot.quotaGovernor.recordRequestStart(lane);
-  return { pacingWaitMs: budgetAdmission.waitedMs + admission.waitedMs, credentialIndex, slot };
-}
-
-/**
- * Outcome of one bounded admission: the enforced wait, the pooled identity
- * the wait was paid against (`undefined` on the single-credential path),
- * and that identity's slot so the transport-error path feeds AIMD feedback
- * to the SAME governor admission paced.
- */
-interface RequestStartAdmissionOutcome {
-  readonly pacingWaitMs: number;
-  readonly credentialIndex: number | undefined;
-  readonly slot: CredentialPacingSlot;
-}
-
-/**
- * Whole-millisecond time still left under the shared admission deadline,
- * clamped into [0, maxWaitMs]: a spent budget (clock past the deadline) makes
- * the next gate refuse any nonzero predicted wait, and a backward-moving
- * clock between the two gates can otherwise re-derive a bound ABOVE the
- * configured maximum. `maxWaitMs` is pre-validated by the caller, so the
- * result is always a non-negative safe integer (waitForSlot's own contract).
- */
-function remainingAdmissionMs(deadline: number, now: number, maxWaitMs: number): number {
-  return Math.min(maxWaitMs, Math.max(0, Math.floor(deadline - now)));
-}
 
 /**
  * Shared refusal exit for both admission stages: one redacted boundary log
@@ -516,7 +367,10 @@ export async function runRead<T>(
   pacing: RequestStartPacing = "polling",
   meta?: GoogleSheetsApiRequestMeta,
 ): Promise<T> {
-  const admission = await admitRequestStart(deps, pacing);
+  // Pacing admission lives in the kernel; a refused start throws the stable
+  // delivery-uncertain error here (Sheets vocabulary) before any SDK call.
+  const admission = await admitRequestStart(deps, pacing)
+    ?? refuseRequestStart(deps, pacing);
   const { pacingWaitMs, credentialIndex } = admission;
   const startedAt = deps.now();
   try {
@@ -545,7 +399,7 @@ export async function runRead<T>(
     // pacing interval on the NEXT reservation of the SAME pooled identity
     // only; any other failure leaves the governor untouched (the durable
     // worker's own retry path is unchanged).
-    if (isQuotaLimitedOutcome(outcome)) {
+    if (isQuotaLimitedOutcome(outcome, deps.timingDefaults)) {
       admission.slot.quotaGovernor.recordQuotaLimited(
         pacing === "write" ? QUOTA_GOVERNOR_LANES.WRITE : QUOTA_GOVERNOR_LANES.READ,
       );
@@ -565,7 +419,8 @@ export async function runWrite<T>(
   task: (credentialIndex: number | undefined) => Promise<T>,
   meta?: GoogleSheetsApiRequestMeta,
 ): Promise<T> {
-  const admission = await admitRequestStart(deps, "write");
+  const admission = await admitRequestStart(deps, "write")
+    ?? refuseRequestStart(deps, "write");
   const { pacingWaitMs, credentialIndex } = admission;
   const startedAt = deps.now();
   try {
@@ -582,7 +437,7 @@ export async function runWrite<T>(
     return result;
   } catch (error: unknown) {
     const outcome = classifyTransportOutcome(error);
-    if (isQuotaLimitedOutcome(outcome)) {
+    if (isQuotaLimitedOutcome(outcome, deps.timingDefaults)) {
       admission.slot.quotaGovernor.recordQuotaLimited(QUOTA_GOVERNOR_LANES.WRITE);
     }
     emitRequest(deps, "batchUpdate", "write", 1, startedAt, false, outcome.httpStatus, outcome.code, {
@@ -743,3 +598,190 @@ export function requireValidBatchUpdateReply(value: unknown, requestCount: numbe
     }
   });
 }
+
+/**
+ * Thin Sheets adapters over the neutral kernel engines.
+ *
+ * These keep the historical operation signatures: they convert the Sheets
+ * grid model to the kernel's neutral descriptors at the call site (sheet
+ * bounds, calibration, receipt evidence), run the neutral iteration, and
+ * map telemetry/validation back into Sheets vocabulary. The band/batch
+ * planning and execution semantics live in `@hikoutei/ikisaki` and are
+ * unchanged here.
+ */
+
+/** Sheets grid documents keyed the way the transport returns them. */
+export type SheetsBandedGet = BandedGet<ParsedSheet, number, ParsedGridData>;
+export type SheetsEngineRuntime = EngineRuntime<ParsedSheet, number, ParsedGridData>;
+
+/**
+ * Builds the executor for ONE logical read: fixed field mask, evidence
+ * class, pacing lane, and telemetry label. The returned closure owns no
+ * state — bounds/calibration updates land on the shared `deps` carriers.
+ */
+export function createBandedGet(
+  deps: GoogleSheetsApiProviderDeps,
+  pacing: RequestStartPacing,
+  fields: string,
+  evidence: BandEvidence,
+  label: string,
+): SheetsBandedGet {
+  return createEngineRuntime(deps, pacing, label).makeGet(fields, evidence);
+}
+
+/**
+ * Builds the model-facing engine runtime for one logical read on one lane:
+ * the fields/evidence → executor factory plus the shared bounds cache and
+ * calibration tracker. Model functions receive this instead of a raw
+ * transport, which is what lets a single logical read expand into
+ * sequential paced band requests WITHOUT the model layer importing the
+ * operations layer.
+ */
+export function createEngineRuntime(
+  deps: GoogleSheetsApiProviderDeps,
+  pacing: RequestStartPacing,
+  label: string,
+): SheetsEngineRuntime {
+  return createNeutralEngineRuntime<ParsedSheet, number, ParsedGridData>({
+    makeFetch: (fields, evidence) => async (addresses) => {
+      // The RAW document is measured INSIDE the paced task (the awaited-call
+      // ordering the historical reads proved): runRead emits its telemetry
+      // event when the task resolves, so a later measurement would land one
+      // event too late.
+      const rawMeta = createRawResponseMeta(deps);
+      const raw = await runRead(deps, async (credentialIndex) => {
+        const response = await deps.transport.getSpreadsheet({
+          spreadsheetId: deps.spreadsheetId,
+          ranges: [...addresses],
+          fields,
+          ...(deps.readTimeoutMs === undefined ? {} : { timeoutMs: deps.readTimeoutMs }),
+          ...credentialBinding(credentialIndex),
+        });
+        rawMeta.onRawResponse?.(response);
+        return response;
+      }, pacing, rawMeta.meta);
+      const document = parseSpreadsheetDocument(raw, label);
+      return {
+        sheets: document.sheets,
+        grids: document.grids,
+        responseBytes: rawMeta.meta.responseBytes,
+      };
+    },
+    sheetKey: (sheet) => sheet.title,
+    rowBounds: deps.sheetRowBounds,
+    calibration: deps.readCalibration,
+    noteSheet: (sheet) => {
+      const rowCount = sheet.gridProperties?.rowCount;
+      if (rowCount !== undefined) deps.sheetRowBounds.set(sheet.title, rowCount);
+    },
+    noteResponse: (evidence, cells, responseBytes) => {
+      if (responseBytes !== undefined) deps.readCalibration.observe(evidence, cells, responseBytes);
+    },
+  });
+}
+
+/**
+ * Ensures every listed tab has an authoritative row bound in the
+ * provider-instance cache, settling cold titles with ONE range-less
+ * metadata enumeration (`gridProperties.rowCount` is metadata-only). The
+ * cache is refreshed by every subsequent engine response's sheet
+ * properties, so the enumeration is a once-per-title-per-instance cost —
+ * the polling lane has no per-dispatch enumeration of its own and this is
+ * where its committed upper bound comes from.
+ */
+export async function ensureSheetRowBounds(
+  deps: GoogleSheetsApiProviderDeps,
+  pacing: RequestStartPacing,
+  titles: readonly string[],
+): Promise<void> {
+  return ensureBandRowBounds({
+    hasBound: (title) => deps.sheetRowBounds.has(title),
+    enumerate: async () => {
+      const enumeration = createRawResponseMeta(deps);
+      const sheets = await runRead(deps, (credentialIndex) =>
+        enumerateSheetProperties(
+          deps.transport, deps.spreadsheetId, deps.readTimeoutMs, enumeration.onRawResponse,
+          credentialIndex,
+        ), pacing, enumeration.meta);
+      return sheets.map((sheet) => ({
+        title: sheet.title,
+        rowCount: sheet.gridProperties?.rowCount,
+      }));
+    },
+    noteBound: (title, rowCount) => {
+      if (rowCount !== undefined) deps.sheetRowBounds.set(title, rowCount);
+    },
+  }, titles);
+}
+
+/**
+ * Sends one built batch as ONE paced `batchUpdate` and validates the reply.
+ *
+ * `BuiltApplyBatch` is the shared return shape of every batch builder
+ * (apply, append, and their combined variants), and the batch contents here
+ * are exactly what the caller's builder produced: the engine never rebuilds
+ * or reorders requests. A malformed or short reply throws the existing
+ * delivery-uncertain invalid-state classification, so a 2xx that cannot be
+ * matched request-for-request never closes effects. Zero-request batches
+ * must be skipped by the caller (no transport call and no telemetry event
+ * for an empty batch, exactly like before).
+ */
+export async function executeBatchUpdate(
+  deps: GoogleSheetsApiProviderDeps,
+  batch: BuiltApplyBatch,
+  telemetry: WriteBatchTelemetry,
+): Promise<void> {
+  return executeNeutralBatchUpdate(batch, telemetry, {
+    send: (requests) => runWrite(deps, (credentialIndex) =>
+      deps.transport.batchUpdate({
+        spreadsheetId: deps.spreadsheetId,
+        requests: [...requests],
+        ...credentialBinding(credentialIndex),
+      }), {
+      requestCount: requests.length,
+      bodyBytes: batch.bytes,
+      ...telemetry,
+    }),
+    validateReply: (reply, requestCount) => requireValidBatchUpdateReply(reply, requestCount),
+  });
+}
+
+/**
+ * Runs one prepared write unit behind the receipt-init guard.
+ *
+ * When the unit needs initialization, refresh + write run as ONE atomic
+ * section on the per-spreadsheet `receiptInitLock`; steady state (receipt
+ * present at preflight) never takes the lock. Callers keep their own
+ * eligibility guard: a deterministic no-op batch must not take the refresh,
+ * whose write-lane admission can be refused under saturation and would turn
+ * the no-op into a delivery-uncertain requeue.
+ */
+export async function executePreparedWrite<C, R>(
+  deps: GoogleSheetsApiProviderDeps,
+  unit: {
+    readonly context: C;
+    readonly needsReceiptInit: boolean;
+    readonly refresh: (context: C) => Promise<C>;
+    readonly write: (context: C) => Promise<R>;
+  },
+): Promise<R> {
+  return executeNeutralPreparedWrite(deps.receiptInitLock, unit);
+}
+
+/** True when a preflight context observed the shared receipt tab absent. */
+export function receiptInitNeeded(context: PreflightContext): boolean {
+  return receiptInitNeededNeutral(context.receiptSheetId.kind === PRESENCE_KINDS.PRESENT);
+}
+
+/**
+ * Buckets items by their canonical route key (neutral kernel grouping:
+ * first-seen group order and per-group order are preserved).
+ */
+export const groupByRouteKey = groupNeutralByRouteKey;
+
+/**
+ * Refreshes the shared receipt tab through the FIRST route's context and
+ * returns the route list with that context replaced (neutral kernel
+ * first-route replacement; the caller supplies the Sheets refresh).
+ */
+export const refreshFirstRouteContext = refreshNeutralFirstRouteContext;

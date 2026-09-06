@@ -1,148 +1,155 @@
 /**
- * Response-loss postcondition classifier (Apps Script `classifyPostcondition_`).
+ * Neutral response-loss postcondition classifier.
  *
  * Recovery probes classify one effect against a fresh target+receipt read.
  * The classifier never assumes success: a receipt proves the effect reached
  * the sheet, a matching visible hash proves the target content, and anything
  * else is `unapplied`, `changed`, or `unavailable` so the worker redrives,
  * fails, or keeps probing instead of closing the outbox on weak evidence.
+ *
+ * The classifier is provider-neutral: it decides over caller-supplied
+ * evidence views (deletion-ness, expected/target hashes, the observed row,
+ * the receipt). Providers build those views from their own context model
+ * and map the neutral verdict onto their contract types at the boundary.
  */
 
-import type { SyncEffectPostcondition, SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
-import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
-import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
-import type { PreflightContext, PreflightReceipt } from "./preflightContext.js";
-import {
-  currentHash,
-  findWorkingRow,
-  toWorkingRow,
-} from "./plannerWorkingRow.js";
-import { isDeletionEffect } from "./plannerDeletion.js";
-import { requireProviderEffect } from "./planner.js";
-import type { WorkingRow } from "./plannerContracts.js";
+/** Read-back classification of one response-loss effect after a probe. */
+export type CasDisposition = "applied" | "unapplied" | "changed" | "unavailable";
+
+/** Neutral postcondition verdict for one probed effect. */
+export interface CasPostcondition {
+  readonly disposition: CasDisposition;
+  /** Probe evidence verified against the effect target (when available). */
+  readonly visibleRevision: number | undefined;
+  readonly visibleHash: string | undefined;
+  /** Classification note (e.g. why a matching row did not prove delivery). */
+  readonly reason?: string;
+}
+
+/** Neutral receipt evidence for the classified effect, when read back. */
+export interface CasReceiptEvidence {
+  readonly payloadHash: string;
+  readonly visibleRevision: number;
+  readonly visibleHash: string;
+}
+
+/** Neutral observed-row view for the classified effect's target. */
+export interface CasObservedRow {
+  /** Provider row number of the probe-located target row. */
+  readonly rowNumber: number;
+  /** Current content hash of the row under the effect's fields. */
+  readonly currentHash: string;
+}
+
+/** Everything the classifier needs for one effect. */
+export interface CasClassifyInput {
+  /** True when the effect deletes its target row. */
+  readonly isDeletion: boolean;
+  /** Durable expected visible state from the outbox row. */
+  readonly expectedVisibleHash: string;
+  readonly expectedVisibleRevision: number;
+  /** Target content hash the effect intended to write. */
+  readonly targetVisibleHash: string;
+  /** True when the effect creates its row if missing. */
+  readonly createIfMissing: boolean;
+  /** Repair guard hash the probe also accepts as unapplied evidence. */
+  readonly repairGuardHash: string | null;
+  /** Payload hash of the classified effect (receipt-staleness check). */
+  readonly effectPayloadHash: string;
+  /** Receipt read back for this effect, when present. */
+  readonly receipt: CasReceiptEvidence | undefined;
+  /** Probe-located target row, when the read found a candidate. */
+  readonly observedRow: CasObservedRow | undefined;
+}
 
 /**
- * Classifies one effect's delivery state. `context` must come from the same
- * read pass as `receipts` so the classification is a single consistent view.
+ * Classifies one effect's delivery state. The receipt and the observed row
+ * must come from the same read pass so the classification is a single
+ * consistent view.
  */
-export function classifyPostcondition(
-  context: PreflightContext,
-  effect: SyncProjectionEffect,
-  receipts: ReadonlyMap<string, PreflightReceipt>,
-): SyncEffectPostcondition {
-  const request = {
-    physicalSheetId: effect.physicalSheetId,
-    sheetName: effect.payload.sheetName,
-    registeredRange: effect.payload.registeredRange,
-    projection: effect.projection,
-    schemaVersion: effect.payload.schemaVersion,
-    effects: [effect],
-  };
-  requireProviderEffect(effect, request, context);
-  const receipt = receipts.get(effect.effectId);
-  if (receipt !== undefined && receipt.payloadHash !== effect.payloadHash) {
-    return postcondition("changed", absentValue(), absentValue());
+export function classifyCasPostcondition(
+  input: CasClassifyInput,
+): CasPostcondition {
+  if (
+    input.receipt !== undefined &&
+    input.receipt.payloadHash !== input.effectPayloadHash
+  ) {
+    return postcondition("changed", undefined, undefined);
   }
-  const row = findProbeRow(context, effect);
-  if (isDeletionEffect(effect.effectKind)) {
-    if (receipt !== undefined && row === undefined) {
-      return postcondition("applied", presentValue(receipt.visibleRevision), presentValue(receipt.visibleHash));
+  const row = input.observedRow;
+  if (input.isDeletion) {
+    if (input.receipt !== undefined && row === undefined) {
+      return postcondition(
+        "applied",
+        input.receipt.visibleRevision,
+        input.receipt.visibleHash,
+      );
     }
     if (row === undefined) {
       // An absent row without this effect's receipt could be a manual
       // deletion; never let that absence close an outbox effect.
-      return postcondition("unavailable", absentValue(), absentValue());
+      return postcondition("unavailable", undefined, undefined);
     }
-    const deleteHash = currentHash(row, effect.payload.fields);
-    if (receipt !== undefined) {
-      return postcondition("changed", absentValue(), presentValue(deleteHash));
+    if (input.receipt !== undefined) {
+      return postcondition("changed", undefined, row.currentHash);
     }
-    return deleteHash === effect.expectedVisibleHash
-      ? postcondition("unapplied", presentValue(effect.expectedVisibleRevision), presentValue(deleteHash))
-      : postcondition("changed", absentValue(), presentValue(deleteHash));
+    return row.currentHash === input.expectedVisibleHash
+      ? postcondition(
+        "unapplied",
+        input.expectedVisibleRevision,
+        row.currentHash,
+      )
+      : postcondition("changed", undefined, row.currentHash);
   }
   // A receipt alone cannot prove that a non-delete row still exists; a manual
   // deletion must remain observable instead of closing the outbox.
   if (row === undefined) {
     return postcondition(
-      receipt !== undefined || !effect.payload.createIfMissing ? "changed" : "unapplied",
-      absentValue(),
-      absentValue(),
-      receipt === undefined ? undefined : "receipt_target_missing",
+      input.receipt !== undefined || !input.createIfMissing ? "changed" : "unapplied",
+      undefined,
+      undefined,
+      input.receipt === undefined ? undefined : "receipt_target_missing",
     );
   }
-  const current = currentHash(row, effect.payload.fields);
-  if (current === effect.payload.targetVisibleHash) {
-    if (receipt === undefined) {
+  if (row.currentHash === input.targetVisibleHash) {
+    if (input.receipt === undefined) {
       // The row already carries the target content, but without a receipt
       // there is no durable proof that this effect was applied by the
-      // provider: the two-batch inline path can crash between the target-row
+      // provider: the two-stage write path can crash between the target-row
       // write and the receipt write and leave exactly this orphan. Closing
       // the outbox on row-hash evidence alone would turn that crash into a
       // false success, so stay fail-closed.
-      return postcondition("unavailable", absentValue(), presentValue(current), "receipt_missing");
+      return postcondition("unavailable", undefined, row.currentHash, "receipt_missing");
     }
-    return postcondition("applied", presentValue(receipt.visibleRevision), presentValue(current));
+    return postcondition(
+      "applied",
+      input.receipt.visibleRevision,
+      row.currentHash,
+    );
   }
-  const repairGuard = effect.repairGuardHash;
   if (
-    current === effect.expectedVisibleHash ||
-    (repairGuard.kind === PRESENCE_KINDS.PRESENT && current === repairGuard.value)
+    row.currentHash === input.expectedVisibleHash ||
+    (input.repairGuardHash !== null && row.currentHash === input.repairGuardHash)
   ) {
-    return postcondition("unapplied", presentValue(effect.expectedVisibleRevision), presentValue(current));
+    return postcondition(
+      "unapplied",
+      input.expectedVisibleRevision,
+      row.currentHash,
+    );
   }
-  return postcondition("changed", absentValue(), presentValue(current));
-}
-
-/**
- * Locates the row number the probe's `findProbeRow` will classify for one
- * effect, against a preflight context (anchor first, then identity, then the
- * targetId tail). Returns `undefined` when the context holds no candidate
- * row. The recovery probe uses this to build its scoped row-band read: a row
- * that cannot be located needs no band (its absence is itself the evidence
- * `classifyPostcondition` consumes).
- */
-export function probeTargetRowNumber(
-  context: PreflightContext,
-  effect: SyncProjectionEffect,
-): number | undefined {
-  const row = findProbeRow(context, effect);
-  return row === undefined ? undefined : row.rowNumber;
-}
-
-function findProbeRow(
-  context: PreflightContext,
-  effect: SyncProjectionEffect,
-): WorkingRow | undefined {
-  const byAnchor = new Map<string, WorkingRow>();
-  const byIdentity = new Map<string, WorkingRow>();
-  for (const row of context.rows) {
-    const working = toWorkingRow(row);
-    // Mirrors indexRows: only the FIRST row per anchor value enters the
-    // index (duplicated anchors are evidence, never rewritten).
-    if (working.anchor.kind === PRESENCE_KINDS.PRESENT && !byAnchor.has(working.anchor.value)) {
-      byAnchor.set(working.anchor.value, working);
-    }
-    if (working.identity.kind === PRESENCE_KINDS.PRESENT) {
-      byIdentity.set(working.identity.value, working);
-    }
-  }
-  return findWorkingRow(byAnchor, byIdentity, effect.payload.targetAnchor, effect.targetId);
+  return postcondition("changed", undefined, row.currentHash);
 }
 
 function postcondition(
-  disposition: SyncEffectPostcondition["disposition"],
-  visibleRevision: SyncEffectPostcondition["visibleRevision"],
-  visibleHash: SyncEffectPostcondition["visibleHash"],
+  disposition: CasDisposition,
+  visibleRevision: number | undefined,
+  visibleHash: string | undefined,
   reason?: string,
-): SyncEffectPostcondition {
-  const result: SyncEffectPostcondition = {
+): CasPostcondition {
+  const result: CasPostcondition = {
     disposition,
     visibleRevision,
     visibleHash,
-    // The direct provider never computes a snapshot hash; recovery does not
-    // need it and the Apps Script provider also returns null here.
-    snapshotHash: absentValue(),
   };
   return reason === undefined ? result : { ...result, reason };
 }

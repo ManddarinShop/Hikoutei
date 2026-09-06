@@ -53,7 +53,8 @@ import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/she
 import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
 import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import { absorbedProbePlan } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/applyEffects.js";
-import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
+import { ReceiptReadCursor } from "@hikoutei/ikisaki";
+import type { PreflightReceipt } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightContext.js";
 import { CoordinatedSheetsProvider } from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
 import { FakeSyncSheetsProvider, type FakeSyncSheetInput } from "./support/FakeSyncSheetsProvider.js";
 import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
@@ -392,6 +393,7 @@ describe("absorbed-probe preflight lane serialization (D1)", () => {
     return {
       effect_id: `effect-${effectId}` as PendingEffect["effect_id"],
       effect_kind: "system_projection",
+      dispatch_class: "fast-append",
       commit_id: `commit-${effectId}`,
       logical_sheet_id: "logical-absorption",
       physical_sheet_id: LANE_SHEET as PendingEffect["physical_sheet_id"],
@@ -508,7 +510,7 @@ describe("absorbed-probe preflight lane serialization (D1)", () => {
 
 describe("absorbed-probe evidence gate (D6, unit)", () => {
   const cursorHarness = () => {
-    const cursor = new ReceiptReadCursor();
+    const cursor = new ReceiptReadCursor<PreflightReceipt>();
     const deps = { receiptReadCursor: cursor } as never;
     return { cursor, deps };
   };
@@ -760,6 +762,7 @@ function createEffect(
   return {
     effectId: `effect-${suffix}`,
     effectKind: "system_projection",
+    dispatchClass: "fast-append",
     commitId: `commit-${suffix}`,
     logicalSheetId: "logical-absorption",
     physicalSheetId,
@@ -802,6 +805,7 @@ function createFollowerEffect(
   return {
     effectId: `effect-${suffix}-follower`,
     effectKind: "system_projection",
+    dispatchClass: "regular",
     commitId: `commit-${suffix}-follower`,
     logicalSheetId: "logical-absorption",
     physicalSheetId,

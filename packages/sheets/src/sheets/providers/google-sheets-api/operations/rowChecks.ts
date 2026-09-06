@@ -70,13 +70,17 @@ import {
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
-import { createBandedGet, ensureSheetRowBounds } from "./readEngine.js";
+import {
+  createBandedGet,
+  ensureSheetRowBounds,
+} from "./shared.js";
 import {
   packReadRequests,
   planRowBands,
-  type PlannedRange,
-  type ReadEvidence,
-} from "../model/readPlan.js";
+  type BandEvidence,
+  type BandRange,
+} from "@hikoutei/ikisaki";
+import { SHEET_MAX_ROW } from "../constants.js";
 
 /** Reads several registered tabs' check bands through ONE REST read. */
 export async function readRowChecksBatch(
@@ -130,18 +134,19 @@ export async function readRowChecksBatch(
   // one 3 × 1048576-cell request to the 10 s read timeout. The LAST band of
   // every column stays open-ended, so a human row added past the cached
   // bound between refreshes is still served (in the last band).
-  const evidence: ReadEvidence = "row-checks";
+  const evidence: BandEvidence = "row-checks";
   await ensureSheetRowBounds(deps, "polling", routes.map((route) => route.request.sheetName));
-  const items: PlannedRange[] = [];
+  const items: BandRange[] = [];
   for (const route of routes) {
     const quote = `${quoteA1SheetName(route.request.sheetName)}!`;
     const rowBound = deps.sheetRowBounds.get(route.request.sheetName);
     for (const column of [route.identityAbsolute, route.anchorAbsolute, route.checkAbsolute]) {
       const letter = columnLetters(column);
       items.push(...planRowBands({
-        quote,
-        firstLetter: letter,
-        lastLetter: letter,
+        addressPrefix: quote,
+        firstColumn: letter,
+        lastColumn: letter,
+        openEndRow: SHEET_MAX_ROW,
         columnCount: 1,
         fromRow: 1,
         rowBound,

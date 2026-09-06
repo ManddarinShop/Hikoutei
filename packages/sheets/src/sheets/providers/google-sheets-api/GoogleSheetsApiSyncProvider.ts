@@ -78,13 +78,14 @@ import {
   GoogleSheetsApiHttpTransport,
   type GoogleSheetsApiTransport,
 } from "./transport/googleSheetsApiTransport.js";
-import { ReceiptReadCursor } from "./model/receiptCursor.js";
-import { createReadCalibration } from "./model/readPlan.js";
+import { ReceiptReadCursor, createReadCalibration } from "@hikoutei/ikisaki";
+import type { PreflightReceipt } from "./model/preflightContext.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/ikisaki";
 import {
   QUOTA_GOVERNOR_LANES,
   QuotaPacingGovernor,
   RollingQuotaBudget,
+  type QuotaGovernorTimingDefaults,
 } from "@hikoutei/ikisaki";
 import type { GoogleSheetsApiProviderDeps } from "./operations/shared.js";
 import { PromiseTailLock } from "./operations/shared.js";
@@ -172,6 +173,8 @@ export class GoogleSheetsApiSyncProvider
   private readonly readBudget: RollingQuotaBudget;
   private readonly writeBudget: RollingQuotaBudget;
   private readonly quotaGovernor: QuotaPacingGovernor;
+  /** Single quota/backoff marker object shared by governors and outcome checks. */
+  private readonly timingDefaults: QuotaGovernorTimingDefaults;
   /** Bounded admission: independent max request-start wait (default 5,000
    * ms), separate from the pacing interval. */
   private readonly maxRequestStartWaitMs: number;
@@ -273,21 +276,27 @@ export class GoogleSheetsApiSyncProvider
     // is byte-identical to the pre-pool provider.
     const slotCount = Math.max(serviceAccountKeyFiles.length, 1);
     const slots: CredentialPacingSlot[] = [];
+    // Single quota/backoff marker object for this provider: the SAME object
+    // builds every pooled governor below AND feeds both quota-outcome call
+    // sites in `operations/shared.ts` (via `deps.timingDefaults`), so pacing
+    // backoff and outcome classification can never diverge on the markers.
+    const timingDefaults: QuotaGovernorTimingDefaults = {
+      backoffGrowthFactor: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_GROWTH_FACTOR,
+      backoffMaxMultiplier: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_MAX_MULTIPLIER,
+      recoveryStepFactor: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_STEP_FACTOR,
+      recoverySuccessThreshold: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_SUCCESS_THRESHOLD,
+      recoveryQuietMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_QUIET_MS,
+      quotaLimitHttpStatus: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_HTTP_STATUS,
+      quotaLimitRemoteCode: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_REMOTE_CODE,
+    };
+    this.timingDefaults = timingDefaults;
     for (let slot = 0; slot < slotCount; slot += 1) {
       // Adaptive quota governor: the AIMD multiplier starts at 1x, so with
       // no 429 ever observed each lane paces exactly as before this wiring
       // existed.
       const quotaGovernor = new QuotaPacingGovernor({
         baseIntervalMs: intervalMs,
-        timingDefaults: {
-          backoffGrowthFactor: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_GROWTH_FACTOR,
-          backoffMaxMultiplier: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_BACKOFF_MAX_MULTIPLIER,
-          recoveryStepFactor: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_STEP_FACTOR,
-          recoverySuccessThreshold: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_SUCCESS_THRESHOLD,
-          recoveryQuietMs: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_RECOVERY_QUIET_MS,
-          quotaLimitHttpStatus: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_HTTP_STATUS,
-          quotaLimitRemoteCode: GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_REMOTE_CODE,
-        },
+        timingDefaults,
         now: this.now,
       });
       slots.push({
@@ -340,7 +349,7 @@ export class GoogleSheetsApiSyncProvider
       providerNonce: "provider:" + randomUUID(),
       preparedStateRegistry: new WeakSet<object>(),
       receiptInitLock: new PromiseTailLock(),
-      receiptReadCursor: new ReceiptReadCursor(),
+      receiptReadCursor: new ReceiptReadCursor<PreflightReceipt>(),
       sheetRowBounds: new Map<string, number>(),
       readCalibration: createReadCalibration(),
       definitions: this.definitions,
@@ -352,6 +361,7 @@ export class GoogleSheetsApiSyncProvider
       readBudget: this.readBudget,
       writeBudget: this.writeBudget,
       quotaGovernor: this.quotaGovernor,
+      timingDefaults: this.timingDefaults,
       maxRequestStartWaitMs: this.maxRequestStartWaitMs,
       ...(this.credentialPacing === undefined
         ? {}

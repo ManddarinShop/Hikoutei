@@ -7,6 +7,8 @@
  */
 
 import {
+  EFFECT_KINDS,
+  EFFECT_STATUSES,
   FIELD_OWNERSHIPS,
   type EffectTargetKind,
 } from "@hikoutei/contracts/domain/model/constants.js";
@@ -27,8 +29,6 @@ import {
   createUserInputDeleteEffect,
 } from "../../../sync/outbound/projection/ProjectionEffectFactory.js";
 import {
-  EFFECT_KINDS,
-  EFFECT_STATUSES,
   isRecoverableEffectErrorCode,
 } from "@hikoutei/ikisaki";
 import {

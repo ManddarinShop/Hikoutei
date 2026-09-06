@@ -50,9 +50,10 @@ import {
   MAX_READ_CELLS_PER_RANGE,
   MAX_READ_RANGES_PER_REQUEST,
   planRowBands,
-  type PlannedRange,
+  type BandRange,
   type ReadCalibration,
-} from "./readPlan.js";
+} from "@hikoutei/ikisaki";
+import { SHEET_MAX_ROW } from "../constants.js";
 import type {
   ParsedGridData,
   PreflightContext,
@@ -77,7 +78,7 @@ export const MAX_VERIFY_CELLS_PER_RANGE = MAX_READ_CELLS_PER_RANGE;
  */
 export type PreflightVerificationPlan =
   | { readonly kind: "none" }
-  | { readonly kind: "ranges"; readonly items: readonly PlannedRange[] };
+  | { readonly kind: "ranges"; readonly items: readonly BandRange[] };
 
 /** Serial-string aliases of an ISO-shaped identity (empty otherwise). */
 export function identitySerialAliases(identity: string): readonly string[] {
@@ -105,7 +106,7 @@ export function planPreflightVerification(
   targetRowNumbers: readonly number[],
   calibration: ReadCalibration,
 ): PreflightVerificationPlan {
-  const items: PlannedRange[] = [];
+  const items: BandRange[] = [];
   if (context.identityNeedsFormatEvidence) {
     items.push(...identityColumnItems(context, calibration));
   }
@@ -289,7 +290,7 @@ function identityColumnPosition(context: PreflightContext): number | undefined {
 function identityColumnItems(
   context: PreflightContext,
   calibration: ReadCalibration,
-): PlannedRange[] {
+): BandRange[] {
   const column = identityColumnPosition(context);
   const lastRow = context.rows.length === 0
     ? 0
@@ -297,9 +298,10 @@ function identityColumnItems(
   if (column === undefined || lastRow < 2) return [];
   const letter = columnLetters(column);
   return planRowBands({
-    quote: `${quoteA1SheetName(context.title)}!`,
-    firstLetter: letter,
-    lastLetter: letter,
+    addressPrefix: `${quoteA1SheetName(context.title)}!`,
+    firstColumn: letter,
+    lastColumn: letter,
+    openEndRow: SHEET_MAX_ROW,
     columnCount: 1,
     fromRow: 2,
     rowBound: lastRow,
@@ -316,7 +318,7 @@ function rowBandItems(
   context: PreflightContext,
   sortedRows: readonly number[],
   calibration: ReadCalibration,
-): PlannedRange[] {
+): BandRange[] {
   const first = context.startColumn;
   const last = context.anchorColumn !== undefined
     ? Math.max(context.anchorColumn, context.startColumn + context.headers.length - 1)
@@ -328,16 +330,17 @@ function rowBandItems(
   const quote = `${quoteA1SheetName(context.title)}!`;
   const firstLetter = columnLetters(first);
   const lastLetter = columnLetters(last);
-  const items: PlannedRange[] = [];
+  const items: BandRange[] = [];
   // Merge contiguous runs (the historical behavior), then chunk each run at
   // the cell/byte caps. The run END is the proven extent, so bands close.
   let runStart = sortedRows[0]!;
   let previous = runStart;
   const flush = (end: number): void => {
     items.push(...planRowBands({
-      quote,
-      firstLetter,
-      lastLetter,
+      addressPrefix: quote,
+      firstColumn: firstLetter,
+      lastColumn: lastLetter,
+      openEndRow: SHEET_MAX_ROW,
       columnCount,
       fromRow: runStart,
       rowBound: end,
