@@ -15,7 +15,7 @@ importers:
         specifier: ^14.0.0
         version: 14.0.0
       '@hikoutei/ikisaki':
-        specifier: 0.1.14
+        specifier: 0.1.15
         version: link:packages/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
@@ -79,7 +79,7 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: 0.10.2-dev
+        specifier: 0.10.3-dev
         version: link:../..
     devDependencies:
       '@types/node':
@@ -108,7 +108,7 @@ importers:
   packages/contracts:
     dependencies:
       '@hikoutei/ikisaki':
-        specifier: 0.1.14
+        specifier: 0.1.15
         version: link:../ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
@@ -143,7 +143,7 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: 0.10.2-dev
+        specifier: 0.10.3-dev
         version: link:../..
 
   packages/sheets:
@@ -155,7 +155,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.14
+        specifier: 0.1.15
         version: link:../ikisaki
       google-auth-library:
         specifier: ^11.0.0
@@ -174,7 +174,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.14
+        specifier: 0.1.15
         version: link:../ikisaki
       '@mikro-orm/core':
         specifier: 7.1.7
@@ -193,7 +193,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.14
+        specifier: 0.1.15
         version: link:../ikisaki
       '@hikoutei/storage':
         specifier: 0.1.0
