@@ -26,7 +26,7 @@ import type { ParsedGridData } from "../model/preflightContext.js";
 import { GOOGLE_SHEETS_API_ROW_ID_HEADER, GOOGLE_SHEETS_API_ROW_CHECK_HEADER } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
-import { allocateSheetId } from "../model/sheetIdAllocator.js";
+import { allocateSheetId } from "@hikoutei/ikisaki";
 import {
   columnLetters,
   parseRegisteredRange,
@@ -129,7 +129,10 @@ export async function provisionRegistry(
     // then lands the header in the same atomic batch.
     const checkColumn = checkColumnFor(registration.registeredRange, registration.projection);
     if (existing === undefined) {
-      const sheetId = allocateSheetId(usedSheetIds);
+      const sheetId = allocateSheetId(
+        usedSheetIds,
+        () => invalidProviderState("no free sheet id remains for tab creation"),
+      );
       usedSheetIds.add(sheetId);
       requests.push({ kind: "addSheet", title: registration.sheetName, sheetId });
       // A freshly added sheet starts at the API's default 26 columns; only

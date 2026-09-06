@@ -21,7 +21,7 @@ import type {
   SyncProjectionEffect,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { SYNC_POSTCONDITION_MODES } from "@hikoutei/contracts/sheets/constants.js";
-import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "@hikoutei/ikisaki";
 import { GoogleSheetsApiSyncProvider, classifyGoogleSheetsApiError, isRetryableTransportStatus } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import type {
   GoogleSheetsApiTransport,

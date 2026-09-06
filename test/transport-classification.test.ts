@@ -9,7 +9,7 @@ import {
   classifyTransportOutcome,
   isDeliveryUncertainOutcome,
   sanitizeTransportRemoteCode,
-} from "@hikoutei/contracts/sheets/transportOutcome.js";
+} from "@hikoutei/ikisaki";
 import { absentValue, presentValue } from "@hikoutei/contracts/state/index.js";
 
 function transportError(

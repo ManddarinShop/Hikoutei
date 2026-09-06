@@ -15,6 +15,7 @@ import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
 import {
   GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT,
   GOOGLE_SHEETS_API_RECEIPT_HEADERS,
+  GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
 } from "../constants.js";
 import { invalidProviderState } from "../errors.js";
 import type {
@@ -25,9 +26,8 @@ import type {
 import { serializeBatchUpdateRequests } from "../transport/googleSheetsApiTransport.js";
 import type { PreflightContext } from "./preflightContext.js";
 import type { EffectPlan, PlanMutation, PlannedReceipt, WorkingRow } from "./plannerContracts.js";
-import { toApiUserEnteredValue } from "./valueNormalization.js";
-import { allocateSheetId } from "./sheetIdAllocator.js";
-import { buildRowCheckFormula } from "./rowCheckFormula.js";
+import { allocateSheetId, buildRowCheckFormula } from "@hikoutei/ikisaki";
+import { columnLetters, toApiUserEnteredValue } from "./valueNormalization.js";
 
 /** One built batch plus its serialized byte size. */
 export interface BuiltApplyBatch {
@@ -531,7 +531,8 @@ function pushAppendWrites(
   // out).
   // The sheet recalcs it from then on, so a human edit to any data cell of
   // the row changes the visible check string, and inbound polling detects
-  // the edit by reading only this narrow column (see rowCheckFormula.ts).
+  // the edit by reading only this narrow column (see `@hikoutei/ikisaki`
+  // `evidence/rowCheckFormula.ts`).
   // Skipped entirely when the preflight saw no provisioned check header
   // (legacy tabs stay byte-identical and never receive stray formulas).
   const checkColumn = context.checkColumn;
@@ -547,6 +548,8 @@ function pushAppendWrites(
             startColumn + 1,
             startColumn + columnCount,
             first.rowNumber + offset,
+            GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+            columnLetters,
           ),
         },
       }]),
@@ -671,7 +674,10 @@ function pushReceiptSheetCreation(
   // A deterministic, collision-free 31-bit positive sheetId (never the old
   // random pick): the allocator scans the enumeration's existing ids so a
   // repeated attempt after a lost response picks the same id.
-  const receiptSheetId = allocateSheetId(context.existingSheetIds);
+  const receiptSheetId = allocateSheetId(
+    context.existingSheetIds,
+    () => invalidProviderState("no free sheet id remains for tab creation"),
+  );
   requests.push({
     kind: "addSheet",
     title: "__typed_sheets_internal_effect_receipts",
