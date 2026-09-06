@@ -92,6 +92,7 @@ import {
 } from "./errors.js";
 import {
   chunkEffectGroups,
+  dispatchClassValidationError,
   fenceFromLease,
   groupEffectsByRoute,
   isFastAppendPendingEffect,
@@ -343,12 +344,12 @@ async function runEffectWorker(
     const appendCandidates = (await storage.listReadyFastAppendEffects(
       maxFastAppendCandidates,
       currentFence().now,
-    )).filter((pending) => isFastAppendPendingEffect(pending, options.dispatcher))
+    )).filter((pending) => isFastAppendPendingEffect(pending))
       .slice(0, maxFastAppendCandidates);
     const regular: PendingEffect[] = [];
     for (const pending of selected) {
       if (regular.length >= MAX_IN_FLIGHT_EFFECTS) break;
-      if (isFastAppendPendingEffect(pending, options.dispatcher)) continue;
+      if (isFastAppendPendingEffect(pending)) continue;
       regular.push(pending);
     }
     claimable = [...appendCandidates, ...regular];
@@ -358,8 +359,8 @@ async function runEffectWorker(
     scope: TIMING_SCOPES.WORKER,
     phase: "recover_and_select",
     durationMs: Date.now() - selectStartedAt,
-    operationKinds: operationKindsForPendingEffects(claimable),
-    operationCounts: countsForPendingEffects(claimable),
+    operationKinds: operationKindsForPendingEffects(claimable, options.dispatcher),
+    operationCounts: countsForPendingEffects(claimable, options.dispatcher),
   });
 
   const claimed: ClaimedEffect[] = [];
@@ -388,6 +389,12 @@ async function runEffectWorker(
         "Dispatcher payload validation threw: " + safeErrorMessage(error),
       );
     }
+    if (isAbsent(invalidPayloadError)) {
+      // The opaque dispatch label is validated alongside the payload: an
+      // unstamped effect fails closed here instead of being assumed into a
+      // dispatch bucket at split time.
+      invalidPayloadError = dispatchClassValidationError(pending);
+    }
     const item = { pending, claimToken, invalidPayloadError };
     if (
       pending.status === OUTBOX_EFFECT_STATUSES.FAILED ||
@@ -402,8 +409,8 @@ async function runEffectWorker(
     scope: TIMING_SCOPES.WORKER,
     phase: "effect_claims",
     durationMs: Date.now() - claimEffectsStartedAt,
-    operationKinds: operationKindsForItems([...claimed, ...recoveryCandidates]),
-    operationCounts: countsForItems([...claimed, ...recoveryCandidates]),
+    operationKinds: operationKindsForItems([...claimed, ...recoveryCandidates], options.dispatcher),
+    operationCounts: countsForItems([...claimed, ...recoveryCandidates], options.dispatcher),
   });
 
   // Recovery candidates are NOT probed here any more: same-route candidates
@@ -459,31 +466,32 @@ async function runEffectWorker(
     scope: TIMING_SCOPES.WORKER,
     phase: "candidate_gate",
     durationMs: Date.now() - candidateGateStartedAt,
-    operationKinds: operationKindsForItems(usable),
-    operationCounts: countsForItems(usable),
+    operationKinds: operationKindsForItems(usable, options.dispatcher),
+    operationCounts: countsForItems(usable, options.dispatcher),
   });
 
   const fastAppendItems: ClaimedEffect[] = [];
   const regularItems: ClaimedEffect[] = [];
   for (const item of dispatchable) {
-    try {
-      if (options.dispatcher.isFastAppendCandidate(item.pending)) {
-        fastAppendItems.push(item);
-      } else {
-        regularItems.push(item);
-      }
-    } catch (error: unknown) {
-      // The candidacy predicate is declared never to throw, but a violating
-      // dispatcher must not abort the pass: fail the claimed effect
-      // per-effect through the invalid-payload path and skip it.
+    // Dispatch routing branches SOLELY on the entity-stamped opaque hint.
+    // Every dispatchable item passed claim-time validation, so an unknown
+    // label here is a race (never a default): fail it closed per-effect.
+    const labelError = dispatchClassValidationError(item.pending);
+    if (isPresent(labelError)) {
       await completeFailure(
         storage,
         currentFence(),
         item,
         WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
-        presentValue("Dispatcher fast-append classification threw: " + safeErrorMessage(error)),
+        labelError,
         report,
       );
+      continue;
+    }
+    if (isFastAppendPendingEffect(item.pending)) {
+      fastAppendItems.push(item);
+    } else {
+      regularItems.push(item);
     }
   }
 
@@ -946,8 +954,8 @@ async function runEffectWorker(
     scope: TIMING_SCOPES.WORKER,
     phase: "worker_total",
     durationMs: Date.now() - passStartedAt,
-    operationKinds: operationKindsForItems(dispatchable),
-    operationCounts: countsForItems(dispatchable),
+    operationKinds: operationKindsForItems(dispatchable, options.dispatcher),
+    operationCounts: countsForItems(dispatchable, options.dispatcher),
   });
   return freezeReport(report);
 }
@@ -1072,7 +1080,7 @@ async function dispatchRegularUnit(
 ): Promise<boolean> {
   const deferredEffectIds = new Set<string>();
   let outcome: ApplyOutcome;
-  const regularOperationCounts = countsForItems(group.items);
+  const regularOperationCounts = countsForItems(group.items, options.dispatcher);
   const regularOperationKinds = operationKindsForCounts(regularOperationCounts);
   const providerStartedAt = Date.now();
   const requestRouteKey = group.routeKey;

@@ -161,3 +161,21 @@ export const EFFECT_STATUSES = {
 
 /** Closed set of durable effect lifecycle status values. */
 export type EffectStatus = (typeof EFFECT_STATUSES)[keyof typeof EFFECT_STATUSES];
+
+/**
+ * Opaque dispatch buckets stamped on every outbox effect at creation.
+ *
+ * The entity side interprets domain kinds once (see
+ * `ProjectionEffectFactory`'s classifier) and stamps the result here; the
+ * protocol worker routes SOLELY on this label and never interprets kinds
+ * itself. Canonical home of the `as const` table; the kernel reads the
+ * stamped string structurally so it stays import-free of this module.
+ */
+export const DISPATCH_CLASSES = {
+  FAST_APPEND: "fast-append",
+  REGULAR: "regular",
+} as const;
+
+/** Closed set of opaque effect dispatch buckets. */
+export type DispatchClass =
+  (typeof DISPATCH_CLASSES)[keyof typeof DISPATCH_CLASSES];

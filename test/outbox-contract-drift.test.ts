@@ -4,19 +4,20 @@
  *
  * The kernel is compiled and published independently of the host, but several
  * persisted string contracts are shared across the boundary: storage error
- * codes, effect kinds, effect targets, and effect statuses. Host and kernel
- * each declare their own `as const` tables (the kernel must stay
- * self-contained), so this test pins every kernel value to the matching host
- * value key-by-key and fails loudly if either side drifts. Credential-free
- * and fast: it only compares constant tables.
+ * codes, outbox effect kinds, effect targets, and effect statuses. The host
+ * owns the canonical `as const` tables and the kernel owns protocol copies
+ * for its own table decoding and emitted transitions (the kernel must stay
+ * import-free of entity modules), so this test pins every kernel value to
+ * the matching host value key-by-key and fails loudly if either side
+ * drifts. Credential-free and fast: it only compares constant tables.
  */
 
 import { describe, expect, it } from "vitest";
 
 import {
-  EFFECT_KINDS as KERNEL_EFFECT_KINDS,
-  EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
-  EFFECT_TARGET_KINDS as KERNEL_EFFECT_TARGET_KINDS,
+  OUTBOX_EFFECT_KINDS as KERNEL_EFFECT_KINDS,
+  OUTBOX_EFFECT_STATUSES as KERNEL_EFFECT_STATUSES,
+  OUTBOX_EFFECT_TARGET_KINDS as KERNEL_EFFECT_TARGET_KINDS,
   STORAGE_ERROR_CODES as KERNEL_STORAGE_ERROR_CODES,
   TIMING_OPERATION_KINDS as KERNEL_TIMING_OPERATION_KINDS,
 } from "@hikoutei/ikisaki";

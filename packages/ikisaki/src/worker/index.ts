@@ -47,6 +47,17 @@ export {
 
 // --- Request-start pacing (interval limiters + quota governor) ---
 export {
+  admitRequestStart,
+  credentialBinding,
+  type CredentialPacingPool,
+  type CredentialPacingSlot,
+  type ReadPacing,
+  type RequestStartAdmissionOutcome,
+  type RequestStartPacing,
+  type RequestStartPacingDeps,
+} from "./pacing/requestAdmission.js";
+
+export {
   RATE_LIMIT_OPTIONS_ERROR_CODES,
   RateLimitOptionsError,
   ReadQoSScheduler,
@@ -161,9 +172,9 @@ export {
 // --- Dispatch (routing + transitions + fast-append) ---
 export {
   chunkEffectGroups,
+  dispatchClassValidationError,
   fenceFromLease,
   groupEffectsByRoute,
-  isCandidateProtectingUserInputEffect,
   isFastAppendPendingEffect,
   type EffectRouteGroup,
 } from "./dispatch/routing.js";

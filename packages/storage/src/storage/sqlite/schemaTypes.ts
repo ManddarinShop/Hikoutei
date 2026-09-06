@@ -16,4 +16,5 @@ export type SchemaMigrationColumnName =
   | "dispatch_id"
   | "candidate_visible_revision"
   | "candidate_visible_hash"
-  | "heartbeat_at";
+  | "heartbeat_at"
+  | "dispatch_class";

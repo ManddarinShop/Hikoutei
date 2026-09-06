@@ -26,6 +26,17 @@ export {
 } from "./quotaGovernor.js";
 
 export {
+  admitRequestStart,
+  credentialBinding,
+  type CredentialPacingPool,
+  type CredentialPacingSlot,
+  type ReadPacing,
+  type RequestStartAdmissionOutcome,
+  type RequestStartPacing,
+  type RequestStartPacingDeps,
+} from "./requestAdmission.js";
+
+export {
   ADAPTIVE_EFFECT_BATCH_LIMITS,
   AdaptiveEffectBatchController,
   DEFAULT_EFFECT_BATCH_COALESCE_WINDOW_MS,

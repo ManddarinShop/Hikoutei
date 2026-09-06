@@ -6,10 +6,10 @@
  */
 
 import type {
-  EffectKind,
-  EffectStatus,
-  EffectTargetKind,
-} from "./constants.js";
+  OutboxEffectKind,
+  OutboxEffectStatus,
+  OutboxEffectTargetKind,
+} from "../outbox/effectVocabulary.js";
 import type {
   Applicability,
   Presence,
@@ -103,6 +103,14 @@ export interface EffectProjectionConfirmation {
   readonly entityRevision: Applicability<number>;
   readonly fieldHashes: Readonly<Record<string, string>>;
   /**
+   * Set when the confirmed effect follows the delete lifecycle (declared by
+   * the dispatcher, never derived from kinds here): a delete receipt reads
+   * back the pre-delete provider revision, which can lag the durable
+   * confirmed revision after a delete+recreate, so the confirmation retains
+   * the higher durable revision instead of failing as a regression.
+   */
+  readonly deleteRetention: boolean;
+  /**
    * Set when the confirmed effect applied from an empty visible baseline
    * (a create-if-missing repair): the fresh row restarts the provider's
    * revision counter at 1, so the durable confirmation may advance past a
@@ -113,17 +121,28 @@ export interface EffectProjectionConfirmation {
   readonly allowCreateRebaseline?: boolean;
 }
 
+/**
+ * Opaque dispatch bucket stamped by the entity side at effect creation.
+ *
+ * Structural mirror of the entity-owned `DISPATCH_CLASSES` values: the
+ * kernel routes SOLELY on this label and must never import the canonical
+ * table (see the protocol import-boundary gate). Unstamped or unknown
+ * values fail closed at the worker boundary; never assume a default.
+ */
+export type DispatchClass = "fast-append" | "regular";
+
 /** A pending outbox row prepared by the writer transaction. */
 export interface NewEffect {
   readonly effectId: string;
-  readonly effectKind: EffectKind;
+  readonly effectKind: OutboxEffectKind;
+  readonly dispatchClass: DispatchClass;
   readonly commitId: string;
   readonly logicalSheetId: string;
   readonly physicalSheetId: string;
   readonly projection: string;
   readonly rowBindingId: Presence<string>;
   readonly conflictId: Presence<string>;
-  readonly targetKind: EffectTargetKind;
+  readonly targetKind: OutboxEffectTargetKind;
   readonly targetId: string;
   readonly targetEntityRevision: Applicability<number>;
   readonly targetFieldRevisionHash: Applicability<string>;
@@ -161,14 +180,15 @@ export interface MarkDeliveryUncertainOptions
 
 export interface PendingEffect {
   readonly effect_id: OutboxEffectId;
-  readonly effect_kind: EffectKind;
+  readonly effect_kind: OutboxEffectKind;
+  readonly dispatch_class: DispatchClass;
   readonly commit_id: string;
   readonly logical_sheet_id: string;
   readonly physical_sheet_id: OutboxPhysicalSheetId;
   readonly projection: string;
   readonly row_binding_id: OutboxRowBindingId | null;
   readonly conflict_id: string | null;
-  readonly target_kind: EffectTargetKind;
+  readonly target_kind: OutboxEffectTargetKind;
   readonly target_id: string;
   readonly target_entity_revision: number | null;
   readonly target_field_revision_hash: string | null;
@@ -186,5 +206,5 @@ export interface PendingEffect {
   readonly uncertain_since: number | null;
   readonly next_probe_at: number | null;
   readonly dispatch_id: string | null;
-  readonly status: EffectStatus;
+  readonly status: OutboxEffectStatus;
 }

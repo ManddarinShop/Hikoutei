@@ -8,7 +8,6 @@ export {
   chunkEffectGroups,
   fenceFromLease,
   groupEffectsByRoute,
-  isCandidateProtectingUserInputEffect,
   isFastAppendPendingEffect,
   type EffectRouteGroup,
 } from "./routing.js";

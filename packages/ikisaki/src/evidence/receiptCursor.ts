@@ -54,7 +54,18 @@
  * and storage API changes far outside this optimization's scope).
  */
 
-import type { PreflightReceipt } from "./preflightContext.js";
+/**
+ * Neutral receipt evidence tracked by the cursor: the effect identity, the
+ * payload it proves, and the remote visible state it carries. Providers map
+ * their receipt rows onto this shape at the boundary (their richer row type
+ * stays provider-owned).
+ */
+export interface CursorReceiptEvidence {
+  readonly effectId: string;
+  readonly payloadHash: string;
+  readonly visibleHash: string;
+  readonly visibleRevision: number;
+}
 
 /**
  * Ceiling for the cumulative receipt memo. Beyond it the cursor resets and
@@ -65,11 +76,11 @@ import type { PreflightReceipt } from "./preflightContext.js";
  */
 export const MAX_MEMO_RECEIPTS = 200_000;
 
-export class ReceiptReadCursor {
+export class ReceiptReadCursor<TReceipt extends CursorReceiptEvidence = CursorReceiptEvidence> {
   /** Last receipt row (1-based) verified as covered; 0 means "no cursor". */
   private lastVerifiedRow = 0;
   /** Every receipt parsed by this instance since the last reset. */
-  private readonly memo = new Map<string, PreflightReceipt>();
+  private readonly memo = new Map<string, TReceipt>();
 
   /**
    * Row (1-based) to START a banded receipt read at, or `undefined` when a
@@ -96,7 +107,7 @@ export class ReceiptReadCursor {
    * effectId means the append-only tab was rewritten from under this
    * instance and fails closed exactly like an in-band duplicate.
    */
-  public mergeParsed(receipts: ReadonlyMap<string, PreflightReceipt>): boolean {
+  public mergeParsed(receipts: ReadonlyMap<string, TReceipt>): boolean {
     for (const [effectId, receipt] of receipts) {
       const known = this.memo.get(effectId);
       if (known !== undefined) {
@@ -128,7 +139,7 @@ export class ReceiptReadCursor {
   }
 
   /** The cumulative receipt coverage every scoped/full read's context exposes. */
-  public memoView(): ReadonlyMap<string, PreflightReceipt> {
+  public memoView(): ReadonlyMap<string, TReceipt> {
     return this.memo;
   }
 

@@ -57,7 +57,7 @@ import {
   validateRoute,
   type GoogleSheetsApiProviderDeps,
 } from "./shared.js";
-import { createEngineRuntime, ensureSheetRowBounds } from "./readEngine.js";
+import { createEngineRuntime, ensureSheetRowBounds } from "./shared.js";
 import { observationTargetFor } from "./preflightOp.js";
 
 /** Reads one registered table's literal values with one REST read. */

@@ -15,6 +15,10 @@ import {
 } from "@hikoutei/contracts/constants.js";
 import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type { EffectTargetKind } from "@hikoutei/contracts/domain/model/constants.js";
+import {
+  DISPATCH_CLASSES,
+  type DispatchClass,
+} from "@hikoutei/contracts/domain/model/constants.js";
 import type {
   Applicability,
   Presence,
@@ -60,6 +64,41 @@ const PROJECTION_TARGET_KINDS = {
 } as const satisfies Record<string, EffectTargetKind>;
 
 const EMPTY_VISIBLE_HASH = "";
+
+/**
+ * Classifies the opaque worker dispatch bucket for one projection effect.
+ *
+ * This is the single entity-side interpretation of domain kinds into the
+ * opaque `dispatchClass` label the protocol worker routes on: a fast append
+ * needs an empty visible baseline (`createIfMissing` at revision 0) plus a
+ * new System_State entity row or a new Sync_Conflicts resolution row.
+ * Everything else rides the regular CAS path. The worker must read only the
+ * stamped label, never re-derive this decision.
+ */
+export function classifyDispatchClass(input: {
+  readonly effectKind: SyncEffectKind;
+  readonly projection: SyncProjection;
+  readonly targetKind: EffectTargetKind;
+  readonly createIfMissing: boolean;
+  readonly expectedVisibleRevision: number;
+  readonly expectedVisibleHash: string;
+}): DispatchClass {
+  const emptyVisibleBaseline = input.createIfMissing &&
+    input.expectedVisibleRevision === NON_NEGATIVE_SAFE_INTEGER_MINIMUM &&
+    input.expectedVisibleHash === EMPTY_VISIBLE_HASH;
+  if (!emptyVisibleBaseline) return DISPATCH_CLASSES.REGULAR;
+  if (
+    (input.effectKind === PROJECTION_EFFECT_KINDS.SYSTEM_PROJECTION &&
+      input.projection === SYNC_PROJECTIONS.SYSTEM_STATE &&
+      input.targetKind === PROJECTION_TARGET_KINDS.ENTITY) ||
+    (input.effectKind === PROJECTION_EFFECT_KINDS.RESOLUTION_PROJECTION &&
+      input.projection === SYNC_PROJECTIONS.SYNC_CONFLICTS &&
+      input.targetKind === PROJECTION_TARGET_KINDS.CONFLICT)
+  ) {
+    return DISPATCH_CLASSES.FAST_APPEND;
+  }
+  return DISPATCH_CLASSES.REGULAR;
+}
 
 /** Common immutable coordinates of a writer-approved projection effect. */
 export interface ProjectionEffectInput {
@@ -138,6 +177,14 @@ export function createProjectionEffect(input: ProjectionEffectInput): NewEffect 
   return {
     effectId: input.effectId,
     effectKind: input.effectKind,
+    dispatchClass: classifyDispatchClass({
+      effectKind: input.effectKind,
+      projection: input.projection,
+      targetKind: input.targetKind,
+      createIfMissing: input.createIfMissing,
+      expectedVisibleRevision: input.expectedVisibleRevision,
+      expectedVisibleHash: input.expectedVisibleHash,
+    }),
     commitId: input.commitId,
     logicalSheetId: input.logicalSheetId,
     physicalSheetId: input.physicalSheetId,

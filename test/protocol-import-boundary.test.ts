@@ -9,7 +9,7 @@
  * kernel sources and fails on violation.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -143,5 +143,95 @@ describe("ikisaki protocol import boundary", () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it("never interprets domain kinds inside packages/ikisaki/src (opaque dispatchClass only)", () => {
+    // Step-2 vocabulary: the worker routes SOLELY on the entity-stamped
+    // opaque `dispatchClass` label. Domain-kind tables, provider effect
+    // shapes, Sheets grid concepts, and host classifier predicates must not
+    // appear as identifiers in kernel code (word-boundary match, so the
+    // protocol-owned OUTBOX_* copies never trip this gate). Comments are
+    // stripped before scanning so prose can still name the concepts.
+    const denied = [
+      "EFFECT_KINDS",
+      "EFFECT_TARGET_KINDS",
+      "EFFECT_STATUSES",
+      "EffectKind",
+      "EffectStatus",
+      "EffectTargetKind",
+      "SYNC_PROJECTIONS",
+      "SYNC_EFFECT_RESULT_STATUSES",
+      "SYNC_POSTCONDITION_STATUSES",
+      "SYNC_POSTCONDITION_DISPOSITIONS",
+      "SYNC_FAST_APPEND_STATUSES",
+      "SYNC_DELETE_EFFECT_KINDS",
+      "isFastAppendCandidate",
+      "isSheetsFastAppendCandidate",
+      "isFastAppendEffect",
+      "isCandidateProtectingUserInputEffect",
+      "toProviderEffect",
+      "parseSyncProjectionEffectPayload",
+      "SyncProjectionEffect",
+      "SyncEffectResult",
+      "SyncEffectPostcondition",
+      "PreflightContext",
+      "PreflightReceipt",
+      "BuiltApplyBatch",
+      "ParsedGrid",
+      "ParsedSheet",
+      "PlannedRange",
+      "ReadEvidence",
+    ].map((name) => ({
+      name,
+      pattern: new RegExp(`\\b${name}\\b`),
+    }));
+    const violations: string[] = [];
+    for (const file of collectSources(kernelSrc)) {
+      const text = stripComments(readFileSync(file, "utf8"));
+      for (const { name, pattern } of denied) {
+        if (pattern.test(text)) {
+          violations.push(`${relative(kernelSrc, file)}: forbidden domain-kind identifier ${name}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("never branches on effect_kind or raw domain literals inside the dispatch hot path", () => {
+    // The deny-list above catches entity-vocabulary reintroduction
+    // tree-wide, but a worker branch on the bare `effect_kind` column or on
+    // a raw domain literal (e.g. "system_projection") would slip through:
+    // those spellings are legitimate in the outbox SQL layer (column names,
+    // CHECK values) but must never select a dispatch path. Scope this gate
+    // to the dispatch hot path only.
+    const hotPath = [
+      join(kernelSrc, "worker", "dispatch"),
+      join(kernelSrc, "worker", "worker.ts"),
+    ];
+    const violations: string[] = [];
+    const scopedDenied = ["effect_kind", '"system_projection"', '"candidate_reconcile"'];
+    const scopedFiles = hotPath.flatMap((entry) =>
+      statSync(entry).isDirectory() ? collectSources(entry) : [entry],
+    );
+    for (const file of scopedFiles) {
+      if (!file.endsWith(".ts")) continue;
+      const text = stripComments(readFileSync(file, "utf8"));
+      for (const name of scopedDenied) {
+        if (text.includes(name)) {
+          violations.push(`${relative(kernelSrc, file)}: forbidden dispatch-hot-path token ${name}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("branches dispatch routing on the opaque dispatchClass hint", () => {
+    const routing = readFileSync(join(kernelSrc, "worker", "dispatch", "routing.ts"), "utf8");
+    expect(routing).toContain("dispatch_class");
+    expect(routing).toContain('"fast-append"');
+    const worker = readFileSync(join(kernelSrc, "worker", "worker.ts"), "utf8");
+    expect(worker).toContain("dispatchClassValidationError");
+    const contracts = readFileSync(join(kernelSrc, "contract", "contracts.ts"), "utf8");
+    expect(contracts).toContain("dispatchClass");
   });
 });

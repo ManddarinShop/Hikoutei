@@ -28,6 +28,9 @@ export { GOOGLE_SHEETS_API_SCOPES, GOOGLE_SHEETS_API_DEFAULTS } from "@hikoutei/
  */
 export const GOOGLE_SHEETS_API_MISSING_RANGE_REMOTE_CODE = "INVALID_ARGUMENT";
 
+/** Current hard grid limit of a real spreadsheet (1-based). */
+export const SHEET_MAX_ROW = 1_048_576;
+
 /** Hidden receipt tab shared with the Apps Script effect operations. */
 export const GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME =
   "__typed_sheets_internal_effect_receipts";

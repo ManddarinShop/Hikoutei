@@ -424,6 +424,7 @@ function createUpdateEffect(index: number, streamSequence: number): NewEffect {
   return {
     effectId: `effect-${index}`,
     effectKind: "system_projection",
+    dispatchClass: "regular",
     commitId: `commit-${index}`,
     logicalSheetId: "logical-perf",
     physicalSheetId: "physical-perf",

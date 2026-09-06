@@ -293,6 +293,7 @@ export async function dispatchFastAppendGroup(
       continue;
     }
     await completeApplied(
+      options,
       storage,
       resultFence,
       item,

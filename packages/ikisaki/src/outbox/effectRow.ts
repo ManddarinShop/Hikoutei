@@ -8,11 +8,13 @@
 
 import { STORAGE_ERROR_CODES, StorageError } from "../contract/errors.js";
 import {
-  EFFECT_KINDS,
-  EFFECT_STATUSES,
-  EFFECT_TARGET_KINDS,
-} from "../contract/constants.js";
-import type { EffectKind, EffectStatus, EffectTargetKind } from "../contract/constants.js";
+  OUTBOX_EFFECT_KINDS,
+  OUTBOX_EFFECT_STATUSES,
+  OUTBOX_EFFECT_TARGET_KINDS,
+  type OutboxEffectKind,
+  type OutboxEffectStatus,
+  type OutboxEffectTargetKind,
+} from "./effectVocabulary.js";
 import {
   isSemanticRevision,
   requireSemanticString,
@@ -27,6 +29,7 @@ import { toSqlNullable } from "../sql/sqlState.js";
 import type {
   ApplyResultOptions,
   ClaimEffectOptions,
+  DispatchClass,
   MarkDeliveryUncertainOptions,
   NewEffect,
   RetryClaimedEffectOptions,
@@ -53,7 +56,8 @@ export function decodePendingEffectRow(row: SqlRow, index?: number): PendingEffe
   }
   return {
     effect_id: requirePendingString<"effect-id">(row.effect_id, `${label}.effect_id`),
-    effect_kind: requireEffectKind(row.effect_kind, `${label}.effect_kind`),
+    effect_kind: requireOutboxEffectKind(row.effect_kind, `${label}.effect_kind`),
+    dispatch_class: requireDispatchClass(row.dispatch_class, `${label}.dispatch_class`),
     commit_id: requireSqlText(row.commit_id, `${label}.commit_id`),
     logical_sheet_id: requireSqlText(row.logical_sheet_id, `${label}.logical_sheet_id`),
     physical_sheet_id: requirePendingString<"physical-sheet-id">(
@@ -66,7 +70,7 @@ export function decodePendingEffectRow(row: SqlRow, index?: number): PendingEffe
       `${label}.row_binding_id`,
     ),
     conflict_id: requireNullableSqlText(row.conflict_id, `${label}.conflict_id`),
-    target_kind: requireEffectTargetKind(row.target_kind, `${label}.target_kind`),
+    target_kind: requireOutboxEffectTargetKind(row.target_kind, `${label}.target_kind`),
     target_id: requireSqlText(row.target_id, `${label}.target_id`),
     target_entity_revision: requireNullableSqlRevision(
       row.target_entity_revision,
@@ -107,8 +111,13 @@ export function decodePendingEffectRow(row: SqlRow, index?: number): PendingEffe
     uncertain_since: requireNullableSqlRevision(row.uncertain_since, `${label}.uncertain_since`),
     next_probe_at: requireNullableSqlRevision(row.next_probe_at, `${label}.next_probe_at`),
     dispatch_id: requireNullableSqlText(row.dispatch_id, `${label}.dispatch_id`),
-    status: requireEffectStatus(row.status, `${label}.status`),
+    status: requireOutboxEffectStatus(row.status, `${label}.status`),
   };
+}
+
+function requireDispatchClass(value: unknown, label: string): DispatchClass {
+  if (value === "fast-append" || value === "regular") return value;
+  throwInvalidPendingEffect(`${label} is unstamped or unknown; refusing to assume a dispatch route`);
 }
 
 function requireSqlText(value: unknown, label: string): string {
@@ -157,33 +166,33 @@ function requireNullableSqlRevision(value: unknown, label: string): number | nul
   return requireSqlRevision(value, label);
 }
 
-function requireEffectKind(value: unknown, label: string): EffectKind {
-  if (value === EFFECT_KINDS.SYSTEM_PROJECTION ||
-      value === EFFECT_KINDS.CANDIDATE_RECONCILE ||
-      value === EFFECT_KINDS.SYSTEM_REPAIR ||
-      value === EFFECT_KINDS.RESOLUTION_PROJECTION ||
-      value === EFFECT_KINDS.RESOLUTION_DELETE ||
-      value === EFFECT_KINDS.USER_INPUT_DELETE) return value;
+function requireOutboxEffectKind(value: unknown, label: string): OutboxEffectKind {
+  if (value === OUTBOX_EFFECT_KINDS.SYSTEM_PROJECTION ||
+      value === OUTBOX_EFFECT_KINDS.CANDIDATE_RECONCILE ||
+      value === OUTBOX_EFFECT_KINDS.SYSTEM_REPAIR ||
+      value === OUTBOX_EFFECT_KINDS.RESOLUTION_PROJECTION ||
+      value === OUTBOX_EFFECT_KINDS.RESOLUTION_DELETE ||
+      value === OUTBOX_EFFECT_KINDS.USER_INPUT_DELETE) return value;
   throwInvalidPendingEffect(`${label} is unsupported`);
 }
 
-function requireEffectTargetKind(value: unknown, label: string): EffectTargetKind {
-  if (value === EFFECT_TARGET_KINDS.ENTITY ||
-      value === EFFECT_TARGET_KINDS.ROW_BINDING ||
-      value === EFFECT_TARGET_KINDS.PROJECTION_ROW ||
-      value === EFFECT_TARGET_KINDS.CONFLICT) return value;
+function requireOutboxEffectTargetKind(value: unknown, label: string): OutboxEffectTargetKind {
+  if (value === OUTBOX_EFFECT_TARGET_KINDS.ENTITY ||
+      value === OUTBOX_EFFECT_TARGET_KINDS.ROW_BINDING ||
+      value === OUTBOX_EFFECT_TARGET_KINDS.PROJECTION_ROW ||
+      value === OUTBOX_EFFECT_TARGET_KINDS.CONFLICT) return value;
   throwInvalidPendingEffect(`${label} is unsupported`);
 }
 
-function requireEffectStatus(value: unknown, label: string): EffectStatus {
-  if (value === EFFECT_STATUSES.PENDING ||
-      value === EFFECT_STATUSES.PROCESSING ||
-      value === EFFECT_STATUSES.DELIVERY_UNCERTAIN ||
-      value === EFFECT_STATUSES.APPLIED ||
-      value === EFFECT_STATUSES.BLOCKED_CANDIDATE ||
-      value === EFFECT_STATUSES.SUPERSEDED ||
-      value === EFFECT_STATUSES.CONFLICT ||
-      value === EFFECT_STATUSES.FAILED) return value;
+function requireOutboxEffectStatus(value: unknown, label: string): OutboxEffectStatus {
+  if (value === OUTBOX_EFFECT_STATUSES.PENDING ||
+      value === OUTBOX_EFFECT_STATUSES.PROCESSING ||
+      value === OUTBOX_EFFECT_STATUSES.DELIVERY_UNCERTAIN ||
+      value === OUTBOX_EFFECT_STATUSES.APPLIED ||
+      value === OUTBOX_EFFECT_STATUSES.BLOCKED_CANDIDATE ||
+      value === OUTBOX_EFFECT_STATUSES.SUPERSEDED ||
+      value === OUTBOX_EFFECT_STATUSES.CONFLICT ||
+      value === OUTBOX_EFFECT_STATUSES.FAILED) return value;
   throwInvalidPendingEffect(`${label} is unsupported`);
 }
 
@@ -221,6 +230,7 @@ export function effectInsertParameters(effect: NewEffect): readonly SqlParameter
   return [
     effect.effectId,
     effect.effectKind,
+    effect.dispatchClass,
     effect.commitId,
     effect.logicalSheetId,
     effect.physicalSheetId,

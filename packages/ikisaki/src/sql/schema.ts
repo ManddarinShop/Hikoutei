@@ -24,6 +24,11 @@ export const REQUIRED_V5_COLUMNS: Readonly<Record<"sheet_effect_outbox", readonl
   ],
 };
 
+/** Entity-stamped opaque dispatch bucket added to the outbox by the v9 migration. */
+export const REQUIRED_V9_COLUMNS: Readonly<Record<"sheet_effect_outbox", readonly string[]>> = {
+  sheet_effect_outbox: ["dispatch_class"],
+};
+
 /**
  * Creates indexes that depend on v5-only outbox columns.
  *
@@ -45,6 +50,7 @@ export const EFFECT_OUTBOX_DDL = `
   CREATE TABLE IF NOT EXISTS sheet_effect_outbox (
     effect_id TEXT PRIMARY KEY,
     effect_kind TEXT NOT NULL,
+    dispatch_class TEXT NOT NULL CHECK (dispatch_class IN ('fast-append', 'regular')),
     commit_id TEXT NOT NULL,
     logical_sheet_id TEXT NOT NULL REFERENCES sheet_registry(sheet_id),
     physical_sheet_id TEXT NOT NULL REFERENCES physical_sheet_registry(physical_sheet_id),

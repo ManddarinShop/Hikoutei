@@ -1179,6 +1179,7 @@ function createAppendEffectFor(suffix: string, physicalSheetId: string, sheetNam
   return {
     effectId: `effect-${suffix}`,
     effectKind: "system_projection",
+    dispatchClass: "fast-append",
     commitId: `commit-${suffix}`,
     logicalSheetId: LOGICAL_SHEET,
     physicalSheetId,
@@ -1215,6 +1216,7 @@ function pendingFrom(effect: NewEffect): PendingEffect {
   return {
     effect_id: effect.effectId,
     effect_kind: effect.effectKind,
+    dispatch_class: effect.dispatchClass,
     commit_id: effect.commitId,
     logical_sheet_id: effect.logicalSheetId,
     physical_sheet_id: effect.physicalSheetId,

@@ -43,6 +43,7 @@ function pendingEffect(overrides: Partial<PendingEffect> = {}): PendingEffect {
   return {
     effect_id: requireSemanticString<"effect-id">("effect-1", "effect ID"),
     effect_kind: "system_projection",
+    dispatch_class: "regular",
     commit_id: "commit-1",
     logical_sheet_id: "logical-1",
     physical_sheet_id: requireSemanticString<"physical-sheet-id">("physical-1", "physical sheet ID"),

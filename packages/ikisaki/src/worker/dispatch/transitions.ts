@@ -1,6 +1,5 @@
 /** Durable result transitions for dispatcher outcomes and response-loss recovery. */
 
-import { EFFECT_KINDS } from "../../contract/constants.js";
 import type { ClaimedEffect } from "../contracts.js";
 import type { PendingEffect } from "../../contract/contracts.js";
 import type {
@@ -35,9 +34,40 @@ import {
   presentValue,
   safeErrorMessage,
 } from "../helpers.js";
-import {
-  isCandidateProtectingUserInputEffect,
-} from "./routing.js";
+/**
+ * Declares whether a guard mismatch on one effect must preserve the row.
+ *
+ * Host-declared via the dispatcher (the kernel never interprets kinds); a
+ * throwing declaration fails the affected effect through the per-effect
+ * invalid-payload path, exactly like the other dispatcher predicates.
+ */
+function isCandidateProtected(
+  options: EffectWorkerBaseOptions,
+  item: ClaimedEffect,
+): boolean | undefined {
+  try {
+    return options.dispatcher.isCandidateProtectedEffect(item.pending);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Declares whether one effect is a writer-replannable repair.
+ *
+ * Host-declared via the dispatcher; a throwing declaration fails the
+ * affected effect through the per-effect invalid-payload path.
+ */
+function isRepairDispatch(
+  options: EffectWorkerBaseOptions,
+  item: ClaimedEffect,
+): boolean | undefined {
+  try {
+    return options.dispatcher.isRepairEffect(item.pending);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Persists one dispatcher per-effect result.
@@ -59,6 +89,7 @@ export async function completeProviderResult(
     result.status === "already_applied"
   ) {
     await completeApplied(
+      options,
       storage,
       fence,
       item,
@@ -81,7 +112,19 @@ export async function completeProviderResult(
     return;
   }
   if (result.status === "guard_mismatch") {
-    const blocked = isCandidateProtectingUserInputEffect(item.pending);
+    const protectedEffect = isCandidateProtected(options, item);
+    if (protectedEffect === undefined) {
+      await completeFailure(
+        storage,
+        fence,
+        item,
+        WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+        presentValue("Dispatcher candidate-protection classification threw."),
+        report,
+      );
+      return;
+    }
+    const blocked = protectedEffect;
     const status = blocked
       ? OUTBOX_EFFECT_STATUSES.BLOCKED_CANDIDATE
       : OUTBOX_EFFECT_STATUSES.CONFLICT;
@@ -339,6 +382,7 @@ export async function settleUnknownPostcondition(
   }
   if (postcondition.disposition === "applied") {
     if (await completeApplied(
+      options,
       storage,
       fence,
       item,
@@ -374,7 +418,19 @@ export async function settleUnknownPostcondition(
     return;
   }
   if (postcondition.disposition === "changed") {
-    if (item.pending.effect_kind === EFFECT_KINDS.SYSTEM_REPAIR) {
+    const repair = isRepairDispatch(options, item);
+    if (repair === undefined) {
+      await completeFailure(
+        storage,
+        fence,
+        item,
+        WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+        presentValue("Dispatcher repair classification threw."),
+        report,
+      );
+      return;
+    }
+    if (repair) {
       await replanOrFail(
         options,
         storage,
@@ -481,6 +537,7 @@ async function deferDeliveryUncertain(
  * when the effect carries a row binding.
  */
 export async function completeApplied(
+  options: EffectWorkerBaseOptions,
   storage: EffectWorkerStorage,
   fence: FencingContext,
   item: ClaimedEffect,
@@ -500,6 +557,23 @@ export async function completeApplied(
     );
     return false;
   }
+  // The delete-monotonic confirmation rule is host-declared via the
+  // dispatcher (the kernel never interprets kinds); a throwing declaration
+  // fails the effect instead of assuming a revision rule.
+  let deleteRetention: boolean;
+  try {
+    deleteRetention = options.dispatcher.isDeleteLifecycleEffect(item.pending);
+  } catch {
+    await completeFailure(
+      storage,
+      fence,
+      item,
+      WORKER_ERROR_CODES.INVALID_EFFECT_PAYLOAD,
+      presentValue("Dispatcher delete-lifecycle classification threw."),
+      report,
+    );
+    return false;
+  }
   const rowBindingId = item.pending.row_binding_id;
   const confirmation = rowBindingId === null
     ? undefined
@@ -511,6 +585,7 @@ export async function completeApplied(
       visibleHash,
       entityRevision: applicabilityFromSqlNullable(item.pending.target_entity_revision),
       fieldHashes,
+      deleteRetention,
       // A create-if-missing repair restarts the provider's revision counter
       // at 1, so its confirmation may advance a higher durable confirmed
       // revision instead of being rejected as a regression (which would
