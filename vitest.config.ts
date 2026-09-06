@@ -15,7 +15,7 @@ const storageSource = fileURLToPath(
   new URL("./packages/storage/src/", import.meta.url),
 );
 const sheetsSource = fileURLToPath(
-  new URL("./packages/sheets/src/", import.meta.url),
+  new URL("./packages/library/cloud/sheets/src/", import.meta.url),
 );
 // P8-D2 phase 2 packages resolve to source for the same reason.
 const syncEngineSource = fileURLToPath(
@@ -25,7 +25,7 @@ const compositionSource = fileURLToPath(
   new URL("./packages/composition/src/", import.meta.url),
 );
 const cliSource = fileURLToPath(
-  new URL("./packages/cli/src/", import.meta.url),
+  new URL("./packages/library/cloud/cli/src/", import.meta.url),
 );
 
 export default defineConfig({

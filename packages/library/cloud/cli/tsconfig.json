@@ -13,13 +13,13 @@
     // bundled (the reconcile codemod copies only the package's own subtree
     // onto dist/cli/**). At runtime the bundled bin resolves `hikoutei`
     // through Node package self-reference inside the published artifact.
-    "rootDir": "../..",
+    "rootDir": "../../../..",
     "outDir": "dist",
-    "baseUrl": "../..",
+    "baseUrl": "../../../..",
     "paths": {
       "hikoutei": ["src/index.ts"],
       "@hikoutei/storage/*": ["packages/storage/src/*"],
-      "@hikoutei/sheets/*": ["packages/sheets/src/*"],
+      "@hikoutei/sheets/*": ["packages/library/cloud/sheets/src/*"],
       "@hikoutei/sync-engine/*": ["packages/sync-engine/src/*"],
       "@hikoutei/composition/*": ["packages/composition/src/*"],
       "@hikoutei/contracts/*": ["packages/contracts/src/*"]
