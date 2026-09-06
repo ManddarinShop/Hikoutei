@@ -123,11 +123,14 @@ client directly.
 
 Google Sheets synchronization is a service-side concern. Applications do not
 import a provider client, pass Sheet routes to `createTypedSheets()`, or choose
-an operation for each write — the root API accepts only `dbName` and
-`entities`. The sync runtime uses one internal Google Sheets API provider with
-a service account — no Apps Script deployment. Sync auto-start is selected by
-`HIKOUTEI_SYNC_SPREADSHEET_URL` plus `GOOGLE_APPLICATION_CREDENTIALS`; there is
-no public `googleSheetsApi` bootstrap option to configure.
+an operation for each write — `CreateTypedSheetsOptions` fields (`dbName`,
+`entities`, `providerOptions`) are all optional. The sync runtime uses one
+internal Google Sheets API provider with a service account — no Apps Script
+deployment. Sync auto-start is selected by `HIKOUTEI_SYNC_SPREADSHEET_URL`
+plus `GOOGLE_APPLICATION_CREDENTIALS`. Optional `providerOptions` tunes the
+sync-path provider (telemetry/timeouts; inert when local-only), and
+`createTypedSheetsWithSync()` exposes the same options with a richer result
+for existing-sheet adoption.
 
 **Fastest path:** install the gcloud CLI, then run `npx hikoutei setup` from your
 project directory. On an interactive terminal it offers (press Enter) to
@@ -247,8 +250,8 @@ shared on the spreadsheet (the error tells you which email to share).
    `GOOGLE_APPLICATION_CREDENTIALS` and `HIKOUTEI_SYNC_SPREADSHEET_URL` set;
    `createTypedSheets()` detects them and starts the internal sync bootstrap —
    it creates and verifies headers on the registered tabs, then starts outbox
-   delivery and User_Input polling. There is no provider option to pass and no
-   internal bootstrap to start by hand.
+   delivery and User_Input polling. Pass `providerOptions` only when sync-path
+   tuning is needed; there is no internal bootstrap to start by hand.
 
 > **Legacy spreadsheet note.** Spreadsheets provisioned by the old Apps Script
 > provider with developer-metadata row anchors are not migrated: `User_Input`
@@ -273,15 +276,15 @@ verification path. The detailed setup and troubleshooting steps are in the
 
 ## Installation
 
-The project and npm package are both called `hikoutei`. The built-in SQLite
-provider currently requires MikroORM:
+The project and npm package are both called `hikoutei`. This repo uses pnpm
+(packageManager `pnpm@11.1.2`):
 
 ```sh
-npm install hikoutei @mikro-orm/core @mikro-orm/sql
+pnpm install --frozen-lockfile
 ```
 
-MikroORM is an implementation detail and does not appear in Hikoutei's public
-entity API.
+`@mikro-orm/core` and `@mikro-orm/sql` are optional peers (`optional: true`),
+lazy-loaded only when a runtime opens. `npm install` still works for consumers.
 
 ## Documentation
 
