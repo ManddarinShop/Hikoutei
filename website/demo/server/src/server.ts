@@ -34,10 +34,11 @@ import { readHikouteiSyncStatus } from "hikoutei/internal/sync-status";
 
 // Container deploy: the key arrives as DEMO_SA_JSON (GH Secrets -> compose
 // env_file) and is materialized to a per-process temp file here — the host
-// never holds a key file. Takes effect when no usable credentials file exists
-// (a stale GOOGLE_APPLICATION_CREDENTIALS path is overridden).
+// never holds a key file. Always (re)materialize while rotating: a stale
+// file must never skip the env setup, otherwise any post-write crash turns
+// into a permanent credentials-missing restart loop (see #491).
 const saKeyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS ?? "/tmp/hikoutei-demo-sa.json";
-if (process.env.DEMO_SA_JSON && !existsSync(saKeyFile)) {
+if (process.env.DEMO_SA_JSON) {
   writeFileSync(saKeyFile, process.env.DEMO_SA_JSON, { mode: 0o600 });
   process.env.GOOGLE_APPLICATION_CREDENTIALS = saKeyFile;
 }
