@@ -6,7 +6,7 @@ name: Publish ikisaki only
 # without touching any hikoutei tag or branch.
 #
 # The checked-out ref must contain the `repository` metadata in
-# packages/ikisaki/package.json so provenance publication succeeds. The
+# packages/protocol/ikisaki/package.json so provenance publication succeeds. The
 # workflow is idempotent: if the exact version already exists on npm, it only
 # re-applies the `latest` dist-tag.
 on:
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           node -e '
-            const pkg = require("./packages/ikisaki/package.json");
+            const pkg = require("./packages/protocol/ikisaki/package.json");
             if (pkg.name !== "@hikoutei/ikisaki") process.exit(1);
             if (!pkg.repository || !pkg.repository.url) {
               console.error("ikisaki package.json is missing repository metadata for provenance publish");
@@ -72,7 +72,7 @@ jobs:
             echo "NPM_TOKEN secret is required to publish the ikisaki package." >&2
             exit 1
           fi
-          version="$(node -p "require('./packages/ikisaki/package.json').version")"
+          version="$(node -p "require('./packages/protocol/ikisaki/package.json').version")"
           if npm view "@hikoutei/ikisaki@${version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
             echo "@hikoutei/ikisaki@${version} already published; re-applying latest dist-tag."
             npm dist-tag add "@hikoutei/ikisaki@${version}" latest --registry=https://registry.npmjs.org
@@ -81,5 +81,5 @@ jobs:
             # P8-DD); the INSTALL and BUILD run through pnpm.
             pnpm install --frozen-lockfile
             pnpm --filter @hikoutei/ikisaki run build
-            (cd packages/ikisaki && npm publish --tag latest --access public --provenance)
+            (cd packages/protocol/ikisaki && npm publish --tag latest --access public --provenance)
           fi

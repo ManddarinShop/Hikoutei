@@ -362,7 +362,7 @@ describe("env-driven sync auto-start", () => {
   /**
    * Loads the `node:sqlite` builtin outside the bundler's module graph (a
    * static import fails under Vite — see
-   * packages/ikisaki/test/support/nodeSqliteAdapter.ts).
+   * packages/protocol/ikisaki/test/support/nodeSqliteAdapter.ts).
    */
   function openRawSqlite(path: string): InstanceType<typeof import("node:sqlite").DatabaseSync> {
     const nodeSqlite = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");

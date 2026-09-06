@@ -11,7 +11,7 @@ every change must respect.
 
 Package management is pnpm (workspaces declared in `pnpm-workspace.yaml`;
 pinned via the `packageManager` field in `package.json`): the root package
-(`hikoutei`) plus `packages/ikisaki` (`@hikoutei/ikisaki`, the durable
+(`hikoutei`) plus `packages/protocol/ikisaki` (`@hikoutei/ikisaki`, the durable
 consistency queue).
 
 ```sh
@@ -36,7 +36,7 @@ src/domain/                 pure normalization, evaluation, conflict rules
 src/application/            ORM facade, sync engine, service bootstrap
 src/adapter/                persistence (MikroORM/SQLite) and Sheets providers
 src/infrastructure/         SQLite storage: canonical, observation, resolution, outbox
-packages/ikisaki/           durable consistency-queue package (workspace)
+packages/protocol/ikisaki/           durable consistency-queue package (workspace)
 docs/                       local-only architecture, flows, benchmarks, guidelines
 design/                     local-only normative v1 design and execution checklist
 ```

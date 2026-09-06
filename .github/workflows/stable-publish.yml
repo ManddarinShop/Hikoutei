@@ -150,7 +150,7 @@ jobs:
 
           # The root package depends on the @hikoutei/ikisaki workspace
           # package; pack it too so the consumer install resolves locally.
-          ikisaki_package_file="$(cd packages/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          ikisaki_package_file="$(cd packages/protocol/ikisaki && npm pack --silent --pack-destination "$RUNNER_TEMP")"
           ikisaki_package_path="$RUNNER_TEMP/$ikisaki_package_file"
 
           (
@@ -255,7 +255,7 @@ jobs:
           # declared in the workspace manifest, so that version must exist on
           # the registry before hikoutei is published. Publish at most once per
           # version; later releases skip the step.
-          ikisaki_version="$(node -p "require('./packages/ikisaki/package.json').version")"
+          ikisaki_version="$(node -p "require('./packages/protocol/ikisaki/package.json').version")"
           if npm view "@hikoutei/ikisaki@${ikisaki_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
             echo "@hikoutei/ikisaki@${ikisaki_version} already published; skipping."
           else
@@ -264,7 +264,7 @@ jobs:
             # pnpm; the build goes through pnpm's workspace filtering.
             pnpm install --frozen-lockfile
             pnpm --filter @hikoutei/ikisaki run build
-            (cd packages/ikisaki && npm publish --tag latest --access public)
+            (cd packages/protocol/ikisaki && npm publish --tag latest --access public)
           fi
 
       - name: Verify latest dist-tag monotonicity
