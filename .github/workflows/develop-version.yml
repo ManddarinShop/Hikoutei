@@ -197,7 +197,20 @@ jobs:
             ikisaki_next_version="$(node scripts/ci/release-version.mjs \
               --base-version="$ikisaki_base_version" \
               --bump=patch)"
-            npm version "$ikisaki_next_version" --no-git-tag-version -w "$ikisaki_dir"
+            # Direct manifest edit, deliberately NOT `npm version -w`: the
+            # npm command re-resolves the workspace tree internally and dies
+            # ETARGET when consumer pins match neither the workspace
+            # (mid-bump) nor the registry (an unpublished pin never
+            # resolves). The edit is exact and both lockfiles are
+            # regenerated below anyway, so the intermediate reify buys
+            # nothing and can only fail.
+            node -e '
+              const fs = require("node:fs");
+              const rel = `${process.argv[2]}/package.json`;
+              const pkg = JSON.parse(fs.readFileSync(rel, "utf8"));
+              pkg.version = process.argv[1];
+              fs.writeFileSync(rel, JSON.stringify(pkg, null, 2) + "\n");
+            ' "$ikisaki_next_version" "$ikisaki_dir"
             node -e '
               const { execFileSync } = require("node:child_process");
               const fs = require("node:fs");
