@@ -14,7 +14,7 @@
  * removed, so no file under `packages/library/cloud/sheets/src/` may name the
  * `@hikoutei/sync-engine` specifier at all.
  *
- * Batch-B storage-seam gate (same file, third suite): `packages/storage/src`
+ * Batch-B storage-seam gate (same file, third suite): `packages/library/core/storage/src`
  * is the shared-transaction home (entity flush, canonical/observation/
  * resolution writers, and the outbox/fencing SQL they share with the protocol
  * worker), so its `@hikoutei/ikisaki` touches must stay on the narrow port
@@ -281,7 +281,7 @@ describe("sheets provider import boundary", () => {
 /**
  * Batch-B storage-seam gate: the narrow protocol port surface storage may use.
  *
- * `packages/storage/src` shares one SQLite transaction between the entity
+ * `packages/library/core/storage/src` shares one SQLite transaction between the entity
  * flush and the protocol outbox, so fencing, the outbox SQL seam, the DDL
  * the kernel owns, the shared error identity, and passive diagnostic timing
  * vocabulary are the port; every other kernel export (worker, dispatch,
@@ -378,7 +378,7 @@ function extractStorageSeamImports(source: string): StorageSeamImport[] {
 
 describe("storage protocol-seam import boundary", () => {
   it("keeps @hikoutei/ikisaki imports inside storage on the narrow port surface", () => {
-    const storageSrc = resolve(here, "..", "packages", "storage", "src");
+    const storageSrc = resolve(here, "..", "packages", "library", "core", "storage", "src");
     const violations: string[] = [];
     for (const file of collectSources(storageSrc)) {
       const source = readFileSync(file, "utf8");
@@ -410,7 +410,7 @@ describe("storage protocol-seam import boundary", () => {
     // the atomic seam. That one edge is pinned here; the entity-ORM
     // subtrees (`orm/`, `persistence/`, `storage/`) and every other sync
     // file must never name the sheets package.
-    const storageSrc = resolve(here, "..", "packages", "storage", "src");
+    const storageSrc = resolve(here, "..", "packages", "library", "core", "storage", "src");
     const violations: string[] = [];
     for (const file of collectSources(storageSrc)) {
       const source = readFileSync(file, "utf8");
@@ -432,7 +432,7 @@ describe("storage protocol-seam import boundary", () => {
     // The Batch-B move empties the old storage-side sheets-contract home:
     // no storage source may reference it (relative or by package), and no
     // importer worktree-wide may name the retired package path.
-    const storageSrc = resolve(here, "..", "packages", "storage", "src");
+    const storageSrc = resolve(here, "..", "packages", "library", "core", "storage", "src");
     const violations: string[] = [];
     for (const file of collectSources(storageSrc)) {
       const source = readFileSync(file, "utf8");
@@ -445,7 +445,7 @@ describe("storage protocol-seam import boundary", () => {
     for (const root of [
       resolve(here, "..", "packages", "library", "core", "sync-engine", "src"),
       resolve(here, "..", "packages", "library", "cloud", "sheets", "src"),
-      resolve(here, "..", "packages", "composition", "src"),
+      resolve(here, "..", "packages", "library", "core", "composition", "src"),
       resolve(here, "..", "packages", "library", "cloud", "cli", "src"),
       resolve(here, "..", "src"),
       here,

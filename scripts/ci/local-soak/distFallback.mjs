@@ -148,7 +148,7 @@ async function importInternalLoggerReset() {
   // own URL. Declared here so the catch can evaluate the loader-failure
   // predicate against it.
   const sourceUrl = new URL(
-    "../../../packages/contracts/src/shared/observability/internalLog.ts",
+    "../../../packages/library/core/contracts/src/shared/observability/internalLog.ts",
     import.meta.url,
   );
   try {

@@ -5,7 +5,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
-    "directory": "packages/composition"
+    "directory": "packages/library/core/composition"
   },
   "bugs": {
     "url": "https://github.com/ManddarinShop/Hikoutei/issues"
@@ -18,12 +18,12 @@
   },
   "exports": {
     "./*.js": {
-      "types": "./dist/packages/composition/src/*.d.ts",
-      "import": "./dist/packages/composition/src/*.js"
+      "types": "./dist/packages/library/core/composition/src/*.d.ts",
+      "import": "./dist/packages/library/core/composition/src/*.js"
     },
     "./*": {
-      "types": "./dist/packages/composition/src/*.d.ts",
-      "import": "./dist/packages/composition/src/*.js"
+      "types": "./dist/packages/library/core/composition/src/*.d.ts",
+      "import": "./dist/packages/library/core/composition/src/*.js"
     }
   },
   "files": [
