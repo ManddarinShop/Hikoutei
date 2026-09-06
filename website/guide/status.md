@@ -60,7 +60,7 @@ Hikoutei is a solo-maintained, open-source project with a documented
 contribution and release process:
 
 - [CONTRIBUTING.md](https://github.com/ManddarinShop/Hikoutei/blob/develop/CONTRIBUTING.md)
-- [Release process](https://github.com/ManddarinShop/Hikoutei/blob/develop/docs/release-process.md)
+- [Release process](https://github.com/ManddarinShop/Hikoutei/blob/develop/website/guide/release-process.md)
 
 Bug reports and feature requests use the repository's issue templates
 (`type:` / `area:` / `status:` labels).

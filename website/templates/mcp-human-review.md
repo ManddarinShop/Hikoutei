@@ -10,7 +10,7 @@ Hikoutei typed entities to AI agents, with people reviewing results in Google
 Sheets:
 
 ```sh
-npm create hikoutei@latest mcp-review -- --template mcp-review
+npm create hikoutei@latest mcp-human-review -- --template mcp-human-review
 ```
 
 AI agents work against **local SQLite** through the MCP tools; committed
@@ -21,7 +21,7 @@ SQLite is the authority, Sheets is the human-facing view.
 ## Quick start (local-only, no Google credentials)
 
 ```sh
-cd mcp-review
+cd mcp-human-review
 npm install
 npm run mcp
 ```
@@ -65,4 +65,4 @@ Share the spreadsheet with the service account as an **Editor**.
 - **Serverless / read-only filesystems:** SQLite needs a writable local volume.
 - **Multi-replica:** a local SQLite file is not a shared coordination layer.
 
-The server itself is [`@hikoutei/mcp`](https://www.npmjs.com/package/@hikoutei/mcp).
+The server itself is [`spreadsheet-db-mcp`](https://www.npmjs.com/package/spreadsheet-db-mcp).

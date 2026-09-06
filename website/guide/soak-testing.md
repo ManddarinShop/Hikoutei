@@ -19,7 +19,7 @@ is pinned by focused Vitest suites (`test/soak-args.test.ts`,
 `test/soak-executor.test.ts`, the split `test/soak-artifacts.{records,writer,collection}.test.ts`, and
 `test/soak-runner-unit.test.ts`, the feature-independent soak suite whose
 focused unit convergence/tombstone/batching/readiness/security asserts run
-in the default suite. The feature-dependent `test/soak-runner.test.ts` — a
+in the default suite. Feature-dependent end-to-end soak coverage — a
 short end-to-end run that crosses the cycle-60 reopen and the resume path,
 with opt-in long soak/recovery groups — is excluded from the non-feature
 soak stack, so `npm run test:soak` targets the available non-feature file

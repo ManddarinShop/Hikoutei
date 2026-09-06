@@ -5,14 +5,16 @@ description: Dated live and synthetic measurements for Hikoutei sync — through
 
 # Benchmarks
 
-All measurements are dated, environment-specific observations recorded in the
-repository's
-[`docs/sync-bulk-write-benchmark.md`](https://github.com/ManddarinShop/Hikoutei/blob/develop/docs/sync-bulk-write-benchmark.md).
+All measurements are dated, environment-specific observations recorded on
+this page ([`website/guide/benchmarks.md`](https://github.com/ManddarinShop/Hikoutei/blob/develop/website/guide/benchmarks.md))
+per the [benchmark recording rule](https://github.com/ManddarinShop/Hikoutei/blob/develop/CONTRIBUTING.md#benchmarks).
 They are not guarantees for other environments.
 
 The table below is **historical evidence from the retired Apps Script/Gateway
 era**: those runs measured the signed Apps Script gateway and its
-observation lock, which no longer exist. They are not comparable to the
+observation lock, which no longer exist. The rows below carry no recorded
+date/branch/command and are unverified against the current provider — treat
+them as historical notes only. They are not comparable to the
 current direct Google Sheets API provider and must not be presented as its
 performance.
 
