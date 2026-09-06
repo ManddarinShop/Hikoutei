@@ -7,7 +7,7 @@
 # When a domain is added later, replace ":80" with "hikoutei.example.com"
 # and Caddy obtains/renews the TLS certificate automatically.
 
-:80 {
+hikoutei.cloud {
 	# Bare host root -> live demo
 	redir / /demo 302
 
