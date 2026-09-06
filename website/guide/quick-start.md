@@ -48,6 +48,13 @@ user.name = "Ada Lovelace";
 await em.flush();
 ```
 
+`dbName` and `entities` are both optional: an omitted `dbName` falls back to
+the `HIKOUTEI_DB_PATH` environment variable (then `./hikoutei.sqlite`), and
+omitted `entities` use the tokens registered by `defineTypedSheetsEntity()`,
+in registration order. The sync-only `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS`
+optionally tunes the provider's request-start spacing; it never affects
+local-only mode.
+
 ## Query the local authority
 
 Equality shorthand composes with Hikoutei-owned typed operators, ordering,

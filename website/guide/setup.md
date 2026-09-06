@@ -1,6 +1,6 @@
 ---
 title: Google Sheets setup
-description: Env-driven sync auto-start and the service-account environment setup — three steps to connect Hikoutei to a spreadsheet.
+description: Env-driven sync auto-start and the service-account environment setup — nine steps across ten progress phases to connect Hikoutei to a spreadsheet.
 ---
 
 # Google Sheets setup
@@ -203,7 +203,10 @@ Options:
                             only; no subprocess, network, cloud, or file
                             writes; the key create shows the staging
                             placeholder <private-key-staging-dir>/key.json).
+-h, --help                Show help and exit.
 ```
+
+Both `--flag value` and `--flag=value` forms are accepted.
 
 When the setup finishes, the sync runtime picks the spreadsheet up from the
 environment automatically (see below).
@@ -231,6 +234,46 @@ The repository's `.gitignore` already ignores these defaults, so a plain
   checkpoint at custom paths, add those exact paths to your application's
   ignore rules and never commit them.
 
+## Adopt an existing spreadsheet with `hikoutei adopt`
+
+`hikoutei adopt` migrates an existing spreadsheet tab into a Hikoutei-managed
+entity without touching existing cells: the tab becomes the entity's
+`User_Input` surface, local SQLite state is seeded from its rows, and fresh
+`System_State` / `Sync_Conflicts` tabs are provisioned. Dry-run is the
+default and never mutates the spreadsheet; `adopt` mode requires `--entities`.
+
+```sh
+npx hikoutei adopt --entity Invoice --tab Invoices --entities ./dist/entities.js
+npx hikoutei adopt --adopt "Invoices=Invoices;Invoice No=invoiceNo" --entities ./dist/entities.js --mode adopt --yes
+```
+
+```text
+--entity <Name>           Entity name (must match a registered descriptor).
+--tab <TabName>           Existing tab to adopt (required with --entity).
+--adopt "Entity=Tab[;Header=property;...]"
+                          Repeat once per entity; mutually exclusive with
+                          --entity/--tab. Column bindings ride inline as
+                          `;Header=property` pairs. Per-run flags below apply
+                          to a single --adopt entry only.
+--identity-from <header|auto>  PK column header (default: auto).
+--map "Header=property"  Header-to-property binding; repeatable.
+--system-tab <name>       Fresh System_State tab (default <tab>_System).
+--conflicts-tab <name>    Fresh Sync_Conflicts tab (default <tab>_Conflicts).
+--mode <dry-run|adopt>    dry-run (default) analyzes read-only; adopt migrates.
+--db <path>               SQLite path (default ./hikoutei.sqlite, or HIKOUTEI_DB_PATH).
+--spreadsheet-url <url>   Falls back to HIKOUTEI_SYNC_SPREADSHEET_URL.
+--credentials <path>      Service-account key file; falls back to
+                          GOOGLE_APPLICATION_CREDENTIALS.
+--entities <module>       Module that registers the entities on import.
+                          Required in adopt mode.
+--yes                     Skip the interactive confirmation (adopt mode).
+--json                    Machine-readable output.
+-h, --help                Show help and exit.
+```
+
+Exit codes: 0 success (a ready dry-run also exits 0), 1 failure (a blocked
+dry-run, a declined confirmation, or a runtime error), 2 argument errors.
+
 ## Env-driven sync auto-start
 
 Set the spreadsheet URL and the service-account key path in the server
@@ -246,6 +289,13 @@ GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 ```ts
 const hikoutei = await createTypedSheets({ dbName: "./hikoutei.sqlite", entities: [User] });
 ```
+
+`dbName` and `entities` are both optional: an omitted `dbName` falls back to
+the `HIKOUTEI_DB_PATH` environment variable (then `./hikoutei.sqlite`), and
+omitted `entities` use the tokens registered by `defineTypedSheetsEntity()`,
+in registration order. `HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` optionally tunes
+the sync provider's request-start spacing (sync path only; it never affects
+local-only mode).
 
 Without `HIKOUTEI_SYNC_SPREADSHEET_URL`, `createTypedSheets()` stays
 local-only (SQLite). Startup failures are diagnosed with clear messages:
@@ -298,4 +348,4 @@ it spaces request starts to stay inside Google's quota windows.
 
 Live Google calls are opt-in; fake providers and SQLite fixtures are the
 normal verification path. Detailed setup and troubleshooting steps live in the
-repository's `docs/quick-start.md`.
+repository's `website/guide/quick-start.md`.
