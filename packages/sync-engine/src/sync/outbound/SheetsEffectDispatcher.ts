@@ -74,7 +74,7 @@ import {
 import {
   classifyTransportOutcome,
   TRANSPORT_OUTCOME_KINDS,
-} from "@hikoutei/contracts/sheets/transportOutcome.js";
+} from "@hikoutei/ikisaki";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,

@@ -7,7 +7,7 @@ import {
   type CoordinatedSheetsInner,
 } from "@hikoutei/contracts/sheets/mutationCoordinator/CoordinatedSheetsProvider.js";
 import type { CoordinatorLaneEvent } from "@hikoutei/contracts/sheets/mutationCoordinator/laneTelemetry.js";
-import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/ikisaki";
 import type {
   ApplySyncEffectsRequest,
   ApplySyncEffectsResult,

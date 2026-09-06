@@ -19,7 +19,7 @@ import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "@hikoutei/contracts/sheets/errors.js";
-import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { classifyTransportOutcome, sanitizeTransportRemoteCode } from "@hikoutei/ikisaki";
 import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.js";
 import {
   HIKOUTEI_LOG_LEVELS,

@@ -46,8 +46,12 @@ import type { MappedPollingState } from "@hikoutei/storage/persistence/providers
 import { createMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { GoogleSheetsApiSyncProvider } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
-import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
-import { buildRowCheckFormula } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/rowCheckFormula.js";
+import {
+  GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
+  GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
+import { buildRowCheckFormula } from "@hikoutei/ikisaki";
+import { columnLetters } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,
@@ -423,7 +427,13 @@ function gateDefinition(): RegisteredSyncProjectionDefinition {
 
 /** Row-check formula for one seeded gate row (data columns A:B). */
 function gateFormula(rowNumber: number): string {
-  return buildRowCheckFormula(1, 2, rowNumber);
+  return buildRowCheckFormula(
+    1,
+    2,
+    rowNumber,
+    GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+    columnLetters,
+  );
 }
 
 function seedGateSheet(humanEdit: boolean): {

@@ -27,9 +27,13 @@ import { computeSyncVisibleHash } from "@hikoutei/contracts/sheets/syncSheets.js
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import { absentValue, presentValue, notApplicableValue } from "@hikoutei/contracts/state/index.js";
 import { GoogleSheetsApiSyncProvider } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
-import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
+import {
+  GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
+  GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import { GOOGLE_SHEETS_API_ROW_CHECK_FIELDS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
-import { buildRowCheckFormula } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/rowCheckFormula.js";
+import { buildRowCheckFormula } from "@hikoutei/ikisaki";
+import { columnLetters } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,
@@ -104,7 +108,13 @@ function seedInputTab(
 function seedCheckFormula(tab: StubSheet, rowNumber: number): void {
   tab.cells.set(`${rowNumber - 1},4`, {
     userEnteredValue: {
-      formulaValue: buildRowCheckFormula(1, 3, rowNumber),
+      formulaValue: buildRowCheckFormula(
+        1,
+        3,
+        rowNumber,
+        GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+        columnLetters,
+      ),
     },
   });
 }
@@ -201,10 +211,24 @@ describe("check-column formula at row creation", () => {
     expect(checkWrite?.kind).toBe("updateCells");
     if (checkWrite?.kind !== "updateCells") return;
     expect(checkWrite.rows).toEqual([[{
-      userEnteredValue: { formulaValue: buildRowCheckFormula(1, 3, 2) },
+      userEnteredValue: {
+        formulaValue: buildRowCheckFormula(
+          1,
+          3,
+          2,
+          GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+          columnLetters,
+        ),
+      },
     }]]);
     expect(tab.cell(1, 4)?.userEnteredValue?.formulaValue)
-      .toBe(buildRowCheckFormula(1, 3, 2));
+      .toBe(buildRowCheckFormula(
+        1,
+        3,
+        2,
+        GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+        columnLetters,
+      ));
 
     // The stub's recalc engine computes the token join on the FIRST read
     // after the batch, and the value equals the SQLite-side expectation
@@ -298,7 +322,13 @@ describe("check-column formula at row creation", () => {
     // (cell-targeted updateCells preserves neighbors — proven 3/3) and the
     // recalc reflects the new value on the next narrow read.
     expect(tab.cell(1, 4)?.userEnteredValue?.formulaValue)
-      .toBe(buildRowCheckFormula(1, 3, 2));
+      .toBe(buildRowCheckFormula(
+        1,
+        3,
+        2,
+        GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+        columnLetters,
+      ));
     const [checks] = await provider.readRowChecksBatch([rowChecksRequest()]);
     expect(checks?.rows[0]?.check)
       .toEqual(presentValue(computeRowCheckValue([...INPUT_HEADERS],
@@ -582,7 +612,13 @@ describe("check-column polling read size", () => {
       tab.cells.set(`${index + 1},2`, toStubCell(cell.bool(index % 2 === 0)));
       tab.cells.set(`${index + 1},3`, toStubCell(`anchor-${id}`));
       tab.cells.set(`${index + 1},4`, { userEnteredValue: {
-        formulaValue: buildRowCheckFormula(1, 3, index + 2),
+        formulaValue: buildRowCheckFormula(
+          1,
+          3,
+          index + 2,
+          GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+          columnLetters,
+        ),
       } });
     }
     const events: { readonly operation: string; readonly responseBytes?: number }[] = [];

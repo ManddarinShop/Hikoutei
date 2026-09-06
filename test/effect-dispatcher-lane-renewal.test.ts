@@ -42,7 +42,7 @@ import {
   type PreparedApplyEffects,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { absentValue } from "@hikoutei/contracts/state/index.js";
-import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/ikisaki";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
