@@ -13,6 +13,15 @@
  * shared/observability log modules now owned by `@hikoutei/contracts`) is
  * removed, so no file under `packages/library/cloud/sheets/src/` may name the
  * `@hikoutei/sync-engine` specifier at all.
+ *
+ * Batch-B storage-seam gate (same file, third suite): `packages/storage/src`
+ * is the shared-transaction home (entity flush, canonical/observation/
+ * resolution writers, and the outbox/fencing SQL they share with the protocol
+ * worker), so its `@hikoutei/ikisaki` touches must stay on the narrow port
+ * surface below while every other kernel name (worker, dispatch, pacing
+ * policy, bands, batches, evidence, transport, effect lifecycle) is denied.
+ * `@hikoutei/sheets` is denied inside storage except the single
+ * protocol-side audit-planning edge pinned below.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -262,6 +271,192 @@ describe("sheets provider import boundary", () => {
           violations.push(
             `${relative(sheetsSrc, file)}: forbidden sync-engine import ${JSON.stringify(imp.specifier)}`,
           );
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+});
+
+/**
+ * Batch-B storage-seam gate: the narrow protocol port surface storage may use.
+ *
+ * `packages/storage/src` shares one SQLite transaction between the entity
+ * flush and the protocol outbox, so fencing, the outbox SQL seam, the DDL
+ * the kernel owns, the shared error identity, and passive diagnostic timing
+ * vocabulary are the port; every other kernel export (worker, dispatch,
+ * pacing policy, bands, batches, evidence, transport, confirmations, effect
+ * lifecycle) is an internal and must never be named by storage. `export *`
+ * and default/namespace/side-effect/dynamic imports are opaque and denied
+ * outright because no port name can be verified on them.
+ */
+const STORAGE_SEAM_IKISAKI_PORT = new Set([
+  // Fencing ports: writer-lease claims/gates, fence-guarded SQL evidence,
+  // and the fence-lost signal the append seam reports through.
+  "FencingContext",
+  "claimWriterLeaseWithSql",
+  "claimWriterLeaseWithAdapter",
+  "awaitTakeoverableWriterLeaseWithAdapter",
+  "isFencingValidWithSql",
+  "fenceParameters",
+  "FENCE_EXISTS_SQL",
+  "writerLeaseHeartbeatStaleBoundMs",
+  "WRITER_LEASE_CLAIM_RESULT_KINDS",
+  "AsyncFenceLostError",
+  // Outbox SQL seam: the in-transaction append/replan primitives, their
+  // input type, the opaque dispatch label type, and the pure recoverability
+  // predicate over the shared error-code vocabulary.
+  "appendPendingEffectsWithSql",
+  "supersedeAndReplanWithSql",
+  "NewEffect",
+  "isRecoverableEffectErrorCode",
+  // DDL the kernel owns and the host schema composes.
+  "EFFECT_OUTBOX_DDL",
+  "REQUIRED_V3_COLUMNS",
+  "REQUIRED_V5_COLUMNS",
+  "REQUIRED_V9_COLUMNS",
+  "VISIBLE_STATE_TABLES_DDL",
+  "WRITER_LEASE_DDL",
+  "syncSchemaV5IndexesDdl",
+  // Shared error identity plus passive diagnostic timing vocabulary (shapes
+  // and zeroed counts only; no pacing policy, emit, or dispatch helper).
+  "StorageError",
+  "TIMING_OPERATION_KINDS",
+  "TIMING_SCOPES",
+  "emptyOperationCounts",
+  "ProviderTiming",
+  "TimingEvent",
+  "TimingOperationCounts",
+  "TimingOperationKind",
+]);
+
+/** The moved Sync_Conflicts audit projection (Sheets-tab semantics, Batch B). */
+const CONFLICT_PROJECTION_SHEETS_SPECIFIER =
+  "@hikoutei/sheets/sheets/providers/google-sheets-api/model/conflictProjection.js";
+
+/** The one protocol-side storage file allowed to plan audit effects. */
+const AUDIT_PLANNER_RELATIVE = join("sync", "inbound", "autoSystemConflictResolution.ts");
+
+/** One import edge with the names the gate can verify against the port. */
+interface StorageSeamImport {
+  readonly specifier: string;
+  readonly names: readonly string[];
+  readonly opaque: boolean;
+}
+
+/** Extracts (specifier, verified names) pairs, flagging opaque edges. */
+function extractStorageSeamImports(source: string): StorageSeamImport[] {
+  const text = stripComments(source);
+  const found: StorageSeamImport[] = [];
+  const staticPattern = /(?:import|export)\s+([^;]*?)\sfrom\s*["']([^"']+)["']/g;
+  for (let match = staticPattern.exec(text); match !== null; match = staticPattern.exec(text)) {
+    const clause = match[1] as string;
+    const specifier = match[2] as string;
+    const names: string[] = [];
+    const bracePattern = /\{([^}]*)\}/g;
+    for (let brace = bracePattern.exec(clause); brace !== null; brace = bracePattern.exec(clause)) {
+      for (const part of (brace[1] as string).split(",")) {
+        const name = part.replace(/^\s*type\s+/, "").split(/\s+as\s+/)[0]?.trim() ?? "";
+        if (name !== "") names.push(name);
+      }
+    }
+    // Anything outside braces (default binding, namespace, star) hides the
+    // kernel name behind a local alias, so the edge stays unverifiable.
+    const outside = clause.replace(/\{[^}]*\}/g, "").trim();
+    found.push({ specifier, names, opaque: outside !== "" && outside !== "type" });
+  }
+  const sideEffectPattern = /import\s*["']([^"']+)["']/g;
+  for (let match = sideEffectPattern.exec(text); match !== null; match = sideEffectPattern.exec(text)) {
+    found.push({ specifier: match[1] as string, names: [], opaque: true });
+  }
+  const dynamicPattern = /import\s*\(\s*["']([^"']+)["']\s*\)/g;
+  for (let match = dynamicPattern.exec(text); match !== null; match = dynamicPattern.exec(text)) {
+    found.push({ specifier: match[1] as string, names: [], opaque: true });
+  }
+  return found;
+}
+
+describe("storage protocol-seam import boundary", () => {
+  it("keeps @hikoutei/ikisaki imports inside storage on the narrow port surface", () => {
+    const storageSrc = resolve(here, "..", "packages", "storage", "src");
+    const violations: string[] = [];
+    for (const file of collectSources(storageSrc)) {
+      const source = readFileSync(file, "utf8");
+      for (const imp of extractStorageSeamImports(source)) {
+        if (imp.specifier !== "@hikoutei/ikisaki") {
+          if (imp.specifier.startsWith("@hikoutei/ikisaki/")) {
+            violations.push(`${relative(storageSrc, file)}: deep protocol import ${JSON.stringify(imp.specifier)}`);
+          }
+          continue;
+        }
+        if (imp.opaque) {
+          violations.push(`${relative(storageSrc, file)}: opaque protocol import of ${JSON.stringify(imp.specifier)}`);
+          continue;
+        }
+        for (const name of imp.names) {
+          if (!STORAGE_SEAM_IKISAKI_PORT.has(name)) {
+            violations.push(`${relative(storageSrc, file)}: protocol internal ${JSON.stringify(name)} is past the port surface`);
+          }
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps @hikoutei/sheets out of storage except the single audit-planning edge", () => {
+    // The Sync_Conflicts audit projection is Sheets-tab semantics owned by
+    // `@hikoutei/sheets`, but its rows are planned inside the shared flush
+    // transaction by the protocol-side inbound planner, which must stay for
+    // the atomic seam. That one edge is pinned here; the entity-ORM
+    // subtrees (`orm/`, `persistence/`, `storage/`) and every other sync
+    // file must never name the sheets package.
+    const storageSrc = resolve(here, "..", "packages", "storage", "src");
+    const violations: string[] = [];
+    for (const file of collectSources(storageSrc)) {
+      const source = readFileSync(file, "utf8");
+      for (const imp of extractStorageSeamImports(source)) {
+        if (imp.specifier !== "@hikoutei/sheets" && !imp.specifier.startsWith("@hikoutei/sheets/")) {
+          continue;
+        }
+        const isPinnedEdge = relative(storageSrc, file) === AUDIT_PLANNER_RELATIVE &&
+          imp.specifier === CONFLICT_PROJECTION_SHEETS_SPECIFIER;
+        if (!isPinnedEdge) {
+          violations.push(`${relative(storageSrc, file)}: forbidden sheets import ${JSON.stringify(imp.specifier)}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("leaves no sheetsContract remnant behind in storage or its importers", () => {
+    // The Batch-B move empties the old storage-side sheets-contract home:
+    // no storage source may reference it (relative or by package), and no
+    // importer worktree-wide may name the retired package path.
+    const storageSrc = resolve(here, "..", "packages", "storage", "src");
+    const violations: string[] = [];
+    for (const file of collectSources(storageSrc)) {
+      const source = readFileSync(file, "utf8");
+      for (const imp of extractStorageSeamImports(source)) {
+        if (imp.specifier.includes("sheetsContract")) {
+          violations.push(`${relative(storageSrc, file)}: retired sheets-contract import ${JSON.stringify(imp.specifier)}`);
+        }
+      }
+    }
+    for (const root of [
+      resolve(here, "..", "packages", "sync-engine", "src"),
+      resolve(here, "..", "packages", "library", "cloud", "sheets", "src"),
+      resolve(here, "..", "packages", "composition", "src"),
+      resolve(here, "..", "packages", "library", "cloud", "cli", "src"),
+      resolve(here, "..", "src"),
+      here,
+    ]) {
+      for (const file of collectSources(root)) {
+        if (!file.endsWith(".ts")) continue;
+        const source = readFileSync(file, "utf8");
+        for (const imp of extractStorageSeamImports(source)) {
+          if (imp.specifier === "@hikoutei/storage/sync/sheetsContract/conflictProjection.js") {
+            violations.push(`${relative(resolve(here, ".."), file)}: retired package import ${JSON.stringify(imp.specifier)}`);
+          }
         }
       }
     }

@@ -42,8 +42,9 @@ import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
+  SYNC_CONFLICT_PROJECTION_ERROR_CODES,
   SYNC_CONFLICT_RESOLUTIONS,
-} from "@hikoutei/storage/sync/sheetsContract/conflictProjection.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/conflictProjection.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
@@ -1916,36 +1917,36 @@ describe("issue #196 audit projection state union", () => {
     });
   });
 
-  it("rejects malformed audit state combinations with the structured storage error", () => {
+  it("rejects malformed audit state combinations with the structured projection error", () => {
     // Unresolved conflicts must never carry a command identity: the shared
     // materializer would otherwise emit a nonblank Resolution_Command_ID.
     expect(() => openSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.OPEN, presentValue("sync:system-wins:conflict-proj:1:3")),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     expect(() => openSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.NEEDS_REBASE, presentValue("sync:system-wins:conflict-proj:1:3")),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     // RESOLVED cannot be projected as unresolved, with or without identity.
     expect(() => openSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.RESOLVED, absentValue()),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     // RESOLVED as resolved requires the applied command identity.
     expect(() => resolvedSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.RESOLVED, absentValue()),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     // A non-RESOLVED conflict can never be projected as resolved.
     expect(() => resolvedSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.OPEN, presentValue("sync:system-wins:conflict-proj:1:3")),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
   });
 });

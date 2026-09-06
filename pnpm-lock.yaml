@@ -192,6 +192,9 @@ importers:
       '@hikoutei/ikisaki':
         specifier: 0.1.16
         version: link:../protocol/ikisaki
+      '@hikoutei/sheets':
+        specifier: 0.1.0
+        version: link:../library/cloud/sheets
       '@mikro-orm/core':
         specifier: 7.1.7
         version: 7.1.7

@@ -43,7 +43,7 @@ import {
 import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
-} from "../sheetsContract/conflictProjection.js";
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/conflictProjection.js";
 import {
   createCandidateReconcileEffect,
   createResolutionProjectionEffect,
