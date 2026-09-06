@@ -16,11 +16,11 @@ import {
   SyncSheetsContractError,
   type SyncInvalidProviderClassification,
 } from "@hikoutei/contracts/sheets/errors.js";
-import { HIKOUTEI_LOG_LEVELS, logHikouteiInternalEvent } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+import { HIKOUTEI_LOG_LEVELS, logHikouteiInternalEvent } from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 
 // P8-B: the transport error contract moved to the contracts leaf (the shared
 // `classifyTransportOutcome` boundary needs the class identity). The adapter

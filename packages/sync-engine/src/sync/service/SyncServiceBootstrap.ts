@@ -70,11 +70,11 @@ import {
   HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
   logWriterLeaseStartupWait,
-} from "../../shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
-} from "../../shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,

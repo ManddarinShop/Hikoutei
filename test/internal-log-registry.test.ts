@@ -27,7 +27,7 @@ import {
   HIKOUTEI_LOG_PROVIDER_REASONS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 
 /** Every non-CLI error-code family that can reach a logged boundary. */
 const RUNTIME_ERROR_CODE_FAMILIES = [

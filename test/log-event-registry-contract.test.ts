@@ -1,6 +1,6 @@
 /**
  * Contract tests for the internal log registries
- * (`@hikoutei/sync-engine/shared/observability/logEvents.js` — the implementation module).
+ * (`@hikoutei/contracts/shared/observability/logEvents.js` — the implementation module).
  *
  * The registries are a deliberate allowlist: an unknown or arbitrary
  * `error.code` or `errorClass` (which could be an ID-like secret) must never
@@ -25,8 +25,8 @@ import {
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
-import { formatHikouteiLogLine } from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
+import { formatHikouteiLogLine } from "@hikoutei/contracts/shared/observability/internalLog.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "@hikoutei/sync-engine/api/errors.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,

@@ -24,11 +24,11 @@ import { presentValue, absentValue, PRESENCE_KINDS, type Presence } from "@hikou
 import {
   HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
-} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import {

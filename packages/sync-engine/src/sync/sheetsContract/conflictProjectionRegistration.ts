@@ -9,7 +9,7 @@ import {
   writerLeaseHeartbeatStaleBoundMs,
   type FencingContext,
 } from "@hikoutei/ikisaki";
-import { logWriterLeaseStartupWait } from "../../shared/observability/internalLog.js";
+import { logWriterLeaseStartupWait } from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   registerSyncSheetWithSql,
   type RegisteredSyncSheet,

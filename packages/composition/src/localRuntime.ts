@@ -49,11 +49,11 @@ import {
   describeErrorForInternalLog,
   HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
-} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 
 
 /** Lazily-loaded provider resources for one local runtime open. */

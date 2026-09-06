@@ -4,16 +4,15 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
-    // P8-D2 phase 2: the provider keeps two internal-log imports against the
-    // sync engine's shared/observability modules, mapped to SOURCE like the
-    // storage package's engine map (no build-order dependency). rootDir
-    // spans the repo for that reached-in source emission, which is never
+    // Batch E: the provider's internal-log imports resolve to the contracts
+    // leaf's shared/observability modules through the workspace link (built
+    // contracts dist, no source map needed). rootDir spans the repo
+    // for the storage package's reached-in source emission, which is never
     // bundled or shipped.
     "rootDir": "../..",
     "outDir": "dist",
     "baseUrl": "../..",
     "paths": {
-      "@hikoutei/sync-engine/*": ["packages/sync-engine/src/*"],
       "@hikoutei/storage/*": ["packages/storage/src/*"],
       "@hikoutei/sheets/*": ["packages/sheets/src/*"]
     },
