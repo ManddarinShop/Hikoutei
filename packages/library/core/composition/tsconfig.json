@@ -9,11 +9,11 @@
     // engine tsconfigs): the transient reached-in mirrors in this package's
     // dist are never bundled or shipped. Nothing here reaches into the root
     // package (composition -> engine -> storage is the only direction).
-    "rootDir": "../..",
+    "rootDir": "../../../..",
     "outDir": "dist",
-    "baseUrl": "../..",
+    "baseUrl": "../../../..",
     "paths": {
-      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/storage/*": ["packages/library/core/storage/src/*"],
       "@hikoutei/sheets/*": ["packages/library/cloud/sheets/src/*"],
       "@hikoutei/sync-engine/*": ["packages/library/core/sync-engine/src/*"]
     },

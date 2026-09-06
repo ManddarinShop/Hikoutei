@@ -13,7 +13,7 @@
     "outDir": "dist",
     "baseUrl": "../../../..",
     "paths": {
-      "@hikoutei/storage/*": ["packages/storage/src/*"],
+      "@hikoutei/storage/*": ["packages/library/core/storage/src/*"],
       "@hikoutei/sheets/*": ["packages/library/cloud/sheets/src/*"]
     },
     "declaration": true,

@@ -6,13 +6,13 @@ const ikisakiSource = fileURLToPath(
 );
 
 const contractsSource = fileURLToPath(
-  new URL("./packages/contracts/src/", import.meta.url),
+  new URL("./packages/library/core/contracts/src/", import.meta.url),
 );
 
 // P8-D2 phase 1 leaves resolve to source so suites never depend on a stale
 // dist build (same convention as @hikoutei/contracts above).
 const storageSource = fileURLToPath(
-  new URL("./packages/storage/src/", import.meta.url),
+  new URL("./packages/library/core/storage/src/", import.meta.url),
 );
 const sheetsSource = fileURLToPath(
   new URL("./packages/library/cloud/sheets/src/", import.meta.url),
@@ -26,7 +26,7 @@ const syncEngineSource = fileURLToPath(
   new URL("./packages/library/core/sync-engine/src/", import.meta.url),
 );
 const compositionSource = fileURLToPath(
-  new URL("./packages/composition/src/", import.meta.url),
+  new URL("./packages/library/core/composition/src/", import.meta.url),
 );
 const cliSource = fileURLToPath(
   new URL("./packages/library/cloud/cli/src/", import.meta.url),
