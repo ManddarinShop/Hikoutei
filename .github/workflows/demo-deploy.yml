@@ -109,7 +109,7 @@ jobs:
           script: |
             set -euo pipefail
             for i in 1 2 3 4 5 6; do
-              if curl -fsS http://localhost/api/health | grep -q '"syncMode":"sync"'; then
+              if curl -fsS --resolve hikoutei.cloud:443:127.0.0.1 https://hikoutei.cloud/api/health | grep -q '"syncMode":"sync"'; then
                 echo "health OK: sync mode"
                 exit 0
               fi
