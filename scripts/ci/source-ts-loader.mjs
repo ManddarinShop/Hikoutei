@@ -23,7 +23,7 @@ const PACKAGE_SRC = {
   // split the WeakMap/registry identity from the source-loaded harness.
   "@hikoutei/contracts": "../../packages/contracts",
   "@hikoutei/storage": "../../packages/storage",
-  "@hikoutei/sheets": "../../packages/sheets",
+  "@hikoutei/sheets": "../../packages/library/cloud/sheets",
   "@hikoutei/sync-engine": "../../packages/sync-engine",
   "@hikoutei/composition": "../../packages/composition",
 };

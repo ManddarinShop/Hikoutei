@@ -35,7 +35,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/sheets": {
+    "packages/library/cloud/sheets": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -59,7 +59,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/cli": {
+    "packages/library/cloud/cli": {
       "entry": [
         "src/**/*.ts"
       ],

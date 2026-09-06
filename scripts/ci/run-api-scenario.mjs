@@ -68,7 +68,7 @@ const { SheetsEffectDispatcher } = sheetsDispatcher;
 const { runEffectWorkerWithAdapter } = outboxWorker;
 const { stableHash } = encoding;
 const [directSheets, mappedPolling] = await Promise.all([
-  import(new URL("../../packages/sheets/src/sheets/providers/google-sheets-api/index.js", import.meta.url).href),
+  import(new URL("../../packages/library/cloud/sheets/src/sheets/providers/google-sheets-api/index.js", import.meta.url).href),
   import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js", import.meta.url).href),
 ]);
 const { GoogleSheetsApiSyncProvider, GoogleSheetsApiHttpTransport } = directSheets;

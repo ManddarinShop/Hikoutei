@@ -80,7 +80,7 @@ SQLite 인입 경로(p50 2–3ms, p95 4–6ms)는 sync on/off와 무관하게 �
 
 ## 적용한 수정
 
-- `packages/sheets/src/sheets/providers/google-sheets-api/operations/applyEffects.ts`
+- `packages/library/cloud/sheets/src/sheets/providers/google-sheets-api/operations/applyEffects.ts`
   inline 검증 읽기의 request-start 페이싱을 `"write"` → `"preflight"`(read-lane)로 이동.
   워커가 단일 스레드 직렬이라 write→verify 순서는 그대로 보장되어 CAS 안전성 유지.
   배치당 write-lane 슬롯 3 → 2.

@@ -1,13 +1,14 @@
 {
-  "name": "@hikoutei/cli",
+  "name": "@hikoutei/sheets",
   "version": "0.1.0",
-  "description": "Setup and adoption command line for the Hikoutei typed repository (service-side provisioning; not part of the library API). Published through the root package: the reconcile codemod bundles this dist into the root dist/cli/** bin (P8-D2 phase 2).",
+  "description": "Google Sheets sync adapter leaf for the Hikoutei typed repository: the google-sheets-api provider (P8-D2 phase 1).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
-    "directory": "packages/cli"
+    "directory": "packages/library/cloud/sheets"
   },
   "bugs": {
+    "type": "git",
     "url": "https://github.com/ManddarinShop/Hikoutei/issues"
   },
   "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
@@ -18,12 +19,12 @@
   },
   "exports": {
     "./*.js": {
-      "types": "./dist/packages/cli/src/*.d.ts",
-      "import": "./dist/packages/cli/src/*.js"
+      "types": "./dist/packages/library/cloud/sheets/src/*.d.ts",
+      "import": "./dist/packages/library/cloud/sheets/src/*.js"
     },
     "./*": {
-      "types": "./dist/packages/cli/src/*.d.ts",
-      "import": "./dist/packages/cli/src/*.js"
+      "types": "./dist/packages/library/cloud/sheets/src/*.d.ts",
+      "import": "./dist/packages/library/cloud/sheets/src/*.js"
     }
   },
   "files": [
@@ -35,11 +36,11 @@
     "typecheck:test": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@googleapis/drive": "^21.0.0",
     "@googleapis/sheets": "^14.0.0",
-    "@hikoutei/sync-engine": "0.1.0",
+    "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/ikisaki": "0.1.13",
     "google-auth-library": "^11.0.0",
-    "hikoutei": "0.10.1-dev"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"

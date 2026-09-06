@@ -62,7 +62,7 @@ module.exports = {
       from: { path: "^packages/sync-engine/src/" },
       to: {
         path:
-          "^packages/(sheets|composition|cli)/(?:src|dist)/|^src/",
+          "^packages/(library/cloud/sheets|composition|library/cloud/cli)/(?:src|dist)/|^src/",
       },
     },
     {
@@ -78,7 +78,7 @@ module.exports = {
       comment:
         "The Google Sheets provider may reuse ONLY the engine's shared/observability log modules (internalLog/logEvents). Any other sheets->engine edge is an error: the provider belongs below the engine, and the engine must never import @hikoutei/sheets.",
       severity: "error",
-      from: { path: "^packages/sheets/src/" },
+      from: { path: "^packages/library/cloud/sheets/src/" },
       to: {
         path: `^${ENGINE}/`,
         pathNot: [
@@ -95,7 +95,7 @@ module.exports = {
       from: { path: "^packages/storage/src/storage/" },
       to: {
         path:
-          `^packages/(sync-engine|composition|cli)/(?:src|dist)/|^src/|^packages/storage/src/(persistence|orm|sync)/`,
+          `^packages/(sync-engine|composition|library/cloud/cli)/(?:src|dist)/|^src/|^packages/storage/src/(persistence|orm|sync)/`,
       },
     },
     {
@@ -104,15 +104,15 @@ module.exports = {
         "The public API layer stays adapter-free (composition root owns wiring): src/api may consume @hikoutei/sync-engine and @hikoutei/composition but must never import @hikoutei/storage or @hikoutei/sheets.",
       severity: "error",
       from: { path: "^src/api/" },
-      to: { path: "^src/adapter/|^packages/(storage|sheets)/(?:src|dist)/" },
+      to: { path: "^src/adapter/|^packages/(storage|library/cloud/sheets)/(?:src|dist)/" },
     },
     {
       name: "cli-not-into-adapter-leaves",
       comment:
         "The setup/adoption cli talks to the public root entrypoint (`hikoutei` barrel — the api-bridge) and the engine's registry internals only; concrete adapter leaves (@hikoutei/storage, @hikoutei/sheets) are the composition root's business and are never named from cli code.",
       severity: "error",
-      from: { path: "^packages/cli/src/" },
-      to: { path: "^packages/(storage|sheets)/(?:src|dist)/" },
+      from: { path: "^packages/library/cloud/cli/src/" },
+      to: { path: "^packages/(storage|library/cloud/sheets)/(?:src|dist)/" },
     },
     {
       name: "domain-shared-leaf",

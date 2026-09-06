@@ -19,7 +19,7 @@
       // moved packages back by name; mapping both to source (never dist)
       // removes any build-order dependency between the two packages.
       "@hikoutei/storage/*": ["packages/storage/src/*"],
-      "@hikoutei/sheets/*": ["packages/sheets/src/*"]
+      "@hikoutei/sheets/*": ["packages/library/cloud/sheets/src/*"]
     },
     "declaration": true,
     "declarationMap": true,
