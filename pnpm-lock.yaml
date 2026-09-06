@@ -15,7 +15,7 @@ importers:
         specifier: ^14.0.0
         version: 14.0.0
       '@hikoutei/ikisaki':
-        specifier: 0.1.13
+        specifier: 0.1.14
         version: link:packages/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
@@ -79,7 +79,7 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: 0.10.1-dev
+        specifier: 0.10.2-dev
         version: link:../..
     devDependencies:
       '@types/node':
@@ -109,7 +109,7 @@ importers:
     dependencies:
       '@hikoutei/ikisaki':
         specifier: 0.1.13
-        version: link:../ikisaki
+        version: 0.1.13
       '@hikoutei/kohkai':
         specifier: 0.1.0
         version: 0.1.0
@@ -143,7 +143,7 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: 0.10.1-dev
+        specifier: 0.10.2-dev
         version: link:../..
 
   packages/sheets:
@@ -156,7 +156,7 @@ importers:
         version: link:../contracts
       '@hikoutei/ikisaki':
         specifier: 0.1.13
-        version: link:../ikisaki
+        version: 0.1.13
       '@hikoutei/sync-engine':
         specifier: 0.1.0
         version: link:../sync-engine
@@ -177,7 +177,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.13
+        specifier: 0.1.14
         version: link:../ikisaki
       '@mikro-orm/core':
         specifier: 7.1.7
@@ -196,7 +196,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.13
+        specifier: 0.1.14
         version: link:../ikisaki
       '@hikoutei/storage':
         specifier: 0.1.0
@@ -362,6 +362,9 @@ packages:
   '@googleapis/sheets@14.0.0':
     resolution: {integrity: sha512-fANEl4RQohsPYUWhcLSYyUyE8A8bRfvw/bp8h0t8VDQqTgdQ3itZBkty4nddtdqCAvNDpA+KM66OejVKDd6aFg==}
     engines: {node: '>=12.0.0'}
+
+  '@hikoutei/ikisaki@0.1.13':
+    resolution: {integrity: sha512-1tBRGUamioaygzKuokqSPNhDgwr/+LIq6ZHIBClMF/EWvqei3DRDImcV1xqctBDmG29vXN8cVOV38otvPkVWZQ==}
 
   '@hikoutei/kohkai@0.1.0':
     resolution: {integrity: sha512-ciZqHnU+4R4ozxzZBltaDpzhcra0wPegAXG7BDLtaQuYqkMvkHdq2PUhPtl6HGddSSI63bRwVO2Qb05mQBv0VQ==}
@@ -1948,6 +1951,8 @@ snapshots:
       googleapis-common: 8.0.3
     transitivePeerDependencies:
       - supports-color
+
+  '@hikoutei/ikisaki@0.1.13': {}
 
   '@hikoutei/kohkai@0.1.0': {}
 
