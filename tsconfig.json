@@ -23,7 +23,7 @@
       // dists, built first by the build scripts). Source-based compilation
       // lives in tsconfig.test.json and the vitest aliases, so
       // typecheck/test never depend on a stale dist.
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"]
+      "@hikoutei/ikisaki": ["./packages/protocol/ikisaki/dist/index.d.ts"]
     },
     "declaration": true,
     "declarationMap": true,

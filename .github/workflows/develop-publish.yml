@@ -234,7 +234,7 @@ jobs:
           mkdir -p "$ikisaki_dir"
           # npm pack here is deliberate (tarball production, registry act
           # unchanged until P8-DD); the BUILD runs through pnpm.
-          (cd packages/ikisaki && pnpm run build && npm pack --silent --pack-destination "$ikisaki_dir")
+          (cd packages/protocol/ikisaki && pnpm run build && npm pack --silent --pack-destination "$ikisaki_dir")
           # Exact ikisaki artifact integrity: exactly one tarball whose
           # package name/version match the workspace manifest and the version
           # record the publish job reads. The checksum accompanies the tarball
@@ -245,7 +245,7 @@ jobs:
             exit 1
           fi
           ikisaki_tarball="${ikisaki_tarballs[0]}"
-          ikisaki_version="$(node -p "require('./packages/ikisaki/package.json').version")"
+          ikisaki_version="$(node -p "require('./packages/protocol/ikisaki/package.json').version")"
           tar -xOf "$ikisaki_tarball" package/package.json > "$RUNNER_TEMP/hikoutei-ikisaki-package.json"
           node -e '
             const pkg = require(process.argv[1]);

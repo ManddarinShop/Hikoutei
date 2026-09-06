@@ -1,7 +1,7 @@
 /**
  * Step-1 protocol import-boundary gate for the `@hikoutei/ikisaki` kernel.
  *
- * The kernel is provider-neutral: no file under `packages/ikisaki/src/` may
+ * The kernel is provider-neutral: no file under `packages/protocol/ikisaki/src/` may
  * import entity/Sheets state, storage, sync-engine/provider code, or the
  * Google SDKs. Shared primitives (`contracts/state`, `contracts/encoding`,
  * `contracts/identity`) stay usable as `import type` only; `zod` stays a
@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const kernelSrc = resolve(here, "..", "packages", "ikisaki", "src");
+const kernelSrc = resolve(here, "..", "packages", "protocol", "ikisaki", "src");
 
 /** Runtime imports from these specifiers are always a boundary violation. */
 const DENIED_RUNTIME_PREFIXES = [
@@ -137,7 +137,7 @@ function checkImport(imp: KernelImport): string | undefined {
 }
 
 describe("ikisaki protocol import boundary", () => {
-  it("keeps provider/Sheets/entity imports out of packages/ikisaki/src", () => {
+  it("keeps provider/Sheets/entity imports out of packages/protocol/ikisaki/src", () => {
     const violations: string[] = [];
     for (const file of collectSources(kernelSrc)) {
       const source = readFileSync(file, "utf8");
@@ -151,7 +151,7 @@ describe("ikisaki protocol import boundary", () => {
     expect(violations).toEqual([]);
   });
 
-  it("never interprets domain kinds inside packages/ikisaki/src (opaque dispatchClass only)", () => {
+  it("never interprets domain kinds inside packages/protocol/ikisaki/src (opaque dispatchClass only)", () => {
     // Step-2 vocabulary: the worker routes SOLELY on the entity-stamped
     // opaque `dispatchClass` label. Domain-kind tables, provider effect
     // shapes, Sheets grid concepts, and host classifier predicates must not

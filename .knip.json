@@ -13,7 +13,7 @@
         "scripts/**/*.{ts,mts,mjs}"
       ]
     },
-    "packages/ikisaki": {
+    "packages/protocol/ikisaki": {
       "entry": [
         "test/**/*.ts"
       ],

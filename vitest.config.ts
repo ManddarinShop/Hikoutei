@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 const ikisakiSource = fileURLToPath(
-  new URL("./packages/ikisaki/src/index.ts", import.meta.url),
+  new URL("./packages/protocol/ikisaki/src/index.ts", import.meta.url),
 );
 
 const contractsSource = fileURLToPath(
@@ -49,6 +49,6 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["test/**/*.test.ts", "packages/ikisaki/test/**/*.test.ts"],
+    include: ["test/**/*.test.ts", "packages/protocol/ikisaki/test/**/*.test.ts"],
   },
 });
