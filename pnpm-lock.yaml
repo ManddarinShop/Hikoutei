@@ -157,9 +157,6 @@ importers:
       '@hikoutei/ikisaki':
         specifier: 0.1.14
         version: link:../ikisaki
-      '@hikoutei/sync-engine':
-        specifier: 0.1.0
-        version: link:../sync-engine
       google-auth-library:
         specifier: ^11.0.0
         version: 11.0.0

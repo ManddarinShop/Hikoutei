@@ -21,7 +21,7 @@ import {
   type WriterLeaseHeartbeatHandle,
 } from "@hikoutei/ikisaki";
 import { RECONCILIATION_DEFAULTS } from "../outbound/reconciliation/ReconciliationScanner.js";
-import { stableConsoleErrorTag } from "../../shared/observability/internalLog.js";
+import { stableConsoleErrorTag } from "@hikoutei/contracts/shared/observability/internalLog.js";
 import type { MappedUserInputPollingReport } from "@hikoutei/contracts/sheets/userInputPolling.js";
 import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
 

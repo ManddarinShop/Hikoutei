@@ -68,13 +68,13 @@ import {
   describeErrorForInternalLog,
   HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
-} from "../../shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CLASSES,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "../../shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,

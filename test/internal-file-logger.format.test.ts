@@ -26,11 +26,11 @@ import {
   rotatedLogPath,
   stableConsoleErrorTag,
   type HikouteiInternalLogger,
-} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 import { HIKOUTEI_ERROR_CODES } from "@hikoutei/sync-engine/api/errors.js";
 import { createTypedSheets } from "../src/api/Hikoutei.js";
 import { defineTypedSheetsEntity } from "@hikoutei/sync-engine/api/entity.js";

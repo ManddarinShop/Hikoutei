@@ -30,12 +30,12 @@ import {
   HIKOUTEI_LOG_ENV_KEYS,
   HIKOUTEI_LOG_LEVELS,
   resetHikouteiInternalLoggerForTests,
-} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_TRANSPORT_OPERATIONS,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 import {
   presentValue,
   absentValue,

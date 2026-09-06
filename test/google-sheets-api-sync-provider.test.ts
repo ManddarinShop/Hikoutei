@@ -31,8 +31,8 @@ import {
   getHikouteiInternalLogger,
   HIKOUTEI_LOG_ENV_KEYS,
   resetHikouteiInternalLoggerForTests,
-} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
-import { HIKOUTEI_LOG_EVENTS } from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
+import { HIKOUTEI_LOG_EVENTS } from "@hikoutei/contracts/shared/observability/logEvents.js";
 import type {
   ApplySyncEffectsRequest,
   ReadSyncSnapshotRequest,

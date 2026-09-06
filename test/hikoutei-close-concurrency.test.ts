@@ -39,8 +39,8 @@ const loggerHooks = vi.hoisted(() => ({
 // Mock the ENGINE module path directly: since P8-D2 the runtime core lives
 // in `@hikoutei/sync-engine` and imports its sibling observability module
 // relatively, so mocking the root re-export shim would not reach it.
-vi.mock("@hikoutei/sync-engine/shared/observability/internalLog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@hikoutei/sync-engine/shared/observability/internalLog.js")>();
+vi.mock("@hikoutei/contracts/shared/observability/internalLog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@hikoutei/contracts/shared/observability/internalLog.js")>();
   return {
     ...actual,
     getHikouteiInternalLogger: () => ({
