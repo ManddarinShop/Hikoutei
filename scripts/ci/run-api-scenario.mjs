@@ -34,19 +34,19 @@ import { defineEntity, p } from "@mikro-orm/sql";
 // trees.
 const [entityApi, entityManagerApi, scalarProviderApi, mappedFlushApi, mapping, mappedRuntime, sqliteAdapter, sqliteSchema, provisioning, sheetsDispatcher, encoding, outboxWorker] =
   await Promise.all([
-    import(new URL("../../packages/sync-engine/src/api/entity.js", import.meta.url).href),
-    import(new URL("../../packages/sync-engine/src/api/internalEntityManager.js", import.meta.url).href),
+    import(new URL("../../packages/library/core/sync-engine/src/api/entity.js", import.meta.url).href),
+    import(new URL("../../packages/library/core/sync-engine/src/api/internalEntityManager.js", import.meta.url).href),
     // P8-D2 phase 1: the persistence/sheets adapter trees moved into the
 // @hikoutei/storage / @hikoutei/sheets workspace packages; the source-ts-loader
 // still transpiles them (every URL contains "/src/").
 import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/api/MikroOrmScalarPersistenceProvider.js", import.meta.url).href),
     import(new URL("../../packages/storage/src/orm/persistence/flush/flushCoordinator.js", import.meta.url).href),
-    import(new URL("../../packages/sync-engine/src/orm/mapping/entityMapping.js", import.meta.url).href),
+    import(new URL("../../packages/library/core/sync-engine/src/orm/mapping/entityMapping.js", import.meta.url).href),
     import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/engine/MikroOrmMappedRuntime.js", import.meta.url).href),
     import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js", import.meta.url).href),
     import(new URL("../../packages/storage/src/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js", import.meta.url).href),
     import(new URL("../../packages/contracts/src/sheets/sheetsProvisioning.js", import.meta.url).href),
-    import(new URL("../../packages/sync-engine/src/sync/outbound/SheetsEffectDispatcher.js", import.meta.url).href),
+    import(new URL("../../packages/library/core/sync-engine/src/sync/outbound/SheetsEffectDispatcher.js", import.meta.url).href),
     import(new URL("../../packages/contracts/src/encoding/index.js", import.meta.url).href),
     import("@hikoutei/ikisaki"),
   ]);

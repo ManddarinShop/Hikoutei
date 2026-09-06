@@ -33,7 +33,7 @@
       "@hikoutei/storage/*": ["./packages/storage/src/*"],
       "@hikoutei/google-auth/*": ["./packages/library/cloud/google-auth/src/*"],
       "@hikoutei/sheets/*": ["./packages/library/cloud/sheets/src/*"],
-      "@hikoutei/sync-engine/*": ["./packages/sync-engine/src/*"],
+      "@hikoutei/sync-engine/*": ["./packages/library/core/sync-engine/src/*"],
       "@hikoutei/composition/*": ["./packages/composition/src/*"],
       "@hikoutei/cli/*": ["./packages/library/cloud/cli/src/*"]
     }

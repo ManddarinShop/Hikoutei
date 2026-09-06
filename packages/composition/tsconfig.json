@@ -15,7 +15,7 @@
     "paths": {
       "@hikoutei/storage/*": ["packages/storage/src/*"],
       "@hikoutei/sheets/*": ["packages/library/cloud/sheets/src/*"],
-      "@hikoutei/sync-engine/*": ["packages/sync-engine/src/*"]
+      "@hikoutei/sync-engine/*": ["packages/library/core/sync-engine/src/*"]
     },
     "declaration": true,
     "declarationMap": true,

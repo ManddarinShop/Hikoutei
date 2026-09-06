@@ -7,6 +7,7 @@ packages:
   - packages/*
   - packages/protocol/*
   - packages/library/cloud/*
+  - packages/library/core/*
 
 # vitest depends on esbuild, whose postinstall downloads the platform
 # binary. pnpm blocks lifecycle scripts by default; allow esbuild so vitest

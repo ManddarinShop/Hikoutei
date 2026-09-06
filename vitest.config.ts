@@ -23,7 +23,7 @@ const googleAuthSource = fileURLToPath(
 );
 // P8-D2 phase 2 packages resolve to source for the same reason.
 const syncEngineSource = fileURLToPath(
-  new URL("./packages/sync-engine/src/", import.meta.url),
+  new URL("./packages/library/core/sync-engine/src/", import.meta.url),
 );
 const compositionSource = fileURLToPath(
   new URL("./packages/composition/src/", import.meta.url),
