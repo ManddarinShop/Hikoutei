@@ -133,6 +133,30 @@ jobs:
           fi
           next_version="$(node scripts/ci/semver-monotonic.mjs \
             --next-dev --latest="$effective_latest" --current-dev="$dev_current")"
+          # Idempotency: a previous run may have committed the bump while
+          # its publish never completed (a skipped/failed publish leaves the
+          # manifest ahead of the published dev tag). The next run then
+          # recomputes the same version and `npm version` dies with
+          # "Version not changed", wedging every later release. If the
+          # computed version does not move past the manifest, advance the
+          # manifest one patch instead (0.10.2-dev -> 0.10.3-dev); the
+          # skipped stillborn version is simply never published, which is
+          # harmless on the dev channel. The comparison delegates to the
+          # unit-tested helper (exit 0 = manifest at/ahead of computed).
+          manifest_dev_version="$(node -p "require('./package.json').version")"
+          if node scripts/ci/semver-monotonic.mjs --monotonic \
+            --current="$next_version" --target="$manifest_dev_version" >/dev/null 2>&1; then
+            if [[ ! "$manifest_dev_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev$ ]]; then
+              echo "Manifest version is not a plain X.Y.Z-dev prerelease; refusing to guess the next version." >&2
+              exit 1
+            fi
+            next_version="$(node -e '
+              const [triple] = process.argv[1].split("-dev");
+              const [major, minor, patch] = triple.split(".").map(Number);
+              console.log(`${major}.${minor}.${patch + 1}-dev`);
+            ' "$manifest_dev_version")"
+            echo "Manifest already at $manifest_dev_version; advancing to $next_version (stillborn version skipped)."
+          fi
           npm version "$next_version" --no-git-tag-version
           # Pin the cli workspace dependency to the new root release version
           # so the package can be resolved by npm (which rejects workspace:*
