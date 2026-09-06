@@ -443,7 +443,7 @@ describe("storage protocol-seam import boundary", () => {
       }
     }
     for (const root of [
-      resolve(here, "..", "packages", "sync-engine", "src"),
+      resolve(here, "..", "packages", "library", "core", "sync-engine", "src"),
       resolve(here, "..", "packages", "library", "cloud", "sheets", "src"),
       resolve(here, "..", "packages", "composition", "src"),
       resolve(here, "..", "packages", "library", "cloud", "cli", "src"),

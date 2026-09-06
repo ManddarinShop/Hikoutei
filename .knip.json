@@ -43,7 +43,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/sync-engine": {
+    "packages/library/core/sync-engine": {
       "entry": [
         "src/**/*.ts"
       ],

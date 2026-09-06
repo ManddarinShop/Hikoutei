@@ -19,7 +19,7 @@
  *                 transient dist mirror of reached-in sibling-package sources
  *                 is NOT copied)
  *        - packages/library/cloud/sheets/dist/…/src/sheets -> dist/sheets/**
- *        - packages/sync-engine/dist/…/src   -> dist/sync-engine/**
+ *        - packages/library/core/sync-engine/dist/…/src   -> dist/sync-engine/**
  *        - packages/composition/dist/…/src  -> dist/composition/**
  *        - packages/library/cloud/cli/dist/…/src            -> dist/cli/**
  *          (the published `bin` entry: dist/cli/index.js must exist here)
@@ -99,7 +99,7 @@ const BUNDLES = [
     // `@hikoutei/sync-engine/<sub>` specifier subpaths each land exactly
     // where the rewritten specifiers point.
     prefix: "@hikoutei/sync-engine",
-    distSrc: "packages/sync-engine/dist/packages/sync-engine/src",
+    distSrc: "packages/library/core/sync-engine/dist/packages/library/core/sync-engine/src",
     destDir: "sync-engine",
     copySubtrees: [""],
   },
@@ -139,7 +139,7 @@ const BRIDGE_LITERAL_RE = /@hikoutei-app-src/;
 const LEAF_PACKAGES = [
   { name: "@hikoutei/storage", distDir: "packages/storage/dist" },
   { name: "@hikoutei/sheets", distDir: "packages/library/cloud/sheets/dist" },
-  { name: "@hikoutei/sync-engine", distDir: "packages/sync-engine/dist" },
+  { name: "@hikoutei/sync-engine", distDir: "packages/library/core/sync-engine/dist" },
   { name: "@hikoutei/composition", distDir: "packages/composition/dist" },
 ];
 

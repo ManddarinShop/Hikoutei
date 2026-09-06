@@ -24,7 +24,7 @@ const PACKAGE_SRC = {
   "@hikoutei/contracts": "../../packages/contracts",
   "@hikoutei/storage": "../../packages/storage",
   "@hikoutei/sheets": "../../packages/library/cloud/sheets",
-  "@hikoutei/sync-engine": "../../packages/sync-engine",
+  "@hikoutei/sync-engine": "../../packages/library/core/sync-engine",
   "@hikoutei/composition": "../../packages/composition",
 };
 

@@ -48,7 +48,7 @@
  */
 
 /** Leaf-tree alternation shared by the package-space rules. */
-const ENGINE = "packages/sync-engine/(?:src|dist)";
+const ENGINE = "packages/library/core/sync-engine/(?:src|dist)";
 const STORAGE = "packages/storage/(?:src|dist)";
 
 /** @type {import('dependency-cruiser').IConfiguration} */
@@ -59,7 +59,7 @@ module.exports = {
       comment:
         "The sync engine is composition-free and provider-free: it must never import @hikoutei/sheets, @hikoutei/composition, @hikoutei/cli, or root src (the public API layer/composition imports the engine, never the reverse). Contract types flow through @hikoutei/contracts; concrete-adapter wiring arrives via the registered composition ports (sync/service/compositionPorts.ts).",
       severity: "error",
-      from: { path: "^packages/sync-engine/src/" },
+      from: { path: "^packages/library/core/sync-engine/src/" },
       to: {
         path:
           "^packages/(library/cloud/sheets|composition|library/cloud/cli)/(?:src|dist)/|^src/",
@@ -95,7 +95,7 @@ module.exports = {
       from: { path: "^packages/storage/src/storage/" },
       to: {
         path:
-          `^packages/(sync-engine|composition|library/cloud/cli)/(?:src|dist)/|^src/|^packages/storage/src/(persistence|orm|sync)/`,
+          `^packages/(library/core/sync-engine|composition|library/cloud/cli)/(?:src|dist)/|^src/|^packages/storage/src/(persistence|orm|sync)/`,
       },
     },
     {
