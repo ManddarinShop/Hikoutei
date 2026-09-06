@@ -4,10 +4,10 @@
 #   /api/*       -> demo-server container (SSE streams unbuffered)
 #   everything   -> VitePress static build (DOCS_BASE_PATH=/, mounted /srv/docs)
 #
-# When a domain is added later, replace ":80" with "hikoutei.example.com"
-# and Caddy obtains/renews the TLS certificate automatically.
+# Domain front: Caddy obtains/renews the TLS certificate automatically
+# (HTTP-01 via Cloudflare proxy) and redirects :80 to https.
 
-:80 {
+hikoutei.cloud {
 	# Bare host root -> live demo
 	redir / /demo 302
 
