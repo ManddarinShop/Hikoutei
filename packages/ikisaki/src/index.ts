@@ -192,4 +192,20 @@ export {
   WRITER_LEASE_DDL,
 } from "./sql/schema.js";
 
+/** Step-1 protocol surface: provider-neutral transport error parsers. */
+export {
+  parseRawErrorRecord,
+  parseRawErrorText,
+  parseRawHttpStatus,
+} from "./transport/rawErrorSchemas.js";
+
+/** Step-1 protocol surface: provider-timing contract (contracts shim target). */
+export {
+  SYNC_TIMING_OPERATION_KINDS,
+  type SyncProviderTiming,
+  type SyncProviderTimingPhase,
+  type SyncTimingOperationCounts,
+  type SyncTimingOperationKind,
+} from "./sheets/timing.js";
+
 export * from "./worker/index.js";

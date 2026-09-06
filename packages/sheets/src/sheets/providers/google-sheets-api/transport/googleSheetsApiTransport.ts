@@ -32,7 +32,7 @@ import {
   parseRawErrorRecord,
   parseRawErrorText,
   parseRawHttpStatus,
-} from "./rawErrorSchemas.js";
+} from "@hikoutei/ikisaki";
 
 // P8-C sole-source: the wire contract types (write requests, transport
 // boundary, values.get shapes) live in the contracts leaf; this module only

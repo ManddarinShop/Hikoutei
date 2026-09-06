@@ -36,14 +36,14 @@ import {
   RateLimitOptionsError,
   RequestStartLimiter,
   ReadQoSScheduler,
-} from "../transport/rateLimiter.js";
+} from "@hikoutei/ikisaki";
 import {
   isQuotaLimitedOutcome,
   QUOTA_GOVERNOR_LANES,
   type QuotaGovernorLane,
   QuotaPacingGovernor,
   RollingQuotaBudget,
-} from "../transport/quotaGovernor.js";
+} from "@hikoutei/ikisaki";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,

@@ -30,7 +30,7 @@ import type {
   GoogleSheetsApiWriteRequest,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import { serializeBatchUpdateRequests } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
-import { parseRawErrorRecord } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rawErrorSchemas.js";
+import { parseRawErrorRecord } from "@hikoutei/ikisaki";
 import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
 import { GOOGLE_SHEETS_API_RECEIPT_HEADERS, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME, GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {

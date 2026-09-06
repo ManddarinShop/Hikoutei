@@ -26,7 +26,7 @@ export type {
   GoogleSheetsApiCellRow,
   GoogleSheetsApiHttpTransportOptions,
 } from "./transport/googleSheetsApiTransport.js";
-export { RequestStartLimiter } from "./transport/rateLimiter.js";
+export { RequestStartLimiter } from "@hikoutei/ikisaki";
 export {
   GOOGLE_SHEETS_API_DEFAULTS,
   GOOGLE_SHEETS_API_SCOPES,
