@@ -50,7 +50,11 @@ import {
   type ParsedSpreadsheetDocument,
   type PreflightContext,
 } from "../model/preflightContext.js";
-import { packReadRequests, planRowBands, type PlannedRange } from "../model/readPlan.js";
+import {
+  packReadRequests,
+  planRowBands,
+  type BandRange,
+} from "@hikoutei/ikisaki";
 import {
   patchPreflightContext,
   planPreflightVerification,
@@ -60,7 +64,7 @@ import {
   findSheetByTitle,
 } from "../model/preflightRows.js";
 import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
-import { createBandedGet, createEngineRuntime } from "./readEngine.js";
+import { createBandedGet, createEngineRuntime } from "./shared.js";
 import { quoteA1SheetName } from "../model/valueNormalization.js";
 import type { GoogleSheetsApiGetSpreadsheetRequest } from "../transport/googleSheetsApiTransport.js";
 import type { SnapshotBuildTarget } from "../model/observation.js";
@@ -283,7 +287,7 @@ export async function verifyPreflightContexts(
 ): Promise<readonly PreflightContext[]> {
   const results: (PreflightContext | undefined)[] = passes.map(() => undefined);
   const shared: { readonly index: number }[] = [];
-  const items: PlannedRange[] = [];
+  const items: BandRange[] = [];
   passes.forEach((pass, index) => {
     // A non-scoped base context (receipt-init downgrade, key-row-gap
     // fallback, or a full-evidence recovery result) already carries

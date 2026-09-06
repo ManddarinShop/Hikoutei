@@ -63,17 +63,15 @@ import { classifyPostcondition, probeTargetRowNumber } from "../model/postcondit
 import {
   definitionForPhysicalSheet,
   effectRouteOptions,
-  validateRoute,
-  type GoogleSheetsApiProviderDeps,
-  type RequestStartPacing,
-} from "./shared.js";
-import {
   executeBatchUpdate,
   executePreparedWrite,
   groupByRouteKey,
   receiptInitNeeded,
   refreshFirstRouteContext,
-} from "./writeEngine.js";
+  validateRoute,
+  type GoogleSheetsApiProviderDeps,
+  type RequestStartPacing,
+} from "./shared.js";
 import {
   enumeratePreflightSheets,
   readPreflight,
@@ -747,7 +745,7 @@ async function applyPreparedMultiRoute(
     needsReceiptInit: included[0] !== undefined &&
       receiptInitNeeded(included[0].context) &&
       persistsReceiptOrWrite,
-    refresh: (routes) => refreshFirstRouteContext(deps, routes),
+    refresh: (routes) => refreshFirstRouteContext((context: PreflightContext) => refreshReceiptForWrite(deps, context), routes),
     write: writeCombined,
   });
 

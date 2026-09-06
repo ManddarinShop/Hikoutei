@@ -40,16 +40,17 @@ import {
   parseRegisteredRange,
   quoteA1SheetName,
 } from "./valueNormalization.js";
-import type { ReceiptReadCursor } from "./receiptCursor.js";
 import {
   authoritativeRowBound,
   packReadRequests,
   planRowBands,
+  type BandEvidence,
+  type BandRange,
   type EngineRuntime,
-  type PlannedRange,
   type ReadCalibration,
-  type ReadEvidence,
-} from "./readPlan.js";
+  type ReceiptReadCursor,
+} from "@hikoutei/ikisaki";
+import { SHEET_MAX_ROW } from "../constants.js";
 import {
   apiNumberValue,
   apiStringValue,
@@ -281,7 +282,7 @@ export async function enumerateSheetProperties(
  */
 export interface PreflightReadShape {
   readonly scoped: boolean;
-  readonly cursor?: ReceiptReadCursor;
+  readonly cursor?: ReceiptReadCursor<PreflightReceipt>;
 }
 
 /** The historical whole-table read shape (every fallback/recovery path). */
@@ -310,14 +311,14 @@ export function buildPreflightRanges(
   receiptBandStart: number | undefined = undefined,
   rowBounds: ReadonlyMap<string, number> = new Map(),
   calibration: ReadCalibration | undefined = undefined,
-  evidence: ReadEvidence = "values-only",
-): readonly PlannedRange[] {
+  evidence: BandEvidence = "values-only",
+): readonly BandRange[] {
   const seen = new Set<string>();
-  const ranges: PlannedRange[] = [];
-  const push = (items: readonly PlannedRange[]): void => {
+  const ranges: BandRange[] = [];
+  const push = (items: readonly BandRange[]): void => {
     for (const item of items) {
-      if (seen.has(item.range)) continue;
-      seen.add(item.range);
+      if (seen.has(item.address)) continue;
+      seen.add(item.address);
       ranges.push(item);
     }
   };
@@ -327,9 +328,10 @@ export function buildPreflightRanges(
   if (receiptSheet !== undefined) {
     const receiptQuote = `${quoteA1SheetName(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)}!`;
     push(planRowBands({
-      quote: receiptQuote,
-      firstLetter: "A",
-      lastLetter: columnLetters(GOOGLE_SHEETS_API_RECEIPT_HEADERS.length),
+      addressPrefix: receiptQuote,
+      firstColumn: "A",
+      lastColumn: columnLetters(GOOGLE_SHEETS_API_RECEIPT_HEADERS.length),
+      openEndRow: SHEET_MAX_ROW,
       columnCount: GOOGLE_SHEETS_API_RECEIPT_HEADERS.length,
       fromRow: receiptBandStart === undefined || receiptBandStart < 2 ? 1 : receiptBandStart,
       rowBound: rowBounds.get(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME),
@@ -370,17 +372,18 @@ function scopedOrFullTargetRanges(
   scoped: boolean,
   rowBounds: ReadonlyMap<string, number>,
   calibration: ReadCalibration | undefined,
-  evidence: ReadEvidence,
-): PlannedRange[] {
+  evidence: BandEvidence,
+): BandRange[] {
   const parsedRange = parseRegisteredRange(route.registeredRange);
   const lastColumn = parsedRange.startColumn + parsedRange.columnCount - 1;
   const quote = `${quoteA1SheetName(route.sheetName)}!`;
   const calib = calibration ?? NO_CALIBRATION;
   const bound = rowBounds.get(route.sheetName);
-  const fullSpan = (): PlannedRange[] => planRowBands({
-    quote,
-    firstLetter: "A",
-    lastLetter: columnLetters(lastColumn),
+  const fullSpan = (): BandRange[] => planRowBands({
+    addressPrefix: quote,
+    firstColumn: "A",
+    lastColumn: columnLetters(lastColumn),
+    openEndRow: SHEET_MAX_ROW,
     columnCount: lastColumn,
     fromRow: 1,
     rowBound: bound,
@@ -392,16 +395,16 @@ function scopedOrFullTargetRanges(
   // header is the only evidence that separates "provisioned" from "legacy",
   // and the probe never grows any existing range).
   const checkProbe = checkColumnFor(route.registeredRange, route.projection);
-  const checkProbeItem: PlannedRange[] = checkProbe === undefined
+  const checkProbeItem: BandRange[] = checkProbe === undefined
     ? []
     : [{
-      range: `${quote}${columnLetters(checkProbe)}1:${columnLetters(checkProbe)}1`,
+      address: `${quote}${columnLetters(checkProbe)}1:${columnLetters(checkProbe)}1`,
       cells: 1,
     }];
   if (!scoped) return [...fullSpan(), ...checkProbeItem];
   const lastLetter = columnLetters(lastColumn);
-  const headerBand: PlannedRange[] = [{
-    range: `${quote}A1:${lastLetter}1`,
+  const headerBand: BandRange[] = [{
+    address: `${quote}A1:${lastLetter}1`,
     cells: lastColumn,
   }];
   const columns: number[] = [];
@@ -414,13 +417,14 @@ function scopedOrFullTargetRanges(
   // A route whose registered range holds NEITHER key column cannot prove
   // dedupe/append identity from a column-scoped read: keep the full span.
   if (columns.length === 0) return [...fullSpan(), ...checkProbeItem];
-  const ranges: PlannedRange[] = [...headerBand];
+  const ranges: BandRange[] = [...headerBand];
   for (const column of new Set(columns)) {
     const letter = columnLetters(column);
     ranges.push(...planRowBands({
-      quote,
-      firstLetter: letter,
-      lastLetter: letter,
+      addressPrefix: quote,
+      firstColumn: letter,
+      lastColumn: letter,
+      openEndRow: SHEET_MAX_ROW,
       columnCount: 1,
       fromRow: 2,
       rowBound: bound,
@@ -470,7 +474,7 @@ function scopedOrFullTargetRanges(
  *   the historical fail-closed validation over it instead of scoping.
  */
 async function readPreflightContextsWithCursor(
-  engine: EngineRuntime,
+  engine: EngineRuntime<ParsedSheet, number, ParsedGridData>,
   routes: readonly PreflightRouteOptions[],
   sheets: readonly ParsedSheet[],
   receiptSheet: ParsedSheet | undefined,
@@ -495,7 +499,14 @@ async function readPreflightContextsWithCursor(
   const titles = routes.map((route) => route.sheetName);
   if (receiptSheet !== undefined) titles.push(receiptSheet.title);
   for (const title of titles) {
-    const bound = authoritativeRowBound(sheets, engine.rowBounds, title);
+    const bound = authoritativeRowBound(
+      sheets.map((sheet) => ({
+        title: sheet.title,
+        rowCount: sheet.gridProperties?.rowCount,
+      })),
+      engine.rowBounds,
+      title,
+    );
     if (bound !== undefined) rowBounds.set(title, bound);
   }
   // At the memo ceiling the band would expose an incomplete coverage map:
@@ -508,7 +519,7 @@ async function readPreflightContextsWithCursor(
     buildShape: PreflightReadShape = effectiveShape,
     buildFields: string = effectiveFields,
   ): Promise<Map<string, PreflightContext>> => {
-    const evidence: ReadEvidence = buildFields === GOOGLE_SHEETS_API_PREFLIGHT_FIELDS
+    const evidence: BandEvidence = buildFields === GOOGLE_SHEETS_API_PREFLIGHT_FIELDS
       ? "values+formats"
       : "values-only";
     const planned = buildPreflightRanges(
@@ -624,7 +635,7 @@ function isRejectedReadRange(error: unknown): boolean {
  * but lands as ONE reassembled logical document for the context builders.
  */
 export async function readPreflightData(
-  engine: EngineRuntime,
+  engine: EngineRuntime<ParsedSheet, number, ParsedGridData>,
   route: PreflightRouteOptions,
   sheets: readonly ParsedSheet[],
   /** Field mask override; defaults to the values-only base mask. The
@@ -653,7 +664,7 @@ export async function readPreflightData(
  * route context.
  */
 export async function readPreflightDataForRoutes(
-  engine: EngineRuntime,
+  engine: EngineRuntime<ParsedSheet, number, ParsedGridData>,
   routes: readonly PreflightRouteOptions[],
   sheets: readonly ParsedSheet[],
   operation?: SyncMissingTabOperation,

@@ -30,14 +30,18 @@ export {
   type Presence,
 } from "./contract/state.js";
 
+/**
+ * Protocol-owned persisted outbox vocabulary (kernel table values; the
+ * entity-owned canonical tables live in `@hikoutei/contracts`).
+ */
 export {
-  EFFECT_KINDS,
-  EFFECT_STATUSES,
-  EFFECT_TARGET_KINDS,
-  type EffectKind,
-  type EffectStatus,
-  type EffectTargetKind,
-} from "./contract/constants.js";
+  OUTBOX_EFFECT_KINDS,
+  OUTBOX_EFFECT_STATUSES,
+  OUTBOX_EFFECT_TARGET_KINDS,
+  type OutboxEffectKind,
+  type OutboxEffectStatus,
+  type OutboxEffectTargetKind,
+} from "./outbox/effectVocabulary.js";
 
 export {
   isSemanticRevision,
@@ -121,6 +125,7 @@ export {
   type ApplyResultOptions,
   type ClaimEffectOptions,
   type ClaimResult,
+  type DispatchClass,
   type EffectProjectionConfirmation,
   type MarkDeliveryUncertainOptions,
   type NewEffect,
@@ -187,10 +192,81 @@ export {
   EFFECT_OUTBOX_DDL,
   REQUIRED_V3_COLUMNS,
   REQUIRED_V5_COLUMNS,
+  REQUIRED_V9_COLUMNS,
   syncSchemaV5IndexesDdl,
   VISIBLE_STATE_TABLES_DDL,
   WRITER_LEASE_DDL,
 } from "./sql/schema.js";
+
+/** Protocol surface: neutral banded-read planning and execution. */
+export {
+  MAX_READ_CELLS_PER_RANGE,
+  MAX_READ_RANGES_PER_REQUEST,
+  READ_BYTES_PER_CELL,
+  READ_HARD_MAX_BYTES,
+  READ_SOFT_TARGET_BYTES,
+  authoritativeRowBound,
+  createReadCalibration,
+  estimatedRangeBytes,
+  packReadRequests,
+  planRowBands,
+  rowsPerBand,
+  type BandEvidence,
+  type BandRange,
+  type BandSheetBound,
+  type BandedDocument,
+  type BandedGet,
+  type EngineRuntime,
+  type ReadCalibration,
+  type RowBandPlan,
+} from "./bands/readPlan.js";
+
+export {
+  createBandExecutor,
+  createEngineRuntime,
+  ensureBandRowBounds,
+  type BandBoundEnumeration,
+  type BandEngineHooks,
+  type BandFetchResult,
+} from "./bands/readEngine.js";
+
+/** Protocol surface: neutral write-batch execution. */
+export {
+  executeBatchUpdate,
+  executePreparedWrite,
+  groupByRouteKey,
+  receiptInitNeeded,
+  refreshFirstRouteContext,
+  type BatchWriteHooks,
+  type BuiltBatch,
+  type WriteBatchTelemetry,
+} from "./batches/writeEngine.js";
+
+/** Protocol surface: neutral CAS evidence (postconditions, receipts, cursors). */
+export {
+  classifyCasPostcondition,
+  type CasClassifyInput,
+  type CasDisposition,
+  type CasObservedRow,
+  type CasPostcondition,
+  type CasReceiptEvidence,
+} from "./evidence/postcondition.js";
+
+export {
+  encodeOutcomeResultEvidence,
+  encodeSchemaErrorResultEvidence,
+  makeReceiptEvidence,
+  withDeferredPostconditionEvidence,
+  type CodedEffectResult,
+  type PlannedOutcomeEvidence,
+  type PlannedReceiptEvidence,
+} from "./evidence/plannerReceipt.js";
+
+export {
+  MAX_MEMO_RECEIPTS,
+  ReceiptReadCursor,
+  type CursorReceiptEvidence,
+} from "./evidence/receiptCursor.js";
 
 /** Step-1 protocol surface: provider-neutral transport error parsers. */
 export {
@@ -199,13 +275,13 @@ export {
   parseRawHttpStatus,
 } from "./transport/rawErrorSchemas.js";
 
-/** Step-1 protocol surface: provider-timing contract (contracts shim target). */
+/** Protocol surface: provider-timing contract (contracts shim target). */
 export {
   SYNC_TIMING_OPERATION_KINDS,
   type SyncProviderTiming,
   type SyncProviderTimingPhase,
   type SyncTimingOperationCounts,
   type SyncTimingOperationKind,
-} from "./sheets/timing.js";
+} from "./timing/providerTiming.js";
 
 export * from "./worker/index.js";

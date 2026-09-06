@@ -38,8 +38,9 @@ import {
   type CredentialPacingSlot,
   type GoogleSheetsApiProviderDeps,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
-import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
-import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
+import { DEFAULT_QUOTA_GOVERNOR_TIMING, ReceiptReadCursor } from "@hikoutei/ikisaki";
+import type { PreflightReceipt } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightContext.js";
+import { createReadCalibration } from "@hikoutei/ikisaki";
 import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/ikisaki";
 import {
@@ -271,7 +272,7 @@ function makePooledDeps(
     definitions: [SYSTEM_DEFINITION],
     transport,
     receiptInitLock: new PromiseTailLock(),
-    receiptReadCursor: new ReceiptReadCursor(),
+    receiptReadCursor: new ReceiptReadCursor<PreflightReceipt>(),
     sheetRowBounds: new Map<string, number>(),
     readCalibration: createReadCalibration(),
     readTimeoutMs: 60_000,
@@ -281,6 +282,7 @@ function makePooledDeps(
     readBudget: slots[0]!.readBudget,
     writeBudget: slots[0]!.writeBudget,
     quotaGovernor: slots[0]!.quotaGovernor,
+    timingDefaults: DEFAULT_QUOTA_GOVERNOR_TIMING,
     maxRequestStartWaitMs: 5_000,
     credentialPacing: pool,
     now,

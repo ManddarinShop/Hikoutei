@@ -18,6 +18,7 @@ import {
   REQUIRED_V5_COLUMNS,
   REQUIRED_V6_COLUMNS,
   REQUIRED_V7_COLUMNS,
+  REQUIRED_V9_COLUMNS,
   SQLITE_CONNECTION_PRAGMAS,
   syncSchemaIndexesDdl,
   syncSchemaTablesDdl,
@@ -129,6 +130,17 @@ export async function migrateSqliteSchema(
       await writeSchemaVersion(sql, 8);
       appliedVersions.push(8);
     }
+    if (fromVersion < 9) {
+      // Stamp the opaque worker dispatch bucket on every outbox effect.
+      // Fresh rows always stamp explicitly; legacy rows backfill from the
+      // SQL-visible fast-append shape (the factory classifier's exact
+      // predicate: an empty visible baseline is equivalent to
+      // createIfMissing there, deletions never sit at revision zero, and
+      // only the two appendable kind/projection/target routes qualify).
+      await applyVersion9DispatchClassMigration(sql);
+      await writeSchemaVersion(sql, 9);
+      appliedVersions.push(9);
+    }
     await verifyRequiredColumns(sql);
     await executeSqlScript(sql, syncSchemaIndexesDdl());
     // v5-only indexes are created after every migration so an upgraded v4
@@ -165,7 +177,7 @@ async function applyVersion5DurableDeliveryMigration(sql: SqlExecutor): Promise<
   await executeSqlScript(sql, syncSchemaTablesDdl());
   await sql.run(`
     INSERT INTO sheet_effect_outbox (
-      effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+      effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
       projection, row_binding_id, conflict_id, target_kind, target_id,
       target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
       expected_visible_revision, expected_visible_hash, repair_guard_hash,
@@ -176,7 +188,13 @@ async function applyVersion5DurableDeliveryMigration(sql: SqlExecutor): Promise<
       created_at
     )
     SELECT
-      effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+      effect_id, effect_kind,
+      CASE WHEN ((effect_kind = 'system_projection' AND projection = 'system_state' AND target_kind = 'entity')
+          OR (effect_kind = 'resolution_projection' AND projection = 'sync_conflicts' AND target_kind = 'conflict'))
+        AND expected_visible_revision = 0
+        AND expected_visible_hash = ''
+        THEN 'fast-append' ELSE 'regular' END,
+      commit_id, logical_sheet_id, physical_sheet_id,
       projection, row_binding_id, conflict_id, target_kind, target_id,
       target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
       expected_visible_revision, expected_visible_hash, repair_guard_hash,
@@ -231,6 +249,25 @@ async function applyVersion8LeaseHeartbeatMigration(sql: SqlExecutor): Promise<v
   await addColumnIfMissing(sql, "writer_lease", "heartbeat_at", "INTEGER");
 }
 
+async function applyVersion9DispatchClassMigration(sql: SqlExecutor): Promise<void> {
+  // SQLite requires a non-null default when adding a NOT NULL column to a
+  // populated table; every writer stamps explicitly, so the default only
+  // covers the pre-backfill instant inside this same migration step.
+  await addColumnIfMissing(
+    sql,
+    "sheet_effect_outbox",
+    "dispatch_class",
+    "TEXT NOT NULL DEFAULT 'regular'",
+  );
+  await sql.run(`
+    UPDATE sheet_effect_outbox SET dispatch_class = 'fast-append'
+    WHERE ((effect_kind = 'system_projection' AND projection = 'system_state' AND target_kind = 'entity')
+        OR (effect_kind = 'resolution_projection' AND projection = 'sync_conflicts' AND target_kind = 'conflict'))
+      AND expected_visible_revision = 0
+      AND expected_visible_hash = ''
+  `);
+}
+
 async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
   await verifyRequiredColumns(sql);
   await verifyDroppedColumns(sql);
@@ -273,6 +310,9 @@ async function verifyRequiredColumns(sql: SqlExecutor): Promise<void> {
   }
   for (const tableName of ["quarantine_record"] as const) {
     await verifyTableColumns(sql, tableName, REQUIRED_V7_COLUMNS[tableName]);
+  }
+  for (const tableName of ["sheet_effect_outbox"] as const) {
+    await verifyTableColumns(sql, tableName, REQUIRED_V9_COLUMNS[tableName]);
   }
 }
 

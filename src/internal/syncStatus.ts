@@ -17,8 +17,7 @@
 
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { EFFECT_STATUSES } from "@hikoutei/ikisaki";
-import { CONFLICT_STATUSES } from "@hikoutei/contracts/domain/model/constants.js";
+import { CONFLICT_STATUSES, EFFECT_STATUSES } from "@hikoutei/contracts/domain/model/constants.js";
 import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 
 /** Stable machine-readable codes raised by the internal status reader. */

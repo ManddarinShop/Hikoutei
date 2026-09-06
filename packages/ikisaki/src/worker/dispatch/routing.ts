@@ -7,7 +7,8 @@ import type {
   PendingEffect,
   WriterLease,
 } from "../../index.js";
-import { EFFECT_KINDS } from "../../contract/constants.js";
+import type { Presence } from "../../contract/state.js";
+import { absentValue, presentValue } from "../helpers.js";
 import {
   EFFECT_BATCH_LIMIT,
   OUTBOX_EFFECT_STATUSES,
@@ -142,14 +143,17 @@ export function chunkEffectGroups(
 }
 
 /**
- * Pending-level fast-append classification used to bound a bulk claim window
- * before claim. Recovery-status effects are excluded because the claim loop
- * diverts them to recovery regardless of their append shape; the dispatcher
- * owns the payload-derived candidacy decision.
+ * Pending-level fast-append classification from the stamped opaque hint.
+ *
+ * The worker routes SOLELY on `dispatchClass` (stamped by the entity side
+ * at creation) and never interprets domain kinds. Recovery-status effects
+ * are excluded because the claim loop diverts them to recovery regardless
+ * of their append shape. An unstamped or unknown label is NOT a regular
+ * effect: it fails closed through `dispatchClassValidationError` at the
+ * claim/split boundary instead of being assumed into a bucket here.
  */
 export function isFastAppendPendingEffect(
   pending: PendingEffect,
-  dispatcher: Dispatcher,
 ): boolean {
   if (
     pending.status === OUTBOX_EFFECT_STATUSES.FAILED ||
@@ -157,26 +161,25 @@ export function isFastAppendPendingEffect(
   ) {
     return false;
   }
-  try {
-    return dispatcher.isFastAppendCandidate(pending);
-  } catch {
-    // The candidate predicate is declared never to throw, but a violating
-    // dispatcher must not abort the pass during selection. Treat the row as
-    // a regular candidate here; if it is claimed, the claimed-item split
-    // re-classifies it and fails it per-effect through the invalid-payload
-    // path when the predicate still throws.
-    return false;
-  }
+  return pending.dispatch_class === "fast-append";
 }
 
 /**
- * Reconcile/delete effects whose visible fields protect a User_Input
- * candidate. Guard mismatches for these effects close as blocked_candidate
- * instead of conflict; the classification uses only kernel effect kinds.
+ * Fail-closed validation of the stamped opaque dispatch label.
+ *
+ * Returns an absent value for a stamped effect and the invalid-payload
+ * message otherwise. The worker folds this into the per-effect
+ * invalid-payload path (never a default bucket), so test fakes, fixtures,
+ * and migration seeds must stamp every effect they produce.
  */
-export function isCandidateProtectingUserInputEffect(pending: PendingEffect): boolean {
-  return pending.effect_kind === EFFECT_KINDS.CANDIDATE_RECONCILE ||
-    pending.effect_kind === EFFECT_KINDS.USER_INPUT_DELETE;
+export function dispatchClassValidationError(
+  pending: PendingEffect,
+): Presence<string> {
+  const value: unknown = (pending as { readonly dispatch_class?: unknown }).dispatch_class;
+  if (value === "fast-append" || value === "regular") return absentValue();
+  return presentValue(
+    `Effect ${pending.effect_id} carries no stamped dispatch class; refusing to assume a dispatch route.`,
+  );
 }
 
 /** Builds the current fence from a claimed writer lease. */

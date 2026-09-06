@@ -42,13 +42,14 @@ import {
   SYNC_EFFECT_RECOVERY_ERROR_CODES,
   type EffectProjectionConfirmation,
   type FencingContext,
+  type NewEffect,
   type PendingEffect,
   type SqlExecutor,
 } from "../src/index.js";
 import {
   APPLICABILITY_KINDS,
-  EFFECT_KINDS,
   LOOKUP_RESULT_KINDS,
+  OUTBOX_EFFECT_KINDS,
   PRESENCE_KINDS,
   WRITER_LEASE_CLAIM_RESULT_KINDS,
   WRITER_LEASE_RENEW_RESULT_KINDS,
@@ -434,6 +435,7 @@ describe("consistency-queue kernel", () => {
         visibleHash: "visible-hash-1",
         entityRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: 1 },
         fieldHashes: { name: "field-hash-1" },
+        deleteRetention: false,
       };
       const applied = await withSql(adapter, (sql) =>
         applyEffectResultWithSql(sql, {
@@ -491,6 +493,7 @@ describe("consistency-queue kernel", () => {
         visibleHash: "visible-hash-5",
         entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
         fieldHashes: { name: "field-hash-5" },
+        deleteRetention: false,
       };
       expect(await withSql(adapter, (sql) =>
         applyEffectResultWithSql(sql, {
@@ -557,6 +560,7 @@ describe("consistency-queue kernel", () => {
         visibleHash: "visible-hash-3",
         entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
         fieldHashes: { name: "field-hash-3" },
+        deleteRetention: false,
       };
       expect(await withSql(adapter, (sql) =>
         applyEffectResultWithSql(sql, {
@@ -641,6 +645,7 @@ describe("consistency-queue kernel", () => {
         visibleHash: "visible-hash-3",
         entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
         fieldHashes: { name: "field-hash-3" },
+        deleteRetention: false,
       };
       expect(await withSql(adapter, (sql) =>
         applyEffectResultWithSql(sql, {
@@ -685,7 +690,7 @@ describe("consistency-queue kernel", () => {
       // not incrementing), and its fields must apply at the same retained
       // revision.
       const third = newEffect({
-        effectKind: EFFECT_KINDS.USER_INPUT_DELETE,
+        effectKind: OUTBOX_EFFECT_KINDS.USER_INPUT_DELETE,
         rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" },
       });
       await appendPendingEffectsWithAdapter(adapter, fence, [third]);
@@ -706,6 +711,7 @@ describe("consistency-queue kernel", () => {
             visibleRevision: 1,
             visibleHash: "visible-hash-delete",
             fieldHashes: { name: "field-hash-delete" },
+            deleteRetention: true,
           },
           lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
           lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
@@ -792,6 +798,7 @@ describe("consistency-queue kernel", () => {
               visibleHash: "visible-hash-1",
               entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
               fieldHashes: {},
+              deleteRetention: false,
             },
             lastErrorCode: { kind: PRESENCE_KINDS.ABSENT },
             lastErrorMessage: { kind: PRESENCE_KINDS.ABSENT },
@@ -805,7 +812,7 @@ describe("consistency-queue kernel", () => {
       const adapter = createKernelStore();
       const fence = await claimTestFence(adapter);
       const effect = newEffect({
-        effectKind: "malformed_kind" as typeof EFFECT_KINDS[keyof typeof EFFECT_KINDS],
+        effectKind: "malformed_kind" as unknown as NewEffect["effectKind"],
         rowBindingId: { kind: PRESENCE_KINDS.PRESENT, value: "binding-1" },
       });
       await appendPendingEffectsWithAdapter(adapter, fence, [effect]);
@@ -830,6 +837,7 @@ describe("consistency-queue kernel", () => {
               visibleHash: "visible-hash-1",
               entityRevision: { kind: APPLICABILITY_KINDS.NOT_APPLICABLE },
               fieldHashes: {},
+              deleteRetention: false,
             },
           )),
       ).rejects.toMatchObject({

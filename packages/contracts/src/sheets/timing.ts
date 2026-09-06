@@ -1,7 +1,7 @@
 /**
- * Step-1 compatibility shim: the canonical provider-timing contract moved to
- * the kernel (`@hikoutei/ikisaki`); this module re-exports it so existing
- * importers keep working. Deleted in Step 2.
+ * Compatibility shim: the canonical provider-timing contract lives in the
+ * kernel (`@hikoutei/ikisaki` `timing/providerTiming.ts`); this module
+ * re-exports it one-way so existing importers keep working.
  */
 export {
   SYNC_TIMING_OPERATION_KINDS,

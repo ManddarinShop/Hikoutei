@@ -56,8 +56,9 @@ import {
   packReadRequests,
   planRowBands,
   rowsPerBand,
-  type PlannedRange,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
+  type BandRange,
+} from "@hikoutei/ikisaki";
+import { SHEET_MAX_ROW } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,
@@ -249,38 +250,41 @@ describe("readPlan pure planner", () => {
   it("collapses small bounds to the byte-identical historical open band", () => {
     const calibration = createReadCalibration();
     const bands = planRowBands({
-      quote: "'Users'!",
-      firstLetter: "A",
-      lastLetter: "F",
+      addressPrefix: "'Users'!",
+      firstColumn: "A",
+      lastColumn: "F",
+      openEndRow: SHEET_MAX_ROW,
       columnCount: 6,
       fromRow: 1,
       rowBound: 1_000,
       evidence: "values-only",
       calibration,
     });
-    expect(bands).toEqual([{ range: "'Users'!A1:F1048576", cells: 6_000 }]);
+    expect(bands).toEqual([{ address: "'Users'!A1:F1048576", cells: 6_000 }]);
   });
 
   it("plans the historical open band unchunked when NO bound is known", () => {
     const bands = planRowBands({
-      quote: "'Users'!",
-      firstLetter: "B",
-      lastLetter: "B",
+      addressPrefix: "'Users'!",
+      firstColumn: "B",
+      lastColumn: "B",
+      openEndRow: SHEET_MAX_ROW,
       columnCount: 1,
       fromRow: 2,
       rowBound: undefined,
       evidence: "values-only",
       calibration: createReadCalibration(),
     });
-    expect(bands).toEqual([{ range: "'Users'!B2:B1048576", cells: 0 }]);
+    expect(bands).toEqual([{ address: "'Users'!B2:B1048576", cells: 0 }]);
   });
 
   it("chunks past the bound and keeps the LAST band open-ended", () => {
     const calibration = createReadCalibration();
     const bands = planRowBands({
-      quote: "'Users'!",
-      firstLetter: "B",
-      lastLetter: "B",
+      addressPrefix: "'Users'!",
+      firstColumn: "B",
+      lastColumn: "B",
+      openEndRow: SHEET_MAX_ROW,
       columnCount: 1,
       fromRow: 2,
       rowBound: 30_001,
@@ -291,16 +295,16 @@ describe("readPlan pure planner", () => {
     // row-checks bytes/cell dominates before the cell cap for 1-column bands.
     expect(rows).toBe(Math.floor(READ_SOFT_TARGET_BYTES / READ_BYTES_PER_CELL["row-checks"]));
     for (const band of bands.slice(0, -1)) {
-      const parsed = parseBand(band.range);
+      const parsed = parseBand(band.address);
       expect(parsed.endRow - parsed.startRow + 1).toBe(rows);
       expect(parsed.endRow).toBeLessThan(1_048_576);
     }
-    const last = parseBand(bands[bands.length - 1]!.range);
+    const last = parseBand(bands[bands.length - 1]!.address);
     expect(last.endRow).toBe(1_048_576);
     // Full contiguous coverage 2..bound with no gap or overlap.
     let expectedStart = 2;
     for (const band of bands) {
-      const parsed = parseBand(band.range);
+      const parsed = parseBand(band.address);
       expect(parsed.startRow).toBe(expectedStart);
       if (parsed.endRow < 1_048_576) expectedStart = parsed.endRow + 1;
     }
@@ -308,9 +312,10 @@ describe("readPlan pure planner", () => {
 
   it("closes the last band when the caller proves the extent (row sets)", () => {
     const bands = planRowBands({
-      quote: "'Users'!",
-      firstLetter: "A",
-      lastLetter: "D",
+      addressPrefix: "'Users'!",
+      firstColumn: "A",
+      lastColumn: "D",
+      openEndRow: SHEET_MAX_ROW,
       columnCount: 4,
       fromRow: 80,
       rowBound: 90,
@@ -319,23 +324,23 @@ describe("readPlan pure planner", () => {
       calibration: createReadCalibration(),
     });
     expect(bands).toHaveLength(1);
-    expect(bands[0]!.range).toBe("'Users'!A80:D90");
-    expect(bands[0]!.range).not.toContain("1048576");
+    expect(bands[0]!.address).toBe("'Users'!A80:D90");
+    expect(bands[0]!.address).not.toContain("1048576");
   });
 
   it("packs bands under the range cap AND the hard byte estimate", () => {
     const calibration = createReadCalibration();
     // 45 tiny bands: one request per 40 (range cap dominates).
-    const tiny: PlannedRange[] = Array.from({ length: 45 }, (_, index) => ({
-      range: `'T'!A${String(index + 1)}:A${String(index + 1)}`,
+    const tiny: BandRange[] = Array.from({ length: 45 }, (_, index) => ({
+      address: `'T'!A${String(index + 1)}:A${String(index + 1)}`,
       cells: 1,
     }));
     const packed = packReadRequests(tiny, "values-only", calibration);
     expect(packed.map((request) => request.length)).toEqual([40, 5]);
     // 2 MB-estimate bands: only two fit under the 5 MB hard pack ceiling.
     const heavyCells = Math.floor(2_000_000 / READ_BYTES_PER_CELL["values-only"]);
-    const heavy: PlannedRange[] = Array.from({ length: 3 }, (_, index) => ({
-      range: `'T'!A${String(index + 1)}:A${String(index + 1)}`,
+    const heavy: BandRange[] = Array.from({ length: 3 }, (_, index) => ({
+      address: `'T'!A${String(index + 1)}:A${String(index + 1)}`,
       cells: heavyCells,
     }));
     const heavyPacked = packReadRequests(heavy, "values-only", calibration);

@@ -254,7 +254,7 @@ describe("inspectChecksPollingTable", () => {
       await storage.transaction(async ({ sql }) => {
         sql.run(
           `INSERT INTO sheet_effect_outbox (
-            effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+            effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
             projection, row_binding_id, conflict_id, target_kind, target_id,
             target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
             expected_visible_revision, expected_visible_hash, repair_guard_hash,
@@ -262,10 +262,11 @@ describe("inspectChecksPollingTable", () => {
             stream_sequence, predecessor_effect_id, status, attempts, claim_token,
             writer_epoch, supersedes_effect_id, last_error_code, last_error_message,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             "effect-failed-u2",
             "candidate_reconcile",
+            "regular",
             "commit-failed-u2",
             "check-gate-sheet",
             "check-gate-input",

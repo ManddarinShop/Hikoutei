@@ -35,8 +35,14 @@ import type {
   SyncSnapshotRow,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
-import type { EngineRuntime, PlannedRange } from "./readPlan.js";
-import { packReadRequests, planRowBands } from "./readPlan.js";
+import {
+  packReadRequests,
+  planRowBands,
+  type BandEvidence,
+  type BandRange,
+  type EngineRuntime,
+} from "@hikoutei/ikisaki";
+import { SHEET_MAX_ROW } from "../constants.js";
 import {
   columnLetters,
   quoteA1SheetName,
@@ -161,14 +167,14 @@ export interface SnapshotBuildTarget extends AnchorPlanningTarget {
  * coverage is never truncated.
  */
 export async function readTabGrids(
-  engine: EngineRuntime,
+  engine: EngineRuntime<ParsedSheet, number, ParsedGridData>,
   targets: readonly ObservationGridTarget[],
   fields: string,
 ): Promise<ReadonlyMap<string, ObservedTab>> {
   const tabs = new Map<string, ObservedTab>();
   if (targets.length === 0) return tabs;
   const evidence = "rendering-complete" as const;
-  const items: PlannedRange[] = [];
+  const items: BandRange[] = [];
   // Per-target request order is preserved so the parsed per-sheet grid list
   // can be synthesized back into one logical grid.
   const bandedTargets = new Map<string, { readonly range: { readonly startColumn: number; readonly columnCount: number } }>();
@@ -182,9 +188,10 @@ export async function readTabGrids(
       // range when no bound is known, chunked bands against the bound
       // otherwise (last band stays open).
       items.push(...planRowBands({
-        quote: `${quoteA1SheetName(target.sheetName)}!`,
-        firstLetter: "A",
-        lastLetter: rangeEndColumnLetters(target.registeredRange),
+        addressPrefix: `${quoteA1SheetName(target.sheetName)}!`,
+        firstColumn: "A",
+        lastColumn: rangeEndColumnLetters(target.registeredRange),
+        openEndRow: SHEET_MAX_ROW,
         columnCount: rangeEndColumnCells(target.registeredRange),
         fromRow: 1,
         rowBound: engine.rowBounds.get(target.sheetName),
@@ -198,7 +205,7 @@ export async function readTabGrids(
     const firstLetter = columnLetters(parsed.startColumn);
     const lastLetter = columnLetters(parsed.startColumn + parsed.columnCount - 1);
     items.push({
-      range: `${quoteA1SheetName(target.sheetName)}!${firstLetter}1:${lastLetter}1`,
+      address: `${quoteA1SheetName(target.sheetName)}!${firstLetter}1:${lastLetter}1`,
       cells: parsed.columnCount,
     });
     items.push(...bandItems);
@@ -268,23 +275,24 @@ function rowBandItems(
   range: { readonly startColumn: number; readonly columnCount: number },
   rowNumbers: readonly number[],
   evidence: "rendering-complete",
-  calibration: EngineRuntime["calibration"],
-): PlannedRange[] {
+  calibration: EngineRuntime<ParsedSheet, number, ParsedGridData>["calibration"],
+): BandRange[] {
   const sorted = [...new Set(rowNumbers.filter((row) => row >= 2))].sort((a, b) => a - b);
   if (sorted.length === 0) return [];
   const quote = `${quoteA1SheetName(sheetName)}!`;
   const firstLetter = columnLetters(range.startColumn);
   const lastLetter = columnLetters(range.startColumn + range.columnCount - 1);
-  const items: PlannedRange[] = [];
+  const items: BandRange[] = [];
   let runStart = sorted[0]!;
   let previous = runStart;
   const flush = (): void => {
     // The run's own rows are the proven extent: close the last chunk at the
     // run end (no open tail, no unrelated rows fetched).
     items.push(...planRowBands({
-      quote,
-      firstLetter,
-      lastLetter,
+      addressPrefix: quote,
+      firstColumn: firstLetter,
+      lastColumn: lastLetter,
+      openEndRow: SHEET_MAX_ROW,
       columnCount: range.columnCount,
       fromRow: runStart,
       rowBound: previous,
