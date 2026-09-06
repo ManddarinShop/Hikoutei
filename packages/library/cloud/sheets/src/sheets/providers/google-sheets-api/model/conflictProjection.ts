@@ -5,10 +5,34 @@ import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { CONFLICT_STATUSES } from "@hikoutei/contracts/domain/model/constants.js";
 import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
 import { PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
-import {
-  STORAGE_ERROR_CODES,
-  StorageError,
-} from "@hikoutei/storage/storage/errors.js";
+import { CoreErrorException } from "@hikoutei/contracts/domain/errors/index.js";
+
+/**
+ * Stable error categories for Sync_Conflicts audit projection misuse.
+ *
+ * The audit state union is Sheets-tab semantics owned by this provider
+ * package: projecting a resolved conflict as unresolved (or vice versa, or
+ * with a mismatched command identity) is a projection inconsistency. The
+ * code string preserves the pre-move stable value so persisted diagnostics
+ * and existing assertions keep matching; only the error identity moved with
+ * the module. Code strings are stable and must never change.
+ */
+export const SYNC_CONFLICT_PROJECTION_ERROR_CODES = {
+  INCONSISTENT_AUDIT_STATE: "resolution_storage_inconsistent",
+} as const;
+
+export type SyncConflictProjectionErrorCode =
+  (typeof SYNC_CONFLICT_PROJECTION_ERROR_CODES)[keyof typeof SYNC_CONFLICT_PROJECTION_ERROR_CODES];
+
+/** Error raised when a conflict record violates the audit projection state union. */
+export class SyncConflictProjectionError extends CoreErrorException<
+  "runtime.sync_sheets",
+  SyncConflictProjectionErrorCode
+> {
+  constructor(code: SyncConflictProjectionErrorCode, message: string) {
+    super("runtime.sync_sheets", code, message);
+  }
+}
 
 /** Fixed audit headers shared by every entity-specific Sync_Conflicts tab. */
 export const SYNC_CONFLICT_PROJECTION_HEADERS = [
@@ -45,20 +69,20 @@ export const SYNC_CONFLICT_RESOLUTIONS = {
  * never carry a resolution command identity; only the RESOLVED variant
  * carries the system_wins marker and its durable command identity. Any
  * combination that would emit a command ID from an unresolved row is a
- * storage-consistency failure.
+ * projection-inconsistency failure.
  */
 export function openSyncConflictAuditProjectionFields(
   conflict: SyncConflict,
 ): Readonly<Record<string, NormalizedCell>> {
   if (conflict.status === CONFLICT_STATUSES.RESOLVED) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+    throw new SyncConflictProjectionError(
+      SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
       `resolved conflict ${conflict.conflictId} cannot be projected as unresolved`,
     );
   }
   if (conflict.resolutionCommandId.kind !== PRESENCE_KINDS.ABSENT) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+    throw new SyncConflictProjectionError(
+      SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
       `unresolved conflict ${conflict.conflictId} cannot carry a resolution command identity`,
     );
   }
@@ -70,20 +94,20 @@ export function openSyncConflictAuditProjectionFields(
  *
  * The audit state union requires a RESOLVED conflict carrying its applied
  * resolution command identity; projecting anything else as resolved is a
- * storage-consistency failure.
+ * projection-inconsistency failure.
  */
 export function resolvedSyncConflictAuditProjectionFields(
   conflict: SyncConflict,
 ): Readonly<Record<string, NormalizedCell>> {
   if (conflict.status !== CONFLICT_STATUSES.RESOLVED) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+    throw new SyncConflictProjectionError(
+      SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
       `conflict ${conflict.conflictId} is not RESOLVED and cannot carry a system-wins projection`,
     );
   }
   if (conflict.resolutionCommandId.kind !== PRESENCE_KINDS.PRESENT) {
-    throw new StorageError(
-      STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+    throw new SyncConflictProjectionError(
+      SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
       `resolved conflict ${conflict.conflictId} has no resolution command identity`,
     );
   }
