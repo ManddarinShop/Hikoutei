@@ -18,10 +18,10 @@
  *                 `@hikoutei/storage/<sub>` specifiers name; the package's
  *                 transient dist mirror of reached-in sibling-package sources
  *                 is NOT copied)
- *        - packages/sheets/dist/…/src/sheets -> dist/sheets/**
+ *        - packages/library/cloud/sheets/dist/…/src/sheets -> dist/sheets/**
  *        - packages/sync-engine/dist/…/src   -> dist/sync-engine/**
  *        - packages/composition/dist/…/src  -> dist/composition/**
- *        - packages/cli/dist/…/src            -> dist/cli/**
+ *        - packages/library/cloud/cli/dist/…/src            -> dist/cli/**
  *          (the published `bin` entry: dist/cli/index.js must exist here)
  *   2. Every `@hikoutei/{contracts,storage,sheets,sync-engine,composition,cli}/…`
  *      specifier inside root dist is rewritten to the correct RELATIVE
@@ -89,7 +89,7 @@ const BUNDLES = [
   },
   {
     prefix: "@hikoutei/sheets",
-    distSrc: "packages/sheets/dist/packages/sheets/src",
+    distSrc: "packages/library/cloud/sheets/dist/packages/library/cloud/sheets/src",
     destDir: "",
     copySubtrees: ["sheets"],
   },
@@ -117,7 +117,7 @@ const BUNDLES = [
     // The cli tsconfig spans the repo root for its `hikoutei` source map;
     // only the package's own emission subtree is bundled (onto dist/cli/** —
     // the published bin path).
-    distSrc: "packages/cli/dist/packages/cli/src",
+    distSrc: "packages/library/cloud/cli/dist/packages/library/cloud/cli/src",
     destDir: "cli",
     copySubtrees: [""],
   },
@@ -138,7 +138,7 @@ const BRIDGE_LITERAL_RE = /@hikoutei-app-src/;
 // specifiers resolve inside it; the removed bridge literal never appears).
 const LEAF_PACKAGES = [
   { name: "@hikoutei/storage", distDir: "packages/storage/dist" },
-  { name: "@hikoutei/sheets", distDir: "packages/sheets/dist" },
+  { name: "@hikoutei/sheets", distDir: "packages/library/cloud/sheets/dist" },
   { name: "@hikoutei/sync-engine", distDir: "packages/sync-engine/dist" },
   { name: "@hikoutei/composition", distDir: "packages/composition/dist" },
 ];

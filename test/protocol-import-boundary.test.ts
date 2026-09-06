@@ -11,7 +11,7 @@
  * Batch-E sheets gate (same file, second suite): the only wrong-direction
  * package edge (`sheets` -> `sync-engine`, previously just the
  * shared/observability log modules now owned by `@hikoutei/contracts`) is
- * removed, so no file under `packages/sheets/src/` may name the
+ * removed, so no file under `packages/library/cloud/sheets/src/` may name the
  * `@hikoutei/sync-engine` specifier at all.
  */
 
@@ -243,14 +243,14 @@ describe("ikisaki protocol import boundary", () => {
 });
 
 describe("sheets provider import boundary", () => {
-  it("keeps @hikoutei/sync-engine imports out of packages/sheets/src", () => {
+  it("keeps @hikoutei/sync-engine imports out of packages/library/cloud/sheets/src", () => {
     // Batch E removed the only wrong-direction package edge (sheets ->
     // sync-engine, previously just the shared/observability log modules now
     // owned by @hikoutei/contracts). The package graph must stay a clean
     // DAG with no provider->engine edge, so the specifier is deny-listed
     // outright (runtime or type-only). Comments are stripped before scanning
     // so prose can still name the package.
-    const sheetsSrc = resolve(here, "..", "packages", "sheets", "src");
+    const sheetsSrc = resolve(here, "..", "packages", "library", "cloud", "sheets", "src");
     const violations: string[] = [];
     for (const file of collectSources(sheetsSrc)) {
       const source = readFileSync(file, "utf8");
