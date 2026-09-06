@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@hikoutei/contracts": "0.1.0",
+    "@hikoutei/google-auth": "0.1.0",
     "@hikoutei/ikisaki": "0.1.16",
     "@hikoutei/storage": "0.1.0"
   },

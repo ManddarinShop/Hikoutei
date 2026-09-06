@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // Same hermetic layout as the sibling cloud leaves: rootDir spans the
+    // repo so the emitted declaration tree lands under
+    // dist/packages/library/cloud/google-auth/src (matching the exports
+    // map), and the transient dist mirror is never bundled or shipped.
+    // No paths entries: this leaf imports nothing but google-auth-library
+    // and node builtins, so every specifier resolves through node_modules.
+    "rootDir": "../../../..",
+    "outDir": "dist",
+    "baseUrl": "../../../..",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

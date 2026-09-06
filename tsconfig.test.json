@@ -15,6 +15,7 @@
       // program (rootDir "." covers all trees), so typecheck/test never
       // depend on a stale package dist (P8-D2 phase 2 bridge removal).
       "@hikoutei/storage/*": ["./packages/storage/src/*"],
+      "@hikoutei/google-auth/*": ["./packages/library/cloud/google-auth/src/*"],
       "@hikoutei/sheets/*": ["./packages/library/cloud/sheets/src/*"],
       "@hikoutei/sync-engine/*": ["./packages/sync-engine/src/*"],
       "@hikoutei/composition/*": ["./packages/composition/src/*"],
@@ -26,6 +27,7 @@
     "test/**/*.ts",
     "packages/contracts/src/**/*.ts",
     "packages/storage/src/**/*.ts",
+    "packages/library/cloud/google-auth/src/**/*.ts",
     "packages/library/cloud/sheets/src/**/*.ts",
     "packages/sync-engine/src/**/*.ts",
     "packages/composition/src/**/*.ts",

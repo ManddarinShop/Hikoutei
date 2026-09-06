@@ -1,9 +1,9 @@
 /**
  * Credential-free coverage for the service-account credential pool:
  *
- * - `nextPooledClientIndex`: the transport pool's deterministic round-robin
- *   cursor (0,1,...,N-1,0,...), with provider-admitted preferred indexes
- *   passing through WITHOUT skewing the fallback rotation.
+ * - `nextPooledClientIndex`: the shared credential pool's deterministic
+ *   round-robin cursor (0,1,...,N-1,0,...), with provider-admitted preferred
+ *   indexes passing through WITHOUT skewing the fallback rotation.
  * - Admission/transport index binding: the identity the admission paced
  *   against IS the identity the transport request is stamped with (and the
  *   telemetry event reports) — request-scoped, never skewed.
@@ -52,13 +52,13 @@ import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
-import {
-  nextPooledClientIndex,
-  type GoogleSheetsApiBatchUpdateRequest,
-  type GoogleSheetsApiGetSpreadsheetRequest,
-  type GoogleSheetsApiTransport,
-  type GoogleSheetsApiValuesGetRequest,
-  type GoogleSheetsApiValuesGetResponse,
+import { nextPooledClientIndex } from "@hikoutei/google-auth/auth/serviceAccountAuthPool.js";
+import type {
+  GoogleSheetsApiBatchUpdateRequest,
+  GoogleSheetsApiGetSpreadsheetRequest,
+  GoogleSheetsApiTransport,
+  GoogleSheetsApiValuesGetRequest,
+  GoogleSheetsApiValuesGetResponse,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import { HIKOUTEI_ERROR_CODES } from "../src/index.js";
 import {
