@@ -37,11 +37,11 @@ import {
   HIKOUTEI_LOG_LEVELS,
   logHikouteiInternalEvent,
   stableConsoleErrorTag,
-} from "../../shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
-} from "../../shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 import {
   RECONCILIATION_INITIAL_DELAY_MS,
   RECONCILIATION_SCAN_INTERVAL_MS,
