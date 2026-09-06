@@ -33,6 +33,9 @@ importers:
       '@hikoutei/contracts':
         specifier: 0.1.0
         version: link:packages/contracts
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:packages/library/cloud/google-auth
       '@hikoutei/sheets':
         specifier: 0.1.0
         version: link:packages/library/cloud/sheets
@@ -121,6 +124,16 @@ importers:
         specifier: ^24.0.0
         version: 24.13.3
 
+  packages/library/cloud/google-auth:
+    dependencies:
+      google-auth-library:
+        specifier: ^11.0.0
+        version: 11.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
   packages/library/cloud/sheets:
     dependencies:
       '@googleapis/sheets':
@@ -129,6 +142,9 @@ importers:
       '@hikoutei/contracts':
         specifier: 0.1.0
         version: link:../../../contracts
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:../google-auth
       '@hikoutei/ikisaki':
         specifier: 0.1.13
         version: link:../../../protocol/ikisaki
@@ -192,6 +208,9 @@ importers:
       '@hikoutei/contracts':
         specifier: 0.1.0
         version: link:../contracts
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:../library/cloud/google-auth
       '@hikoutei/ikisaki':
         specifier: 0.1.13
         version: link:../protocol/ikisaki

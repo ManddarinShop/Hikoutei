@@ -17,6 +17,10 @@ const storageSource = fileURLToPath(
 const sheetsSource = fileURLToPath(
   new URL("./packages/library/cloud/sheets/src/", import.meta.url),
 );
+// Batch A: the shared Google-auth leaf resolves to source like its siblings.
+const googleAuthSource = fileURLToPath(
+  new URL("./packages/library/cloud/google-auth/src/", import.meta.url),
+);
 // P8-D2 phase 2 packages resolve to source for the same reason.
 const syncEngineSource = fileURLToPath(
   new URL("./packages/sync-engine/src/", import.meta.url),
@@ -38,6 +42,7 @@ export default defineConfig({
       // drift guards) never depend on a stale contracts dist build.
       "@hikoutei/contracts": contractsSource,
       "@hikoutei/storage": storageSource,
+      "@hikoutei/google-auth": googleAuthSource,
       "@hikoutei/sheets": sheetsSource,
       "@hikoutei/sync-engine": syncEngineSource,
       "@hikoutei/composition": compositionSource,
