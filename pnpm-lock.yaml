@@ -16,7 +16,7 @@ importers:
         version: 14.0.0
       '@hikoutei/ikisaki':
         specifier: 0.1.15
-        version: link:packages/ikisaki
+        version: link:packages/protocol/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
         version: 0.1.0
@@ -109,20 +109,10 @@ importers:
     dependencies:
       '@hikoutei/ikisaki':
         specifier: 0.1.15
-        version: link:../ikisaki
+        version: link:../protocol/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
         version: 0.1.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/ikisaki:
-    dependencies:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -146,6 +136,16 @@ importers:
         specifier: 0.10.3-dev
         version: link:../..
 
+  packages/protocol/ikisaki:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
   packages/sheets:
     dependencies:
       '@googleapis/sheets':
@@ -156,7 +156,7 @@ importers:
         version: link:../contracts
       '@hikoutei/ikisaki':
         specifier: 0.1.15
-        version: link:../ikisaki
+        version: link:../protocol/ikisaki
       google-auth-library:
         specifier: ^11.0.0
         version: 11.0.0
@@ -175,7 +175,7 @@ importers:
         version: link:../contracts
       '@hikoutei/ikisaki':
         specifier: 0.1.15
-        version: link:../ikisaki
+        version: link:../protocol/ikisaki
       '@mikro-orm/core':
         specifier: 7.1.7
         version: 7.1.7
@@ -194,7 +194,7 @@ importers:
         version: link:../contracts
       '@hikoutei/ikisaki':
         specifier: 0.1.15
-        version: link:../ikisaki
+        version: link:../protocol/ikisaki
       '@hikoutei/storage':
         specifier: 0.1.0
         version: link:../storage

@@ -9,7 +9,7 @@
       // in the test typecheck that resolves to the current source tree so
       // it never depends on a stale ./dist build.
       "hikoutei": ["./src/index.ts"],
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      "@hikoutei/ikisaki": ["./packages/protocol/ikisaki/dist/index.d.ts"],
       "@hikoutei/contracts/*": ["./packages/contracts/src/*"],
       // P8-D2 phase 2: every moved leaf compiles from SOURCE in the test
       // program (rootDir "." covers all trees), so typecheck/test never

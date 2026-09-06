@@ -37,7 +37,7 @@
     "clean": "node scripts/clean-dist.mjs",
     "build": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run build -w @hikoutei/storage && npm run build -w @hikoutei/sheets && npm run build -w @hikoutei/sync-engine && npm run build -w @hikoutei/composition && npm run build -w @hikoutei/cli && npm run clean && tsc -p tsconfig.build.json && node scripts/ci/reconcile-contracts-dist.mjs && node scripts/ci/smoke-contracts-bundle.mjs && npm run build -w spreadsheet-db-mcp",
     "typecheck": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json",
-    "typecheck:test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json && tsc -p packages/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json && npm run typecheck -w @hikoutei/storage -w @hikoutei/sheets -w @hikoutei/sync-engine -w @hikoutei/composition -w @hikoutei/cli",
+    "typecheck:test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && tsc -p tsconfig.test.json && tsc -p packages/protocol/ikisaki/tsconfig.test.json && tsc -p packages/mcp/tsconfig.test.json && npm run typecheck -w @hikoutei/storage -w @hikoutei/sheets -w @hikoutei/sync-engine -w @hikoutei/composition -w @hikoutei/cli",
     "test": "npm run build -w @hikoutei/ikisaki && npm run build -w @hikoutei/contracts && npm run build -w @hikoutei/storage && npm run build -w @hikoutei/sheets && npm run build -w @hikoutei/sync-engine && npm run build -w @hikoutei/composition && vitest run",
     "test:soak": "npm run build -w @hikoutei/ikisaki && node scripts/run-soak-long.mjs",
     "audit:knip": "knip",
@@ -58,7 +58,8 @@
   ],
   "license": "MIT",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/protocol/*"
   ],
   "dependencies": {
     "@googleapis/drive": "^21.0.0",

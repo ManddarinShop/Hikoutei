@@ -21,7 +21,7 @@
     "baseUrl": ".",
     "paths": {
       "hikoutei": ["./src/index.ts"],
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      "@hikoutei/ikisaki": ["./packages/protocol/ikisaki/dist/index.d.ts"],
       // The two externals the leaf packages import: mapped to their installed
       // dirs so dep-cruiser resolves them (without entries they fall out as
       // could-not-resolve even though the real compiler resolves them fine
