@@ -38,11 +38,13 @@ process without changing the root entity lifecycle contract.
 The public surface contains entity definition, runtime creation, and the
 request-local `EntityManager` lifecycle: `fork()`, `create()`, `find()`,
 `findOne()`, `count()`, `findAndCount()`, `persist()`, `remove()`, `flush()`,
-and `transactional()`. MikroORM, raw SQL, provider clients, Sheet routes,
+and `transactional()`. MikroORM, raw SQL, provider clients, projection
 provisioning, polling, and outbox controls are internal. Sync auto-start is
 environment-driven (`HIKOUTEI_SYNC_SPREADSHEET_URL` plus
-`GOOGLE_APPLICATION_CREDENTIALS`); there is no public bootstrap option for
-the direct provider.
+`GOOGLE_APPLICATION_CREDENTIALS`). `createTypedSheetsWithSync()` is the
+public counterpart of `createTypedSheets()` for sync runtimes (richer result
+union, existing-sheet adoption support); both accept `providerOptions`,
+sync-path-only provider tuning/telemetry that stays inert in local-only mode.
 
 ## SQLite authority
 
@@ -65,10 +67,11 @@ The mapped planner writes canonical sync state, projection registry/state, and
 the durable Sheet effect outbox before the scheduled entity statements. Any
 failure rolls the complete transaction back.
 
-The service-side configuration supplies the required `System_State`,
-`User_Input`, and `Sync_Conflicts` routes, spreadsheet identity, and
-user-owned fields. Every internal sync runtime fails closed if any of the
-three physical routes or its fixed headers are missing or drifted.
+The service-side projection config (`InternalSyncProjectionConfig`) supplies
+the required `System_State`, `User_Input`, and `Sync_Conflicts` projections,
+spreadsheet identity, and user-owned fields. Every internal sync runtime fails
+closed if any of the three registered projections or its fixed headers are
+missing or drifted.
 
 ## Google Sheets projection
 
@@ -107,17 +110,22 @@ All queued Sheet audit and repair effects remain asynchronous.
 ## Source boundaries
 
 ```text
-src/domain/                         pure normalization/evaluation/conflict rules
-src/application/orm/                public ORM facade and mapped flush planning
-src/application/sync/               internal sync engine and service bootstrap
-src/adapter/persistence/            SQLite/MikroORM implementation
-src/adapter/sheets/                 Google Sheets API provider
-src/infrastructure/storage/         canonical, observation, resolution, outbox state
-src/api/                            root-facing entity and EntityManager facade
-src/cli/                            `hikoutei setup` CLI (service-side provisioning)
+packages/protocol/ikisaki/          outbox/effect kernel (outbox SQL/schema, dispatch, leases, bands)
+packages/library/core/contracts/    shared contracts (Sheets provider surface, transport errors, projection config)
+packages/library/core/storage/      canonical, observation, resolution state + SQLite technology
+packages/library/core/sync-engine/  runtime core, ORM, and sync service engine
+packages/library/core/composition/  composition root (local runtime + sync auto-start bridge)
+packages/library/cloud/sheets/      Google Sheets API provider
+packages/library/cloud/google-auth/ service-account auth
+packages/library/cloud/cli/         `hikoutei setup` CLI (service-side provisioning)
+src/                                P8-D2 compat shims (public facade over the engine/composition)
 src/index.ts                        root public barrel only
 ```
 
 `src` does not mean public. The only application-facing package entrypoint is
 `src/index.ts`; provider, sync operations, polling, and sync state are not
-part of the contract.
+part of the contract. The `@hikoutei/ikisaki` kernel owns the outbox
+SQL/schema and its effect vocabulary; the outbox lifecycle statuses
+(`pending`, `processing`, `delivery_uncertain`, `applied`,
+`blocked_candidate`, `superseded`, `conflict`, `failed`) are persisted
+spellings and must never change.

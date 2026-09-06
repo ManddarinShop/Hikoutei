@@ -6,9 +6,9 @@ description: How Hikoutei validates untrusted wire, configuration, and provider 
 # Runtime boundary validation
 
 Hikoutei uses TypeScript types for compile-time contracts and Zod for selected
-runtime boundaries. A value received from JSON, a future gateway transport, a
-configuration file, or a provider SDK is not trusted merely because a
-TypeScript type exists for it.
+runtime boundaries. A value received from JSON, the direct Google Sheets API
+transport, a configuration file, or a provider SDK is not trusted merely
+because a TypeScript type exists for it.
 
 The promotion flow is:
 
@@ -24,7 +24,7 @@ unknown wire/config/provider value
 
 Zod validates structural shape at these boundaries:
 
-- Sheets gateway request envelopes
+- Google Sheets API request envelopes
 - persisted projection payloads
 - service-account and sync startup configuration
 - durable manifest and registry JSON
