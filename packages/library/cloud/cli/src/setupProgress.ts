@@ -66,7 +66,18 @@ export const SETUP_PROGRESS_PHASES = [
 ] as const;
 
 /** One setup phase. */
-export type SetupProgressPhase = (typeof SETUP_PROGRESS_PHASES)[number];
+export type SetupProgressPhase = (typeof SETUP_PROGRESS_PHASES)[number] | typeof POOL_EXPANSION_PHASE;
+
+/**
+ * Credential-pool expansion phase for `--sa-count` runs with N > 1.
+ *
+ * Deliberately OUTSIDE {@link SETUP_PROGRESS_PHASES}: the fixed ten-phase
+ * list (and its denominator) is the byte-identical N=1 contract, so the
+ * pool phase never counts toward the overall bar. It is emitted only when
+ * the pool is active (after the output phase of the primary flow), and the
+ * tracker accepts it without advancing the completed count.
+ */
+export const POOL_EXPANSION_PHASE = "pool_expansion" as const;
 
 /** Total number of setup phases (drives the overall bar denominator). */
 export const SETUP_PROGRESS_PHASE_COUNT = SETUP_PROGRESS_PHASES.length;
@@ -103,6 +114,7 @@ export const SETUP_PROGRESS_LABELS: Readonly<Record<SetupProgressPhase, string>>
   share: "Share and ownership",
   sa_access: "Service-account access",
   output: "Checkpoint and .env",
+  pool_expansion: "Credential pool",
 };
 
 /** Short labels for the compact "done" line. */
@@ -117,6 +129,7 @@ export const SETUP_PROGRESS_SHORT_LABELS: Readonly<Record<SetupProgressPhase, st
   share: "Share",
   sa_access: "SA access",
   output: "Output",
+  pool_expansion: "Pool",
 };
 
 /** The bounded retry polls that carry a nested detail bar. */
@@ -305,7 +318,10 @@ export function overallPercent(completed: number): number {
 
 /** True when the value names a known phase (runtime boundary guard). */
 function isKnownPhase(value: unknown): value is SetupProgressPhase {
-  return typeof value === "string" && (SETUP_PROGRESS_PHASES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    ((SETUP_PROGRESS_PHASES as readonly string[]).includes(value) || value === POOL_EXPANSION_PHASE)
+  );
 }
 
 /** True when the value is a known generic or bounded operation label. */
@@ -387,6 +403,11 @@ export class SetupProgressTracker {
     | undefined;
   private failed: { readonly phase: SetupProgressPhase; readonly code: SetupErrorCode } | undefined;
   private resumed = false;
+  /**
+   * Pool-expansion completion, tracked OUTSIDE `completed` so the
+   * conditional pool phase never advances the overall ten-phase count.
+   */
+  private poolDone = false;
 
   /**
    * Number of completed phases (any source), clamped to the ten logical
@@ -424,6 +445,9 @@ export class SetupProgressTracker {
 
   /** True when the phase was completed (by run or checkpoint). */
   isComplete(phase: SetupProgressPhase): boolean {
+    if (phase === POOL_EXPANSION_PHASE) {
+      return this.poolDone;
+    }
     return this.completed.has(phase);
   }
 
@@ -469,7 +493,11 @@ export class SetupProgressTracker {
 
   /** True when every phase before `phase` (in execution order) is complete. */
   private allEarlierCompleted(phase: SetupProgressPhase): boolean {
-    const index = SETUP_PROGRESS_PHASES.indexOf(phase);
+    // The pool phase lives outside the fixed sequence (indexOf would miss
+    // it); its ordering is handled by `isValidNextPhase` instead.
+    const index = SETUP_PROGRESS_PHASES.indexOf(
+      phase as (typeof SETUP_PROGRESS_PHASES)[number],
+    );
     if (index === -1) {
       return false;
     }
@@ -483,6 +511,13 @@ export class SetupProgressTracker {
 
   /** True when `phase` may start: no current phase, not completed, ordered. */
   private isValidNextPhase(phase: SetupProgressPhase): boolean {
+    if (phase === POOL_EXPANSION_PHASE) {
+      // The pool phase runs after the primary flow, outside the fixed
+      // sequence: it may start once the output phase completed, whenever
+      // no phase is current and it has not completed. It never advances
+      // the overall count.
+      return this.current === undefined && !this.poolDone && this.completed.has("output");
+    }
     return this.current === undefined && !this.completed.has(phase) && this.allEarlierCompleted(phase);
   }
 
@@ -541,6 +576,22 @@ export class SetupProgressTracker {
         }
         if (event.source !== "run" && event.source !== "checkpoint") {
           return false;
+        }
+        if (event.phase === POOL_EXPANSION_PHASE) {
+          // Pool completion clears the current phase and records
+          // separately: the overall ten-phase count never moves.
+          if (this.poolDone || this.current !== POOL_EXPANSION_PHASE) {
+            return false;
+          }
+          this.poolDone = true;
+          this.current = undefined;
+          if (this.retry?.phase === event.phase) {
+            this.retry = undefined;
+          }
+          if (this.activeOperation?.phase === event.phase) {
+            this.operation = undefined;
+          }
+          return true;
         }
         // Duplicate completion never increments the count again.
         if (this.completed.has(event.phase)) {

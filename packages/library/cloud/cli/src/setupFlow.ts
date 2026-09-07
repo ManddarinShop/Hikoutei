@@ -66,6 +66,7 @@
  * available.
  */
 
+import { basename, dirname, join } from "node:path";
 import {
   acquireSetupLock,
   checkStateCompatibility,
@@ -83,10 +84,12 @@ import {
   type KeyOrigin,
   type LockFs,
   type ProjectMode,
+  type SetupPoolEntry,
   type SetupState,
   type ShareOrigin,
 } from "./checkpoint.js";
-import { SETUP_ERROR_CODES, carrierCode, type SetupErrorCode } from "./errors.js";
+import { MAX_SETUP_SA_COUNT, parseSaCount } from "./args.js";
+import { SETUP_ERROR_CODES, carrierCode, setupFailure, type SetupErrorCode, type SetupFailure } from "./errors.js";
 import { describeGcloudFailure, errorResult, outcomeOf, type PlannedCommand, type SetupErrorResult } from "./flowResult.js";
 import {
   atomicWritePrivateFile,
@@ -108,6 +111,7 @@ export { findSetupPathCollision, type SetupPathCollision } from "./setupPathColl
 import { createSafeRunner, type GcloudRunner, type GcloudRunResult } from "./gcloudRunner.js";
 import {
   boundedCheckReporter,
+  POOL_EXPANSION_PHASE,
   safeProgressSink,
   SETUP_PROGRESS_OPERATIONS,
   type SetupProgressPhase,
@@ -168,6 +172,16 @@ export interface RunSetupOptions {
   readonly statePath: string;
   readonly dryRun: boolean;
   /**
+   * Service accounts to provision as a credential pool. Defaults to 1
+   * (single-SA behavior, unchanged); N > 1 provisions `<saName>-<i>`
+   * accounts after the primary flow, sharing the same spreadsheet and
+   * recorded in `HIKOUTEI_SYNC_CREDENTIALS`. Values outside 1..10 are an
+   * `invalid_args` usage error. Resuming with a smaller count keeps every
+   * existing pool entry (the pool never shrinks); the summary reports the
+   * actual pool size.
+   */
+  readonly saCount?: number;
+  /**
    * Optional progress sink for the CLI renderer. When omitted the run is
    * unaffected; when present a throwing callback is swallowed so progress
    * can never change the setup result, the mutation order, or the exit
@@ -220,6 +234,16 @@ export interface SetupSummary {
   readonly saWriterRole: ShareOutcome["writerRole"] | "unchanged";
   /** True when this run resumed from an existing checkpoint. */
   readonly resumed: boolean;
+  /** Provisioned pool size (1 for single-SA runs). */
+  readonly poolSize: number;
+  /** Key paths of the provisioned pool, entry 1 first ([keyPath] for N=1). */
+  readonly poolPaths: readonly string[];
+  /**
+   * Pool entries kept from a previous run (absent/0 for fresh runs and
+   * N=1). A resume never removes entries, so resuming with a smaller
+   * `--sa-count` reports the actual (larger) pool with this kept count.
+   */
+  readonly poolKeptEntries?: number;
 }
 
 /** Discriminated result of a setup run. */
@@ -494,7 +518,7 @@ export function formatSummary(summary: SetupSummary): string {
     : summary.envFileModified
       ? "updated"
       : "unchanged";
-  return [
+  const lines = [
     "Hikoutei setup complete.",
     `  project:              ${summary.projectId} (${summary.projectReused ? "reused" : "created"})`,
     `  human owner:          ${summary.ownerEmail}`,
@@ -505,7 +529,16 @@ export function formatSummary(summary: SetupSummary): string {
     `  spreadsheet URL:      ${summary.spreadsheetUrl}`,
     `  checkpoint:           ${summary.statePath} (${summary.stateStatus}${summary.resumed ? ", resumed" : ""})`,
     `  env file:             ${summary.outputPath} (${envState})`,
-  ].join("\n");
+  ];
+  // Pool lines appear only for multi-SA runs, so N=1 output is unchanged.
+  if (summary.poolSize > 1) {
+    const kept = summary.poolKeptEntries ?? 0;
+    lines.push(
+      `  credential pool:      ${summary.poolSize} service accounts${kept > 0 ? ` (kept: ${kept} existing)` : ""}`,
+      `  credential pool keys: ${summary.poolPaths.join(",")}`,
+    );
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -561,6 +594,17 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
       SETUP_ERROR_CODES.INVALID_ARGS,
       `invalid --sa-name value: service-account names must start with a lowercase letter and ` +
         `contain only lowercase letters, digits, and hyphens (6-30 characters)`,
+    );
+  }
+  // Fail closed on a programmatic out-of-range pool size (the CLI parser
+  // already enforces 1..10): the pool expansion below trusts this bound.
+  if (
+    options.saCount !== undefined &&
+    (!Number.isSafeInteger(options.saCount) || options.saCount < 1 || options.saCount > MAX_SETUP_SA_COUNT)
+  ) {
+    return errorResult(
+      SETUP_ERROR_CODES.INVALID_ARGS,
+      `invalid sa-count value: expected a positive integer between 1 and ${MAX_SETUP_SA_COUNT}`,
     );
   }
   // Reject canonical path collisions before anything else runs: `--output`
@@ -984,54 +1028,15 @@ async function runSetupLocked(
     progress.report({ type: "phase_started", phase: "service_account" });
 
     // Service account: reuse by email when it already exists.
-    progress.report({ type: "operation_started", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_LIST });
-    const saList = await runner.run(["iam", "service-accounts", "list", "--project", projectId, "--format=value(email)"]);
-    progress.report({ type: "operation_completed", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_LIST });
-    executed.push({
-      kind: "gcloud",
-      command: ["iam", "service-accounts", "list", "--project", projectId, "--format=value(email)"],
-      outcome: outcomeOf(saList, "service account lookup complete"),
+    const ensured = await ensureServiceAccount(runner, executed, progress, "service_account", {
+      projectId,
+      saName: options.saName,
+      saEmail: email,
     });
-    if (saList.status !== "ok") {
-      return errorResult(SETUP_ERROR_CODES.SA_CREATE_FAILED, `could not list service accounts: ${describeGcloudFailure(saList)}`);
+    if (ensured.status === "error") {
+      return ensured.error;
     }
-    const existingEmails = saList.stdout.split("\n").map((line) => line.trim());
-    if (existingEmails.includes(email)) {
-      serviceAccountReused = true;
-    } else {
-      progress.report({ type: "operation_started", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_CREATE });
-      const saCreate = await runner.run([
-        "iam",
-        "service-accounts",
-        "create",
-        options.saName,
-        "--project",
-        projectId,
-        "--display-name",
-        "hikoutei setup",
-      ]);
-      progress.report({ type: "operation_completed", phase: "service_account", operation: SETUP_PROGRESS_OPERATIONS.SA_CREATE });
-      executed.push({
-        kind: "gcloud",
-        command: [
-          "iam",
-          "service-accounts",
-          "create",
-          options.saName,
-          "--project",
-          projectId,
-          "--display-name",
-          "hikoutei setup",
-        ],
-        outcome: outcomeOf(saCreate, "service account created"),
-      });
-      if (saCreate.status !== "ok") {
-        return errorResult(
-          SETUP_ERROR_CODES.SA_CREATE_FAILED,
-          `could not create service account "${options.saName}": ${describeGcloudFailure(saCreate)}`,
-        );
-      }
-    }
+    serviceAccountReused = ensured.reused;
     progress.report({ type: "phase_completed", phase: "service_account", source: "run" });
   }
 
@@ -1476,28 +1481,61 @@ async function runSetupLocked(
   }
   progress.report({ type: "phase_completed", phase: "output", source: "run" });
 
+  const baseSummary = {
+    projectId,
+    ownerEmail,
+    serviceAccountEmail: email,
+    keyPath: options.keyPath,
+    spreadsheetId: spreadsheet.spreadsheetId,
+    spreadsheetUrl: spreadsheetEditUrl(spreadsheet.spreadsheetId),
+    spreadsheetTitle: title,
+    outputPath: options.outputPath,
+    statePath: options.statePath,
+    stateStatus: "complete",
+    envFileCreated: envResult.created,
+    envFileModified: envResult.modified,
+    projectReused,
+    serviceAccountReused: needsProjectPhase ? serviceAccountReused : true,
+    keyReused,
+    saWriterRole,
+    resumed: checkpoint !== undefined,
+  };
+  // Single-SA runs return exactly as before (no pool checkpoint key, no
+  // pool env line, no pool progress); the pool expansion below runs only
+  // when more than one service account was requested.
+  const saCount = options.saCount ?? 1;
+  if (saCount <= 1) {
+    return {
+      status: "ok",
+      dryRun: false,
+      commands: executed,
+      summary: { ...baseSummary, poolSize: 1, poolPaths: [options.keyPath] },
+    };
+  }
+  const expanded = await expandCredentialPool(runner, executed, progress, api, options, keySleeper, {
+    projectId,
+    spreadsheetId: spreadsheet.spreadsheetId,
+    title,
+    ownerEmail,
+    primaryEmail: email,
+    projectMode: persistProjectMode,
+    keyOrigin,
+    shareOrigin,
+    saCount,
+  });
+  if (expanded.status === "error") {
+    return expanded.error;
+  }
   return {
     status: "ok",
     dryRun: false,
     commands: executed,
     summary: {
-      projectId,
-      ownerEmail,
-      serviceAccountEmail: email,
-      keyPath: options.keyPath,
-      spreadsheetId: spreadsheet.spreadsheetId,
-      spreadsheetUrl: spreadsheetEditUrl(spreadsheet.spreadsheetId),
-      spreadsheetTitle: title,
-      outputPath: options.outputPath,
-      statePath: options.statePath,
-      stateStatus: "complete",
-      envFileCreated: envResult.created,
-      envFileModified: envResult.modified,
-      projectReused,
-      serviceAccountReused: needsProjectPhase ? serviceAccountReused : true,
-      keyReused,
-      saWriterRole,
-      resumed: checkpoint !== undefined,
+      ...baseSummary,
+      envFileModified: envResult.modified || expanded.envModified,
+      poolSize: expanded.pool.length,
+      poolPaths: expanded.pool.map((entry) => entry.keyPath),
+      poolKeptEntries: expanded.keptPoolEntries,
     },
   };
 }
@@ -1533,6 +1571,451 @@ async function createProjectOnce(
   }
   executed.push({ kind: "gcloud", command: ["projects", "create", projectId], outcome: "created" });
   return { status: "ok", reused: false };
+}
+
+/**
+ * Ensures one service account exists: reuse by email when it already
+ * exists, create it otherwise.
+ *
+ * Shared verbatim by the primary flow and the credential-pool expansion:
+ * the same list/create commands, outcomes, and `sa_create_failed` codes
+ * run under the caller's phase (the primary `service_account` phase or
+ * `pool_expansion`), so the primary path emits byte-identical events.
+ */
+async function ensureServiceAccount(
+  runner: GcloudRunner,
+  executed: PlannedCommand[],
+  progress: SetupProgressSink,
+  phase: SetupProgressPhase,
+  input: { readonly projectId: string; readonly saName: string; readonly saEmail: string },
+): Promise<{ readonly status: "ok"; readonly reused: boolean } | { readonly status: "error"; readonly error: SetupErrorResult }> {
+  progress.report({ type: "operation_started", phase, operation: SETUP_PROGRESS_OPERATIONS.SA_LIST });
+  const saList = await runner.run(["iam", "service-accounts", "list", "--project", input.projectId, "--format=value(email)"]);
+  progress.report({ type: "operation_completed", phase, operation: SETUP_PROGRESS_OPERATIONS.SA_LIST });
+  executed.push({
+    kind: "gcloud",
+    command: ["iam", "service-accounts", "list", "--project", input.projectId, "--format=value(email)"],
+    outcome: outcomeOf(saList, "service account lookup complete"),
+  });
+  if (saList.status !== "ok") {
+    return {
+      status: "error",
+      error: errorResult(SETUP_ERROR_CODES.SA_CREATE_FAILED, `could not list service accounts: ${describeGcloudFailure(saList)}`),
+    };
+  }
+  const existingEmails = saList.stdout.split("\n").map((line) => line.trim());
+  if (existingEmails.includes(input.saEmail)) {
+    return { status: "ok", reused: true };
+  }
+  progress.report({ type: "operation_started", phase, operation: SETUP_PROGRESS_OPERATIONS.SA_CREATE });
+  const saCreate = await runner.run([
+    "iam",
+    "service-accounts",
+    "create",
+    input.saName,
+    "--project",
+    input.projectId,
+    "--display-name",
+    "hikoutei setup",
+  ]);
+  progress.report({ type: "operation_completed", phase, operation: SETUP_PROGRESS_OPERATIONS.SA_CREATE });
+  executed.push({
+    kind: "gcloud",
+    command: [
+      "iam",
+      "service-accounts",
+      "create",
+      input.saName,
+      "--project",
+      input.projectId,
+      "--display-name",
+      "hikoutei setup",
+    ],
+    outcome: outcomeOf(saCreate, "service account created"),
+  });
+  if (saCreate.status !== "ok") {
+    return {
+      status: "error",
+      error: errorResult(
+        SETUP_ERROR_CODES.SA_CREATE_FAILED,
+        `could not create service account "${input.saName}": ${describeGcloudFailure(saCreate)}`,
+      ),
+    };
+  }
+  return { status: "ok", reused: false };
+}
+
+/**
+ * Derives the key path for pool entry `index` (2-based) next to the
+ * primary key path, mirroring the primary naming: `name-2.json` beside
+ * `name.json` (or `name-2` beside an extensionless `name`). The directory
+ * is preserved and no existing file is ever touched here.
+ */
+export function poolKeyPath(primaryKeyPath: string, index: number): string {
+  const base = basename(primaryKeyPath);
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  return join(dirname(primaryKeyPath), `${stem}-${index}${ext}`);
+}
+
+/** Prompt text for the interactive service-account count question. */
+export const SA_COUNT_PROMPT = "Service accounts to create? [1]: ";
+
+/** Reads one line of prompt input; null on end-of-input. Injectable for tests. */
+export type SaCountLineReader = () => Promise<string | null>;
+
+/** Inputs for resolving the service-account count of a run. */
+export interface ResolveSaCountOptions {
+  /** Parsed `--sa-count` value, or undefined when the flag was not given. */
+  readonly saCount: number | undefined;
+  readonly yes: boolean;
+  readonly dryRun: boolean;
+  /** True when the session is an interactive terminal (stdin and stdout TTY). */
+  readonly isTTY: boolean;
+  /** Writes the prompt text; required when prompting. */
+  readonly write?: (text: string) => void;
+  /** Reads one input line; required when prompting. */
+  readonly readLine?: SaCountLineReader;
+}
+
+/** Outcome of resolving the service-account count of a run. */
+export type SaCountResolution =
+  | { readonly status: "ok"; readonly saCount: number }
+  | { readonly status: "invalid"; readonly failure: SetupFailure };
+
+/**
+ * Resolves how many service accounts to provision.
+ *
+ * `--yes`, `--dry-run`, and non-TTY sessions never prompt and use the
+ * flag (default 1). An interactive TTY session without `--sa-count` asks
+ * once (`Service accounts to create? [1]: `): an empty answer means 1, a
+ * valid 1..10 integer wins, and invalid input re-asks exactly once before
+ * failing with an `invalid_args` usage error. End-of-input on the first
+ * read counts as empty (1); end-of-input on the re-ask fails closed with
+ * an `invalid_args` usage error (a typo followed by Ctrl-D must never
+ * silently provision 1). A missing line reader degrades to the default
+ * without prompting.
+ */
+export async function resolveSaCountForSetup(options: ResolveSaCountOptions): Promise<SaCountResolution> {
+  if (options.yes || options.dryRun || !options.isTTY || options.saCount !== undefined) {
+    return { status: "ok", saCount: options.saCount ?? 1 };
+  }
+  const readLine = options.readLine;
+  if (readLine === undefined) {
+    return { status: "ok", saCount: 1 };
+  }
+  const write = options.write ?? ((): void => undefined);
+  const invalidArgs = (detail: string): SaCountResolution => ({
+    status: "invalid",
+    failure: setupFailure(
+      SETUP_ERROR_CODES.INVALID_ARGS,
+      `invalid service-account count: ${detail}; run with --sa-count <n> (1-${MAX_SETUP_SA_COUNT}) or --yes`,
+    ),
+  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    write(SA_COUNT_PROMPT);
+    const line = await readLine();
+    if (line === null) {
+      if (attempt === 0) {
+        return { status: "ok", saCount: 1 };
+      }
+      return invalidArgs("no input on retry");
+    }
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      return { status: "ok", saCount: 1 };
+    }
+    const parsed = parseSaCount(trimmed);
+    if (parsed.status === "ok") {
+      return { status: "ok", saCount: parsed.saCount };
+    }
+    if (attempt === 1) {
+      return invalidArgs(parsed.message);
+    }
+  }
+  // Unreachable: the loop above returns on every path.
+  return { status: "ok", saCount: 1 };
+}
+
+/** Context the pool expansion inherits from the completed primary flow. */
+interface PoolExpansionContext {
+  readonly projectId: string;
+  readonly spreadsheetId: string;
+  readonly title: string;
+  readonly ownerEmail: string;
+  /** Canonical email of the primary service account (pool entry 1). */
+  readonly primaryEmail: string;
+  readonly projectMode: ProjectMode;
+  readonly keyOrigin: KeyOrigin;
+  readonly shareOrigin: ShareOrigin;
+  readonly saCount: number;
+}
+
+/** Outcome of the credential-pool expansion. */
+type PoolExpansionResult =
+  | { readonly status: "ok"; readonly pool: readonly SetupPoolEntry[]; readonly envModified: boolean; readonly keptPoolEntries: number }
+  | { readonly status: "error"; readonly error: SetupErrorResult };
+
+/**
+ * Provisions the additional credential-pool accounts (entries 2..N).
+ *
+ * Runs after the primary flow reached `complete`: for each missing entry
+ * it ensures the `<saName>-<i>` service account exists (the same
+ * ensure/create path as the primary), issues its key with the same
+ * settlement loop (`settleServiceAccountKey` with `fresh` permission and
+ * its own marker/baseline), grants it writer access, verifies access with
+ * the same verifier, and persists the entry to the `complete` checkpoint
+ * IMMEDIATELY — a mid-pool failure keeps entries 1..i-1 so the resume
+ * skips them. Failures use the same error codes as the primary path.
+ * Finally the `.env` file is rewritten with the comma-separated
+ * `HIKOUTEI_SYNC_CREDENTIALS` pool line. The bounded key/verify progress
+ * reporters stay unwired here (the tracker hosts one bounded kind per
+ * phase): only generic operation events are emitted under
+ * `pool_expansion`, which never advances the overall ten-phase count.
+ *
+ * // ponytail: no per-pool-SA key write-ahead checkpoint; a crash between
+ * // a pool key create and its pool-entry persist leaves an orphaned cloud
+ * // key that the retry treats as baseline (fails uncertain, never
+ * // duplicates silently). Persist per-SA key markers if this ever matters.
+ */
+async function expandCredentialPool(
+  runner: GcloudRunner,
+  executed: PlannedCommand[],
+  progress: SetupProgressSink,
+  api: HumanSheetApi,
+  options: RunSetupOptions,
+  keySleeper: Sleeper,
+  context: PoolExpansionContext,
+): Promise<PoolExpansionResult> {
+  progress.report({ type: "phase_started", phase: POOL_EXPANSION_PHASE });
+  // The primary flow just persisted `complete`; reload it as the
+  // append-reconcile base (saCount is a run option, never a checkpoint
+  // conflict: entries already present are skipped).
+  const reloaded = loadSetupState(options.statePath);
+  if (reloaded.status !== "loaded" || reloaded.state.status !== "complete") {
+    return {
+      status: "error",
+      error: errorResult(
+        SETUP_ERROR_CODES.SETUP_STATE_INVALID,
+        `the setup state at ${options.statePath} is not complete; remove it and rerun setup`,
+      ),
+    };
+  }
+  const primaryEntry: SetupPoolEntry = {
+    saName: options.saName,
+    saEmail: context.primaryEmail,
+    keyPath: options.keyPath,
+  };
+  const storedPool = reloaded.state.pool;
+  if (storedPool !== undefined) {
+    const first = storedPool[0];
+    if (
+      first === undefined ||
+      first.saName !== primaryEntry.saName ||
+      first.saEmail !== primaryEntry.saEmail ||
+      first.keyPath !== primaryEntry.keyPath
+    ) {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.SETUP_STATE_INVALID,
+          `the credential pool in ${options.statePath} does not start with the primary service account; ` +
+            `remove the setup state and rerun setup`,
+        ),
+      };
+    }
+  }
+  // Keep-all resume: resuming with a smaller --sa-count never removes
+  // entries — the loop below only appends missing entries 2..N, so the
+  // pool only grows and the summary reports the actual (larger) size.
+  const keptPoolEntries = storedPool?.length ?? 0;
+  const pool: SetupPoolEntry[] = storedPool !== undefined ? [...storedPool] : [primaryEntry];
+
+  for (let index = pool.length + 1; index <= context.saCount; index += 1) {
+    const saName = `${options.saName}-${index}`;
+    if (!isValidServiceAccountName(saName)) {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.INVALID_ARGS,
+          `service-account name "${options.saName}" is too long to expand into a ${context.saCount}-account ` +
+            `pool ("${saName}" is not a valid service-account name); use a shorter --sa-name`,
+        ),
+      };
+    }
+    const saEmail = serviceAccountEmail(saName, context.projectId);
+    const keyPath = poolKeyPath(options.keyPath, index);
+
+    const ensured = await ensureServiceAccount(runner, executed, progress, POOL_EXPANSION_PHASE, {
+      projectId: context.projectId,
+      saName,
+      saEmail,
+    });
+    if (ensured.status === "error") {
+      return ensured;
+    }
+
+    progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
+    const keyList = await listUserManagedServiceAccountKeys(runner, executed, {
+      projectId: context.projectId,
+      saEmail,
+      purpose: "baseline",
+    });
+    progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
+    if (keyList.status === "error") {
+      return { status: "error", error: keyList.error };
+    }
+    const settled = await settleServiceAccountKey(runner, executed, {
+      keyPath,
+      projectId: context.projectId,
+      saEmail,
+      keyMarker: generateCreationMarker(),
+      baseline: keyList.names,
+      createPermission: "fresh",
+      sleeper: keySleeper,
+    });
+    if (settled.status === "error") {
+      return settled;
+    }
+
+    progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.SHARE });
+    let outcome: ShareOutcome;
+    try {
+      outcome = await api.ensureSaWriter({
+        spreadsheetId: context.spreadsheetId,
+        saEmail,
+        ownerEmail: context.ownerEmail,
+      });
+    } catch (error) {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.SHEET_SHARE_FAILED,
+          `could not share spreadsheet ${context.spreadsheetId} with ${saEmail}: ${safeReasonOf(error)}`,
+        ),
+      };
+    }
+    progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.SHARE });
+    executed.push({
+      kind: "api",
+      label: `drive: share ${saEmail} as writer on ${context.spreadsheetId}`,
+      outcome: `role ${outcome.writerRole}; ownership verified`,
+    });
+
+    const keyCredential = readServiceAccountKeyCredentialSecurely(keyPath);
+    if (keyCredential.status === "absent") {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.SA_ACCESS_VERIFY_FAILED,
+          `the service-account key file ${keyPath} recorded in the setup state is missing`,
+        ),
+      };
+    }
+    if (keyCredential.status === "invalid") {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.SA_ACCESS_VERIFY_FAILED,
+          `could not read the service-account key at ${keyPath}: ${keyCredential.message}`,
+        ),
+      };
+    }
+    if (keyCredential.credentials.projectId !== context.projectId || keyCredential.credentials.clientEmail !== saEmail) {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.SA_ACCESS_VERIFY_FAILED,
+          `the service-account key at ${keyPath} belongs to ` +
+            `${keyCredential.credentials.clientEmail} (project ` +
+            `${keyCredential.credentials.projectId}); expected ${saEmail} in project ${context.projectId}`,
+        ),
+      };
+    }
+    try {
+      await options.verifySaAccess.verify({
+        keyPath,
+        spreadsheetId: context.spreadsheetId,
+        keyFresh: !settled.keyReused,
+        shareFresh: outcome.writerRole === "created" || outcome.writerRole === "upgraded",
+        credentials: {
+          client_email: keyCredential.credentials.clientEmail,
+          private_key: keyCredential.credentials.privateKey,
+        },
+      });
+    } catch (error) {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.SA_ACCESS_VERIFY_FAILED,
+          `could not verify service-account access to the spreadsheet: ${safeReasonOf(error)}`,
+        ),
+      };
+    }
+    executed.push({
+      kind: "api",
+      label: `spreadsheets.get with the ${saEmail} key`,
+      outcome: "service-account access verified",
+    });
+
+    // Persisted IMMEDIATELY: a later failure keeps this entry and the
+    // resume skips it.
+    pool.push({ saName, saEmail, keyPath });
+    progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.CHECKPOINT_PERSIST });
+    const completeState = spreadsheetState(
+      options,
+      context.projectId,
+      context.ownerEmail,
+      context.title,
+      context.primaryEmail,
+      { spreadsheetId: context.spreadsheetId },
+      "complete",
+      context.projectMode,
+      context.keyOrigin,
+      context.shareOrigin,
+    );
+    if (completeState.status !== "complete") {
+      // Unreachable: the builder returns the requested status; fail
+      // closed rather than persist a wrong-status checkpoint.
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.SETUP_STATE_INVALID,
+          `could not persist the credential pool in ${options.statePath}; remove the setup state and rerun setup`,
+        ),
+      };
+    }
+    const saveError = persistState(options, executed, { ...completeState, pool: [...pool] });
+    progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.CHECKPOINT_PERSIST });
+    if (saveError !== null) {
+      return { status: "error", error: saveError };
+    }
+  }
+
+  progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.ENV_WRITE });
+  let envModified = false;
+  try {
+    const poolWrite = writeSetupEnvFile(
+      options.outputPath,
+      options.keyPath,
+      spreadsheetEditUrl(context.spreadsheetId),
+      [options.statePath, setupLockPath(options.statePath), setupStateTempPath(options.statePath)],
+      pool.map((entry) => entry.keyPath),
+    );
+    envModified = poolWrite.modified;
+  } catch (error) {
+    return {
+      status: "error",
+      error: errorResult(
+        carrierCode(error) ?? SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED,
+        `could not write ${options.outputPath}: ${messageOf(error)}`,
+      ),
+    };
+  }
+  progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.ENV_WRITE });
+  progress.report({ type: "phase_completed", phase: POOL_EXPANSION_PHASE, source: "run" });
+  return { status: "ok", pool, envModified, keptPoolEntries };
 }
 
 /**

@@ -35,10 +35,12 @@ import { errorResult, type SetupErrorResult } from "./flowResult.js";
 import { findSetupPathCollision } from "./setupPathCollision.js";
 import type { RunSetupOptions } from "./setupFlow.js";
 
-/** The two .env keys the setup CLI manages. */
+/** The .env keys the setup CLI manages. */
 export const SETUP_ENV_KEYS = {
   CREDENTIALS: "GOOGLE_APPLICATION_CREDENTIALS",
   SPREADSHEET_URL: "HIKOUTEI_SYNC_SPREADSHEET_URL",
+  /** Comma-separated credential pool for multi-SA runs (written only when ≥2 paths). */
+  CREDENTIAL_POOL: "HIKOUTEI_SYNC_CREDENTIALS",
 } as const;
 
 /** Result of writing the .env output file. */
@@ -52,7 +54,8 @@ export interface EnvFileWriteResult {
 function isManagedEnvLine(line: string): boolean {
   return (
     line.startsWith(`${SETUP_ENV_KEYS.CREDENTIALS}=`) ||
-    line.startsWith(`${SETUP_ENV_KEYS.SPREADSHEET_URL}=`)
+    line.startsWith(`${SETUP_ENV_KEYS.SPREADSHEET_URL}=`) ||
+    line.startsWith(`${SETUP_ENV_KEYS.CREDENTIAL_POOL}=`)
   );
 }
 
@@ -64,6 +67,10 @@ const ENV_FILE_MODE = 0o600;
 
 /**
  * Writes or updates the .env output file securely and atomically.
+ *
+ * Updates only the managed env keys (the single-SA credentials path, the
+ * spreadsheet URL, and — for multi-SA runs with at least two pool paths —
+ * the comma-separated credential pool) while preserving unrelated lines.
  *
  * An existing output must be a regular file at the lstat boundary (a
  * symlink is rejected outright, and directories/FIFOs/devices/sockets are
@@ -92,6 +99,13 @@ export function writeSetupEnvFile(
   credentialsPath: string,
   spreadsheetUrl: string,
   reservedPaths: readonly string[] = [],
+  /**
+   * Full credential pool (entry 1 first). The pool line is written only
+   * when at least two paths are present; single-SA runs never contain it
+   * (a stale pool line is removed as a managed key). Paths are joined
+   * with commas and no spaces, matching the runtime pool parser.
+   */
+  poolPaths: readonly string[] = [],
 ): EnvFileWriteResult {
   const read = readExistingEnvFile(outputPath, [credentialsPath, ...reservedPaths]);
   const existing = read.existing;
@@ -106,6 +120,7 @@ export function writeSetupEnvFile(
     ...lines.filter((line) => !isManagedEnvLine(line)),
     `${SETUP_ENV_KEYS.CREDENTIALS}=${credentialsPath}`,
     `${SETUP_ENV_KEYS.SPREADSHEET_URL}=${spreadsheetUrl}`,
+    ...(poolPaths.length >= 2 ? [`${SETUP_ENV_KEYS.CREDENTIAL_POOL}=${poolPaths.join(",")}`] : []),
   ];
   const content = `${next.join("\n")}\n`;
   // A mode repair is a modification: an existing file whose owner bits are

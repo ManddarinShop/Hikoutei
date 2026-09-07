@@ -994,6 +994,8 @@ describe("runSetup — fresh setup", () => {
       keyReused: false,
       saWriterRole: "created",
       resumed: false,
+      poolSize: 1,
+      poolPaths: [harness.keyPath],
     });
 
     // Checkpoint: complete status, correct identities, mode 0600, the URL is
@@ -4395,6 +4397,8 @@ describe("formatSummary", () => {
       keyReused: false,
       saWriterRole: "created",
       resumed: false,
+      poolSize: 1,
+      poolPaths: ["/tmp/hikoutei-service-account.json"],
     });
     expect(text).toContain("hikoutei-abc");
     expect(text).toContain(FAKE_OWNER);

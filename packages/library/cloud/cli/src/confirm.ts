@@ -51,7 +51,7 @@ export type PromptLoginHandoffResult =
  * the last read — and calls `next()` once. It deliberately never calls
  * `return()`, which is the one difference that keeps a later prompt working.
  */
-async function readOneInputChunk(input: AsyncIterable<string>): Promise<string | null> {
+export async function readOneInputChunk(input: AsyncIterable<string>): Promise<string | null> {
   const iterator = input[Symbol.asyncIterator]();
   const result = await iterator.next();
   if (result.done === true || result.value === undefined) {

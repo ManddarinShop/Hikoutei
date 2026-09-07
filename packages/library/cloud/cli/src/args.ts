@@ -15,12 +15,48 @@ export const DEFAULT_SA_NAME = "hikoutei-sa";
 /** Default output file name (resolved against the current directory by main). */
 export const DEFAULT_OUTPUT_FILE_NAME = ".env";
 
+/** Maximum service accounts per setup run (quota-exhaustion guard). */
+export const MAX_SETUP_SA_COUNT = 10;
+
+/**
+ * Validates an `--sa-count` value: a positive safe integer capped at
+ * {@link MAX_SETUP_SA_COUNT}. Returns the count, or an error message.
+ */
+export function parseSaCount(value: string): { readonly status: "ok"; readonly saCount: number } | { readonly status: "error"; readonly message: string } {
+  if (!/^\d+$/.test(value)) {
+    return {
+      status: "error",
+      message: `invalid value for --sa-count: expected a positive integer between 1 and ${MAX_SETUP_SA_COUNT}`,
+    };
+  }
+  const saCount = Number(value);
+  if (saCount > MAX_SETUP_SA_COUNT) {
+    return {
+      status: "error",
+      message: `sa-count is capped at ${MAX_SETUP_SA_COUNT} to avoid accidental quota exhaustion`,
+    };
+  }
+  if (!Number.isSafeInteger(saCount) || saCount < 1) {
+    return {
+      status: "error",
+      message: `invalid value for --sa-count: expected a positive integer between 1 and ${MAX_SETUP_SA_COUNT}`,
+    };
+  }
+  return { status: "ok", saCount };
+}
+
 /** Parsed and defaulted setup options handed to the setup flow. */
 export interface SetupOptions {
   /** Existing Google Cloud project id; when absent the flow creates one. */
   readonly projectId?: string;
   /** Service-account name within the project. */
   readonly saName: string;
+  /**
+   * Number of service accounts to provision as a credential pool. Absent
+   * means the flag was not given (default 1); the interactive prompt
+   * (TTY, no --yes) resolves the count, while --yes/non-TTY runs use 1.
+   */
+  readonly saCount?: number;
   /** Spreadsheet title; when absent the flow derives `hikoutei-sync-<project>`. */
   readonly spreadsheetTitle?: string;
   /** Output .env path (relative to the current directory). */
@@ -42,6 +78,7 @@ const SETUP_FLAGS = {
   HELP_SHORT: "-h",
   PROJECT: "--project",
   SA_NAME: "--sa-name",
+  SA_COUNT: "--sa-count",
   SPREADSHEET_TITLE: "--spreadsheet-title",
   OUTPUT: "--output",
   YES: "--yes",
@@ -69,6 +106,13 @@ export const SETUP_HELP_TEXT = [
   "                             creating one (verified with `gcloud projects",
   "                             describe`).",
   "  --sa-name <name>           Service-account name (default: hikoutei-sa).",
+  "  --sa-count <n>             Number of service accounts to create as a",
+  "                             credential pool (default 1; capped at 10).",
+  "                             Additional accounts are granted writer access",
+  "                             to the same spreadsheet and written to",
+  "                             HIKOUTEI_SYNC_CREDENTIALS. Resuming with a",
+  "                             smaller count keeps the existing pool",
+  "                             (entries are never removed).",
   "  --spreadsheet-title <title> Title of the spreadsheet to create (default:",
   "                             hikoutei-sync-<project>).",
   "  --output <path>            .env file to write or update (default: .env in",
@@ -143,6 +187,7 @@ export const SETUP_HELP_TEXT = [
 const VALUE_FLAGS = [
   SETUP_FLAGS.PROJECT,
   SETUP_FLAGS.SA_NAME,
+  SETUP_FLAGS.SA_COUNT,
   SETUP_FLAGS.SPREADSHEET_TITLE,
   SETUP_FLAGS.OUTPUT,
 ] as const;
@@ -161,6 +206,7 @@ export function parseSetupArgs(argv: readonly string[]): SetupArgsParseResult {
   const args = argv.length > 0 && argv[0] === "setup" ? argv.slice(1) : argv;
   let projectId: string | undefined;
   let saName = DEFAULT_SA_NAME;
+  let saCount: number | undefined;
   let spreadsheetTitle: string | undefined;
   let output = DEFAULT_OUTPUT_FILE_NAME;
   let yes = false;
@@ -226,6 +272,17 @@ export function parseSetupArgs(argv: readonly string[]): SetupArgsParseResult {
           }
           saName = value;
           break;
+        case SETUP_FLAGS.SA_COUNT: {
+          const parsed = parseSaCount(value);
+          if (parsed.status === "error") {
+            return {
+              status: "invalid",
+              failure: setupFailure(SETUP_ERROR_CODES.INVALID_ARGS, parsed.message),
+            };
+          }
+          saCount = parsed.saCount;
+          break;
+        }
         case SETUP_FLAGS.SPREADSHEET_TITLE:
           spreadsheetTitle = value;
           break;
@@ -255,6 +312,7 @@ export function parseSetupArgs(argv: readonly string[]): SetupArgsParseResult {
     options: {
       ...(projectId !== undefined ? { projectId } : {}),
       ...(spreadsheetTitle !== undefined ? { spreadsheetTitle } : {}),
+      ...(saCount !== undefined ? { saCount } : {}),
       saName,
       output,
       yes,

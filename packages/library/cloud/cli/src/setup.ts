@@ -20,7 +20,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSetupArgs, type SetupOptions } from "./args.js";
 import { SETUP_STATE_FILE_NAME } from "./checkpoint.js";
-import { confirmSetup, promptLoginHandoff } from "./confirm.js";
+import { confirmSetup, promptLoginHandoff, readOneInputChunk } from "./confirm.js";
 import {
   SETUP_ARG_ERROR_EXIT_CODE,
   SETUP_ERROR_CODES,
@@ -51,6 +51,7 @@ import {
   findSetupPathCollision,
   formatPlan,
   formatSummary,
+  resolveSaCountForSetup,
   runSetup,
   type RunSetupOptions,
   type SetupResult,
@@ -65,6 +66,8 @@ export interface RunSetupParams {
   readonly outputPath: string;
   readonly statePath: string;
   readonly dryRun: boolean;
+  /** Resolved service-account count (1 for single-SA runs). */
+  readonly saCount: number;
 }
 
 /**
@@ -202,6 +205,23 @@ export async function runSetupCli(context: RunSetupCliContext): Promise<number> 
       return SETUP_RUNTIME_ERROR_EXIT_CODE;
     }
 
+    // Service-account count: prompts once on an interactive terminal
+    // without --sa-count (TTY, no --yes/--dry-run); every other session
+    // uses the flag (default 1) without prompting.
+    const saCountResolution = await resolveSaCountForSetup({
+      saCount: options.saCount,
+      yes: options.yes,
+      dryRun: options.dryRun,
+      isTTY: context.stdin.isTTY === true && context.stdout.isTTY === true,
+      write: (text) => context.stdout.write(text),
+      readLine: () => readOneInputChunk(context.stdin),
+    });
+    if (saCountResolution.status === "invalid") {
+      context.stderr.write(`hikoutei-setup:${saCountResolution.failure.code}: ${saCountResolution.failure.message}\n`);
+      context.stderr.write("Run `hikoutei setup --help` for usage.\n");
+      return SETUP_ARG_ERROR_EXIT_CODE;
+    }
+
     const params: RunSetupParams = {
       projectId: options.projectId,
       saName: options.saName,
@@ -210,6 +230,7 @@ export async function runSetupCli(context: RunSetupCliContext): Promise<number> 
       outputPath,
       statePath,
       dryRun: options.dryRun,
+      saCount: saCountResolution.saCount,
     };
 
     let result = await context.runSetup(params);
@@ -419,6 +440,7 @@ async function main(argv: readonly string[] = process.argv.slice(2)): Promise<nu
       outputPath: params.outputPath,
       statePath: params.statePath,
       dryRun: params.dryRun,
+      saCount: params.saCount,
       progress,
     } satisfies RunSetupOptions);
 
