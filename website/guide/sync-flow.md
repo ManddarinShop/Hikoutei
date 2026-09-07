@@ -23,7 +23,7 @@ return to application
 ```
 
 `createTypedSheets()` never contacts Google Sheets and does not require a Sheet
-route, provider client, or provisioner. Reads always come from SQLite.
+projection config, provider client, or provisioner. Reads always come from SQLite.
 
 ## Internal sync service flow
 
@@ -43,7 +43,9 @@ SQLite transaction
           ▼
 internal effect supervisor
   ├─ claim with a lease
-  ├─ send a signed operation batch
+  ├─ route on the stamped dispatchClass (fast-append vs guarded dispatch)
+  ├─ stream large tabs as size-capped band reads; reads and writes pace
+  │   through independent request-start limiters
   ├─ persist uncertain delivery and schedule a durable postcondition probe
   └─ mark the effect applied, terminally failed, or recoverably pending
           │
