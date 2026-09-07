@@ -18,7 +18,6 @@ separately by the root-surface tests.
 | Type | Purpose |
 | --- | --- |
 | `HikouteiScalarType` | Closed set of scalar property types accepted by `defineTypedSheetsEntity` — `"string"` \| `"number"` \| `"boolean"` \| `"date"`. |
-| `HikouteiPropertyOptions` | Per-property descriptor options: scalar `type`, plus `primary`, `nullable`, `required`, `unique`. |
 | `HikouteiPropertyDescriptorMap` | Map of property name to scalar options declared by one entity descriptor. |
 | `HikouteiEntityDescriptorInput` | User-facing entity descriptor accepted by `defineTypedSheetsEntity`: descriptor name, SQLite `tableName`, and property map. |
 | `HikouteiScalarValueType` | TypeScript value type derived from one declared scalar `type` (`string`, `number`, `boolean`, or `Date`). |
@@ -30,7 +29,7 @@ separately by the root-surface tests.
 
 | Type | Purpose |
 | --- | --- |
-| `CreateTypedSheetsWithSyncOptions` | Options for `createTypedSheetsWithSync()`: SQLite `dbName`, declared `entities`, optional `env` override, optional `adopt` spec. |
+| `CreateTypedSheetsWithSyncOptions` | Options for `createTypedSheetsWithSync()`: SQLite `dbName`, declared `entities`, optional `env` override, optional `onDiagnostic` hook, optional `providerOptions`, optional `adopt` spec. |
 | `AdoptEntitySpec` | One entity's existing-sheet adoption request: the existing tab to adopt, the business-key header (`identityFrom`), optional provisioned tab names, and explicit header→property `columnMap` bindings. |
 | `AdoptionRunReport` | Complete read-only adoption dry-run report; `ok` is true only when every entity is ready. `mode: "dry-run"` never mutates the spreadsheet. |
 | `AdoptionColumnBinding` | One bound column in an adoption report: entity property (`field`) plus the 0-based column index, column letter, and sheet header it binds to. |

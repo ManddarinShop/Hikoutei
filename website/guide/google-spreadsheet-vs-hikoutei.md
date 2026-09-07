@@ -44,9 +44,10 @@ Hikoutei keeps the spreadsheet for people and moves the application to SQLite:
   limited; if that is all you need, use `google-spreadsheet` or
   `@googleapis/sheets` directly.
 - **Not a transaction-safe database on top of Sheets.** Sheet updates are
-  asynchronous; a successful `flush()` commits SQLite, outbox state, and the
-  durable effect log in one local transaction, but does not mean the Sheet
-  write has completed.
+  asynchronous; a successful `flush()` never means the Sheet write has
+  completed. In a sync-enabled runtime it commits entity tables plus the
+  durable outbox in one local SQLite transaction; in a local-only runtime
+  (no sync env) it commits entity tables only.
 
 ## Decision guide
 
