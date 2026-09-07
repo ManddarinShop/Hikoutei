@@ -159,7 +159,7 @@ function keyWait(attempt: number, delayMs: number): SetupProgressEvent {
  * a test can begin a valid sequence at any phase (the tracker enforces
  * phase order).
  */
-function prefixEvents(phase: SetupProgressPhase): readonly SetupProgressEvent[] {
+function prefixEvents(phase: (typeof SETUP_PROGRESS_PHASES)[number]): readonly SetupProgressEvent[] {
   const events: SetupProgressEvent[] = [];
   const index = SETUP_PROGRESS_PHASES.indexOf(phase);
   for (let i = 0; i < index; i += 1) {
@@ -1805,6 +1805,8 @@ describe("runSetupCli login handoff with the progress renderer", () => {
         keyReused: false,
         saWriterRole: "created",
         resumed: false,
+        poolSize: 1,
+        poolPaths: ["/tmp/hikoutei-service-account.json"],
       },
       commands: [],
     };
@@ -1861,7 +1863,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     });
     const { stdout, text: stdoutText } = capturingStdout(true);
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup: (params) => {
         // The retry re-runs the same controller: re-emit the full phase
@@ -1933,7 +1935,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     const { output, text: stderrText } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: true, interactive: true, now: () => 0 });
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup: async () => {
         for (const event of prefixEvents("drive_access")) {
@@ -1968,7 +1970,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     const { output, text: stderrText } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: true, interactive: true, now: () => 0 });
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup: async () => {
         for (const event of prefixEvents("drive_access")) {
@@ -2030,7 +2032,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
       };
     };
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup,
       loginRunner: {

@@ -68,6 +68,13 @@
  *   stay no-ops. Starting fresh requires removing both the checkpoint and
  *   the key file (or passing the matching `--project` for recovery).
  *
+ * A `complete` checkpoint may additionally carry `pool`, the provisioned
+ * credential pool for `--sa-count` runs (entry 1 duplicates the primary
+ * fields; entries 2..N are the additional accounts). The pool is
+ * append-reconciled on resume: a stored pool never conflicts with a new
+ * `--sa-count` (saCount is a run option, not checkpoint state), and
+ * already-recorded entries are skipped.
+ *
  * The spreadsheet URL is never stored: it is derived deterministically from
  * the spreadsheet id, so a stored URL can never disagree with the id.
  * `projectMode` records whether the project was explicit (`--project`) or
@@ -298,6 +305,20 @@ export type KeyOrigin = "created" | "reused";
  */
 export type ShareOrigin = "fresh" | "reused";
 
+/**
+ * One provisioned service account of a credential pool.
+ *
+ * Non-secret identities only (names, emails, paths — never key material):
+ * entry 1 duplicates the primary `saName`/`saEmail`/`keyPath` fields, and
+ * entries 2..N are the additional pool accounts (`<saName>-<i>`) sharing
+ * the same spreadsheet. A resumed run skips entries already present.
+ */
+export interface SetupPoolEntry {
+  readonly saName: string;
+  readonly saEmail: string;
+  readonly keyPath: string;
+}
+
 /** Progression statuses of a setup run; later statuses mean earlier work is done. */
 export type SetupStateStatus =
   | "project_selected"
@@ -364,7 +385,7 @@ export type SetupState =
     readonly keyOrigin: KeyOrigin;
   })
   | (SetupStateCommon & {
-    readonly status: "spreadsheet_shared" | "complete";
+    readonly status: "spreadsheet_shared";
     readonly spreadsheetId: string;
     readonly keyOrigin: KeyOrigin;
     /**
@@ -373,6 +394,23 @@ export type SetupState =
      * 403/404 propagation freshness.
      */
     readonly shareOrigin: ShareOrigin;
+  })
+  | (SetupStateCommon & {
+    readonly status: "complete";
+    readonly spreadsheetId: string;
+    readonly keyOrigin: KeyOrigin;
+    /**
+     * Non-secret provenance of the SA writer permission; required once the
+     * share step is done so a resumed shared-but-unverified state keeps its
+     * 403/404 propagation freshness.
+     */
+    readonly shareOrigin: ShareOrigin;
+    /**
+     * Credential pool (entry 1 duplicates the primary fields). Absent for
+     * single-SA runs; a present pool is non-empty and append-reconciled on
+     * resume (a stored pool never conflicts with a new --sa-count).
+     */
+    readonly pool?: readonly SetupPoolEntry[];
   });
 
 /** Result of loading the checkpoint file from disk. */
@@ -618,14 +656,16 @@ export function validateSetupState(value: unknown): SetupState | null {
   if (status === "project_selected") {
     // A pre-key/pre-spreadsheet state carrying key or sheet fields is
     // contradictory (shareOrigin included: the share provenance is
-    // unknown before the share step).
+    // unknown before the share step). The pool only exists after
+    // completion.
     if (
       value.spreadsheetId !== undefined ||
       value.creationMarker !== undefined ||
       value.keyMarker !== undefined ||
       value.keyBaseline !== undefined ||
       value.keyOrigin !== undefined ||
-      value.shareOrigin !== undefined
+      value.shareOrigin !== undefined ||
+      value.pool !== undefined
     ) {
       return null;
     }
@@ -636,12 +676,13 @@ export function validateSetupState(value: unknown): SetupState | null {
     // pre-existing user-managed key resource names; spreadsheet fields are
     // contradictory here, and keyOrigin is unknown until the key is
     // secured (a pre-secure state carrying it is a contradiction). Key
-    // material is never stored.
+    // material is never stored. The pool only exists after completion.
     if (
       value.spreadsheetId !== undefined ||
       value.creationMarker !== undefined ||
       value.keyOrigin !== undefined ||
-      value.shareOrigin !== undefined
+      value.shareOrigin !== undefined ||
+      value.pool !== undefined
     ) {
       return null;
     }
@@ -660,13 +701,15 @@ export function validateSetupState(value: unknown): SetupState | null {
     // no spreadsheet fields may be carried, but the non-secret keyOrigin
     // provenance discriminant is REQUIRED from here on (the verify phase
     // depends on it across resumes). shareOrigin is unknown until the
-    // share step, so a pre-share status carrying it is contradictory.
+    // share step, so a pre-share status carrying it is contradictory. The
+    // pool only exists after completion.
     if (
       value.spreadsheetId !== undefined ||
       value.creationMarker !== undefined ||
       value.keyMarker !== undefined ||
       value.keyBaseline !== undefined ||
-      value.shareOrigin !== undefined
+      value.shareOrigin !== undefined ||
+      value.pool !== undefined
     ) {
       return null;
     }
@@ -682,12 +725,13 @@ export function validateSetupState(value: unknown): SetupState | null {
     // Key fields are contradictory: a spreadsheet state implies key
     // readiness. keyOrigin is required (see key_ready); shareOrigin is
     // unknown until the share step, so a pre-share state carrying it is
-    // contradictory.
+    // contradictory. The pool only exists after completion.
     if (
       value.spreadsheetId !== undefined ||
       value.keyMarker !== undefined ||
       value.keyBaseline !== undefined ||
-      value.shareOrigin !== undefined
+      value.shareOrigin !== undefined ||
+      value.pool !== undefined
     ) {
       return null;
     }
@@ -718,25 +762,96 @@ export function validateSetupState(value: unknown): SetupState | null {
     // The share step has not completed yet: a stored shareOrigin would be a
     // contradiction (the provenance is unknown until the permission is
     // ensured — `spreadsheet_share_started` is the write-ahead BEFORE that
-    // ensure, so it must never carry a shareOrigin).
-    if (value.shareOrigin !== undefined) {
+    // ensure, so it must never carry a shareOrigin). The pool only exists
+    // after completion, so a pre-complete status carrying it is rejected.
+    if (value.shareOrigin !== undefined || value.pool !== undefined) {
       return null;
     }
     return { ...common, status, spreadsheetId, keyOrigin };
   }
-  // spreadsheet_shared and complete: the share step is done, so the
-  // non-secret shareOrigin provenance discriminant is REQUIRED (the verify
-  // phase depends on it across resumes).
+  if (status === "spreadsheet_shared") {
+    // The pool only exists after completion: a shared-but-incomplete state
+    // carrying it is contradictory.
+    if (value.pool !== undefined) {
+      return null;
+    }
+    const shareOrigin = requireShareOrigin(value.shareOrigin);
+    if (shareOrigin === null) {
+      return null;
+    }
+    return { ...common, status, spreadsheetId, keyOrigin, shareOrigin };
+  }
+  // complete: the share step is done, so the non-secret shareOrigin
+  // provenance discriminant is REQUIRED (the verify phase depends on it
+  // across resumes). The optional pool carries the provisioned credential
+  // pool; absent for single-SA runs.
   const shareOrigin = requireShareOrigin(value.shareOrigin);
   if (shareOrigin === null) {
     return null;
   }
-  return { ...common, status, spreadsheetId, keyOrigin, shareOrigin };
+  const pool = requireSetupPool(value.pool, common);
+  if (pool === null && value.pool !== undefined) {
+    return null;
+  }
+  return {
+    ...common,
+    status,
+    spreadsheetId,
+    keyOrigin,
+    shareOrigin,
+    ...(pool !== null ? { pool } : {}),
+  };
 }
 
 /** Promotes a validated `shareOrigin` value, or null when malformed. */
 function requireShareOrigin(value: unknown): ShareOrigin | null {
   return value === "fresh" || value === "reused" ? value : null;
+}
+
+/**
+ * Promotes a validated credential pool, or null when malformed.
+ *
+ * Callers distinguish "absent" (undefined input → null return meaning no
+ * pool) from "present but malformed" by checking the input separately:
+ * an empty array, a non-record entry, a malformed service-account name,
+ * a non-matching email derivation, an empty key path, or an entry 1 that
+ * disagrees with the primary fields is invalid (omit the pool instead of
+ * storing an empty array; entry 1 duplicates the primary fields).
+ */
+function requireSetupPool(
+  value: unknown,
+  common: SetupStateCommon,
+): readonly SetupPoolEntry[] | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+  const pool: SetupPoolEntry[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      return null;
+    }
+    const saName = requireValidServiceAccountName(entry.saName);
+    const saEmail = requireNonEmptyString(entry.saEmail);
+    const keyPath = requireNonEmptyString(entry.keyPath);
+    if (saName === null || saEmail === null || keyPath === null) {
+      return null;
+    }
+    // Same canonical-identity rule as the primary fields: the stored email
+    // must equal the derivation from the entry name and project.
+    if (saEmail !== serviceAccountEmail(saName, common.projectId)) {
+      return null;
+    }
+    pool.push({ saName, saEmail, keyPath });
+  }
+  // Entry 1 duplicates the primary fields; anything else is contradictory.
+  const first = pool[0] as SetupPoolEntry;
+  if (first.saName !== common.saName || first.saEmail !== common.saEmail || first.keyPath !== common.keyPath) {
+    return null;
+  }
+  return pool;
 }
 
 /** Requires a non-empty URL-safe Drive id for spreadsheet-bearing statuses. */
