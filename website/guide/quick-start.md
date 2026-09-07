@@ -83,6 +83,28 @@ order as the final tie-breaker; when the primary key is explicitly ordered,
 its supplied position and direction are preserved. Pagination without
 `orderBy` uses primary-key ascending order.
 
+## Update, remove, and transactions
+
+Updates flush like creates. Removals go through `remove()` plus `flush()`:
+
+```ts
+const loaded = await em.findOne(User, { id: "u1" });
+if (loaded !== null) {
+  em.remove(loaded);
+  await em.flush();
+}
+```
+
+Group a unit of work with `transactional()` — it commits atomically, and
+throwing inside the callback rolls everything back:
+
+```ts
+await em.transactional(async (tx) => {
+  tx.persist(tx.create(User, { id: "u2", name: "Bo" }));
+  await tx.flush();
+});
+```
+
 ## What happens to the Sheet?
 
 The write commits to local SQLite immediately — the application request never
