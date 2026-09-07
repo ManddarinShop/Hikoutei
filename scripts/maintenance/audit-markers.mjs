@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Marker census for the 0.9 cleanup baseline: case-insensitive word-boundary
-// count of TODO/FIXME/HACK/XXX/LEGACY/DEPRECATED across src/**/*.ts.
+// count of TODO/FIXME/HACK/XXX/LEGACY/DEPRECATED across src/scripts/packages
+// (**/*.ts, **/*.mts, **/*.mjs).
 // Read-only audit; prints totals per marker, top files, and file:line entries.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const ROOTS = ["src"];
+const ROOTS = ["src", "scripts", "packages"];
 const MARKERS = ["todo", "fixme", "hack", "xxx", "legacy", "deprecated"];
 const PATTERN = new RegExp(`\\b(${MARKERS.join("|")})\\b`, "gi");
 
@@ -17,7 +18,7 @@ function listTsFiles(dir) {
     if (statSync(full).isDirectory()) {
       if (entry === "node_modules" || entry === "dist") continue;
       out.push(...listTsFiles(full));
-    } else if (entry.endsWith(".ts")) {
+    } else if (entry.endsWith(".ts") || entry.endsWith(".mts") || entry.endsWith(".mjs")) {
       out.push(full);
     }
   }

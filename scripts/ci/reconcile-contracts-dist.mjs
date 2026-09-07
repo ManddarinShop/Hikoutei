@@ -298,6 +298,7 @@ async function main() {
     (rel) => rel.endsWith(".js") || rel.endsWith(".d.ts"),
   );
   let rewrittenFiles = 0, rewrittenSpecifiers = 0, remappedSpecifiers = 0;
+  const remappedFiles = [];
   for (const rel of emitFiles) {
     const abs = path.join(rootDist, rel);
     let source = await readFile(abs, "utf8");
@@ -313,6 +314,7 @@ async function main() {
     // point back into repo src (e.g. a surviving transitional relative
     // pointer); remap it onto the dist mirror of its `src/<rest>` target.
     const fileDirPosix = path.posix.dirname(rel);
+    let remappedInFile = 0;
     source = source.replace(/(['"])\.([^'"]*)\1/g, (whole, quote, rest) => {
       const spec = `.${rest}`;
       const resolvedAbs = path.resolve(rootDist, fileDirPosix, spec);
@@ -324,9 +326,14 @@ async function main() {
       let newSpec = path.posix.relative(fileDirPosix, target);
       if (!newSpec.startsWith(".")) newSpec = `./${newSpec}`;
       remappedSpecifiers += 1;
+      remappedInFile += 1;
       return `${quote}${newSpec}${quote}`;
     });
+    if (remappedInFile > 0) remappedFiles.push(rel);
     await writeFile(abs, source, "utf8");
+  }
+  if (remappedSpecifiers > 0) {
+    for (const f of remappedFiles) console.error(`[reconcile] WARN: remapped transitional /src/ pointer(s) in ${f}`);
   }
 
   // 3. Guard A: no UNRESOLVED LEAF SPECIFIER and no removed-bridge literal
