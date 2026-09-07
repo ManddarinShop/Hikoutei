@@ -11,7 +11,7 @@ Google Sheets 기반 MVP를 위한 타입 안전 리포지토리이자 안전한
 사람이 검토하고 가볍게 협업할 수 있도록 Google Sheets에 비동기로 투영됩니다.
 
 <a href="https://www.npmjs.com/package/hikoutei">npm</a> ·
-<a href="docs/quick-start.md">빠른 시작</a> ·
+<a href="website/guide/quick-start.md">빠른 시작</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">이슈</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
@@ -169,11 +169,11 @@ Hikoutei는 내구성 있는 로컬 outbox, 멱등 전달, 충돌을 인지하�
 사용하므로 일시적인 API 실패가 커밋된 애플리케이션 쓰기를 잃게 하지 않습니다.
 provider는 자격 증명, 스프레드시트 ID, URL, 페이로드를 로그에 남기지 않으며,
 Google 할당량 창 안에 머물도록 요청 시작 간격을 조절합니다. 상세 상태 머신과
-복구 규칙은 [내부 정합성 모델](docs/internal-consistency-model.md)을
+복구 규칙은 [내부 정합성 모델](website/guide/internal-consistency.md)을
 참고하세요.
 
 라이브 Google 호출은 opt-in이며, 일반적인 검증 경로는 fake provider와 SQLite
-fixture입니다. 자세한 설정과 문제 해결 단계는 [빠른 시작](docs/quick-start.md)을
+fixture입니다. 자세한 설정과 문제 해결 단계는 [빠른 시작](website/guide/quick-start.md)을
 참고하세요.
 
 ## 설치
@@ -190,14 +190,14 @@ MikroORM은 구현 세부 사항이며 Hikoutei의 공개 엔티티 API에는 �
 
 ## 문서
 
-- [빠른 시작](docs/quick-start.md) — 설치, ORM 생명주기, 서비스 측 동기화 설정
-- [아키텍처](docs/architecture.md) — 로컬 저장소와 Sheet 화면이 맞물리는 방식
-- [쓰기 및 동기화 흐름](docs/write-and-synchronization-flow.md) — 비동기 전달과
+- [빠른 시작](website/guide/quick-start.md) — 설치, ORM 생명주기, 서비스 측 동기화 설정
+- [아키텍처](website/guide/architecture.md) — 로컬 저장소와 Sheet 화면이 맞물리는 방식
+- [쓰기 및 동기화 흐름](website/guide/sync-flow.md) — 비동기 전달과
   복구 동작
-- [내부 정합성 모델](docs/internal-consistency-model.md) — 내구성 outbox,
+- [내부 정합성 모델](website/guide/internal-consistency.md) — 내구성 outbox,
   멱등 전달, 충돌을 인지하는 업데이트
-- [개발](docs/development.md) — 로컬 개발 및 테스트 명령어
-- [벤치마크 노트](docs/sync-bulk-write-benchmark.md) — 날짜가 기록된 측정과
+- [개발](website/guide/contributing.md) — 로컬 개발 및 테스트 명령어
+- [벤치마크 노트](website/guide/benchmarks.md) — 날짜가 기록된 측정과
   그 한계
 
 ## 한계

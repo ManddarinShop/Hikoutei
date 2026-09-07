@@ -12,7 +12,7 @@ Google Sheets を利用する MVP 向けの型付きリポジトリであり、�
 Sheets へ非同期で投影されます。
 
 <a href="https://www.npmjs.com/package/hikoutei">npm</a> ·
-<a href="docs/quick-start.md">クイックスタート</a> ·
+<a href="website/guide/quick-start.md">クイックスタート</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
@@ -176,12 +176,12 @@ Hikoutei は、永続的なローカル outbox・冪等な配信・競合を考�
 ため、一時的な API 障害でコミット済みのアプリケーション書き込みが失われる
 ことはありません。provider は資格情報・スプレッドシート ID・URL・ペイロードを
 ログに残さず、Google の割り当て枠に収まるようリクエスト開始間隔を調整します。
-詳細な状態機械と復旧ルールは[内部整合性モデル](docs/internal-consistency-model.md)を
+詳細な状態機械と復旧ルールは[内部整合性モデル](website/guide/internal-consistency.md)を
 参照してください。
 
 ライブの Google 呼び出しはオプトインであり、通常の検証経路はフェイク
 provider と SQLite フィクスチャです。詳細なセットアップとトラブルシューティン
-グは[クイックスタート](docs/quick-start.md)を参照してください。
+グは[クイックスタート](website/guide/quick-start.md)を参照してください。
 
 ## インストール
 
@@ -196,15 +196,15 @@ MikroORM は実装の詳細であり、Hikoutei の公開エンティティ API 
 
 ## ドキュメント
 
-- [クイックスタート](docs/quick-start.md) — インストール、ORM ライフサイクル、
+- [クイックスタート](website/guide/quick-start.md) — インストール、ORM ライフサイクル、
   サービス側の同期設定
-- [アーキテクチャ](docs/architecture.md) — ローカルストアとシートビューの関係
-- [書き込みと同期フロー](docs/write-and-synchronization-flow.md) — 非同期配信と
+- [アーキテクチャ](website/guide/architecture.md) — ローカルストアとシートビューの関係
+- [書き込みと同期フロー](website/guide/sync-flow.md) — 非同期配信と
   復旧動作
-- [内部整合性モデル](docs/internal-consistency-model.md) — 永続的な outbox、
+- [内部整合性モデル](website/guide/internal-consistency.md) — 永続的な outbox、
   冪等な配信、競合を考慮した更新
-- [開発](docs/development.md) — ローカル開発とテストコマンド
-- [ベンチマークノート](docs/sync-bulk-write-benchmark.md) — 日付付きの測定と
+- [開発](website/guide/contributing.md) — ローカル開発とテストコマンド
+- [ベンチマークノート](website/guide/benchmarks.md) — 日付付きの測定と
   その限界
 
 ## 制限事項
