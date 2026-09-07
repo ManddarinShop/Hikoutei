@@ -56,6 +56,7 @@ export function createMikroOrmScalarEntityRuntime(
 interface ScalarPropertyBuilder {
   primary(): ScalarPropertyBuilder;
   nullable(): ScalarPropertyBuilder;
+  autoincrement(): ScalarPropertyBuilder;
 }
 
 function createMikroProperties(
@@ -68,6 +69,11 @@ function createMikroProperties(
 }
 
 function createMikroProperty(property: ResolvedHikouteiProperty): ScalarPropertyBuilder {
+  // A numeric primary key is the SQLite-generated identity: INTEGER PRIMARY
+  // KEY AUTOINCREMENT so an omitted id is assigned at insert and backfilled.
+  if (property.primary && property.type === "number") {
+    return p.integer().primary().autoincrement();
+  }
   switch (property.type) {
     case "number":
       return applyMikroPropertyFlags(p.float(), property);

@@ -145,14 +145,18 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("more than one primary key");
   });
 
-  it("rejects a non-string primary key", () => {
-    const error = expectDescriptorError({
+  it("accepts a number primary key as the SQLite-generated identity", () => {
+    const descriptor = resolveEntityDescriptor({
       name: "Counter",
       tableName: "counters",
-      properties: { id: { type: "number", primary: true } },
+      properties: { id: { type: "number", primary: true }, value: { type: "number" } },
     });
-    expect(error.message).toContain("primary key");
-    expect(error.message).toContain("must be a string scalar in v1");
+    expect(descriptor.primaryKey).toBe("id");
+    expect(descriptor.properties.find((property) => property.name === "id")).toMatchObject({
+      type: HIKOUTEI_SCALAR_TYPES.NUMBER,
+      storageType: "INTEGER",
+      primary: true,
+    });
   });
 
   it("rejects a non-scalar property type", () => {

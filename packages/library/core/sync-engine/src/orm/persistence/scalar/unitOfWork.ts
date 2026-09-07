@@ -120,9 +120,11 @@ export class ScalarEntityUnitOfWork {
     const expected = entry.state === "new"
       ? entry.initialPrimaryKey
       : entry.snapshot[entry.descriptor.primaryKey];
-    return typeof expected === "string" &&
-      expected.length > 0 &&
-      Reflect.get(entity, entry.descriptor.primaryKey) === expected;
+    if (!isPresentPrimaryKeyValue(expected)) return false;
+    const current: unknown = Reflect.get(entity, entry.descriptor.primaryKey);
+    if (!isPresentPrimaryKeyValue(current)) return false;
+    // `42` and `"42"` are one identity for sync purposes; compare canonically.
+    return String(expected) === String(current as string | number);
   }
 
   /** Captures lifecycle state before an outer transaction can roll back. */
@@ -213,6 +215,18 @@ export class ScalarEntityUnitOfWork {
         this.entries.delete(entry.entity);
         continue;
       }
+      if (change.kind === "insert") {
+        // SQLite-generated inserts resolve their PK inside the provider flush
+        // (the shared `row.values` reference is patched before commit). Copy
+        // it back onto the in-memory entity so snapshots and identity agree.
+        // The same copy normalizes an explicit cross-type PK (`42` for a TEXT
+        // key, `"42"` for an INTEGER key) to the descriptor's canonical form.
+        const resolved = change.row.values[entry.descriptor.primaryKey];
+        const current: unknown = Reflect.get(entry.entity, entry.descriptor.primaryKey);
+        if (isPresentPrimaryKeyValue(resolved) && current !== resolved) {
+          Reflect.set(entry.entity, entry.descriptor.primaryKey, resolved);
+        }
+      }
       entry.snapshot = readEntityValues(entry.descriptor, entry.entity);
       entry.initialPrimaryKey = entry.snapshot[entry.descriptor.primaryKey];
       entry.state = "clean";
@@ -289,11 +303,27 @@ function readRawEntityValues(
 function planChange(entry: ManagedEntity): PlannedScalarChange | undefined {
   const { descriptor } = entry;
   if (entry.state === "new") {
+    const rawPrimaryKey: unknown = Reflect.get(entry.entity, descriptor.primaryKey);
+    if (rawPrimaryKey === undefined && isNumberPrimary(descriptor)) {
+      // SQLite assigns the numeric ID at insert. Omit the PK from the row so
+      // the provider inserts without it, then backfills after `flush()`.
+      const values = readInsertValuesAllowingGeneratedId(descriptor, entry.entity);
+      return {
+        kind: "insert",
+        entry,
+        row: {
+          entityName: descriptor.name,
+          tableName: descriptor.tableName,
+          primaryKeyColumn: descriptor.primaryKey,
+          values,
+        },
+      };
+    }
     const values = readEntityValues(descriptor, entry.entity);
     const currentPrimaryKey = requirePrimaryKeyValue(descriptor, values[descriptor.primaryKey]);
     if (
       entry.initialPrimaryKey !== undefined &&
-      !sameScalarValue(entry.initialPrimaryKey, currentPrimaryKey)
+      !samePrimaryKeyValue(entry.initialPrimaryKey, currentPrimaryKey)
     ) {
       throw new HikouteiError(
         HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
@@ -315,7 +345,7 @@ function planChange(entry: ManagedEntity): PlannedScalarChange | undefined {
     const current = readEntityValues(descriptor, entry.entity);
     const currentPrimaryKey = current[descriptor.primaryKey];
     const snapshotPrimaryKeyValue = snapshotPrimaryKey(descriptor, entry);
-    if (!sameScalarValue(currentPrimaryKey, snapshotPrimaryKeyValue)) {
+    if (!samePrimaryKeyValue(currentPrimaryKey, snapshotPrimaryKeyValue)) {
       throw new HikouteiError(
         HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
         `${descriptor.name}.${descriptor.primaryKey} cannot change after the entity is created.`,
@@ -341,7 +371,7 @@ function planUpdateIfDirty(entry: ManagedEntity): PlannedScalarChange | undefine
   const current = readEntityValues(descriptor, entry.entity);
   const snapshotPrimaryKeyValue = requirePrimaryKeyValue(descriptor, snapshot[descriptor.primaryKey]);
   const currentPrimaryKeyValue = current[descriptor.primaryKey];
-  if (!sameScalarValue(currentPrimaryKeyValue, snapshotPrimaryKeyValue)) {
+  if (!samePrimaryKeyValue(currentPrimaryKeyValue, snapshotPrimaryKeyValue)) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_MUTATION,
       `${descriptor.name}.${descriptor.primaryKey} cannot change after the entity is created.`,
@@ -398,17 +428,78 @@ function snapshotPrimaryKey(
   return requirePrimaryKeyValue(descriptor, entry.snapshot[descriptor.primaryKey]);
 }
 
+/** Whether a descriptor uses a SQLite-generated numeric identity. */
+function isNumberPrimary(descriptor: ResolvedHikouteiEntityDescriptor): boolean {
+  return descriptor.properties.some(
+    (property) => property.name === descriptor.primaryKey && property.type === "number",
+  );
+}
+
+/** Whether a raw PK value is present (non-empty string or safe integer). */
+function isPresentPrimaryKeyValue(value: unknown): value is string | number {
+  return (
+    (typeof value === "string" && value.length > 0) ||
+    (typeof value === "number" && Number.isSafeInteger(value))
+  );
+}
+
+/** Compares two PK values by their canonical string form (`42` === `"42"`). */
+function samePrimaryKeyValue(
+  before: ScalarEntityValue | undefined,
+  after: ScalarEntityValue | undefined,
+): boolean {
+  if (!isPresentPrimaryKeyValue(before) || !isPresentPrimaryKeyValue(after)) {
+    return before === after;
+  }
+  return String(before) === String(after);
+}
+
+/** Reads insert values, omitting a missing numeric PK for SQLite generation. */
+function readInsertValuesAllowingGeneratedId(
+  descriptor: ResolvedHikouteiEntityDescriptor,
+  entity: object,
+): Readonly<Record<string, ScalarEntityValue>> {
+  const values: Record<string, ScalarEntityValue> = {};
+  for (const property of descriptor.properties) {
+    const raw = Reflect.get(entity, property.name);
+    if (raw === undefined && property.name === descriptor.primaryKey) continue;
+    values[property.name] = readScalarValue(property, raw);
+  }
+  return values;
+}
+
 function requirePrimaryKeyValue(
   descriptor: ResolvedHikouteiEntityDescriptor,
   value: ScalarEntityValue | undefined,
-): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new HikouteiError(
-      HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
-      `${descriptor.name}.${descriptor.primaryKey} must be a non-empty string before flush.`,
-    );
+): ScalarEntityValue {
+  const primaryType = descriptor.properties.find(
+    (property) => property.name === descriptor.primaryKey,
+  )?.type;
+  if (typeof value === "string" && value.length > 0) {
+    if (primaryType === "number") {
+      // Accept `"42"` for a numeric PK by normalizing to its number form so
+      // the INTEGER column, canonical state, and sync identity agree.
+      if (/^-?\d+$/.test(value)) {
+        const parsed = Number(value);
+        if (Number.isSafeInteger(parsed)) return parsed;
+      }
+      throw new HikouteiError(
+        HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+        `${descriptor.name}.${descriptor.primaryKey} must be a safe integer before flush.`,
+      );
+    }
+    return value;
   }
-  return value;
+  if (typeof value === "number" && Number.isSafeInteger(value)) {
+    if (primaryType === "string") return String(value);
+    return value;
+  }
+  throw new HikouteiError(
+    HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+    primaryType === "number"
+      ? `${descriptor.name}.${descriptor.primaryKey} must be a safe integer before flush.`
+      : `${descriptor.name}.${descriptor.primaryKey} must be a non-empty string or safe integer before flush.`,
+  );
 }
 
 /** Reads the declared scalar values from one managed entity instance. */
@@ -447,6 +538,11 @@ function readScalarValue(
       }
       return new Date(value.getTime());
     case "string":
+      // A numeric PK value normalizes to its string form so `42` and `"42"`
+      // share one sync identity on TEXT tables.
+      if (property.primary && typeof value === "number" && Number.isSafeInteger(value)) {
+        return String(value);
+      }
       if (typeof value !== "string") {
         throw new HikouteiError(
           property.primary
@@ -463,12 +559,28 @@ function readScalarValue(
       }
       return value;
     case "number":
+      // Accept `"42"` for a numeric PK by normalizing to its number form so
+      // INTEGER columns, canonical state, and sync identity agree.
+      if (property.primary && typeof value === "string" && /^-?\d+$/.test(value)) {
+        const parsed = Number(value);
+        if (Number.isSafeInteger(parsed)) return parsed;
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+          `${property.name} must be a safe integer before flush.`,
+        );
+      }
       if (typeof value !== "number" || !Number.isFinite(value)) {
         throw new HikouteiError(
           property.primary
             ? HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE
             : HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
           `${property.name} expected a finite number but received ${typeof value}.`,
+        );
+      }
+      if (property.primary && !Number.isSafeInteger(value)) {
+        throw new HikouteiError(
+          HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+          `${property.name} must be a safe integer before flush.`,
         );
       }
       return value;

@@ -181,11 +181,16 @@ const ALLOWED_PROPERTY_OPTION_KEYS: ReadonlySet<string> = new Set([
  * Validates a scalar entity descriptor and returns a stable entity token.
  *
  * Throws a typed `HikouteiError` for an empty name or table name, an invalid
- * table identifier, a missing or duplicate primary key, a non-string primary
- * key, a non-scalar property type, or any unsupported relation/provider option.
- * The returned token is safe to pass to `createTypedSheets({ entities })`, and
- * is also registered so a later `createTypedSheets()` call that omits
- * `entities` can use it as the default entity set.
+ * table identifier, a missing or duplicate primary key, a non-string/number
+ * primary key, a non-scalar property type, or any unsupported
+ * relation/provider option. The returned token is safe to pass to
+ * `createTypedSheets({ entities })`, and is also registered so a later
+ * `createTypedSheets()` call that omits `entities` can use it as the default
+ * entity set.
+ *
+ * A `string` primary key stays a TEXT column with application-assigned IDs.
+ * A `number` primary key becomes an INTEGER AUTOINCREMENT column so SQLite
+ * assigns the numeric ID when the app omits it at insert.
  */
 export function defineTypedSheetsEntity<
   Name extends string,
@@ -248,9 +253,12 @@ export function resolveEntityDescriptor(
     throwInvalid(`entity "${name}" must declare exactly one primary key.`);
   }
   const primaryProperty = findProperty(properties, primaryKey);
-  if (primaryProperty.type !== HIKOUTEI_SCALAR_TYPES.STRING) {
+  if (
+    primaryProperty.type !== HIKOUTEI_SCALAR_TYPES.STRING &&
+    primaryProperty.type !== HIKOUTEI_SCALAR_TYPES.NUMBER
+  ) {
     throwInvalid(
-      `entity "${name}" primary key "${primaryKey}" must be a string scalar in v1.`,
+      `entity "${name}" primary key "${primaryKey}" must be a string or number scalar in v1.`,
     );
   }
 
@@ -306,19 +314,21 @@ function resolveProperty(
   return {
     name: propertyName,
     type,
-    storageType: toStorageType(type),
+    storageType: toStorageType(type, primary),
     primary,
     nullable,
     unique,
   };
 }
 
-function toStorageType(type: HikouteiScalarType): HikouteiScalarStorageType {
+function toStorageType(type: HikouteiScalarType, primary: boolean): HikouteiScalarStorageType {
   switch (type) {
     case HIKOUTEI_SCALAR_TYPES.STRING:
       return "TEXT";
     case HIKOUTEI_SCALAR_TYPES.NUMBER:
-      return "REAL";
+      // A numeric primary key is the SQLite-generated identity (INTEGER
+      // PRIMARY KEY AUTOINCREMENT); non-primary numbers stay REAL floats.
+      return primary ? "INTEGER" : "REAL";
     case HIKOUTEI_SCALAR_TYPES.BOOLEAN:
       return "INTEGER";
     case HIKOUTEI_SCALAR_TYPES.DATE:

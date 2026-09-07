@@ -56,29 +56,41 @@ export function requireEncodedField(
   return value;
 }
 
-/** Validates the primary-key value promoted by Hikoutei's scalar flush plan. */
+/** Validates the primary-key value promoted by Hikoutei's scalar flush plan.
+ *
+ * Accepts a non-empty string or safe-integer number and normalizes both to
+ * `String(id)` so canonical state, anchors, and outbox effects agree.
+ */
 export function requireChangeEntityId(
   mapping: TypedSheetsEntityMapping,
   change: ScalarEntityFlushChange,
 ): string {
   const row = change.row;
-  const value = change.kind === SCALAR_ENTITY_CHANGE_KINDS.INSERT
+  const value: unknown = change.kind === SCALAR_ENTITY_CHANGE_KINDS.INSERT
     ? row.values[mapping.primaryKey]
     : "primaryKeyValue" in row ? row.primaryKeyValue : undefined;
-  if (typeof value !== "string" || value.length === EMPTY_STRING_LENGTH_ZERO) {
-    throw new TypedSheetsOrmError(
-      TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
-      `${mapping.entityName}.${mapping.primaryKey} must be a non-empty string before flush.`,
-    );
-  }
-  const rowValue = row.values[mapping.primaryKey];
-  if (rowValue !== value) {
+  const normalized = normalizeChangeEntityId(value, mapping);
+  const rowValue: unknown = row.values[mapping.primaryKey];
+  if (rowValue !== undefined && String(rowValue) !== normalized) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
       `${mapping.entityName} primary-key value does not match its row snapshot.`,
     );
   }
-  return value;
+  return normalized;
+}
+
+/** Normalizes a promoted primary-key value to its canonical string form. */
+function normalizeChangeEntityId(
+  value: unknown,
+  mapping: TypedSheetsEntityMapping,
+): string {
+  if (typeof value === "string" && value.length !== EMPTY_STRING_LENGTH_ZERO) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
+  throw new TypedSheetsOrmError(
+    TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+    `${mapping.entityName}.${mapping.primaryKey} must be a non-empty string or safe integer before flush.`,
+  );
 }
 
 /** Builds the stable target ID used by a physical projection row effect. */

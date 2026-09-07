@@ -34,15 +34,15 @@ export type MappedObservationEntityMutation =
   | { readonly kind: typeof MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.NONE }
   | {
       readonly kind: typeof MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.INSERT;
-      readonly entityId: string;
+      readonly entityId: string | number;
       readonly data: Readonly<Record<string, unknown>>;
     }
   | {
       readonly kind: typeof MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.UPDATE;
-      readonly entityId: string;
+      readonly entityId: string | number;
       readonly data: Readonly<Record<string, unknown>>;
     }
-  | { readonly kind: typeof MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.DELETE; readonly entityId: string };
+  | { readonly kind: typeof MAPPED_OBSERVATION_ENTITY_MUTATION_KINDS.DELETE; readonly entityId: string | number };
 
 /**
  * Translates one accepted canonical commit into a local entity-table mutation.
@@ -54,7 +54,7 @@ export type MappedObservationEntityMutation =
 export function planMappedObservationEntityMutation(
   mapping: TypedSheetsEntityMapping,
   commit: CanonicalCommitInput,
-  entityIdOverride?: string,
+  entityIdOverride?: string | number,
 ): MappedObservationEntityMutation {
   const entityId = entityIdOverride ?? typedSheetsEntityIdFromCanonical(mapping, commit.entityId);
   if (commit.kind === ROW_OPERATIONS.DELETE) {
@@ -73,7 +73,8 @@ export function planMappedObservationEntityMutation(
     const field = requireTypedSheetsEntityField(mapping, write.fieldName);
     const value = decodeTypedSheetsEntityField(mapping, field, write.value);
     if (field.property === mapping.primaryKey) {
-      if (value !== entityId) {
+      // Numeric and string forms share one sync identity; compare canonically.
+      if (String(value) !== String(entityId)) {
         throw new TypedSheetsOrmError(
           TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
           `${mapping.entityName}.${mapping.primaryKey} does not match the canonical entity ID.`,

@@ -381,8 +381,10 @@ class EntityManagerImpl implements EntityManager {
   ): void {
     this.forgetIdentity(entity);
     if (!this.unitOfWork.isPrimaryKeyStable(entity)) return;
-    const primaryKey = Reflect.get(entity, descriptor.primaryKey);
-    if (typeof primaryKey === "string" && primaryKey.length > 0) {
+    const primaryKey: unknown = Reflect.get(entity, descriptor.primaryKey);
+    const present = (typeof primaryKey === "string" && primaryKey.length > 0) ||
+      (typeof primaryKey === "number" && Number.isSafeInteger(primaryKey));
+    if (present) {
       const key = identityKey(descriptor, entity);
       const existing = this.identityMap.get(key);
       if (existing !== undefined && existing !== entity) {
