@@ -38,27 +38,33 @@ import {
   observeSyncSnapshot,
   type SyncSheetsSnapshot,
   type SyncSheetsProvider,
+  type SyncSnapshotRow,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import {
   SYNC_PROJECTIONS,
   SYNC_SNAPSHOT_READ_MODES,
 } from "@hikoutei/contracts/sheets/constants.js";
 import {
+  assembleDesiredChunk,
   DEFAULT_RECONCILIATION_LEASE_MS,
   DEFAULT_RECONCILIATION_ROLE,
   DEFAULT_SYSTEM_TOMBSTONE_FIELD,
-  readDesiredSystemState,
-  readTerminalFailedHeads,
+  flushDesiredCarry,
+  readReconciliationDesiredSystemStateChunkWithSql,
+  readTerminalFailedHeadsWithSql,
+  RECONCILIATION_SCAN_ENTITY_PAGE_SIZE,
   type DesiredRow,
+  type PartialDesiredRow,
+  type ReconciliationDesiredChunkCursor,
   type ReconciliationIdFactory,
   type ScanContext,
 } from "./shared.js";
 import {
-  computeDrifts,
-  countExtraRows,
-  countMatchedRows,
-  findObservedRows,
-  type DriftTarget,
+  buildObservedRowIndex,
+  classifyDesiredRow,
+  countExtraRowsForKeys,
+  desiredRowIdentity,
+  resolveObservedRow,
 } from "./diff.js";
 import {
   appendEffectsWithSupersedes,
@@ -188,32 +194,35 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
   const observed = await observeSyncSnapshot(context.provider, snapshotRequest);
   const snapshot = observed.snapshot;
 
-  const desired = await readDesiredSystemState(context);
-  const drifts = computeDrifts({
-    snapshot,
-    desired,
-    systemFields: context.systemFields,
-    sheet,
-  });
-
+  // The desired state streams in keyset pages inside one read: only one
+  // chunk of flat canonical rows plus repair decisions are ever retained.
   // A terminal failed head on a stream whose Sheet row already matches
   // canonical is invisible to the drift detector, yet it still blocks every
-  // follower through the durable predecessor guard. Detect those heads
-  // BEFORE the no-drift return so a matching Sheet recovers its stream.
-  const wedgedTargets = await findWedgedStreamTargets(
-    context,
-    sheet,
+  // follower through the durable predecessor guard. Those heads are detected
+  // inline (per matched row) so a matching Sheet recovers its stream even
+  // when nothing drifted.
+  const scan = await scanDesiredChunked(context, snapshot, sheet.businessKeyField);
+  const desiredCount = scan.desiredCount;
+  const drifts = scan.drifts;
+  const wedgedTargets = scan.wedgedTargets;
+  const drifted = drifts.filter((drift) => drift.kind === "drifted").length;
+  const missing = drifts.filter((drift) => drift.kind === "missing").length;
+  // Matched means located but not necessarily clean: drifted rows still own
+  // their Sheet row, so matched is scanned-minus-missing exactly as before.
+  const matched = desiredCount - missing;
+  const extra = (): number => countExtraRowsForKeys(
     snapshot,
-    desired,
-    drifts,
+    sheet.businessKeyField,
+    scan.desiredAnchors,
+    scan.desiredIdentities,
   );
 
   if (drifts.length === 0 && wedgedTargets.length === 0) {
-    return freezeReport(context.physicalSheetId, snapshot, desired, {
-      matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
+    return freezeReport(context.physicalSheetId, snapshot, desiredCount, {
+      matched,
       drifted: 0,
       missing: 0,
-      extra: countExtraRows(snapshot, desired, sheet.businessKeyField),
+      extra: extra(),
       effects: 0,
       fenceClaimed: false,
     });
@@ -221,10 +230,10 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
 
   const fence = await claimReconcilerFence(context);
   if (fence === null) {
-    return freezeReport(context.physicalSheetId, snapshot, desired, {
-      matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
-      drifted: drifts.filter((drift) => drift.kind === "drifted").length,
-      missing: drifts.filter((drift) => drift.kind === "missing").length,
+    return freezeReport(context.physicalSheetId, snapshot, desiredCount, {
+      matched,
+      drifted,
+      missing,
       extra: 0,
       effects: 0,
       fenceClaimed: false,
@@ -240,11 +249,11 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
   }
   const plans: readonly CorrectionPlan[] = [...driftPlans, ...wedgeRepairPlans];
   if (plans.length === 0) {
-    return freezeReport(context.physicalSheetId, snapshot, desired, {
-      matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
-      drifted: drifts.filter((drift) => drift.kind === "drifted").length,
-      missing: drifts.filter((drift) => drift.kind === "missing").length,
-      extra: countExtraRows(snapshot, desired, sheet.businessKeyField),
+    return freezeReport(context.physicalSheetId, snapshot, desiredCount, {
+      matched,
+      drifted,
+      missing,
+      extra: extra(),
       effects: 0,
       fenceClaimed: true,
     });
@@ -252,52 +261,106 @@ async function scanAndEnqueue(context: ScanContext): Promise<ReconciliationScanR
 
   const enqueued = await enqueueCorrections(context, fence, plans);
   if (enqueued === 0) {
-    return freezeReport(context.physicalSheetId, snapshot, desired, {
-      matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
-      drifted: drifts.filter((drift) => drift.kind === "drifted").length,
-      missing: drifts.filter((drift) => drift.kind === "missing").length,
-      extra: countExtraRows(snapshot, desired, sheet.businessKeyField),
+    return freezeReport(context.physicalSheetId, snapshot, desiredCount, {
+      matched,
+      drifted,
+      missing,
+      extra: extra(),
       effects: 0,
       fenceClaimed: true,
     });
   }
 
-  return freezeReport(context.physicalSheetId, snapshot, desired, {
-    matched: countMatchedRows(snapshot, desired, sheet.businessKeyField),
-    drifted: drifts.filter((drift) => drift.kind === "drifted").length,
-    missing: drifts.filter((drift) => drift.kind === "missing").length,
-    extra: countExtraRows(snapshot, desired, sheet.businessKeyField),
+  return freezeReport(context.physicalSheetId, snapshot, desiredCount, {
+    matched,
+    drifted,
+    missing,
+    extra: extra(),
     effects: enqueued,
     fenceClaimed: true,
   });
 }
 
+/** Chunked desired-state scan: drifts, wedged repairs, and report keys. */
+interface ChunkedScanResult {
+  readonly desiredCount: number;
+  readonly drifts: { readonly kind: "drifted" | "missing"; readonly desired: DesiredRow; readonly observed: SyncSnapshotRow | undefined }[];
+  readonly wedgedTargets: FailedHeadRepairTarget[];
+  readonly desiredAnchors: Map<string, string | undefined>;
+  readonly desiredIdentities: Set<string>;
+}
+
 /**
- * Desired rows whose stream is wedged behind a terminal failed head and
- * whose Sheet state already matches canonical (no drift) plus each row's
- * observed snapshot evidence.
+ * Streams the desired state in keyset pages inside one read.
  *
- * Drift plans already supersede the failed head of their own stream, so
- * only drift-free rows need a dedicated repair here. The observed row is
- * attached so the repair baseline can guard on the row's current visible
- * hash even when no confirmed visible state exists. Returns an empty list
- * when there is nothing to scan or every desired row already drifted.
+ * Only one page of flat canonical rows is materialized at a time; completed
+ * entities are classified against the scan-wide snapshot index immediately
+ * and dropped unless they drift (repair decision) or sit behind a terminal
+ * failed head (wedged repair). Drift plans already supersede the failed head
+ * of their own stream, so only drift-free rows become wedged targets, with
+ * the observed row attached so the repair baseline can guard on the row's
+ * current visible hash. The scan stays eventually consistent: concurrent
+ * writes between pages surface on the next 60s scan.
  */
-async function findWedgedStreamTargets(
+async function scanDesiredChunked(
   context: ScanContext,
-  sheet: { readonly businessKeyField: string },
   snapshot: SyncSheetsSnapshot,
-  desired: readonly DesiredRow[],
-  drifts: readonly DriftTarget[],
-): Promise<readonly FailedHeadRepairTarget[]> {
-  if (desired.length === 0) return [];
-  const driftedEntityIds = new Set(drifts.map((drift) => drift.desired.entityId));
-  const terminalFailedHeads = await readTerminalFailedHeads(context);
-  const observedRows = findObservedRows(snapshot, desired, sheet.businessKeyField);
-  return desired
-    .filter((row) =>
-      !driftedEntityIds.has(row.entityId) && terminalFailedHeads.has(row.entityId))
-    .map((row) => ({ desired: row, observed: observedRows.get(row.entityId) }));
+  businessKeyField: string,
+): Promise<ChunkedScanResult> {
+  return context.storage.read(async ({ sql }) => {
+    const index = buildObservedRowIndex(snapshot, businessKeyField);
+    const terminalFailedHeads = await readTerminalFailedHeadsWithSql(
+      sql,
+      context.logicalSheetId,
+    );
+    const drifts: ChunkedScanResult["drifts"] = [];
+    const wedgedTargets: FailedHeadRepairTarget[] = [];
+    // Lightweight report keys only: anchors (first row wins) and identities.
+    // Full desired rows never accumulate; matched rows are dropped inline.
+    const desiredAnchors = new Map<string, string | undefined>();
+    const desiredIdentities = new Set<string>();
+    let desiredCount = 0;
+    let after: ReconciliationDesiredChunkCursor | undefined;
+    let carry: PartialDesiredRow | undefined;
+    const classifyRow = (desired: DesiredRow): void => {
+      desiredCount += 1;
+      if (!desiredAnchors.has(desired.anchorReference)) {
+        desiredAnchors.set(desired.anchorReference, desiredRowIdentity(desired, businessKeyField));
+      }
+      const identity = desiredRowIdentity(desired, businessKeyField);
+      if (identity !== undefined) desiredIdentities.add(identity);
+      const drift = classifyDesiredRow(index, desired, context.systemFields, businessKeyField);
+      if (drift !== undefined) {
+        drifts.push(drift);
+        return;
+      }
+      if (terminalFailedHeads.has(desired.entityId)) {
+        wedgedTargets.push({
+          desired,
+          observed: resolveObservedRow(index, desired, businessKeyField),
+        });
+      }
+    };
+    for (;;) {
+      const chunk = await readReconciliationDesiredSystemStateChunkWithSql(
+        sql,
+        context.logicalSheetId,
+        after,
+      );
+      // Whole-entity chunks: the cursor is the last entity paged, including
+      // binding-less ones that emit no rows, so no entity's rows can be
+      // skipped or repeated across chunks.
+      if (chunk.entityCount === 0 || chunk.lastEntityId === undefined) break;
+      after = { entityId: chunk.lastEntityId };
+      const assembled = assembleDesiredChunk(chunk.rows, carry, context.tombstoneField);
+      carry = assembled.carry;
+      for (const desired of assembled.completed) classifyRow(desired);
+      if (chunk.entityCount < RECONCILIATION_SCAN_ENTITY_PAGE_SIZE) break;
+    }
+    const flushed = flushDesiredCarry(carry, context.tombstoneField);
+    if (flushed !== undefined) classifyRow(flushed);
+    return { desiredCount, drifts, wedgedTargets, desiredAnchors, desiredIdentities };
+  });
 }
 
 /**
@@ -394,13 +457,13 @@ interface ReportDelta {
 function freezeReport(
   physicalSheetId: string,
   snapshot: SyncSheetsSnapshot,
-  desired: readonly DesiredRow[],
+  desiredCount: number,
   delta: ReportDelta,
 ): ReconciliationScanReport {
   return {
     physicalSheetId,
     snapshotRowsScanned: snapshot.rows.length,
-    desiredRowsScanned: desired.length,
+    desiredRowsScanned: desiredCount,
     matchedRows: delta.matched,
     driftedRows: delta.drifted,
     missingRows: delta.missing,

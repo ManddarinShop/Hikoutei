@@ -26,6 +26,35 @@ export { syncSchemaV5IndexesDdl } from "@hikoutei/ikisaki";
 /** Current durable schema version managed by the provider migration. */
 export const CURRENT_SCHEMA_VERSION = 9;
 
+/**
+ * Covering index for the keyset-paged cleanup binding scan
+ * (`WHERE logical_sheet_id = ? AND row_binding_id > ? ORDER BY
+ * row_binding_id LIMIT ?`). Without it the scan sorts every binding of the
+ * sheet in a temp b-tree per page; with it each page is a bounded covering
+ * index range scan.
+ */
+export const SCAN_INDEX_DDL = `
+  CREATE INDEX IF NOT EXISTS row_binding_scan_idx
+    ON row_binding(logical_sheet_id, row_binding_id);
+`;
+
+/**
+ * Covering index for the entity-batched scan pages: the desired-state and
+ * cleanup-canonical readers page whole entities in `entity_state` primary
+ * key order, then fetch each entity's bindings here. Every lookup is an
+ * index seek with no temp-b-tree sort (verified with EXPLAIN QUERY PLAN):
+ * the entity page follows the `entity_state` PK, field fetches follow the
+ * `entity_field_state` PK prefix, and this index serves the binding fetch
+ * as a covering range scan. A flat cross-table keyset can never get such a
+ * plan — the row-value predicate over joined tables forces SQLite to
+ * materialize and sort the whole join per page — which is why the readers
+ * page entities instead of flat rows.
+ */
+export const SCAN_ENTITY_INDEX_DDL = `
+  CREATE INDEX IF NOT EXISTS row_binding_entity_idx
+    ON row_binding(logical_sheet_id, entity_id, state, row_binding_id, anchor_reference);
+`;
+
 /** Observable result of bringing one SQLite database to the current schema. */
 export interface SchemaMigrationResult {
   readonly fromVersion: number;
