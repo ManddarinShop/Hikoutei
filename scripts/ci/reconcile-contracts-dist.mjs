@@ -113,6 +113,17 @@ const BUNDLES = [
     copySubtrees: [""],
   },
   {
+    prefix: "@hikoutei/google-auth",
+    // The auth-line package is INTERNAL-ONLY (never published to npm), so it
+    // must be BUNDLED like the other leaves — declaring it as a root
+    // dependency would 404 every consumer install (the registry has no
+    // tarball). Its tsconfig emits repo-root-relative like the cross-mapped
+    // leaves, so only its own src subtree is copied.
+    distSrc: "packages/library/cloud/google-auth/dist/packages/library/cloud/google-auth/src",
+    destDir: "",
+    copySubtrees: ["auth"],
+  },
+  {
     prefix: "@hikoutei/cli",
     // The cli tsconfig spans the repo root for its `hikoutei` source map;
     // only the package's own emission subtree is bundled (onto dist/cli/** —
@@ -125,7 +136,7 @@ const BUNDLES = [
 
 // All bundled private-package specifiers rewritten to relative paths inside
 // the root dist (and checked by the dist guards below).
-const LEAF_PREFIXES = "contracts|storage|sheets|sync-engine|composition|cli";
+const LEAF_PREFIXES = "contracts|storage|sheets|sync-engine|composition|cli|google-auth";
 const LEAF_SPECIFIER_RE = new RegExp(
   `(['"])(@hikoutei\\/(?:${LEAF_PREFIXES}))(?:\\/([^'"]+))?\\1`,
 );
@@ -370,6 +381,41 @@ async function main() {
   //    bundled leaf; runs after root bundling so nothing mutates depths).
   for (const leaf of LEAF_PACKAGES) {
     await checkLeafDist(leaf);
+  }
+
+  // 6. Guard C: every BARE @hikoutei/<name> specifier remaining in root dist
+  //    must be declared in the ROOT package.json dependencies. Bundled-leaf
+  //    names were already rewritten away (Guard A); anything left is an
+  //    external workspace package (e.g. @hikoutei/ikisaki) that a consumer's
+  //    `npm install hikoutei` must resolve — an undeclared one crashes the
+  //    published tarball at import time (ERR_MODULE_NOT_FOUND) and only on
+  //    real consumer installs, which the workspace-link dev flow cannot see.
+  const rootManifest = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+  const declared = {
+    ...rootManifest.dependencies,
+    ...rootManifest.optionalDependencies,
+  };
+  const bareNames = new Set();
+  const bareSpecifierRe = /(['\"])@hikoutei\/([a-z-]+)(?:\/[^'"\n]+)?\1/g;
+  for (const rel of allDistFiles) {
+    if (!(rel.endsWith(".js") || rel.endsWith(".d.ts"))) continue;
+    const source = await readFile(path.join(rootDist, rel), "utf8");
+    for (const match of source.matchAll(bareSpecifierRe)) {
+      const name = match[2];
+      if (LEAF_PREFIXES.split("|").includes(name)) continue; // Guard A already failed on these
+      if (name === "app-src") continue; // bridge literal; Guard A trips first
+      bareNames.add(`@hikoutei/${name}`);
+    }
+  }
+  const undeclared = [...bareNames].filter((name) => declared[name] === undefined);
+  if (undeclared.length > 0) {
+    console.error(
+      `[reconcile] FAIL: bare @hikoutei/* specifier(s) remain in root dist but are NOT declared in root package.json dependencies: ${undeclared.join(", ")}`,
+    );
+    console.error(
+      "  A consumer install resolves these from the registry, not the workspace — declare them as root dependencies (or bundle them).",
+    );
+    process.exit(1);
   }
 
   console.log(
