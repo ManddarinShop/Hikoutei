@@ -127,6 +127,7 @@ describe("parseSetupArgs --sa-count", () => {
   it("documents --sa-count in the help text", () => {
     expect(SETUP_HELP_TEXT).toContain("--sa-count");
     expect(SETUP_HELP_TEXT).toContain("HIKOUTEI_SYNC_CREDENTIALS");
+    expect(SETUP_HELP_TEXT).toContain("never removed");
   });
 });
 
@@ -225,6 +226,24 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     if (resolved.status === "invalid") {
       expect(resolved.failure.code).toBe(SETUP_ERROR_CODES.INVALID_ARGS);
     }
+  });
+
+  it("fails closed on invalid input followed by end-of-input (no silent default)", async () => {
+    const writes: string[] = [];
+    const reader = scriptedReader(["banana", null]);
+    const resolved = await resolveSaCountForSetup({
+      saCount: undefined,
+      yes: false,
+      dryRun: false,
+      isTTY: true,
+      write: (text) => writes.push(text),
+      readLine: reader.readLine,
+    });
+    expect(resolved.status).toBe("invalid");
+    if (resolved.status === "invalid") {
+      expect(resolved.failure.code).toBe(SETUP_ERROR_CODES.INVALID_ARGS);
+    }
+    expect(writes).toStrictEqual([SA_COUNT_PROMPT, SA_COUNT_PROMPT]);
   });
 });
 
@@ -657,6 +676,31 @@ describe("runSetup credential pool flow", () => {
     expect(second.summary.poolSize).toBe(3);
     expect(readFileSync(harness.outputPath, "utf8")).toContain(
       `${SETUP_ENV_KEYS.CREDENTIAL_POOL}=`,
+    );
+    const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as { pool: unknown[] };
+    expect(final.pool).toHaveLength(3);
+  });
+
+  it("resume with a smaller saCount keeps the full pool and reports kept entries", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const first = await harness.run({ saCount: 3 });
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok" || first.dryRun) return;
+    expect(first.summary.poolSize).toBe(3);
+    expect(first.summary.poolKeptEntries ?? 0).toBe(0);
+    expect(formatSummary(first.summary)).not.toContain("kept:");
+
+    // Resume asking for fewer accounts: nothing is removed, so the
+    // summary reports the actual 3-account pool with the kept count.
+    const second = await harness.run({ saCount: 2 });
+    expect(second.status).toBe("ok");
+    if (second.status !== "ok" || second.dryRun) return;
+    expect(second.summary.poolSize).toBe(3);
+    expect(second.summary.poolKeptEntries).toBe(3);
+    expect(second.summary.poolPaths).toHaveLength(3);
+    expect(formatSummary(second.summary)).toContain(
+      "credential pool:      3 service accounts (kept: 3 existing)",
     );
     const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as { pool: unknown[] };
     expect(final.pool).toHaveLength(3);

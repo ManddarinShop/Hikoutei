@@ -176,7 +176,9 @@ export interface RunSetupOptions {
    * (single-SA behavior, unchanged); N > 1 provisions `<saName>-<i>`
    * accounts after the primary flow, sharing the same spreadsheet and
    * recorded in `HIKOUTEI_SYNC_CREDENTIALS`. Values outside 1..10 are an
-   * `invalid_args` usage error.
+   * `invalid_args` usage error. Resuming with a smaller count keeps every
+   * existing pool entry (the pool never shrinks); the summary reports the
+   * actual pool size.
    */
   readonly saCount?: number;
   /**
@@ -236,6 +238,12 @@ export interface SetupSummary {
   readonly poolSize: number;
   /** Key paths of the provisioned pool, entry 1 first ([keyPath] for N=1). */
   readonly poolPaths: readonly string[];
+  /**
+   * Pool entries kept from a previous run (absent/0 for fresh runs and
+   * N=1). A resume never removes entries, so resuming with a smaller
+   * `--sa-count` reports the actual (larger) pool with this kept count.
+   */
+  readonly poolKeptEntries?: number;
 }
 
 /** Discriminated result of a setup run. */
@@ -524,8 +532,9 @@ export function formatSummary(summary: SetupSummary): string {
   ];
   // Pool lines appear only for multi-SA runs, so N=1 output is unchanged.
   if (summary.poolSize > 1) {
+    const kept = summary.poolKeptEntries ?? 0;
     lines.push(
-      `  credential pool:      ${summary.poolSize} service accounts`,
+      `  credential pool:      ${summary.poolSize} service accounts${kept > 0 ? ` (kept: ${kept} existing)` : ""}`,
       `  credential pool keys: ${summary.poolPaths.join(",")}`,
     );
   }
@@ -1526,6 +1535,7 @@ async function runSetupLocked(
       envFileModified: envResult.modified || expanded.envModified,
       poolSize: expanded.pool.length,
       poolPaths: expanded.pool.map((entry) => entry.keyPath),
+      poolKeptEntries: expanded.keptPoolEntries,
     },
   };
 }
@@ -1681,9 +1691,11 @@ export type SaCountResolution =
  * flag (default 1). An interactive TTY session without `--sa-count` asks
  * once (`Service accounts to create? [1]: `): an empty answer means 1, a
  * valid 1..10 integer wins, and invalid input re-asks exactly once before
- * failing with an `invalid_args` usage error. End-of-input counts as
- * empty (1). A missing line reader degrades to the default without
- * prompting.
+ * failing with an `invalid_args` usage error. End-of-input on the first
+ * read counts as empty (1); end-of-input on the re-ask fails closed with
+ * an `invalid_args` usage error (a typo followed by Ctrl-D must never
+ * silently provision 1). A missing line reader degrades to the default
+ * without prompting.
  */
 export async function resolveSaCountForSetup(options: ResolveSaCountOptions): Promise<SaCountResolution> {
   if (options.yes || options.dryRun || !options.isTTY || options.saCount !== undefined) {
@@ -1694,10 +1706,23 @@ export async function resolveSaCountForSetup(options: ResolveSaCountOptions): Pr
     return { status: "ok", saCount: 1 };
   }
   const write = options.write ?? ((): void => undefined);
+  const invalidArgs = (detail: string): SaCountResolution => ({
+    status: "invalid",
+    failure: setupFailure(
+      SETUP_ERROR_CODES.INVALID_ARGS,
+      `invalid service-account count: ${detail}; run with --sa-count <n> (1-${MAX_SETUP_SA_COUNT}) or --yes`,
+    ),
+  });
   for (let attempt = 0; attempt < 2; attempt += 1) {
     write(SA_COUNT_PROMPT);
     const line = await readLine();
-    const trimmed = (line ?? "").trim();
+    if (line === null) {
+      if (attempt === 0) {
+        return { status: "ok", saCount: 1 };
+      }
+      return invalidArgs("no input on retry");
+    }
+    const trimmed = line.trim();
     if (trimmed === "") {
       return { status: "ok", saCount: 1 };
     }
@@ -1706,13 +1731,7 @@ export async function resolveSaCountForSetup(options: ResolveSaCountOptions): Pr
       return { status: "ok", saCount: parsed.saCount };
     }
     if (attempt === 1) {
-      return {
-        status: "invalid",
-        failure: setupFailure(
-          SETUP_ERROR_CODES.INVALID_ARGS,
-          `invalid service-account count: ${parsed.message}; run with --sa-count <n> (1-${MAX_SETUP_SA_COUNT}) or --yes`,
-        ),
-      };
+      return invalidArgs(parsed.message);
     }
   }
   // Unreachable: the loop above returns on every path.
@@ -1735,7 +1754,7 @@ interface PoolExpansionContext {
 
 /** Outcome of the credential-pool expansion. */
 type PoolExpansionResult =
-  | { readonly status: "ok"; readonly pool: readonly SetupPoolEntry[]; readonly envModified: boolean }
+  | { readonly status: "ok"; readonly pool: readonly SetupPoolEntry[]; readonly envModified: boolean; readonly keptPoolEntries: number }
   | { readonly status: "error"; readonly error: SetupErrorResult };
 
 /**
@@ -1807,6 +1826,10 @@ async function expandCredentialPool(
       };
     }
   }
+  // Keep-all resume: resuming with a smaller --sa-count never removes
+  // entries — the loop below only appends missing entries 2..N, so the
+  // pool only grows and the summary reports the actual (larger) size.
+  const keptPoolEntries = storedPool?.length ?? 0;
   const pool: SetupPoolEntry[] = storedPool !== undefined ? [...storedPool] : [primaryEntry];
 
   for (let index = pool.length + 1; index <= context.saCount; index += 1) {
@@ -1992,7 +2015,7 @@ async function expandCredentialPool(
   }
   progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.ENV_WRITE });
   progress.report({ type: "phase_completed", phase: POOL_EXPANSION_PHASE, source: "run" });
-  return { status: "ok", pool, envModified };
+  return { status: "ok", pool, envModified, keptPoolEntries };
 }
 
 /**
