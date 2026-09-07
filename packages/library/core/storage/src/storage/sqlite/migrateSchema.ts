@@ -19,6 +19,8 @@ import {
   REQUIRED_V6_COLUMNS,
   REQUIRED_V7_COLUMNS,
   REQUIRED_V9_COLUMNS,
+  SCAN_INDEX_DDL,
+  SCAN_ENTITY_INDEX_DDL,
   SQLITE_CONNECTION_PRAGMAS,
   syncSchemaIndexesDdl,
   syncSchemaTablesDdl,
@@ -59,6 +61,8 @@ export async function migrateSqliteSchema(
       await verifyRequiredColumns(sql);
       await executeSqlScript(sql, syncSchemaIndexesDdl());
       await executeSqlScript(sql, syncSchemaV5IndexesDdl());
+      await executeSqlScript(sql, SCAN_INDEX_DDL);
+      await executeSqlScript(sql, SCAN_ENTITY_INDEX_DDL);
       await writeSchemaVersion(sql, CURRENT_SCHEMA_VERSION);
       await verifyCurrentSchema(sql);
       return {
@@ -146,6 +150,13 @@ export async function migrateSqliteSchema(
     // v5-only indexes are created after every migration so an upgraded v4
     // installation gets the probe index the same way a fresh install does.
     await executeSqlScript(sql, syncSchemaV5IndexesDdl());
+    // The scan index converges on every path like the v5 probe index, so a
+    // database created before it cannot miss the paged binding access path.
+    // No version bump: an additive IF NOT EXISTS index changes no column or
+    // table contract, and verifyCurrentSchema below refuses a marker when
+    // the index is absent.
+    await executeSqlScript(sql, SCAN_INDEX_DDL);
+    await executeSqlScript(sql, SCAN_ENTITY_INDEX_DDL);
     await verifyCurrentSchema(sql);
 
     return {
@@ -281,6 +292,18 @@ async function verifyCurrentSchema(sql: SqlExecutor): Promise<void> {
     throw new StorageError(
       STORAGE_ERROR_CODES.SCHEMA_INDEX_MISSING,
       "SQLite schema is missing effect_outbox_probe_idx.",
+    );
+  }
+  if (!(await indexExists(sql, "row_binding_scan_idx"))) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SCHEMA_INDEX_MISSING,
+      "SQLite schema is missing row_binding_scan_idx.",
+    );
+  }
+  if (!(await indexExists(sql, "row_binding_entity_idx"))) {
+    throw new StorageError(
+      STORAGE_ERROR_CODES.SCHEMA_INDEX_MISSING,
+      "SQLite schema is missing row_binding_entity_idx.",
     );
   }
 }

@@ -17,8 +17,38 @@ import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import { NORMALIZED_CELL_KINDS } from "@hikoutei/contracts/encoding/constants.js";
 import { isNormalizedCell } from "@hikoutei/contracts/encoding/normalizedCell.js";
 import { STORAGE_ERROR_CODES, StorageError } from "@hikoutei/storage/storage/errors.js";
+import {
+  READ_DESIRED_SYSTEM_STATE_SQL,
+  RECONCILIATION_SCAN_CHUNK_SIZE,
+  RECONCILIATION_SCAN_ENTITY_PAGE_SIZE,
+  readActiveEntityPageWithSql,
+  readEntityBindingsWithSql,
+  readEntityFieldsWithSql,
+  readReconciliationDesiredSystemStateChunkWithSql,
+  readReconciliationDesiredSystemStateWithSql as readFlatDesiredSystemStateWithSql,
+  type ReconciliationDesiredChunkCursor,
+  type ReconciliationDesiredEntityChunk,
+  type ReconciliationDesiredSystemStateRow,
+} from "@hikoutei/storage/storage/sync/outbound/reconciliationSql.js";
 import type { SqlExecutor, SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import type { SyncSheetsProvider } from "@hikoutei/contracts/sheets/syncSheets.js";
+
+// The desired-state query lives in storage; this module re-exports the
+// shared pieces so scanner role modules keep importing from one place.
+export {
+  READ_DESIRED_SYSTEM_STATE_SQL,
+  RECONCILIATION_SCAN_CHUNK_SIZE,
+  RECONCILIATION_SCAN_ENTITY_PAGE_SIZE,
+  readActiveEntityPageWithSql,
+  readEntityBindingsWithSql,
+  readEntityFieldsWithSql,
+  readReconciliationDesiredSystemStateChunkWithSql,
+};
+export type {
+  ReconciliationDesiredChunkCursor,
+  ReconciliationDesiredEntityChunk,
+  ReconciliationDesiredSystemStateRow,
+};
 
 export const DEFAULT_RECONCILIATION_ROLE = "typed-sheets-reconciler";
 export const DEFAULT_RECONCILIATION_LEASE_MS = 60_000;
@@ -36,15 +66,7 @@ export interface DesiredRow {
   readonly fieldRevisionHash: string;
 }
 
-export interface DesiredRowSqlShape {
-  readonly entity_id: string;
-  readonly row_binding_id: string;
-  readonly anchor_reference: string;
-  readonly entity_revision: number;
-  readonly field_name: string;
-  readonly normalized_value: string;
-  readonly ownership: string;
-}
+
 
 export interface LatestVisibleSqlShape {
   readonly confirmed_visible_revision: number | null;
@@ -61,25 +83,7 @@ export interface LatestEffectSqlShape {
   readonly payload_json: string | null;
 }
 
-export const READ_DESIRED_SYSTEM_STATE_SQL = `
-  SELECT
-    entity.entity_id              AS entity_id,
-    binding.row_binding_id        AS row_binding_id,
-    binding.anchor_reference      AS anchor_reference,
-    entity.entity_revision        AS entity_revision,
-    field.field_name              AS field_name,
-    field.normalized_value        AS normalized_value,
-    field.ownership               AS ownership
-  FROM entity_state AS entity
-  JOIN row_binding AS binding
-    ON binding.entity_id = entity.entity_id
-   AND binding.logical_sheet_id = ?
-   AND binding.state = 'active'
-  JOIN entity_field_state AS field
-    ON field.entity_id = entity.entity_id
-  WHERE entity.status = 'active'
-  ORDER BY entity.entity_id, field.field_name
-`;
+
 
 export const READ_LATEST_VISIBLE_STATE_SQL = `
   SELECT confirmed_visible_revision, confirmed_snapshot_hash
@@ -145,17 +149,28 @@ export interface FailedHeadsSqlShape {
 export async function readTerminalFailedHeads(
   context: ScanContext,
 ): Promise<ReadonlyMap<string, string>> {
-  return context.storage.read(async ({ sql }) => {
-    const rows = await sql.all<FailedHeadsSqlShape>(READ_FAILED_HEADS_SQL, [
-      context.logicalSheetId,
-    ]);
-    const byTarget = new Map<string, string>();
-    for (const row of rows) {
-      if (isRecoverableEffectErrorCode(row.last_error_code)) continue;
-      if (!byTarget.has(row.target_id)) byTarget.set(row.target_id, row.effect_id);
-    }
-    return byTarget;
-  });
+  return context.storage.read(({ sql }) =>
+    readTerminalFailedHeadsWithSql(sql, context.logicalSheetId),
+  );
+}
+
+/**
+ * Reads terminal failed heads inside the caller's SQL context so the chunked
+ * scan can share one read with its pages instead of opening a second one.
+ */
+export async function readTerminalFailedHeadsWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+): Promise<ReadonlyMap<string, string>> {
+  const rows = await sql.all<FailedHeadsSqlShape>(READ_FAILED_HEADS_SQL, [
+    logicalSheetId,
+  ]);
+  const byTarget = new Map<string, string>();
+  for (const row of rows) {
+    if (isRecoverableEffectErrorCode(row.last_error_code)) continue;
+    if (!byTarget.has(row.target_id)) byTarget.set(row.target_id, row.effect_id);
+  }
+  return byTarget;
 }
 
 export interface ScanContext {
@@ -179,39 +194,108 @@ export async function readDesiredSystemState(context: ScanContext): Promise<read
 
 export async function readDesiredSystemStateWithSql(
   sql: SqlExecutor,
-  context: ScanContext,
+  context: Pick<ScanContext, "logicalSheetId" | "tombstoneField">,
 ): Promise<readonly DesiredRow[]> {
-  const rows = await sql.all<DesiredRowSqlShape>(READ_DESIRED_SYSTEM_STATE_SQL, [
-    context.logicalSheetId,
-  ]);
+  // The flat rows come from the storage-owned reader; grouping stays here
+  // because DesiredRow (decoded cells, tombstone default, revision hash) is
+  // the scanner's internal contract, not a storage shape.
+  const rows = await readFlatDesiredSystemStateWithSql(sql, context.logicalSheetId);
+  const { completed, carry } = assembleDesiredChunk(rows, undefined, context.tombstoneField);
+  const flushed = flushDesiredCarry(carry, context.tombstoneField);
+  return flushed === undefined ? completed : [...completed, flushed];
+}
 
-  const byEntity = new Map<string, DesiredRow>();
+/** One entity's fields accumulated across chunk boundaries. */
+export interface PartialDesiredRow {
+  readonly entityId: string;
+  readonly rowBindingId: string;
+  readonly anchorReference: string;
+  readonly entityRevision: number;
+  readonly fields: Record<string, NormalizedCell>;
+}
+
+/** Completed desired rows plus the trailing entity still missing fields. */
+export interface DesiredChunkResult {
+  readonly completed: readonly DesiredRow[];
+  readonly carry: PartialDesiredRow | undefined;
+}
+
+/**
+ * Groups one ordered page of flat canonical rows into completed desired
+ * rows. A page may split an entity's fields across the boundary, so the
+ * trailing entity is returned as `carry` and must seed the next call; only
+ * `flushDesiredCarry` after the last page finalizes it. Completed rows are
+ * finalized (tombstone default + revision hash) exactly like the full-load
+ * reader, in global `(entity_id, field_name)` order.
+ */
+export function assembleDesiredChunk(
+  rows: readonly ReconciliationDesiredSystemStateRow[],
+  carry: PartialDesiredRow | undefined,
+  tombstoneField: string | undefined,
+): DesiredChunkResult {
+  const completed: DesiredRow[] = [];
+  let current = carry === undefined ? undefined : {
+    entityId: carry.entityId,
+    rowBindingId: carry.rowBindingId,
+    anchorReference: carry.anchorReference,
+    entityRevision: carry.entityRevision,
+    fields: { ...carry.fields },
+  };
+  const finalizeCurrent = (): PartialDesiredRow | undefined => {
+    if (current === undefined) return undefined;
+    completed.push(finalizeDesiredRow(current, tombstoneField));
+    return undefined;
+  };
   for (const row of rows) {
-    const existing = byEntity.get(row.entity_id);
-    const cell = decodeNormalizedCell(row.normalized_value);
-    if (existing === undefined) {
-      const fields: Record<string, NormalizedCell> = {};
-      fields[row.field_name] = cell;
-      byEntity.set(row.entity_id, {
-        entityId: row.entity_id,
-        rowBindingId: row.row_binding_id,
-        anchorReference: row.anchor_reference,
-        entityRevision: row.entity_revision,
-        fields,
-        fieldRevisionHash: "",
-      });
-      continue;
+    if (current !== undefined && current.entityId !== row.entityId) {
+      current = finalizeCurrent();
     }
-    existing.fields[row.field_name] = cell;
+    if (current === undefined) {
+      current = {
+        entityId: row.entityId,
+        rowBindingId: row.rowBindingId,
+        anchorReference: row.anchorReference,
+        entityRevision: row.entityRevision,
+        fields: {},
+      };
+    }
+    current.fields[row.fieldName] = decodeNormalizedCell(row.normalizedValue);
   }
+  return {
+    completed,
+    carry: current === undefined ? undefined : {
+      entityId: current.entityId,
+      rowBindingId: current.rowBindingId,
+      anchorReference: current.anchorReference,
+      entityRevision: current.entityRevision,
+      fields: current.fields,
+    },
+  };
+}
 
-  const desired: DesiredRow[] = [];
-  for (const row of byEntity.values()) {
-    ensureTombstoneField(row, context.tombstoneField);
-    const hash = computeFieldRevisionHash(row.fields);
-    desired.push({ ...row, fieldRevisionHash: hash });
-  }
-  return desired;
+/** Finalizes the trailing entity after the last page. */
+export function flushDesiredCarry(
+  carry: PartialDesiredRow | undefined,
+  tombstoneField: string | undefined,
+): DesiredRow | undefined {
+  if (carry === undefined) return undefined;
+  return finalizeDesiredRow(carry, tombstoneField);
+}
+
+function finalizeDesiredRow(
+  row: PartialDesiredRow,
+  tombstoneField: string | undefined,
+): DesiredRow {
+  const desired: DesiredRow = {
+    entityId: row.entityId,
+    rowBindingId: row.rowBindingId,
+    anchorReference: row.anchorReference,
+    entityRevision: row.entityRevision,
+    fields: row.fields,
+    fieldRevisionHash: "",
+  };
+  ensureTombstoneField(desired, tombstoneField);
+  return { ...desired, fieldRevisionHash: computeFieldRevisionHash(desired.fields) };
 }
 
 export function ensureTombstoneField(row: DesiredRow, tombstoneField: string | undefined): void {

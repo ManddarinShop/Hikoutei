@@ -64,7 +64,14 @@ import {
   createUserInputDeleteEffect,
 } from "@hikoutei/storage/sync/outbound/projection/ProjectionEffectFactory.js";
 import { normalizedCellIdentity } from "./diff.js";
-import { decodeNormalizedCell } from "./shared.js";
+import {
+  decodeNormalizedCell,
+  RECONCILIATION_SCAN_CHUNK_SIZE,
+  RECONCILIATION_SCAN_ENTITY_PAGE_SIZE,
+  readActiveEntityPageWithSql,
+  readEntityBindingsWithSql,
+  readEntityFieldsWithSql,
+} from "./shared.js";
 
 /** One snapshot row the cleanup scan may correct. */
 export interface CleanupRow {
@@ -167,6 +174,27 @@ const READ_CLEANUP_BINDINGS_SQL = `
 `;
 
 /**
+ * One keyset page of row bindings in `row_binding_id` order. The
+ * `(logical_sheet_id, row_binding_id)` covering index (`row_binding_scan_idx`)
+ * serves each page as a bounded index range scan with no temp-b-tree sort.
+ */
+const READ_CLEANUP_BINDINGS_PAGE_SQL = `
+  SELECT row_binding_id, anchor_reference, state
+  FROM row_binding
+  WHERE logical_sheet_id = ? AND row_binding_id > ?
+  ORDER BY row_binding_id
+  LIMIT ?
+`;
+
+const READ_CLEANUP_BINDINGS_FIRST_PAGE_SQL = `
+  SELECT row_binding_id, anchor_reference, state
+  FROM row_binding
+  WHERE logical_sheet_id = ?
+  ORDER BY row_binding_id
+  LIMIT ?
+`;
+
+/**
  * Canonical user-owned projection values for every active binding with an
  * entity. The anchor_reference is the User_Input row-id anchor of the bound
  * row; only user-owned fields are projected (system-owned fields never appear
@@ -190,6 +218,15 @@ const READ_CLEANUP_CANONICAL_SQL = `
   WHERE entity.status = 'active'
   ORDER BY entity.entity_id, field.field_name
 `;
+
+/**
+ * Whole-entity canonical pages are assembled from the storage-owned
+ * entity-batch primitives (same bounded access path as the desired-state
+ * pages: PK-ordered entities, PK-prefix fields, covering binding seeks).
+ * A flat cross-table keyset cannot page here: duplicate `(entity, field)`
+ * keys across several active bindings of one entity would be skipped by a
+ * `(entity_id, field_name)` cursor, silently dropping a binding's fields.
+ */
 
 /**
  * Stable binding-keyed stream target id shared with flush projections and
@@ -292,6 +329,365 @@ export async function readCleanupEvidence(
 ): Promise<CleanupEvidence> {
   return storage.read(({ sql }) =>
     readCleanupEvidenceWithSql(sql, logicalSheetId, physicalSheetId));
+}
+
+/** Keyset cursor for a paged cleanup binding chunk: the last id already seen. */
+export interface CleanupBindingsCursor {
+  readonly rowBindingId: string;
+}
+
+/** Keyset cursor for a paged canonical chunk: the last entity already seen. */
+export interface CleanupCanonicalCursor {
+  readonly entityId: string;
+}
+
+/** One entity-batched canonical chunk: whole entities plus progress. */
+export interface CleanupCanonicalEntityChunk {
+  readonly rows: readonly CleanupCanonicalSqlShape[];
+  /** Entities paged (including binding-less ones) — the termination signal. */
+  readonly entityCount: number;
+  /** Last entity paged — the next cursor (absent only when empty). */
+  readonly lastEntityId: string | undefined;
+}
+
+/** Reads one bounded page of row bindings in `row_binding_id` order. */
+export function readCleanupBindingsChunkWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+  after: CleanupBindingsCursor | undefined,
+  limit: number = RECONCILIATION_SCAN_CHUNK_SIZE,
+): Promise<readonly CleanupBinding[]> {
+  const query = after === undefined
+    ? READ_CLEANUP_BINDINGS_FIRST_PAGE_SQL
+    : READ_CLEANUP_BINDINGS_PAGE_SQL;
+  const parameters = after === undefined
+    ? [logicalSheetId, limit] as const
+    : [logicalSheetId, after.rowBindingId, limit] as const;
+  return sql.all<CleanupBindingSqlShape>(query, [...parameters]).then((rows) =>
+    rows.map((row) => ({
+      rowBindingId: row.row_binding_id,
+      anchorReference: row.anchor_reference,
+      state: row.state,
+    })),
+  );
+}
+
+/**
+ * Reads one bounded chunk of whole entities as flat canonical user-owned
+ * rows, in global entity order. Pass no cursor for the first chunk, then
+ * `{ entityId }` of the last entity paged; an empty chunk (or
+ * `entityCount < limit`) ends the scan. Only `limit` entities are ever
+ * materialized per call. Multi-binding entities emit one row per
+ * (binding, field) with the smallest `row_binding_id` first, so no
+ * binding's fields can be skipped across chunks by construction.
+ */
+export async function readCleanupCanonicalChunkWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+  after: CleanupCanonicalCursor | undefined,
+  limit: number = RECONCILIATION_SCAN_ENTITY_PAGE_SIZE,
+): Promise<CleanupCanonicalEntityChunk> {
+  const entities = await readActiveEntityPageWithSql(sql, after?.entityId, limit);
+  const rows: CleanupCanonicalSqlShape[] = [];
+  for (const entity of entities) {
+    const [bindings, fields] = await Promise.all([
+      readEntityBindingsWithSql(sql, logicalSheetId, entity.entityId),
+      readEntityFieldsWithSql(sql, entity.entityId, "user"),
+    ]);
+    for (const binding of bindings) {
+      for (const field of fields) {
+        rows.push({
+          entity_id: entity.entityId,
+          row_binding_id: binding.rowBindingId,
+          anchor_reference: binding.anchorReference,
+          field_name: field.fieldName,
+          normalized_value: field.normalizedValue,
+        });
+      }
+    }
+  }
+  const lastEntity = entities[entities.length - 1];
+  return {
+    rows,
+    entityCount: entities.length,
+    lastEntityId: lastEntity === undefined ? undefined : lastEntity.entityId,
+  };
+}
+
+/** One entity's canonical bindings accumulated across chunk boundaries. */
+export interface PartialCleanupCanonical {
+  readonly entityId: string;
+  readonly partials: ReadonlyMap<string, {
+    readonly entityId: string;
+    readonly rowBindingId: string;
+    readonly anchorReference: string;
+    readonly fields: Record<string, NormalizedCell>;
+  }>;
+}
+
+/** Completed canonical rows plus the trailing entity still missing fields. */
+export interface CleanupCanonicalChunkResult {
+  readonly completed: readonly CleanupCanonicalRow[];
+  readonly carry: PartialCleanupCanonical | undefined;
+}
+
+/**
+ * Groups one ordered page of canonical rows into completed canonical rows.
+ *
+ * A page may split an entity's fields across the boundary, and several
+ * bindings may share one entity, so the trailing entity is returned as
+ * `carry` (all of its bindings) and must seed the next call; only the flush
+ * after the last page finalizes it. Completed rows hash exactly like the
+ * full-load grouping, in global entity order.
+ */
+export function assembleCleanupCanonicalChunk(
+  rows: readonly CleanupCanonicalSqlShape[],
+  carry: PartialCleanupCanonical | undefined,
+): CleanupCanonicalChunkResult {
+  const completed: CleanupCanonicalRow[] = [];
+  let currentEntityId = carry?.entityId;
+  let current = new Map(carry?.partials);
+  const finalizeCurrent = (): void => {
+    for (const partial of current.values()) {
+      completed.push(toCleanupCanonicalRow(partial));
+    }
+    current = new Map();
+    currentEntityId = undefined;
+  };
+  for (const row of rows) {
+    if (currentEntityId !== undefined && currentEntityId !== row.entity_id) {
+      finalizeCurrent();
+    }
+    currentEntityId = row.entity_id;
+    const existing = current.get(row.row_binding_id);
+    if (existing === undefined) {
+      current.set(row.row_binding_id, {
+        entityId: row.entity_id,
+        rowBindingId: row.row_binding_id,
+        anchorReference: row.anchor_reference,
+        fields: { [row.field_name]: decodeNormalizedCell(row.normalized_value) },
+      });
+    } else {
+      existing.fields[row.field_name] = decodeNormalizedCell(row.normalized_value);
+    }
+  }
+  return {
+    completed,
+    carry: currentEntityId === undefined ? undefined : {
+      entityId: currentEntityId,
+      partials: current,
+    },
+  };
+}
+
+/** Finalizes the trailing entity's canonical rows after the last page. */
+export function flushCleanupCanonicalCarry(
+  carry: PartialCleanupCanonical | undefined,
+): readonly CleanupCanonicalRow[] {
+  if (carry === undefined) return [];
+  return [...carry.partials.values()].map(toCleanupCanonicalRow);
+}
+
+function toCleanupCanonicalRow(partial: {
+  readonly entityId: string;
+  readonly rowBindingId: string;
+  readonly anchorReference: string;
+  readonly fields: Record<string, NormalizedCell>;
+}): CleanupCanonicalRow {
+  return {
+    entityId: partial.entityId,
+    rowBindingId: partial.rowBindingId,
+    anchorReference: partial.anchorReference,
+    fields: partial.fields,
+    fieldRevisionHash: computeSyncVisibleHash(partial.fields),
+  };
+}
+
+/** Snapshot rows grouped by anchor for the chunked cleanup scan. */
+export interface CleanupSnapshotIndex {
+  readonly groupsByAnchor: ReadonlyMap<string, readonly CleanupRow[]>;
+  readonly duplicateAnchors: ReadonlySet<string>;
+}
+
+/**
+ * Groups decoded snapshot rows by anchor once per scan. The maps hold
+ * references to the decoded rows; no snapshot data is copied.
+ */
+export function buildCleanupSnapshotIndex(
+  rows: readonly CleanupRow[],
+): CleanupSnapshotIndex {
+  const groupsByAnchor = new Map<string, CleanupRow[]>();
+  for (const row of rows) {
+    if (row.anchor === null) continue;
+    const group = groupsByAnchor.get(row.anchor) ?? [];
+    group.push(row);
+    groupsByAnchor.set(row.anchor, group);
+  }
+  const duplicateAnchors = new Set<string>();
+  for (const [anchor, group] of groupsByAnchor) {
+    if (group.length > 1) duplicateAnchors.add(anchor);
+  }
+  return { groupsByAnchor, duplicateAnchors };
+}
+
+/** Streaming evidence for one cleanup scan: small maps plus drifted rewrites. */
+export interface CleanupStreamEvidence {
+  readonly bindingsByAnchor: ReadonlyMap<string, CleanupBinding>;
+  readonly candidateHashes: ReadonlyMap<string, string>;
+  readonly canonicalAnchors: ReadonlySet<string>;
+  readonly rewriteByAnchor: ReadonlyMap<string, CleanupTarget>;
+}
+
+/**
+ * Streams binding/canonical/candidate evidence in keyset pages inside the
+ * caller's SQL context.
+ *
+ * Only one page of canonical rows is materialized at a time; completed
+ * canonical rows are rewrite-checked against the snapshot index immediately
+ * and dropped unless drifted. Retained state is small bindings, candidate
+ * hashes, canonical anchor keys, and drifted rewrite targets — never the
+ * full canonical table.
+ */
+export async function readCleanupStreamEvidenceWithSql(
+  sql: SqlExecutor,
+  logicalSheetId: string,
+  physicalSheetId: string,
+  snapshot: CleanupSnapshotIndex,
+): Promise<CleanupStreamEvidence> {
+  const candidateRows = await sql.all<CleanupCandidateHashSqlShape>(
+    READ_CLEANUP_CANDIDATE_HASHES_SQL,
+    [physicalSheetId],
+  );
+  const candidateHashes = new Map(candidateRows.map((row) => [
+    row.row_binding_id,
+    row.active_candidate_hash,
+  ]));
+  const bindingsByAnchor = new Map<string, CleanupBinding>();
+  let bindingsAfter: CleanupBindingsCursor | undefined;
+  for (;;) {
+    const page = await readCleanupBindingsChunkWithSql(sql, logicalSheetId, bindingsAfter);
+    if (page.length === 0) break;
+    for (const binding of page) bindingsByAnchor.set(binding.anchorReference, binding);
+    const last = page[page.length - 1];
+    if (last === undefined) break;
+    bindingsAfter = { rowBindingId: last.rowBindingId };
+    if (page.length < RECONCILIATION_SCAN_CHUNK_SIZE) break;
+  }
+  const canonicalAnchors = new Set<string>();
+  const rewriteByAnchor = new Map<string, CleanupTarget>();
+  let canonicalAfter: CleanupCanonicalCursor | undefined;
+  let carry: PartialCleanupCanonical | undefined;
+  for (;;) {
+    const chunk = await readCleanupCanonicalChunkWithSql(sql, logicalSheetId, canonicalAfter);
+    // Whole-entity chunks: the cursor is the last entity paged, including
+    // binding-less ones that emit no rows, so no entity's rows can be
+    // skipped or repeated across chunks.
+    if (chunk.entityCount === 0 || chunk.lastEntityId === undefined) break;
+    canonicalAfter = { entityId: chunk.lastEntityId };
+    const assembled = assembleCleanupCanonicalChunk(chunk.rows, carry);
+    carry = assembled.carry;
+    for (const canonical of assembled.completed) {
+      canonicalAnchors.add(canonical.anchorReference);
+      const rewrite = classifyCleanupRewrite(canonical, snapshot, candidateHashes);
+      if (rewrite !== undefined) rewriteByAnchor.set(canonical.anchorReference, rewrite);
+    }
+    if (chunk.entityCount < RECONCILIATION_SCAN_ENTITY_PAGE_SIZE) break;
+  }
+  for (const canonical of flushCleanupCanonicalCarry(carry)) {
+    canonicalAnchors.add(canonical.anchorReference);
+    const rewrite = classifyCleanupRewrite(canonical, snapshot, candidateHashes);
+    if (rewrite !== undefined) rewriteByAnchor.set(canonical.anchorReference, rewrite);
+  }
+  return { bindingsByAnchor, candidateHashes, canonicalAnchors, rewriteByAnchor };
+}
+
+/**
+ * Rewrite-checks one completed canonical row against its snapshot group.
+ *
+ * Mirrors the bound-row branch of `classifyCleanupRows`: duplicated-anchor
+ * groups defer (their delete is planned by the surplus pass), candidate-
+ * protected bindings converge through resolution, field-less canonical rows
+ * belong to the lifecycle pipeline, and matching rows are idempotent.
+ * Returns the rewrite target only for a drifted, plannable row.
+ */
+function classifyCleanupRewrite(
+  canonical: CleanupCanonicalRow,
+  snapshot: CleanupSnapshotIndex,
+  candidateHashes: ReadonlyMap<string, string>,
+): CleanupTarget | undefined {
+  if (snapshot.duplicateAnchors.has(canonical.anchorReference)) return undefined;
+  if (Object.keys(canonical.fields).length === 0) return undefined;
+  if (candidateHashes.has(canonical.rowBindingId)) return undefined;
+  const group = snapshot.groupsByAnchor.get(canonical.anchorReference);
+  const row = group?.[0];
+  if (row === undefined) return undefined;
+  if (observedCanonicalHash(row, canonical.fields) === canonical.fieldRevisionHash) {
+    return undefined;
+  }
+  return {
+    kind: "rewrite",
+    row,
+    canonicalFields: canonical.fields,
+    rowBindingId: canonical.rowBindingId,
+  };
+}
+
+/**
+ * Classifies snapshot rows into correction targets in full-load order.
+ *
+ * Mirrors `classifyCleanupRows` decision-for-decision (duplicate deletes
+ * first in first-seen anchor order, then snapshot row order for rewrites
+ * and surplus deletes) while reading rewrites from the streamed evidence:
+ * bound non-duplicate anchors resolve through `rewriteByAnchor`, every
+ * other row through the binding map. The target sequence is identical to
+ * the full-load scan, so repair effect ids stay stable across the switch.
+ */
+export function classifyCleanupStreamTargets(
+  rows: readonly CleanupRow[],
+  snapshot: CleanupSnapshotIndex,
+  evidence: CleanupStreamEvidence,
+): readonly CleanupTarget[] {
+  const targets: CleanupTarget[] = [];
+  const handled = new Set<number>();
+  for (const [anchor, group] of snapshot.groupsByAnchor) {
+    if (group.length < 2) continue;
+    const resolvable = lowestRow(group);
+    const binding = evidence.bindingsByAnchor.get(anchor);
+    if (binding !== undefined && evidence.candidateHashes.has(binding.rowBindingId)) {
+      for (const row of group) handled.add(row.rowNumber);
+      continue;
+    }
+    targets.push({
+      kind: "duplicate",
+      row: resolvable,
+      ...(binding === undefined ? {} : { rowBindingId: binding.rowBindingId }),
+    });
+    for (const row of group) handled.add(row.rowNumber);
+  }
+  for (const row of rows) {
+    if (row.anchor === null || handled.has(row.rowNumber)) continue;
+    if (evidence.canonicalAnchors.has(row.anchor)) {
+      const rewrite = evidence.rewriteByAnchor.get(row.anchor);
+      if (rewrite !== undefined) targets.push(rewrite);
+      continue;
+    }
+    const binding = evidence.bindingsByAnchor.get(row.anchor);
+    if (binding !== undefined) {
+      if (
+        binding.state === "candidate" &&
+        row.identity === undefined &&
+        !evidence.candidateHashes.has(binding.rowBindingId)
+      ) {
+        targets.push({ kind: "empty_id", row, rowBindingId: binding.rowBindingId });
+      }
+      continue;
+    }
+    targets.push({
+      kind: row.identity === undefined ? "empty_id" : "extra",
+      row,
+    });
+  }
+  return targets;
 }
 
 function groupCanonicalRows(

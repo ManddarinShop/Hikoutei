@@ -36,12 +36,19 @@ export interface DriftTarget {
   readonly observed: SyncSnapshotRow | undefined;
 }
 
-/** Anchor + business-key indices shared by drift detection and matching. */
-interface ObservedRowIndex {
-  readonly rowsByAnchor: Map<string, SyncSnapshotRow>;
-  readonly ambiguousAnchors: Set<string>;
-  readonly rowsByIdentity: Map<string, SyncSnapshotRow>;
-  readonly ambiguousIdentities: Set<string>;
+/**
+ * Anchor + business-key indices shared by drift detection and matching.
+ *
+ * Built once per scan from the snapshot and reused for every desired chunk,
+ * so the snapshot side is indexed in a single Map pass instead of rebuilt
+ * per chunk. The maps hold references to the snapshot's rows; no snapshot
+ * data is copied.
+ */
+export interface ObservedRowIndex {
+  readonly rowsByAnchor: ReadonlyMap<string, SyncSnapshotRow>;
+  readonly ambiguousAnchors: ReadonlySet<string>;
+  readonly rowsByIdentity: ReadonlyMap<string, SyncSnapshotRow>;
+  readonly ambiguousIdentities: ReadonlySet<string>;
 }
 
 /**
@@ -51,7 +58,7 @@ interface ObservedRowIndex {
  * choice: the affected locators are dropped from the index so neither the
  * drift classifier nor the failed-head matcher can silently pick one row.
  */
-function buildObservedRowIndex(
+export function buildObservedRowIndex(
   snapshot: SyncSheetsSnapshot,
   businessKeyField: string,
 ): ObservedRowIndex {
@@ -93,7 +100,7 @@ function buildObservedRowIndex(
  * duplicate set. Returns undefined when no row can prove ownership of this
  * binding.
  */
-function resolveObservedRow(
+export function resolveObservedRow(
   index: ObservedRowIndex,
   desiredRow: DesiredRow,
   businessKeyField: string,
@@ -119,44 +126,49 @@ export function computeDrifts(args: {
   readonly sheet: { readonly registeredRange: string; readonly businessKeyField: string };
 }): readonly DriftTarget[] {
   const index = buildObservedRowIndex(args.snapshot, args.sheet.businessKeyField);
+  return classifyDesiredChunk(index, args.desired, args.systemFields, args.sheet.businessKeyField);
+}
 
+/**
+ * Classifies one chunk of desired rows against a prebuilt snapshot index.
+ *
+ * The chunked scan calls this per completed entity batch with the scan-wide
+ * index; results concatenate in chunk order, which is the global
+ * `(entity_id, field_name)` order, so chunked classification is identical to
+ * one full-load `computeDrifts` call. Returns only drift targets; matched
+ * rows are simply absent (the scan counts them as scanned-minus-missing).
+ */
+export function classifyDesiredChunk(
+  index: ObservedRowIndex,
+  desired: readonly DesiredRow[],
+  systemFields: readonly string[],
+  businessKeyField: string,
+): readonly DriftTarget[] {
   const drifts: DriftTarget[] = [];
-  for (const desiredRow of args.desired) {
-    const observed = resolveObservedRow(index, desiredRow, args.sheet.businessKeyField);
-    if (observed === undefined) {
-      drifts.push({ kind: "missing", desired: desiredRow, observed: undefined });
-      continue;
-    }
-    const observedHash = computeObservedHash(observed, args.systemFields);
-    const desiredHash = computeSyncVisibleHash(desiredRow.fields);
-    if (observedHash !== desiredHash) {
-      drifts.push({ kind: "drifted", desired: desiredRow, observed });
-    }
+  for (const desiredRow of desired) {
+    const drift = classifyDesiredRow(index, desiredRow, systemFields, businessKeyField);
+    if (drift !== undefined) drifts.push(drift);
   }
   return drifts;
 }
 
-/**
- * Returns the observed snapshot row owned by each desired row.
- *
- * Honors the same duplication quarantine as drift detection: an ambiguous
- * anchor or duplicated business key never resolves to a row. The failed-head
- * repair path uses this to pass FRESH verified snapshot evidence into a
- * repair baseline for a clean (already matching) row, so a repair never
- * falls back to an unguarded insert for an existing Sheet row.
- */
-export function findObservedRows(
-  snapshot: SyncSheetsSnapshot,
-  desired: readonly DesiredRow[],
+/** Classifies one desired row: missing, drifted, or matched (undefined). */
+export function classifyDesiredRow(
+  index: ObservedRowIndex,
+  desiredRow: DesiredRow,
+  systemFields: readonly string[],
   businessKeyField: string,
-): ReadonlyMap<string, SyncSnapshotRow> {
-  const index = buildObservedRowIndex(snapshot, businessKeyField);
-  const matched = new Map<string, SyncSnapshotRow>();
-  for (const desiredRow of desired) {
-    const observed = resolveObservedRow(index, desiredRow, businessKeyField);
-    if (observed !== undefined) matched.set(desiredRow.entityId, observed);
+): DriftTarget | undefined {
+  const observed = resolveObservedRow(index, desiredRow, businessKeyField);
+  if (observed === undefined) {
+    return { kind: "missing", desired: desiredRow, observed: undefined };
   }
-  return matched;
+  const observedHash = computeObservedHash(observed, systemFields);
+  const desiredHash = computeSyncVisibleHash(desiredRow.fields);
+  if (observedHash !== desiredHash) {
+    return { kind: "drifted", desired: desiredRow, observed };
+  }
+  return undefined;
 }
 
 /** Reads a business-key value from a snapshot row for unanchored fast appends. */
@@ -246,6 +258,34 @@ export function countExtraRows(
   desired: readonly DesiredRow[],
   identityField: string,
 ): number {
+  // First-wins anchor ownership plus every desired identity, as lightweight
+  // keys: the chunked scan accumulates the same keys without retaining rows.
+  const desiredAnchors = new Map<string, string | undefined>();
+  const desiredIdentities = new Set<string>();
+  for (const row of desired) {
+    if (!desiredAnchors.has(row.anchorReference)) {
+      desiredAnchors.set(row.anchorReference, desiredRowIdentity(row, identityField));
+    }
+    const identity = desiredRowIdentity(row, identityField);
+    if (identity !== undefined) desiredIdentities.add(identity);
+  }
+  return countExtraRowsForKeys(snapshot, identityField, desiredAnchors, desiredIdentities);
+}
+
+/**
+ * Counts surplus snapshot rows from pre-accumulated desired keys.
+ *
+ * The chunked scan feeds one chunk at a time into `desiredAnchors` (first
+ * row wins per anchor) and `desiredIdentities`, then calls this once: the
+ * count is identical to `countExtraRows` while only small key strings are
+ * retained instead of full desired rows.
+ */
+export function countExtraRowsForKeys(
+  snapshot: SyncSheetsSnapshot,
+  identityField: string,
+  desiredAnchors: ReadonlyMap<string, string | undefined>,
+  desiredIdentities: ReadonlySet<string>,
+): number {
   // Identities that appear more than once in the snapshot cannot prove
   // ownership. A desired row carrying one of these identities is quarantined:
   // its anchor never suppresses the extra count, and the duplicated identity
@@ -259,13 +299,6 @@ export function countExtraRows(
       if (seen.has(identity)) duplicateIdentities.add(identity);
       seen.add(identity);
     }
-  }
-  const desiredByAnchor = new Map<string, DesiredRow>();
-  const desiredIdentities = new Set<string>();
-  for (const row of desired) {
-    if (!desiredByAnchor.has(row.anchorReference)) desiredByAnchor.set(row.anchorReference, row);
-    const identity = desiredRowIdentity(row, identityField);
-    if (identity !== undefined) desiredIdentities.add(identity);
   }
   const anchorCounts = new Map<string, number>();
   for (const row of snapshot.rows) {
@@ -281,11 +314,8 @@ export function countExtraRows(
     // business key that appears elsewhere.
     if (row.physicalAnchor.kind === PRESENCE_KINDS.PRESENT &&
         (anchorCounts.get(row.physicalAnchor.value) ?? 0) === 1) {
-      const desiredRow = desiredByAnchor.get(row.physicalAnchor.value);
-      const desiredIdentity = desiredRow === undefined
-        ? undefined
-        : desiredRowIdentity(desiredRow, identityField);
-      if (desiredRow !== undefined &&
+      const desiredIdentity = desiredAnchors.get(row.physicalAnchor.value);
+      if (desiredAnchors.has(row.physicalAnchor.value) &&
           (desiredIdentity === undefined || !duplicateIdentities.has(desiredIdentity))) {
         continue;
       }

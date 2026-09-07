@@ -56,9 +56,10 @@ import {
 import { appendEffectsWithSupersedes } from "./enqueue.js";
 import {
   buildCleanupEffects,
-  classifyCleanupRows,
+  buildCleanupSnapshotIndex,
+  classifyCleanupStreamTargets,
   decodeCleanupRows,
-  readCleanupEvidence,
+  readCleanupStreamEvidenceWithSql,
 } from "./cleanup.js";
 
 /** Construction options for a single User_Input cleanup scan. */
@@ -176,12 +177,20 @@ async function scanAndEnqueue(context: CleanupScanContext): Promise<CleanupScanR
   const observed = await observeSyncSnapshot(context.provider, snapshotRequest);
 
   const rows = decodeCleanupRows(observed.snapshot, context.identityField);
-  const evidence = await readCleanupEvidence(
-    context.storage,
-    context.logicalSheetId,
-    context.physicalSheetId,
+  // Evidence streams in keyset pages inside one read: only one canonical
+  // page plus small binding/candidate maps and drifted rewrites are ever
+  // retained. The scan stays eventually consistent like the System_State
+  // scanner: concurrent writes between pages surface on the next scan.
+  const snapshotIndex = buildCleanupSnapshotIndex(rows);
+  const evidence = await context.storage.read(({ sql }) =>
+    readCleanupStreamEvidenceWithSql(
+      sql,
+      context.logicalSheetId,
+      context.physicalSheetId,
+      snapshotIndex,
+    ),
   );
-  const targets = classifyCleanupRows(rows, evidence);
+  const targets = classifyCleanupStreamTargets(rows, snapshotIndex, evidence);
 
   const counts = countTargets(targets);
   if (targets.length === 0) {
