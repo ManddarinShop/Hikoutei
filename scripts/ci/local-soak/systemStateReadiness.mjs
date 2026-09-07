@@ -86,6 +86,7 @@ export async function resolveSystemStateReadinessReader(deps = systemStateReadin
     // REGARDLESS of whether a stale dist copy exists — a dist file left over
     // from a different branch/feature layer must never be loaded here.
     if (!sourceExists()) {
+      console.warn("[soak] WARN: System_State readiness module absent from this branch; reporting immediate-ready");
       return immediateReadyReadSystemStateReadiness;
     }
     // The source module EXISTS, so its load failed. Only fall back to dist
