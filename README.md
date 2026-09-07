@@ -272,7 +272,9 @@ detailed state machine and recovery rules.
 
 Live Google calls are opt-in; fake providers and SQLite fixtures are the normal
 verification path. The detailed setup and troubleshooting steps are in the
-[Quick start](website/guide/quick-start.md).
+[Quick start](website/guide/quick-start.md) and [Google Sheets setup](website/guide/setup.md) —
+including the credential pool (`--sa-count`) and API quota guidance when
+polling-heavy workloads hit HTTP 429.
 
 ## Installation
 

@@ -195,6 +195,10 @@ Options:
 ```text
 --project <id>              Use an existing Google Cloud project.
 --sa-name <name>            Service-account name (default: hikoutei-sa).
+--sa-count <n>             Credential pool size, 1-10 (default: 1). Extra
+                            accounts share the spreadsheet and land in
+                            HIKOUTEI_SYNC_CREDENTIALS; reruns never remove
+                            pool entries (see "Credential pool" below).
 --spreadsheet-title <title> Spreadsheet title (default: hikoutei-sync-<project>).
 --output <path>             .env file to write or update (default: .env).
 --yes                       Skip interactive confirmation.
@@ -210,6 +214,33 @@ Both `--flag value` and `--flag=value` forms are accepted.
 
 When the setup finishes, the sync runtime picks the spreadsheet up from the
 environment automatically (see below).
+
+### Credential pool with --sa-count
+
+Google Sheets API quota applies per project and per service account. One
+account is enough for MVPs, but polling-heavy workloads (tight soak
+intervals, frequent human-edit polling) can hit HTTP 429. A credential
+pool spreads requests across accounts:
+
+```sh
+npx hikoutei setup --sa-count 5
+```
+
+Setup creates `hikoutei-sa`, `hikoutei-sa-2`, … as writers on the same
+spreadsheet and writes the key list to `HIKOUTEI_SYNC_CREDENTIALS` in
+`.env` (comma-separated paths; every entry is validated fail-closed
+before any remote contact, and a stray empty entry is rejected instead of
+silently falling back to the single credential). Rerunning setup with a
+larger count only adds accounts — existing pool entries are never
+removed — and a smaller count keeps the pool as is. Pool key files
+(`hikoutei-service-account-2.json`, …) are secrets like the primary key
+and are covered by the ignore rules below; custom paths must be added to
+your application's ignore rules.
+
+If 429s persist with a pool in place, space request starts with
+`HIKOUTEI_SYNC_RATE_LIMIT_INTERVAL_MS` and loosen polling intervals
+before adding more accounts. Committed writes are never lost to quota:
+they wait in the durable local outbox and deliver when quota recovers.
 
 ### Keep setup artifacts out of Git
 
