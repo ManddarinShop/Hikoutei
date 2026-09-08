@@ -126,28 +126,28 @@ async function resolveObservationEntityId(
   entityManager: MikroOrmNativeEntityWriter,
   mapping: TypedSheetsEntityMapping,
   commit: CanonicalCommitInput,
-): Promise<string> {
+): Promise<string | number> {
   if (commit.kind === "insert") {
     const primaryField = commit.fields.find((field) => field.fieldName === mapping.primaryKey);
     if (primaryField === undefined) {
       return typedSheetsEntityIdFromCanonical(mapping, commit.entityId);
     }
     const field = requireTypedSheetsEntityField(mapping, primaryField.fieldName);
-    const value = decodeTypedSheetsEntityField(mapping, field, primaryField.value);
-    if (typeof value !== "string" || value.length === 0) {
+    const value: unknown = decodeTypedSheetsEntityField(mapping, field, primaryField.value);
+    if (!isPresentObservationEntityId(value)) {
       throw new TypedSheetsOrmError(
         TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
         `insert observation has an invalid ${mapping.entityName}.${mapping.primaryKey}.`,
       );
     }
-    const expectedCanonical = typedSheetsCanonicalEntityId(mapping, value);
-    if (commit.entityId !== value && commit.entityId !== expectedCanonical) {
+    const expectedCanonical = typedSheetsCanonicalEntityId(mapping, value as string | number);
+    if (commit.entityId !== String(value) && commit.entityId !== expectedCanonical) {
       throw new TypedSheetsOrmError(
         TYPED_SHEETS_ORM_ERROR_CODES.ENTITY_PRIMARY_KEY_MISMATCH,
         `${mapping.entityName}.${mapping.primaryKey} does not match the canonical entity ID.`,
       );
     }
-    return value;
+    return value as string | number;
   }
 
   const candidate = typedSheetsEntityIdFromCanonical(mapping, commit.entityId);
@@ -156,18 +156,34 @@ async function resolveObservationEntityId(
     mapping.entity,
     { [mapping.primaryKey]: candidate },
   );
+  // INTEGER tables store numbers; a string candidate `"42"` still identifies
+  // row 42. Fall back to the numeric form before treating it as missing.
+  const numericCandidate = /^\d+$/.test(candidate) ? Number(candidate) : undefined;
+  const numericEntity = numericCandidate === undefined
+    ? null
+    : await entityManager.findOne(mapping.entity, { [mapping.primaryKey]: numericCandidate });
   const canonicalEntity = candidate === canonical
     ? candidateEntity
     : await entityManager.findOne(mapping.entity, { [mapping.primaryKey]: canonical });
-  if (candidateEntity !== null && canonicalEntity !== null && candidate !== canonical) {
+  const foundCandidate = candidateEntity ?? numericEntity;
+  if (foundCandidate !== null && canonicalEntity !== null && candidate !== canonical) {
     throw new TypedSheetsOrmError(
       TYPED_SHEETS_ORM_ERROR_CODES.OBSERVATION_ENTITY_MUTATION_FAILED,
       `canonical identity ${canonical} is ambiguous for ${mapping.entityName}.`,
     );
   }
   if (candidateEntity !== null) return candidate;
+  if (numericEntity !== null && numericCandidate !== undefined) return numericCandidate;
   if (canonicalEntity !== null) return canonical;
-  return candidate;
+  return numericCandidate ?? candidate;
+}
+
+/** Whether a decoded observation PK is present (non-empty string or safe int). */
+function isPresentObservationEntityId(value: unknown): value is string | number {
+  return (
+    (typeof value === "string" && value.length > 0) ||
+    (typeof value === "number" && Number.isSafeInteger(value))
+  );
 }
 
 async function applyMappedMutation(
@@ -207,7 +223,7 @@ async function applyMappedMutation(
 async function requireExactlyOneMutation(
   mutation: Promise<number>,
   mapping: TypedSheetsEntityMapping,
-  entityId: string,
+  entityId: string | number,
   operation: "update" | "delete",
 ): Promise<void> {
   const changed = await mutation;

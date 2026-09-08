@@ -151,14 +151,18 @@ class MikroOrmScalarReader implements ScalarEntityReader {
 /**
  * Schedules a Hikoutei flush plan on the active MikroORM manager.
  *
- * The coordinator runs before MikroORM emits entity SQL. Both its SQL and the
- * later entity statements are owned by the surrounding `transactional()` call,
- * so either side can reject without leaving a partial canonical/outbox write.
+ * String-PK flushes keep the original order (coordinator before entity SQL).
+ * Flushes containing a SQLite-generated numeric insert reorder ONLY that path:
+ * entity rows flush first so SQLite assigns the ID, the shared row references
+ * are patched, and canonical/outbox planning then derives `entity:<id>`.
+ * Both orders share the surrounding `transactional()` boundary, so a
+ * coordinator failure still rolls back the uncommitted entity rows.
  */
 class MikroOrmScalarTransaction
   extends MikroOrmScalarReader
   implements ScalarEntityTransaction {
   private readonly changes: ScalarEntityFlushChange[] = [];
+  private readonly insertEntities = new Map<ScalarEntityInsert, object>();
 
   constructor(
     private readonly storage: MikroOrmSqliteAdapter,
@@ -179,6 +183,7 @@ class MikroOrmScalarTransaction
     );
     this.entityManager.persist(entity);
     this.changes.push({ kind: "insert", row });
+    this.insertEntities.set(row, entity);
   }
 
   async update(row: ScalarEntityUpdate): Promise<void> {
@@ -208,8 +213,30 @@ class MikroOrmScalarTransaction
     this.changes.push({ kind: "delete", row });
   }
 
-  /** Plans mapped state first, then flushes the scheduled entity statements. */
+  /** Plans mapped state, flushing generated-ID inserts first to resolve anchors. */
   async flush(): Promise<void> {
+    if (hasGeneratedInsert(this.changes)) {
+      // SQLite assigns the numeric PK on entity flush; patch the shared row
+      // references before canonical/outbox planning so they derive the same
+      // `entity:<id>` anchor, binding, and canonical identity.
+      await this.entityManager.flush();
+      for (const change of this.changes) {
+        if (change.kind !== "insert") continue;
+        const current = change.row.values[change.row.primaryKeyColumn];
+        if (current !== undefined) continue;
+        const managed = this.insertEntities.get(change.row);
+        const generated: unknown = managed === undefined
+          ? undefined
+          : Reflect.get(managed, change.row.primaryKeyColumn);
+        if (typeof generated !== "number" || !Number.isSafeInteger(generated)) {
+          throw new HikouteiError(
+            HIKOUTEI_ERROR_CODES.ENTITY_PRIMARY_KEY_UNAVAILABLE,
+            `SQLite did not assign a numeric primary key for table "${change.row.tableName}".`,
+          );
+        }
+        (change.row.values as Record<string, ScalarEntityValue>)[change.row.primaryKeyColumn] = generated;
+      }
+    }
     if (this.changes.length > 0 && this.flushCoordinator !== undefined) {
       await this.flushCoordinator.onFlush({
         changes: [...this.changes],
@@ -218,6 +245,7 @@ class MikroOrmScalarTransaction
     }
     await this.entityManager.flush();
     this.changes.length = 0;
+    this.insertEntities.clear();
   }
 
   private async findOne(
@@ -476,6 +504,14 @@ function throwInvalidStoredScalar(propertyName: string, expected: string): never
   throw new HikouteiError(
     HIKOUTEI_ERROR_CODES.INVALID_SCALAR_VALUE,
     `${propertyName} must be a ${expected} in the stored entity.`,
+  );
+}
+
+/** Whether any insert omits its PK for SQLite-generated assignment. */
+function hasGeneratedInsert(changes: readonly ScalarEntityFlushChange[]): boolean {
+  return changes.some((change) =>
+    change.kind === "insert" &&
+    change.row.values[change.row.primaryKeyColumn] === undefined
   );
 }
 
