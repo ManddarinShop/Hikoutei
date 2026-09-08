@@ -14,6 +14,7 @@
 
 - [ ] `npm test`
 - [ ] `npm run typecheck`
+- [ ] `npm run typecheck:test`
 - [ ] `npm run build`
 - [ ] Not run; reason:
 

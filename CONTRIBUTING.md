@@ -19,7 +19,7 @@ pnpm install --frozen-lockfile # installs root and workspace dependencies
 npm test           # unit and provider/contract tests (no live Google calls)
 npm run typecheck  # production typecheck
 npm run typecheck:test
-npm run build      # builds the ikisaki workspace first, then clean + tsc for root
+npm run build      # builds workspaces in dependency order, then root compile/reconcile/smoke, then MCP
 npm pack --dry-run # preview package contents
 ```
 
@@ -31,13 +31,19 @@ fixtures.
 
 ```text
 src/api/                    public entity lifecycle API (the only public surface)
-src/cli/                    `hikoutei setup` CLI (service-side provisioning)
-src/domain/                 pure normalization, evaluation, conflict rules
-src/application/            ORM facade, sync engine, service bootstrap
-src/adapter/                persistence (MikroORM/SQLite) and Sheets providers
-src/infrastructure/         SQLite storage: canonical, observation, resolution, outbox
+src/internal/               read-only sync-status observability for first-party tooling
+src/types/                  ambient typing for the node:sqlite built-in
+packages/library/core/contracts/     pure contracts (domain model, storage interfaces, sync protocol)
+packages/library/core/storage/       SQLite storage + MikroORM persistence adapter
+packages/library/core/sync-engine/   outbound worker, reconciliation, flush unit-of-work, runtime core
+packages/library/core/composition/   composition root (wires adapters; local/sync factories)
+packages/library/cloud/sheets/       google-sheets-api sync provider
+packages/library/cloud/google-auth/  shared Google service-account authentication
+packages/library/cloud/cli/          `hikoutei setup`/`adopt` CLI (service-side provisioning)
 packages/protocol/ikisaki/           durable consistency-queue package (workspace)
-docs/                       local-only architecture, flows, benchmarks, guidelines
+packages/mcp/                        spreadsheet-db-mcp server (workspace)
+test/                       root Vitest suite (package tests live with their packages)
+docs/                       local-only gitignored mirrors (resolve only where they exist)
 design/                     local-only normative v1 design and execution checklist
 ```
 
@@ -91,9 +97,11 @@ must be filled in.
 
 ## Documentation rules
 
-- Keep `docs/architecture.md`, `docs/write-and-synchronization-flow.md`, and
-  `docs/internal-consistency-model.md` consistent with the code when the sync
-  model changes.
+- When the sync model changes, sync the affected guides in the separate
+  Hikoutei-Website- repository; the `docs/` mirrors
+  (`docs/architecture.md`, `docs/write-and-synchronization-flow.md`,
+  `docs/internal-consistency-model.md`) are local-only — consult them only
+  when present in your checkout.
 - `docs/` and `design/` are listed in `.gitignore` and are local-only working
   directories: they are not tracked and not shipped with the package (commit
   `634197e` stopped tracking them). Do not force-add or wholesale add those
@@ -117,8 +125,8 @@ record the result durably:
 - comparison with the previous relevant benchmark
 - known caveats
 
-Record results in `docs/sync-bulk-write-benchmark.md` (or the existing GitHub
-performance issue when one is open). A benchmark is not complete if it only
+Record results in the benchmarks guide of the separate Hikoutei-Website-
+repository (or the existing GitHub performance issue when one is open). A benchmark is not complete if it only
 appears in chat.
 
 ## Issues and labels

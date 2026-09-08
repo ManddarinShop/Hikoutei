@@ -4,7 +4,7 @@ Hikoutei is framework-agnostic: the root API (`createTypedSheets` + the
 request-local `EntityManager`) runs in any Node.js process, and each example
 below shows the same entity-lifecycle pattern adapted to a popular stack.
 
-> Runtime premise: Node.js >= 22.3, a local SQLite file, and a long-lived
+> Runtime premise: Node.js >= 22.13, a local SQLite file, and a long-lived
 > process.
 >
 > **Sheets sync via environment:** set `HIKOUTEI_SYNC_SPREADSHEET_URL`

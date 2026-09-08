@@ -6,8 +6,9 @@ Service-side provisioning CLI, not part of the library API: `hikoutei setup`
 on the legacy setup spelling. Bundled into the root `dist/cli/**` bin.
 
 ## Boundary
-Not importable library surface. Subcommand modules keep ESM entrypoint guards,
-so importing the router never triggers their side effects; unexpected failures
+Not importable library surface. Do not import the bin-only router: it runs
+`route()` unconditionally with no entrypoint guard. Entrypoint guards live in
+the subcommand modules only; unexpected failures
 exit via the stable setup error code.
 
 ## Entry
