@@ -14,7 +14,7 @@ Google Sheets を利用する MVP 向けの型付きリポジトリであり、�
 Sheets へ非同期で投影されます。
 
 <a href="https://www.npmjs.com/package/hikoutei">npm</a> ·
-<a href="website/guide/quick-start.md">クイックスタート</a> ·
+<a href="https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md">クイックスタート</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
@@ -80,7 +80,7 @@ Cloud プロジェクト・サービスアカウント・キー・スプレッ�
 `.env` まで書き出します。`HIKOUTEI_SYNC_SPREADSHEET_URL` がなければ
 `createTypedSheets()` はローカル専用(SQLite)のままです。詳細な設定、
 クレデンシャルプール、クォータガイド、手動セットアップ:
-[Google Sheets の設定](website/guide/setup.md)。
+[Google Sheets の設定](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/setup.md)。
 
 ## 使い方
 
@@ -122,23 +122,23 @@ if (loaded !== null) {
 ```
 
 読み取り・トランザクション・演算子の詳細:
-[クイックスタート](website/guide/quick-start.md)。
+[クイックスタート](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md)。
 
 書き込みは即座にローカル SQLite にコミットされます — リクエストは Google を
 待ちません。シートで人が編集するとポーリングで戻ってきて、SQLite に取り込まれる
 か競合として記録され、黙って上書きされることはありません。パイプライン全体
 (outbox、配信、競合処理)は
-[書き込みと同期フロー](website/guide/sync-flow.md) を参照してください。
+[書き込みと同期フロー](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/sync-flow.md) を参照してください。
 
 ## さらに読む
 
-- [クイックスタート](website/guide/quick-start.md) — インストール、ORM
+- [クイックスタート](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md) — インストール、ORM
   ライフサイクル、同期セットアップ
-- [アーキテクチャ](website/guide/architecture.md) — ローカルストアとシート
+- [アーキテクチャ](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/architecture.md) — ローカルストアとシート
   画面の連携
-- [書き込みと同期フロー](website/guide/sync-flow.md) — 非同期配信とリカバリ
-- [制限事項](website/guide/limitations.md) — 他のツールを選ぶべきケース
-- [プロジェクトステータスとロードマップ](website/guide/status.md) — 完了済みと次の作業
+- [書き込みと同期フロー](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/sync-flow.md) — 非同期配信とリカバリ
+- [制限事項](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/limitations.md) — 他のツールを選ぶべきケース
+- [プロジェクトステータスとロードマップ](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/status.md) — 完了済みと次の作業
 
 ## ライセンス
 
