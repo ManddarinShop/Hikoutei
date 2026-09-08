@@ -36,7 +36,7 @@ import { readHikouteiSyncStatus } from "hikoutei/internal/sync-status";
 // env_file) and is materialized to a per-process temp file here — the host
 // never holds a key file. Always (re)materialize while rotating: a stale
 // file must never skip the env setup, otherwise any post-write crash turns
-// into a permanent credentials-missing restart loop (see #491).
+// into a permanent credentials-missing restart loop (see #491, live case #509).
 const saKeyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS ?? "/tmp/hikoutei-demo-sa.json";
 if (process.env.DEMO_SA_JSON) {
   writeFileSync(saKeyFile, process.env.DEMO_SA_JSON, { mode: 0o600 });
@@ -150,12 +150,40 @@ const DemoRequest = defineTypedSheetsEntity({
 // ---------------------------------------------------------------------------
 
 console.log(`[demo] opening Hikoutei (sync: ${syncSpreadsheetConfigured ? "on" : "off"})...`);
-const hikoutei = await createTypedSheets({
-  dbName: DB_PATH,
-  entities: [DemoRequest],
-  // Additive instrumentation hook: inert in local-only mode (see above).
-  providerOptions: { onRequest: recordRequestEvent },
-});
+// Sync auto-start is fail-closed: a transient Sheets network blip at boot
+// would otherwise exit the process (top-level throw) and flap the site on
+// every deploy. Retry boot a few times; a persistent failure still throws.
+// Deterministic config failures (missing/invalid credentials, denied
+// access) are never retried: fail-closed stays loud (see #509).
+const BOOT_ATTEMPTS = 5;
+const BOOT_RETRY_MS = 5_000;
+const BOOT_NO_RETRY_CODES: readonly string[] = [
+  "sync_credentials_file_missing",
+  "sync_credentials_invalid_json",
+  "sync_credentials_field_missing",
+  "sync_auth_failed",
+  "sync_spreadsheet_access_denied",
+  "sync_spreadsheet_url_invalid",
+];
+async function openHikoutei(): Promise<Awaited<ReturnType<typeof createTypedSheets>>> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await createTypedSheets({
+        dbName: DB_PATH,
+        entities: [DemoRequest],
+        // Additive instrumentation hook: inert in local-only mode (see above).
+        providerOptions: { onRequest: recordRequestEvent },
+      });
+    } catch (error) {
+      const code = (error as { readonly code?: unknown } | null)?.code;
+      if (typeof code === "string" && BOOT_NO_RETRY_CODES.includes(code)) throw error;
+      if (attempt >= BOOT_ATTEMPTS) throw error;
+      console.error(`[demo] Hikoutei boot attempt ${attempt} failed, retrying in ${BOOT_RETRY_MS}ms:`, error);
+      await new Promise((resolve) => setTimeout(resolve, BOOT_RETRY_MS));
+    }
+  }
+}
+const hikoutei = await openHikoutei();
 console.log(`[demo] Hikoutei ready — sync mode: ${syncSpreadsheetConfigured ? "sync" : "local"}`);
 
 // ---------------------------------------------------------------------------
