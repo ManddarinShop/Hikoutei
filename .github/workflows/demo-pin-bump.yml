@@ -1,0 +1,139 @@
+# Demo pin bump (semi-automatic).
+#
+# The demo server pins an exact `hikoutei` version in
+# `website/demo/server/package.json`, so every library release rots the demo
+# until someone hand-edits the pin AND the lockfile. This workflow removes
+# the hand-editing without giving up human control over production deploys:
+#
+# - `workflow_dispatch` with an explicit `version`: bumps pin + lockfile and
+#   commits straight to develop. The push matches demo-deploy's path filter
+#   (`website/demo/**`), so the deploy chain runs automatically.
+# - Daily schedule: never commits. When npm carries anything newer than the
+#   pin (stable or prerelease), it files ONE issue (deduped by title search)
+#   telling the human which version to dispatch.
+#
+# Deliberately no full-auto commit: surprise production deploys are worse
+# than a daily reminder issue for a one-VM study setup. `latest`-tag
+# auto-tracking is out of scope for the same reason (a stable `latest` would
+# otherwise downgrade a newer dev pin).
+
+name: Demo pin bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "hikoutei version to pin (e.g. 0.10.19-dev)"
+        required: true
+  schedule:
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-pin-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Refuse non-develop dispatch
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_NAME" != "develop" ]; then
+            echo "Run this workflow from the develop branch (it commits there)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bump pin and lockfile
+        working-directory: website/demo/server
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Fail fast on a version that does not exist on the registry.
+          npm view "hikoutei@${VERSION}" version
+          npm install --no-audit --no-fund --package-lock-only "hikoutei@${VERSION}"
+
+      - name: Commit and push when changed
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- website/demo/server/package.json website/demo/server/package-lock.json; then
+            echo "Pin already at ${VERSION}; nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add website/demo/server/package.json website/demo/server/package-lock.json
+          git commit -m "chore(demo): bump hikoutei to ${VERSION} (auto)"
+          git push
+
+  check:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: File an issue when the pin lags npm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PIN=$(node -p "require('./website/demo/server/package.json').dependencies.hikoutei")
+          # Newest version strictly greater than the pin. Numeric tuples
+          # compare component-wise; a trailing prerelease suffix (this repo
+          # uses -dev) sorts below the same bare tuple. Good enough for the
+          # repo's versioning scheme; NOT a general semver implementation.
+          NEWEST=$(npm view hikoutei versions --json | PIN_VERSION="$PIN" node -e "
+            let raw = '';
+            process.stdin.on('data', (d) => { raw += d; }).on('end', () => {
+              const pin = process.env.PIN_VERSION.split('.');
+              const key = (v) => v.split('.').map((p, i) => {
+                const m = p.match(/^([0-9]+)(-.*)?$/);
+                const num = i < 3 ? Number(m[1]) : 0;
+                const pre = i === 2 && m[2] ? 0 : 1;
+                return [num, pre];
+              }).flat();
+              const gt = (a, b) => {
+                for (let i = 0; i < a.length; i += 1) {
+                  if (a[i] !== b[i]) return a[i] > b[i];
+                }
+                return false;
+              };
+              const pinKey = key(process.env.PIN_VERSION);
+              const newer = JSON.parse(raw).filter((v) => gt(key(v), pinKey));
+              if (newer.length > 0) console.log(newer[newer.length - 1]);
+            });
+          "
+          if [ -z "${NEWEST:-}" ]; then
+            echo "Pin ${PIN} is current."
+            exit 0
+          fi
+          if gh issue list --state open --search 'in:title "demo pin outdated"' --json title --jq 'length' | grep -qx 0; then
+            gh issue create --title "demo pin outdated: ${PIN} -> ${NEWEST}" --body "npm carries Hikoutei \`${NEWEST}\` but the demo pins \`${PIN}\`. To bump: run the \`Demo pin bump\` workflow (dispatch from \`develop\`) with \`version=${NEWEST}\`. The push auto-triggers demo-deploy."
+          else
+            echo "Reminder issue already open; skipping."
+          fi
