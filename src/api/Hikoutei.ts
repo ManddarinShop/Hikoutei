@@ -17,6 +17,7 @@
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 import { getRegisteredEntityTokens } from "./entity.js";
 import {
+  mergeEntitiesAndDescriptors,
   resolveDefaultDbPath,
   validateTypedSheetsOptions,
   createInternalHikoutei,
@@ -61,11 +62,20 @@ export async function createTypedSheets(
   validateTypedSheetsOptions(options);
 
   const dbName = options.dbName ?? resolveDefaultDbPath();
-  const entities = options.entities ?? getRegisteredEntityTokens();
-  if (options.entities === undefined && entities.length === 0) {
+  // File-form descriptors run through the same builder and are appended
+  // after `entities`; the shared registry validation rejects collisions.
+  const entities = mergeEntitiesAndDescriptors(
+    options.entities ?? getRegisteredEntityTokens(),
+    options.descriptors,
+  );
+  if (
+    options.entities === undefined
+    && options.descriptors === undefined
+    && entities.length === 0
+  ) {
     throw new HikouteiError(
       HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
-      "createTypedSheets() requires at least one entity; pass `entities` or call defineTypedSheetsEntity() before opening the runtime.",
+      "createTypedSheets() requires at least one entity; pass `entities`/`descriptors` or call defineTypedSheetsEntity() before opening the runtime.",
     );
   }
 

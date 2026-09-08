@@ -37,6 +37,7 @@ import {
 import {
   getRegisteredEntityTokens,
 } from "@hikoutei/sync-engine/api/entity.js";
+import { mergeEntitiesAndDescriptors } from "@hikoutei/sync-engine/api/hikouteiCore.js";
 import {
   resolveEntityDescriptors,
   type EntityDescriptorResolutionFailure,
@@ -101,7 +102,11 @@ export async function createLocalTypedSheetsRuntime(
   const startedAt = Date.now();
   try {
     const dbName = options.dbName ?? resolveDefaultDbPath();
-    const entities = options.entities ?? getRegisteredEntityTokens();
+    // File-form descriptors ride the same builder path as the public factory.
+    const entities = mergeEntitiesAndDescriptors(
+      options.entities ?? getRegisteredEntityTokens(),
+      options.descriptors,
+    );
     const descriptors = resolveEntityDescriptors(entities, throwHikouteiResolutionError);
     // Load the current provider only when a runtime is opened. Importing the
     // root package alone must not require MikroORM or expose its module graph.

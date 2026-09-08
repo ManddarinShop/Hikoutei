@@ -29,14 +29,23 @@ describe("root public export allowlist", () => {
     // Type-only re-exports (HikouteiEntity, HikouteiFilter, EntityManager, ...)
     // do not appear as runtime keys; only value exports do.
     expect(Object.keys(hikouteiRoot).sort()).toEqual([
+      "HIKOUTEI_DESCRIPTOR_FILE_VERSION",
       "HIKOUTEI_ERROR_CODES",
       "HIKOUTEI_SCALAR_TYPES",
       "HikouteiError",
+      "buildDescriptorFile",
       "createTypedSheets",
       // Sync auto-start with existing-sheet adoption support; the sync module
       // graph stays lazy-loaded behind the api/syncRuntime.ts wrapper.
       "createTypedSheetsWithSync",
       "defineTypedSheetsEntity",
+      // File-form descriptor registration (infer --emit / descriptors /
+      // adopt --descriptor): parsed JSON validated through the same builder.
+      "defineTypedSheetsEntityFromDescriptorFile",
+      "descriptorFileColumnMap",
+      "descriptorFileToEntityInput",
+      "parseDescriptorFile",
+      "serializeDescriptorFile",
     ]);
   });
 

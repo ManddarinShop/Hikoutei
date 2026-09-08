@@ -16,6 +16,9 @@ import type { EntityManager } from "./EntityManager.js";
 import { createEntityManager } from "./internalEntityManager.js";
 import { HIKOUTEI_ERROR_CODES, HikouteiError } from "./errors.js";
 import {
+  defineTypedSheetsEntityFromDescriptorFile,
+  parseDescriptorFile,
+  type HikouteiDescriptorFile,
   type HikouteiEntity,
   type ResolvedHikouteiEntityDescriptor,
 } from "./entity.js";
@@ -73,6 +76,18 @@ export interface CreateTypedSheetsOptions {
    * time of the call, in registration order.
    */
   readonly entities?: readonly HikouteiEntity[];
+  /**
+   * File-form entity descriptors (e.g. from `infer --emit desc.json`).
+   *
+   * Each entry runs through the same `defineTypedSheetsEntity` builder as
+   * code-registered entities, so file-registered tokens are
+   * indistinguishable at runtime (CRUD, sync projection, adoption). The
+   * built tokens are appended after `entities`; name/table collisions
+   * across both lists are rejected by the shared registry validation.
+   * Pass `entities: []` alongside this list to isolate from the ambient
+   * `defineTypedSheetsEntity()` registration default.
+   */
+  readonly descriptors?: readonly HikouteiDescriptorFile[];
   /**
    * Optional Google Sheets provider tuning/telemetry for the SYNC path only.
    * When `HIKOUTEI_SYNC_SPREADSHEET_URL` is absent this field is inert (a
@@ -418,6 +433,12 @@ export function validateTypedSheetsOptions(options: CreateTypedSheetsOptions): v
       "createTypedSheets() entities must be an array.",
     );
   }
+  if (options.descriptors !== undefined && !Array.isArray(options.descriptors)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+      "createTypedSheets() descriptors must be an array.",
+    );
+  }
   // Untrusted-caller boundary: providerOptions is plain JS at this point, so
   // reject a non-object bag and a non-callable onRequest fail-closed instead
   // of letting the sync worker crash on a late invocation.
@@ -438,4 +459,38 @@ export function validateTypedSheetsOptions(options: CreateTypedSheetsOptions): v
       );
     }
   }
+}
+
+/**
+ * Builds entity tokens for file-form descriptors after re-validating them.
+ *
+ * `validateTypedSheetsOptions` checks the array shape only; this step runs
+ * every entry through `parseDescriptorFile` (version + header envelope +
+ * the builder's own scalar rules) and then the shared builder, so
+ * file-registered tokens take the exact same path as code-registered ones.
+ * Plain JSON values (e.g. `JSON.parse` output) are accepted as well as
+ * already-typed descriptors.
+ */
+export function tokensFromDescriptorFiles(
+  descriptors: readonly unknown[],
+): HikouteiEntity[] {
+  return descriptors.map((entry) =>
+    defineTypedSheetsEntityFromDescriptorFile(parseDescriptorFile(entry))
+  );
+}
+
+/**
+ * Merges code-registered tokens with file-form descriptors for a factory.
+ *
+ * `explicitEntities` is the `entities` option (or its registry default,
+ * resolved by the caller); descriptor-built tokens are appended after it.
+ */
+export function mergeEntitiesAndDescriptors(
+  explicitEntities: readonly HikouteiEntity[],
+  descriptors: readonly unknown[] | undefined,
+): HikouteiEntity[] {
+  if (descriptors === undefined || descriptors.length === 0) {
+    return [...explicitEntities];
+  }
+  return [...explicitEntities, ...tokensFromDescriptorFiles(descriptors)];
 }
