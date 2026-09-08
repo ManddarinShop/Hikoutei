@@ -24,6 +24,7 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check host shape
         uses: appleboy/ssh-action@v1
@@ -55,7 +56,7 @@ jobs:
             fi
 
             echo "--- port owners ---"
-            listeners=$(sudo ss -tlnp | grep -E ':443 ' || true)
+            listeners=$(sudo ss -tlnp | grep -E ':443\b' || true)
             echo "$listeners"
             if echo "$listeners" | grep -q docker-proxy; then
               echo "ok: :443 served via docker-proxy"
@@ -69,7 +70,7 @@ jobs:
             fi
 
             echo "--- public edge ---"
-            if curl -fsS --max-time 20 https://hikoutei.cloud/api/health | grep -q '"syncMode":"sync"'; then
+            if curl -fsS --max-time 20 https://hikoutei.cloud/api/health | grep -Eq '"syncMode"[[:space:]]*:[[:space:]]*"sync"'; then
               echo "ok: public health reports sync mode"
             else
               echo "DRIFT: public health does not report sync mode"
