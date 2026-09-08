@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="website/public/hikoutei-logo.png" alt="Hikoutei" width="220" />
+<img src="assets/hikoutei-icon.png" alt="Hikoutei" width="220" />
 
 # Hikoutei
 
