@@ -1796,20 +1796,8 @@ describe("reconciliation first-scan scheduling", () => {
     await harness.stop();
   });
 
-  it("rejects a negative initial reconciliation delay", () => {
-    const adapter = createKernelStore();
-    expect(() => createEffectWorkerSupervisor({
-      storage: adapter,
-      dispatcher: new FakeDispatcher(),
-      workerId: "recon-worker",
-      reconciliation: {
-        initialReconciliationDelayMs: -1,
-        run: async () => ({ effectsEnqueued: 0 }),
-      },
-    })).toThrow("initial reconciliation delay must be a non-negative safe integer");
-  });
-
-  it("throws SupervisionOptionsError with code for invalid reconciliation delay", () => {
+  it("rejects a negative initial reconciliation delay with the typed error code", () => {
+    expect.assertions(3);
     const adapter = createKernelStore();
     try {
       createEffectWorkerSupervisor({
@@ -1821,10 +1809,11 @@ describe("reconciliation first-scan scheduling", () => {
           run: async () => ({ effectsEnqueued: 0 }),
         },
       });
-      expect.fail("expected throw");
-    } catch (error) {
+    } catch (error: unknown) {
       expect(error).toBeInstanceOf(SupervisionOptionsError);
-      expect((error as SupervisionOptionsError).code).toBe("sync_effect_supervisor_non_negative_integer_required");
+      if (!(error instanceof SupervisionOptionsError)) throw error;
+      expect(error.code).toBe("sync_effect_supervisor_non_negative_integer_required");
+      expect(error.message).toContain("initial reconciliation delay must be a non-negative safe integer");
     }
   });
 
@@ -2542,27 +2531,23 @@ describe("adaptive batch controller", () => {
     expect(controller.limitFor("route-b")).toBe(150);
   });
 
-  it("rejects invalid adaptive batch limit configurations", () => {
-    expect(() => new AdaptiveEffectBatchController({ minimum: 20, maximum: 5 }))
-      .toThrow("adaptive effect batch limits must satisfy minimum <= initial <= maximum");
-    expect(() => new AdaptiveEffectBatchController({ initial: 0 }))
-      .toThrow("adaptive initial must be a positive safe integer");
-  });
-
-  it("throws AdaptiveBatchOptionsError with code for invalid batch limits", () => {
+  it("rejects invalid adaptive batch limit configurations with typed error codes", () => {
+    expect.assertions(6);
     try {
       new AdaptiveEffectBatchController({ minimum: 20, maximum: 5 });
-      expect.fail("expected throw");
-    } catch (error) {
+    } catch (error: unknown) {
       expect(error).toBeInstanceOf(AdaptiveBatchOptionsError);
-      expect((error as AdaptiveBatchOptionsError).code).toBe("adaptive_limit_order_invalid");
+      if (!(error instanceof AdaptiveBatchOptionsError)) throw error;
+      expect(error.code).toBe("adaptive_limit_order_invalid");
+      expect(error.message).toContain("adaptive effect batch limits must satisfy minimum <= initial <= maximum");
     }
     try {
       new AdaptiveEffectBatchController({ initial: 0 });
-      expect.fail("expected throw");
-    } catch (error) {
+    } catch (error: unknown) {
       expect(error).toBeInstanceOf(AdaptiveBatchOptionsError);
-      expect((error as AdaptiveBatchOptionsError).code).toBe("adaptive_positive_integer_required");
+      if (!(error instanceof AdaptiveBatchOptionsError)) throw error;
+      expect(error.code).toBe("adaptive_positive_integer_required");
+      expect(error.message).toContain("adaptive initial must be a positive safe integer");
     }
   });
 

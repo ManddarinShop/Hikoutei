@@ -1,6 +1,6 @@
 # 테스트 정리 작업 지침 (test-cleanup-audit)
 
-> 상태: **탐색 단계만 진행 중** — 수정 워커 실행은 사용자 승인 후 시작.
+> 상태: **승인된 정리 수정 진행 중** — 이번 전체 범위 총 4파일(CLI tests 2개 수정중 + `packages/protocol/ikisaki/test/worker.test.ts` + 본 지침). 검증·리뷰 완료 아님.
 
 ## 1. 목표
 
@@ -15,9 +15,9 @@
 
 - **메인 에이전트:** 지침 관리, 워커 분담, 요약 취합, 사용자 승인 요청. 소스 직접 조사·수정은 하지 않는다.
 - **조사 워커:** 담당 범위를 읽기 전용으로 조사하고 삭제 후보와 근거를 제출한다.
-- **수정 워커:** 승인된 후보만 삭제·통합한다. (미기동)
-- **리뷰어:** 필요한 검증까지 제거했는지 독립적으로 확인한다. (미기동)
-- **검증 워커:** 변경 내역과 테스트·타입체크·빌드 결과를 확인한다. (미기동)
+- **수정 워커:** 승인된 후보만 삭제·통합한다. (진행 중: CLI tests 2개 별도 워커, ikisaki worker.test.ts 본 워커)
+- **리뷰어:** Terra만 (`reviewer = openai-codex/gpt-5.6-terra`). 필요한 검증까지 제거했는지 독립적으로 확인한다. (미기동)
+- **검증 워커:** 변경 내역과 테스트·타입체크·빌드 결과를 확인한다. (미기동, 전체 gates는 별도 워커)
 
 조사 워커에게 삭제 할당량을 주지 않는다. **"삭제할 것 없음"도 정상적인 결과다.**
 
@@ -82,11 +82,13 @@
 ## 7. 실행 순서
 
 1. **현재 유지할 제품 계약을 확인한다.** 문서·구현·테스트가 충돌하면 워커가 임의로 결정하지 않고 보고한다.
-2. 검증 워커가 기존 테스트·타입체크·빌드의 기준선을 기록한다. (미기동)
-3. 조사 워커들을 독립된 범위로 나누어 병렬 조사한다. 이 단계에서는 수정하지 않는다. ← **현재 단계**
-4. 메인이 요약을 취합하고, 리뷰어가 후보의 삭제 근거와 검증 공백을 검토한다.
+2. 기준선은 green 확인됨. 전체 gates 재실행은 별도 워커가 담당한다.
+3. 조사 워커들을 독립된 범위로 나누어 병렬 조사한다. 이 단계에서는 수정하지 않는다. ← **완료, 수정 단계 진행 중**
+4. 메인이 요약을 취합하고, Terra 리뷰어가 후보의 삭제 근거와 검증 공백을 검토한다.
 5. **사용자가 삭제 대상 목록을 승인한 뒤** 수정 워커가 작은 묶음으로 반영한다.
-6. 수정 워커 → 리뷰 → 수정 → 재리뷰를 반복하고, 검증 워커가 공식 검증을 실행한다.
+6. 수정 워커 → Terra 리뷰 → 수정 → Terra 재리뷰를 반복하고(Terra required fixes 없을 때까지), 검증 워커가 공식 검증을 실행한다.
+
+- Git stage/commit은 사용자 별도 승인 없이 하지 않는다. 프로덕션·지원정책 변경도 이번 승인에 포함되지 않는다.
 
 기존 실패를 없애기 위해 테스트를 삭제하거나 assertion을 약화시키지 않는다.
 
@@ -95,17 +97,20 @@
 | 워커 | 담당 테스트 범위 |
 |---|---|
 | W1 | 제품 계약 추출 (문서·공개 API·보호 대상 기준선) — 테스트 조사 아님 |
-| W2 | `packages/core/contracts`, `packages/core/composition` 테스트 |
-| W3 | `packages/core/storage` 테스트 |
-| W4 | `packages/core/sync-engine` 테스트 |
-| W5 | `packages/cloud/sheets`, `packages/cloud/google-auth` 테스트 |
-| W6 | `packages/cloud/cli`, `packages/mcp` 테스트 |
+| W2 | `packages/library/core/contracts`, `packages/library/core/composition` 테스트 |
+| W3 | `packages/library/core/storage` 테스트 |
+| W4 | `packages/library/core/sync-engine` 테스트 |
+| W5 | `packages/library/cloud/sheets`, `packages/library/cloud/google-auth` 테스트 (`@hikoutei/sheets`, `@hikoutei/google-auth` manifest 확인됨) |
+| W6 | `packages/library/cloud/cli` (`@hikoutei/cli` manifest 확인됨), `packages/mcp` 테스트 |
 | W7 | `packages/protocol/ikisaki` 테스트 |
 | W8 | 루트 `test/` 테스트 |
+
+테스트 위치 참고: 패키지 검증의 다수는 루트 `test/`에 있고(약 125파일), ikisaki·mcp는 패키지 내 `test/`를 둔다. 경로만으로 소유를 귀속하지 말고 주 검증 책임 기준으로 소유하고 중복집계하지 않는다. 예: `test/credential-pool.test.ts`는 루트에 있지만 `@hikoutei/google-auth`(`packages/library/cloud/google-auth`)를 검증한다.
 
 ## 9. 범위와 완료 조건
 
 - 이번 범위는 테스트 정리다. 프로덕션 기능 제거는 별도 제안·승인을 받는다.
+- 이번 승인 범위 총 4파일: CLI tests 2개(수정 중), `packages/protocol/ikisaki/test/worker.test.ts`(수정 중), 본 지침. 전체 stage/commit·프로덕션·지원정책 변경은 승인되지 않았다.
 - 테스트 삭제가 자동으로 라이브러리 단순화를 의미하지는 않는다. 제거 가능한 프로덕션 코드가 발견되면 후속 후보로 기록한다.
 - 탐색 단계에서 테스트 실행은 기준선 파악 목적으로만 허용하며, 코드·문서·Git 상태를 수정하지 않는다.
 - 완료 보고에는 **삭제한 의무, 보존한 안전망, 실제 검증 결과, 남은 불확실성**을 적는다.
