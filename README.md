@@ -14,7 +14,7 @@ changes are asynchronously projected to Google Sheets for human review and
 lightweight collaboration.
 
 <a href="https://www.npmjs.com/package/hikoutei">npm</a> ·
-<a href="website/guide/quick-start.md">Quick start</a> ·
+<a href="https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md">Quick start</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">Issues</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
@@ -79,7 +79,7 @@ npx hikoutei setup
 This creates the Cloud project, service account, key, and spreadsheet, and
 writes `.env` for you. Without `HIKOUTEI_SYNC_SPREADSHEET_URL`,
 `createTypedSheets()` stays local-only (SQLite). Details, credential pools,
-quota guidance, and manual setup: [Google Sheets setup](website/guide/setup.md).
+quota guidance, and manual setup: [Google Sheets setup](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/setup.md).
 
 ## Usage
 
@@ -120,21 +120,21 @@ if (loaded !== null) {
 }
 ```
 
-More reads, transactions, and operators: [Quick start](website/guide/quick-start.md).
+More reads, transactions, and operators: [Quick start](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md).
 
 Writes commit to local SQLite immediately — the request never waits on Google.
 Human edits in the Sheet flow back through polling — accepted into SQLite or
 recorded as conflicts, never silently overwritten. The full pipeline (outbox,
 delivery, conflict handling) is covered in
-[Write and synchronization flow](website/guide/sync-flow.md).
+[Write and synchronization flow](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/sync-flow.md).
 
 ## Learn more
 
-- [Quick start](website/guide/quick-start.md) — installation, ORM lifecycle, sync setup.
-- [Architecture](website/guide/architecture.md) — local store and Sheet views.
-- [Write and synchronization flow](website/guide/sync-flow.md) — delivery and recovery.
-- [Limitations](website/guide/limitations.md) — when to choose something else.
-- [Project status and roadmap](website/guide/status.md) — what is done and next.
+- [Quick start](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md) — installation, ORM lifecycle, sync setup.
+- [Architecture](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/architecture.md) — local store and Sheet views.
+- [Write and synchronization flow](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/sync-flow.md) — delivery and recovery.
+- [Limitations](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/limitations.md) — when to choose something else.
+- [Project status and roadmap](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/status.md) — what is done and next.
 
 ## License
 

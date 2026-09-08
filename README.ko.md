@@ -13,7 +13,7 @@ Google Sheets 기반 MVP를 위한 타입 안전 리포지토리이자 안전한
 사람이 검토하고 가볍게 협업할 수 있도록 Google Sheets에 비동기로 투영됩니다.
 
 <a href="https://www.npmjs.com/package/hikoutei">npm</a> ·
-<a href="website/guide/quick-start.md">빠른 시작</a> ·
+<a href="https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md">빠른 시작</a> ·
 <a href="https://github.com/ManddarinShop/Hikoutei/issues">이슈</a>
 
 [![npm version](https://img.shields.io/npm/v/hikoutei?style=flat-square)](https://www.npmjs.com/package/hikoutei)
@@ -77,7 +77,7 @@ npx hikoutei setup
 Cloud 프로젝트, 서비스 계정, 키, 스프레드시트를 만들고 `.env`까지 써 줍니다.
 `HIKOUTEI_SYNC_SPREADSHEET_URL`이 없으면 `createTypedSheets()`는 로컬 전용
 (SQLite)으로 유지됩니다. 상세 설정, 크리덴셜 풀, 쿼터 가이드, 수동 설정:
-[Google Sheets 설정](website/guide/setup.md).
+[Google Sheets 설정](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/setup.md).
 
 ## 사용법
 
@@ -118,20 +118,20 @@ if (loaded !== null) {
 }
 ```
 
-더 많은 읽기·트랜잭션·연산자: [빠른 시작](website/guide/quick-start.md).
+더 많은 읽기·트랜잭션·연산자: [빠른 시작](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md).
 
 쓰기는 즉시 로컬 SQLite에 커밋됩니다 — 요청은 Google을 기다리지 않습니다.
 시트에서 사람이 편집하면 폴링으로 되돌아와 SQLite에 수용되거나 충돌로
 기록되며, 절대 조용히 덮어쓰이지 않습니다. 전체 파이프라인(outbox, 전달,
-충돌 처리)은 [쓰기 및 동기화 흐름](website/guide/sync-flow.md)을 참고하세요.
+충돌 처리)은 [쓰기 및 동기화 흐름](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/sync-flow.md)을 참고하세요.
 
 ## 더 보기
 
-- [빠른 시작](website/guide/quick-start.md) — 설치, ORM 생명주기, 동기화 설정
-- [아키텍처](website/guide/architecture.md) — 로컬 저장소와 Sheet 화면이 맞물리는 방식
-- [쓰기 및 동기화 흐름](website/guide/sync-flow.md) — 비동기 전달과 복구 동작
-- [한계](website/guide/limitations.md) — 다른 도구를 선택해야 할 때
-- [프로젝트 상태와 로드맵](website/guide/status.md) — 완료된 것과 다음 작업
+- [빠른 시작](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/quick-start.md) — 설치, ORM 생명주기, 동기화 설정
+- [아키텍처](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/architecture.md) — 로컬 저장소와 Sheet 화면이 맞물리는 방식
+- [쓰기 및 동기화 흐름](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/sync-flow.md) — 비동기 전달과 복구 동작
+- [한계](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/limitations.md) — 다른 도구를 선택해야 할 때
+- [프로젝트 상태와 로드맵](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/status.md) — 완료된 것과 다음 작업
 
 ## 라이선스
 
