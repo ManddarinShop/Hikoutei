@@ -37,6 +37,13 @@ export {
 } from "./requestAdmission.js";
 
 export {
+  runPacedRequest,
+  type PacedQuotaSignals,
+  type PacedSettlement,
+  type RunPacedRequestOptions,
+} from "./runPaced.js";
+
+export {
   ADAPTIVE_EFFECT_BATCH_LIMITS,
   AdaptiveEffectBatchController,
   DEFAULT_EFFECT_BATCH_COALESCE_WINDOW_MS,

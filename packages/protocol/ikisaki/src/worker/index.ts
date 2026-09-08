@@ -58,6 +58,13 @@ export {
 } from "./pacing/requestAdmission.js";
 
 export {
+  runPacedRequest,
+  type PacedQuotaSignals,
+  type PacedSettlement,
+  type RunPacedRequestOptions,
+} from "./pacing/runPaced.js";
+
+export {
   RATE_LIMIT_OPTIONS_ERROR_CODES,
   RateLimitOptionsError,
   ReadQoSScheduler,

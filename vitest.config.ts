@@ -31,6 +31,9 @@ const compositionSource = fileURLToPath(
 const cliSource = fileURLToPath(
   new URL("./packages/library/cloud/cli/src/", import.meta.url),
 );
+const docsSource = fileURLToPath(
+  new URL("./packages/library/cloud/docs/src/", import.meta.url),
+);
 
 export default defineConfig({
   resolve: {
@@ -44,6 +47,7 @@ export default defineConfig({
       "@hikoutei/storage": storageSource,
       "@hikoutei/google-auth": googleAuthSource,
       "@hikoutei/sheets": sheetsSource,
+      "@hikoutei/docs": docsSource,
       "@hikoutei/sync-engine": syncEngineSource,
       "@hikoutei/composition": compositionSource,
       "@hikoutei/cli": cliSource,
