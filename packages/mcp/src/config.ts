@@ -57,6 +57,8 @@ const SQL_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * `HIKOUTEI_MCP_CONFIG` env var, then `./hikoutei.config.json` in the CWD.
  *
  * Returns the resolved absolute path, or `null` when no candidate exists.
+ * Throws a plain `Error` when `--config` is present without a value, so an
+ * explicit-but-empty flag never silently falls back to env or the default.
  * An explicitly requested path that cannot be read is reported by
  * {@link loadHikouteiMcpConfig}, not here.
  */
@@ -67,7 +69,10 @@ export function resolveConfigPath(
   const flagIndex = argv.indexOf(CONFIG_FLAG);
   if (flagIndex >= 0) {
     const flagged = argv[flagIndex + 1];
-    if (flagged !== undefined && flagged !== "") return resolve(flagged);
+    if (flagged === undefined || flagged.trim() === "") {
+      throw new Error("--config requires a value: pass --config <path>.");
+    }
+    return resolve(flagged);
   }
   const fromEnv = env[HIKOUTEI_MCP_CONFIG_ENV];
   if (fromEnv !== undefined && fromEnv.trim() !== "") return resolve(fromEnv.trim());
