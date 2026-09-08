@@ -34,3 +34,6 @@ hikoutei-service-account-*.json
 .typed-sheets.json
 .typed-sheets.*.json
 hikoutei-sa-*.json
+
+# local service-account keys (never commit)
+sa/
