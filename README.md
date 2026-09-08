@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="website/public/hikoutei-logo.png" alt="Hikoutei" width="220" />
+
 # Hikoutei
 
 **Keep your app fast with SQLite. Keep your workflow visible in Google Sheets.**
