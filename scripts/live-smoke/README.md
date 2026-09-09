@@ -25,7 +25,7 @@ network).
 #    recorded in the state file — 37 checks incl. header preservation).
 #    Add HIKOUTEI_ADOPT_SMOKE_MULTI=1 for the §13 multi-entity variant
 #    (two tabs Invoices + Customers in the SAME spreadsheet, both recorded
-#    under `tabs` — 29 checks across both entities).
+#    under `tabs` — 30 checks across both entities).
 GOOGLE_APPLICATION_CREDENTIALS=<sa.json> \
 HIKOUTEI_ADOPT_SMOKE_SPREADSHEET_ID=<spreadsheetId> \
   node scripts/live-smoke/prepare-sheet.mjs
