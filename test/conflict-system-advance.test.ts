@@ -44,7 +44,7 @@ import {
   resolvedSyncConflictAuditProjectionFields,
   SYNC_CONFLICT_PROJECTION_ERROR_CODES,
   SYNC_CONFLICT_RESOLUTIONS,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/conflictProjection.js";
+} from "@hikoutei/contracts/sheets/model/conflictProjection.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
