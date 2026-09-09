@@ -332,7 +332,7 @@ const STORAGE_SEAM_IKISAKI_PORT = new Set([
 
 /** The moved Sync_Conflicts audit projection (Sheets-tab semantics, Batch B). */
 const CONFLICT_PROJECTION_SHEETS_SPECIFIER =
-  "@hikoutei/sheets/sheets/providers/google-sheets-api/model/conflictProjection.js";
+  "@hikoutei/contracts/sheets/model/conflictProjection.js";
 
 /** The one protocol-side storage file allowed to plan audit effects. */
 const AUDIT_PLANNER_RELATIVE = join("sync", "inbound", "autoSystemConflictResolution.ts");

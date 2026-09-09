@@ -53,7 +53,7 @@ import {
 } from "@hikoutei/ikisaki";
 import {
   SYNC_CONFLICT_PROJECTION_REGISTERED_RANGE,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/conflictProjection.js";
+} from "@hikoutei/contracts/sheets/model/conflictProjection.js";
 import { SyncSheetsContractError } from "@hikoutei/contracts/sheets/errors.js";
 import {
   ExistingSheetAdoptionDryRunReportError,

@@ -35,7 +35,7 @@ import {
 } from "@hikoutei/contracts/sheets/constants.js";
 import {
   SYNC_CONFLICT_PROJECTION_HEADERS,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/conflictProjection.js";
+} from "@hikoutei/contracts/sheets/model/conflictProjection.js";
 import type {
   RegisteredSyncProjectionDefinition,
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";

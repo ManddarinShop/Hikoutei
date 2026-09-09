@@ -125,12 +125,12 @@ module.exports = {
     {
       name: "contracts-leaf",
       comment:
-        "@hikoutei/contracts is a pure leaf: only node builtins, @hikoutei/kohkai, zod and itself. Workspace/undeclared specifiers that fail to resolve stay flagged (could-not-resolved edges carry the bare specifier, not a node_modules path).",
+        "@hikoutei/contracts is a pure leaf: node builtins, @hikoutei/kohkai, zod, itself, and the kernel (@hikoutei/ikisaki, whose transportOutcome constants/classifier this package re-exports as part of the sheets contract). Workspace specifiers that fail to resolve stay flagged (could-not-resolved edges carry the bare specifier, not a node_modules path).",
       severity: "error",
       from: { path: "^packages/library/core/contracts/src/" },
       to: {
         pathNot:
-          "^packages/library/core/contracts/src/|^(node:)?(crypto|zod|@hikoutei/kohkai|@hikoutei/contracts)($|/)|(^|/)node_modules/",
+          "^packages/library/core/contracts/src/|^(node:)?(crypto|zod|path|fs|fs/promises|@hikoutei/kohkai|@hikoutei/contracts|@hikoutei/ikisaki)(\\.d\\.ts($|\\?)|($|/))|(^|/)node_modules/|^packages/protocol/ikisaki/dist/",
       },
     },
     {
