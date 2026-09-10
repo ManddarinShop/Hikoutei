@@ -57,7 +57,9 @@ const SYMLINK_SUPPORTED = (() => {
   }
 })();
 
+// Verifies internal file logger rotation behavior.
 describe("internal file logger rotation", () => {
+  // Verifies rotation moves to numbered .txt backups within the backup budget.
   it("rotates to numbered .txt backups within the backup budget", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-rot-"));
     try {
@@ -99,6 +101,7 @@ describe("internal file logger rotation", () => {
     }
   });
 
+  // Verifies the existing file size is preserved when opening an existing log.
   it("preserves the existing file size when opening an existing log", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-size-"));
     try {
@@ -120,7 +123,9 @@ describe("internal file logger rotation", () => {
   });
 });
 
+// Verifies internal file logger fail-open behavior.
 describe("internal file logger fail-open behavior", () => {
+  // Verifies logging never throws and degrades after repeated sink failures.
   it("never throws and degrades after repeated sink failures", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-broken-"));
     try {
@@ -147,6 +152,7 @@ describe("internal file logger fail-open behavior", () => {
     }
   });
 
+  // Verifies a disappearing directory mid-run is survived without throwing.
   it("survives a disappearing directory mid-run without throwing", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-vanish-"));
     const nested = path.join(tempRoot, "nested");
@@ -165,6 +171,7 @@ describe("internal file logger fail-open behavior", () => {
     await rm(tempRoot, { recursive: true, force: true });
   });
 
+  // Verifies appends never follow a pre-existing symlink at the log path.
   it(
     "never appends through a pre-existing symlink at the log path (fail-open)",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -213,6 +220,7 @@ describe("internal file logger fail-open behavior", () => {
     },
   );
 
+  // Verifies rotation never moves a symlinked log file into the backup chain.
   it(
     "never rotates a symlinked log file into the backup chain",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -259,6 +267,7 @@ describe("internal file logger fail-open behavior", () => {
   );
 });
 
+// Verifies the internal logger process singleton.
 describe("internal logger process singleton", () => {
   const savedEnv = { ...process.env };
 
@@ -276,6 +285,7 @@ describe("internal logger process singleton", () => {
     }
   });
 
+  // Verifies the process logger is created from process.env once.
   it("creates the process logger from process.env once", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-proc-"));
     try {
@@ -298,6 +308,7 @@ describe("internal logger process singleton", () => {
     }
   });
 
+  // Verifies boundary logging stays a no-op when the env var is absent.
   it("keeps boundary logging a no-op when the env var is absent", async () => {
     delete process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE];
     const logger: HikouteiInternalLogger = getHikouteiInternalLogger();
