@@ -39,7 +39,9 @@ function readNodeFloor(packageJsonPath: string): string | undefined {
   return pkg.engines?.node;
 }
 
+// Covers Node engine floor versus node:sqlite availability.
 describe("Node engine floor versus node:sqlite availability", () => {
+  // Verifies root package.json engines.node floor is at least the node:sqlite availability.
   it("root package.json engines.node floor is at least the node:sqlite availability", () => {
     const floor = readNodeFloor(resolve(repoRoot, "package.json"));
     expect(floor).toMatch(/^>=/);
@@ -50,6 +52,7 @@ describe("Node engine floor versus node:sqlite availability", () => {
     }
   });
 
+  // Verifies the MCP workspace package.json engines.node floor matches too.
   it("the MCP workspace package.json engines.node floor matches too", () => {
     const floor = readNodeFloor(resolve(repoRoot, "packages/mcp/package.json"));
     expect(floor).toMatch(/^>=/);
