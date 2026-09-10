@@ -135,7 +135,9 @@ class FakeClient {
 // Tests.
 // ---------------------------------------------------------------------------
 
+// Suite: deleteRecreateHumanEdit scenario.
 describe("deleteRecreateHumanEdit scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -144,6 +146,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(ids).toContain("delete-recreate-human-edit");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("delete-recreate-human-edit");
     expect(scenario.kind).toBe("data");
@@ -170,6 +173,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(plan.iterations).toBeLessThanOrEqual(3);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = racePlan();
     const context = {
@@ -187,6 +191,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: verifies the reactivation invariant when the human edit lands on the recreated generation (ok).
   it("verifies the reactivation invariant when the human edit lands on the recreated generation (ok)", async () => {
     // Core hypothesis: the public API deletes and recreates the same id while
     // a human edits a field of that id. When the human edit lands on the
@@ -214,6 +219,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-stale local rejection as a real failure (scenario-error).
   it("classifies a non-stale local rejection as a real failure (scenario-error)", async () => {
     // A rejected local write is an expected stale conflict ONLY on exact
     // CAS/stale evidence. A non-stale (validation/transport) rejection is a
@@ -242,6 +248,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records an identity-shifted human-edit rejection as a transient skip, not a failure.
   it("records an identity-shifted human-edit rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human edit with
     // the stable `identity_shifted` class when a CONCURRENT actor shifted
@@ -266,6 +273,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = racePlan();
     const client = new FakeClient();
@@ -282,6 +290,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies duplicate final rows as a failed reactivation invariant.
   it("classifies duplicate final rows as a failed reactivation invariant", async () => {
     // The reactivation must leave EXACTLY one final row for the id. When the
     // authority shows MORE than one row (duplicate residue), the invariant is
@@ -304,6 +313,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a missing final row as a failed reactivation invariant.
   it("classifies a missing final row as a failed reactivation invariant", async () => {
     // A MISSING row is as much a failure as a duplicate: the delete/recreate
     // must leave exactly one final row, and a lost row violates that too.
@@ -325,6 +335,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(em.rows().length).toBe(1);
   });
 
+  // Verifies: accepts an OPEN sync_conflict as conflict-recorded when the final row never shows the human value (ok).
   it("accepts an OPEN sync_conflict as conflict-recorded when the final row never shows the human value (ok)", async () => {
     // Core harness fix: the recreated row never carries the human value
     // within the bound (the outbox-gated poll skips the row), but the value
@@ -369,6 +380,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     });
   });
 
+  // Verifies: records cleanup-unresolved-conflict and keeps the row when the conflict never clears.
   it("records cleanup-unresolved-conflict and keeps the row when the conflict never clears", async () => {
     // The resolve-then-delete cleanup advances the conflicted field, but the
     // conflict record never leaves the blocking state within the bound. The
@@ -399,6 +411,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
   });
 
+  // Verifies: records cleanup-outbox-busy and keeps the row when the binding outbox never drains.
   it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
     // The human edit landed on the recreated generation (verified ok), but
     // a candidate effect for the binding is stuck in flight past the bounded
@@ -422,6 +435,7 @@ describe("deleteRecreateHumanEdit scenario", () => {
     expect(em.rows().length).toBe(1);
   });
 
+  // Verifies: still skips winner-not-verified when the value never lands and no conflict is recorded.
   it("still skips winner-not-verified when the value never lands and no conflict is recorded", async () => {
     // The negative control: a final row without the human value and NO
     // conflict record is still a truthful skip, never an unobserved ok.
