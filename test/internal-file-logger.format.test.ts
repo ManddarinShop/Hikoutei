@@ -62,7 +62,9 @@ const SYMLINK_SUPPORTED = (() => {
   }
 })();
 
+// Verifies internal file logger formatting and redaction rules.
 describe("internal file logger formatting and redaction", () => {
+  // Verifies only allowlisted structured fields are serialized.
   it("serializes only allowlisted structured fields", () => {
     const result = formatHikouteiLogLine(
       {
@@ -106,6 +108,7 @@ describe("internal file logger formatting and redaction", () => {
     ]);
   });
 
+  // Verifies unsafe identifier-like field values are redacted.
   it("redacts unsafe identifier-like field values", () => {
     const secretEmail = "service@project.iam.gserviceaccount.com";
     const spreadsheetUrl = "https://docs.google.com/spreadsheets/d/1AbC/edit";
@@ -125,6 +128,7 @@ describe("internal file logger formatting and redaction", () => {
     expect(result.line).not.toContain(spreadsheetUrl);
   });
 
+  // Verifies non-allowlisted token/email/URL/path-like code values are redacted.
   it("redacts token/email/URL/path-like code values that are not allowlisted", () => {
     const secretCodes = [
       "ya29.jwt-abcdefghijklmnop",
@@ -146,6 +150,7 @@ describe("internal file logger formatting and redaction", () => {
     }
   });
 
+  // Verifies every allowlisted stable code passes through unchanged.
   it("passes every allowlisted stable code through unchanged", () => {
     for (const code of HIKOUTEI_LOG_STABLE_CODES) {
       const result = formatHikouteiLogLine({
@@ -171,6 +176,7 @@ describe("internal file logger formatting and redaction", () => {
     expect(JSON.parse(unsafeComponent.line).component).toBe("[redacted]");
   });
 
+  // Verifies allowlisted provider operation/reason values pass and unsafe ones are redacted.
   it("passes allowlisted provider operation/reason through and redacts unsafe ones", () => {
     const valid = formatHikouteiLogLine({
       event: HIKOUTEI_LOG_EVENTS.TRANSPORT_RESPONSE_INVALID,
@@ -201,6 +207,7 @@ describe("internal file logger formatting and redaction", () => {
     expect(unsafe.line).not.toContain("effect-id-123");
   });
 
+  // Verifies non-numeric counts and unknown extra fields are dropped entirely.
   it("drops non-numeric counts and unknown extra fields entirely", () => {
     const result = formatHikouteiLogLine({
       // Extra fields are not part of the entry type; simulate an untyped
@@ -222,6 +229,7 @@ describe("internal file logger formatting and redaction", () => {
     expect(parsed.payload).toBeUndefined();
   });
 
+  // Verifies entries without a usable event are rejected.
   it("rejects entries without a usable event", () => {
     expect(formatHikouteiLogLine({} as { event: string }).status).toBe("invalid");
     expect(
@@ -231,6 +239,7 @@ describe("internal file logger formatting and redaction", () => {
     ).toBe("invalid");
   });
 
+  // Verifies only class name and stable code are extracted from errors.
   it("extracts only class name and stable code from errors", () => {
     const described = describeErrorForInternalLog(
       new Error("path /Users/me/secret.json token ya29.x"),
@@ -248,6 +257,7 @@ describe("internal file logger formatting and redaction", () => {
     });
   });
 
+  // Verifies allowlisted console tags are built for default diagnostics.
   it("builds allowlisted console tags for default diagnostics", () => {
     // Raw messages with paths, tokens, and emails never survive.
     const raw = new Error(
@@ -269,6 +279,7 @@ describe("internal file logger formatting and redaction", () => {
     expect(stableConsoleErrorTag(new TypeError("boom"))).toBe("TypeError");
   });
 
+  // Verifies the .txt extension is enforced for output and backup names.
   it("enforces the .txt extension for output and backup names", () => {
     expect(ensureTxtExtension("hikoutei-log")).toBe("hikoutei-log.txt");
     expect(ensureTxtExtension("dir/hikoutei-log.TXT")).toBe("dir/hikoutei-log.TXT");
@@ -276,7 +287,9 @@ describe("internal file logger formatting and redaction", () => {
   });
 });
 
+// Verifies the internal file logger env contract.
 describe("internal file logger env contract", () => {
+  // Verifies logging is disabled unless HIKOUTEI_LOG_FILE is set.
   it("is disabled unless HIKOUTEI_LOG_FILE is set", () => {
     const logger = createHikouteiInternalLogger({
       env: { [HIKOUTEI_LOG_ENV_KEYS.LOG_LEVEL]: "debug" },
@@ -286,6 +299,7 @@ describe("internal file logger env contract", () => {
     expect(logger.log({ event: "hikoutei.runtime.opened" })).toBe(false);
   });
 
+  // Verifies blank HIKOUTEI_LOG_FILE means disabled, never a bare .txt path.
   it("treats blank or whitespace HIKOUTEI_LOG_FILE as logging disabled, never a bare .txt path", async () => {
     // Regression (Luna review): blank/whitespace env values must mean
     // DISABLED — they must never be trimmed into an empty path and then
@@ -311,6 +325,7 @@ describe("internal file logger env contract", () => {
     }
   });
 
+  // Verifies entries below the configured level are filtered.
   it("filters entries below the configured level", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-level-"));
     try {
@@ -332,6 +347,7 @@ describe("internal file logger env contract", () => {
     }
   });
 
+  // Verifies malformed numeric env values fall back to defaults.
   it("falls back to defaults for malformed numeric env values", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-env-"));
     try {
@@ -352,6 +368,7 @@ describe("internal file logger env contract", () => {
     }
   });
 
+  // Verifies the 10 MiB / 5 backup defaults and bounds on explicit overrides.
   it("applies the approved 10 MiB / 5 backup defaults and bounds explicit overrides", async () => {
     expect(DEFAULT_MAX_BYTES).toBe(10 * 1024 * 1024);
     expect(DEFAULT_BACKUPS).toBe(5);
@@ -367,6 +384,7 @@ describe("internal file logger env contract", () => {
     await logger.drain();
   });
 
+  // Verifies a nested non-existent parent directory is created on the first write.
   it("creates a nested non-existent parent directory on the first write", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-log-nested-"));
     try {
