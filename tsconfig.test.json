@@ -19,7 +19,8 @@
       "@hikoutei/sheets/*": ["./packages/library/cloud/sheets/src/*"],
       "@hikoutei/sync-engine/*": ["./packages/library/core/sync-engine/src/*"],
       "@hikoutei/composition/*": ["./packages/library/core/composition/src/*"],
-      "@hikoutei/cli/*": ["./packages/library/cloud/cli/src/*"]
+      "@hikoutei/cli/*": ["./packages/library/cloud/cli/src/*"],
+      "@hikoutei/docs/*": ["./packages/library/cloud/docs/src/*"]
     }
   },
   "include": [
@@ -31,7 +32,8 @@
     "packages/library/cloud/sheets/src/**/*.ts",
     "packages/library/core/sync-engine/src/**/*.ts",
     "packages/library/core/composition/src/**/*.ts",
-    "packages/library/cloud/cli/src/**/*.ts"
+    "packages/library/cloud/cli/src/**/*.ts",
+    "packages/library/cloud/docs/src/**/*.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }

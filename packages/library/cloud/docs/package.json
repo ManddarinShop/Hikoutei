@@ -1,0 +1,47 @@
+{
+  "name": "@hikoutei/docs",
+  "version": "0.1.0",
+  "description": "Google Docs sync adapter leaf for the Hikoutei typed repository: the docs-api provider (documents.create/get/batchUpdate).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/library/cloud/docs"
+  },
+  "bugs": {
+    "type": "git",
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/packages/library/cloud/docs/src/*.d.ts",
+      "import": "./dist/packages/library/cloud/docs/src/*.js"
+    },
+    "./*": {
+      "types": "./dist/packages/library/cloud/docs/src/*.d.ts",
+      "import": "./dist/packages/library/cloud/docs/src/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@googleapis/docs": "^10.0.0",
+    "@hikoutei/google-auth": "0.1.0",
+    "@hikoutei/ikisaki": "0.1.16",
+    "google-auth-library": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

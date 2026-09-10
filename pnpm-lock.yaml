@@ -89,6 +89,25 @@ importers:
         specifier: ^24.0.0
         version: 24.13.3
 
+  packages/library/cloud/docs:
+    dependencies:
+      '@googleapis/docs':
+        specifier: ^10.0.0
+        version: 10.0.0
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:../google-auth
+      '@hikoutei/ikisaki':
+        specifier: 0.1.16
+        version: link:../../../protocol/ikisaki
+      google-auth-library:
+        specifier: ^11.0.0
+        version: 11.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
   packages/library/cloud/google-auth:
     dependencies:
       google-auth-library:
@@ -373,6 +392,10 @@ packages:
     engines: {node: '>=12'}
     cpu: [x64]
     os: [win32]
+
+  '@googleapis/docs@10.0.0':
+    resolution: {integrity: sha512-5ioOb5THY9McFIYBPUNG3T/jVsx+1XIdmox5D+2irPRU7nphzfzU/DUfMWDeVcXRP2eNBCq7tRj8Yk5hSVOP4g==}
+    engines: {node: '>=12.0.0'}
 
   '@googleapis/drive@21.0.0':
     resolution: {integrity: sha512-vebQpAqn+FZcmDWh1TEQTcYdkKftcSaHc7kO2ZxrINBb+ZMcFu1UybD3+maeqdLs60HrRDYwyzJ6TgZ7/Vn2Rg==}
@@ -1955,6 +1978,12 @@ snapshots:
 
   '@esbuild/win32-x64@0.21.5':
     optional: true
+
+  '@googleapis/docs@10.0.0':
+    dependencies:
+      googleapis-common: 8.0.3
+    transitivePeerDependencies:
+      - supports-color
 
   '@googleapis/drive@21.0.0':
     dependencies:
