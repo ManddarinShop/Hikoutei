@@ -1,3 +1,9 @@
+/**
+ * Compile-time and runtime checks for the rich-query public type contract.
+ * Declares a representative entity plus valid and intentionally invalid filters,
+ * ordering, and find options, then exercises the inferred EntityManager query
+ * signatures against an in-memory runtime.
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -80,7 +86,9 @@ void invalidOrderDirection;
 void invalidFindOnePaging;
 void invalidUndefined;
 
+// Verifies the rich-query public type contract (filters, ordering, find options).
 describe("Hikoutei rich-query public type contract", () => {
+  // Verifies the inferred manager query signatures stay usable at runtime.
   it("keeps the inferred manager signatures usable", async () => {
     const runtime = await createTypedSheets({ dbName: ":memory:", entities: [QueryUser] });
     try {
