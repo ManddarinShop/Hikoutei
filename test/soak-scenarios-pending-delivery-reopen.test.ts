@@ -105,6 +105,7 @@ function liveContext(plan: PlanLike, em: FakeEm, client: FakeClient): Record<str
 // ---------------------------------------------------------------------------
 
 describe("pendingDeliveryReopen scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -113,6 +114,7 @@ describe("pendingDeliveryReopen scenario", () => {
     expect(ids).toContain("pending-delivery-reopen");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("pending-delivery-reopen");
     expect(scenario.kind).toBe("lifecycle");
@@ -133,6 +135,7 @@ describe("pendingDeliveryReopen scenario", () => {
     expect(plan.burstPrefix).toMatch(/^burst-c\d+-\d+$/);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = buildPlan(777);
     const em = new FakeEm();
@@ -155,6 +158,7 @@ describe("pendingDeliveryReopen scenario", () => {
     expect(em.flushCount()).toBe(0);
   });
 
+  // Verifies: classifies the pending-delivery reopen as a truthful non-mutating skip (reopen-skipped).
   it("classifies the pending-delivery reopen as a truthful non-mutating skip (reopen-skipped)", async () => {
     // Core hypothesis: a pending-delivery burst followed by a close/reopen of
     // the SAME runtime needs a runner-owned runtime-replacement seam that the
@@ -176,6 +180,7 @@ describe("pendingDeliveryReopen scenario", () => {
     expect(client.mutateCalls).toEqual([]);
   });
 
+  // Verifies: never mutates regardless of the plan's burst size (non-mutating contract).
   it("never mutates regardless of the plan's burst size (non-mutating contract)", async () => {
     // Even a large burst plan must not create rows: the reopen step cannot
     // run, so the whole scenario is skipped before any write is attempted.
