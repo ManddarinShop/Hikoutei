@@ -189,6 +189,7 @@ const buildProvider = () =>
     },
   ]);
 
+// Covers issue #196 system-advance conflict resolution.
 describe("issue #196 system-advance conflict resolution", () => {
   const services: InternalSyncService[] = [];
   const tempDirs: string[] = [];
@@ -326,6 +327,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     );
   };
 
+  // Verifies 1. records an initial A/B conflict as OPEN with evidence, zero commands, and an OPEN audit projection.
   it("1. records an initial A/B conflict as OPEN with evidence, zero commands, and an OPEN audit projection", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -382,6 +384,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 2. repeated polling and a runtime restart leave the OPEN conflict untouched with zero commands.
   it("2. repeated polling and a runtime restart leave the OPEN conflict untouched with zero commands", async () => {
     const provider = buildProvider();
     const dbName = newDbFile();
@@ -410,6 +413,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 3. a later same-field B->C flush resolves system-wins, clears the candidate, and converges User_Input.
   it("3. a later same-field B->C flush resolves system-wins, clears the candidate, and converges User_Input", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -482,6 +486,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 4. an unrelated-field flush leaves the OPEN conflict and its evidence untouched.
   it("4. an unrelated-field flush leaves the OPEN conflict and its evidence untouched", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -583,6 +588,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ).resolves.toMatchObject({ status: "canonical", notes: "updated" });
   });
 
+  // Verifies 5. a same-candidate re-observation advances stored evidence monotonically and resolution uses the newer CAS baseline.
   it("5. a same-candidate re-observation advances stored evidence monotonically and resolution uses the newer CAS baseline", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -735,6 +741,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ))).resolves.toMatchObject({ status: "blocked_candidate" });
   });
 
+  // Verifies 6. a newer pending D command stales the pending C generation and only D applies.
   it("6. a newer pending D command stales the pending C generation and only D applies", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -811,6 +818,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 7. a legacy sync:auto-system-wins pending command is staled idempotently and the conflict stays OPEN.
   it("7. a legacy sync:auto-system-wins pending command is staled idempotently and the conflict stays OPEN", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -857,6 +865,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 8. a post-candidate remote edit is never overwritten and becomes a new conflict generation.
   it("8. a post-candidate remote edit is never overwritten and becomes a new conflict generation", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -907,6 +916,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ]);
   });
 
+  // Verifies 9. B->A with a genuine new canonical revision is a valid trigger and resolves.
   it("9. B->A with a genuine new canonical revision is a valid trigger and resolves", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -937,6 +947,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ).resolves.toMatchObject({ status: "human-edit" });
   });
 
+  // Verifies 10. a mapped delete with an unresolved conflict fails closed and rolls back completely.
   it("10. a mapped delete with an unresolved conflict fails closed and rolls back completely", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -981,6 +992,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     await expect(readCommands(service)).resolves.toEqual([]);
   });
 
+  // Verifies 11. polling and system advances never consume manual or unknown pending commands.
   it("11. polling and system advances never consume manual or unknown pending commands", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1051,6 +1063,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 12. a legacy conflict without candidate evidence is never upgraded by later polling and stays unresolved.
   it("12. a legacy conflict without candidate evidence is never upgraded by later polling and stays unresolved", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -1174,6 +1187,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     await expect(readCommands(service)).resolves.toEqual([]);
   });
 
+  // Verifies 13. a one-sided active candidate pointer fails a mapped update closed instead of overwriting.
   it("13. a one-sided active candidate pointer fails a mapped update closed instead of overwriting", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1209,6 +1223,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 14. a flush defers instead of rolling back when the OPEN audit effect is processing, then resolves in stream order.
   it("14. a flush defers instead of rolling back when the OPEN audit effect is processing, then resolves in stream order", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1326,6 +1341,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ]);
   });
 
+  // Verifies 15. a flush defers instead of rolling back when the OPEN audit effect is delivery_uncertain, then resolves in stream order.
   it("15. a flush defers instead of rolling back when the OPEN audit effect is delivery_uncertain, then resolves in stream order", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1451,6 +1467,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ]);
   });
 
+  // Verifies 16. a two-sided active candidate pointer to a RESOLVED conflict fails closed instead of overwriting.
   it("16. a two-sided active candidate pointer to a RESOLVED conflict fails closed instead of overwriting", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1515,6 +1532,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 17. a pending cleanup rewrite for the row is superseded when the conflict resolves so only the fresh reconcile converges User_Input.
   it("17. a pending cleanup rewrite for the row is superseded when the conflict resolves so only the fresh reconcile converges User_Input", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1617,6 +1635,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     });
   });
 
+  // Verifies 18. a restart-style cleanup scan during an OPEN conflict enqueues nothing and the later system-wins flush converges without regression.
   it("18. a restart-style cleanup scan during an OPEN conflict enqueues nothing and the later system-wins flush converges without regression", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1687,6 +1706,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ))).resolves.toEqual({ count: 0 });
   });
 
+  // Verifies 19. a cleanup-scan rewrite enqueued before detection streams under the binding key and is superseded by the resolution.
   it("19. a cleanup-scan rewrite enqueued before detection streams under the binding key and is superseded by the resolution", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
@@ -1801,6 +1821,7 @@ describe("issue #196 system-advance conflict resolution", () => {
   }, 30_000);
 });
 
+// Covers issue #196 evidence promotion and migration boundaries.
 describe("issue #196 evidence promotion and migration boundaries", () => {
   const openAdapters: Array<{ readonly close: (deleteFile?: boolean) => Promise<void> }> = [];
 
@@ -1810,6 +1831,7 @@ describe("issue #196 evidence promotion and migration boundaries", () => {
     );
   });
 
+  // Verifies promotes raw evidence columns into the validated union and rejects malformed shapes.
   it("promotes raw evidence columns into the validated union and rejects malformed shapes", () => {
     expect(promoteCandidateVisibleEvidence(null, null, "c1")).toEqual(
       unavailableCandidateVisibleEvidence(),
@@ -1838,6 +1860,7 @@ describe("issue #196 evidence promotion and migration boundaries", () => {
     }
   });
 
+  // Verifies advances same-candidate evidence only monotonically.
   it("advances same-candidate evidence only monotonically", () => {
     const current = promoteCandidateVisibleEvidence(3, "hash-a", "c1");
     // Legacy UNAVAILABLE evidence stays UNAVAILABLE: a later observation
@@ -1865,6 +1888,7 @@ describe("issue #196 evidence promotion and migration boundaries", () => {
     );
   });
 
+// Covers issue #196 audit projection state union.
 describe("issue #196 audit projection state union", () => {
   const auditConflict = (
     status: ConflictStatus,
@@ -1888,6 +1912,7 @@ describe("issue #196 audit projection state union", () => {
     resolutionCommandId,
   });
 
+  // Verifies projects OPEN and NEEDS_REBASE with blank resolution cells and RESOLVED with its command identity.
   it("projects OPEN and NEEDS_REBASE with blank resolution cells and RESOLVED with its command identity", () => {
     const open = openSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.OPEN, absentValue()),
@@ -1917,6 +1942,7 @@ describe("issue #196 audit projection state union", () => {
     });
   });
 
+  // Verifies rejects malformed audit state combinations with the structured projection error.
   it("rejects malformed audit state combinations with the structured projection error", () => {
     // Unresolved conflicts must never carry a command identity: the shared
     // materializer would otherwise emit a nonblank Resolution_Command_ID.
@@ -1951,6 +1977,7 @@ describe("issue #196 audit projection state union", () => {
   });
 });
 
+  // Verifies rejects one-sided stored evidence when a conflict row is promoted.
   it("rejects one-sided stored evidence when a conflict row is promoted", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
         "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
@@ -2014,6 +2041,7 @@ describe("issue #196 audit projection state union", () => {
     });
   });
 
+  // Verifies migrates a v5 store to v6 additively, preserves legacy rows, and stays idempotent.
   it("migrates a v5 store to v6 additively, preserves legacy rows, and stays idempotent", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
         "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
@@ -2133,6 +2161,7 @@ describe("issue #196 audit projection state union", () => {
     );
   });
 
+  // Verifies drops real legacy quarantine repair data in the v5→v7 multi-hop path and keeps the surviving columns intact.
   it("drops real legacy quarantine repair data in the v5→v7 multi-hop path and keeps the surviving columns intact", async () => {
     const { initializeMikroOrmSqliteAdapter } = await import(
         "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js"
