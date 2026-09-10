@@ -1,3 +1,11 @@
+/**
+ * Scalar provider persistence boundary coverage for the typed-sheets facade.
+ *
+ * Exercises the entity manager over the MikroORM SQLite provider: atomic
+ * insert/update/delete flush plans with audit observation, end-of-transaction
+ * flushing, and full rollback when the flush coordinator rejects.
+ */
+
 import {
   defineEntity,
   MikroORM,
@@ -52,6 +60,7 @@ interface FlushAuditRow {
   readonly primary_key: string;
 }
 
+// Verifies the entity manager flush/transaction contract over the scalar provider.
 describe("scalar provider persistence boundary", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -59,6 +68,7 @@ describe("scalar provider persistence boundary", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  // Verifies insert/update/delete flush plans apply atomically with audit rows.
   it("executes Hikoutei's insert/update/delete plan atomically", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -95,6 +105,7 @@ describe("scalar provider persistence boundary", () => {
     ]);
   });
 
+  // Verifies pending work is flushed automatically at the end of transactional().
   it("flushes pending work at the end of transactional()", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -114,6 +125,7 @@ describe("scalar provider persistence boundary", () => {
       .resolves.toMatchObject({ id: "order-transactional" });
   });
 
+  // Verifies entity and planner SQL roll back together when the planner rejects.
   it("rolls entity and planner SQL back when the planner rejects", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
