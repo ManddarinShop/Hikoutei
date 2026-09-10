@@ -90,7 +90,9 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner projection id extraction.
 describe("soak runner projection id extraction", () => {
+  // Verifies: extracts ids and counts non-empty blank-id rows as extra rows.
   it("extracts ids and counts non-empty blank-id rows as extra rows", () => {
     // A physical row with real content but a blank id cell is a row the
     // oracle never planned; it must surface as an extra row, never be
@@ -105,6 +107,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(1);
   });
 
+  // Verifies: ignores fully empty trailing padding rows.
   it("ignores fully empty trailing padding rows", () => {
     // The range read pads unused rows with empty cells; those are not
     // physical rows and must not count as extra rows.
@@ -119,6 +122,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(0);
   });
 
+  // Verifies: treats null and undefined id cells with content as blank-id rows.
   it("treats null and undefined id cells with content as blank-id rows", () => {
     const rows = [
       [null, "x"],
@@ -130,6 +134,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(2);
   });
 
+  // Verifies: excludes durable tombstone rows from the active id set.
   it("excludes durable tombstone rows from the active id set", () => {
     // System_State intentionally RETAINS deleted entities as rows whose
     // __typed_sheets_deleted cell displays TRUE; those rows are durable
@@ -145,6 +150,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(0);
   });
 
+  // Verifies: treats tombstone displays conservatively: TRUE case-insensitive and boolean true only.
   it("treats tombstone displays conservatively: TRUE case-insensitive and boolean true only", () => {
     // Formatted booleans arrive as strings; only explicit boolean-true
     // displays mark a row as deleted history. Never a broad truthiness
@@ -163,6 +169,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(0);
   });
 
+  // Verifies: counts blank-id content rows as extra even when the tombstone looks set.
   it("counts blank-id content rows as extra even when the tombstone looks set", () => {
     // A tombstone without an id is malformed durable history; the row has
     // real content and must surface as extra instead of being hidden.
@@ -176,6 +183,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(1);
   });
 
+  // Verifies: keeps the two-argument behavior when no tombstone column is given.
   it("keeps the two-argument behavior when no tombstone column is given", () => {
     // Callers that do not pass a tombstone column index keep the original
     // contract: every non-blank id is active, tombstone displays included.
@@ -190,6 +198,7 @@ describe("soak runner projection id extraction", () => {
 });
 
 
+// Suite: soak runner System_State readiness barrier.
 describe("soak runner System_State readiness barrier", () => {
   const BarrierUser = defineTypedSheetsEntity({
     name: "SoakBarrierUser",
@@ -238,6 +247,7 @@ describe("soak runner System_State readiness barrier", () => {
     return service;
   }
 
+  // Verifies: defers the batched convergence read while the runtime is draining and proceeds after readiness.
   it("defers the batched convergence read while the runtime is draining and proceeds after readiness", async () => {
     const service = await openWithPendingSystemStateEffect();
     try {
@@ -284,6 +294,7 @@ describe("soak runner System_State readiness barrier", () => {
     }
   });
 
+  // Verifies: reports ready immediately for runtimes without a registered sync service.
   it("reports ready immediately for runtimes without a registered sync service", async () => {
     const hikoutei = await createTypedSheets({
       dbName: ":memory:",
@@ -316,6 +327,7 @@ describe("soak runner System_State readiness barrier", () => {
     }
   });
 
+  // Verifies: honors the phase deadline: an endless drain fails with a redacted zero-count check.
   it("honors the phase deadline: an endless drain fails with a redacted zero-count check", async () => {
     const service = await openWithPendingSystemStateEffect();
     try {
