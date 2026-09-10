@@ -207,7 +207,9 @@ function cleanRow(rowNumber: number, id: NormalizedCell, anchor: string) {
   };
 }
 
+// Verifies inspectChecksPollingTable check-gate decisions.
 describe("inspectChecksPollingTable", () => {
+  // Verifies clean is returned when every check equals the canonical-derived value.
   it("returns clean when every check equals the canonical-derived value", () => {
     const decision = inspectChecksPollingTable(mapping, checksResult([
       cleanRow(2, ID_1, "anchor-u1"),
@@ -218,6 +220,7 @@ describe("inspectChecksPollingTable", () => {
     expect(decision.rowsScanned).toBe(2);
   });
 
+  // Verifies only the mismatched rows are targeted for the band read.
   it("targets ONLY the mismatched rows for the band read", () => {
     const decision = inspectChecksPollingTable(mapping, checksResult([
       cleanRow(2, ID_1, "anchor-u1"),
@@ -234,6 +237,7 @@ describe("inspectChecksPollingTable", () => {
     expect(decision.rowsScanned).toBe(2);
   });
 
+  // Verifies legacy rows with no check evidence are targeted (mixed mode).
   it("targets legacy rows with no check evidence (mixed mode)", () => {
     const decision = inspectChecksPollingTable(mapping, checksResult([
       { rowNumber: 2, identity: ID_1, anchor: presentValue("anchor-u1"), check: absentValue() },
@@ -243,6 +247,7 @@ describe("inspectChecksPollingTable", () => {
     expect(decision.rowNumbers).toEqual([2]);
   });
 
+  // Verifies a mismatching row with only terminally failed outbox evidence is not skipped.
   it("does NOT skip a mismatching row whose only outbox evidence is terminally failed", async () => {
     // A FAILED outbox effect will never deliver, so its binding must not
     // suppress inbound observation: the failed version of the race row
@@ -321,6 +326,7 @@ describe("inspectChecksPollingTable", () => {
     }
   });
 
+  // Verifies a mismatching row whose own write delivery is in flight is skipped.
   it("skips a mismatching row whose own write delivery is still in flight", () => {
     // The Sheet still shows the PRE-write value while the outbox effect is
     // undelivered; treating that as human input would fabricate a conflict
@@ -344,6 +350,7 @@ describe("inspectChecksPollingTable", () => {
     ]), state()).kind).toBe(CHECKS_POLLING_DECISION_KINDS.TARGETED);
   });
 
+  // Verifies a tab without the provisioned check column escalates to the whole-table path.
   it("escalates a tab without the provisioned check column to the whole-table path", () => {
     const decision = inspectChecksPollingTable(
       mapping,
@@ -353,6 +360,7 @@ describe("inspectChecksPollingTable", () => {
     expect(decision.kind).toBe(CHECKS_POLLING_DECISION_KINDS.ESCALATE);
   });
 
+  // Verifies unknown and duplicate identities escalate.
   it("escalates unknown and duplicate identities", () => {
     const unknown = inspectChecksPollingTable(mapping, checksResult([
       { rowNumber: 2, identity: cell.string("intruder"), anchor: absentValue(), check: presentValue("x") },
@@ -366,6 +374,7 @@ describe("inspectChecksPollingTable", () => {
     expect(duplicate.kind).toBe(CHECKS_POLLING_DECISION_KINDS.ESCALATE);
   });
 
+  // Verifies an invalid identity cell and a vanished active entity escalate.
   it("escalates an invalid identity cell and a vanished active entity", () => {
     const invalid = inspectChecksPollingTable(mapping, checksResult([
       { rowNumber: 2, identity: { kind: "number", value: 7 }, anchor: absentValue(), check: presentValue("7|pending") },
@@ -378,6 +387,7 @@ describe("inspectChecksPollingTable", () => {
     expect(vanished.kind).toBe(CHECKS_POLLING_DECISION_KINDS.ESCALATE);
   });
 
+  // Verifies anchor deletion, duplication, and misplacement escalate.
   it("escalates anchor deletion, duplication, and misplacement", () => {
     // A human deleted the system row-id cell: only the whole-table
     // observation owns anchor re-assignment/orphan evidence.
@@ -537,7 +547,9 @@ function gateProvider(transport: StubSheetsTransport): GoogleSheetsApiSyncProvid
   });
 }
 
+// Verifies the check-gated mapped polling pass (provider + storage).
 describe("check-gated mapped polling pass (provider + storage)", () => {
+  // Verifies a clean pass reads only the identity/anchor/check bands.
   it("reads ONLY the identity/anchor/check bands when every row matches canonical state", async () => {
     const orm = await createOrm();
     try {
@@ -577,6 +589,7 @@ describe("check-gated mapped polling pass (provider + storage)", () => {
     }
   });
 
+  // Verifies a human edit band-reads only its row and matches the full-pass outcome.
   it("band-reads ONLY the mismatched row, accepts the human edit, and matches the full-pass outcome", async () => {
     // Gated pass.
     const gatedOrm = await createOrm();
