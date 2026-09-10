@@ -118,7 +118,9 @@ class FakeClient {
 // Tests.
 // ---------------------------------------------------------------------------
 
+// Suite: humanDeleteRow scenario.
 describe("humanDeleteRow scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -127,6 +129,7 @@ describe("humanDeleteRow scenario", () => {
     expect(ids).toContain("human-delete-row");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("human-delete-row");
     expect(scenario.kind).toBe("data");
@@ -151,6 +154,7 @@ describe("humanDeleteRow scenario", () => {
     expect(plan.jitterMs).toBeGreaterThan(0);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = deletePlan();
     const context = {
@@ -168,6 +172,7 @@ describe("humanDeleteRow scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: retains the authority row and applies the public update (ok).
   it("retains the authority row and applies the public update (ok)", async () => {
     // Core hypothesis: SQLite is the authority, so a human sheet delete must
     // NOT erase the SQLite row. The row is retained in the authority and the
@@ -191,6 +196,7 @@ describe("humanDeleteRow scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-stale public-update rejection as a real failure (scenario-error).
   it("classifies a non-stale public-update rejection as a real failure (scenario-error)", async () => {
     // A rejected public update is an expected stale conflict ONLY on exact
     // CAS/stale evidence. A non-stale (validation/transport) rejection is a
@@ -216,6 +222,7 @@ describe("humanDeleteRow scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records an identity-shifted human-delete rejection as a transient skip, not a failure.
   it("records an identity-shifted human-delete rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human delete with
     // the stable `identity_shifted` class when a concurrent actor shifted
@@ -239,6 +246,7 @@ describe("humanDeleteRow scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = deletePlan();
     const client = new FakeClient();
