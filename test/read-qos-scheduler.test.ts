@@ -19,7 +19,9 @@ import {
   RequestStartLimiter,
 } from "@hikoutei/ikisaki";
 
+// Covers ReadQoSScheduler.
 describe("ReadQoSScheduler", () => {
+  // Verifies shares ONE timeline and interval across both read classes.
   it("shares ONE timeline and interval across both read classes", async () => {
     let now = 1_000_000;
     const scheduler = new ReadQoSScheduler({
@@ -37,6 +39,7 @@ describe("ReadQoSScheduler", () => {
     expect(now).toBe(1_001_100);
   });
 
+  // Verifies applies the 2:1 polling:preflight policy when both classes are queued.
   it("applies the 2:1 polling:preflight policy when both classes are queued", async () => {
     let now = 1_000_000;
     const scheduler = new ReadQoSScheduler({
@@ -61,6 +64,7 @@ describe("ReadQoSScheduler", () => {
     expect(scheduler.lastStart()).toBe(1_002_200);
   });
 
+  // Verifies never starves preflight behind a continuous polling burst.
   it("never starves preflight behind a continuous polling burst", async () => {
     let now = 1_000_000;
     const scheduler = new ReadQoSScheduler({
@@ -90,6 +94,7 @@ describe("ReadQoSScheduler", () => {
     expect(firstPre).toBe(2); // after exactly two polling starts
   });
 
+  // Verifies refuses a deep reservation WITHOUT advancing the shared horizon.
   it("refuses a deep reservation WITHOUT advancing the shared horizon", async () => {
     const scheduler = new ReadQoSScheduler({
       intervalMs: 1_100,
@@ -117,6 +122,7 @@ describe("ReadQoSScheduler", () => {
     expect(scheduler.lastStart()).toBe(1_001_100);
   });
 
+  // Verifies still admits after time passes the refused slot (no horizon poisoning).
   it("still admits after time passes the refused slot (no horizon poisoning)", async () => {
     let now = 1_000_000;
     const scheduler = new ReadQoSScheduler({
@@ -148,6 +154,7 @@ describe("ReadQoSScheduler", () => {
     expect(scheduler.lastStart()).toBe(1_002_200);
   });
 
+  // Verifies admits every caller with a zero interval.
   it("admits every caller with a zero interval", async () => {
     let now = 42;
     const scheduler = new ReadQoSScheduler({
@@ -167,12 +174,14 @@ describe("ReadQoSScheduler", () => {
     }
   });
 
+  // Verifies rejects an invalid maximum wait bound.
   it("rejects an invalid maximum wait bound", async () => {
     const scheduler = new ReadQoSScheduler({ intervalMs: 1_100 });
     expect(() => scheduler.waitForSlot("polling", -1)).toThrow(RangeError);
     expect(() => scheduler.waitForSlot("preflight", 1.5)).toThrow(RangeError);
   });
 
+  // Verifies keeps the WRITE lane independent on its own RequestStartLimiter.
   it("keeps the WRITE lane independent on its own RequestStartLimiter", async () => {
     let now = 1_000_000;
     const scheduler = new ReadQoSScheduler({
@@ -207,6 +216,7 @@ describe("ReadQoSScheduler", () => {
     expect(scheduler.lastStart()).toBe(1_001_100);
   });
 
+  // Verifies throws RateLimitOptionsError with INTERVAL_NON_NEGATIVE_REQUIRED for invalid constructor intervalMs.
   it("throws RateLimitOptionsError with INTERVAL_NON_NEGATIVE_REQUIRED for invalid constructor intervalMs", () => {
     expect.assertions(3);
     try {
@@ -222,6 +232,7 @@ describe("ReadQoSScheduler", () => {
     }
   });
 
+  // Verifies throws RateLimitOptionsError with MAX_WAIT_NON_NEGATIVE_REQUIRED for invalid maxWaitMs.
   it("throws RateLimitOptionsError with MAX_WAIT_NON_NEGATIVE_REQUIRED for invalid maxWaitMs", async () => {
     expect.assertions(3);
     const scheduler = new ReadQoSScheduler({ intervalMs: 1_100 });
