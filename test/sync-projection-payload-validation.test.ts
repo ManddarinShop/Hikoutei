@@ -1,3 +1,8 @@
+/**
+ * sync projection payload validation tests. Covers projection effect payload boundary; promotes a valid wire payload and preserves stable serialization; keeps semantic hash validation outside the Zod shape schema; rejects empty fields after structural validation.
+ *
+ * Exercises the behavior through fake providers and SQLite fixtures with no live credentials.
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -23,7 +28,9 @@ function validPayload() {
   };
 }
 
+// Covers: projection effect payload boundary.
 describe("projection effect payload boundary", () => {
+  // Verifies: promotes a valid wire payload and preserves stable serialization.
   it("promotes a valid wire payload and preserves stable serialization", () => {
     const wirePayload = validPayload();
     const parsed = parseSyncProjectionEffectPayload(JSON.stringify(wirePayload));
@@ -46,6 +53,7 @@ describe("projection effect payload boundary", () => {
     );
   });
 
+  // Verifies: keeps semantic hash validation outside the Zod shape schema.
   it("keeps semantic hash validation outside the Zod shape schema", () => {
     const payload = validPayload();
     expect(() => parseSyncProjectionEffectPayload(JSON.stringify({
@@ -59,6 +67,7 @@ describe("projection effect payload boundary", () => {
     );
   });
 
+  // Verifies: rejects empty fields after structural validation.
   it("rejects empty fields after structural validation", () => {
     const payload = validPayload();
     expect(() => parseSyncProjectionEffectPayload(JSON.stringify({
