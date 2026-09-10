@@ -95,7 +95,9 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Verifies the soak runner deadline clock suite.
 describe("soak runner deadline clock", () => {
+  // Verifies: treats a future epoch deadline as not immediately expired.
   it("treats a future epoch deadline as not immediately expired", () => {
     const now = Date.now();
     expect(deadlineRemainingMs(now + 5_000, now)).toBe(5_000);
@@ -105,6 +107,7 @@ describe("soak runner deadline clock", () => {
     expect(deadlineRemainingMs(now, now)).toBe(0);
   });
 
+  // Verifies: bounded wait honors the deadline instead of the full poll interval.
   it("bounded wait honors the deadline instead of the full poll interval", async () => {
     const startedAt = Date.now();
     // Poll interval far beyond the deadline: the sleep must end at the
@@ -119,18 +122,22 @@ describe("soak runner deadline clock", () => {
 });
 
 
+// Verifies the soak runner bounded close deadline suite.
 describe("soak runner bounded close deadline", () => {
+  // Verifies: grants an admitted live cycle exactly one convergence budget past the base deadline.
   it("grants an admitted live cycle exactly one convergence budget past the base deadline", () => {
     const base = Date.now();
     expect(resolveCycleDeadlineAtMs({ mode: "live", baseDeadlineAtMs: base }))
       .toBe(base + CONVERGENCE_TIMEOUT_MS);
   });
 
+  // Verifies: keeps the base deadline unchanged for local cycles (no grace).
   it("keeps the base deadline unchanged for local cycles (no grace)", () => {
     const base = Date.now();
     expect(resolveCycleDeadlineAtMs({ mode: "local", baseDeadlineAtMs: base })).toBe(base);
   });
 
+  // Verifies: is overflow-safe: a base deadline near MAX_SAFE_INTEGER clamps to the base.
   it("is overflow-safe: a base deadline near MAX_SAFE_INTEGER clamps to the base", () => {
     // Adding the convergence budget would wrap past the safe-integer
     // ceiling; the helper must return the base unchanged, never a wrapped
@@ -140,6 +147,7 @@ describe("soak runner bounded close deadline", () => {
     expect(resolveCycleDeadlineAtMs({ mode: "local", baseDeadlineAtMs: base })).toBe(base);
   });
 
+  // Verifies: preserves finite fractional base deadlines exactly (never rounds away grace).
   it("preserves finite fractional base deadlines exactly (never rounds away grace)", () => {
     // A valid fractional `--duration-hours`/durationMs yields a fractional
     // epoch deadline; adding the convergence budget must keep the fraction
@@ -157,7 +165,9 @@ describe("soak runner bounded close deadline", () => {
 });
 
 
+// Verifies the soak runner stable error tags and CLI diagnostics suite.
 describe("soak runner stable error tags and CLI diagnostics", () => {
+  // Verifies: sanitizes custom error class names in progress diagnostics.
   it("sanitizes custom error class names in progress diagnostics", () => {
     // A custom error class name can embed a path, URL, or id-like token;
     // progress tags must pass the stable class allowlist.
@@ -173,6 +183,7 @@ describe("soak runner stable error tags and CLI diagnostics", () => {
     expect(stableErrorTag(undefined)).toBe("unknown");
   });
 
+  // Verifies: prints only allowlisted class/code/status-class text in CLI diagnostics.
   it("prints only allowlisted class/code/status-class text in CLI diagnostics", () => {
     const raw = new Error("boom");
     raw.name = "Error: at /Users/secret/file.ts";
@@ -201,6 +212,7 @@ describe("soak runner stable error tags and CLI diagnostics", () => {
     expect(describeSoakFailure(undefined)).toBe("unknown");
   });
 
+  // Verifies: stableErrorTag preserves an allowlisted DirectSheetsError status class.
   it("stableErrorTag preserves an allowlisted DirectSheetsError status class", () => {
     // The stable progress tag must carry the allowlisted status class so
     // a live direct-client failure is diagnosable on stderr, and must
@@ -233,7 +245,9 @@ describe("soak runner stable error tags and CLI diagnostics", () => {
 });
 
 
+// Verifies the soak runner final close retry suite.
 describe("soak runner final close retry", () => {
+  // Verifies: retries a genuine first close failure and recovers by re-invoking close.
   it("retries a genuine first close failure and recovers by re-invoking close", async () => {    let calls = 0;
     const runtime = {
       async close() {
@@ -247,6 +261,7 @@ describe("soak runner final close retry", () => {
     expect(calls).toBe(2);
   });
 
+  // Verifies: returns the persistent close error after two genuine attempts.
   it("returns the persistent close error after two genuine attempts", async () => {
     let calls = 0;
     const runtime = {
@@ -260,6 +275,7 @@ describe("soak runner final close retry", () => {
     expect(calls).toBe(2);
   });
 
+  // Verifies: closes once on immediate success.
   it("closes once on immediate success", async () => {
     let calls = 0;
     const runtime = { async close() { calls += 1; } };
@@ -268,6 +284,7 @@ describe("soak runner final close retry", () => {
     expect(calls).toBe(1);
   });
 
+  // Verifies: failClose injects a first-attempt failure and the retry delegates to the real close.
   it("failClose injects a first-attempt failure and the retry delegates to the real close", async () => {
     let calls = 0;
     const runtime = { async close() { calls += 1; } };
@@ -277,6 +294,7 @@ describe("soak runner final close retry", () => {
     expect(calls).toBe(1);
   });
 
+  // Verifies: failClosePersistent fails both attempts while the retry still runs the real close.
   it("failClosePersistent fails both attempts while the retry still runs the real close", async () => {
     let calls = 0;
     const runtime = { async close() { calls += 1; } };
@@ -286,6 +304,7 @@ describe("soak runner final close retry", () => {
     expect(calls).toBe(1);
   });
 
+  // Verifies: treats a close that throws undefined as a failed close (never a silent pass).
   it("treats a close that throws undefined as a failed close (never a silent pass)", async () => {
     // MEDIUM 3: boolean failure tracking, never `error !== undefined` — a
     // runtime whose close rejects with `undefined` (a hook or provider
@@ -306,7 +325,9 @@ describe("soak runner final close retry", () => {
 });
 
 
+// Verifies the soak runner deadline-gated startup suite.
 describe("soak runner deadline-gated startup", () => {
+  // Verifies: returns the runtime unchanged when the open finishes inside the deadline.
   it("returns the runtime unchanged when the open finishes inside the deadline", async () => {
     let closeCalls = 0;
     const runtime = {
@@ -319,6 +340,7 @@ describe("soak runner deadline-gated startup", () => {
     expect(closeCalls).toBe(0);
   });
 
+  // Verifies: closes a runtime whose open returned after the deadline and fails with deadline_expired.
   it("closes a runtime whose open returned after the deadline and fails with deadline_expired", async () => {
     // MEDIUM 5: sync startup that returns after the run budget expired
     // must never be claimed as a within-budget run: the runtime is closed
@@ -339,6 +361,7 @@ describe("soak runner deadline-gated startup", () => {
     expect(closeCalls).toBe(1);
   });
 
+  // Verifies: still fails with deadline_expired when the post-deadline close also fails.
   it("still fails with deadline_expired when the post-deadline close also fails", async () => {
     // The deadline failure dominates: an unclosable late runtime cannot
     // mask the deadline_expired outcome.
@@ -357,9 +380,11 @@ describe("soak runner deadline-gated startup", () => {
 });
 
 
+// Verifies the soak runner recovery planner and safe timestamps suite.
 describe("soak runner recovery planner and safe timestamps", () => {
   const state = { lastCompletedCycle: 7 };
 
+  // Verifies: plans no recovery for a missing or completed checkpoint.
   it("plans no recovery for a missing or completed checkpoint", () => {
     expect(planResumeRecovery(undefined, state, new Map())).toBeUndefined();
     expect(planResumeRecovery(
@@ -369,6 +394,7 @@ describe("soak runner recovery planner and safe timestamps", () => {
     )).toBeUndefined();
   });
 
+  // Verifies: plans a stale-marker repair when state already checkpointed the cycle.
   it("plans a stale-marker repair when state already checkpointed the cycle", () => {
     expect(planResumeRecovery(
       { version: 1, runId: "r", cycle: 7, status: "in-flight" },
@@ -377,6 +403,7 @@ describe("soak runner recovery planner and safe timestamps", () => {
     )).toEqual({ cycle: 7, reason: RECOVERY_REASONS.STALE_IN_FLIGHT_MARKER });
   });
 
+  // Verifies: plans a bookkeeping-only advance when the cycle record already landed.
   it("plans a bookkeeping-only advance when the cycle record already landed", () => {
     expect(planResumeRecovery(
       { version: 1, runId: "r", cycle: 8, status: "in-flight" },
@@ -385,6 +412,7 @@ describe("soak runner recovery planner and safe timestamps", () => {
     )).toEqual({ cycle: 8, reason: RECOVERY_REASONS.COMPLETED_CYCLE_CHECKPOINT });
   });
 
+  // Verifies: plans a full SQLite reconciliation when the interrupted cycle has no record.
   it("plans a full SQLite reconciliation when the interrupted cycle has no record", () => {
     expect(planResumeRecovery(
       { version: 1, runId: "r", cycle: 8, status: "in-flight" },
@@ -393,6 +421,7 @@ describe("soak runner recovery planner and safe timestamps", () => {
     )).toEqual({ cycle: 8, reason: RECOVERY_REASONS.INTERRUPTED_CYCLE_RECONCILED });
   });
 
+  // Verifies: isSafeEpochTimestampMs accepts only finite timestamps in the ISO date range.
   it("isSafeEpochTimestampMs accepts only finite timestamps in the ISO date range", () => {
     expect(isSafeEpochTimestampMs(Date.now())).toBe(true);
     expect(isSafeEpochTimestampMs(0)).toBe(true);
