@@ -94,8 +94,10 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Verifies the soak runner end to end (local, short budget) suite.
 describeLongSoak("soak runner end to end (local, short budget)", () => {
 
+  // Verifies: fails the summary with a stable replacement-cleanup reason when a failed reopen leaves an unclosable replacement.
   it(
     "fails the summary with a stable replacement-cleanup reason when a failed reopen leaves an unclosable replacement",
     { timeout: 90_000 },
@@ -139,6 +141,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: fails the summary with a stable finalization reason when a final artifact step fails.
   it(
     "fails the summary with a stable finalization reason when a final artifact step fails",
     { timeout: 60_000 },
@@ -181,6 +184,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: resume round-trips fractional duration/interval values without coercion.
   it(
     "resume round-trips fractional duration/interval values without coercion",
     { timeout: 90_000 },
@@ -209,6 +213,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: resume preserves the prior JSONL history and continues the cycle numbering.
   it(
     "resume preserves the prior JSONL history and continues the cycle numbering",
     { timeout: 90_000 },
@@ -238,6 +243,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: recovers an interruption at the DB-before-state boundary without duplicates.
   it(
     "recovers an interruption at the DB-before-state boundary without duplicates",
     { timeout: 120_000 },
@@ -322,6 +328,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: reconciles an interruption before the cycle record without duplicates.
   it(
     "reconciles an interruption before the cycle record without duplicates",
     { timeout: 120_000 },
@@ -406,6 +413,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: reconciles an interruption during the FIRST cycle from the pure replay plan (lastCompletedCycle 0).
   it(
     "reconciles an interruption during the FIRST cycle from the pure replay plan (lastCompletedCycle 0)",
     { timeout: 120_000 },
@@ -492,6 +500,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: repairs a stale in-flight marker when the state checkpoint landed before the completed marker.
   it(
     "repairs a stale in-flight marker when the state checkpoint landed before the completed marker",
     { timeout: 120_000 },
@@ -572,6 +581,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: rejects a resume when the previous run.
   it(
     "rejects a resume when the previous run's finalization failed",
     { timeout: 60_000 },
@@ -599,6 +609,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {
     },
   );
 
+  // Verifies: --tables scopes the runtime, workload, verification, and artifacts to the subset.
   it(
     "--tables scopes the runtime, workload, verification, and artifacts to the subset",
     { timeout: 60_000 },
