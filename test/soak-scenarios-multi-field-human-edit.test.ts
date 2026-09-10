@@ -126,6 +126,7 @@ class FakeClient {
 // ---------------------------------------------------------------------------
 
 describe("multiFieldHumanEdit scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -134,6 +135,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(ids).toContain("multi-field-human-edit");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("multi-field-human-edit");
     expect(scenario.kind).toBe("data");
@@ -171,6 +173,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(plan.target.targetId).toMatch(/^multi-/);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = racePlan();
     const context = {
@@ -188,6 +191,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: never picks an inactive entity when the active subset has no eligible one.
   it("never picks an inactive entity when the active subset has no eligible one", async () => {
     // SoakFeatureFlag has only ONE non-primary string field, so it cannot
     // host a multi-field edit. When the active subset is ONLY that entity,
@@ -226,6 +230,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(client.mutateCalls).toEqual([]);
   });
 
+  // Verifies: verifies an atomic multi-field human edit when all fields land (ok).
   it("verifies an atomic multi-field human edit when all fields land (ok)", async () => {
     // Core hypothesis: a human multi-field edit must be applied atomically —
     // never partially, never with a field silently lost. When the authority
@@ -256,6 +261,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: waits for a delayed observation to land before cleanup removes the accepted row.
   it("waits for a delayed observation to land before cleanup removes the accepted row", async () => {
     // A human multi-field write is ACCEPTED but the inbound observation lands
     // only after a few authority reads (the async worker is slower than the
@@ -285,6 +291,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-stale human multi-field rejection as a real failure.
   it("classifies a non-stale human multi-field rejection as a real failure", async () => {
     // A rejected human multi-field write is an expected stale conflict ONLY
     // on exact CAS/stale evidence. A non-stale (transport) rejection is a
@@ -312,6 +319,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.cleanupFailures).toBeGreaterThan(0);
   });
 
+  // Verifies: records an identity-shifted human multi-field rejection as a transient skip, not a failure.
   it("records an identity-shifted human multi-field rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human write with
     // the stable `identity_shifted` class when a CONCURRENT actor shifted
@@ -343,6 +351,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = racePlan();
     const client = new FakeClient();
@@ -359,6 +368,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: leaves the accepted row in place when the settle proof times out (no tombstone race).
   it("leaves the accepted row in place when the settle proof times out (no tombstone race)", async () => {
     // The guaranteed finally removes the dedicated race row even when the
     // public-API update's commit rejects with a non-stale transport code
@@ -391,6 +401,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.cleanupFailures).toBeGreaterThan(0);
   });
 
+  // Verifies: deletes the accepted row once the observation lands during the settle window.
   it("deletes the accepted row once the observation lands during the settle window", async () => {
     // The observation lands only AFTER observeHumanFields gave up (during the
     // settle window), so the cleanup delete is ordered after terminal landing
@@ -428,6 +439,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: leaves the row in place when a STARTED human write rejects after remote mutation (no tombstone race).
   it("leaves the row in place when a STARTED human write rejects after remote mutation (no tombstone race)", async () => {
     // A human write that STARTED but was rejected with stale/CAS evidence may
     // still have mutated the remote Sheet before rejecting. The remote outcome
@@ -453,6 +465,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows().length).toBe(1);
   });
 
+  // Verifies: leaves the row in place when a partial landing never completes (no tombstone race).
   it("leaves the row in place when a partial landing never completes (no tombstone race)", async () => {
     // A partial inbound state can precede later field landing: some human
     // fields landed but others have not yet. Deleting now would tombstone the
@@ -480,6 +493,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(result.cleanupFailures).toBeGreaterThan(0);
   });
 
+  // Verifies: rejects a projection read that resolves after the phase deadline (no write).
   it("rejects a projection read that resolves after the phase deadline (no write)", async () => {
     // The projection readiness read can resolve after the scenario/phase
     // deadline (a slow request that began just before it). A projection
@@ -507,6 +521,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: reports a truthful deadline-expired skip, never silent loss, when the human write never starts.
   it("reports a truthful deadline-expired skip, never silent loss, when the human write never starts", async () => {
     // The run deadline expires during the barrier jitter, so the direct human
     // write never starts. The scenario must NOT report silent loss for a write
@@ -528,6 +543,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: accepts OPEN sync_conflicts carrying the human values as conflict-recorded (ok).
   it("accepts OPEN sync_conflicts carrying the human values as conflict-recorded (ok)", async () => {
     // Core harness fix: when an outbox effect for the binding is in flight,
     // the poll gate deliberately skips the row and the human edit is
@@ -577,6 +593,7 @@ describe("multiFieldHumanEdit scenario", () => {
     });
   });
 
+  // Verifies: accepts a mixed outcome: one field landed, the other conflict-recorded (ok).
   it("accepts a mixed outcome: one field landed, the other conflict-recorded (ok)", async () => {
     // All human values accounted — one landed in the row, the other recorded
     // as an OPEN conflict — is the consistent outcome, never partial loss.
@@ -614,6 +631,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records cleanup-unresolved-conflict and keeps the row when the conflicts never clear.
   it("records cleanup-unresolved-conflict and keeps the row when the conflicts never clear", async () => {
     // The resolve-then-delete cleanup advances every human field, but the
     // conflict records never leave the blocking state within the bound. The
@@ -647,6 +665,7 @@ describe("multiFieldHumanEdit scenario", () => {
     }
   });
 
+  // Verifies: records cleanup-outbox-busy and keeps the landed row when the binding outbox never drains.
   it("records cleanup-outbox-busy and keeps the landed row when the binding outbox never drains", async () => {
     // The human edit landed (the settle proof passes immediately), but a
     // candidate effect for the binding is stuck in flight past the bounded
@@ -673,6 +692,7 @@ describe("multiFieldHumanEdit scenario", () => {
     expect(em.rows().length).toBe(1);
   });
 
+  // Verifies: still reports silent-loss when the human value is neither landed nor conflict-recorded.
   it("still reports silent-loss when the human value is neither landed nor conflict-recorded", async () => {
     // The negative control: an ACCEPTED human write whose value never lands
     // AND has no OPEN conflict record is genuinely lost — still a failure.
