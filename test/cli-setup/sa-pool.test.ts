@@ -76,7 +76,9 @@ afterEach(() => {
   tempDirs.length = 0;
 });
 
+// Covers parseSetupArgs --sa-count.
 describe("parseSetupArgs --sa-count", () => {
+  // Verifies leaves saCount absent by default (default 1, never prompts downstream)
   it("leaves saCount absent by default (default 1, never prompts downstream)", () => {
     const result = parseSetupArgs([]);
     expect(result.status).toBe("valid");
@@ -86,6 +88,7 @@ describe("parseSetupArgs --sa-count", () => {
     }
   });
 
+  // Verifies accepts 1..10 in both --flag value and --flag=value forms.
   it("accepts 1..10 in both --flag value and --flag=value forms", () => {
     for (const argv of [["--sa-count", "1"], ["--sa-count", "10"], ["--sa-count=3"]]) {
       const result = parseSetupArgs(argv);
@@ -96,6 +99,7 @@ describe("parseSetupArgs --sa-count", () => {
     }
   });
 
+  // Verifies rejects 0, negative, non-integer, and non-numeric values with invalid_args.
   it("rejects 0, negative, non-integer, and non-numeric values with invalid_args", () => {
     for (const argv of [
       ["--sa-count", "0"],
@@ -112,6 +116,7 @@ describe("parseSetupArgs --sa-count", () => {
     }
   });
 
+  // Verifies rejects values above the cap with the quota-exhaustion usage error.
   it("rejects values above the cap with the quota-exhaustion usage error", () => {
     const result = parseSetupArgs(["--sa-count", "11"]);
     expect(result.status).toBe("invalid");
@@ -124,6 +129,7 @@ describe("parseSetupArgs --sa-count", () => {
     expect(MAX_SETUP_SA_COUNT).toBe(10);
   });
 
+  // Verifies documents --sa-count in the help text.
   it("documents --sa-count in the help text", () => {
     expect(SETUP_HELP_TEXT).toContain("--sa-count");
     expect(SETUP_HELP_TEXT).toContain("HIKOUTEI_SYNC_CREDENTIALS");
@@ -131,6 +137,7 @@ describe("parseSetupArgs --sa-count", () => {
   });
 });
 
+// Covers resolveSaCountForSetup (interactive prompt)
 describe("resolveSaCountForSetup (interactive prompt)", () => {
   /** Reader over a scripted line queue; records prompt writes. */
   function scriptedReader(lines: ReadonlyArray<string | null>): {
@@ -148,6 +155,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     };
   }
 
+  // Verifies never prompts with --yes, --dry-run, non-TTY, or an explicit flag.
   it("never prompts with --yes, --dry-run, non-TTY, or an explicit flag", async () => {
     const throwing = (): Promise<string | null> => {
       throw new Error("must not prompt");
@@ -164,6 +172,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     }
   });
 
+  // Verifies treats empty input and end-of-input as 1.
   it("treats empty input and end-of-input as 1", async () => {
     for (const lines of [[""], ["   "], [null]]) {
       const writes: string[] = [];
@@ -182,6 +191,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     expect(SA_COUNT_PROMPT).toBe("Service accounts to create? [1]: ");
   });
 
+  // Verifies accepts a valid count on the first answer.
   it("accepts a valid count on the first answer", async () => {
     const writes: string[] = [];
     const reader = scriptedReader(["3"]);
@@ -197,6 +207,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     expect(writes).toStrictEqual([SA_COUNT_PROMPT]);
   });
 
+  // Verifies re-asks once after invalid input, then accepts a valid answer.
   it("re-asks once after invalid input, then accepts a valid answer", async () => {
     const writes: string[] = [];
     const reader = scriptedReader(["banana", "2"]);
@@ -212,6 +223,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     expect(writes).toStrictEqual([SA_COUNT_PROMPT, SA_COUNT_PROMPT]);
   });
 
+  // Verifies fails with a usage error after two invalid answers.
   it("fails with a usage error after two invalid answers", async () => {
     const reader = scriptedReader(["0", "99"]);
     const resolved = await resolveSaCountForSetup({
@@ -228,6 +240,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     }
   });
 
+  // Verifies fails closed on invalid input followed by end-of-input (no silent default)
   it("fails closed on invalid input followed by end-of-input (no silent default)", async () => {
     const writes: string[] = [];
     const reader = scriptedReader(["banana", null]);
@@ -247,7 +260,9 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
   });
 });
 
+// Covers writeSetupEnvFile credential pool.
 describe("writeSetupEnvFile credential pool", () => {
+  // Verifies writes no pool line for a single-SA run.
   it("writes no pool line for a single-SA run", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -259,6 +274,7 @@ describe("writeSetupEnvFile credential pool", () => {
     expect(readFileSync(outputPath, "utf8")).not.toContain("HIKOUTEI_SYNC_CREDENTIALS");
   });
 
+  // Verifies writes a comma-joined pool line with no spaces for N=3.
   it("writes a comma-joined pool line with no spaces for N=3", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -280,6 +296,7 @@ describe("writeSetupEnvFile credential pool", () => {
     expect(second).toStrictEqual({ created: false, modified: false });
   });
 
+  // Verifies removes a stale pool line on a single-SA rewrite.
   it("removes a stale pool line on a single-SA rewrite", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -298,6 +315,7 @@ describe("writeSetupEnvFile credential pool", () => {
   });
 });
 
+// Covers checkpoint credential pool.
 describe("checkpoint credential pool", () => {
   /** Minimal complete state for a project; pool added via overrides. */
   function completeState(projectId: string, overrides: Record<string, unknown> = {}): SetupState {
@@ -327,6 +345,7 @@ describe("checkpoint credential pool", () => {
     };
   }
 
+  // Verifies round-trips a pool through save/load.
   it("round-trips a pool through save/load", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -340,6 +359,7 @@ describe("checkpoint credential pool", () => {
     }
   });
 
+  // Verifies keeps single-SA checkpoints unchanged (no pool key)
   it("keeps single-SA checkpoints unchanged (no pool key)", () => {
     const projectId = "pool-proj";
     const validated = validateSetupState(JSON.parse(JSON.stringify(completeState(projectId))));
@@ -349,6 +369,7 @@ describe("checkpoint credential pool", () => {
     expect("pool" in (validated as unknown as Record<string, unknown>)).toBe(false);
   });
 
+  // Verifies rejects empty pools, foreign emails, entry-1 mismatches, and pre-complete pools.
   it("rejects empty pools, foreign emails, entry-1 mismatches, and pre-complete pools", () => {
     const projectId = "pool-proj";
     expect(validateSetupState(completeState(projectId, { pool: [] }))).toBeNull();
@@ -371,6 +392,7 @@ describe("checkpoint credential pool", () => {
     ).toBeNull();
   });
 
+  // Verifies treats saCount as a run option: a stored pool never conflicts.
   it("treats saCount as a run option: a stored pool never conflicts", () => {
     const projectId = "pool-proj";
     const validated = validateSetupState(
@@ -392,7 +414,9 @@ describe("checkpoint credential pool", () => {
   });
 });
 
+// Covers poolKeyPath.
 describe("poolKeyPath", () => {
+  // Verifies mirrors the primary naming next to the primary path.
   it("mirrors the primary naming next to the primary path", () => {
     expect(poolKeyPath("/tmp/hikoutei-service-account.json", 2)).toBe("/tmp/hikoutei-service-account-2.json");
     expect(poolKeyPath("/tmp/custom-key.json", 10)).toBe("/tmp/custom-key-10.json");
@@ -551,7 +575,9 @@ function keyCommandEmails(calls: readonly string[][]): string[] {
     .map((c) => c[c.indexOf("--iam-account") + 1] as string);
 }
 
+// Covers runSetup credential pool flow.
 describe("runSetup credential pool flow", () => {
+  // Verifies N=1 (default) writes no pool key, no pool env line, and no pool progress.
   it("N=1 (default) writes no pool key, no pool env line, and no pool progress", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -566,6 +592,7 @@ describe("runSetup credential pool flow", () => {
     expect(harness.events.some((e) => e.type === "phase_started" && e.phase === POOL_EXPANSION_PHASE)).toBe(false);
   });
 
+  // Verifies N=3 provisions 3 SAs/keys/shares/verifies and writes the pool env.
   it("N=3 provisions 3 SAs/keys/shares/verifies and writes the pool env", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -646,6 +673,7 @@ describe("runSetup credential pool flow", () => {
     expect(tracker.isComplete(POOL_EXPANSION_PHASE)).toBe(true);
   });
 
+  // Verifies resume mid-pool skips completed entries without redoing their cloud calls.
   it("resume mid-pool skips completed entries without redoing their cloud calls", async () => {
     const dir = makeTempDir();
     const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
@@ -681,6 +709,7 @@ describe("runSetup credential pool flow", () => {
     expect(final.pool).toHaveLength(3);
   });
 
+  // Verifies resume with a smaller saCount keeps the full pool and reports kept entries.
   it("resume with a smaller saCount keeps the full pool and reports kept entries", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -706,6 +735,7 @@ describe("runSetup credential pool flow", () => {
     expect(final.pool).toHaveLength(3);
   });
 
+  // Verifies reuses an existing matching key file for a pool SA instead of creating.
   it("reuses an existing matching key file for a pool SA instead of creating", async () => {
     const dir = makeTempDir();
     const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
@@ -727,6 +757,7 @@ describe("runSetup credential pool flow", () => {
     expect(JSON.parse(readFileSync(secondPath, "utf8")).client_email).toBe(secondEmail);
   });
 
+  // Verifies rejects an out-of-range saCount with invalid_args before any cloud call.
   it("rejects an out-of-range saCount with invalid_args before any cloud call", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -737,6 +768,7 @@ describe("runSetup credential pool flow", () => {
   });
 });
 
+// Covers setup progress pool phase.
 describe("setup progress pool phase", () => {
   /** Full ten-phase completion prefix so the pool phase may legally start. */
   function completeFixedPhases(tracker: SetupProgressTracker): void {
@@ -758,6 +790,7 @@ describe("setup progress pool phase", () => {
     }
   }
 
+  // Verifies accepts the pool phase after output without moving the overall count.
   it("accepts the pool phase after output without moving the overall count", () => {
     const tracker = new SetupProgressTracker();
     // Rejected before the fixed phases complete.
@@ -774,6 +807,7 @@ describe("setup progress pool phase", () => {
   });
 });
 
+// Covers runSetupCli service-account count wiring.
 describe("runSetupCli service-account count wiring", () => {
   function capturingSink(): { write: (text: string) => void; text: () => string } {
     let text = "";
@@ -846,6 +880,7 @@ describe("runSetupCli service-account count wiring", () => {
     return { code, paramsSaCount, stdout: stdout.text(), stderr: stderr.text() };
   }
 
+  // Verifies prompts once on a TTY without --sa-count and passes the answer through.
   it("prompts once on a TTY without --sa-count and passes the answer through", async () => {
     const result = await runCli({ stdinChunks: ["y\n", "3\n"], isTTY: true });
     expect(result.code).toBe(0);
@@ -853,6 +888,7 @@ describe("runSetupCli service-account count wiring", () => {
     expect(result.stdout).toContain("Service accounts to create?");
   });
 
+  // Verifies never prompts with --sa-count and passes the flag through.
   it("never prompts with --sa-count and passes the flag through", async () => {
     const result = await runCli({ saCount: 2, stdinChunks: ["y\n"], isTTY: true });
     expect(result.code).toBe(0);
@@ -860,6 +896,7 @@ describe("runSetupCli service-account count wiring", () => {
     expect(result.stdout).not.toContain("Service accounts to create?");
   });
 
+  // Verifies never prompts off-TTY and defaults to 1.
   it("never prompts off-TTY and defaults to 1", async () => {
     // Off-TTY the confirmation still reads stdin (existing behavior), but
     // the count prompt never fires: the flag default (1) is used.
