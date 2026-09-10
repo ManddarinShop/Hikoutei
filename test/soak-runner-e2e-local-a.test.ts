@@ -94,6 +94,7 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Verifies the soak runner end to end (local, short budget) suite.
 describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     "passes with a fully numeric operations summary and reopen records",
     { timeout: 60_000 },
@@ -123,6 +124,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: writes redacted JSONL artifacts with the reopen cadence exercised.
   it(
     "writes redacted JSONL artifacts with the reopen cadence exercised",
     { timeout: 60_000 },
@@ -176,6 +178,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: resumes from the stored state with the stored seed and continuous totals.
   it(
     "resumes from the stored state with the stored seed and continuous totals",
     { timeout: 90_000 },
@@ -199,6 +202,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: reproduces identical per-cycle and per-operation results from the same seed.
   it(
     "reproduces identical per-cycle and per-operation results from the same seed",
     { timeout: 120_000 },
@@ -241,6 +245,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: converts an escaping cycle exception into a redacted abort failure on the budget.
   it(
     "converts an escaping cycle exception into a redacted abort failure on the budget",
     { timeout: 90_000 },
@@ -280,6 +285,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: stops with max-consecutive-failures when a cycle abort exhausts the budget.
   it(
     "stops with max-consecutive-failures when a cycle abort exhausts the budget",
     { timeout: 60_000 },
@@ -299,6 +305,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: stops with a stable reopen-cleanup abort when the safe-handoff reopen fails.
   it(
     "stops with a stable reopen-cleanup abort when the safe-handoff reopen fails",
     { timeout: 90_000 },
@@ -344,6 +351,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: recovers on the final close retry with a genuinely re-run provider cleanup.
   it(
     "recovers on the final close retry with a genuinely re-run provider cleanup",
     { timeout: 60_000 },
@@ -371,6 +379,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: fails the summary with a stable cleanup reason when the final close fails persistently.
   it(
     "fails the summary with a stable cleanup reason when the final close fails persistently",
     { timeout: 60_000 },
@@ -407,6 +416,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: collects the final runtime events in the collected log after close.
   it(
     "collects the final runtime events in the collected log after close",
     { timeout: 60_000 },
@@ -428,6 +438,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: --resume fails on a missing or invalid state instead of starting fresh.
   it(
     "--resume fails on a missing or invalid state instead of starting fresh",
     { timeout: 30_000 },
@@ -479,6 +490,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: --resume validates checkpoint.json and fails safely on a corrupt or foreign marker.
   it(
     "--resume validates checkpoint.json and fails safely on a corrupt or foreign marker",
     { timeout: 30_000 },
@@ -581,6 +593,7 @@ describeLongSoak("soak runner end to end (local, short budget)", () => {  it(
     },
   );
 
+  // Verifies: --resume validates the complete state schema with stable local reasons.
   it(
     "--resume validates the complete state schema with stable local reasons",
     { timeout: 30_000 },
