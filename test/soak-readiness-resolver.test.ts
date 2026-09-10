@@ -20,7 +20,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveSystemStateReadinessReader } from "../scripts/ci/local-soak/runner.mjs";
 
+// Verifies the resolveSystemStateReadinessReader (optional capability) suite.
 describe("resolveSystemStateReadinessReader (optional capability)", () => {
+  // Verifies: returns an immediate-ready no-op when the module is absent (source and dist missing).
   it("returns an immediate-ready no-op when the module is absent (source and dist missing)", async () => {
     // Simulates a base branch without the feature file: the module is absent
     // from BOTH source and dist, so there is nothing real to load.
@@ -37,6 +39,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     expect(touched).not.toHaveBeenCalled();
   });
 
+  // Verifies: still uses the real reader when the module is present.
   it("still uses the real reader when the module is present", async () => {
     const realReader = (runtime: { readonly draining: boolean }) => (
       runtime.draining ? { status: "draining" } : { status: "ready" }
@@ -52,6 +55,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     expect(reader({ draining: false })).toEqual({ status: "ready" });
   });
 
+  // Verifies: falls back to the built dist module for the EXPECTED plain-Node unsupported-TS-loader shape when the source is present.
   it("falls back to the built dist module for the EXPECTED plain-Node unsupported-TS-loader shape when the source is present", async () => {
     // Plain node strips types but cannot resolve the source's internal `./x.js`
     // specifier, so the load fails with the repo's specific ERR_MODULE_NOT_FOUND
@@ -77,6 +81,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     expect(reader({})).toEqual({ status: "ready" });
   });
 
+  // Verifies: rethrows a source-present runtime failure even with dist present and plain-Node fallback allowed.
   it("rethrows a source-present runtime failure even with dist present and plain-Node fallback allowed", async () => {
     // A real runtime throw from the loaded `.ts` source is NOT the
     // unsupported-loader shape, so it must rethrow even though a stale dist
@@ -97,6 +102,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     expect(loadDist).not.toHaveBeenCalled();
   });
 
+  // Verifies: rethrows a missing bare dependency even with dist present and plain-Node fallback allowed.
   it("rethrows a missing bare dependency even with dist present and plain-Node fallback allowed", async () => {
     // A REAL dependency failure: ERR_MODULE_NOT_FOUND for a bare package, not
     // for an internal `.js` under the source tree — must rethrow, never masked
@@ -120,6 +126,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     expect(loadDist).not.toHaveBeenCalled();
   });
 
+  // Verifies: returns the immediate-ready no-op when the source is absent even if a stale dist copy exists (never loads it).
   it("returns the immediate-ready no-op when the source is absent even if a stale dist copy exists (never loads it)", async () => {
     // A dist file left over from a different branch/feature layer must not be
     // loaded when the source module is absent: the no-op is returned and the
@@ -138,6 +145,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     expect(loadDist).not.toHaveBeenCalled();
   });
 
+  // Verifies: rethrows a real source/runtime failure when the module exists (never masks it).
   it("rethrows a real source/runtime failure when the module exists (never masks it)", async () => {
     const realError = new Error("systemStateReadiness failed to compile");
     await expect(
@@ -151,6 +159,7 @@ describe("resolveSystemStateReadinessReader (optional capability)", () => {
     ).rejects.toBe(realError);
   });
 
+  // Verifies: rethrows under Vitest (no dist fallback) even when dist exists, avoiding stale-dist masking.
   it("rethrows under Vitest (no dist fallback) even when dist exists, avoiding stale-dist masking", async () => {
     const realError = new Error("source compile failure under Vitest");
     await expect(
