@@ -73,6 +73,7 @@ function rowFor(id: string, overrides: Record<string, unknown> = {}) {
 
 type SoakRuntime = Awaited<ReturnType<typeof createTypedSheets>>;
 
+// Verifies the soak executor against a real runtime suite.
 describe("soak executor against a real runtime", () => {
   let runtime: SoakRuntime;
   let rootEm: ReturnType<SoakRuntime["em"]["fork"]>;
@@ -104,6 +105,7 @@ describe("soak executor against a real runtime", () => {
 
   const sqliteCount = async () => rootEm.fork().count(SoakTask, {});
 
+  // Verifies: commits create/update/delete/batchPersist in lockstep with the oracle.
   it("commits create/update/delete/batchPersist in lockstep with the oracle", async () => {
     const created = await executeActorOperation(
       { ...baseOp("create", "t-create"), row: rowFor("t-create") },
@@ -150,6 +152,7 @@ describe("soak executor against a real runtime", () => {
     expect(missing.counts).toEqual({ skipped: 1 });
   });
 
+  // Verifies: commits transactionalCommit and rolls back transactionalRollback fully.
   it("commits transactionalCommit and rolls back transactionalRollback fully", async () => {
     const committed = await executeActorOperation(
       {
@@ -178,6 +181,7 @@ describe("soak executor against a real runtime", () => {
     expect(await rootEm.fork().findOne(SoakTask, { id: "t-tx-rollback" })).toBeNull();
   });
 
+  // Verifies: regression: forkIsolation followed by transactionalRollback stays aligned.
   it("regression: forkIsolation followed by transactionalRollback stays aligned", async () => {
     // Original soak failure sequence: forkIsolation created a NEW row but the
     // oracle's replace skipped it, then transactionalRollback compared the
@@ -208,6 +212,7 @@ describe("soak executor against a real runtime", () => {
     expect(oracle.size("SoakTask")).toBe(1);
   });
 
+  // Verifies: expected_* ops assert the documented stable error codes.
   it("expected_* ops assert the documented stable error codes", async () => {
     const invalidField = await executeActorOperation(
       { ...baseOp("expectedInvalidField", "t-invalid") },
@@ -238,6 +243,7 @@ describe("soak executor against a real runtime", () => {
     expect(negativeOffset.code).toBe(EXPECTED_ERROR_CODES.invalidField);
   });
 
+  // Verifies: verifies query ops (count/find/findOne/paging) against the oracle.
   it("verifies query ops (count/find/findOne/paging) against the oracle", async () => {
     // Seed two rows through the public API and the oracle together.
     const em = rootEm.fork();
@@ -314,6 +320,7 @@ describe("soak executor against a real runtime", () => {
     expect(noOp.status).toBe("ok");
   });
 
+  // Verifies: reports failed operations with a stable redacted reason, never a message.
   it("reports failed operations with a stable redacted reason, never a message", async () => {
     // Deliberately desync the oracle (phantom row) so findOne fails: the
     // executor must report presence-mismatch and never the raw message.
@@ -351,6 +358,7 @@ describe("soak executor against a real runtime", () => {
     expect(JSON.stringify(unexpected)).not.toMatch(/soak-intentional-rollback|rollback leaked/);
   });
 
+  // Verifies: runner-style retry loop counts retries and honors bounded attempts.
   it("runner-style retry loop counts retries and honors bounded attempts", async () => {
     // Force a deterministic failure (oracle phantom) and replay the runner's
     // retry loop: 3 attempts, 2 retries, final record failed with a stable
@@ -378,6 +386,7 @@ describe("soak executor against a real runtime", () => {
     expect(recovered.status).toBe("ok");
   });
 
+  // Verifies: never records raw ids, values, or messages in any result payload.
   it("never records raw ids, values, or messages in any result payload", async () => {
     const results = [];
     results.push(await executeActorOperation(
@@ -405,6 +414,7 @@ describe("soak executor against a real runtime", () => {
     }
   });
 
+  // Verifies: maps arbitrary token/email/URL/path-like error codes to the fixed unknown category.
   it("maps arbitrary token/email/URL/path-like error codes to the fixed unknown category", async () => {
     // An unvalidated error.code is free text: it could be a JWT, email,
     // URL, or path. Only allowlisted stable codes may pass through; every
@@ -456,6 +466,7 @@ describe("soak executor against a real runtime", () => {
     expect(result.code).toBe(EXPECTED_ERROR_CODES.invalidQuery);
   });
 
+  // Verifies: sanitizeStableCode maps unknown values and passes allowlisted codes.
   it("sanitizeStableCode maps unknown values and passes allowlisted codes", async () => {
     const { sanitizeStableCode } = await import("../scripts/ci/local-soak/executor.mjs");
     expect(sanitizeStableCode(EXPECTED_ERROR_CODES.invalidField)).toBe(
@@ -469,7 +480,9 @@ describe("soak executor against a real runtime", () => {
     expect(sanitizeStableCode(42)).toBe("unknown");
   });
 
+  // Verifies the replay reconciliation of an interrupted cycle suite.
   describe("replay reconciliation of an interrupted cycle", () => {
+    // Verifies: create accepts an already-committed deterministic row instead of duplicating.
     it("create accepts an already-committed deterministic row instead of duplicating", async () => {
       const op = { ...baseOp("create", "rec-create"), row: rowFor("rec-create") };
       const first = await executeActorOperation(op, { ...ctx, reconcile: true });
@@ -485,6 +498,7 @@ describe("soak executor against a real runtime", () => {
       expect(oracle.size("SoakTask")).toBe(1);
     });
 
+    // Verifies: create fails with reconcile-mismatch when the existing row diverges.
     it("create fails with reconcile-mismatch when the existing row diverges", async () => {
       const op = { ...baseOp("create", "rec-diverged"), row: rowFor("rec-diverged") };
       await executeActorOperation(op, { ...ctx, reconcile: true });
@@ -512,6 +526,7 @@ describe("soak executor against a real runtime", () => {
       expect(await sqliteCount()).toBe(1); // never duplicated, never overwritten
     });
 
+    // Verifies: batchPersist inserts only the missing rows on replay.
     it("batchPersist inserts only the missing rows on replay", async () => {
       const op = {
         ...baseOp("batchPersist", "rec-batch"),
@@ -528,6 +543,7 @@ describe("soak executor against a real runtime", () => {
       expect(oracle.size("SoakTask")).toBe(3);
     });
 
+    // Verifies: transactionalCommit reconciles an already-committed row.
     it("transactionalCommit reconciles an already-committed row", async () => {
       const op = {
         ...baseOp("transactionalCommit", "rec-tx"),
@@ -540,6 +556,7 @@ describe("soak executor against a real runtime", () => {
       expect(await sqliteCount()).toBe(1);
     });
 
+    // Verifies: forkIsolation replay accepts an already-committed post-patch row.
     it("forkIsolation replay accepts an already-committed post-patch row", async () => {
       const op = {
         ...baseOp("forkIsolation", "rec-fork"),
@@ -559,6 +576,7 @@ describe("soak executor against a real runtime", () => {
       expect(oracle.row("SoakTask", "rec-fork")?.priority).toBe(42);
     });
 
+    // Verifies: forkIsolation recovers a pre-patch committed row (interrupted between the two flushes).
     it("forkIsolation recovers a pre-patch committed row (interrupted between the two flushes)", async () => {
       const op = {
         ...baseOp("forkIsolation", "rec-fork-pre"),
@@ -593,6 +611,7 @@ describe("soak executor against a real runtime", () => {
       expect(converged?.priority).toBe(42);
     });
 
+    // Verifies: forkIsolation rejects a committed row that matches neither deterministic stage.
     it("forkIsolation rejects a committed row that matches neither deterministic stage", async () => {
       const op = {
         ...baseOp("forkIsolation", "rec-fork-arbitrary"),
@@ -622,6 +641,7 @@ describe("soak executor against a real runtime", () => {
       expect(oracle.row("SoakTask", "rec-fork-arbitrary")?.priority).toBe(7);
     });
 
+    // Verifies: update and delete remain idempotent on replay without reconcile flags.
     it("update and delete remain idempotent on replay without reconcile flags", async () => {
       const created = await executeActorOperation(
         { ...baseOp("create", "rec-idem"), row: rowFor("rec-idem") },
