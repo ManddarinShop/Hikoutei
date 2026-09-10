@@ -110,6 +110,7 @@ async function withRuntime(
   }
 }
 
+// Covers create() required and scalar value validation.
 describe("create() required and scalar value validation", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -117,6 +118,7 @@ describe("create() required and scalar value validation", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies rejects a missing required scalar at flush with INVALID_SCALAR_VALUE.
   it("rejects a missing required scalar at flush with INVALID_SCALAR_VALUE", async () => {
     await withRuntime(undefined, async (runtime) => {
       const em = runtime.em.fork();
@@ -136,6 +138,7 @@ describe("create() required and scalar value validation", () => {
     });
   });
 
+  // Verifies rejects a wrong scalar type at flush with INVALID_SCALAR_VALUE.
   it("rejects a wrong scalar type at flush with INVALID_SCALAR_VALUE", async () => {
     await withRuntime(undefined, async (runtime) => {
       const em = runtime.em.fork();
@@ -151,6 +154,7 @@ describe("create() required and scalar value validation", () => {
   });
 });
 
+// Covers persist() and remove() iterable inputs.
 describe("persist() and remove() iterable inputs", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -158,6 +162,7 @@ describe("persist() and remove() iterable inputs", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies persists every managed entity scheduled for removal in an array input.
   it("persists every managed entity scheduled for removal in an array input", async () => {
     await withRuntime(undefined, async (runtime) => {
       // A loaded entity is dirty-tracked against its snapshot, so mutating it
@@ -198,6 +203,7 @@ describe("persist() and remove() iterable inputs", () => {
     });
   });
 
+  // Verifies persists every managed entity scheduled for removal in a generic iterable (Set) input.
   it("persists every managed entity scheduled for removal in a generic iterable (Set) input", async () => {
     await withRuntime(undefined, async (runtime) => {
       // Same load-bearing rationale as the array case above: a loaded entity
@@ -236,6 +242,7 @@ describe("persist() and remove() iterable inputs", () => {
     });
   });
 
+  // Verifies removes every managed entity in an array input.
   it("removes every managed entity in an array input", async () => {
     await withRuntime(undefined, async (runtime) => {
       const seed = runtime.em.fork();
@@ -259,6 +266,7 @@ describe("persist() and remove() iterable inputs", () => {
     });
   });
 
+  // Verifies removes every managed entity in a generic iterable (Set) input.
   it("removes every managed entity in a generic iterable (Set) input", async () => {
     await withRuntime(undefined, async (runtime) => {
       const seed = runtime.em.fork();
@@ -283,6 +291,7 @@ describe("persist() and remove() iterable inputs", () => {
   });
 });
 
+// Covers remove() unmanaged entity contract.
 describe("remove() unmanaged entity contract", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -290,6 +299,7 @@ describe("remove() unmanaged entity contract", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies rejects a plain object that was never managed with UNMANAGED_ENTITY.
   it("rejects a plain object that was never managed with UNMANAGED_ENTITY", async () => {
     await withRuntime(undefined, async (runtime) => {
       const em = runtime.em.fork();
@@ -301,6 +311,7 @@ describe("remove() unmanaged entity contract", () => {
     });
   });
 
+  // Verifies rejects an entity materialized by a different fork with UNMANAGED_ENTITY.
   it("rejects an entity materialized by a different fork with UNMANAGED_ENTITY", async () => {
     await withRuntime(undefined, async (runtime) => {
       const owner = runtime.em.fork();
@@ -318,6 +329,7 @@ describe("remove() unmanaged entity contract", () => {
   });
 });
 
+// Covers unregistered entity token on the read surface.
 describe("unregistered entity token on the read surface", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -325,6 +337,7 @@ describe("unregistered entity token on the read surface", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies rejects find() on a token not passed to createTypedSheets() with UNREGISTERED_ENTITY.
   it("rejects find() on a token not passed to createTypedSheets() with UNREGISTERED_ENTITY", async () => {
     // Open the runtime with only `Note`; `UnregisteredNote` is a valid token
     // but was never registered with this runtime.
@@ -340,6 +353,7 @@ describe("unregistered entity token on the read surface", () => {
   });
 });
 
+// Covers primary-key mutation on a pending insert.
 describe("primary-key mutation on a pending insert", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -347,6 +361,7 @@ describe("primary-key mutation on a pending insert", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies rejects a changed primary key before the first flush with ENTITY_PRIMARY_KEY_MUTATION.
   it("rejects a changed primary key before the first flush with ENTITY_PRIMARY_KEY_MUTATION", async () => {
     await withRuntime(undefined, async (runtime) => {
       const em = runtime.em.fork();
@@ -360,6 +375,7 @@ describe("primary-key mutation on a pending insert", () => {
   });
 });
 
+// Covers flush() idempotency with no pending changes.
 describe("flush() idempotency with no pending changes", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -367,6 +383,7 @@ describe("flush() idempotency with no pending changes", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies resolves repeated flush() calls without changes and leaves data intact.
   it("resolves repeated flush() calls without changes and leaves data intact", async () => {
     await withRuntime(undefined, async (runtime) => {
       const em = runtime.em.fork();
@@ -385,6 +402,7 @@ describe("flush() idempotency with no pending changes", () => {
   });
 });
 
+// Covers fork() identity isolation.
 describe("fork() identity isolation", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -392,6 +410,7 @@ describe("fork() identity isolation", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies keeps identity maps and dirty snapshots independent across forks.
   it("keeps identity maps and dirty snapshots independent across forks", async () => {
     await withRuntime(undefined, async (runtime) => {
       const seed = runtime.em.fork();
@@ -428,6 +447,7 @@ describe("fork() identity isolation", () => {
   });
 });
 
+// Covers close() public contract.
 describe("close() public contract", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -435,6 +455,7 @@ describe("close() public contract", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close().catch(() => undefined)));
   });
 
+  // Verifies is idempotent: a second close() resolves without throwing.
   it("is idempotent: a second close() resolves without throwing", async () => {
     const runtime = await openRuntime();
     runtimes.push(runtime);
@@ -444,6 +465,7 @@ describe("close() public contract", () => {
   });
 });
 
+// Covers transactional() success result propagation.
 describe("transactional() success result propagation", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -451,6 +473,7 @@ describe("transactional() success result propagation", () => {
     await Promise.all(runtimes.splice(0).map((runtime) => runtime.close()));
   });
 
+  // Verifies returns the callback result and commits its writes on success.
   it("returns the callback result and commits its writes on success", async () => {
     await withRuntime(undefined, async (runtime) => {
       const em = runtime.em.fork();
