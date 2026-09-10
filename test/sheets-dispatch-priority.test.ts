@@ -73,7 +73,9 @@ function pendingEffect(overrides: Partial<PendingEffect> = {}): PendingEffect {
   };
 }
 
+// Verifies the sheetsDispatchPriorityFor suite.
 describe("sheetsDispatchPriorityFor", () => {
+  // Verifies: runs System_State fast-append creates first (priority 0).
   it("runs System_State fast-append creates first (priority 0)", () => {
     const effect = pendingEffect({
       effect_kind: "system_projection",
@@ -86,6 +88,7 @@ describe("sheetsDispatchPriorityFor", () => {
       .toBe(SYNC_DISPATCH_PRIORITIES.SYSTEM_STATE_FAST_APPEND);
   });
 
+  // Verifies: runs System_State regular update/delete/tombstone followers next (priority 1).
   it("runs System_State regular update/delete/tombstone followers next (priority 1)", () => {
     const update = pendingEffect({
       effect_kind: "system_projection",
@@ -107,6 +110,7 @@ describe("sheetsDispatchPriorityFor", () => {
       .toBe(SYNC_DISPATCH_PRIORITIES.SYSTEM_STATE_REGULAR);
   });
 
+  // Verifies: runs Sync_Conflicts fast appends after System_State followers (priority 2).
   it("runs Sync_Conflicts fast appends after System_State followers (priority 2)", () => {
     const effect = pendingEffect({
       effect_kind: "resolution_projection",
@@ -119,6 +123,7 @@ describe("sheetsDispatchPriorityFor", () => {
       .toBe(SYNC_DISPATCH_PRIORITIES.SYNC_CONFLICTS_FAST_APPEND);
   });
 
+  // Verifies: runs User_Input and other regular effects last (priority 3).
   it("runs User_Input and other regular effects last (priority 3)", () => {
     const userDelete = pendingEffect({
       effect_kind: "user_input_delete",
@@ -149,6 +154,7 @@ describe("sheetsDispatchPriorityFor", () => {
       .toBe(SYNC_DISPATCH_PRIORITIES.OTHER_REGULAR);
   });
 
+  // Verifies: degrades a malformed payload to the neutral class without throwing.
   it("degrades a malformed payload to the neutral class without throwing", () => {
     const malformed = pendingEffect({
       payload_json: "{not-json",
