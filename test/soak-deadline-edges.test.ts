@@ -61,6 +61,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// Verifies the probe polling deadline edges suite.
 describe("probe polling deadline edges", () => {
   /**
    * Builds a probe context whose canonical-baseline read resolves through
@@ -122,6 +123,7 @@ describe("probe polling deadline edges", () => {
     return { id: "task-main-c0", ...Object.fromEntries(EDITABLE_FIELDS.map((field) => [field, "human-edit-c0"])) };
   }
 
+  // Verifies: never runs a poll read after the deadline: the bounded sleep overshoot is rechecked first.
   it("never runs a poll read after the deadline: the bounded sleep overshoot is rechecked first", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + PROBE_ACCEPT_POLL_MS;
@@ -145,6 +147,7 @@ describe("probe polling deadline edges", () => {
     expect(applyMutation).not.toHaveBeenCalled();
   });
 
+  // Verifies: never accepts a success observed after the deadline: a slow poll read resolving late is failed.
   it("never accepts a success observed after the deadline: a slow poll read resolving late is failed", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -178,6 +181,7 @@ describe("probe polling deadline edges", () => {
     expect(applyMutation).not.toHaveBeenCalled();
   });
 
+  // Verifies: accepts a success only while the deadline still holds (control).
   it("accepts a success only while the deadline still holds (control)", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -203,6 +207,7 @@ describe("probe polling deadline edges", () => {
   });
 });
 
+// Verifies the probe User_Input readiness suite.
 describe("probe User_Input readiness", () => {
   /** A matching row for the deterministic probe target. */
   function matchingRow() {
@@ -252,6 +257,7 @@ describe("probe User_Input readiness", () => {
     return { context, applyMutation, mutateInputCell, readTabRows };
   }
 
+  // Verifies: waits for the identity to appear across readiness reads, then issues exactly ONE write and accepts.
   it("waits for the identity to appear across readiness reads, then issues exactly ONE write and accepts", async () => {
     // System_State convergence passed but the User_Input row had not yet
     // projected: the probe must reread until the identity is observable
@@ -278,6 +284,7 @@ describe("probe User_Input readiness", () => {
     expect(applyMutation).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: never writes when the identity never appears: stable missing_identity, zero writes, no post-deadline read.
   it("never writes when the identity never appears: stable missing_identity, zero writes, no post-deadline read", async () => {
     const startedAt = Date.now();
     // The phase budget equals one poll, so the deadline expires after the
@@ -301,6 +308,7 @@ describe("probe User_Input readiness", () => {
     expect(mutateInputCell).not.toHaveBeenCalled();
   });
 
+  // Verifies: does not write to a stale baseline: the canonical row was deleted (binding tombstoned), so the probe fails missing_identity.
   it("does not write to a stale baseline: the canonical row was deleted (binding tombstoned), so the probe fails missing_identity", async () => {
     // A present identity on the User_Input tab is not a current writable
     // baseline: the scenario cleanup may have already deleted the canonical
@@ -342,6 +350,7 @@ describe("probe User_Input readiness", () => {
     expect(applyMutation).not.toHaveBeenCalled();
   });
 
+  // Verifies: does not write to an incoherent baseline: the canonical row.
   it("does not write to an incoherent baseline: the canonical row's editable values differ from the User_Input display", async () => {
     // A present identity whose canonical row exists is still not a current
     // writable baseline when the canonical editable values DIFFER from the
@@ -388,6 +397,7 @@ describe("probe User_Input readiness", () => {
     expect(applyMutation).not.toHaveBeenCalled();
   });
 
+  // Verifies: fails closed immediately without a write on a duplicated intended identity.
   it("fails closed immediately without a write on a duplicated intended identity", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -408,6 +418,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: fails closed immediately without a write when the id header is missing or malformed.
   it("fails closed immediately without a write when the id header is missing or malformed", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -424,6 +435,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: does not retry a rejected write and preserves the stable status class.
   it("does not retry a rejected write and preserves the stable status class", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -445,6 +457,7 @@ describe("probe User_Input readiness", () => {
     expect(mutate).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: fails closed on a duplicated id header: malformed_header, zero writes.
   it("fails closed on a duplicated id header: malformed_header, zero writes", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -464,6 +477,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: fails closed before a whitespace/non-string header: malformed, zero writes.
   it("fails closed before a whitespace/non-string header: malformed, zero writes", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -483,6 +497,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: fails closed on a malformed sparse non-empty row: identity_shifted, zero writes.
   it("fails closed on a malformed sparse non-empty row: identity_shifted, zero writes", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -505,6 +520,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: fails closed on a duplicated NON-target identity: identity_shifted, zero writes.
   it("fails closed on a duplicated NON-target identity: identity_shifted, zero writes", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -526,6 +542,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: treats fully blank padding rows as valid and writes once (control).
   it("treats fully blank padding rows as valid and writes once (control)", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -549,6 +566,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(2);
   });
 
+  // Verifies: never writes when a slow readiness read resolves ready AT/after the deadline.
   it("never writes when a slow readiness read resolves ready AT/after the deadline", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 10_000;
@@ -575,6 +593,7 @@ describe("probe User_Input readiness", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: never writes when the pre-write canonical revalidation read resolves after the deadline.
   it("never writes when the pre-write canonical revalidation read resolves after the deadline", async () => {
     // The readiness loop resolves a coherent baseline, but the immediate
     // pre-write canonical revalidation read (the second findOne) is slow and
@@ -641,6 +660,7 @@ describe("probe User_Input readiness", () => {
   });
 });
 
+// Verifies the convergence deadline edges suite.
 describe("convergence deadline edges", () => {
   /** Builds a convergence context over two entities with scripted reads. */
   function convergenceContext(
@@ -672,6 +692,7 @@ describe("convergence deadline edges", () => {
     return [["id"], ["r1"], ["r2"]];
   }
 
+  // Verifies: never starts a read after the deadline: the final read of an iteration is rechecked.
   it("never starts a read after the deadline: the final read of an iteration is rechecked", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 100;
@@ -693,6 +714,7 @@ describe("convergence deadline edges", () => {
     expect(called).not.toContain("E2");
   });
 
+  // Verifies: never returns success when the last read resolved after the deadline.
   it("never returns success when the last read resolved after the deadline", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 100;
@@ -717,6 +739,7 @@ describe("convergence deadline edges", () => {
     expect(record.duplicateRows).toBe(0);
   });
 
+  // Verifies: returns ok only while the phase deadline still holds (control).
   it("returns ok only while the phase deadline still holds (control)", async () => {
     const startedAt = Date.now();
     const deadlineAtMs = startedAt + 1_000;
