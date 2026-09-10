@@ -117,7 +117,9 @@ function receiptRange(call: { readonly ranges: readonly string[] }): string | un
   return call.ranges.find((range) => range.includes(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME));
 }
 
+// Covers receipt read cursor (tail band + fallback).
 describe("receipt read cursor (tail band + fallback)", () => {
+  // Verifies reads only the receipt tail band after applied batches.
   it("reads only the receipt tail band after applied batches", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -152,6 +154,7 @@ describe("receipt read cursor (tail band + fallback)", () => {
     );
   });
 
+  // Verifies falls back to the historical full receipt read when the sentinel vanishes.
   it("falls back to the historical full receipt read when the sentinel vanishes", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -192,6 +195,7 @@ describe("receipt read cursor (tail band + fallback)", () => {
     expect(receiptTab.cell(1, 0)?.userEnteredValue?.stringValue).toBe("append-fourth-0000");
   });
 
+  // Verifies replays an effect from MORE THAN ONE prior batch after cursor advances.
   it("replays an effect from MORE THAN ONE prior batch after cursor advances", async () => {
     // Regression (review 5차, Critical): the tail band alone only covers
     // receipts appended since the previous read. An effect whose ack was lost
@@ -221,6 +225,7 @@ describe("receipt read cursor (tail band + fallback)", () => {
     expect(replayFirst.results[0]?.visibleHash).toBeDefined();
   });
 
+  // Verifies replays a same-effectId re-dispatch straight to the provider after banding.
   it("replays a same-effectId re-dispatch straight to the provider after banding", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -239,6 +244,7 @@ describe("receipt read cursor (tail band + fallback)", () => {
     expect(systemTab.lastContentRow()).toBe(before);
   });
 
+  // Verifies keeps append positions exact across banded reads.
   it("keeps append positions exact across banded reads", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -267,6 +273,7 @@ describe("receipt read cursor (tail band + fallback)", () => {
   });
 });
 
+// Covers receipt accumulation seeding (burst over a deep history).
 describe("receipt accumulation seeding (burst over a deep history)", () => {
   /**
    * Seeded receipt-history depth. Parameterized because the FIRST dispatch
@@ -285,6 +292,7 @@ describe("receipt accumulation seeding (burst over a deep history)", () => {
     return Number(match[1]);
   }
 
+  // Verifies bands over a seeded history without re-reading it and applies each effect once.
   it("bands over a seeded history without re-reading it and applies each effect once", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -375,6 +383,7 @@ describe("receipt accumulation seeding (burst over a deep history)", () => {
   }, 60_000);
 });
 
+// Covers column-scoped base read.
 describe("column-scoped base read", () => {
   /** Pre-create the hidden receipt tab (headers only) so dispatches are
    * steady-state scoped reads — a receipt-init dispatch (tab absent) is
@@ -385,6 +394,7 @@ describe("column-scoped base read", () => {
     });
   }
 
+  // Verifies detects a human-added duplicate identity row through the identity band.
   it("detects a human-added duplicate identity row through the identity band", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", {
@@ -406,6 +416,7 @@ describe("column-scoped base read", () => {
       .toEqual(["'Users_System'!A1:C1", "'Users_System'!A2:A1048576"]);
   });
 
+  // Verifies reads a fresh batch.
   it("reads a fresh batch's replay evidence without the full width", async () => {
     // An append-only steady dispatch reads the target tab through the
     // column-scoped bands only (the planned row itself is re-read
@@ -429,6 +440,7 @@ describe("column-scoped base read", () => {
     expect(systemTab?.cell(2, 0)?.userEnteredValue?.stringValue).toBe("extra-0000");
   });
 
+  // Verifies falls back to the whole-table full-evidence read when key rows are not contiguous.
   it("falls back to the whole-table full-evidence read when key rows are not contiguous", async () => {
     // A human cleared the identity cell of a middle row: the scoped bands
     // cannot prove the row's NON-key columns are blank, so the dispatch must
@@ -464,6 +476,7 @@ describe("column-scoped base read", () => {
       .toEqual(["'Users_System'!A1:C1048576"]);
   });
 
+  // Verifies downgrades a receipt-init dispatch to the historical whole-table read.
   it("downgrades a receipt-init dispatch to the historical whole-table read", async () => {
     // Without the receipt tab the scoped path must NOT stack its conditional
     // verification read on top of the stale receipt-init refresh: the base
@@ -492,7 +505,9 @@ describe("column-scoped base read", () => {
   });
 });
 
+// Covers leased paced-request budget (5차 re-review fixes).
 describe("leased paced-request budget (5차 re-review fixes)", () => {
+  // Verifies falls back to exactly ONE full receipt read when the API rejects the band (HTTP 400).
   it("falls back to exactly ONE full receipt read when the API rejects the band (HTTP 400)", async () => {
     // Regression (review 5차 re-review, High): a transport-rejected tail
     // band first ran the full recovery read inside the catch, THEN failed
@@ -532,6 +547,7 @@ describe("leased paced-request budget (5차 re-review fixes)", () => {
       .toContain("!A4:F");
   });
 
+  // Verifies consolidates verification-overflow routes into ONE enumeration-reusing full read.
   it("consolidates verification-overflow routes into ONE enumeration-reusing full read", async () => {
     // Regression (review 5차 re-review, High): a multi-route dispatch whose
     // band plan overflows the 40-range budget re-entered the per-route
