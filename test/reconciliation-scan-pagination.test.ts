@@ -69,7 +69,9 @@ const GOLDEN_PATH = join(
   "reconciliation-golden.json",
 );
 
+// Covers reconciliation scan pagination.
 describe("reconciliation scan pagination", () => {
+  // Verifies reproduces the golden full-load repair decisions on the large fixture.
   it("reproduces the golden full-load repair decisions on the large fixture", async () => {
     const { adapter, provider } = await bootstrapLarge();
     try {
@@ -98,6 +100,7 @@ describe("reconciliation scan pagination", () => {
     }
   }, 240_000);
 
+  // Verifies bounds every canonical read to the entity page size (peak scan memory is O(chunk)).
   it("bounds every canonical read to the entity page size (peak scan memory is O(chunk))", async () => {
     const { adapter, provider } = await bootstrapLarge();
     try {
@@ -125,6 +128,7 @@ describe("reconciliation scan pagination", () => {
     }
   }, 240_000);
 
+  // Verifies handles empty tables, a single row, and mid-entity chunk splits.
   it("handles empty tables, a single row, and mid-entity chunk splits", async () => {
     const { adapter } = await bootstrapSmall([
       { entityId: "e1", fields: { id: "a", status: "x", note: "n", flag: "f" } },
@@ -152,6 +156,7 @@ describe("reconciliation scan pagination", () => {
     }
   });
 
+  // Verifies reads nothing from empty tables.
   it("reads nothing from empty tables", async () => {
     const { adapter } = await bootstrapSmall([]);
     try {
@@ -167,6 +172,7 @@ describe("reconciliation scan pagination", () => {
     }
   });
 
+  // Verifies keeps every binding.
   it("keeps every binding's fields for multi-binding entities", async () => {
     const { adapter } = await bootstrapSmall([
       { entityId: "e1", fields: { id: "a", status: "x", note: "n", flag: "f" } },
@@ -200,6 +206,7 @@ describe("reconciliation scan pagination", () => {
     }
   });
 
+  // Verifies skips binding-less entities while advancing the cursor.
   it("skips binding-less entities while advancing the cursor", async () => {
     const { adapter } = await bootstrapSmall([
       { entityId: "e1", fields: { id: "a" } },
@@ -228,6 +235,7 @@ describe("reconciliation scan pagination", () => {
     }
   });
 
+  // Verifies serves entity-batched pages from bounded index seeks (no temp sort).
   it("serves entity-batched pages from bounded index seeks (no temp sort)", async () => {
     const { adapter } = await bootstrapSmall([
       { entityId: "e1", fields: { id: "a" } },
