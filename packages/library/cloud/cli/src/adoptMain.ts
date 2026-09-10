@@ -10,12 +10,19 @@
  * migration, not a long-lived service host).
  */
 
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import { createTypedSheetsWithSync } from "hikoutei";
 import type { HikouteiEntity } from "@hikoutei/sync-engine/api/entity.js";
-import { getEntityDescriptor, getRegisteredEntityTokens } from "@hikoutei/sync-engine/api/entity.js";
-import { HikouteiError } from "@hikoutei/sync-engine/api/errors.js";
+import {
+  defineTypedSheetsEntityFromDescriptorFile,
+  descriptorFileColumnMap,
+  getEntityDescriptor,
+  getRegisteredEntityTokens,
+  parseDescriptorFile,
+} from "@hikoutei/sync-engine/api/entity.js";
+import { HIKOUTEI_ERROR_CODES, HikouteiError } from "@hikoutei/sync-engine/api/errors.js";
 import { parseAdoptArgs, type AdoptOptions } from "./adoptArgs.js";
 import {
   ADOPT_ERROR_PREFIX,
@@ -34,6 +41,18 @@ import { createStdinFinalizer, isModuleMainEntry } from "./setup.js";
 const HIKOUTEI_ERROR_CODES_ADOPT_ENTITY_UNKNOWN = "sync_startup_failed" as const;
 
 /**
+ * Loads the ambient/module entity registry: imports the `--entities` module
+ * once (whose import side effect registers the descriptors) and snapshots
+ * the tokens, or falls back to entities already registered in this process.
+ */
+async function registeredTokens(entitiesModule: string | undefined): Promise<readonly HikouteiEntity[]> {
+  if (entitiesModule !== undefined) {
+    await import(pathToFileURL(entitiesModule).href);
+  }
+  return getRegisteredEntityTokens();
+}
+
+/**
  * Resolves every requested entity token. Loads the `--entities` module once
  * (whose import side effect registers the descriptors), then resolves each
  * requested entity name. Without a module, falls back to entities already
@@ -44,9 +63,7 @@ async function loadAdoptEntities(options: AdoptOptions): Promise<readonly Hikout
     ? options.adopts.map((entry) => entry.entityName)
     : [options.entityName!];
 
-  const registered: readonly HikouteiEntity[] = options.entitiesModule !== undefined
-    ? (await import(pathToFileURL(options.entitiesModule).href), getRegisteredEntityTokens())
-    : getRegisteredEntityTokens();
+  const registered = await registeredTokens(options.entitiesModule);
 
   const tokens: HikouteiEntity[] = [];
   for (const name of names) {
@@ -84,6 +101,54 @@ const productionRunner: AdoptRunner = async (input: AdoptRunnerInput) => {
 };
 
 /**
+ * Resolves a `--descriptor` adoption: reads the JSON file, validates it
+ * with the same rules `defineTypedSheetsEntity` enforces (version mismatch
+ * and malformed fields fail with `invalid_entity_descriptor`), rejects an
+ * already-registered entity name with `duplicate_entity`, and registers the
+ * file through the same builder adopt requires. The header→property
+ * columnMap comes from the file's `header` fields; an explicit `--map` wins
+ * on a conflict. File content is never echoed (redaction); only the reason
+ * and the descriptor path are reported.
+ */
+export async function loadDescriptorAdoption(
+  options: AdoptOptions,
+): Promise<{ readonly entityName: string; readonly columnMap: Record<string, string>; readonly entities: readonly HikouteiEntity[] }> {
+  const descriptorPath = options.descriptorPath!;
+  let raw: string;
+  try {
+    raw = await readFile(descriptorPath, "utf8");
+  } catch {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+      `could not read the descriptor file "${descriptorPath}".`,
+    );
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
+      `descriptor file "${descriptorPath}" is not valid JSON.`,
+    );
+  }
+  const file = parseDescriptorFile(json);
+  const registered = await registeredTokens(options.entitiesModule);
+  if (registered.some((candidate) => getEntityDescriptor(candidate).name === file.name)) {
+    throw new HikouteiError(
+      HIKOUTEI_ERROR_CODES.DUPLICATE_ENTITY,
+      `entity "${file.name}" from descriptor file "${descriptorPath}" is already registered.`,
+    );
+  }
+  return {
+    entityName: file.name,
+    // Explicit `--map` bindings win over the file-derived headers.
+    columnMap: { ...descriptorFileColumnMap(file), ...(options.columnMap ?? {}) },
+    entities: [defineTypedSheetsEntityFromDescriptorFile(file)],
+  };
+}
+
+/**
  * Runs the `hikoutei adopt` CLI with the given argument vector (without the
  * leading "adopt" subcommand). Exported so the bin router can delegate and
  * tests can drive it with injected argv.
@@ -104,6 +169,29 @@ export async function runAdoptMain(argv: readonly string[]): Promise<number> {
 
   const options = parsed.options;
   try {
+    // `--descriptor` (file alternative to `--entity`): the entity name and
+    // the header→property columnMap come from the file, so `--map` flags
+    // are unnecessary; an explicit `--map` still wins on a conflict.
+    if (options.descriptorPath !== undefined) {
+      const resolved = await loadDescriptorAdoption(options);
+      const { descriptorPath: _dropped, ...rest } = options;
+      void _dropped;
+      return await runAdoptCli({
+        options: {
+          ...rest,
+          entityName: resolved.entityName,
+          ...(resolved.columnMap === undefined ? {} : { columnMap: resolved.columnMap }),
+        },
+        entities: resolved.entities,
+        runner: productionRunner,
+        input: process.stdin,
+        output: process.stdout,
+        error: process.stderr,
+        // The confirmation prompt reads one stdin chunk and leaves the shared
+        // iterator open; destroy the stream so the process can exit (Terra S1).
+        finalizeStdin: createStdinFinalizer(),
+      });
+    }
     const entities = await loadAdoptEntities(options);
     return await runAdoptCli({
       options,

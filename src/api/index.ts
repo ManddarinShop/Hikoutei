@@ -12,6 +12,13 @@
 export {
   defineTypedSheetsEntity,
   HIKOUTEI_SCALAR_TYPES,
+  HIKOUTEI_DESCRIPTOR_FILE_VERSION,
+  buildDescriptorFile,
+  serializeDescriptorFile,
+  parseDescriptorFile,
+  descriptorFileToEntityInput,
+  descriptorFileColumnMap,
+  defineTypedSheetsEntityFromDescriptorFile,
 } from "./entity.js";
 export type {
   HikouteiEntity,
@@ -22,6 +29,9 @@ export type {
   HikouteiScalarValueType,
   HikouteiPropertyValueType,
   HikouteiEntityInstance,
+  HikouteiDescriptorFile,
+  HikouteiDescriptorFileProperty,
+  HikouteiDescriptorColumn,
 } from "./entity.js";
 export { createTypedSheets } from "./Hikoutei.js";
 export type { CreateTypedSheetsOptions, HikouteiProviderOptions, Hikoutei } from "./Hikoutei.js";

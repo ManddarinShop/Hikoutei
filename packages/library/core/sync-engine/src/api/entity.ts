@@ -8,3 +8,4 @@
  * surface, cli, and composition with a single runtime identity.
  */
 export * from "@hikoutei/contracts/api/entity.js";
+export * from "@hikoutei/contracts/api/descriptorFile.js";

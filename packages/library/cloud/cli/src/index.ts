@@ -5,6 +5,7 @@
  * Routes:
  *   hikoutei setup [flags...]  → the setup bootstrap flow (src/cli/setup.ts)
  *   hikoutei adopt [flags...]  → the existing-sheet adoption flow (src/cli/adoptMain.ts)
+ *   hikoutei infer [flags...]  → the read-only sheet-to-entity sampler (src/cli/inferMain.ts)
  *   hikoutei [flags...]        → legacy spelling of `hikoutei setup` (the bin
  *                                predates subcommands; bare-flag invocations
  *                                stay on the setup flow for compatibility)
@@ -14,6 +15,7 @@
  */
 
 import { runAdoptMain } from "./adoptMain.js";
+import { runInferMain } from "./inferMain.js";
 import { runSetupMain } from "./setup.js";
 import { SETUP_RUNTIME_ERROR_EXIT_CODE } from "./errors.js";
 
@@ -24,6 +26,9 @@ async function route(argv: readonly string[]): Promise<number> {
   }
   if (head === "setup") {
     return runSetupMain(argv.slice(1));
+  }
+  if (head === "infer") {
+    return runInferMain(argv.slice(1));
   }
   // Legacy: the bin used to BE the setup CLI, so bare-flag invocations keep
   // working unchanged.

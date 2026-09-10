@@ -35,6 +35,14 @@ export interface AdoptOptions {
    * `entityName`/`tabName`/`columnMap` fields are absent.
    */
   readonly adopts?: readonly AdoptCliEntitySpec[];
+  /**
+   * Descriptor-file path (`--descriptor`), an alternative to `--entity` for
+   * the legacy single-entity path. The entity name and the header→property
+   * columnMap come from the file; the CLI registers the file through the
+   * same `defineTypedSheetsEntity` builder adopt requires. Mutually
+   * exclusive with `--entity` and `--adopt`.
+   */
+  readonly descriptorPath?: string;
   /** Entity name to adopt (legacy single-entity path; absent with `--adopt`). */
   readonly entityName?: string;
   /** The existing spreadsheet tab that becomes the User_Input route. */
@@ -74,6 +82,7 @@ const ADOPT_FLAGS = {
   HELP_SHORT: "-h",
   ADOPT: "--adopt",
   ENTITY: "--entity",
+  DESCRIPTOR: "--descriptor",
   TAB: "--tab",
   IDENTITY_FROM: "--identity-from",
   SYSTEM_TAB: "--system-tab",
@@ -90,7 +99,7 @@ const ADOPT_FLAGS = {
 
 const KNOWN_FLAGS = new Set<string>(Object.values(ADOPT_FLAGS));
 const VALUE_FLAGS = new Set<string>([
-  ADOPT_FLAGS.ADOPT, ADOPT_FLAGS.ENTITY, ADOPT_FLAGS.TAB,
+  ADOPT_FLAGS.ADOPT, ADOPT_FLAGS.ENTITY, ADOPT_FLAGS.DESCRIPTOR, ADOPT_FLAGS.TAB,
   ADOPT_FLAGS.IDENTITY_FROM, ADOPT_FLAGS.SYSTEM_TAB,
   ADOPT_FLAGS.CONFLICTS_TAB, ADOPT_FLAGS.MODE, ADOPT_FLAGS.DB,
   ADOPT_FLAGS.SPREADSHEET_URL, ADOPT_FLAGS.CREDENTIALS,
@@ -111,8 +120,13 @@ export const ADOPT_HELP_TEXT = [
   "",
   "Required:",
   "  --entity <Name>           Entity name (must match a registered descriptor).",
+  "  --descriptor <path>       Descriptor JSON file (e.g. from `infer --emit`);",
+  "                            alternative to --entity. The entity name and",
+  "                            the header→property columnMap come from the",
+  "                            file, so no --map flags are needed.",
   "  --tab <TabName>           Existing tab to adopt (never modified in-place",
   "                            beyond appending the row-id system column).",
+  "                            Required with --entity or --descriptor.",
   "",
   "Multi-entity (repeat --adopt once per entity; mutually exclusive with",
   "--entity/--tab):",
@@ -207,8 +221,14 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
   // The `--adopt` path is mutually exclusive with the legacy single-entity
   // `--entity`/`--tab` flags: mixing two adoption styles is an argument error.
   const multi = adoptEntries.length > 0;
-  if (multi && (values.has(ADOPT_FLAGS.ENTITY) || values.has(ADOPT_FLAGS.TAB))) {
-    return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, "mixing --adopt with --entity/--tab is not supported — use one adoption style only") };
+  if (multi && (values.has(ADOPT_FLAGS.ENTITY) || values.has(ADOPT_FLAGS.TAB) || values.has(ADOPT_FLAGS.DESCRIPTOR))) {
+    return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, "mixing --adopt with --entity/--descriptor/--tab is not supported — use one adoption style only") };
+  }
+  // `--descriptor` is the file alternative to `--entity`: exactly one of
+  // them must be present, and `--tab` stays required either way.
+  const hasDescriptor = values.has(ADOPT_FLAGS.DESCRIPTOR);
+  if (hasDescriptor && values.has(ADOPT_FLAGS.ENTITY)) {
+    return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, "--descriptor and --entity are mutually exclusive — the entity name comes from the descriptor file") };
   }
   // Legacy per-run flags only make sense for a SINGLE entity. With multiple
   // --adopt entries they cannot be scoped, so reject them and require the
@@ -224,7 +244,10 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
   }
 
   if (!multi) {
-    const missing = [ADOPT_FLAGS.ENTITY, ADOPT_FLAGS.TAB].filter((flag) => !values.has(flag));
+    const missing = [
+      ...(!values.has(ADOPT_FLAGS.ENTITY) && !hasDescriptor ? [ADOPT_FLAGS.ENTITY + " or " + ADOPT_FLAGS.DESCRIPTOR] : []),
+      ...(values.has(ADOPT_FLAGS.TAB) ? [] : [ADOPT_FLAGS.TAB]),
+    ];
     if (missing.length > 0) {
       return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, `missing required flag(s): ${missing.join(", ")}`) };
     }
@@ -234,8 +257,10 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
   if (rawMode !== "dry-run" && rawMode !== "adopt") {
     return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, `--mode must be "dry-run" or "adopt", received "${rawMode}"`) };
   }
-  if (rawMode === "adopt" && !values.has(ADOPT_FLAGS.ENTITIES)) {
-    return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, "adopt mode requires --entities <module> (the entity definitions live in application code)") };
+  // Adopt mode mutates state, so the entity definitions must be reachable:
+  // either the application module or the descriptor file supplies them.
+  if (rawMode === "adopt" && !values.has(ADOPT_FLAGS.ENTITIES) && !hasDescriptor) {
+    return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, "adopt mode requires --entities <module> (the entity definitions live in application code) or --descriptor <file>") };
   }
 
   const identityFrom = values.get(ADOPT_FLAGS.IDENTITY_FROM) ?? "auto";
@@ -253,6 +278,10 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
   const entitiesModule = optional(ADOPT_FLAGS.ENTITIES);
   const systemTabName = optional(ADOPT_FLAGS.SYSTEM_TAB);
   const conflictsTabName = optional(ADOPT_FLAGS.CONFLICTS_TAB);
+  const rawDescriptor = values.get(ADOPT_FLAGS.DESCRIPTOR);
+  if (rawDescriptor !== undefined && rawDescriptor.trim() === "") {
+    return { status: "invalid", failure: setupFailure(SETUP_ERROR_CODES_INVALID_ARGS, "flag --descriptor requires a non-empty path") };
+  }
 
   // Shared options for both paths (identityFrom/systemTabName/conflictsTabName
   // are consumed by the flow only for a SINGLE --adopt entry or the legacy
@@ -279,12 +308,19 @@ export function parseAdoptArgs(argv: readonly string[]): AdoptArgsParseResult {
       ? (adoptEntries.length === 1
           ? { ...commonOptions, adopts: adoptEntries, ...(columnMap === undefined ? {} : { columnMap }) }
           : { ...commonOptions, adopts: adoptEntries })
-      : {
-          ...commonOptions,
-          entityName: values.get(ADOPT_FLAGS.ENTITY)!,
-          tabName: values.get(ADOPT_FLAGS.TAB)!,
-          ...(columnMap === undefined ? {} : { columnMap }),
-        },
+      : hasDescriptor
+        ? {
+            ...commonOptions,
+            descriptorPath: rawDescriptor!,
+            tabName: values.get(ADOPT_FLAGS.TAB)!,
+            ...(columnMap === undefined ? {} : { columnMap }),
+          }
+        : {
+            ...commonOptions,
+            entityName: values.get(ADOPT_FLAGS.ENTITY)!,
+            tabName: values.get(ADOPT_FLAGS.TAB)!,
+            ...(columnMap === undefined ? {} : { columnMap }),
+          },
   };
 }
 

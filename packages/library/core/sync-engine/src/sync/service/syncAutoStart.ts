@@ -26,9 +26,11 @@ import { loadServiceAccountKeyFile } from "@hikoutei/google-auth/auth/serviceAcc
 
 import {
   getEntityDescriptor,
+  type HikouteiDescriptorFile,
   type HikouteiEntity,
 } from "../../api/entity.js";
 import {
+  mergeEntitiesAndDescriptors,
   validateTypedSheetsOptions,
   type Hikoutei,
   type HikouteiProviderOptions,
@@ -220,6 +222,13 @@ export interface AdoptSpec {
 export interface SyncAutoStartOptions {
   readonly dbName: string;
   readonly entities: readonly HikouteiEntity[];
+  /**
+   * File-form entity descriptors, built through the same
+   * `defineTypedSheetsEntity` builder and appended after `entities` (mirrors
+   * the public `CreateTypedSheetsOptions.descriptors` contract for the
+   * internal bridge, including the stub-transport test path).
+   */
+  readonly descriptors?: readonly HikouteiDescriptorFile[];
   /** Injectable env reader; defaults to an empty env (sync disabled). */
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Stub transport for credential-free tests; omitted builds the real ADC client. */
@@ -317,6 +326,11 @@ export async function createTypedSheetsWithSync(
   validateTypedSheetsOptions(options);
   const env = options.env ?? {};
   const diagnostic = options.onDiagnostic ?? defaultDiagnostic;
+  // File-form descriptors take the same builder path as the public factory;
+  // the merged list feeds every branch below (the local-runtime port gets
+  // the pre-merged entities with `descriptors` stripped, so its own merge
+  // never double-registers).
+  const entities = mergeEntitiesAndDescriptors(options.entities, options.descriptors);
 
   const spreadsheetUrl = env[SYNC_ENV_KEYS.SPREADSHEET_URL];
   if (spreadsheetUrl === undefined || spreadsheetUrl.trim() === "") {
@@ -326,7 +340,9 @@ export async function createTypedSheetsWithSync(
     // syncEngine ports thunk is never touched on this path), so the engine
     // never imports the composition package.
     const createLocalRuntime = await requireSyncEngineLocalRuntime();
-    const hikoutei = await createLocalRuntime(options);
+    const { descriptors: _stripped, ...localOptions } = options;
+    void _stripped;
+    const hikoutei = await createLocalRuntime({ ...localOptions, entities });
     return { kind: "local", hikoutei };
   }
 
@@ -407,13 +423,13 @@ export async function createTypedSheetsWithSync(
     // NOTE: the credential pool (`serviceAccountKeyFiles`) is resolved and
     // validated at the TOP of this block — see the pool-first comment above.
     const projections = withAdoptedTabOverrides(
-      buildSyncProjections(options.entities, spreadsheetId),
-      options.entities,
+      buildSyncProjections(entities, spreadsheetId),
+      entities,
       options.adopt,
     );
     const service = await createInternalSyncService({
       dbName: options.dbName,
-      entities: [...options.entities],
+      entities: [...entities],
       projections,
       // Injected transports are a test-only affordance; ZERO pacing keeps
       // stub-based suites wall-clock cheap AND immune to the bounded
@@ -457,7 +473,7 @@ export async function createTypedSheetsWithSync(
       event: HIKOUTEI_LOG_EVENTS.SYNC_AUTOSTART_STARTED,
       level: HIKOUTEI_LOG_LEVELS.INFO,
       component: HIKOUTEI_LOG_COMPONENTS.SYNC_AUTOSTART,
-      counts: { entities: options.entities.length },
+      counts: { entities: entities.length },
     });
     return { kind: "sync", hikoutei: service.hikoutei, service };
   } catch (error: unknown) {
@@ -531,7 +547,7 @@ function withAdoptedTabOverrides(
         `adopt.entities references entity "${entityName}" that is not part of this runtime (declared: ${[...descriptorByName.keys()].join(", ") || "none"}).`,
       );
     }
-    // NOTE: configs is derived from buildSyncProjections(options.entities),
+    // NOTE: configs is derived from buildSyncProjections(entities),
     // so a config existing implies its descriptor exists — no second check.
     if (config.userInput === undefined) {
       throw new HikouteiError(
