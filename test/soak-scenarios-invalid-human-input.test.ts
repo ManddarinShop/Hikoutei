@@ -132,7 +132,9 @@ function toCellStringForTest(value: unknown, spec: { type: string }): string {
 // Tests.
 // ---------------------------------------------------------------------------
 
+// Suite: invalidHumanInput scenario.
 describe("invalidHumanInput scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -141,6 +143,7 @@ describe("invalidHumanInput scenario", () => {
     expect(ids).toContain("invalid-human-input");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenarioInput.id).toBe("invalid-human-input");
     expect(scenarioInput.kind).toBe("data");
@@ -160,6 +163,7 @@ describe("invalidHumanInput scenario", () => {
     expect(typeof plan.restore).toBe("string");
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = buildPlan(1);
     const context = {
@@ -176,6 +180,7 @@ describe("invalidHumanInput scenario", () => {
     expect(result.reason).toBe("local-mode");
   });
 
+// Verifies: classifies a provable rejection as ok with one expected error and cleans up.
 it("classifies a provable rejection as ok with one expected error and cleans up", async () => {
     const plan = buildPlan(7);
     const client = new FakeClient();
@@ -224,6 +229,7 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(projectedRow![fieldColumn]).toBe(authoritativeValue);
   });
 
+  // Verifies: classifies a silently accepted invalid value as failed (corruption).
   it("classifies a silently accepted invalid value as failed (corruption)", async () => {
     // A hand-built plan over a STRING field so `toCellString` round-trips the
     // injected invalid value exactly (a boolean field would always render as
@@ -252,6 +258,7 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = buildPlan(9);
     const client = new FakeClient();
@@ -267,6 +274,7 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips when the invalid edit cannot be observed on the sheet (no evidence).
   it("skips when the invalid edit cannot be observed on the sheet (no evidence)", async () => {
     const plan = buildPlan(5);
     const client = new FakeClient();
@@ -282,6 +290,7 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records an identity-shifted invalid-write rejection as a transient skip, not a failure.
   it("records an identity-shifted invalid-write rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the invalid write
     // with the stable `identity_shifted` class when a CONCURRENT actor
@@ -304,6 +313,7 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records a readTabRows rejection as failed, never a transient skip.
   it("records a readTabRows rejection as failed, never a transient skip", async () => {
     // Narrowed transient scope: ONLY the direct `mutateInputCell`
     // rejection may classify as `identity-shifted-transient`. A read
@@ -324,6 +334,7 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: guarantees independent cleanup: a failed cell restore still removes the row.
   it("guarantees independent cleanup: a failed cell restore still removes the row", async () => {
     const plan = buildPlan(3);
     const client = new FakeClient();
@@ -340,6 +351,7 @@ it("classifies a provable rejection as ok with one expected error and cleans up"
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records cleanup-outbox-busy and keeps the row when the binding outbox never drains.
   it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
     // The invalid write is provably rejected (an ok verdict), but a
     // candidate effect for the binding is stuck in flight past the bounded
