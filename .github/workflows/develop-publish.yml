@@ -7,12 +7,13 @@ name: Publish develop package
 #
 # Channel contract: the develop channel publishes ONLY `X.Y.Z-dev` prereleases
 # (the patch marches forward from the stable line, e.g. latest 0.10.0 →
-# 0.10.1-dev, then 0.10.2-dev) under the npm `dev` dist-tag, and the release
+# 0.10.1-dev, then 0.10.2-dev) under the npm `latest` dist-tag, and the release
 # tag must carry the fixed `-dev` suffix (plain develop-vX.Y.Z tags AND legacy
 # develop-vX.Y.Z-dev.N tags are rejected fail-closed; the two formats never
-# mix). The `latest` dist-tag
-# belongs exclusively to the main/stable channel (stable-publish.yml); a
-# plain `npm install hikoutei` never resolves a develop build.
+# mix). The `latest` dist-tag is shared with the main/stable channel
+# (stable-publish.yml): every write is gated by the prerelease-aware
+# monotonicity check, so neither channel can move `latest` backward and a
+# stable release always outranks the same-triple `-dev` prerelease.
 #
 # The workflow can also be dispatched manually for tag recovery: dispatch
 # with an existing develop release tag (for example develop-v0.10.1-dev)
@@ -461,7 +462,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CHANNEL_TAG: dev
+          CHANNEL_TAG: latest
           EXPECTED_VERSION: ${{ steps.resolve-mode.outputs.version }}
         run: |
           set -euo pipefail
@@ -513,8 +514,8 @@ jobs:
           # ordering (numeric X.Y.Z triple first; a `-dev` prerelease is below
           # its same-triple stable; legacy `-dev.N` still reads above stable)
           # lives
-          # in the unit-tested scripts/ci/semver-monotonic.mjs so the dev
-          # channel never moves backward, whichever package is checked.
+          # in the unit-tested scripts/ci/semver-monotonic.mjs so the channel
+          # never moves backward, whichever package is checked.
           check_monotonic() {
             local current="$1" target="$2" label="$3"
             if [[ -z "$current" ]]; then
@@ -603,8 +604,9 @@ jobs:
           fi
           if [[ "$IKISAKI_EXISTS" == "1" ]]; then
             # Version already exists; ensure the channel dist-tag
-            # (monotonicity preflighted). Never touch `latest`: that tag
-            # belongs to the stable channel.
+            # (monotonicity preflighted). The tag is `latest`, shared with
+            # the stable channel; the prerelease-aware preflight gate keeps
+            # the move forward-only.
             npm dist-tag add "@hikoutei/ikisaki@${ikisaki_version}" "$CHANNEL_TAG" --registry=https://registry.npmjs.org
             echo "@hikoutei/ikisaki@${ikisaki_version} already published; ensured $CHANNEL_TAG dist-tag."
           else

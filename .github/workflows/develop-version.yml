@@ -5,8 +5,9 @@ name: Create develop prerelease release
 # latest 0.10.0 → 0.10.1-dev, then 0.10.2-dev) and creates a non-production
 # release tag `develop-vX.Y.Z-dev`. Legacy `develop-vX.Y.Z-dev.N` tags are
 # rejected by the publish workflow; the two formats never mix. The tag publish
-# workflow owns npm publication under the `dev` dist-tag; `latest` is reserved
-# for the main/stable channel.
+# workflow owns npm publication under the `latest` dist-tag (shared with the
+# stable channel; every write is monotonicity-gated so neither channel moves
+# `latest` backward).
 on:
   push:
     branches:
@@ -112,13 +113,23 @@ jobs:
             exit 1
           fi
           effective_latest="$published_latest"
-          if [[ -z "$effective_latest" ]]; then
+          if [[ -n "$effective_latest" ]]; then
+            # The develop channel publishes under `latest`, so the tag may
+            # carry an X.Y.Z-dev prerelease; the next-dev helper requires a
+            # numeric triple, so normalize the prerelease to its base.
+            if ! effective_latest="$(node scripts/ci/release-version.mjs \
+              --normalize-base="$published_latest")"; then
+              echo "Published 'latest' is not a recognized channel version; aborting." >&2
+              exit 1
+            fi
+          else
             # First-publication bootstrap: no `latest` yet, so anchor the
             # patch march on the manifest's numeric triple.
             effective_latest="$manifest_base"
           fi
           # The dev channel advances via the patch march `X.Y.(Z+k)-dev`:
-          # read the current `dev` dist-tag and compute
+          # read the (legacy, frozen after the latest-tag switch) current
+          # `dev` dist-tag and compute
           # (max(L, D triple) patch + 1)-dev. Helpers live in
           # scripts/ci/semver-monotonic.mjs so the rules are unit-tested
           # instead of re-implemented inline.

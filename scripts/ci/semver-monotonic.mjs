@@ -2,12 +2,13 @@
 /**
  * Dev-channel semver helpers for the develop release train.
  *
- * The develop channel publishes prereleases `X.Y.(Z+k)-dev` under the npm `dev`
- * dist-tag — the patch marches forward from the stable line with a fixed bare
- * `-dev` suffix. Examples: latest `0.10.0` → dev `0.10.1-dev`, then
- * `0.10.2-dev`, ... Dev versions read as "ahead of stable" instead of a
- * prerelease attached to the stable triple; semver still excludes them from
- * `^` ranges. `latest` belongs exclusively to the main/stable channel.
+ * The develop channel publishes prereleases `X.Y.(Z+k)-dev` under the npm
+ * `latest` dist-tag (shared with the stable channel) — the patch marches
+ * forward from the stable line with a fixed bare `-dev` suffix. Examples:
+ * latest `0.10.0` → `0.10.1-dev`, then `0.10.2-dev`, ... Dev versions read as
+ * "ahead of stable" instead of a prerelease attached to the stable triple;
+ * semver still excludes them from `^` ranges. The legacy `dev` dist-tag is
+ * frozen (no longer written) but still read for migration.
  *
  * The OLD `-dev.N` form (`X.Y.Z-dev.N`, tag `develop-vX.Y.Z-dev.N`) is no
  * longer published and is REJECTED fail-closed by the resolve steps — the two
@@ -322,7 +323,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (!result.monotonic) {
       process.stderr.write(
-        `semver-monotonic:${SEMVER_MONOTONIC_ERROR_CODES.CHANNEL_BACKWARD}: refusing to move the dev channel backward: current=${values.current} target=${values.target}\n`,
+        `semver-monotonic:${SEMVER_MONOTONIC_ERROR_CODES.CHANNEL_BACKWARD}: refusing to move the channel backward: current=${values.current} target=${values.target}\n`,
       );
       return 1;
     }

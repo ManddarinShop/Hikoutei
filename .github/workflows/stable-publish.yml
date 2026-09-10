@@ -275,17 +275,21 @@ jobs:
           set -euo pipefail
           expected_version="${TAG_NAME#v}"
           current_version="$(node scripts/ci/read-npm-dist-tag.mjs --package=hikoutei --tag=latest)"
-          CURRENT_CHANNEL_VERSION="$current_version" TARGET_VERSION="$expected_version" node --input-type=module <<'NODE'
-          import { compareStableVersions } from "./scripts/ci/release-version.mjs";
-          const current = process.env.CURRENT_CHANNEL_VERSION?.trim() ?? "";
-          const target = process.env.TARGET_VERSION ?? "";
-          if (current === "" || current === "null" || current === "undefined") process.exit(0);
-          const result = compareStableVersions(current, target);
-          if (result.status === "invalid" || result.comparison > 0) {
-            throw new Error(`latest dist-tag would move backward: current=${current} target=${target}`);
-          }
-          console.log(`latest dist-tag current=${current} target=${target}`);
-          NODE
+          if [[ -z "$current_version" ]]; then
+            echo "no current latest; target $expected_version"
+            exit 0
+          fi
+          # The `latest` tag is shared with the develop channel, which
+          # publishes X.Y.Z-dev prereleases, so the comparison uses the
+          # prerelease-aware channel comparator (a stable target outranks the
+          # same-triple -dev current; any lower target is refused).
+          if node scripts/ci/semver-monotonic.mjs --monotonic \
+            --current="$current_version" --target="$expected_version" >/dev/null; then
+            echo "latest dist-tag current=$current_version target=$expected_version"
+          else
+            echo "latest dist-tag would move backward: current=$current_version target=$expected_version" >&2
+            exit 1
+          fi
 
       - name: Publish stable package
         shell: bash
