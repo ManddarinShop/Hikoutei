@@ -1,3 +1,9 @@
+/**
+ * Compatibility tests pinning the canonical codec characterization vectors.
+ * Verifies stable encoding bytes, hashes, and canonical JSON text stay aligned
+ * with the `@hikoutei/kohkai` contract, including edge cases like negative
+ * zero, sparse arrays, duplicate keys, and tagged dates.
+ */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -37,7 +43,9 @@ const vectors: readonly CanonicalCodecVector[] = JSON.parse(
   ),
 );
 
+// Verifies the canonical codec characterization vectors from the kohkai contract.
 describe("canonical codec characterization vectors", () => {
+  // Verifies stable encoding bytes and hashes are preserved.
   it("preserves stable encoding bytes and hashes", () => {
     for (const vector of vectors) {
       expect(Buffer.from(stableEncode(vector.value)).toString("hex"), vector.name)
@@ -46,6 +54,7 @@ describe("canonical codec characterization vectors", () => {
     }
   });
 
+  // Verifies the generic core bytes and JSON text are preserved.
   it("preserves the generic core bytes and JSON text", () => {
     for (const vector of vectors) {
       expect(Buffer.from(genericStableEncode(vector.value)).toString("hex"), vector.name)
@@ -54,12 +63,14 @@ describe("canonical codec characterization vectors", () => {
     }
   });
 
+  // Verifies negative zero stays equivalent to zero for stable encoding.
   it("keeps negative zero equivalent to zero for stable encoding", () => {
     expect(Buffer.from(stableEncode(-0)).toString("hex"))
       .toBe(Buffer.from(stableEncode(0)).toString("hex"));
     expect(genericCanonicalJson(-0)).toBe(genericCanonicalJson(0));
   });
 
+  // Verifies canonical JSON values are validated without stable encoding rules.
   it("validates canonical JSON values without applying stable encoding rules", () => {
     expect(isCanonicalJsonValue({ kind: "date", value: "not-a-date" })).toBe(true);
     expect(isCanonicalJsonValue(Number.NaN)).toBe(false);
@@ -71,6 +82,7 @@ describe("canonical codec characterization vectors", () => {
     );
   });
 
+  // Verifies sparse arrays are rejected at the canonical JSON boundary.
   it("rejects sparse arrays at the canonical JSON boundary", () => {
     const sparse: unknown[] = [];
     sparse.length = 1;
@@ -83,6 +95,7 @@ describe("canonical codec characterization vectors", () => {
     );
   });
 
+  // Verifies unsupported object prototypes and cyclic values are rejected.
   it("rejects unsupported object prototypes and cyclic values", () => {
     expect(() => genericStableEncode(new Date())).toThrowError(
       expect.objectContaining({
@@ -113,6 +126,7 @@ describe("canonical codec characterization vectors", () => {
     );
   });
 
+  // Verifies duplicate keys after NFC normalization are rejected.
   it("rejects duplicate keys after stable-encoding NFC normalization", () => {
     const duplicateKeys = {
       "e\u0301": "decomposed",
@@ -126,6 +140,7 @@ describe("canonical codec characterization vectors", () => {
     );
   });
 
+  // Verifies unpaired UTF-16 surrogates are rejected before UTF-8 replacement.
   it("rejects unpaired UTF-16 surrogates before UTF-8 replacement", () => {
     let thrown: unknown;
     try {
@@ -140,6 +155,7 @@ describe("canonical codec characterization vectors", () => {
     });
   });
 
+  // Verifies tagged dates stay on the stable date path.
   it("keeps tagged dates on the stable date path", () => {
     const dateValue = {
       kind: NORMALIZED_CELL_KINDS.DATE,
