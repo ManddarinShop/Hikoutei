@@ -1,3 +1,10 @@
+/**
+ * End-to-end tests for the mapped typed-sheets ORM layer.
+ * Exercises entity mapping registration, observation-to-mutation planning, the
+ * flush coordinator (canonical state plus ordered projection effects), and the
+ * User_Input lifecycle: guarded deletes, same-PK recreate, tombstones, and
+ * monotonic revisions against MikroORM/SQLite fixtures.
+ */
 import {
   defineEntity,
   MikroORM,
@@ -142,6 +149,7 @@ interface DeletionEffectRow {
   readonly status: string;
 }
 
+// Verifies the mapped typed-sheets ORM layer end to end.
 describe("mapped typed-sheets ORM", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -149,6 +157,7 @@ describe("mapped typed-sheets ORM", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  // Verifies shared identity metadata is retained and property codecs are promoted.
   it("retains shared identity metadata and promotes property codecs", () => {
     const mapping = defineTypedSheetsEntityMapping({
       entity: Order,
@@ -189,6 +198,7 @@ describe("mapped typed-sheets ORM", () => {
       .toEqual({ kind: NORMALIZED_CELL_KINDS.STRING, value: "PENDING" });
   });
 
+  // Verifies malformed mapping input is rejected before its fields are read.
   it("rejects malformed mapping input before reading its fields", () => {
     expect(() => defineTypedSheetsEntityMapping(null as never)).toThrow(
       "entity mapping must be an object",
@@ -207,6 +217,7 @@ describe("mapped typed-sheets ORM", () => {
     } as never)).toThrow("encode must be a function");
   });
 
+  // Verifies a User_Input mapping with a system-owned business key is rejected.
   it("rejects a User_Input mapping whose business key is system-owned", () => {
     expect(() => defineTypedSheetsEntityMapping({
       entity: Order,
@@ -249,6 +260,7 @@ describe("mapped typed-sheets ORM", () => {
     })).toThrow("a user_input projection requires a user-owned business-key field");
   });
 
+  // Verifies accepted canonical insert, update, and delete operations map to entity mutations.
   it("maps accepted canonical insert, update, and delete operations to entity mutations", () => {
     const idCell = { kind: NORMALIZED_CELL_KINDS.STRING, value: "order-observed" } as const;
     const pendingCell = { kind: NORMALIZED_CELL_KINDS.STRING, value: "pending" } as const;
@@ -307,6 +319,7 @@ describe("mapped typed-sheets ORM", () => {
     })).toEqual({ kind: "delete", entityId: "order-observed" });
   });
 
+  // Verifies entity lifecycle writes plan into canonical state and ordered projection effects.
   it("plans entity lifecycle writes into canonical state and ordered projection effects", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -421,6 +434,7 @@ describe("mapped typed-sheets ORM", () => {
     expect(thirdUserPayload.fields).toEqual(secondUserPayload.fields);
   });
 
+  // Verifies the follower effect revision floors at confirmed state while a baseline effect is in flight.
   it("floors the follower system effect revision at the confirmed state while a create-baseline effect is in flight", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -526,6 +540,7 @@ describe("mapped typed-sheets ORM", () => {
     });
   });
 
+  // Verifies the User_Input row is physically removed after a guarded mapped delete and response loss.
   it("physically removes the User_Input row after a guarded mapped delete and response loss", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -606,6 +621,7 @@ describe("mapped typed-sheets ORM", () => {
     });
   });
 
+  // Verifies a remote User_Input candidate is preserved instead of physically deleting its row.
   it("preserves a remote User_Input candidate instead of physically deleting its row", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -676,6 +692,7 @@ describe("mapped typed-sheets ORM", () => {
     });
   });
 
+  // Verifies a same-PK create reactivates after a pending delete with monotonic revisions.
   it("reactivates a same-PK create after a pending delete with monotonic revisions", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -739,6 +756,7 @@ describe("mapped typed-sheets ORM", () => {
     });
   });
 
+  // Verifies one User_Input row is recreated and the tombstone cleared after a delivered delete then same-PK create.
   it("recreates one User_Input row and clears the tombstone after a delivered delete then same-PK create", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -828,6 +846,7 @@ describe("mapped typed-sheets ORM", () => {
     });
   });
 
+  // Verifies queued same-ID delete/recreate cycles drain in order with monotonic revisions.
   it("drains queued same-ID delete/recreate cycles in order with monotonic revisions", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -965,6 +984,7 @@ describe("mapped typed-sheets ORM", () => {
     expect(candidateEpochs.every((row) => row.candidate_epoch === 0)).toBe(true);
   });
 
+  // Verifies User_Input is recreated only across safe delete predecessor statuses.
   it("recreates User_Input only across safe delete predecessor statuses", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -1042,6 +1062,7 @@ describe("mapped typed-sheets ORM", () => {
     await expect(baselineFor()).rejects.toThrow(/blocked/);
   });
 
+  // Verifies an accepted canonical observation applies to the entity table without an outbound loop.
   it("applies an accepted canonical observation to the MikroORM entity table without an outbound loop", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
