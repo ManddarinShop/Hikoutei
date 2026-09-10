@@ -82,7 +82,9 @@ function liveContext(plan: PlanLike, em: FakeEm): Record<string, unknown> {
 // Tests.
 // ---------------------------------------------------------------------------
 
+// Suite: deleteRecreateRace scenario.
 describe("deleteRecreateRace scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -91,6 +93,7 @@ describe("deleteRecreateRace scenario", () => {
     expect(ids).toContain("delete-recreate-race");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("delete-recreate-race");
     expect(scenario.kind).toBe("data");
@@ -111,6 +114,7 @@ describe("deleteRecreateRace scenario", () => {
     expect(plan.iterations).toBeLessThanOrEqual(3);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = racePlan();
     const context = {
@@ -128,6 +132,7 @@ describe("deleteRecreateRace scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: delete-then-recreate leaves exactly one final row and cleans up (ok).
   it("delete-then-recreate leaves exactly one final row and cleans up (ok)", async () => {
     // Core hypothesis: rapidly deleting and recreating the same id must leave
     // exactly one final row in the authority — no tombstone residue or
@@ -146,6 +151,7 @@ describe("deleteRecreateRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies the known delete->recreate projection residue (duplicate rows) as failed.
   it("classifies the known delete->recreate projection residue (duplicate rows) as failed", async () => {
     // The library's known sync-enable delete->recreate bug leaves stale /
     // extra projection rows for the recreated id. When the authority shows
@@ -168,6 +174,7 @@ describe("deleteRecreateRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a missing authority row (delete lost the row) as failed.
   it("classifies a missing authority row (delete lost the row) as failed", async () => {
     // A MISSING row is as much a failure as a duplicate: the delete/recreate
     // must leave exactly one final row, and a lost row violates that too.
@@ -187,6 +194,7 @@ describe("deleteRecreateRace scenario", () => {
     expect(em.rows().length).toBe(1);
   });
 
+  // Verifies: classifies a mutation/authority exception during the delete-recreate loop as a failure.
   it("classifies a mutation/authority exception during the delete-recreate loop as a failure", async () => {
     // There is no CAS/stale special-casing in this scenario's loop: ANY
     // exception during the delete/recreate flushes is a real
@@ -209,6 +217,7 @@ describe("deleteRecreateRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: guarantees independent cleanup: a failed cleanup flush still removes the row.
   it("guarantees independent cleanup: a failed cleanup flush still removes the row", async () => {
     // The finally path removes the race row before its own flush, so even
     // when the cleanup flush fails the row is gone from the store and the
