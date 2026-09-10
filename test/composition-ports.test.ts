@@ -40,7 +40,9 @@ function sentinelPorts(): SyncEngineCompositionPorts {
   } as unknown as SyncEngineCompositionPorts;
 }
 
+// Covers sync-engine composition ports registry.
 describe("sync-engine composition ports registry", () => {
+  // Verifies root composition import registers the thunk WITHOUT loading the sync-engine graph.
   it("root composition import registers the thunk WITHOUT loading the sync-engine graph", async () => {
     vi.resetModules();
     const composition = await import("@hikoutei/composition/index.js");
@@ -52,6 +54,7 @@ describe("sync-engine composition ports registry", () => {
     expect(freshState()).toBe("registered");
   });
 
+  // Verifies first requireSyncEnginePorts() invocation fires the lazy load exactly once.
   it("first requireSyncEnginePorts() invocation fires the lazy load exactly once", async () => {
     vi.resetModules();
     let loaderCalls = 0;
@@ -80,6 +83,7 @@ describe("sync-engine composition ports registry", () => {
     expect(loaderCalls).toBe(1);
   });
 
+  // Verifies unregistered registry throws the stable SyncServiceError with the wiring message.
   it("unregistered registry throws the stable SyncServiceError with the wiring message", async () => {
     vi.resetModules();
     const { requireSyncEnginePorts: requireFresh, syncEnginePortsLoadState } =
@@ -105,7 +109,9 @@ describe("sync-engine composition ports registry", () => {
   });
 });
 
+// Covers sync-engine local-runtime port (P8-D2 phase 2)
 describe("sync-engine local-runtime port (P8-D2 phase 2)", () => {
+  // Verifies composition-root import registers the local-runtime thunk WITHOUT loading it.
   it("composition-root import registers the local-runtime thunk WITHOUT loading it",
     async () => {
       vi.resetModules();
@@ -119,6 +125,7 @@ describe("sync-engine local-runtime port (P8-D2 phase 2)", () => {
       expect(syncEngineLocalRuntimeLoadState()).toBe("registered");
     });
 
+  // Verifies requireSyncEngineLocalRuntime() memoizes the resolved factory.
   it("requireSyncEngineLocalRuntime() memoizes the resolved factory",
     async () => {
       vi.resetModules();
@@ -149,6 +156,7 @@ describe("sync-engine local-runtime port (P8-D2 phase 2)", () => {
       expect(loaderCalls).toBe(1);
     });
 
+  // Verifies unregistered local-runtime seam fails closed with the wiring message.
   it("unregistered local-runtime seam fails closed with the wiring message",
     async () => {
       vi.resetModules();
