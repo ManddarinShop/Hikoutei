@@ -394,7 +394,9 @@ function readState(statePath: string): Record<string, unknown> {
   return JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
 }
 
+// Covers setup path collisions.
 describe("setup path collisions", () => {
+  // Verifies rejects --output aliasing the key path before any gcloud call or file write.
   it("rejects --output aliasing the key path before any gcloud call or file write", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -413,6 +415,7 @@ describe("setup path collisions", () => {
     expect(readFileSync(harness.keyPath, "utf8")).toBe("precious-key-content");
   });
 
+  // Verifies rejects --output aliasing the checkpoint path before any gcloud call.
   it("rejects --output aliasing the checkpoint path before any gcloud call", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -427,6 +430,7 @@ describe("setup path collisions", () => {
     expect(readFileSync(harness.statePath, "utf8")).toBe('{"kept":true}');
   });
 
+  // Verifies rejects a key path that aliases the checkpoint path.
   it("rejects a key path that aliases the checkpoint path", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -435,6 +439,7 @@ describe("setup path collisions", () => {
     expect(harness.calls).toHaveLength(0);
   });
 
+  // Verifies rejects symlink aliases of the key path.
   it("rejects symlink aliases of the key path", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -448,6 +453,7 @@ describe("setup path collisions", () => {
     expect(readFileSync(harness.keyPath, "utf8")).toBe("keep-me");
   });
 
+  // Verifies rejects --output aliasing the checkpoint temp path before any gcloud call.
   it("rejects --output aliasing the checkpoint temp path before any gcloud call", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -460,6 +466,7 @@ describe("setup path collisions", () => {
     expect(readFileSync(tempPath, "utf8")).toBe("stale-temp");
   });
 
+  // Verifies rejects --output aliasing the setup lock path before any gcloud call.
   it("rejects --output aliasing the setup lock path before any gcloud call", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -471,6 +478,7 @@ describe("setup path collisions", () => {
     expect(harness.calls).toHaveLength(0);
   });
 
+  // Verifies rejects a key path that aliases the setup lock path.
   it("rejects a key path that aliases the setup lock path", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -480,6 +488,7 @@ describe("setup path collisions", () => {
     expect(harness.calls).toHaveLength(0);
   });
 
+  // Verifies rejects a dangling symlink at --output that targets the key path.
   it("rejects a dangling symlink at --output that targets the key path", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -497,6 +506,7 @@ describe("setup path collisions", () => {
     expect(existsSync(harness.keyPath)).toBe(false);
   });
 
+  // Verifies rejects a hardlink alias of the key path by device/inode.
   it("rejects a hardlink alias of the key path by device/inode", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -510,6 +520,7 @@ describe("setup path collisions", () => {
     expect(readFileSync(harness.keyPath, "utf8")).toBe("shared-content");
   });
 
+  // Verifies rejects an output symlink pointing at a hardlink of the key by resolved identity.
   it("rejects an output symlink pointing at a hardlink of the key by resolved identity", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -537,6 +548,7 @@ describe("setup path collisions", () => {
     expect(readFileSync(harness.keyPath, "utf8")).toBe("attack-target-content");
   });
 
+  // Verifies rejects a case alias of a reserved path on case-insensitive platforms.
   it("rejects a case alias of a reserved path on case-insensitive platforms", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -566,6 +578,7 @@ describe("setup path collisions", () => {
     }
   });
 
+  // Verifies accepts distinct key/checkpoint/output paths.
   it("accepts distinct key/checkpoint/output paths", () => {
     expect(
       findSetupPathCollision({
@@ -577,7 +590,9 @@ describe("setup path collisions", () => {
   });
 });
 
+// Covers runSetup — mid-run reserved-path revalidation.
 describe("runSetup — mid-run reserved-path revalidation", () => {
+  // Verifies fails closed when an alias appears after preflight and before a checkpoint write.
   it("fails closed when an alias appears after preflight and before a checkpoint write", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -605,6 +620,7 @@ describe("runSetup — mid-run reserved-path revalidation", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies fails closed when an alias appears after the share checkpoint and before the .env write.
   it("fails closed when an alias appears after the share checkpoint and before the .env write", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -627,6 +643,7 @@ describe("runSetup — mid-run reserved-path revalidation", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies fails closed when a hardlink of the key is planted at the output before the .env write.
   it("fails closed when a hardlink of the key is planted at the output before the .env write", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -648,6 +665,7 @@ describe("runSetup — mid-run reserved-path revalidation", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies fails closed when a symlink is planted at the output before the .env write.
   it("fails closed when a symlink is planted at the output before the .env write", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -671,7 +689,9 @@ describe("runSetup — mid-run reserved-path revalidation", () => {
   });
 });
 
+// Covers secret leakage hardening.
 describe("secret leakage hardening", () => {
+  // Verifies safeReasonOf exposes only HTTP status and whitelisted constructed reasons.
   it("safeReasonOf exposes only HTTP status and whitelisted constructed reasons", () => {
     expect(safeReasonOf(new Error(`boom ${SECRET_JWT}`))).toBe("unknown failure");
     expect(safeReasonOf(new Error(SECRET_KEY_MATERIAL))).toBe("unknown failure");
@@ -681,6 +701,7 @@ describe("secret leakage hardening", () => {
     );
   });
 
+  // Verifies never forwards arbitrary sheet API error messages into the result.
   it("never forwards arbitrary sheet API error messages into the result", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -696,6 +717,7 @@ describe("secret leakage hardening", () => {
     }
   });
 
+  // Verifies never forwards marker lookup error text into the result.
   it("never forwards marker lookup error text into the result", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -711,6 +733,7 @@ describe("secret leakage hardening", () => {
     }
   });
 
+  // Verifies never forwards token validator error text into the result.
   it("never forwards token validator error text into the result", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -726,6 +749,7 @@ describe("secret leakage hardening", () => {
     }
   });
 
+  // Verifies never forwards SA verifier error text into the result.
   it("never forwards SA verifier error text into the result", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -739,6 +763,7 @@ describe("secret leakage hardening", () => {
     }
   });
 
+  // Verifies fails setup with the sanitized path-only message when the key cannot be opened (flow level)
   it("fails setup with the sanitized path-only message when the key cannot be opened (flow level)", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -768,6 +793,7 @@ describe("secret leakage hardening", () => {
     }
   });
 
+  // Verifies never forwards gcloud stderr/stdout into project-phase failure messages.
   it("never forwards gcloud stderr/stdout into project-phase failure messages", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -785,6 +811,7 @@ describe("secret leakage hardening", () => {
     }
   });
 
+  // Verifies keeps secrets out of the checkpoint, .env, and summary on success.
   it("keeps secrets out of the checkpoint, .env, and summary on success", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -803,6 +830,7 @@ describe("secret leakage hardening", () => {
     expect(combined).not.toContain("Authorization");
   });
 
+  // Verifies never forwards JSON.parse exception text from a malformed checkpoint into the flow result or CLI output.
   it("never forwards JSON.parse exception text from a malformed checkpoint into the flow result or CLI output", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -830,6 +858,7 @@ describe("secret leakage hardening", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies never forwards JSON.parse exception text from a malformed key file into the flow result.
   it("never forwards JSON.parse exception text from a malformed key file into the flow result", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -854,7 +883,9 @@ describe("secret leakage hardening", () => {
   });
 });
 
+// Covers runSetup — fresh setup.
 describe("runSetup — fresh setup", () => {
+  // Verifies runs the full sequence: human auth, both APIs, human-owned sheet, share, verify, checkpoint, env.
   it("runs the full sequence: human auth, both APIs, human-owned sheet, share, verify, checkpoint, env", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1043,6 +1074,7 @@ describe("runSetup — fresh setup", () => {
     expect(readdirSync(".").some((name) => name.startsWith("--managed-by"))).toBe(false);
   });
 
+  // Verifies uses a custom spreadsheet title when given.
   it("uses a custom spreadsheet title when given", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1054,6 +1086,7 @@ describe("runSetup — fresh setup", () => {
     expect(readState(harness.statePath).spreadsheetTitle).toBe("My Custom Sheet");
   });
 
+  // Verifies derives the service account email and title from an explicit project.
   it("derives the service account email and title from an explicit project", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1075,6 +1108,7 @@ describe("runSetup — fresh setup", () => {
   });
 });
 
+// Covers runSetup — spreadsheet marker reconciliation.
 describe("runSetup — spreadsheet marker reconciliation", () => {
   /** A marker-query result that matches the flow's marker for a run. */
   function matchingLookup(
@@ -1093,6 +1127,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     ];
   }
 
+  // Verifies reconciles a create whose response was lost by the exact marker and never creates twice.
   it("reconciles a create whose response was lost by the exact marker and never creates twice", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1122,6 +1157,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).spreadsheetId).toBe(CREATED_SHEET_ID);
   });
 
+  // Verifies keeps spreadsheet_create_started and fails with sheet_create_uncertain when the marker lookup finds nothing.
   it("keeps spreadsheet_create_started and fails with sheet_create_uncertain when the marker lookup finds nothing", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1144,6 +1180,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies resumes a started state with one marker match and recovers without creating.
   it("resumes a started state with one marker match and recovers without creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1169,6 +1206,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies never creates from a started state with zero matches (uncertain again)
   it("never creates from a started state with zero matches (uncertain again)", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1185,6 +1223,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_create_started");
   });
 
+  // Verifies fails with a conflict-style uncertain error on ambiguous (>1) marker matches.
   it("fails with a conflict-style uncertain error on ambiguous (>1) marker matches", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1208,6 +1247,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_create_started");
   });
 
+  // Verifies rejects non-spreadsheet, wrong-name, and wrong-marker matches without creating.
   it("rejects non-spreadsheet, wrong-name, and wrong-marker matches without creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1248,6 +1288,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_create_started");
   });
 
+  // Verifies treats an unavailable marker lookup as uncertain without creating.
   it("treats an unavailable marker lookup as uncertain without creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1263,6 +1304,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(harness.created).toHaveLength(1);
   });
 
+  // Verifies resumes a custom spreadsheet title from the checkpoint instead of re-defaulting.
   it("resumes a custom spreadsheet title from the checkpoint instead of re-defaulting", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1284,6 +1326,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(harness.lookupCalls).toStrictEqual([marker, marker]);
   });
 
+  // Verifies rolls a rejected 400/403 create with zero marker matches back to key_ready with sheet_create_failed, and a rerun creates once with a new marker.
   it("rolls a rejected 400/403 create with zero marker matches back to key_ready with sheet_create_failed, and a rerun creates once with a new marker", async () => {
     for (const status of [400, 403]) {
       // The module-level fake key-created flag is shared across iterations:
@@ -1330,6 +1373,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     }
   });
 
+  // Verifies preserves keyFresh=true across a resume when the key was created by the setup.
   it("preserves keyFresh=true across a resume when the key was created by the setup", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1356,6 +1400,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).keyOrigin).toBe("created");
   });
 
+  // Verifies recovers a rejected 403 create whose marker match already exists.
   it("recovers a rejected 403 create whose marker match already exists", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1374,6 +1419,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies keeps spreadsheet_create_started and returns sheet_create_uncertain when the 400/403 marker lookup fails or is ambiguous.
   it("keeps spreadsheet_create_started and returns sheet_create_uncertain when the 400/403 marker lookup fails or is ambiguous", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1407,6 +1453,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(harness.created).toHaveLength(1);
   });
 
+  // Verifies flow-level: a 400/403 create with an empty first page (token present) and a later-page match never rolls back to key_ready.
   it("flow-level: a 400/403 create with an empty first page (token present) and a later-page match never rolls back to key_ready", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1486,6 +1533,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     });
   });
 
+  // Verifies flow-level: a 400/403 create with an incompleteSearch marker lookup stays uncertain — never rolls back and never creates again.
   it("flow-level: a 400/403 create with an incompleteSearch marker lookup stays uncertain — never rolls back and never creates again", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1539,6 +1587,7 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_create_started");
   });
 
+  // Verifies flow-level: duplicates found on a later page after an empty first page keep the started state; the next run reconciles instead of creating a second Sheet.
   it("flow-level: duplicates found on a later page after an empty first page keep the started state; the next run reconciles instead of creating a second Sheet", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1618,7 +1667,9 @@ describe("runSetup — spreadsheet marker reconciliation", () => {
   });
 });
 
+// Covers runSetup — idempotent reuse.
 describe("runSetup — idempotent reuse", () => {
+  // Verifies reuses a project whose creation reports already-exists.
   it("reuses a project whose creation reports already-exists", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1639,6 +1690,7 @@ describe("runSetup — idempotent reuse", () => {
     expect(commands.some((c) => c[0] === "iam" && c[2] === "keys")).toBe(true);
   });
 
+  // Verifies reuses an existing service account by email.
   it("reuses an existing service account by email", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1659,6 +1711,7 @@ describe("runSetup — idempotent reuse", () => {
     expect(commands.some((c) => c[0] === "iam" && c[2] === "keys")).toBe(true);
   });
 
+  // Verifies reuses an existing key file when it matches the explicit project.
   it("reuses an existing key file when it matches the explicit project", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1681,7 +1734,9 @@ describe("runSetup — idempotent reuse", () => {
   });
 });
 
+// Covers runSetup — checkpoint resume.
 describe("runSetup — checkpoint resume", () => {
+  // Verifies resumes a full run without creating a second spreadsheet and keeps env unchanged.
   it("resumes a full run without creating a second spreadsheet and keeps env unchanged", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1711,6 +1766,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies resumes after a share failure: reuses the created sheet and shares once.
   it("resumes after a share failure: reuses the created sheet and shares once", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1765,6 +1821,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies keeps shareFresh=true on a resumed shared-but-unverified state from a prior fresh share.
   it("keeps shareFresh=true on a resumed shared-but-unverified state from a prior fresh share", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1815,6 +1872,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(state.shareOrigin).toBe("fresh");
   });
 
+  // Verifies passes shareFresh=false on a resumed shared-but-unverified state from a prior permission reuse.
   it("passes shareFresh=false on a resumed shared-but-unverified state from a prior permission reuse", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1857,6 +1915,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(readState(harness.statePath).shareOrigin).toBe("reused");
   });
 
+  // Verifies refuses a FOREIGN key planted before the SA verify: SA_ACCESS_VERIFY_FAILED and the verifier never runs.
   it("refuses a FOREIGN key planted before the SA verify: SA_ACCESS_VERIFY_FAILED and the verifier never runs", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1894,6 +1953,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_shared");
   });
 
+  // Verifies refuses a foreign key already present at a resumed spreadsheet_shared checkpoint before the verify phase.
   it("refuses a foreign key already present at a resumed spreadsheet_shared checkpoint before the verify phase", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1949,6 +2009,7 @@ describe("runSetup — checkpoint resume", () => {
     );
   });
 
+  // Verifies persists shareOrigin fresh for a created/upgraded writer permission and reused for a reuse.
   it("persists shareOrigin fresh for a created/upgraded writer permission and reused for a reuse", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -1975,6 +2036,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(readState(upgradedHarness.statePath).shareOrigin).toBe("fresh");
   });
 
+  // Verifies keeps shareFresh=false for truly pre-existing writer permission reuse in an uninterrupted flow.
   it("keeps shareFresh=false for truly pre-existing writer permission reuse in an uninterrupted flow", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2002,6 +2064,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(result.summary.saWriterRole).toBe("reused");
   });
 
+  // Verifies resumes from spreadsheet_share_started after a crash between the permission mutation and the shared checkpoint.
   it("resumes from spreadsheet_share_started after a crash between the permission mutation and the shared checkpoint", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2057,6 +2120,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(second.summary.resumed).toBe(true);
   });
 
+  // Verifies resumes a generated project by describing first and creates only when confirmed absent.
   it("resumes a generated project by describing first and creates only when confirmed absent", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2100,6 +2164,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(secondRunCalls.some((c) => c[0] === "projects" && c[1] === "create")).toBe(true);
   });
 
+  // Verifies resumes a generated project that already exists by describing first and never creating.
   it("resumes a generated project that already exists by describing first and never creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2132,6 +2197,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(harness.created).toHaveLength(1);
   });
 
+  // Verifies never calls project create for an explicit project, on fresh runs or on resume.
   it("never calls project create for an explicit project, on fresh runs or on resume", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2163,6 +2229,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(harness.calls.filter((c) => c[0] === "projects" && c[1] === "describe")).toHaveLength(2);
   });
 
+  // Verifies treats a matching --project on a GENERATED checkpoint as explicit: describe not found => project_not_found and zero create calls.
   it("treats a matching --project on a GENERATED checkpoint as explicit: describe not found => project_not_found and zero create calls", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2204,6 +2271,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(retained.projectId).toBe(slug);
   });
 
+  // Verifies continues a GENERATED checkpoint with a matching --project when describe succeeds, never creating.
   it("continues a GENERATED checkpoint with a matching --project when describe succeeds, never creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2245,6 +2313,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(finalState.projectId).toBe(slug);
   });
 
+  // Verifies rejects owner, project, sa-name, title, and key-path mismatches as setup_state_conflict.
   it("rejects owner, project, sa-name, title, and key-path mismatches as setup_state_conflict", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2273,6 +2342,7 @@ describe("runSetup — checkpoint resume", () => {
     expectError(result, SETUP_ERROR_CODES.SETUP_STATE_CONFLICT);
   });
 
+  // Verifies rejects a missing or mismatched key file on resume.
   it("rejects a missing or mismatched key file on resume", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2296,6 +2366,7 @@ describe("runSetup — checkpoint resume", () => {
     }
   });
 
+  // Verifies rejects malformed and wrong-version checkpoint files as setup_state_invalid.
   it("rejects malformed and wrong-version checkpoint files as setup_state_invalid", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2311,6 +2382,7 @@ describe("runSetup — checkpoint resume", () => {
     expectError(result, SETUP_ERROR_CODES.SETUP_STATE_INVALID);
   });
 
+  // Verifies rejects a complete checkpoint with a foreign stored saEmail before cloud calls and leaves .env unchanged.
   it("rejects a complete checkpoint with a foreign stored saEmail before cloud calls and leaves .env unchanged", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2353,6 +2425,7 @@ describe("runSetup — checkpoint resume", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies rejects a project_selected checkpoint with a foreign stored saEmail as setup_state_invalid.
   it("rejects a project_selected checkpoint with a foreign stored saEmail as setup_state_invalid", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2381,11 +2454,13 @@ describe("runSetup — checkpoint resume", () => {
   });
 });
 
+// Covers runSetup — existing key without a checkpoint.
 describe("runSetup — existing key without a checkpoint", () => {
   function validKey(projectId: string): string {
     return validKeyJson(projectId, `hikoutei-sa@${projectId}.iam.gserviceaccount.com`);
   }
 
+  // Verifies fails before project creation when no --project is given.
   it("fails before project creation when no --project is given", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2401,6 +2476,7 @@ describe("runSetup — existing key without a checkpoint", () => {
     expect(existsSync(harness.statePath)).toBe(false);
   });
 
+  // Verifies proceeds with key reuse when --project matches the key.
   it("proceeds with key reuse when --project matches the key", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2415,6 +2491,7 @@ describe("runSetup — existing key without a checkpoint", () => {
     expect(commands).toContainEqual(["projects", "describe", "existing-proj"]);
   });
 
+  // Verifies fails when --project does not match the key.
   it("fails when --project does not match the key", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2425,6 +2502,7 @@ describe("runSetup — existing key without a checkpoint", () => {
     expect(harness.calls.some((c) => c[0] === "projects")).toBe(false);
   });
 
+  // Verifies fails with setup_state_invalid when the existing key is malformed.
   it("fails with setup_state_invalid when the existing key is malformed", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2436,7 +2514,9 @@ describe("runSetup — existing key without a checkpoint", () => {
   });
 });
 
+// Covers runSetup — dry run.
 describe("runSetup — dry run", () => {
+  // Verifies returns the command plan without executing anything or creating/modifying files.
   it("returns the command plan without executing anything or creating/modifying files", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2513,7 +2593,9 @@ describe("runSetup — dry run", () => {
   });
 });
 
+// Covers runSetup — failure mapping.
 describe("runSetup — failure mapping", () => {
+  // Verifies reports gcloud_missing when gcloud is not installed or broken.
   it("reports gcloud_missing when gcloud is not installed or broken", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2525,6 +2607,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run(), SETUP_ERROR_CODES.GCLOUD_MISSING);
   });
 
+  // Verifies maps a THROWN preflight invocation to gcloud_missing without leaking thrown text.
   it("maps a THROWN preflight invocation to gcloud_missing without leaking thrown text", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2541,6 +2624,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies maps a THROWN auth-list invocation to gcloud_not_logged_in without leaking thrown text.
   it("maps a THROWN auth-list invocation to gcloud_not_logged_in without leaking thrown text", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2558,6 +2642,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies maps a THROWN token retrieval to user_token_failed without leaking thrown text.
   it("maps a THROWN token retrieval to user_token_failed without leaking thrown text", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2575,6 +2660,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies maps a THROWN project describe to project_not_found without leaking thrown text.
   it("maps a THROWN project describe to project_not_found without leaking thrown text", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2592,6 +2678,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies maps a THROWN services enable to api_enable_failed without leaking thrown text.
   it("maps a THROWN services enable to api_enable_failed without leaking thrown text", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2609,6 +2696,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies maps a THROWN service-account list to sa_create_failed without leaking thrown text.
   it("maps a THROWN service-account list to sa_create_failed without leaking thrown text", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2625,6 +2713,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies createSafeRunner converts a throwing runner into a sanitized failed result.
   it("createSafeRunner converts a throwing runner into a sanitized failed result", async () => {
     const throwing: GcloudRunner = {
       async run() {
@@ -2644,6 +2733,7 @@ describe("runSetup — failure mapping", () => {
     expect(await okRunner.run(["x"])).toStrictEqual({ status: "ok", stdout: "out", stderr: "err" });
   });
 
+  // Verifies reports gcloud_not_logged_in when no active account exists.
   it("reports gcloud_not_logged_in when no active account exists", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2654,6 +2744,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run(), SETUP_ERROR_CODES.GCLOUD_NOT_LOGGED_IN);
   });
 
+  // Verifies points the no-account guidance at the exact Drive-enabled re-login command.
   it("points the no-account guidance at the exact Drive-enabled re-login command", async () => {
     // Regression: the empty-account (non-interactive/CI/non-TTY) guidance must
     // reuse the shared DRIVE_ACCESS_COMMAND so it instructs the exact
@@ -2676,6 +2767,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies points the auth-list failure guidance at the exact Drive-enabled re-login command.
   it("points the auth-list failure guidance at the exact Drive-enabled re-login command", async () => {
     // Regression: the OTHER auth-list failure branch (invocation failure, not
     // the empty-account list) must also reuse the shared DRIVE_ACCESS_COMMAND
@@ -2702,6 +2794,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies keeps install guidance for the auth-list not_found case.
   it("keeps install guidance for the auth-list not_found case", async () => {
     // A missing gcloud binary is not an account problem: the auth-list
     // failure keeps the SDK install guidance and never suggests a login.
@@ -2717,6 +2810,7 @@ describe("runSetup — failure mapping", () => {
     }
   });
 
+  // Verifies reports user_token_failed when the token cannot be retrieved or validated.
   it("reports user_token_failed when the token cannot be retrieved or validated", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2731,6 +2825,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run(), SETUP_ERROR_CODES.USER_TOKEN_FAILED);
   });
 
+  // Verifies rejects an invalid --project or --sa-name at the runtime boundary before ANY mutation.
   it("rejects an invalid --project or --sa-name at the runtime boundary before ANY mutation", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2765,6 +2860,7 @@ describe("runSetup — failure mapping", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies reports gcloud_drive_access_required before any mutation when Drive scope is missing.
   it("reports gcloud_drive_access_required before any mutation when Drive scope is missing", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2783,6 +2879,7 @@ describe("runSetup — failure mapping", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies reports project_create_failed when project creation fails for another reason.
   it("reports project_create_failed when project creation fails for another reason", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2793,6 +2890,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run(), SETUP_ERROR_CODES.PROJECT_CREATE_FAILED);
   });
 
+  // Verifies reports project_not_found when an explicit project cannot be verified.
   it("reports project_not_found when an explicit project cannot be verified", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2803,6 +2901,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run({ projectId: "no-such-project-xyz" }), SETUP_ERROR_CODES.PROJECT_NOT_FOUND);
   });
 
+  // Verifies reports project_select_failed when config set fails.
   it("reports project_select_failed when config set fails", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2811,6 +2910,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run(), SETUP_ERROR_CODES.PROJECT_SELECT_FAILED);
   });
 
+  // Verifies reports api_enable_failed when enabling the APIs fails.
   it("reports api_enable_failed when enabling the APIs fails", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2819,6 +2919,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run(), SETUP_ERROR_CODES.API_ENABLE_FAILED);
   });
 
+  // Verifies reports sa_create_failed when listing or creating the service account fails.
   it("reports sa_create_failed when listing or creating the service account fails", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2831,6 +2932,7 @@ describe("runSetup — failure mapping", () => {
     expectError(await harness.run(), SETUP_ERROR_CODES.SA_CREATE_FAILED);
   });
 
+  // Verifies fails with key_create_uncertain after the poll schedule when the one fresh create fails and nothing appears.
   it("fails with key_create_uncertain after the poll schedule when the one fresh create fails and nothing appears", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2887,6 +2989,7 @@ describe("runSetup — failure mapping", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies fails with key_create_failed when the final key path is planted mid-run and never overwrites it.
   it("fails with key_create_failed when the final key path is planted mid-run and never overwrites it", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2937,6 +3040,7 @@ describe("runSetup — failure mapping", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies recovers the retained staged key after the planted final path is removed.
   it("recovers the retained staged key after the planted final path is removed", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -2998,6 +3102,7 @@ describe("runSetup — failure mapping", () => {
     expect(second.summary.keyReused).toBe(false);
   });
 
+  // Verifies fails with key_create_failed when the staged key is invalid and retains it securely.
   it("fails with key_create_failed when the staged key is invalid and retains it securely", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3027,6 +3132,7 @@ describe("runSetup — failure mapping", () => {
     expect(harness.created).toHaveLength(0);
   });
 
+  // Verifies fails with key_create_failed when the staged key belongs to a different account and retains it.
   it("fails with key_create_failed when the staged key belongs to a different account and retains it", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3061,6 +3167,7 @@ describe("runSetup — failure mapping", () => {
     expect(readState(harness.statePath).status).toBe("key_create_started");
   });
 
+  // Verifies reports sheet_create_uncertain when the create outcome is unknown and retains the started state.
   it("reports sheet_create_uncertain when the create outcome is unknown and retains the started state", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3078,6 +3185,7 @@ describe("runSetup — failure mapping", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies reports sheet_share_failed when sharing fails, and keeps the spreadsheet_share_started write-ahead.
   it("reports sheet_share_failed when sharing fails, and keeps the spreadsheet_share_started write-ahead", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3101,6 +3209,7 @@ describe("runSetup — failure mapping", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies delays the .env write until SA access is verified, and retains the shared checkpoint.
   it("delays the .env write until SA access is verified, and retains the shared checkpoint", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3113,6 +3222,7 @@ describe("runSetup — failure mapping", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_shared");
   });
 
+  // Verifies reports output_write_failed when the .env file cannot be written.
   it("reports output_write_failed when the .env file cannot be written", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3120,6 +3230,7 @@ describe("runSetup — failure mapping", () => {
     expectError(result, SETUP_ERROR_CODES.OUTPUT_WRITE_FAILED);
   });
 
+  // Verifies reports output_not_regular_file for a directory at the output path and leaves it untouched.
   it("reports output_not_regular_file for a directory at the output path and leaves it untouched", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3139,6 +3250,7 @@ describe("runSetup — failure mapping", () => {
     expect(readState(harness.statePath).status).toBe("spreadsheet_shared");
   });
 
+  // Verifies reports output_not_regular_file for a FIFO at the output path without blocking on it.
   it("reports output_not_regular_file for a FIFO at the output path without blocking on it", async (ctx) => {
     if ((constants as { O_NONBLOCK?: number }).O_NONBLOCK === undefined) {
       ctx.skip();
@@ -3166,6 +3278,7 @@ describe("runSetup — failure mapping", () => {
   });
 });
 
+// Covers runSetup — key write-ahead reconciliation.
 describe("runSetup — key write-ahead reconciliation", () => {
   /** Writes a `key_create_started` checkpoint for the given project. */
   function writeKeyStartedCheckpoint(
@@ -3231,6 +3344,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     return harness.calls.filter((c) => c[0] === "iam" && c[2] === "keys" && c[3] === "delete").length;
   }
 
+  // Verifies resumes with a valid active final key (crash after install) and promotes without creating.
   it("resumes with a valid active final key (crash after install) and promotes without creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3257,6 +3371,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.calls.some((c) => c[0] === "services")).toBe(false);
   });
 
+  // Verifies resumes with a staged+final hardlink (crash after the atomic install) and cleans the owned stage.
   it("resumes with a staged+final hardlink (crash after the atomic install) and cleans the owned stage", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3281,6 +3396,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies resumes with only a staged active key (crash before install) and installs it without creating.
   it("resumes with only a staged active key (crash before install) and installs it without creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3302,6 +3418,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies is reconcile-only on resume with no credential and no delta: zero create/delete and uncertain after the exact poll schedule.
   it("is reconcile-only on resume with no credential and no delta: zero create/delete and uncertain after the exact poll schedule", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3334,6 +3451,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(keyListCalls).toHaveLength(8);
   });
 
+  // Verifies removes a leftover EMPTY stage directory on resume (crash between unlink and rmdir)
   it("removes a leftover EMPTY stage directory on resume (crash between unlink and rmdir)", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3354,6 +3472,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies fails closed on a non-empty stage directory during cleanup and preserves its contents.
   it("fails closed on a non-empty stage directory during cleanup and preserves its contents", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3378,6 +3497,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.created).toHaveLength(0);
   });
 
+  // Verifies resumes a crash-left cleanup directory containing the matching staged hardlink.
   it("resumes a crash-left cleanup directory containing the matching staged hardlink", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3406,6 +3526,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies resumes an empty crash-left cleanup directory and removes it.
   it("resumes an empty crash-left cleanup directory and removes it", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3426,6 +3547,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies preserves extra contents found in the quarantined cleanup directory and moves them back to the stage path.
   it("preserves extra contents found in the quarantined cleanup directory and moves them back to the stage path", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3454,6 +3576,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("key_create_started");
   });
 
+  // Verifies refuses a final symlink during cleanup and retains the staged key.
   it("refuses a final symlink during cleanup and retains the staged key", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
@@ -3479,6 +3602,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(existsSync(stageDir)).toBe(true);
   });
 
+  // Verifies detects a stage-directory replacement after the quarantine rename and deletes nothing.
   it("detects a stage-directory replacement after the quarantine rename and deletes nothing", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
@@ -3523,6 +3647,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readFileSync(keyPath, "utf8")).toBe("final-key");
   });
 
+  // Verifies fails closed when both the stage and cleanup directories exist.
   it("fails closed when both the stage and cleanup directories exist", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
@@ -3541,6 +3666,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readFileSync(keyPath, "utf8")).toBe("final-key");
   });
 
+  // Verifies enforces owner-only 0700 on a pre-existing stage directory before gcloud writes.
   it("enforces owner-only 0700 on a pre-existing stage directory before gcloud writes", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
@@ -3561,6 +3687,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(statSync(stageDir).mode & 0o777).toBe(0o700);
   });
 
+  // Verifies rejects a symlink at the stage directory path without touching it.
   it("rejects a symlink at the stage directory path without touching it", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
@@ -3579,6 +3706,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(existsSync(victim)).toBe(true);
   });
 
+  // Verifies refuses a symlinked staging directory before any key list, create, install, or cleanup.
   it("refuses a symlinked staging directory before any key list, create, install, or cleanup", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3615,6 +3743,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.created).toHaveLength(0);
   });
 
+  // Verifies fails closed when the staging directory is replaced DURING the key create: no foreign key read, chmod, or install.
   it("fails closed when the staging directory is replaced DURING the key create: no foreign key read, chmod, or install", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3680,6 +3809,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.sleepCalls).toHaveLength(0);
   });
 
+  // Verifies refuses a non-directory entry at the staging directory path without touching it.
   it("refuses a non-directory entry at the staging directory path without touching it", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3703,6 +3833,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("key_create_started");
   });
 
+  // Verifies secures an existing 0755 staging directory to 0700 BEFORE the staged key is read.
   it("secures an existing 0755 staging directory to 0700 BEFORE the staged key is read", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3734,6 +3865,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies reconciles a THROWN key-create invocation (lost result) instead of bubbling it.
   it("reconciles a THROWN key-create invocation (lost result) instead of bubbling it", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3760,6 +3892,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readdirSync(dir).some((name) => name.startsWith(".hikoutei-key-stage-"))).toBe(false);
   });
 
+  // Verifies returns key_create_failed (baseline) when the key list invocation throws.
   it("returns key_create_failed (baseline) when the key list invocation throws", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3788,6 +3921,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.created).toHaveLength(0);
   });
 
+  // Verifies returns key_create_uncertain (reconcile) when the key list invocation throws on resume.
   it("returns key_create_uncertain (reconcile) when the key list invocation throws on resume", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3815,6 +3949,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(keyDeleteCalls(harness)).toBe(0);
   });
 
+  // Verifies normalizes key resource names (case-folded key ids) when parsing the list output.
   it("normalizes key resource names (case-folded key ids) when parsing the list output", () => {
     const projectId = "proj-1";
     const saEmail = "sa@proj-1.iam.gserviceaccount.com";
@@ -3828,6 +3963,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(parseUserManagedKeyList(`${keyResourceName("other-proj", saEmail, FIXED_KEY_ID)}\n`, projectId, saEmail)).toBeNull();
   });
 
+  // Verifies parses bare key ids emitted by newer gcloud (574+) as full resource names.
   it("parses bare key ids emitted by newer gcloud (574+) as full resource names", () => {
     const projectId = "proj-1";
     const saEmail = "sa@proj-1.iam.gserviceaccount.com";
@@ -3848,6 +3984,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     ]);
   });
 
+  // Verifies case-folds bare key ids so baseline comparisons are exact.
   it("case-folds bare key ids so baseline comparisons are exact", () => {
     const projectId = "proj-1";
     const saEmail = "sa@proj-1.iam.gserviceaccount.com";
@@ -3861,6 +3998,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     );
   });
 
+  // Verifies parses a mix of bare ids and full names, trimming/sorting/deduping the baseline.
   it("parses a mix of bare ids and full names, trimming/sorting/deduping the baseline", () => {
     const projectId = "proj-1";
     const saEmail = "sa@proj-1.iam.gserviceaccount.com";
@@ -3882,6 +4020,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     );
   });
 
+  // Verifies refuses malformed bare ids and foreign resource names (fail closed)
   it("refuses malformed bare ids and foreign resource names (fail closed)", () => {
     const projectId = "proj-1";
     const saEmail = "sa@proj-1.iam.gserviceaccount.com";
@@ -3915,6 +4054,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     ).toBeNull();
   });
 
+  // Verifies normalizeUserManagedKeyLine reconstructs a bare id and refuses malformed input.
   it("normalizeUserManagedKeyLine reconstructs a bare id and refuses malformed input", () => {
     const projectId = "proj-1";
     const saEmail = "sa@proj-1.iam.gserviceaccount.com";
@@ -3933,6 +4073,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     ).toBeNull();
   });
 
+  // Verifies exposes a stable keys-list command contract.
   it("exposes a stable keys-list command contract", () => {
     // The command form is a stable machine-readable projection; the
     // bare-id vs full-name output variance is handled at the parser
@@ -3947,6 +4088,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     ]);
   });
 
+  // Verifies passes keyFresh=false when the key pre-existed the setup.
   it("passes keyFresh=false when the key pre-existed the setup", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -3975,6 +4117,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).keyOrigin).toBe("reused");
   });
 
+  // Verifies fails with key_create_uncertain on an unmatched delta: zero create calls and zero cloud deletes.
   it("fails with key_create_uncertain on an unmatched delta: zero create calls and zero cloud deletes", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4007,6 +4150,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(existsSync(harness.outputPath)).toBe(false);
   });
 
+  // Verifies fails with key_create_uncertain when the staged key matches one delta entry but a second entry is unmatched.
   it("fails with key_create_uncertain when the staged key matches one delta entry but a second entry is unmatched", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4039,6 +4183,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.created).toHaveLength(0);
   });
 
+  // Verifies fails with key_create_uncertain when the final key matches one delta entry but a second entry is unmatched.
   it("fails with key_create_uncertain when the final key matches one delta entry but a second entry is unmatched", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4060,6 +4205,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.created).toHaveLength(0);
   });
 
+  // Verifies settles a staged credential that becomes visible during the bounded poll without creating.
   it("settles a staged credential that becomes visible during the bounded poll without creating", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4102,6 +4248,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("complete");
   });
 
+  // Verifies installs a recoverable staged key when the gcloud create invocation failed after writing it.
   it("installs a recoverable staged key when the gcloud create invocation failed after writing it", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4127,6 +4274,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readdirSync(dir).some((name) => name.startsWith(".hikoutei-key-stage-"))).toBe(false);
   });
 
+  // Verifies fails closed on an inactive staged key and retains it securely.
   it("fails closed on an inactive staged key and retains it securely", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4151,6 +4299,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readState(harness.statePath).status).toBe("key_create_started");
   });
 
+  // Verifies corrects a reused 0644 key to 0600 during a real run and refuses a symlink key.
   it("corrects a reused 0644 key to 0600 during a real run and refuses a symlink key", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4181,6 +4330,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(existsSync(symlinkHarness.statePath)).toBe(false);
   });
 
+  // Verifies refuses win32 non-dry-run with unsupported_platform before any subprocess, network, cloud, lock, or file mutation.
   it("refuses win32 non-dry-run with unsupported_platform before any subprocess, network, cloud, lock, or file mutation", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4199,6 +4349,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies keeps win32 dry runs pure and successful.
   it("keeps win32 dry runs pure and successful", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4214,6 +4365,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(gcloudCommands(result.commands).some((c) => c[0] === "iam" && c[3] === "create")).toBe(true);
   });
 
+  // Verifies runs normally on linux and darwin platforms.
   it("runs normally on linux and darwin platforms", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4222,7 +4374,9 @@ describe("runSetup — key write-ahead reconciliation", () => {
   });
 });
 
+// Covers runSetup — exclusive lock.
 describe("runSetup — exclusive lock", () => {
+  // Verifies fails with setup_in_progress on lock contention after preflight only, with zero mutations.
   it("fails with setup_in_progress on lock contention after preflight only, with zero mutations", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4253,6 +4407,7 @@ describe("runSetup — exclusive lock", () => {
     expect(lstatSync(setupLockPath(harness.statePath)).isDirectory()).toBe(true);
   });
 
+  // Verifies fails with setup_in_progress for any pre-existing lock entry, file or directory.
   it("fails with setup_in_progress for any pre-existing lock entry, file or directory", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4273,6 +4428,7 @@ describe("runSetup — exclusive lock", () => {
     expect(lstatSync(lockPath).isDirectory()).toBe(true);
   });
 
+  // Verifies never takes over a leftover lock directory: setup_in_progress with zero mutations.
   it("never takes over a leftover lock directory: setup_in_progress with zero mutations", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4305,6 +4461,7 @@ describe("runSetup — exclusive lock", () => {
     expect(lstatSync(lockPath).isDirectory()).toBe(true);
   });
 
+  // Verifies reports setup_lock_failed (not setup_in_progress) when the lock directory cannot be created.
   it("reports setup_lock_failed (not setup_in_progress) when the lock directory cannot be created", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4342,6 +4499,7 @@ describe("runSetup — exclusive lock", () => {
     expect(existsSync(harness.keyPath)).toBe(false);
   });
 
+  // Verifies releases the lock on every error result.
   it("releases the lock on every error result", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4355,6 +4513,7 @@ describe("runSetup — exclusive lock", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies releases the lock on a setup_state_conflict error.
   it("releases the lock on a setup_state_conflict error", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4367,6 +4526,7 @@ describe("runSetup — exclusive lock", () => {
     expect(existsSync(setupLockPath(harness.statePath))).toBe(false);
   });
 
+  // Verifies creates no lock in dry-run mode.
   it("creates no lock in dry-run mode", async () => {
     const dir = makeTempDir();
     const harness = createHarness(dir);
@@ -4377,7 +4537,9 @@ describe("runSetup — exclusive lock", () => {
   });
 });
 
+// Covers formatSummary.
 describe("formatSummary", () => {
+  // Verifies prints owner, roles, checkpoint and paths but never key contents or tokens.
   it("prints owner, roles, checkpoint and paths but never key contents or tokens", () => {
     const text = formatSummary({
       projectId: "hikoutei-abc",
@@ -4412,13 +4574,16 @@ describe("formatSummary", () => {
   });
 });
 
+// Covers derived identity helpers.
 describe("derived identity helpers", () => {
+  // Verifies derives service account emails and default titles.
   it("derives service account emails and default titles", () => {
     expect(serviceAccountEmail("sa", "proj")).toBe("sa@proj.iam.gserviceaccount.com");
     expect(defaultSpreadsheetTitle("proj")).toBe("hikoutei-sync-proj");
   });
 });
 
+// Covers setup artifact ignore rules.
 describe("setup artifact ignore rules", () => {
   const IGNORE_PATTERNS = [
     "hikoutei-service-account.json",
@@ -4446,6 +4611,7 @@ describe("setup artifact ignore rules", () => {
     ".hikoutei-env-1234-a0b1c2d3-e89b-42d3-a456-426614174000.tmp",
   ] as const;
 
+  // Verifies lists a precise ignore pattern for every default setup artifact family.
   it("lists a precise ignore pattern for every default setup artifact family", () => {
     const text = readFileSync(new URL("../../.gitignore", import.meta.url), "utf8");
     const lines = text
@@ -4457,6 +4623,7 @@ describe("setup artifact ignore rules", () => {
     }
   });
 
+  // Verifies protects the concrete default artifact names (git check-ignore, read-only)
   it("protects the concrete default artifact names (git check-ignore, read-only)", () => {
     const gitignoreUrl = new URL("../../.gitignore", import.meta.url);
     const repoRoot = dirname(fileURLToPath(gitignoreUrl));
