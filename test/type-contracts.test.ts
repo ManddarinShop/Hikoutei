@@ -1,3 +1,11 @@
+/**
+ * Internal storage type-contract promotion coverage.
+ *
+ * Verifies that raw outbox rows, apply-result options, and projection
+ * confirmations validate into their narrow internal types, rejecting unknown
+ * statuses, unstamped dispatch labels, and malformed confirmations closed.
+ */
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -38,7 +46,9 @@ function rawPendingEffect(overrides: Record<string, unknown> = {}): Record<strin
   };
 }
 
+// Verifies raw storage rows promote into narrow internal types or fail closed.
 describe("internal type contract promotion", () => {
+  // Verifies valid pending effects promote while unknown statuses and dispatch labels reject.
   it("promotes a valid pending effect and rejects an unknown stored status", () => {
     expect(decodePendingEffectRow(rawPendingEffect())).toMatchObject({
       effect_id: "effect-1",
@@ -57,6 +67,7 @@ describe("internal type contract promotion", () => {
       .toThrowError(StorageError);
   });
 
+  // Verifies non-terminal apply statuses and malformed confirmations throw at runtime.
   it("rejects non-terminal apply statuses and malformed confirmations at runtime", () => {
     expect(() => validateApplyResultOptions({
       effectId: "effect-1",
@@ -81,6 +92,7 @@ describe("internal type contract promotion", () => {
     } as never)).toThrowError(StorageError);
   });
 
+  // Verifies an empty expected visible hash is allowed only for the new-row sentinel.
   it("allows an empty expected visible hash only for the new-row sentinel", () => {
     expect(decodePendingEffectRow(rawPendingEffect({ expected_visible_hash: "" })))
       .toMatchObject({ expected_visible_hash: "" });
@@ -92,6 +104,7 @@ describe("internal type contract promotion", () => {
     }))).toThrowError(StorageError);
   });
 
+  // Verifies the canonical UTC date predicate shared by storage and provider boundaries.
   it("shares the canonical date predicate used by storage and provider boundaries", () => {
     expect(isCanonicalUtcIsoDate("2026-01-02T03:04:05.000Z")).toBe(true);
     expect(isCanonicalUtcIsoDate("2026-01-02T03:04:05+00:00")).toBe(false);
