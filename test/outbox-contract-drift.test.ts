@@ -45,7 +45,9 @@ function assertSharedValuesEqual(
   }
 }
 
+// Covers outbox kernel / host persisted-contract drift.
 describe("outbox kernel / host persisted-contract drift", () => {
+  // Verifies keeps storage error code values byte-identical for the shared keys.
   it("keeps storage error code values byte-identical for the shared keys", () => {
     assertSharedValuesEqual(
       KERNEL_STORAGE_ERROR_CODES,
@@ -54,10 +56,12 @@ describe("outbox kernel / host persisted-contract drift", () => {
     );
   });
 
+  // Verifies keeps effect kind values byte-identical for the shared keys.
   it("keeps effect kind values byte-identical for the shared keys", () => {
     assertSharedValuesEqual(KERNEL_EFFECT_KINDS, HOST_EFFECT_KINDS, "EFFECT_KINDS");
   });
 
+  // Verifies keeps effect target kind values byte-identical for the shared keys.
   it("keeps effect target kind values byte-identical for the shared keys", () => {
     assertSharedValuesEqual(
       KERNEL_EFFECT_TARGET_KINDS,
@@ -66,6 +70,7 @@ describe("outbox kernel / host persisted-contract drift", () => {
     );
   });
 
+  // Verifies keeps effect status values byte-identical for the shared keys.
   it("keeps effect status values byte-identical for the shared keys", () => {
     assertSharedValuesEqual(
       KERNEL_EFFECT_STATUSES,
@@ -74,6 +79,7 @@ describe("outbox kernel / host persisted-contract drift", () => {
     );
   });
 
+  // Verifies keeps provider timing kind values byte-identical for the shared keys.
   it("keeps provider timing kind values byte-identical for the shared keys", () => {
     // P8-B: the contracts leaf mirrors the kernel provider-timing kinds so
     // the sheets sync contract (`timing?: SyncProviderTiming`) stays
