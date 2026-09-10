@@ -141,7 +141,9 @@ function liveContext(overrides = {}) {
 /** The local-only context: scenarios record as skipped and never mutate. */
 const LOCAL_CONTEXT = { live: { mode: "local", client: VALID_CLIENT, spreadsheetId: "spreadsheet-1" } };
 
+// Covers: stub registry and derived vocabulary.
 describe("stub registry and derived vocabulary", () => {
+  // Verifies: exposes the full scenario contract on every stub module.
   it("exposes the full scenario contract on every stub module", () => {
     for (const scenario of STUB_REGISTRY) {
       expect(typeof scenario.id).toBe("string");
@@ -163,6 +165,7 @@ describe("stub registry and derived vocabulary", () => {
     }
   });
 
+  // Verifies: exposes the phase vocabulary as the scheduler's fixed phase values.
   it("exposes the phase vocabulary as the scheduler's fixed phase values", () => {
     expect([...STUB_VOCAB.KNOWN_SCENARIO_PHASES]).toEqual([...SCENARIO_PHASE_VALUES]);
     expect(SCENARIO_PHASE_VALUES).toEqual([
@@ -173,7 +176,9 @@ describe("stub registry and derived vocabulary", () => {
   });
 });
 
+// Covers: deterministic seeded scheduler (stub registry).
 describe("deterministic seeded scheduler (stub registry)", () => {
+  // Verifies: reproduces the identical batch for the same (seed, cycle).
   it("reproduces the identical batch for the same (seed, cycle)", () => {
     const batch = composeScenarioBatch({ seed: 12345, cycle: 4, registry: STUB_REGISTRY });
     const again = composeScenarioBatch({ seed: 12345, cycle: 4, registry: STUB_REGISTRY });
@@ -181,12 +186,14 @@ describe("deterministic seeded scheduler (stub registry)", () => {
     expect(batch.cycle).toBe(4);
   });
 
+  // Verifies: varies the batch across different seeds.
   it("varies the batch across different seeds", () => {
     const a = composeScenarioBatch({ seed: 111, cycle: 1, registry: STUB_REGISTRY });
     const b = composeScenarioBatch({ seed: 222, cycle: 1, registry: STUB_REGISTRY });
     expect(b).not.toEqual(a);
   });
 
+  // Verifies: selects 1-3 distinct scenarios per cycle, all in an allowed phase.
   it("selects 1-3 distinct scenarios per cycle, all in an allowed phase", () => {
     for (let cycle = 1; cycle <= 30; cycle += 1) {
       const { scenarios } = composeScenarioBatch({ seed: 42, cycle, registry: STUB_REGISTRY });
@@ -201,6 +208,7 @@ describe("deterministic seeded scheduler (stub registry)", () => {
     }
   });
 
+  // Verifies: assigns phase, order, tag and jitter deterministically.
   it("assigns phase, order, tag and jitter deterministically", () => {
     const batch = composeScenarioBatch({ seed: 2026, cycle: 7, registry: STUB_REGISTRY });
     const replay = composeScenarioBatch({ seed: 2026, cycle: 7, registry: STUB_REGISTRY });
@@ -217,6 +225,7 @@ describe("deterministic seeded scheduler (stub registry)", () => {
     }
   });
 
+  // Verifies: honors every-scenario-before-repeat across many cycles (shuffle-bag stream).
   it("honors every-scenario-before-repeat across many cycles (shuffle-bag stream)", () => {
     const seenAll = new Set();
     for (let cycle = 1; cycle <= 12; cycle += 1) {
@@ -226,6 +235,7 @@ describe("deterministic seeded scheduler (stub registry)", () => {
     expect([...seenAll].sort()).toEqual([...STUB_REGISTRY.map((s) => s.id)].sort());
   });
 
+  // Verifies: keeps the selection stream continuous across a resume boundary.
   it("keeps the selection stream continuous across a resume boundary", () => {
     // Resuming at cycle N must reproduce exactly what composing cycles 1..N
     // as one uninterrupted stream produces: recomposing cycle N after a
@@ -235,6 +245,7 @@ describe("deterministic seeded scheduler (stub registry)", () => {
     expect(resumed).toEqual(fresh);
   });
 
+  // Verifies: never overlaps two lifecycle scenarios in one phase within a cycle.
   it("never overlaps two lifecycle scenarios in one phase within a cycle", () => {
     for (let cycle = 1; cycle <= 20; cycle += 1) {
       const { scenarios } = composeScenarioBatch({ seed: 5, cycle, registry: STUB_REGISTRY });
@@ -248,6 +259,7 @@ describe("deterministic seeded scheduler (stub registry)", () => {
   });
 });
 
+// Covers: real-registry composition safety.
 describe("real-registry composition safety", () => {
   // Registry-content-agnostic: every assertion below must hold for ANY real
   // registry content (0, 1, or many scenarios registered), so this identical
@@ -272,6 +284,7 @@ describe("real-registry composition safety", () => {
     expect(Array.isArray(SCENARIO_REGISTRY)).toBe(true);
   });
 
+  // Verifies: runs a real-registry phase batch to one record per composed entry.
   it("runs a real-registry phase batch to one record per composed entry", async () => {
     const batch = composeScenarioBatch({ seed: 1, cycle: 1, registry: SCENARIO_REGISTRY });
     const registeredIds = SCENARIO_REGISTRY.map((scenario) => scenario.id);
@@ -300,6 +313,7 @@ describe("real-registry composition safety", () => {
     }
   });
 
+  // Verifies: runs interrupted-cycle recovery with a removal count within batch bounds.
   it("runs interrupted-cycle recovery with a removal count within batch bounds", async () => {
     const batch = composeScenarioBatch({ seed: 1, cycle: 1, registry: SCENARIO_REGISTRY });
     // A recovery context with no tokens/active entities makes every recover
@@ -322,7 +336,9 @@ describe("real-registry composition safety", () => {
   });
 });
 
+// Covers: scenario phase composition.
 describe("scenario phase composition", () => {
+  // Verifies: groups composed entries by phase in execution order.
   it("groups composed entries by phase in execution order", () => {
     const batch = composeScenarioBatch({ seed: 4242, cycle: 3, registry: STUB_REGISTRY });
     for (const phase of SCENARIO_PHASE_VALUES) {
@@ -335,7 +351,9 @@ describe("scenario phase composition", () => {
   });
 });
 
+// Covers: scenario execution wrapper (stub).
 describe("scenario execution wrapper (stub)", () => {
+  // Verifies: records local mode as skipped without touching a live client.
   it("records local mode as skipped without touching a live client", async () => {
     const batch = composeScenarioBatch({ seed: 3, cycle: 1, registry: STUB_REGISTRY });
     const entry = batch.scenarios[0]!;
@@ -346,6 +364,7 @@ describe("scenario execution wrapper (stub)", () => {
     expect(record.failures).toBe(0);
   });
 
+  // Verifies: records an ok live scenario with its expected/failure counters.
   it("records an ok live scenario with its expected/failure counters", async () => {
     const batch = composeScenarioBatch({ seed: 8, cycle: 1, registry: [STUB_ALPHA] });
     const record = await runScenario({ entry: batch.scenarios[0]!, context: liveContext() });
@@ -357,6 +376,7 @@ describe("scenario execution wrapper (stub)", () => {
     expect(record.failures).toBe(0);
   });
 
+  // Verifies: maps a thrown scenario to its own deterministic failed record.
   it("maps a thrown scenario to its own deterministic failed record", async () => {
     const thrower = {
       ...STUB_ALPHA,
@@ -381,6 +401,7 @@ describe("scenario execution wrapper (stub)", () => {
     expect(record.id).toBe("scenario-stub-thrower");
   });
 
+  // Verifies: passes a scenario's own diagnostic tags through the redaction allowlists.
   it("passes a scenario's own diagnostic tags through the redaction allowlists", async () => {
     // A scenario that swallows a throw internally records its own stable
     // reasonTag/failureKinds; the wrapper passes the allowlisted values
@@ -406,6 +427,7 @@ describe("scenario execution wrapper (stub)", () => {
     expect(JSON.stringify(record)).not.toContain("secret.log");
   });
 
+  // Verifies: keeps a truthful skipped status and reason (never ok).
   it("keeps a truthful skipped status and reason (never ok)", async () => {
     const gammaEntry = {
       id: "scenario-stub-gamma",
@@ -422,6 +444,7 @@ describe("scenario execution wrapper (stub)", () => {
     expect(record.failures).toBe(0);
   });
 
+  // Verifies: clamps cleanupFailures to the total failures and never double-counts.
   it("clamps cleanupFailures to the total failures and never double-counts", async () => {
     const stubbing = {
       ...STUB_ALPHA,
@@ -440,6 +463,7 @@ describe("scenario execution wrapper (stub)", () => {
     expect(record.cleanupFailures).toBe(3);
   });
 
+  // Verifies: runScenarioPhase: a scenario throw becomes its own record and siblings still settle.
   it("runScenarioPhase: a scenario throw becomes its own record and siblings still settle", async () => {
     const okScenario = {
       ...STUB_ALPHA,
@@ -485,6 +509,7 @@ describe("scenario execution wrapper (stub)", () => {
     }
   });
 
+  // Verifies: runInterruptedCycleRecovery recomposes the same seed/cycle and recovers only recover hooks.
   it("runInterruptedCycleRecovery recomposes the same seed/cycle and recovers only recover hooks", async () => {
     // Only alpha and gamma expose `recover`; beta does not. The recovery
     // count is the sum of the composed recover hooks' removed rows.
@@ -502,7 +527,9 @@ describe("scenario execution wrapper (stub)", () => {
   });
 });
 
+// Covers: scenario record redaction and resume schema (stub-derived vocab).
 describe("scenario record redaction and resume schema (stub-derived vocab)", () => {
+  // Verifies: sanitizes an unknown scenario id/tag against the real registry to the unknown category.
   it("sanitizes an unknown scenario id/tag against the real registry to the unknown category", () => {
     // Registry-agnostic: an id/tag that is NOT in the real registry (whatever
     // it contains) collapses to the fixed `unknown` category. The phase/status
@@ -536,6 +563,7 @@ describe("scenario record redaction and resume schema (stub-derived vocab)", () 
     });
   });
 
+  // Verifies: sanitization drops an unknown target table and sanitizes a foreign reason.
   it("sanitization drops an unknown target table and sanitizes a foreign reason", () => {
     const sanitized = sanitizeScenarioRecord({
       id: "sneaky-raw-id",
@@ -554,12 +582,14 @@ describe("scenario record redaction and resume schema (stub-derived vocab)", () 
     expect(sanitized).not.toHaveProperty("targetTable");
   });
 
+  // Verifies: returns undefined for non-object scenario inputs.
   it("returns undefined for non-object scenario inputs", () => {
     expect(sanitizeScenarioRecord(null)).toBeUndefined();
     expect(sanitizeScenarioRecord("scenario-stub-alpha")).toBeUndefined();
     expect(sanitizeScenarioRecord([1])).toBeUndefined();
   });
 
+  // Verifies: passes allowlisted reasonTag/failureKinds and collapses crafted diagnostic text.
   it("passes allowlisted reasonTag/failureKinds and collapses crafted diagnostic text", () => {
     const sanitized = sanitizeScenarioRecord({
       id: "scenario-stub-alpha",
@@ -596,6 +626,7 @@ describe("scenario record redaction and resume schema (stub-derived vocab)", () 
   });
 });
 
+// Covers: resume scenario-section schema consistency (stub-derived vocab).
 describe("resume scenario-section schema consistency (stub-derived vocab)", () => {
   /** Extracts the stable rejection reason from a rejected validation result. */
   function rejectionOf(result: { ok: true } | { ok: false; reason: string }): string {
@@ -643,10 +674,12 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     };
   }
 
+  // Verifies: accepts a valid stub-derived scenario section.
   it("accepts a valid stub-derived scenario section", () => {
     expect(validateCycleRecordShape(validCycleRecord(), STUB_VOCAB)).toEqual({ ok: true });
   });
 
+  // Verifies: accepts allowlisted reasonTag/failureKinds diagnostics and rejects forged ones.
   it("accepts allowlisted reasonTag/failureKinds diagnostics and rejects forged ones", () => {
     const valid = validCycleRecord();
     valid.scenarios[1] = {
@@ -674,6 +707,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(rejectionOf(validateCycleRecordShape(emptyKinds, STUB_VOCAB))).toMatch(/failureKinds/);
   });
 
+  // Verifies: sanitizer failureKinds output round-trips through the resume schema.
   it("sanitizer failureKinds output round-trips through the resume schema", () => {
     // Mixed known/unknown/duplicate/unsorted kinds collapse to the canonical
     // form (only the kinds list is asserted — the stub id is foreign to the
@@ -703,6 +737,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     }
   });
 
+  // Verifies: omits failureKinds when only null/empty/non-string kinds are supplied.
   it("omits failureKinds when only null/empty/non-string kinds are supplied", () => {
     // Boundary: inputs that normalize to nothing must omit the field — never
     // emit `[]` (which the resume schema rejects) — matching the redactor's
@@ -727,12 +762,14 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(validateCycleRecordShape(validCycleRecord(), STUB_VOCAB)).toEqual({ ok: true });
   });
 
+  // Verifies: accepts a legacy record without a scenario section.
   it("accepts a legacy record without a scenario section", () => {
     const { scenarios: _unused, scenarioTotals: _totals, ...legacy } = validCycleRecord();
     const result = validateCycleRecordShape(legacy, STUB_VOCAB);
     expect(result).toEqual({ ok: true });
   });
 
+  // Verifies: rejects a known id paired with a foreign tag.
   it("rejects a known id paired with a foreign tag", () => {
     const record = validCycleRecord();
     record.scenarios[0] = { ...record.scenarios[0], tag: "stub-beta" };
@@ -741,6 +778,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(rejectionOf(result)).toMatch(/does not match the tag/);
   });
 
+  // Verifies: rejects a scenario placed in an impossible phase for its id.
   it("rejects a scenario placed in an impossible phase for its id", () => {
     const record = validCycleRecord();
     record.scenarios[0] = { ...record.scenarios[0], phase: "concurrent-with-actors" };
@@ -749,6 +787,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(rejectionOf(result)).toMatch(/not an allowed phase/);
   });
 
+  // Verifies: rejects a forged unknown scenario id.
   it("rejects a forged unknown scenario id", () => {
     const record = validCycleRecord();
     record.scenarios[0] = { ...record.scenarios[0], id: "scenario-not-registered" };
@@ -757,6 +796,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(rejectionOf(result)).toMatch(/not a known scenario id/);
   });
 
+  // Verifies: rejects duplicate scenario ids within a cycle.
   it("rejects duplicate scenario ids within a cycle", () => {
     const record = validCycleRecord();
     record.scenarios[1] = { ...record.scenarios[0], id: "scenario-stub-alpha", order: 1 };
@@ -765,6 +805,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(rejectionOf(result)).toMatch(/must not repeat a scenario id/);
   });
 
+  // Verifies: rejects non-contiguous orders (entry order must equal its array index).
   it("rejects non-contiguous orders (entry order must equal its array index)", () => {
     const record = validCycleRecord();
     record.scenarios = [record.scenarios[0], { ...record.scenarios[1], order: 2 }];
@@ -773,6 +814,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(rejectionOf(result)).toMatch(/order must equal its array index/);
   });
 
+  // Verifies: rejects status/counter inconsistencies.
   it("rejects status/counter inconsistencies", () => {
     // failed with zero failures.
     const failedZero = validCycleRecord();
@@ -793,17 +835,20 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(validateCycleRecordShape(skippedCounts, STUB_VOCAB).ok).toBe(false);
   });
 
+  // Verifies: rejects a scenario section with a nonzero totals that does not match its records.
   it("rejects a scenario section with a nonzero totals that does not match its records", () => {
     const record = validCycleRecord();
     record.scenarioTotals = { expectedErrors: 5, failures: 5 };
     expect(validateCycleRecordShape(record, STUB_VOCAB).ok).toBe(false);
   });
 
+  // Verifies: rejects a nonzero scenarioTotals WITHOUT a scenario section (forged).
   it("rejects a nonzero scenarioTotals WITHOUT a scenario section (forged)", () => {
     const { scenarios, ...record } = validCycleRecord();
     expect(validateCycleRecordShape(record, STUB_VOCAB).ok).toBe(false);
   });
 
+  // Verifies: rejects cardinality outside 1-3.
   it("rejects cardinality outside 1-3", () => {
     const record = validCycleRecord();
     record.scenarios = [];
@@ -811,6 +856,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
     expect(validateCycleRecordShape(record, STUB_VOCAB).ok).toBe(false);
   });
 
+  // Verifies: rejects a cleanup counter that exceeds the failure total.
   it("rejects a cleanup counter that exceeds the failure total", () => {
     const record = validCycleRecord();
     record.scenarios[1] = { ...record.scenarios[1], cleanupFailures: 3, failures: 1 };
@@ -818,6 +864,7 @@ describe("resume scenario-section schema consistency (stub-derived vocab)", () =
   });
 });
 
+// Covers: deterministic resume batch proof (real registry).
 describe("deterministic resume batch proof (real registry)", () => {
   // `validateCycleScenarioBatch` binds a cycle's recorded scenario section to
   // the batch the REAL `SCENARIO_REGISTRY` composes for (seed, cycle). The
@@ -832,11 +879,13 @@ describe("deterministic resume batch proof (real registry)", () => {
   // production history validation.
   const seed = 4242;
 
+  // Verifies: accepts a legacy record with the scenario section omitted.
   it("accepts a legacy record with the scenario section omitted", () => {
     const record = { cycle: 1 };
     expect(validateCycleScenarioBatch(seed, 1, record)).toBeUndefined();
   });
 
+  // Verifies: rejects any recorded scenario the real registry cannot compose.
   it("rejects any recorded scenario the real registry cannot compose", () => {
     const fakeId = foreignSentinelId();
     // Guard inline: the sentinel must not be a real registered id.
@@ -852,6 +901,7 @@ describe("deterministic resume batch proof (real registry)", () => {
     expect(reason).toMatch(/is not in the seed's batch/);
   });
 
+  // Verifies: accepts an abort cycle whose recorded prefix matches the real registry's composition.
   it("accepts an abort cycle whose recorded prefix matches the real registry's composition", () => {
     // Whatever the registry composes (empty, one, or many scenarios), the
     // exact composed batch is a valid ordered abort prefix: an empty batch
@@ -872,7 +922,9 @@ describe("deterministic resume batch proof (real registry)", () => {
   });
 });
 
+// Covers: known reason vocabulary stays scenario-agnostic.
 describe("known reason vocabulary stays scenario-agnostic", () => {
+  // Verifies: keeps the scenario limitation categories on the stable reason allowlist.
   it("keeps the scenario limitation categories on the stable reason allowlist", () => {
     for (const reason of ["reopen-skipped", "recovery-not-observed", "scenario-error", "local-mode"]) {
       expect(KNOWN_REASON_CODES).toContain(reason);
@@ -883,7 +935,9 @@ describe("known reason vocabulary stays scenario-agnostic", () => {
   });
 });
 
+// Covers: identity-shifted transient evidence classification.
 describe("identity-shifted transient evidence classification", () => {
+  // Verifies: accepts ONLY the stable identity_shifted guard evidence.
   it("accepts ONLY the stable identity_shifted guard evidence", () => {
     // The real seam's DirectSheetsError shape and the fake seam's code both
     // count; any other class/code/transport error never does.
@@ -905,6 +959,7 @@ describe("identity-shifted transient evidence classification", () => {
     expect(isIdentityShiftedEvidence(undefined)).toBe(false);
   });
 
+  // Verifies: builds a truthful skipped transient record with a stable reasonTag.
   it("builds a truthful skipped transient record with a stable reasonTag", () => {
     const record = identityShiftedTransientResult(
       Object.assign(new Error("raw-secret-message"), { name: "DirectSheetsError", statusClass: "identity_shifted" }),
@@ -919,6 +974,7 @@ describe("identity-shifted transient evidence classification", () => {
   });
 });
 
+// Covers: abort/probe statusClass redaction roundtrip (resume compatibility).
 describe("abort/probe statusClass redaction roundtrip (resume compatibility)", () => {
   /** A minimal valid cycle record with no scenario section. */
   function minimalCycleRecord(overrides: Record<string, unknown> = {}): Record<string, any> {
@@ -935,6 +991,7 @@ describe("abort/probe statusClass redaction roundtrip (resume compatibility)", (
     };
   }
 
+  // Verifies: sanitizeStatusClass emits the fixed unknown category that resume accepts.
   it("sanitizeStatusClass emits the fixed unknown category that resume accepts", () => {
     // A probe/abort whose status is unparseable collapses to `unknown` at
     // the artifact boundary; the resume schema must accept that exact value.
@@ -949,6 +1006,7 @@ describe("abort/probe statusClass redaction roundtrip (resume compatibility)", (
     expect(isKnownStatusClass("network_or_unknown")).toBe(true);
   });
 
+  // Verifies: accepts an abort whose status collapsed to the fixed unknown category.
   it("accepts an abort whose status collapsed to the fixed unknown category", () => {
     const result = validateCycleRecordShape(minimalCycleRecord({
       abort: { reason: "cycle-error", errorClass: "DirectSheetsError", statusClass: "unknown" },
@@ -956,6 +1014,7 @@ describe("abort/probe statusClass redaction roundtrip (resume compatibility)", (
     expect(result).toEqual({ ok: true });
   });
 
+  // Verifies: accepts an abort whose code collapsed to the fixed unknown category and rejects an arbitrary code.
   it("accepts an abort whose code collapsed to the fixed unknown category and rejects an arbitrary code", () => {
     // `sanitizeStableCode` collapses any non-allowlisted code to `unknown`,
     // so an abort that records the redacted category is still valid history.
@@ -971,6 +1030,7 @@ describe("abort/probe statusClass redaction roundtrip (resume compatibility)", (
     })).ok).toBe(false);
   });
 
+  // Verifies: accepts a probe whose status collapsed to the fixed unknown category.
   it("accepts a probe whose status collapsed to the fixed unknown category", () => {
     const result = validateCycleRecordShape(minimalCycleRecord({
       probe: { status: "failed", reason: "probe-error", statusClass: "unknown" },
@@ -978,6 +1038,7 @@ describe("abort/probe statusClass redaction roundtrip (resume compatibility)", (
     expect(result).toEqual({ ok: true });
   });
 
+  // Verifies: accepts a probe/abort with an allowlisted status and rejects a foreign status.
   it("accepts a probe/abort with an allowlisted status and rejects a foreign status", () => {
     // Allowlisted statuses pass the schema exactly as written.
     expect(validateCycleRecordShape(minimalCycleRecord({
@@ -997,6 +1058,7 @@ describe("abort/probe statusClass redaction roundtrip (resume compatibility)", (
   });
 });
 
+// Covers: operation-record code redaction roundtrip (resume compatibility).
 describe("operation-record code redaction roundtrip (resume compatibility)", () => {
   /** A minimal valid operation record with no code/reason/counts. */
   function minimalOperationRecord(overrides: Record<string, unknown> = {}): Record<string, any> {
@@ -1013,11 +1075,13 @@ describe("operation-record code redaction roundtrip (resume compatibility)", () 
     };
   }
 
+  // Verifies: accepts an operation whose code collapsed to the fixed unknown category.
   it("accepts an operation whose code collapsed to the fixed unknown category", () => {
     expect(validateOperationRecordShape(minimalOperationRecord({ code: "unknown" })))
       .toEqual({ ok: true });
   });
 
+  // Verifies: accepts an allowlisted code and rejects an arbitrary raw code.
   it("accepts an allowlisted code and rejects an arbitrary raw code", () => {
     expect(validateOperationRecordShape(minimalOperationRecord({ code: "invalid_query" })).ok)
       .toBe(true);
