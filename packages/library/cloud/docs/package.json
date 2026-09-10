@@ -38,7 +38,7 @@
   "dependencies": {
     "@googleapis/docs": "^10.0.0",
     "@hikoutei/google-auth": "0.1.0",
-    "@hikoutei/ikisaki": "0.1.16",
+    "@hikoutei/ikisaki": "0.1.17",
     "google-auth-library": "^11.0.0"
   },
   "devDependencies": {

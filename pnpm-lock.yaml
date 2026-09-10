@@ -15,7 +15,7 @@ importers:
         specifier: ^14.0.0
         version: 14.0.0
       '@hikoutei/ikisaki':
-        specifier: 0.1.16
+        specifier: 0.1.17
         version: link:packages/protocol/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
@@ -82,7 +82,7 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: 0.10.24-dev
+        specifier: 0.10.25-dev
         version: link:../../../..
     devDependencies:
       '@types/node':
@@ -98,7 +98,7 @@ importers:
         specifier: 0.1.0
         version: link:../google-auth
       '@hikoutei/ikisaki':
-        specifier: 0.1.16
+        specifier: 0.1.17
         version: link:../../../protocol/ikisaki
       google-auth-library:
         specifier: ^11.0.0
@@ -130,7 +130,7 @@ importers:
         specifier: 0.1.0
         version: link:../google-auth
       '@hikoutei/ikisaki':
-        specifier: 0.1.16
+        specifier: 0.1.17
         version: link:../../../protocol/ikisaki
       google-auth-library:
         specifier: ^11.0.0
@@ -165,7 +165,7 @@ importers:
   packages/library/core/contracts:
     dependencies:
       '@hikoutei/ikisaki':
-        specifier: 0.1.16
+        specifier: 0.1.17
         version: link:../../../protocol/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
@@ -184,7 +184,7 @@ importers:
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/ikisaki':
-        specifier: 0.1.16
+        specifier: 0.1.17
         version: link:../../../protocol/ikisaki
       '@hikoutei/sheets':
         specifier: 0.1.0
@@ -209,7 +209,7 @@ importers:
         specifier: 0.1.0
         version: link:../../cloud/google-auth
       '@hikoutei/ikisaki':
-        specifier: 0.1.16
+        specifier: 0.1.17
         version: link:../../../protocol/ikisaki
       '@hikoutei/storage':
         specifier: 0.1.0
@@ -231,7 +231,7 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: 0.10.24-dev
+        specifier: 0.10.25-dev
         version: link:../..
 
   packages/protocol/ikisaki:

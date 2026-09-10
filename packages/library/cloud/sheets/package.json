@@ -39,7 +39,7 @@
     "@googleapis/sheets": "^14.0.0",
     "@hikoutei/contracts": "0.1.0",
     "@hikoutei/google-auth": "0.1.0",
-    "@hikoutei/ikisaki": "0.1.16",
+    "@hikoutei/ikisaki": "0.1.17",
     "google-auth-library": "^11.0.0",
     "zod": "^4.4.3"
   },
