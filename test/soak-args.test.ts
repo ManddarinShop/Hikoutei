@@ -16,7 +16,9 @@ import {
   SOAK_TABLE_NAMES,
 } from "../scripts/ci/local-soak/args.mjs";
 
+// Verifies the soak args: defaults and limits suite.
 describe("soak args: defaults and limits", () => {
+  // Verifies: applies documented defaults for an empty argv.
   it("applies documented defaults for an empty argv", () => {
     const options = parseSoakArgs([]);
     expect(options.durationHours).toBe(DEFAULT_SOAK_OPTIONS.durationHours);
@@ -31,11 +33,13 @@ describe("soak args: defaults and limits", () => {
     expect(options.resolvedTables).toEqual([...SOAK_TABLE_NAMES]);
   });
 
+  // Verifies: accepts the documented 6h and 24h durations.
   it("accepts the documented 6h and 24h durations", () => {
     expect(parseSoakArgs(["--duration-hours", "6"]).durationMs).toBe(6 * 3_600_000);
     expect(parseSoakArgs(["--duration-hours=24"]).durationMs).toBe(24 * 3_600_000);
   });
 
+  // Verifies: rejects durations above the 24h maximum and non-positive values.
   it("rejects durations above the 24h maximum and non-positive values", () => {
     for (const raw of ["25", "24.5", "0", "-1", "abc", "Infinity"]) {
       expect(() => parseSoakArgs(["--duration-hours", raw])).toThrow(
@@ -44,10 +48,12 @@ describe("soak args: defaults and limits", () => {
     }
   });
 
+  // Verifies: accepts a zero interval (no wait between cycles).
   it("accepts a zero interval (no wait between cycles)", () => {
     expect(parseSoakArgs(["--interval-seconds", "0"]).intervalSeconds).toBe(0);
   });
 
+  // Verifies: rejects negative or malformed intervals, actors, and op counts.
   it("rejects negative or malformed intervals, actors, and op counts", () => {
     expect(() => parseSoakArgs(["--interval-seconds", "-1"])).toThrow();
     expect(() => parseSoakArgs(["--actors", "0"])).toThrow();
@@ -55,6 +61,7 @@ describe("soak args: defaults and limits", () => {
     expect(() => parseSoakArgs(["--operations-per-actor", "0"])).toThrow();
   });
 
+  // Verifies: bounds actors and operations-per-actor to the documented ceilings.
   it("bounds actors and operations-per-actor to the documented ceilings", () => {
     expect(() => parseSoakArgs(["--actors", "65"])).toThrow(/--actors/);
     expect(() => parseSoakArgs(["--operations-per-actor", "1001"])).toThrow(
@@ -65,12 +72,15 @@ describe("soak args: defaults and limits", () => {
   });
 });
 
+// Verifies the soak args: table selection suite.
 describe("soak args: table selection", () => {
+  // Verifies: resolves a comma-separated subset in order.
   it("resolves a comma-separated subset in order", () => {
     const options = parseSoakArgs(["--tables", "soak_tasks,soak_customers"]);
     expect(options.resolvedTables).toEqual(["soak_tasks", "soak_customers"]);
   });
 
+  // Verifies: rejects unknown, empty, and duplicated tables.
   it("rejects unknown, empty, and duplicated tables", () => {
     expect(() => parseSoakArgs(["--tables", "soak_nope"])).toThrow(/known soak tables/);
     expect(() => parseSoakArgs(["--tables", ""])).toThrow(/non-empty/);
@@ -80,7 +90,9 @@ describe("soak args: table selection", () => {
   });
 });
 
+// Verifies the soak args: resume and cleanup flags suite.
 describe("soak args: resume and cleanup flags", () => {
+  // Verifies: requires --output-dir when resuming.
   it("requires --output-dir when resuming", () => {
     expect(() => parseSoakArgs(["--resume"])).toThrow(/--resume requires --output-dir/);
     const options = parseSoakArgs(["--resume", "--output-dir", "/tmp/run-1"]);
@@ -88,12 +100,14 @@ describe("soak args: resume and cleanup flags", () => {
     expect(options.outputDir).toBe("/tmp/run-1");
   });
 
+  // Verifies: rejects values attached to boolean flags.
   it("rejects values attached to boolean flags", () => {
     expect(() => parseSoakArgs(["--resume", "yes"])).toThrow(/does not take a value/);
     expect(() => parseSoakArgs(["--cleanup-only=1"])).toThrow(/does not take a value/);
     expect(parseSoakArgs(["--cleanup-only"]).cleanupOnly).toBe(true);
   });
 
+  // Verifies: allows a boolean flag followed by another option.
   it("allows a boolean flag followed by another option", () => {
     const options = parseSoakArgs([
       "--resume", "--duration-hours", "6", "--output-dir", "/tmp/run-1",
@@ -103,7 +117,9 @@ describe("soak args: resume and cleanup flags", () => {
   });
 });
 
+// Verifies the soak args: output and log paths suite.
 describe("soak args: output and log paths", () => {
+  // Verifies: accepts relative or absolute output/log paths without echoing them.
   it("accepts relative or absolute output/log paths without echoing them", () => {
     const options = parseSoakArgs([
       "--output-dir", "./.local/soak/run-1",
@@ -116,11 +132,13 @@ describe("soak args: output and log paths", () => {
     expect(JSON.stringify(options)).not.toMatch(/secret|credential|token/i);
   });
 
+  // Verifies: rejects empty output/log path values.
   it("rejects empty output/log path values", () => {
     expect(() => parseSoakArgs(["--output-dir", " "])).toThrow(/non-empty/);
     expect(() => parseSoakArgs(["--log-file", ""])).toThrow(/non-empty/);
   });
 
+  // Verifies: preserves values containing multiple .
   it("preserves values containing multiple '=' (splits at the first '=' only)", () => {
     // Regression (Luna review): `--flag=value` must split at the FIRST `=`
     // only — a valid value that itself contains `=` (an output/log path or
@@ -138,7 +156,9 @@ describe("soak args: output and log paths", () => {
   });
 });
 
+// Verifies the soak args: error output redaction suite.
 describe("soak args: error output redaction", () => {
+  // Verifies: never echoes raw values that could be paths, URLs, emails, or tokens.
   it("never echoes raw values that could be paths, URLs, emails, or tokens", () => {
     const secretValues = [
       "https://docs.google.com/spreadsheets/d/1AbC/edit",
@@ -173,6 +193,7 @@ describe("soak args: error output redaction", () => {
     }
   });
 
+  // Verifies: echoes only the flag name for unknown options, never a value payload.
   it("echoes only the flag name for unknown options, never a value payload", () => {
     expect(() => parseSoakArgs(["--not-a-real-flag"])).toThrow(
       /unknown option: --not-a-real-flag/,
@@ -188,6 +209,7 @@ describe("soak args: error output redaction", () => {
     }
   });
 
+  // Verifies: rejects a BARE unknown token with a fixed message that never echoes the token.
   it("rejects a BARE unknown token with a fixed message that never echoes the token", () => {
     // Regression (Luna review): a bare unknown token can itself be a
     // path, URL, email, or credential — a pasted value that was not
@@ -219,6 +241,7 @@ describe("soak args: error output redaction", () => {
     }
   });
 
+  // Verifies: keeps the seed parse error free of the raw value.
   it("keeps the seed parse error free of the raw value", async () => {
     const { parseSeed } = await import("../scripts/ci/local-soak/prng.mjs");
     const secret = "ya29.jwt-token@example.com";
@@ -232,11 +255,14 @@ describe("soak args: error output redaction", () => {
   });
 });
 
+// Verifies the soak args: unknown options and value forms suite.
 describe("soak args: unknown options and value forms", () => {
+  // Verifies: rejects options that require a value when none follows.
   it("rejects options that require a value when none follows", () => {
     expect(() => parseSoakArgs(["--seed"])).toThrow(/requires a value/);
   });
 
+  // Verifies: accepts the --flag=value form and passes the seed through.
   it("accepts the --flag=value form and passes the seed through", () => {
     const options = parseSoakArgs(["--seed=0x1f", "--max-consecutive-failures=3"]);
     expect(options.seed).toBe("0x1f");
@@ -244,12 +270,15 @@ describe("soak args: unknown options and value forms", () => {
   });
 });
 
+// Verifies the soak args: finalizeOptions cross-field validation suite.
 describe("soak args: finalizeOptions cross-field validation", () => {
+  // Verifies: re-validates the duration ceiling after manual construction.
   it("re-validates the duration ceiling after manual construction", () => {
     expect(() => finalizeOptions({ durationHours: 48 })).toThrow(/at most 24/);
     expect(() => finalizeOptions({ durationHours: 0 })).toThrow(/greater than 0/);
   });
 
+  // Verifies: applies derived durationMs and resolvedTables.
   it("applies derived durationMs and resolvedTables", () => {
     const options = finalizeOptions({
       durationHours: 6,
@@ -259,6 +288,7 @@ describe("soak args: finalizeOptions cross-field validation", () => {
     expect(options.resolvedTables).toEqual(["soak_tasks"]);
   });
 
+  // Verifies: documents the constant used by the CLI limit.
   it("documents the constant used by the CLI limit", () => {
     expect(MAX_DURATION_HOURS).toBe(24);
   });
