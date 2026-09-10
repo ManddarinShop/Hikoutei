@@ -110,7 +110,9 @@ const PINNED_TYPE_EXPORT_NAMES = [
   "RunningSyncServiceResult",
 ] as const;
 
+// Verifies the 14 type-only contracts stay pinned on the public root barrel.
 describe("type-only public export pin (14 types)", () => {
+  // Verifies exactly the Terra-audited 14 type-only root exports exist by name.
   it("pins exactly the Terra-audited 14 type-only root exports by name", () => {
     expect([...PINNED_TYPE_EXPORT_NAMES].sort()).toEqual([
       "AdoptEntitySpec",
@@ -140,7 +142,9 @@ function sortedCodes(codes: Readonly<Record<string, string>>): string[] {
   return Object.values(codes).sort();
 }
 
+// Verifies every maintained error-code vocabulary keeps its frozen code strings.
 describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
+  // Verifies the public Hikoutei API error vocabulary is unchanged.
   it("freezes the public Hikoutei API error vocabulary (HIKOUTEI_ERROR_CODES)", () => {
     expect(sortedCodes(HIKOUTEI_ERROR_CODES)).toEqual([
       "duplicate_entity",
@@ -165,6 +169,7 @@ describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
     ]);
   });
 
+  // Verifies the setup CLI error vocabulary is unchanged.
   it("freezes the setup CLI error vocabulary (SETUP_ERROR_CODES)", () => {
     expect(sortedCodes(SETUP_ERROR_CODES)).toEqual([
       "api_enable_failed",
@@ -210,6 +215,7 @@ describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
     ]);
   });
 
+  // Verifies the sync service error vocabulary is unchanged.
   it("freezes the sync service error vocabulary (SYNC_SERVICE_ERROR_CODES)", () => {
     expect(sortedCodes(SYNC_SERVICE_ERROR_CODES)).toEqual([
       "existing_sheet_adoption_cell_kind_mismatch",
@@ -221,6 +227,7 @@ describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
     ]);
   });
 
+  // Verifies the sync provider-contract error vocabulary is unchanged.
   it("freezes the sync provider-contract error vocabulary (SYNC_SHEETS_ERROR_CODES)", () => {
     expect(sortedCodes(SYNC_SHEETS_ERROR_CODES)).toEqual([
       "invalid_fake_sync_provider_input",
@@ -231,6 +238,7 @@ describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
     ]);
   });
 
+  // Verifies the Google Sheets transport error vocabulary is unchanged.
   it("freezes the Google Sheets transport error vocabulary (GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES)", () => {
     expect(sortedCodes(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES)).toEqual([
       "google_sheets_api_http_error",
@@ -241,6 +249,7 @@ describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
     ]);
   });
 
+  // Verifies the mapping layer error vocabulary is unchanged.
   it("freezes the mapping layer error vocabulary (TYPED_SHEETS_ORM_ERROR_CODES)", () => {
     expect(sortedCodes(TYPED_SHEETS_ORM_ERROR_CODES)).toEqual([
       "canonical_commit_rejected",
@@ -258,6 +267,7 @@ describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
     ]);
   });
 
+  // Verifies the storage error vocabulary (SQLite last_error_code baseline) is unchanged.
   it("freezes the storage error vocabulary (STORAGE_ERROR_CODES — the SQLite last_error_code baseline)", () => {
     expect(sortedCodes(STORAGE_ERROR_CODES)).toEqual([
       "effect_replan_conflict",
@@ -291,6 +301,7 @@ describe("error-vocabulary freeze snapshots (persisted code strings)", () => {
     ]);
   });
 
+  // Verifies the internal sync-status reader error vocabulary is unchanged.
   it("freezes the internal sync-status reader error vocabulary (HIKOUTEI_SYNC_STATUS_ERROR_CODES)", () => {
     expect(sortedCodes(HIKOUTEI_SYNC_STATUS_ERROR_CODES)).toEqual([
       "invalid_db_name",
@@ -313,7 +324,9 @@ const packageJson = JSON.parse(
   bin: Record<string, string>;
 };
 
+// Verifies the package.json bin mapping keeps pointing at the compiled CLI entry.
 describe("package.json bin pin", () => {
+  // Verifies the hikoutei CLI bin entry resolves to the compiled CLI source root.
   it("registers the hikoutei CLI at the compiled root of packages/library/cloud/cli/src/index.ts", () => {
     // The bin dist path is produced by the reconcile codemod bundling the
     // cli package's dist into `dist/cli/**`; the source file must exist so
