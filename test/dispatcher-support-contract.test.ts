@@ -57,7 +57,9 @@ function baseEffect(overrides: Partial<PendingEffect> = {}): PendingEffect {
   } as PendingEffect;
 }
 
+// Covers toProviderEffect persisted-value contract.
 describe("toProviderEffect persisted-value contract", () => {
+  // Verifies throws SyncEffectContractError for an unsupported effect_kind.
   it("throws SyncEffectContractError for an unsupported effect_kind", () => {
     const effect = baseEffect({ effect_kind: "unknown-kind" as PendingEffect["effect_kind"] });
     expect.assertions(3);
@@ -72,6 +74,7 @@ describe("toProviderEffect persisted-value contract", () => {
     }
   });
 
+  // Verifies throws SyncEffectContractError for an unsupported projection.
   it("throws SyncEffectContractError for an unsupported projection", () => {
     const effect = baseEffect({ projection: "unknown-projection" as PendingEffect["projection"] });
     expect.assertions(3);
@@ -86,6 +89,7 @@ describe("toProviderEffect persisted-value contract", () => {
     }
   });
 
+  // Verifies throws SyncEffectContractError for an unsupported target_kind.
   it("throws SyncEffectContractError for an unsupported target_kind", () => {
     const effect = baseEffect({ target_kind: "unknown-target" as PendingEffect["target_kind"] });
     expect.assertions(3);
