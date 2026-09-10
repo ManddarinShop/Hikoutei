@@ -56,6 +56,7 @@ EntitySchema.setClass(Entity);
 
 const INPUT_HEADERS = ["id", "status"] as const;
 
+// Covers runUserInputCleanupScan.
 describe("runUserInputCleanupScan", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -63,6 +64,7 @@ describe("runUserInputCleanupScan", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  // Verifies converges duplicated-anchor rows by deleting the resolvable row first, then rewriting the survivor from canonical state.
   it("converges duplicated-anchor rows by deleting the resolvable row first, then rewriting the survivor from canonical state", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -167,6 +169,7 @@ describe("runUserInputCleanupScan", () => {
     await expect(listReadyEffectsWithAdapter(adapter, 10)).resolves.toHaveLength(0);
   });
 
+  // Verifies dispatches a candidate-reconcile batch as one deferred apply and closes it from the applied probe classification.
   it("dispatches a candidate-reconcile batch as one deferred apply and closes it from the applied probe classification", async () => {
     // Regression for the unified-write-engine deferred routing: a
     // candidate_reconcile effect on the User_Input CAS route must leave the
@@ -225,6 +228,7 @@ describe("runUserInputCleanupScan", () => {
       .toEqual({ kind: "string", value: "open" });
   });
 
+  // Verifies deletes empty-ID and orphan rows (including quarantined and duplicated-identity orphans) and keeps the durable evidence.
   it("deletes empty-ID and orphan rows (including quarantined and duplicated-identity orphans) and keeps the durable evidence", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -297,6 +301,7 @@ describe("runUserInputCleanupScan", () => {
     });
   });
 
+  // Verifies skips bindings with an OPEN conflict: no rewrite or delete is planned for a conflicted binding.
   it("skips bindings with an OPEN conflict: no rewrite or delete is planned for a conflicted binding", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -382,6 +387,7 @@ describe("runUserInputCleanupScan", () => {
     });
   });
 
+  // Verifies enqueues no rewrite for a drifted bound row whose binding has an OPEN conflict (restart-style scan)
   it("enqueues no rewrite for a drifted bound row whose binding has an OPEN conflict (restart-style scan)", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -417,6 +423,7 @@ describe("runUserInputCleanupScan", () => {
       .toEqual({ kind: "string", value: "stale" });
   });
 
+  // Verifies leaves rows bound to candidate, tombstoned, or ambiguous bindings untouched.
   it("leaves rows bound to candidate, tombstoned, or ambiguous bindings untouched", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -445,6 +452,7 @@ describe("runUserInputCleanupScan", () => {
     await expect(listReadyEffectsWithAdapter(adapter, 10)).resolves.toHaveLength(0);
   });
 
+  // Verifies enqueues nothing for a tab that already equals SQLite canonical state.
   it("enqueues nothing for a tab that already equals SQLite canonical state", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [inputRow("bound-a", "user-1", "open")],
@@ -469,6 +477,7 @@ describe("runUserInputCleanupScan", () => {
     await expect(listReadyEffectsWithAdapter(adapter, 10)).resolves.toHaveLength(0);
   });
 
+  // Verifies assigns sync-anchor values to unanchored rows through the observation pass, then cleans them as orphans.
   it("assigns sync-anchor values to unanchored rows through the observation pass, then cleans them as orphans", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -512,6 +521,7 @@ describe("runUserInputCleanupScan", () => {
     expect(snapshot.rows).toHaveLength(0);
   });
 
+  // Verifies rewrites a bound row without regressing a higher confirmed visible revision.
   it("rewrites a bound row without regressing a higher confirmed visible revision", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -578,6 +588,7 @@ describe("runUserInputCleanupScan", () => {
     await expect(listReadyEffectsWithAdapter(adapter, 10)).resolves.toHaveLength(0);
   });
 
+  // Verifies deletes a duplicated-anchor row without regressing a higher confirmed visible revision.
   it("deletes a duplicated-anchor row without regressing a higher confirmed visible revision", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [
@@ -638,6 +649,7 @@ describe("runUserInputCleanupScan", () => {
     await expect(listReadyEffectsWithAdapter(adapter, 10)).resolves.toHaveLength(0);
   });
 
+  // Verifies writes no projection confirmation for orphan deletes that have no binding.
   it("writes no projection confirmation for orphan deletes that have no binding", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [inputRow("extra-q", "orphan", "open")],
@@ -673,6 +685,7 @@ describe("runUserInputCleanupScan", () => {
     ))).resolves.toEqual({ count: 0 });
   });
 
+  // Verifies refuses non-user_input projections.
   it("refuses non-user_input projections", async () => {
     const { adapter, provider } = await bootstrap({
       sheetRows: [inputRow("bound-a", "user-1", "open")],
