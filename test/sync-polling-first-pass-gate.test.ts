@@ -80,7 +80,9 @@ function fakeClockAndWait(): {
   };
 }
 
+// Covers SyncPollingSupervisor first-pass gate.
 describe("SyncPollingSupervisor first-pass gate", () => {
+  // Verifies defers the first pass until the gate resolves and never consults it again.
   it("defers the first pass until the gate resolves and never consults it again", async () => {
     const { clock, wait } = fakeClockAndWait();
     let gateCalls = 0;
@@ -120,6 +122,7 @@ describe("SyncPollingSupervisor first-pass gate", () => {
     expect(supervisor.isStopping()).toBe(true);
   });
 
+  // Verifies routes a throwing gate through the polling error path and retries without running a pass.
   it("routes a throwing gate through the polling error path and retries without running a pass", async () => {
     const { clock, wait } = fakeClockAndWait();
     const errors: unknown[] = [];
@@ -159,6 +162,7 @@ describe("SyncPollingSupervisor first-pass gate", () => {
     await supervisor.stop();
   });
 
+  // Verifies keeps manual runOnce() passes ungated.
   it("keeps manual runOnce() passes ungated", async () => {
     const { clock, wait } = fakeClockAndWait();
     let releaseGate: (() => void) | undefined;
@@ -189,6 +193,7 @@ describe("SyncPollingSupervisor first-pass gate", () => {
     await supervisor.stop();
   });
 
+  // Verifies stop() interrupts a pending first-pass gate.
   it("stop() interrupts a pending first-pass gate", async () => {
     const { wait } = fakeClockAndWait();
     let supervisor: SyncPollingSupervisor<{ readonly pass: number }>;
@@ -216,6 +221,7 @@ describe("SyncPollingSupervisor first-pass gate", () => {
   });
 });
 
+// Covers internal sync service first polling pass readiness gate.
 describe("internal sync service first polling pass readiness gate", () => {
   const services: InternalSyncService[] = [];
   const tempDirs: string[] = [];
@@ -361,6 +367,7 @@ describe("internal sync service first polling pass readiness gate", () => {
     });
   }
 
+  // Verifies performs no remote reads while the System_State drain is in flight, then starts with a full scan.
   it("performs no remote reads while the System_State drain is in flight, then starts with a full scan", async () => {
     const dbName = tempDbName("gate");
     const spreadsheet = new StubSpreadsheet();
@@ -411,6 +418,7 @@ describe("internal sync service first polling pass readiness gate", () => {
     expect(adaptive.safetyFullScan).toBe(false);
   });
 
+  // Verifies restart with a conflict predecessor and a pending follower is not stuck on the readiness gate.
   it("restart with a conflict predecessor and a pending follower is not stuck on the readiness gate", async () => {
     const dbName = tempDbName("restart");
     const spreadsheet = new StubSpreadsheet();
@@ -468,6 +476,7 @@ describe("internal sync service first polling pass readiness gate", () => {
     expect(statuses.map((row) => row.status)).toContain("pending");
   });
 
+  // Verifies stop() interrupts the first-pass readiness wait promptly.
   it("stop() interrupts the first-pass readiness wait promptly", async () => {
     const dbName = tempDbName("stop");
     const spreadsheet = new StubSpreadsheet();
