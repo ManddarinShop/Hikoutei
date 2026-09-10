@@ -1,3 +1,10 @@
+/**
+ * Entity descriptor validation tests for defineTypedSheetsEntity.
+ *
+ * Covers scalar type resolution, primary-key inference, and rejection of
+ * malformed descriptors with stable error codes. Pure contract tests with
+ * no runtime or persistence setup.
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -26,7 +33,9 @@ function expectDescriptorError(input: {
   }
 }
 
+// Covers defineTypedSheetsEntity descriptor validation.
 describe("defineTypedSheetsEntity descriptor validation", () => {
+  // Verifies resolves a scalar descriptor and infers its primary key.
   it("resolves a scalar descriptor and infers its primary key", () => {
     const User = defineTypedSheetsEntity({
       name: "User",
@@ -54,6 +63,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     ]);
   });
 
+  // Verifies maps a nullable property to a nullable storage column.
   it("maps a nullable property to a nullable storage column", () => {
     const descriptor = resolveEntityDescriptor({
       name: "Ticket",
@@ -73,6 +83,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     });
   });
 
+  // Verifies accepts date as a scalar stored in text form.
   it("accepts date as a scalar stored in text form", () => {
     const descriptor = resolveEntityDescriptor({
       name: "Event",
@@ -88,6 +99,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     });
   });
 
+  // Verifies rejects an empty entity name.
   it("rejects an empty entity name", () => {
     const error = expectDescriptorError({
       name: "  ",
@@ -97,6 +109,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("entity name must be a non-empty string");
   });
 
+  // Verifies rejects an invalid table name.
   it("rejects an invalid table name", () => {
     const error = expectDescriptorError({
       name: "User",
@@ -106,6 +119,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("table name must be a SQL identifier");
   });
 
+  // Verifies rejects a table name owned by the internal sync schema.
   it("rejects a table name owned by the internal sync schema", () => {
     const error = expectDescriptorError({
       name: "State",
@@ -115,6 +129,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("reserved by Hikoutei");
   });
 
+  // Verifies rejects every SQLite-internal table-name prefix.
   it("rejects every SQLite-internal table-name prefix", () => {
     const error = expectDescriptorError({
       name: "SQLiteOwned",
@@ -124,6 +139,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("reserved by Hikoutei");
   });
 
+  // Verifies rejects a descriptor with no primary key.
   it("rejects a descriptor with no primary key", () => {
     const error = expectDescriptorError({
       name: "User",
@@ -133,6 +149,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("must declare exactly one primary key");
   });
 
+  // Verifies rejects a descriptor with more than one primary key.
   it("rejects a descriptor with more than one primary key", () => {
     const error = expectDescriptorError({
       name: "User",
@@ -145,6 +162,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("more than one primary key");
   });
 
+  // Verifies accepts a number primary key as the SQLite-generated identity.
   it("accepts a number primary key as the SQLite-generated identity", () => {
     const descriptor = resolveEntityDescriptor({
       name: "Counter",
@@ -159,6 +177,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     });
   });
 
+  // Verifies rejects a non-scalar property type.
   it("rejects a non-scalar property type", () => {
     const error = expectDescriptorError({
       name: "User",
@@ -172,6 +191,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("supports only");
   });
 
+  // Verifies rejects unsupported relation/provider and Sheet ownership options.
   it("rejects unsupported relation/provider and Sheet ownership options", () => {
     const relationError = expectDescriptorError({
       name: "User",
@@ -196,6 +216,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(ownershipError.message).toContain("editable");
   });
 
+  // Verifies rejects a primary key that is also nullable.
   it("rejects a primary key that is also nullable", () => {
     const error = expectDescriptorError({
       name: "User",
@@ -205,6 +226,7 @@ describe("defineTypedSheetsEntity descriptor validation", () => {
     expect(error.message).toContain("cannot be both primary and nullable");
   });
 
+  // Verifies rejects a descriptor with no properties.
   it("rejects a descriptor with no properties", () => {
     const error = expectDescriptorError({
       name: "Empty",
