@@ -60,7 +60,9 @@ function envWith(overrides: Partial<Record<(typeof ENV_KEYS)[number], string>> =
   };
 }
 
+// Covers validateBenchmarkEnv.
 describe("validateBenchmarkEnv", () => {
+  // Verifies reports missing env keys without reading files.
   it("reports missing env keys without reading files", () => {
     const result = validateBenchmarkEnv({});
     expect(result.status).toBe("invalid");
@@ -70,6 +72,7 @@ describe("validateBenchmarkEnv", () => {
     expect(result.errors.map((error) => error.code).sort()).toEqual(["missing", "missing"]);
   });
 
+  // Verifies rejects empty env values.
   it("rejects empty env values", () => {
     const result = validateBenchmarkEnv(envWith({ GOOGLE_SHEETS_TEST_SPREADSHEET_ID: "   " }));
     expect(result.status).toBe("invalid");
@@ -79,6 +82,7 @@ describe("validateBenchmarkEnv", () => {
     ]);
   });
 
+  // Verifies rejects an unreadable credentials path.
   it("rejects an unreadable credentials path", () => {
     const result = validateBenchmarkEnv(envWith({ GOOGLE_APPLICATION_CREDENTIALS: "/nonexistent/creds.json" }));
     expect(result.status).toBe("invalid");
@@ -89,6 +93,7 @@ describe("validateBenchmarkEnv", () => {
     });
   });
 
+  // Verifies rejects non-JSON credentials.
   it("rejects non-JSON credentials", () => {
     const filePath = makeCredentialsFile("not json {");
     const result = validateBenchmarkEnv(envWith({ GOOGLE_APPLICATION_CREDENTIALS: filePath }));
@@ -97,6 +102,7 @@ describe("validateBenchmarkEnv", () => {
     expect(result.errors[0]?.code).toBe("credentials_invalid_json");
   });
 
+  // Verifies rejects credentials without client_email or private_key.
   it("rejects credentials without client_email or private_key", () => {
     const noEmail = makeCredentialsFile(JSON.stringify({ type: "service_account", private_key: "x" }));
     const result = validateBenchmarkEnv(envWith({ GOOGLE_APPLICATION_CREDENTIALS: noEmail }));
@@ -111,6 +117,7 @@ describe("validateBenchmarkEnv", () => {
     expect(result2.errors[0]?.code).toBe("credentials_missing_private_key");
   });
 
+  // Verifies rejects a non-service-account type.
   it("rejects a non-service-account type", () => {
     const filePath = makeCredentialsFile(
       JSON.stringify({ type: "authorized_user", client_email: "a@b.c", private_key: "x" })
@@ -121,6 +128,7 @@ describe("validateBenchmarkEnv", () => {
     expect(result.errors[0]?.code).toBe("credentials_not_service_account");
   });
 
+  // Verifies rejects spreadsheet IDs that look like URLs or contain whitespace.
   it("rejects spreadsheet IDs that look like URLs or contain whitespace", () => {
     const filePath = makeCredentialsFile(SERVICE_ACCOUNT_JSON);
     const url = validateBenchmarkEnv(
@@ -136,6 +144,7 @@ describe("validateBenchmarkEnv", () => {
     expect(spaced.status).toBe("invalid");
   });
 
+  // Verifies returns a valid config without exposing credential contents.
   it("returns a valid config without exposing credential contents", () => {
     const filePath = makeCredentialsFile(SERVICE_ACCOUNT_JSON);
     const result = validateBenchmarkEnv(envWith({ GOOGLE_APPLICATION_CREDENTIALS: filePath }));
@@ -147,6 +156,7 @@ describe("validateBenchmarkEnv", () => {
     expect(JSON.stringify(result)).not.toContain("bench@example");
   });
 
+  // Verifies accepts files without an explicit type field.
   it("accepts files without an explicit type field", () => {
     const filePath = makeCredentialsFile(
       JSON.stringify({ client_email: "a@b.c", private_key: "-----BEGIN PRIVATE KEY-----" })
@@ -155,6 +165,7 @@ describe("validateBenchmarkEnv", () => {
     expect(result.status).toBe("valid");
   });
 
+  // Verifies reads real files through the default reader.
   it("reads real files through the default reader", () => {
     const filePath = makeCredentialsFile(SERVICE_ACCOUNT_JSON);
     const result = validateBenchmarkEnv(envWith({ GOOGLE_APPLICATION_CREDENTIALS: filePath }));
@@ -162,7 +173,9 @@ describe("validateBenchmarkEnv", () => {
   });
 });
 
+// Covers buildRows.
 describe("buildRows", () => {
+  // Verifies is deterministic and produces unique string cells.
   it("is deterministic and produces unique string cells", () => {
     const first = buildRows({ runId: "run-1", cellId: "r10_c2", startSeq: 0, count: 10 });
     const second = buildRows({ runId: "run-1", cellId: "r10_c2", startSeq: 0, count: 10 });
@@ -178,6 +191,7 @@ describe("buildRows", () => {
     expect(first[9]).toEqual([expect.stringContaining("r10_c2"), "000009", "payload-000009"]);
   });
 
+  // Verifies supports non-zero start sequences without key collisions.
   it("supports non-zero start sequences without key collisions", () => {
     const rows = buildRows({ runId: "run-1", cellId: "c", startSeq: 20, count: 5 });
     expect(rows[0]?.[1]).toBe("000020");
@@ -186,16 +200,20 @@ describe("buildRows", () => {
     expect(keys.size).toBe(5);
   });
 
+  // Verifies produces no rows for count 0.
   it("produces no rows for count 0", () => {
     expect(buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 0 })).toEqual([]);
   });
 
+  // Verifies keeps header constants stable.
   it("keeps header constants stable", () => {
     expect(BENCH_HEADERS).toEqual(["bench_key", "seq", "payload"]);
   });
 });
 
+// Covers percentile and summarizeLatencies.
 describe("percentile and summarizeLatencies", () => {
+  // Verifies computes nearest-rank percentiles.
   it("computes nearest-rank percentiles", () => {
     const samples = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     expect(percentile([...samples].sort((a, b) => a - b), 50)).toBe(5);
@@ -204,6 +222,7 @@ describe("percentile and summarizeLatencies", () => {
     expect(percentile([], 95)).toBe(0);
   });
 
+  // Verifies summarizes known samples with p50/p95/p99/max.
   it("summarizes known samples with p50/p95/p99/max", () => {
     const summary = summarizeLatencies([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]);
     expect(summary.count).toBe(10);
@@ -215,12 +234,14 @@ describe("percentile and summarizeLatencies", () => {
     expect(summary.p99).toBe(1000);
   });
 
+  // Verifies returns an all-zero summary for empty input.
   it("returns an all-zero summary for empty input", () => {
     expect(summarizeLatencies([])).toEqual({
       count: 0, sumMs: 0, meanMs: 0, minMs: 0, maxMs: 0, p50: 0, p95: 0, p99: 0,
     });
   });
 
+  // Verifies handles a single sample.
   it("handles a single sample", () => {
     const summary = summarizeLatencies([42]);
     expect(summary.p50).toBe(42);
@@ -229,7 +250,9 @@ describe("percentile and summarizeLatencies", () => {
   });
 });
 
+// Covers classifyError.
 describe("classifyError", () => {
+  // Verifies classifies HTTP status codes.
   it("classifies HTTP status codes", () => {
     expect(classifyError({ code: 429 }).class).toBe("rate_limited");
     expect(classifyError({ response: { status: 429 } }).class).toBe("rate_limited");
@@ -242,6 +265,7 @@ describe("classifyError", () => {
     expect(classifyError({ response: { status: 408 } }).class).toBe("timeout");
   });
 
+  // Verifies classifies timeout and network errors.
   it("classifies timeout and network errors", () => {
     expect(classifyError({ code: "ETIMEDOUT" }).class).toBe("timeout");
     expect(classifyError({ message: "timeout of 60000ms exceeded" }).class).toBe("timeout");
@@ -251,11 +275,13 @@ describe("classifyError", () => {
     expect(classifyError({ message: "fetch failed" }).class).toBe("network");
   });
 
+  // Verifies classifies malformed response errors.
   it("classifies malformed response errors", () => {
     expect(classifyError({ message: "invalid json response body at https://sheets.googleapis.com" }).class).toBe("response_format");
     expect(classifyError({ message: "Unexpected token < in JSON" }).class).toBe("response_format");
   });
 
+  // Verifies keeps codes and falls back to other.
   it("keeps codes and falls back to other", () => {
     expect(classifyError({ response: { status: 429 } })).toEqual({ class: "rate_limited", code: "429" });
     expect(classifyError({ message: "boom" })).toEqual({ class: "other", code: null });
@@ -265,7 +291,9 @@ describe("classifyError", () => {
   });
 });
 
+// Covers countDuplicateKeys and compareRows.
 describe("countDuplicateKeys and compareRows", () => {
+  // Verifies counts duplicate keys after a replay.
   it("counts duplicate keys after a replay", () => {
     const payload = buildRows({ runId: "r", cellId: "replay", startSeq: 0, count: 3 });
     const duplicated = [...payload, ...payload];
@@ -274,11 +302,13 @@ describe("countDuplicateKeys and compareRows", () => {
     expect(countDuplicateKeys(payload)).toEqual({ unique: 3, duplicates: 0, total: 3 });
   });
 
+  // Verifies compares expected rows byte-exactly.
   it("compares expected rows byte-exactly", () => {
     const expected = buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 3 });
     expect(compareRows(expected, expected)).toEqual({ compared: 3, matched: 3, mismatched: 0, missing: 0, extra: 0 });
   });
 
+  // Verifies detects mismatched, missing, and extra rows.
   it("detects mismatched, missing, and extra rows", () => {
     const expected = buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 3 });
     const first = expected[0]!;
@@ -295,6 +325,7 @@ describe("countDuplicateKeys and compareRows", () => {
     expect(result.missing).toBe(1);
   });
 
+  // Verifies treats numeric read-back cells as mismatches (strings expected)
   it("treats numeric read-back cells as mismatches (strings expected)", () => {
     const expected = buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 1 });
     const key = expected[0]![0];
@@ -305,11 +336,14 @@ describe("countDuplicateKeys and compareRows", () => {
   });
 });
 
+// Covers classifyAppendResponse.
 describe("classifyAppendResponse", () => {
+  // Verifies accepts an integer updatedRows equal to the payload count.
   it("accepts an integer updatedRows equal to the payload count", () => {
     expect(classifyAppendResponse(5, 5)).toEqual({ status: "ok", rowsAppended: 5 });
   });
 
+  // Verifies flags missing updatedRows as a response-format anomaly, not an append.
   it("flags missing updatedRows as a response-format anomaly, not an append", () => {
     expect(classifyAppendResponse(undefined, 5)).toEqual({
       status: "anomaly",
@@ -320,6 +354,7 @@ describe("classifyAppendResponse", () => {
     expect(classifyAppendResponse(null, 5)).toMatchObject({ status: "anomaly", code: "missing_updatedRows" });
   });
 
+  // Verifies flags non-integer updatedRows as a response-format anomaly.
   it("flags non-integer updatedRows as a response-format anomaly", () => {
     expect(classifyAppendResponse("5", 5)).toMatchObject({
       status: "anomaly",
@@ -330,6 +365,7 @@ describe("classifyAppendResponse", () => {
     expect(classifyAppendResponse(5.5, 5)).toMatchObject({ status: "anomaly", code: "non_integer_updatedRows" });
   });
 
+  // Verifies flags a wrong integer updatedRows as a response-format anomaly.
   it("flags a wrong integer updatedRows as a response-format anomaly", () => {
     expect(classifyAppendResponse(7, 5)).toEqual({
       status: "anomaly",
@@ -340,7 +376,9 @@ describe("classifyAppendResponse", () => {
   });
 });
 
+// Covers analyzeWindowRows.
 describe("analyzeWindowRows", () => {
+  // Verifies validates well-formed known rows regardless of physical order.
   it("validates well-formed known rows regardless of physical order", () => {
     const expectedAll = buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 6 });
     const expectedWindow = expectedAll.slice(0, 3);
@@ -357,6 +395,7 @@ describe("analyzeWindowRows", () => {
     });
   });
 
+  // Verifies records missing and extra keys as interleaving evidence, not failures.
   it("records missing and extra keys as interleaving evidence, not failures", () => {
     const expectedAll = buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 6 });
     const expectedWindow = expectedAll.slice(0, 3);
@@ -368,6 +407,7 @@ describe("analyzeWindowRows", () => {
     expect(result.missing).toBe(2);
   });
 
+  // Verifies flags malformed and unknown rows.
   it("flags malformed and unknown rows", () => {
     const expectedAll = buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 3 });
     const expectedWindow = expectedAll.slice(0, 2);
@@ -387,6 +427,7 @@ describe("analyzeWindowRows", () => {
     });
   });
 
+  // Verifies treats a non-array read as empty evidence.
   it("treats a non-array read as empty evidence", () => {
     const expectedAll = buildRows({ runId: "r", cellId: "c", startSeq: 0, count: 3 });
     const result = analyzeWindowRows({ expectedAll, expectedWindow: expectedAll, actual: undefined });
@@ -394,7 +435,9 @@ describe("analyzeWindowRows", () => {
   });
 });
 
+// Covers aggregateErrorClasses.
 describe("aggregateErrorClasses", () => {
+  // Verifies counts per-class occurrences.
   it("counts per-class occurrences", () => {
     const result = aggregateErrorClasses([
       { class: "rate_limited", code: "429" },
