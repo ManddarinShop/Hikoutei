@@ -12,16 +12,16 @@
  *
  *   1. Each leaf's dist subtree is copied into `dist/<destDir>` so the leaves
  *      ship inside the root package (`files: ["dist"]`):
- *        - packages/contracts/dist          -> dist/contracts/**
- *        - packages/storage/dist/…/src/{storage,persistence,orm,sync}
+ *        - packages/library/core/contracts/dist          -> dist/contracts/**
+ *        - packages/library/core/storage/dist/…/src/{storage,persistence,orm,sync}
  *              -> dist/{storage,persistence,orm,sync}/**  (the subpaths the
  *                 `@hikoutei/storage/<sub>` specifiers name; the package's
  *                 transient dist mirror of reached-in sibling-package sources
  *                 is NOT copied)
- *        - packages/sheets/dist/…/src/sheets -> dist/sheets/**
- *        - packages/sync-engine/dist/…/src   -> dist/sync-engine/**
- *        - packages/composition/dist/…/src  -> dist/composition/**
- *        - packages/cli/dist/…/src            -> dist/cli/**
+ *        - packages/library/cloud/sheets/dist/…/src/sheets -> dist/sheets/**
+ *        - packages/library/core/sync-engine/dist/…/src   -> dist/sync-engine/**
+ *        - packages/library/core/composition/dist/…/src  -> dist/composition/**
+ *        - packages/library/cloud/cli/dist/…/src            -> dist/cli/**
  *          (the published `bin` entry: dist/cli/index.js must exist here)
  *   2. Every `@hikoutei/{contracts,storage,sheets,sync-engine,composition,cli}/…`
  *      specifier inside root dist is rewritten to the correct RELATIVE
@@ -73,7 +73,7 @@ const rootDist = path.join(repoRoot, "dist");
 const BUNDLES = [
   {
     prefix: "@hikoutei/contracts",
-    distSrc: "packages/contracts/dist",
+    distSrc: "packages/library/core/contracts/dist",
     destDir: "contracts",
     copySubtrees: [""],
   },
@@ -83,13 +83,13 @@ const BUNDLES = [
     // package's tsconfig.json — cross-map rootDir "../.."); the useful
     // subtrees are the package's own src emissions. P8-D2 phase 2 cycle
     // break adds the storage-hosted persistence glue (orm/**, sync/**).
-    distSrc: "packages/storage/dist/packages/storage/src",
+    distSrc: "packages/library/core/storage/dist/packages/library/core/storage/src",
     destDir: "",
     copySubtrees: ["storage", "persistence", "orm", "sync"],
   },
   {
     prefix: "@hikoutei/sheets",
-    distSrc: "packages/sheets/dist/packages/sheets/src",
+    distSrc: "packages/library/cloud/sheets/dist/packages/library/cloud/sheets/src",
     destDir: "",
     copySubtrees: ["sheets"],
   },
@@ -99,7 +99,7 @@ const BUNDLES = [
     // `@hikoutei/sync-engine/<sub>` specifier subpaths each land exactly
     // where the rewritten specifiers point.
     prefix: "@hikoutei/sync-engine",
-    distSrc: "packages/sync-engine/dist/packages/sync-engine/src",
+    distSrc: "packages/library/core/sync-engine/dist/packages/library/core/sync-engine/src",
     destDir: "sync-engine",
     copySubtrees: [""],
   },
@@ -108,16 +108,27 @@ const BUNDLES = [
     // Composition cross-maps the leaf sources (transient mirrors are NOT
     // bundled), so its own emission lives under the repo-root-relative
     // packages/…/src subtree like the other cross-mapped leaves.
-    distSrc: "packages/composition/dist/packages/composition/src",
+    distSrc: "packages/library/core/composition/dist/packages/library/core/composition/src",
     destDir: "composition",
     copySubtrees: [""],
+  },
+  {
+    prefix: "@hikoutei/google-auth",
+    // The auth-line package is INTERNAL-ONLY (never published to npm), so it
+    // must be BUNDLED like the other leaves — declaring it as a root
+    // dependency would 404 every consumer install (the registry has no
+    // tarball). Its tsconfig emits repo-root-relative like the cross-mapped
+    // leaves, so only its own src subtree is copied.
+    distSrc: "packages/library/cloud/google-auth/dist/packages/library/cloud/google-auth/src",
+    destDir: "",
+    copySubtrees: ["auth"],
   },
   {
     prefix: "@hikoutei/cli",
     // The cli tsconfig spans the repo root for its `hikoutei` source map;
     // only the package's own emission subtree is bundled (onto dist/cli/** —
     // the published bin path).
-    distSrc: "packages/cli/dist/packages/cli/src",
+    distSrc: "packages/library/cloud/cli/dist/packages/library/cloud/cli/src",
     destDir: "cli",
     copySubtrees: [""],
   },
@@ -125,7 +136,7 @@ const BUNDLES = [
 
 // All bundled private-package specifiers rewritten to relative paths inside
 // the root dist (and checked by the dist guards below).
-const LEAF_PREFIXES = "contracts|storage|sheets|sync-engine|composition|cli";
+const LEAF_PREFIXES = "contracts|storage|sheets|sync-engine|composition|cli|google-auth";
 const LEAF_SPECIFIER_RE = new RegExp(
   `(['"])(@hikoutei\\/(?:${LEAF_PREFIXES}))(?:\\/([^'"]+))?\\1`,
 );
@@ -137,10 +148,10 @@ const BRIDGE_LITERAL_RE = /@hikoutei-app-src/;
 // Leaf packages whose own dist must stay standalone-loadable (relative
 // specifiers resolve inside it; the removed bridge literal never appears).
 const LEAF_PACKAGES = [
-  { name: "@hikoutei/storage", distDir: "packages/storage/dist" },
-  { name: "@hikoutei/sheets", distDir: "packages/sheets/dist" },
-  { name: "@hikoutei/sync-engine", distDir: "packages/sync-engine/dist" },
-  { name: "@hikoutei/composition", distDir: "packages/composition/dist" },
+  { name: "@hikoutei/storage", distDir: "packages/library/core/storage/dist" },
+  { name: "@hikoutei/sheets", distDir: "packages/library/cloud/sheets/dist" },
+  { name: "@hikoutei/sync-engine", distDir: "packages/library/core/sync-engine/dist" },
+  { name: "@hikoutei/composition", distDir: "packages/library/core/composition/dist" },
 ];
 
 /** Recursively collect file paths (absolute) under `dir`. */
@@ -287,6 +298,7 @@ async function main() {
     (rel) => rel.endsWith(".js") || rel.endsWith(".d.ts"),
   );
   let rewrittenFiles = 0, rewrittenSpecifiers = 0, remappedSpecifiers = 0;
+  const remappedFiles = [];
   for (const rel of emitFiles) {
     const abs = path.join(rootDist, rel);
     let source = await readFile(abs, "utf8");
@@ -302,6 +314,7 @@ async function main() {
     // point back into repo src (e.g. a surviving transitional relative
     // pointer); remap it onto the dist mirror of its `src/<rest>` target.
     const fileDirPosix = path.posix.dirname(rel);
+    let remappedInFile = 0;
     source = source.replace(/(['"])\.([^'"]*)\1/g, (whole, quote, rest) => {
       const spec = `.${rest}`;
       const resolvedAbs = path.resolve(rootDist, fileDirPosix, spec);
@@ -313,9 +326,14 @@ async function main() {
       let newSpec = path.posix.relative(fileDirPosix, target);
       if (!newSpec.startsWith(".")) newSpec = `./${newSpec}`;
       remappedSpecifiers += 1;
+      remappedInFile += 1;
       return `${quote}${newSpec}${quote}`;
     });
+    if (remappedInFile > 0) remappedFiles.push(rel);
     await writeFile(abs, source, "utf8");
+  }
+  if (remappedSpecifiers > 0) {
+    for (const f of remappedFiles) console.error(`[reconcile] WARN: remapped transitional /src/ pointer(s) in ${f}`);
   }
 
   // 3. Guard A: no UNRESOLVED LEAF SPECIFIER and no removed-bridge literal
@@ -370,6 +388,41 @@ async function main() {
   //    bundled leaf; runs after root bundling so nothing mutates depths).
   for (const leaf of LEAF_PACKAGES) {
     await checkLeafDist(leaf);
+  }
+
+  // 6. Guard C: every BARE @hikoutei/<name> specifier remaining in root dist
+  //    must be declared in the ROOT package.json dependencies. Bundled-leaf
+  //    names were already rewritten away (Guard A); anything left is an
+  //    external workspace package (e.g. @hikoutei/ikisaki) that a consumer's
+  //    `npm install hikoutei` must resolve — an undeclared one crashes the
+  //    published tarball at import time (ERR_MODULE_NOT_FOUND) and only on
+  //    real consumer installs, which the workspace-link dev flow cannot see.
+  const rootManifest = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+  const declared = {
+    ...rootManifest.dependencies,
+    ...rootManifest.optionalDependencies,
+  };
+  const bareNames = new Set();
+  const bareSpecifierRe = /(['\"])@hikoutei\/([a-z-]+)(?:\/[^'"\n]+)?\1/g;
+  for (const rel of allDistFiles) {
+    if (!(rel.endsWith(".js") || rel.endsWith(".d.ts"))) continue;
+    const source = await readFile(path.join(rootDist, rel), "utf8");
+    for (const match of source.matchAll(bareSpecifierRe)) {
+      const name = match[2];
+      if (LEAF_PREFIXES.split("|").includes(name)) continue; // Guard A already failed on these
+      if (name === "app-src") continue; // bridge literal; Guard A trips first
+      bareNames.add(`@hikoutei/${name}`);
+    }
+  }
+  const undeclared = [...bareNames].filter((name) => declared[name] === undefined);
+  if (undeclared.length > 0) {
+    console.error(
+      `[reconcile] FAIL: bare @hikoutei/* specifier(s) remain in root dist but are NOT declared in root package.json dependencies: ${undeclared.join(", ")}`,
+    );
+    console.error(
+      "  A consumer install resolves these from the registry, not the workspace — declare them as root dependencies (or bundle them).",
+    );
+    process.exit(1);
   }
 
   console.log(

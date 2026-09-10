@@ -159,7 +159,7 @@ function keyWait(attempt: number, delayMs: number): SetupProgressEvent {
  * a test can begin a valid sequence at any phase (the tracker enforces
  * phase order).
  */
-function prefixEvents(phase: SetupProgressPhase): readonly SetupProgressEvent[] {
+function prefixEvents(phase: (typeof SETUP_PROGRESS_PHASES)[number]): readonly SetupProgressEvent[] {
   const events: SetupProgressEvent[] = [];
   const index = SETUP_PROGRESS_PHASES.indexOf(phase);
   for (let i = 0; i < index; i += 1) {
@@ -819,23 +819,23 @@ describe("interactive progress renderer (TTY)", () => {
     // the label must name the next pending phase, never "complete".
     renderer.report(started("cloud_auth"));
     renderer.report(completed("cloud_auth"));
-    expect(text()).toContain("10% 1/10  next: Drive access");
-    expect(text()).not.toContain("10% 1/10  complete");
+    expect(text()).toMatch(/(?<!\d)10% +1\/10 +next: Drive access/);
+    expect(text()).not.toMatch(/(?<!\d)10% +1\/10 +complete/);
     // A mid-run boundary at 5/10 names the next pending phase too.
     for (const event of prefixEvents("service_account")) {
       renderer.report(event);
     }
     renderer.report(started("service_account"));
     renderer.report(completed("service_account"));
-    expect(text()).toContain("50% 5/10  next: Service-account key");
-    expect(text()).not.toContain("50% 5/10  complete");
+    expect(text()).toMatch(/(?<!\d)50% +5\/10 +next: Service-account key/);
+    expect(text()).not.toMatch(/(?<!\d)50% +5\/10 +complete/);
     // Only a fully completed run (10/10) earns the literal "complete".
     for (const event of prefixEvents("output")) {
       renderer.report(event);
     }
     renderer.report(started("output"));
     renderer.report(completed("output"));
-    expect(text()).toContain("100% 10/10  complete");
+    expect(text()).toMatch(/(?<!\d)100% +10\/10 +complete/);
   });
 
   it("fail() after suspend() renders the suspended phase's failure", () => {
@@ -1805,6 +1805,8 @@ describe("runSetupCli login handoff with the progress renderer", () => {
         keyReused: false,
         saWriterRole: "created",
         resumed: false,
+        poolSize: 1,
+        poolPaths: ["/tmp/hikoutei-service-account.json"],
       },
       commands: [],
     };
@@ -1861,7 +1863,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     });
     const { stdout, text: stdoutText } = capturingStdout(true);
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup: (params) => {
         // The retry re-runs the same controller: re-emit the full phase
@@ -1933,7 +1935,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     const { output, text: stderrText } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: true, interactive: true, now: () => 0 });
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup: async () => {
         for (const event of prefixEvents("drive_access")) {
@@ -1968,7 +1970,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     const { output, text: stderrText } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: true, interactive: true, now: () => 0 });
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup: async () => {
         for (const event of prefixEvents("drive_access")) {
@@ -2030,7 +2032,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
       };
     };
     const context: RunSetupCliContext = {
-      options: { saName: "hikoutei-sa", output: ".env", yes: false, dryRun: false },
+      options: { saName: "hikoutei-sa", saCount: 1, output: ".env", yes: false, dryRun: false },
       cwd: "/tmp",
       runSetup,
       loginRunner: {

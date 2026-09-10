@@ -24,7 +24,7 @@ function immediateReadyReadSystemStateReadiness(_runtime) {
 
 /** Absolute file URL of the source module (Vitest/Vite resolves this `.ts`). */
 const SYSTEM_STATE_READINESS_SOURCE_URL = new URL(
-  "../../../packages/sync-engine/src/sync/service/systemStateReadiness.ts",
+  "../../../packages/library/core/sync-engine/src/sync/service/systemStateReadiness.ts",
   import.meta.url,
 );
 /** Absolute file URL of the built dist module (plain-Node CLI resolves this). */
@@ -86,6 +86,7 @@ export async function resolveSystemStateReadinessReader(deps = systemStateReadin
     // REGARDLESS of whether a stale dist copy exists — a dist file left over
     // from a different branch/feature layer must never be loaded here.
     if (!sourceExists()) {
+      console.warn("[soak] WARN: System_State readiness module absent from this branch; reporting immediate-ready");
       return immediateReadyReadSystemStateReadiness;
     }
     // The source module EXISTS, so its load failed. Only fall back to dist

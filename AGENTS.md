@@ -16,13 +16,20 @@ general-purpose Google Sheets API wrapper, or a transaction-safe database on top
 of Sheets. SQLite is the authority; Sheets is an async projection and human
 input surface, not the source of truth.
 
-The authoritative design lives in [`docs/architecture.md`](docs/architecture.md),
-[`docs/write-and-synchronization-flow.md`](docs/write-and-synchronization-flow.md),
-[`docs/internal-consistency-model.md`](docs/internal-consistency-model.md), and
-[`docs/code-guidelines.md`](docs/code-guidelines.md). Note that `docs/` (like
-`design/`) is gitignored and local-only — it is not tracked or shipped — so
-those links resolve only in local checkouts; keep source consistent with the
-documents when present.
+The design is described in the guides in the separate
+[Hikoutei-Website- repository](https://github.com/ManddarinShop/Hikoutei-Website-)
+([architecture](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/architecture.md):
+system shape, SQLite authority;
+[sync flow](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/sync-flow.md):
+local flush, async outbox delivery;
+[internal consistency](https://github.com/ManddarinShop/Hikoutei-Website-/blob/main/guide/internal-consistency.md):
+evidence comparison, lease/epoch/fencing), and the contribution rules in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). The `docs/`
+mirrors (`docs/architecture.md`, `docs/write-and-synchronization-flow.md`,
+`docs/internal-consistency-model.md`, `docs/code-guidelines.md`) are gitignored
+and local-only — they are not tracked or shipped — so those links resolve only
+in checkouts where they exist; keep source consistent with those documents
+when present.
 
 ## Public API direction
 
@@ -63,12 +70,15 @@ Keep the public API and the internal sync/provider engine separate.
 
 The public surface exposes entity/runtime registration plus the
 entity-lifecycle EntityManager: defining entities with
-`defineTypedSheetsEntity()`, opening the runtime with `createTypedSheets()`,
+`defineTypedSheetsEntity()`, opening the runtime with `createTypedSheets()`
+or its public sync/adoption counterpart `createTypedSheetsWithSync()`
+(richer result union plus existing-sheet adoption support; both accept the
+sync-path-only `providerOptions` tuning, inert in local-only mode),
 and `fork()`, `create()`, `find()`, `findOne()`, `count()`, `findAndCount()`,
 `persist()`, `remove()`, `flush()`, and `transactional()`. Google Sheet
 provider setup and the sync bootstrap are internal and environment-driven
-(the `googleSheetsApi` bootstrap option, `HIKOUTEI_SYNC_SPREADSHEET_URL`,
-`GOOGLE_APPLICATION_CREDENTIALS`), not application-facing registration APIs.
+(`HIKOUTEI_SYNC_SPREADSHEET_URL`, `GOOGLE_APPLICATION_CREDENTIALS`; the
+internal providers are not application-facing registration APIs).
 Everything else is internal implementation and must not be part of the
 application-facing contract: MikroORM types and provider internals,
 the Google Sheets API provider, the outbound sync
@@ -87,48 +97,50 @@ public contract.
 
 ## Repository Layout
 
-The source is organized by responsibility, not by a legacy layer. `domain/` and
-`shared/` know nothing about external SDKs; `application/` orchestrates use
-cases and synchronization; `adapter/` isolates persistence and Sheets providers
-behind contracts; `infrastructure/` owns SQLite storage technology.
+The source is organized by responsibility. Pure contract and engine code knows
+nothing about external SDKs; adapters isolate persistence and Sheets providers
+behind contracts; SQLite storage technology lives in the storage package; the
+composition package is the only place that wires concrete adapters.
 
 - `src/api/`: the application-facing facade (entity definitions, runtime
   creation, EntityManager), re-exported by `src/index.ts`.
-- `src/cli/`: the `hikoutei setup` command-line tool (service-side
-  provisioning; not part of the library API).
-- `src/domain/`: normalization values, field evaluation, conflict transitions,
-  and domain errors (`conflict/`, `errors/`, `evaluate/`, `model/`).
-- `src/shared/`: cross-domain constants, stable encoding, and shared state
-  contracts (`encoding/`, `state/`).
-- `src/application/orm/`: ORM facade, entity definitions, entity mapping, and
-  flush planning behind the public `src/api` layer (`api/`, `mapping/`,
-  `persistence/`).
-- `src/application/sync/`: outbound sync worker, effect supervisor, projection,
-  reconciliation, provider orchestration, and telemetry (`sheets/`,
-  `outbound/`, `telemetry/`).
-- `src/adapter/persistence/`: persistence contracts and the current provider
-  (`contracts/` for SQL/persistence contracts, `providers/mikro-orm/` for the
-  MikroORM + SQLite engine, storage bridge, observation, and entity
-  materialization).
-- `src/adapter/sheets/`: Sheets provider contracts and the current Google
-  Sheets API provider under `providers/google-sheets-api/` (transport/ and
-  model/), the single sync provider for outbound effects, provisioning, table
-  reads, row anchors, and snapshots.
-- `src/infrastructure/storage/`: SQLite storage technology for canonical state,
-  observation/conflict/resolution state, and the durable outbox (`sqlite/`,
-  `state/` for canonical/mapped/observation/resolution, `sync/` for the outbound
-  outbox and worker SQL).
+- `src/internal/`: read-only sync-status observability for first-party tooling
+  (the unstable `hikoutei/internal/sync-status` subpath, not part of the
+  application contract).
+- `src/types/`: ambient typing for the `node:sqlite` built-in.
 - `src/index.ts`: the application-facing public entrypoint only (re-exports
   `src/api`).
-- `test/`: Vitest unit and provider/contract tests, plus `test/support/`
-  fixtures.
-- `docs/`: local-only (gitignored) architecture, sync flow, code guidelines,
-  and current-state notes; not tracked or shipped.
+- `packages/library/core/contracts/`: pure contract layer (domain model,
+  state/identity/encoding primitives, storage interfaces, Sheets sync protocol
+  boundary; no Google/MikroORM imports).
+- `packages/library/core/storage/`: SQLite storage plumbing, the MikroORM-backed
+  persistence adapter, and the mapped flush/observation/projection/conflict bridge.
+- `packages/library/core/sync-engine/`: sync services (outbound worker,
+  supervisors, reconciliation, adoption), the scalar flush unit-of-work, and the
+  internal runtime core.
+- `packages/library/core/composition/`: composition root wiring the concrete
+  adapters; owns the local-runtime and sync-auto-start factories.
+- `packages/library/cloud/sheets/`: the `google-sheets-api` sync provider
+  (outbound effects, provisioning, table reads, row anchors, snapshots).
+- `packages/library/cloud/google-auth/`: shared Google service-account
+  authentication (key loading, credential pool).
+- `packages/library/cloud/cli/`: the `hikoutei setup`/`adopt` command-line tool
+  (service-side provisioning, bundled into the root `dist/cli/**` bin; not part
+  of the library API).
+- `packages/protocol/ikisaki/`: durable, ordered, idempotent delivery queue
+  bound to the business transaction (workspace package `@hikoutei/ikisaki`).
+- `packages/mcp/`: the `spreadsheet-db-mcp` server exposing the
+  SQLite-authoritative store to AI agents.
+- `test/`: root Vitest suite (fake providers, SQLite/MikroORM fixtures, plus
+  `test/support/`); `packages/protocol/ikisaki/test/` and `packages/mcp/test/`
+  hold package-local tests.
 - `scripts/`: build and CI helper scripts (`clean-dist.mjs`,
   `ci/run-api-scenario.mjs`).
 
-There is no `src/core/`, `src/setup/`, `src/runtime/`, or `spikes/` directory;
-treat those names as retired. `src/cli/` is active and owns the setup tool.
+There is no `src/domain/`, `src/shared/`, `src/application/`, `src/adapter/`,
+`src/infrastructure/`, `src/cli/`, `src/core/`, `src/setup/`, `src/runtime/`, or
+`spikes/` directory; treat those names as retired. The CLI lives in
+`packages/library/cloud/cli/`.
 
 ## Development Commands
 
@@ -148,29 +160,31 @@ fixtures and needs no credentials.
 
 ## Code Modification Rules
 
-Follow `docs/code-guidelines.md`.
+Follow the type-first style in this file and `CONTRIBUTING.md`
+(`docs/code-guidelines.md` is a local-only mirror, when present in your checkout).
 
 When the user asks for a bugfix, feature, refactor, or other code change, edit
-`src/**` as needed while keeping the change scoped to the request. For planning,
+`src/**` and `packages/**/src/**` as needed while keeping the change scoped to the request. For planning,
 review, explanation, test scaffolding, configuration, or documentation-only
-work, keep changes outside `src/**` unless the user approves otherwise.
+work, keep changes outside `src/**` and `packages/**/src/**` unless the user approves otherwise.
 
 Allowed without extra confirmation when requested:
 
 - documentation files
 - planning notes
-- test scaffolding under `test/**`
+- test scaffolding under `test/**` and `packages/**/test/**`
 - TypeScript/package/test configuration files
 - `.gitignore`
 
 If a production source issue blocks the requested work, explain the blocker and
-ask before editing `src/**`.
+ask before editing `src/**` or `packages/**/src/**`.
 
 ## Implementation Principles
 
-- Keep `domain/` and `application/` logic independent from Google SDK and
+- Keep `packages/library/core/contracts` and `packages/library/core/sync-engine`
+  logic independent from Google SDK and
   MikroORM details; depend on adapter contracts instead.
-- Use adapter interfaces for sheet-level operations; never leak Google SDK
+- Use the Sheets provider contracts for sheet-level operations; never leak Google SDK
   response objects into repository logic.
 - SQLite is the application authority. In a sync-enabled runtime, `flush()`
   commits the entity table, canonical sync state, and the durable Sheet effect
@@ -297,7 +311,8 @@ Do not treat a benchmark as complete if the result only appears in chat.
 
 ## Git
 
-Follow `docs/git-workflow.md`.
+The rules below are the workflow (`docs/git-workflow.md` is a local-only
+mirror, when present in your checkout).
 
 **Git approval rule:** Git-related operations that change repository state or
 remote state require explicit user approval immediately before execution. This
@@ -322,7 +337,7 @@ and `git diff` is allowed, but ask before any state-changing Git command.
   unrelated local or untracked files out of the commit.
 - Keep PRs reviewable and include summary, why, changes, tests, and
   limitations.
-- When resolving PR conflicts, prefer merging the latest `origin/main` into the
+- When resolving PR conflicts, prefer merging the latest `origin/develop` into the
   PR branch, resolving conflicts, committing, and pushing normally. Do not use
   rebase for PR conflict resolution unless the user explicitly asks for it.
 - Never force push or use `--force-with-lease` unless the user explicitly
@@ -330,10 +345,12 @@ and `git diff` is allowed, but ask before any state-changing Git command.
 
 ## Documentation
 
-Follow the documentation standard in `docs/code-guidelines.md`. Keep
-`docs/architecture.md`, `docs/write-and-synchronization-flow.md`, and
-`docs/internal-consistency-model.md` consistent with the code when you change
-the synchronization model (the `docs/` tree is gitignored and local-only).
+Follow the documentation standard in this file and `CONTRIBUTING.md`
+(`docs/code-guidelines.md` is a local-only mirror, when present). When you change
+the synchronization model, also sync the affected guides in the separate
+Hikoutei-Website- repository — that update lives outside this repo's diff
+(the `docs/` mirrors are gitignored and local-only; consult them when present
+in your checkout).
 README updates should cover the intended use case, when
 not to use the library, the SQLite-authoritative model and async Sheets
 projection, outbox/worker delivery, Google Sheets quota constraints, schema

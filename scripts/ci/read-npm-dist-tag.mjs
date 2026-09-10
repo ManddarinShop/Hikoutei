@@ -3,15 +3,16 @@
  * Read one npm dist-tag while distinguishing an absent tag/package from a
  * registry failure. Release workflows must fail closed on network/auth errors
  * instead of treating them as a first publication. Accepted values are stable
- * `X.Y.Z` and develop-channel prereleases `X.Y.Z-dev.N`.
+ * `X.Y.Z`, legacy develop-channel prereleases `X.Y.Z-dev.N` (migration reads),
+ * and new develop-channel prereleases `X.Y.Z-dev`.
  */
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
 
-/** Accepted dist-tag value: stable `X.Y.Z` or develop-channel `X.Y.Z-dev.N`. */
+/** Accepted dist-tag value: stable `X.Y.Z`, legacy `X.Y.Z-dev.N`, or new `X.Y.Z-dev`. */
 const CHANNEL_VERSION_PATTERN =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-dev\.(0|[1-9]\d*))?$/;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)((?:-dev\.(0|[1-9]\d*))|(-dev))?$/;
 
 /**
  * @param {{ status: number | null, stdout: string, stderr: string }} result

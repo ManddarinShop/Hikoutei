@@ -46,8 +46,12 @@ import type { MappedPollingState } from "@hikoutei/storage/persistence/providers
 import { createMikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteAdapter.js";
 import { migrateMikroOrmSqliteStorageSchema } from "@hikoutei/storage/persistence/providers/mikro-orm/storage/MikroOrmSqliteSchema.js";
 import { GoogleSheetsApiSyncProvider } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
-import { GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
-import { buildRowCheckFormula } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/rowCheckFormula.js";
+import {
+  GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME,
+  GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+} from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
+import { buildRowCheckFormula } from "@hikoutei/ikisaki";
+import { columnLetters } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
 import {
   StubSheetsTransport,
   StubSpreadsheet,
@@ -254,7 +258,7 @@ describe("inspectChecksPollingTable", () => {
       await storage.transaction(async ({ sql }) => {
         sql.run(
           `INSERT INTO sheet_effect_outbox (
-            effect_id, effect_kind, commit_id, logical_sheet_id, physical_sheet_id,
+            effect_id, effect_kind, dispatch_class, commit_id, logical_sheet_id, physical_sheet_id,
             projection, row_binding_id, conflict_id, target_kind, target_id,
             target_entity_revision, target_field_revision_hash, target_canonical_commit_id,
             expected_visible_revision, expected_visible_hash, repair_guard_hash,
@@ -262,10 +266,11 @@ describe("inspectChecksPollingTable", () => {
             stream_sequence, predecessor_effect_id, status, attempts, claim_token,
             writer_epoch, supersedes_effect_id, last_error_code, last_error_message,
             created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             "effect-failed-u2",
             "candidate_reconcile",
+            "regular",
             "commit-failed-u2",
             "check-gate-sheet",
             "check-gate-input",
@@ -422,7 +427,13 @@ function gateDefinition(): RegisteredSyncProjectionDefinition {
 
 /** Row-check formula for one seeded gate row (data columns A:B). */
 function gateFormula(rowNumber: number): string {
-  return buildRowCheckFormula(1, 2, rowNumber);
+  return buildRowCheckFormula(
+    1,
+    2,
+    rowNumber,
+    GOOGLE_SHEETS_API_ROW_CHECK_FORMULA_VOCABULARY,
+    columnLetters,
+  );
 }
 
 function seedGateSheet(humanEdit: boolean): {

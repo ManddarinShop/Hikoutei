@@ -230,12 +230,12 @@ describe("MikroOrmSqliteAdapter", () => {
     try {
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
         fromVersion: 0,
-        toVersion: 8,
-        appliedVersions: [8],
+        toVersion: 9,
+        appliedVersions: [9],
       });
       await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-        fromVersion: 8,
-        toVersion: 8,
+        fromVersion: 9,
+        toVersion: 9,
         appliedVersions: [],
       });
       await expect(adapter.read(({ sql }) => {
@@ -354,12 +354,12 @@ describe("MikroOrmSqliteAdapter", () => {
 
     expect(firstMigration).toEqual({
       fromVersion: 0,
-      toVersion: 8,
-      appliedVersions: [8],
+      toVersion: 9,
+      appliedVersions: [9],
     });
     expect(secondMigration).toEqual({
-      fromVersion: 8,
-      toVersion: 8,
+      fromVersion: 9,
+      toVersion: 9,
       appliedVersions: [],
     });
 
@@ -368,11 +368,11 @@ describe("MikroOrmSqliteAdapter", () => {
     });
     await expect(migrateSqliteSchema(adapter)).resolves.toEqual({
       fromVersion: 3,
-      toVersion: 8,
-      appliedVersions: [4, 5, 6, 7, 8],
+      toVersion: 9,
+      appliedVersions: [4, 5, 6, 7, 8, 9],
     });
     await expect(adapter.read(({ sql }) => sql.get<{ readonly user_version: number }>("PRAGMA user_version")))
-      .resolves.toEqual({ user_version: 8 });
+      .resolves.toEqual({ user_version: 9 });
 
     expect(tables.map((table) => table.name)).toContain("mikro_orm_adapter_order");
     expect(tables.map((table) => table.name)).toContain("sheet_effect_outbox");
@@ -553,6 +553,7 @@ describe("MikroOrmSqliteAdapter", () => {
         visibleHash: "visible-hash-1",
         entityRevision: { kind: APPLICABILITY_KINDS.APPLICABLE, value: 1 },
         fieldHashes: { status: "field-hash-1" },
+        deleteRetention: false,
       },
     })).resolves.toBe(true);
 
@@ -1724,6 +1725,7 @@ function createPendingEffect(): NewEffect {
   return {
     effectId: "effect-pending",
     effectKind: "system_projection",
+    dispatchClass: "regular",
     commitId: "commit-1",
     logicalSheetId: "logical-sheet",
     physicalSheetId: "physical-sheet",
@@ -2066,6 +2068,7 @@ function createOrderingEffect(
   return {
     effectId,
     effectKind,
+    dispatchClass: "regular",
     commitId: `commit-${effectId}`,
     logicalSheetId: "logical-sheet",
     physicalSheetId: "physical-sheet",

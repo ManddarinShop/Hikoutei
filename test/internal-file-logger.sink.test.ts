@@ -25,11 +25,11 @@ import {
   rotatedLogPath,
   stableConsoleErrorTag,
   type HikouteiInternalLogger,
-} from "@hikoutei/sync-engine/shared/observability/internalLog.js";
+} from "@hikoutei/contracts/shared/observability/internalLog.js";
 import {
   HIKOUTEI_LOG_EVENTS,
   HIKOUTEI_LOG_STABLE_CODES,
-} from "@hikoutei/sync-engine/shared/observability/logEvents.js";
+} from "@hikoutei/contracts/shared/observability/logEvents.js";
 /** Reads a log file and parses every JSONL line. */
 async function readLogLines(filePath: string): Promise<Record<string, unknown>[]> {
   const raw = await readFile(filePath, "utf8");

@@ -225,13 +225,21 @@ describe("hikoutei-mcp config loader", () => {
     const flagWins = resolveConfigPath(["--config", "/tmp/a.json"], { HIKOUTEI_MCP_CONFIG: "/tmp/b.json" });
     expect(flagWins).toBe("/tmp/a.json");
 
-    const flagWithoutValue = resolveConfigPath(["--config"], { HIKOUTEI_MCP_CONFIG: "/tmp/b.json" });
-    expect(flagWithoutValue).toBe("/tmp/b.json");
-
     const relative = resolveConfigPath(["--config", "nested/cfg.json"], {});
     expect(relative).toBe(join(cwd, "nested/cfg.json"));
 
     const fallback = resolveConfigPath([], {});
     expect(fallback?.endsWith(HIKOUTEI_MCP_CONFIG_FILE_NAME)).toBe(true);
+  });
+
+  it("rejects --config without a value instead of falling back", () => {
+    expect(() => resolveConfigPath(["--config"], { HIKOUTEI_MCP_CONFIG: "/tmp/b.json" })).toThrow(
+      "--config requires a value",
+    );
+    expect(() => resolveConfigPath(["--config", ""], {})).toThrow("--config requires a value");
+  });
+
+  it("rejects --config with a whitespace-only value", () => {
+    expect(() => resolveConfigPath(["--config", "  "], {})).toThrow("--config requires a value");
   });
 });

@@ -107,7 +107,7 @@ For a local (unpublished) build, point `command` at `node` with
 | `update_record` | `entity`, `id`, `data` | Partial update; primary key immutable |
 | `delete_record` | `entity`, `id` | Delete by primary key |
 | `get_sync_status` | — | Mode, bound spreadsheet ID, outbox counts, unresolved conflict counts |
-| `list_conflicts` | `limit?` | Unresolved human-edit conflicts (read-only) |
+| `list_conflicts` | `limit?` (default 50, max 500) | Unresolved human-edit conflicts (read-only) |
 
 `where` maps a field to a value (equality) or an operator object:
 `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `like`.
@@ -116,7 +116,7 @@ For a local (unpublished) build, point `command` at `node` with
 
 ```sh
 npm run build          # root build builds ikisaki → root dist → this package
-mkdir -p /tmp/spreadsheet-db-mcp-demo && cd /tmp/hikoutei-mcp-demo
+mkdir -p /tmp/spreadsheet-db-mcp-demo && cd /tmp/spreadsheet-db-mcp-demo
 # write hikoutei.config.json (see above; no env needed for local-only mode)
 npx @modelcontextprotocol/inspector /path/to/Hikoutei/packages/mcp/dist/index.js
 ```

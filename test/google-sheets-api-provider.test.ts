@@ -21,7 +21,7 @@ import type {
   SyncProjectionEffect,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { SYNC_POSTCONDITION_MODES } from "@hikoutei/contracts/sheets/constants.js";
-import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { classifyTransportOutcome, TRANSPORT_OUTCOME_KINDS, TRANSPORT_OUTCOME_UNKNOWN_CODE } from "@hikoutei/ikisaki";
 import { GoogleSheetsApiSyncProvider, classifyGoogleSheetsApiError, isRetryableTransportStatus } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import type {
   GoogleSheetsApiTransport,
@@ -30,7 +30,7 @@ import type {
   GoogleSheetsApiWriteRequest,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/index.js";
 import { serializeBatchUpdateRequests } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
-import { parseRawErrorRecord } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rawErrorSchemas.js";
+import { parseRawErrorRecord } from "@hikoutei/ikisaki";
 import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS, GOOGLE_SHEETS_API_ENUMERATION_FIELDS } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightFields.js";
 import { GOOGLE_SHEETS_API_RECEIPT_HEADERS, GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME, GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT } from "@hikoutei/sheets/sheets/providers/google-sheets-api/constants.js";
 import {
@@ -40,7 +40,7 @@ import {
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightVerify.js";
 import type { ParsedGridData, PreflightContext, PreflightRow } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightContext.js";
 import { dateSerialFromIso } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/valueNormalization.js";
-import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
+import { createReadCalibration } from "@hikoutei/ikisaki";
 import { GoogleSheetsApiTransportError, GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
 import { SYNC_SHEETS_ERROR_CODES } from "@hikoutei/contracts/sheets/errors.js";
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
@@ -4152,8 +4152,8 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(planPreflightVerification(context, [2, 3, 4, 10], calibration)).toEqual({
       kind: "ranges",
       items: [
-        { range: "'Users_System'!A2:B4", cells: 6 },
-        { range: "'Users_System'!A10:B10", cells: 2 },
+        { address: "'Users_System'!A2:B4", cells: 6 },
+        { address: "'Users_System'!A10:B10", cells: 2 },
       ],
     });
     const withIdentity = verificationContextFixture({
@@ -4164,7 +4164,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     if (planned.kind !== "ranges") throw new Error("expected ranges");
     // Identity column ("id" = column A) spans every data row; the resolved
     // CAS row band covers the full registered span.
-    expect(planned.items.map((item) => item.range)).toEqual([
+    expect(planned.items.map((item) => item.address)).toEqual([
       "'Users_System'!A2:A4", "'Users_System'!A2:B2",
     ]);
     // The unified engine removed the `overflow` rung: a 41-range plan stays

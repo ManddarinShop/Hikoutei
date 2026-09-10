@@ -369,12 +369,12 @@ describe("generateProjectId", () => {
     expect(id.length).toBeLessThanOrEqual(30);
   });
 
-  it("varies the suffix across calls", () => {
-    const seen = new Set<string>();
-    for (let i = 0; i < 50; i += 1) {
-      seen.add(generateProjectId());
-    }
-    expect(seen.size).toBe(50);
+  it("varies the suffix from the injected random value at a fixed timestamp", () => {
+    const now = 1_700_000_000_000;
+    const first = generateProjectId(now, () => 0.1);
+    const second = generateProjectId(now, () => 0.9);
+    expect(first).not.toBe(second);
+    expect(first.slice(0, first.lastIndexOf("-"))).toBe(second.slice(0, second.lastIndexOf("-")));
   });
 });
 

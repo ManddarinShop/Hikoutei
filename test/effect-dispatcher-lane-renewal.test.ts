@@ -42,7 +42,7 @@ import {
   type PreparedApplyEffects,
 } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { absentValue } from "@hikoutei/contracts/state/index.js";
-import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/contracts/sheets/transportOutcome.js";
+import { TRANSPORT_OUTCOME_KINDS } from "@hikoutei/ikisaki";
 import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
@@ -1179,6 +1179,7 @@ function createAppendEffectFor(suffix: string, physicalSheetId: string, sheetNam
   return {
     effectId: `effect-${suffix}`,
     effectKind: "system_projection",
+    dispatchClass: "fast-append",
     commitId: `commit-${suffix}`,
     logicalSheetId: LOGICAL_SHEET,
     physicalSheetId,
@@ -1215,6 +1216,7 @@ function pendingFrom(effect: NewEffect): PendingEffect {
   return {
     effect_id: effect.effectId,
     effect_kind: effect.effectKind,
+    dispatch_class: effect.dispatchClass,
     commit_id: effect.commitId,
     logical_sheet_id: effect.logicalSheetId,
     physical_sheet_id: effect.physicalSheetId,

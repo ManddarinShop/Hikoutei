@@ -311,6 +311,8 @@ describe("runSetupCli — interactive login handoff", () => {
       keyReused: false,
       saWriterRole: "created",
       resumed: false,
+      poolSize: 1,
+      poolPaths: ["/tmp/hikoutei-service-account.json"],
     };
   }
 
@@ -362,9 +364,13 @@ describe("runSetupCli — interactive login handoff", () => {
     },
   };
 
+  // Explicit saCount (as if --sa-count 1 was passed) so the interactive
+  // TTY count prompt — covered in sa-pool.test.ts — never consumes these
+  // tests' login-handoff chunks; the resolved count is 1 either way.
   function baseOptions(overrides: Partial<{ yes: boolean; dryRun: boolean }> = {}): import("@hikoutei/cli/args.js").SetupOptions {
     return {
       saName: "hikoutei-sa",
+      saCount: 1,
       output: ".env",
       yes: false,
       dryRun: false,
@@ -768,6 +774,8 @@ describe("runSetupCli — shared stdin finalization", () => {
         keyReused: false,
         saWriterRole: "created",
         resumed: false,
+        poolSize: 1,
+        poolPaths: ["/tmp/hikoutei-service-account.json"],
       },
       commands: [],
     };
@@ -801,9 +809,13 @@ describe("runSetupCli — shared stdin finalization", () => {
     return { runner, calls: () => calls };
   }
 
+  // Explicit saCount (as if --sa-count 1 was passed) so the interactive
+  // TTY count prompt — covered in sa-pool.test.ts — never consumes these
+  // tests' login-handoff chunks; the resolved count is 1 either way.
   function baseOptions(overrides: Partial<{ yes: boolean; dryRun: boolean; output: string }> = {}): import("@hikoutei/cli/args.js").SetupOptions {
     return {
       saName: "hikoutei-sa",
+      saCount: 1,
       output: ".env",
       yes: false,
       dryRun: false,
@@ -1154,14 +1166,14 @@ describe("package and entry regression", () => {
     // legacy bare-flag setup spelling (routed back to the setup flow).
     expect(pkg.bin.hikoutei).toBe("./dist/cli/index.js");
 
-    const router = readFileSync(new URL("../../packages/cli/src/index.ts", import.meta.url), "utf8");
+    const router = readFileSync(new URL("../../packages/library/cloud/cli/src/index.ts", import.meta.url), "utf8");
     expect(router.split("\n")[0]).toBe("#!/usr/bin/env node");
     expect(router).toContain('head === "adopt"');
     expect(router).toContain('head === "setup"');
 
     // The setup entry keeps its shebang for direct `node dist/cli/setup.js`
     // invocations (back-compat when the bin WAS the setup CLI).
-    const entry = readFileSync(new URL("../../packages/cli/src/setup.ts", import.meta.url), "utf8");
+    const entry = readFileSync(new URL("../../packages/library/cloud/cli/src/setup.ts", import.meta.url), "utf8");
     expect(entry.split("\n")[0]).toBe("#!/usr/bin/env node");
   });
 });

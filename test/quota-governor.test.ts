@@ -23,14 +23,14 @@ import {
   RATE_LIMIT_OPTIONS_ERROR_CODES,
   RateLimitOptionsError,
   RequestStartLimiter,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+} from "@hikoutei/ikisaki";
 import {
   isQuotaLimitedOutcome,
   QUOTA_GOVERNOR_LANES,
   QUOTA_PACING_STATES,
   QuotaPacingGovernor,
   RollingQuotaBudget,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/quotaGovernor.js";
+} from "@hikoutei/ikisaki";
 
 describe("RollingQuotaBudget", () => {
   it("refuses starts beyond the window budget WITHOUT reserving", async () => {

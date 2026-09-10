@@ -21,20 +21,21 @@
     "baseUrl": ".",
     "paths": {
       "hikoutei": ["./src/index.ts"],
-      "@hikoutei/ikisaki": ["./packages/ikisaki/dist/index.d.ts"],
+      "@hikoutei/ikisaki": ["./packages/protocol/ikisaki/dist/index.d.ts"],
       // The two externals the leaf packages import: mapped to their installed
       // dirs so dep-cruiser resolves them (without entries they fall out as
       // could-not-resolve even though the real compiler resolves them fine
       // through NodeNext exports). The paths are version-stable via the
       // pnpm workspace links.
-      "zod": ["./packages/contracts/node_modules/zod"],
-      "@hikoutei/kohkai": ["./packages/contracts/node_modules/@hikoutei/kohkai"],
-      "@hikoutei/contracts/*": ["./packages/contracts/src/*"],
-      "@hikoutei/storage/*": ["./packages/storage/src/*"],
-      "@hikoutei/sheets/*": ["./packages/sheets/src/*"],
-      "@hikoutei/sync-engine/*": ["./packages/sync-engine/src/*"],
-      "@hikoutei/composition/*": ["./packages/composition/src/*"],
-      "@hikoutei/cli/*": ["./packages/cli/src/*"]
+      "zod": ["./packages/library/core/contracts/node_modules/zod"],
+      "@hikoutei/kohkai": ["./packages/library/core/contracts/node_modules/@hikoutei/kohkai"],
+      "@hikoutei/contracts/*": ["./packages/library/core/contracts/src/*"],
+      "@hikoutei/storage/*": ["./packages/library/core/storage/src/*"],
+      "@hikoutei/google-auth/*": ["./packages/library/cloud/google-auth/src/*"],
+      "@hikoutei/sheets/*": ["./packages/library/cloud/sheets/src/*"],
+      "@hikoutei/sync-engine/*": ["./packages/library/core/sync-engine/src/*"],
+      "@hikoutei/composition/*": ["./packages/library/core/composition/src/*"],
+      "@hikoutei/cli/*": ["./packages/library/cloud/cli/src/*"]
     }
   }
 }

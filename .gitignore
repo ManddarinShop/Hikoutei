@@ -5,7 +5,8 @@
 .local/
 review/
 design/
-docs/
+/design.md
+/docs/
 models.json
 
 # Dependencies and build output
@@ -21,6 +22,7 @@ dist/
 # hikoutei setup artifacts (defaults; custom --output/key/checkpoint
 # locations must be added to the application's ignore rules explicitly)
 hikoutei-service-account.json
+hikoutei-service-account-*.json
 .hikoutei-setup-state.json
 .hikoutei-setup-state.json.tmp*
 .hikoutei-setup-state.json.lock

@@ -1,6 +1,0 @@
-node_modules/
-*.sqlite
-*.sqlite-*
-.env
-__*.mjs
-__smoke.cjs

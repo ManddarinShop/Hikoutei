@@ -12,7 +12,7 @@ export type TagResolutionResult =
   | { status: "valid"; version: string }
   | { status: "invalid"; code: string; reason: string };
 
-/** Compares two dev-channel versions (`X.Y.Z` or `X.Y.Z-dev.N`). */
+/** Compares two dev-channel versions (stable `X.Y.Z`, legacy `X.Y.Z-dev.N`, or new `X.Y.Z-dev`). Triple first; `-dev` is below same-triple stable. */
 export function compareDevChannelVersions(
   left: unknown,
   right: unknown,
@@ -24,14 +24,18 @@ export function isMonotonicDevChannelUpdate(
   target: unknown,
 ): MonotonicResult;
 
-/** Resolves a `develop-vX.Y.Z-dev.N` tag to its prerelease version. */
+/** Resolves a `develop-vX.Y.Z-dev` tag to its prerelease version; rejects legacy `-dev.N` and plain tags. */
 export function resolveDevelopTag(tag: unknown): TagResolutionResult;
 
-/** Computes the next `X.Y.Z-dev.N` version for the dev channel. */
-export function computeNextDevVersion(input: {
-  baseVersion: unknown;
-  currentDevTag: unknown;
-}): TagResolutionResult;
+/**
+ * Computes the next `X.Y.(Z+k)-dev` version from the published `latest` triple
+ * and the current `dev` dist-tag value. Accepts positional `(latest,
+ * currentDev)` or object `{ latest, currentDev }` input.
+ */
+export function computeNextDevVersion(
+  latestOrInput: unknown,
+  currentDev?: unknown,
+): TagResolutionResult;
 
 /**
  * CLI entry point; returns the process exit code.

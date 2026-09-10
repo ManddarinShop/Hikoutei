@@ -1,9 +1,9 @@
 /**
  * Credential-free coverage for the service-account credential pool:
  *
- * - `nextPooledClientIndex`: the transport pool's deterministic round-robin
- *   cursor (0,1,...,N-1,0,...), with provider-admitted preferred indexes
- *   passing through WITHOUT skewing the fallback rotation.
+ * - `nextPooledClientIndex`: the shared credential pool's deterministic
+ *   round-robin cursor (0,1,...,N-1,0,...), with provider-admitted preferred
+ *   indexes passing through WITHOUT skewing the fallback rotation.
  * - Admission/transport index binding: the identity the admission paced
  *   against IS the identity the transport request is stamped with (and the
  *   telemetry event reports) — request-scoped, never skewed.
@@ -38,26 +38,27 @@ import {
   type CredentialPacingSlot,
   type GoogleSheetsApiProviderDeps,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/shared.js";
-import { ReceiptReadCursor } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/receiptCursor.js";
-import { createReadCalibration } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/readPlan.js";
+import { DEFAULT_QUOTA_GOVERNOR_TIMING, ReceiptReadCursor } from "@hikoutei/ikisaki";
+import type { PreflightReceipt } from "@hikoutei/sheets/sheets/providers/google-sheets-api/model/preflightContext.js";
+import { createReadCalibration } from "@hikoutei/ikisaki";
 import { readRows } from "@hikoutei/sheets/sheets/providers/google-sheets-api/operations/readRows.js";
-import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/rateLimiter.js";
+import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/ikisaki";
 import {
   QUOTA_GOVERNOR_LANES,
   QuotaPacingGovernor,
   RollingQuotaBudget,
-} from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/quotaGovernor.js";
+} from "@hikoutei/ikisaki";
 import {
   GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES,
   GoogleSheetsApiTransportError,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/errors.js";
-import {
-  nextPooledClientIndex,
-  type GoogleSheetsApiBatchUpdateRequest,
-  type GoogleSheetsApiGetSpreadsheetRequest,
-  type GoogleSheetsApiTransport,
-  type GoogleSheetsApiValuesGetRequest,
-  type GoogleSheetsApiValuesGetResponse,
+import { nextPooledClientIndex } from "@hikoutei/google-auth/auth/serviceAccountAuthPool.js";
+import type {
+  GoogleSheetsApiBatchUpdateRequest,
+  GoogleSheetsApiGetSpreadsheetRequest,
+  GoogleSheetsApiTransport,
+  GoogleSheetsApiValuesGetRequest,
+  GoogleSheetsApiValuesGetResponse,
 } from "@hikoutei/sheets/sheets/providers/google-sheets-api/transport/googleSheetsApiTransport.js";
 import { HIKOUTEI_ERROR_CODES } from "../src/index.js";
 import {
@@ -271,7 +272,7 @@ function makePooledDeps(
     definitions: [SYSTEM_DEFINITION],
     transport,
     receiptInitLock: new PromiseTailLock(),
-    receiptReadCursor: new ReceiptReadCursor(),
+    receiptReadCursor: new ReceiptReadCursor<PreflightReceipt>(),
     sheetRowBounds: new Map<string, number>(),
     readCalibration: createReadCalibration(),
     readTimeoutMs: 60_000,
@@ -281,6 +282,7 @@ function makePooledDeps(
     readBudget: slots[0]!.readBudget,
     writeBudget: slots[0]!.writeBudget,
     quotaGovernor: slots[0]!.quotaGovernor,
+    timingDefaults: DEFAULT_QUOTA_GOVERNOR_TIMING,
     maxRequestStartWaitMs: 5_000,
     credentialPacing: pool,
     now,

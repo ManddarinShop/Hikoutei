@@ -932,6 +932,7 @@ function createEffect(
   return {
     effectId: `effect-${suffix}`,
     effectKind: "system_projection",
+    dispatchClass: "fast-append",
     commitId: `commit-${suffix}`,
     logicalSheetId: "logical-recovery",
     physicalSheetId: "physical-recovery",
@@ -990,6 +991,7 @@ function createFollower(suffix = "stream"): NewEffect {
   return {
     effectId: `effect-${suffix}-follower`,
     effectKind: "system_projection",
+    dispatchClass: "regular",
     commitId: `commit-${suffix}-follower`,
     logicalSheetId: "logical-recovery",
     physicalSheetId: "physical-recovery",

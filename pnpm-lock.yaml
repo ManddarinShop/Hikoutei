@@ -15,8 +15,8 @@ importers:
         specifier: ^14.0.0
         version: 14.0.0
       '@hikoutei/ikisaki':
-        specifier: 0.1.13
-        version: link:packages/ikisaki
+        specifier: 0.1.16
+        version: link:packages/protocol/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
         version: 0.1.0
@@ -29,19 +29,22 @@ importers:
     devDependencies:
       '@hikoutei/composition':
         specifier: 0.1.0
-        version: link:packages/composition
+        version: link:packages/library/core/composition
       '@hikoutei/contracts':
         specifier: 0.1.0
-        version: link:packages/contracts
+        version: link:packages/library/core/contracts
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:packages/library/cloud/google-auth
       '@hikoutei/sheets':
         specifier: 0.1.0
-        version: link:packages/sheets
+        version: link:packages/library/cloud/sheets
       '@hikoutei/storage':
         specifier: 0.1.0
-        version: link:packages/storage
+        version: link:packages/library/core/storage
       '@hikoutei/sync-engine':
         specifier: 0.1.0
-        version: link:packages/sync-engine
+        version: link:packages/library/core/sync-engine
       '@mikro-orm/core':
         specifier: 7.1.7
         version: 7.1.7
@@ -64,7 +67,7 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@20.19.43)
 
-  packages/cli:
+  packages/library/cloud/cli:
     dependencies:
       '@googleapis/drive':
         specifier: ^21.0.0
@@ -74,26 +77,80 @@ importers:
         version: 14.0.0
       '@hikoutei/sync-engine':
         specifier: 0.1.0
-        version: link:../sync-engine
+        version: link:../../core/sync-engine
       google-auth-library:
         specifier: ^11.0.0
         version: 11.0.0
       hikoutei:
-        specifier: 0.10.0
-        version: link:../..
+        specifier: 0.10.24-dev
+        version: link:../../../..
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
 
-  packages/composition:
+  packages/library/cloud/docs:
+    dependencies:
+      '@googleapis/docs':
+        specifier: ^10.0.0
+        version: 10.0.0
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:../google-auth
+      '@hikoutei/ikisaki':
+        specifier: 0.1.16
+        version: link:../../../protocol/ikisaki
+      google-auth-library:
+        specifier: ^11.0.0
+        version: 11.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/library/cloud/google-auth:
+    dependencies:
+      google-auth-library:
+        specifier: ^11.0.0
+        version: 11.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/library/cloud/sheets:
+    dependencies:
+      '@googleapis/sheets':
+        specifier: ^14.0.0
+        version: 14.0.0
+      '@hikoutei/contracts':
+        specifier: 0.1.0
+        version: link:../../core/contracts
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:../google-auth
+      '@hikoutei/ikisaki':
+        specifier: 0.1.16
+        version: link:../../../protocol/ikisaki
+      google-auth-library:
+        specifier: ^11.0.0
+        version: 11.0.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/library/core/composition:
     dependencies:
       '@hikoutei/contracts':
         specifier: 0.1.0
         version: link:../contracts
       '@hikoutei/sheets':
         specifier: 0.1.0
-        version: link:../sheets
+        version: link:../../cloud/sheets
       '@hikoutei/storage':
         specifier: 0.1.0
         version: link:../storage
@@ -105,8 +162,11 @@ importers:
         specifier: ^24.0.0
         version: 24.13.3
 
-  packages/contracts:
+  packages/library/core/contracts:
     dependencies:
+      '@hikoutei/ikisaki':
+        specifier: 0.1.16
+        version: link:../../../protocol/ikisaki
       '@hikoutei/kohkai':
         specifier: 0.1.0
         version: 0.1.0
@@ -118,7 +178,42 @@ importers:
         specifier: ^24.0.0
         version: 24.13.3
 
-  packages/ikisaki:
+  packages/library/core/storage:
+    dependencies:
+      '@hikoutei/contracts':
+        specifier: 0.1.0
+        version: link:../contracts
+      '@hikoutei/ikisaki':
+        specifier: 0.1.16
+        version: link:../../../protocol/ikisaki
+      '@hikoutei/sheets':
+        specifier: 0.1.0
+        version: link:../../cloud/sheets
+      '@mikro-orm/core':
+        specifier: 7.1.7
+        version: 7.1.7
+      '@mikro-orm/sql':
+        specifier: 7.1.7
+        version: 7.1.7(@mikro-orm/core@7.1.7)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/library/core/sync-engine:
+    dependencies:
+      '@hikoutei/contracts':
+        specifier: 0.1.0
+        version: link:../contracts
+      '@hikoutei/google-auth':
+        specifier: 0.1.0
+        version: link:../../cloud/google-auth
+      '@hikoutei/ikisaki':
+        specifier: 0.1.16
+        version: link:../../../protocol/ikisaki
+      '@hikoutei/storage':
+        specifier: 0.1.0
+        version: link:../storage
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -136,61 +231,14 @@ importers:
         specifier: ^1.0.0
         version: 1.30.0(zod@4.4.3)
       hikoutei:
-        specifier: 0.10.0
+        specifier: 0.10.24-dev
         version: link:../..
 
-  packages/sheets:
+  packages/protocol/ikisaki:
     dependencies:
-      '@googleapis/sheets':
-        specifier: ^14.0.0
-        version: 14.0.0
-      '@hikoutei/contracts':
-        specifier: 0.1.0
-        version: link:../contracts
-      '@hikoutei/sync-engine':
-        specifier: 0.1.0
-        version: link:../sync-engine
-      google-auth-library:
-        specifier: ^11.0.0
-        version: 11.0.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
-    devDependencies:
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/storage:
-    dependencies:
-      '@hikoutei/contracts':
-        specifier: 0.1.0
-        version: link:../contracts
-      '@hikoutei/ikisaki':
-        specifier: 0.1.13
-        version: link:../ikisaki
-      '@mikro-orm/core':
-        specifier: 7.1.7
-        version: 7.1.7
-      '@mikro-orm/sql':
-        specifier: 7.1.7
-        version: 7.1.7(@mikro-orm/core@7.1.7)
-    devDependencies:
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-
-  packages/sync-engine:
-    dependencies:
-      '@hikoutei/contracts':
-        specifier: 0.1.0
-        version: link:../contracts
-      '@hikoutei/ikisaki':
-        specifier: 0.1.13
-        version: link:../ikisaki
-      '@hikoutei/storage':
-        specifier: 0.1.0
-        version: link:../storage
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -344,6 +392,10 @@ packages:
     engines: {node: '>=12'}
     cpu: [x64]
     os: [win32]
+
+  '@googleapis/docs@10.0.0':
+    resolution: {integrity: sha512-5ioOb5THY9McFIYBPUNG3T/jVsx+1XIdmox5D+2irPRU7nphzfzU/DUfMWDeVcXRP2eNBCq7tRj8Yk5hSVOP4g==}
+    engines: {node: '>=12.0.0'}
 
   '@googleapis/drive@21.0.0':
     resolution: {integrity: sha512-vebQpAqn+FZcmDWh1TEQTcYdkKftcSaHc7kO2ZxrINBb+ZMcFu1UybD3+maeqdLs60HrRDYwyzJ6TgZ7/Vn2Rg==}
@@ -1926,6 +1978,12 @@ snapshots:
 
   '@esbuild/win32-x64@0.21.5':
     optional: true
+
+  '@googleapis/docs@10.0.0':
+    dependencies:
+      googleapis-common: 8.0.3
+    transitivePeerDependencies:
+      - supports-color
 
   '@googleapis/drive@21.0.0':
     dependencies:

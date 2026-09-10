@@ -5,6 +5,9 @@
 # (hikoutei) until P8-D2 physically moves components into packages/.
 packages:
   - packages/*
+  - packages/protocol/*
+  - packages/library/cloud/*
+  - packages/library/core/*
 
 # vitest depends on esbuild, whose postinstall downloads the platform
 # binary. pnpm blocks lifecycle scripts by default; allow esbuild so vitest

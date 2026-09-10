@@ -42,8 +42,9 @@ import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   openSyncConflictAuditProjectionFields,
   resolvedSyncConflictAuditProjectionFields,
+  SYNC_CONFLICT_PROJECTION_ERROR_CODES,
   SYNC_CONFLICT_RESOLUTIONS,
-} from "@hikoutei/storage/sync/sheetsContract/conflictProjection.js";
+} from "@hikoutei/contracts/sheets/model/conflictProjection.js";
 import {
   computeSyncVisibleHash,
   parseSyncProjectionEffectPayload,
@@ -1916,36 +1917,36 @@ describe("issue #196 audit projection state union", () => {
     });
   });
 
-  it("rejects malformed audit state combinations with the structured storage error", () => {
+  it("rejects malformed audit state combinations with the structured projection error", () => {
     // Unresolved conflicts must never carry a command identity: the shared
     // materializer would otherwise emit a nonblank Resolution_Command_ID.
     expect(() => openSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.OPEN, presentValue("sync:system-wins:conflict-proj:1:3")),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     expect(() => openSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.NEEDS_REBASE, presentValue("sync:system-wins:conflict-proj:1:3")),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     // RESOLVED cannot be projected as unresolved, with or without identity.
     expect(() => openSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.RESOLVED, absentValue()),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     // RESOLVED as resolved requires the applied command identity.
     expect(() => resolvedSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.RESOLVED, absentValue()),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
     // A non-RESOLVED conflict can never be projected as resolved.
     expect(() => resolvedSyncConflictAuditProjectionFields(
       auditConflict(CONFLICT_STATUSES.OPEN, presentValue("sync:system-wins:conflict-proj:1:3")),
     )).toThrowError(expect.objectContaining({
-      code: STORAGE_ERROR_CODES.RESOLUTION_STORAGE_INCONSISTENT,
+      code: SYNC_CONFLICT_PROJECTION_ERROR_CODES.INCONSISTENT_AUDIT_STATE,
     }));
   });
 });
@@ -2085,8 +2086,8 @@ describe("issue #196 audit projection state union", () => {
     // and the new evidence columns start NULL (never guessed).
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 5,
-      toVersion: 8,
-      appliedVersions: [6, 7, 8],
+      toVersion: 9,
+      appliedVersions: [6, 7, 8, 9],
     });
     await expect(adapter.read(({ sql }) => sql.all<{ readonly name: string }>(
       "PRAGMA table_info(sync_conflict)",
@@ -2117,8 +2118,8 @@ describe("issue #196 audit projection state union", () => {
 
     // Idempotent: a second migration applies nothing.
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
-      fromVersion: 8,
-      toVersion: 8,
+      fromVersion: 9,
+      toVersion: 9,
       appliedVersions: [],
     });
 
@@ -2169,8 +2170,8 @@ describe("issue #196 audit projection state union", () => {
     // The v5→v6→v7 multi-hop migration still reports both applied versions.
     await expect(migrateMikroOrmSqliteStorageSchema(adapter)).resolves.toEqual({
       fromVersion: 5,
-      toVersion: 8,
-      appliedVersions: [6, 7, 8],
+      toVersion: 9,
+      appliedVersions: [6, 7, 8, 9],
     });
 
     // The repair columns (and their data) are gone for good.

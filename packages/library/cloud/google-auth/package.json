@@ -1,0 +1,44 @@
+{
+  "name": "@hikoutei/google-auth",
+  "version": "0.1.0",
+  "description": "Shared Google service-account authentication leaf for the Hikoutei typed repository: key-file loading plus the credential-pool ownership reused by the Sheets/Drive/Gmail providers (Batch A).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ManddarinShop/Hikoutei.git",
+    "directory": "packages/library/cloud/google-auth"
+  },
+  "bugs": {
+    "type": "git",
+    "url": "https://github.com/ManddarinShop/Hikoutei/issues"
+  },
+  "homepage": "https://github.com/ManddarinShop/Hikoutei#readme",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    "./*.js": {
+      "types": "./dist/packages/library/cloud/google-auth/src/*.d.ts",
+      "import": "./dist/packages/library/cloud/google-auth/src/*.js"
+    },
+    "./*": {
+      "types": "./dist/packages/library/cloud/google-auth/src/*.d.ts",
+      "import": "./dist/packages/library/cloud/google-auth/src/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "google-auth-library": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

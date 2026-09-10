@@ -96,12 +96,20 @@ describe("normalizeStableBaseVersion", () => {
       status: "valid",
       version: "0.9.31",
     });
+    expect(normalizeStableBaseVersion("0.10.2-dev")).toStrictEqual({
+      status: "valid",
+      version: "0.10.2",
+    });
   });
 
   it("keeps large numeric components exact", () => {
     expect(normalizeStableBaseVersion("9007199254740993.0.0-dev.1")).toStrictEqual({
       status: "valid",
       version: "9007199254740993.0.0",
+    });
+    expect(normalizeStableBaseVersion("9007199254740993.0.1-dev")).toStrictEqual({
+      status: "valid",
+      version: "9007199254740993.0.1",
     });
   });
 
@@ -161,6 +169,15 @@ describe("parseNpmViewDistTagResult", () => {
       status: "found",
       version: "0.9.31-dev.10",
     });
+    // The new bare `-dev` form parses in both JSON and plain output.
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: '"0.10.1-dev"\n', stderr: "" })).toStrictEqual({
+      status: "found",
+      version: "0.10.1-dev",
+    });
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: "0.10.2-dev\n", stderr: "" })).toStrictEqual({
+      status: "found",
+      version: "0.10.2-dev",
+    });
   });
 
   it("accepts an absent tag or package as an empty channel", () => {
@@ -189,7 +206,7 @@ describe("parseNpmViewDistTagResult", () => {
     // Regression for the develop-version base probe: a nonempty JSON string
     // used to count as `found` even when it was not a channel version, so
     // the downstream --monotonic compare received garbage.
-    for (const stdout of ['"next"\n', '"0.9.31-beta.1"\n', '"v1.2.3"\n', '"0.9"\n']) {
+    for (const stdout of ['"next"\n', '"0.9.31-beta.1"\n', '"v1.2.3"\n', '"0.9"\n', '"0.10.1.dev"\n']) {
       expect(parseNpmViewDistTagResult({ status: 0, stdout, stderr: "" })).toMatchObject({
         status: "failed",
         code: "invalid_npm_view_output",
@@ -203,10 +220,14 @@ describe("parseNpmViewDistTagResult", () => {
         code: "invalid_npm_view_output",
       });
     }
-    // The plain-value fallback still accepts both valid channel forms.
+    // The plain-value fallback still accepts all valid channel forms.
     expect(parseNpmViewDistTagResult({ status: 0, stdout: "0.3.1\n", stderr: "" })).toStrictEqual({
       status: "found",
       version: "0.3.1",
+    });
+    expect(parseNpmViewDistTagResult({ status: 0, stdout: "0.10.1-dev\n", stderr: "" })).toStrictEqual({
+      status: "found",
+      version: "0.10.1-dev",
     });
   });
 });
@@ -239,10 +260,17 @@ describe("release-version CLI", () => {
     expect(result.stderr).toContain("release-version:invalid_bump:");
   });
 
-  it("normalizes a dev prerelease base for the main stable workflow", () => {
+  it("normalizes a legacy dev prerelease base for the main stable workflow", () => {
     const result = run("--normalize-base=0.9.31-dev.7");
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("0.9.31\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("normalizes a -dev base for the main stable workflow", () => {
+    const result = run("--normalize-base=0.10.2-dev");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("0.10.2\n");
     expect(result.stderr).toBe("");
   });
 

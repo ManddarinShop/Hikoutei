@@ -21,11 +21,11 @@ const PACKAGE_SRC = {
   // entity-descriptor registry moved into @hikoutei/contracts, and a src
   // engine/storage graph reaching it through node_modules (its dist) would
   // split the WeakMap/registry identity from the source-loaded harness.
-  "@hikoutei/contracts": "../../packages/contracts",
-  "@hikoutei/storage": "../../packages/storage",
-  "@hikoutei/sheets": "../../packages/sheets",
-  "@hikoutei/sync-engine": "../../packages/sync-engine",
-  "@hikoutei/composition": "../../packages/composition",
+  "@hikoutei/contracts": "../../packages/library/core/contracts",
+  "@hikoutei/storage": "../../packages/library/core/storage",
+  "@hikoutei/sheets": "../../packages/library/cloud/sheets",
+  "@hikoutei/sync-engine": "../../packages/library/core/sync-engine",
+  "@hikoutei/composition": "../../packages/library/core/composition",
 };
 
 export async function resolve(specifier, context, nextResolve) {

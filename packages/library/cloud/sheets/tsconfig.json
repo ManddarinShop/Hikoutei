@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // Batch E: the provider's internal-log imports resolve to the contracts
+    // leaf's shared/observability modules through the workspace link (built
+    // contracts dist, no source map needed). rootDir spans the repo
+    // for the storage package's reached-in source emission, which is never
+    // bundled or shipped.
+    "rootDir": "../../../..",
+    "outDir": "dist",
+    "baseUrl": "../../../..",
+    "paths": {
+      "@hikoutei/storage/*": ["packages/library/core/storage/src/*"],
+      "@hikoutei/sheets/*": ["packages/library/cloud/sheets/src/*"]
+    },
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

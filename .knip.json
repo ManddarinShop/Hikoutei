@@ -13,7 +13,7 @@
         "scripts/**/*.{ts,mts,mjs}"
       ]
     },
-    "packages/ikisaki": {
+    "packages/protocol/ikisaki": {
       "entry": [
         "test/**/*.ts"
       ],
@@ -27,7 +27,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/storage": {
+    "packages/library/core/storage": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -35,7 +35,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/sheets": {
+    "packages/library/cloud/sheets": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -43,7 +43,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/sync-engine": {
+    "packages/library/core/sync-engine": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -51,7 +51,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/composition": {
+    "packages/library/core/composition": {
       "entry": [
         "src/**/*.ts"
       ],
@@ -59,7 +59,7 @@
         "src/**/*.ts"
       ]
     },
-    "packages/cli": {
+    "packages/library/cloud/cli": {
       "entry": [
         "src/**/*.ts"
       ],

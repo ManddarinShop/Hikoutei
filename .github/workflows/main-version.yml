@@ -10,7 +10,6 @@ on:
     paths-ignore:
       - '.github/**'
       - 'docs/**'
-      - 'website/**'
       - 'README.md'
 
 concurrency:
@@ -83,11 +82,12 @@ jobs:
         run: |
           set -euo pipefail
           # A develop→main merge can leave the committed manifest carrying an
-          # `X.Y.Z-dev.N` prerelease; the stable train releases its numeric
-          # base, so normalize the dev suffix here BEFORE the strict minor
-          # bump. release-version.mjs's bump path stays numeric-only; the
-          # --normalize-base mode is a separate unit-tested helper call and
-          # fails closed on foreign prerelease/build metadata.
+          # `X.Y.Z-dev.N` (legacy) or `X.Y.Z-dev` (current) prerelease; the
+          # stable train releases its numeric base, so normalize the dev suffix
+          # here BEFORE the strict minor bump. release-version.mjs's bump path
+          # stays numeric-only; the --normalize-base mode is a separate
+          # unit-tested helper call and fails closed on foreign
+          # prerelease/build metadata.
           base_version="$(node scripts/ci/release-version.mjs \
             --normalize-base="$(node -p "require('./package.json').version")")"
           next_version="$(node scripts/ci/release-version.mjs \
@@ -101,7 +101,7 @@ jobs:
           node -e '
             const fs = require("node:fs");
             const next = process.argv[1];
-            for (const rel of ["./packages/cli/package.json", "./packages/mcp/package.json"]) {
+            for (const rel of ["./packages/library/cloud/cli/package.json", "./packages/mcp/package.json"]) {
               const pkg = JSON.parse(fs.readFileSync(rel, "utf8"));
               pkg.dependencies["hikoutei"] = next;
               fs.writeFileSync(rel, JSON.stringify(pkg, null, 2) + "\n");
@@ -129,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only | sort)"
-          expected=$'package-lock.json\npackage.json\npackages/cli/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
+          expected=$'package-lock.json\npackage.json\npackages/library/cloud/cli/package.json\npackages/mcp/package.json\npnpm-lock.yaml'
           if [[ "$changed" != "$expected" ]]; then
             printf 'unexpected version bump files:\n%s\n' "$changed" >&2
             exit 1
@@ -143,7 +143,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json packages/cli/package.json packages/mcp/package.json pnpm-lock.yaml
+          git add package.json package-lock.json packages/library/cloud/cli/package.json packages/mcp/package.json pnpm-lock.yaml
           git commit -m "chore(release): bump stable version to $RELEASE_VERSION"
           git tag -a "v$RELEASE_VERSION" \
             -m "chore(release): stable $RELEASE_VERSION"

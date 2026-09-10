@@ -26,7 +26,7 @@
  */
 
 import type { Hikoutei } from "./Hikoutei.js";
-import type { HikouteiEntity } from "./entity.js";
+import type { HikouteiDescriptorFile, HikouteiEntity } from "./entity.js";
 
 /** One entity's existing-sheet adoption request (design D1/D4). */
 export interface AdoptEntitySpec {
@@ -150,6 +150,13 @@ export type TypedSheetsWithSyncResult =
 export interface CreateTypedSheetsWithSyncOptions {
   readonly dbName: string;
   readonly entities: readonly HikouteiEntity[];
+  /**
+   * File-form entity descriptors (e.g. from `infer --emit desc.json`),
+   * built through the same `defineTypedSheetsEntity` builder and appended
+   * after `entities`. Shares the `CreateTypedSheetsOptions.descriptors`
+   * contract.
+   */
+  readonly descriptors?: readonly HikouteiDescriptorFile[];
   readonly env?: Readonly<Record<string, string | undefined>>;
   // Public API diagnostic type — literal level union is the external contract, not an internalLog emission site.
   readonly onDiagnostic?: (level: "info" | "error", message: string) => void;
@@ -178,13 +185,18 @@ export async function createTypedSheetsWithSync(
   options: CreateTypedSheetsWithSyncOptions,
 ): Promise<TypedSheetsWithSyncResult> {
   // Lazy import: the sync module graph loads only when sync actually starts.
-  // P8-C: routed through the composition root (see packages/composition/src/index.ts).
+  // P8-C: routed through the composition root (see packages/library/core/composition/src/index.ts).
+  // Lazy import: the sync module graph loads only when sync actually starts.
+  // P8-C: routed through the composition root (see packages/library/core/composition/src/index.ts).
+  // File-form descriptors ride through to the bridge, which builds them via
+  // the same `defineTypedSheetsEntity` builder as `createTypedSheets()`.
   const { createTypedSheetsWithSync: bridge } = await import(
     "@hikoutei/composition/syncAutoStart.js"
   );
   const result = await bridge({
     dbName: options.dbName,
     entities: [...options.entities],
+    ...(options.descriptors === undefined ? {} : { descriptors: [...options.descriptors] }),
     // Contract (see CreateTypedSheetsWithSyncOptions): env defaults to
     // `process.env`, read at call time — exactly like `createTypedSheets()`
     // in Hikoutei.ts. Omitting the forward would starve the autostart bridge
