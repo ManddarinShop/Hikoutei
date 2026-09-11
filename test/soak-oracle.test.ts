@@ -51,7 +51,9 @@ function seededOracle() {
   return oracle;
 }
 
+// Verifies the soak oracle: mutation semantics suite.
 describe("soak oracle: mutation semantics", () => {
+  // Verifies: tracks insert/update/delete with string-key identity.
   it("tracks insert/update/delete with string-key identity", () => {
     const oracle = seededOracle();
     expect(oracle.size("SoakTask")).toBe(3);
@@ -69,6 +71,7 @@ describe("soak oracle: mutation semantics", () => {
     expect(oracle.row("SoakTask", "t-3")).toBeUndefined();
   });
 
+  // Verifies: rejects duplicate inserts (deterministic failure, never silent).
   it("rejects duplicate inserts (deterministic failure, never silent)", () => {
     const oracle = seededOracle();
     expect(() => oracle.applyMutation({
@@ -78,6 +81,7 @@ describe("soak oracle: mutation semantics", () => {
     })).toThrow(/duplicate insert/);
   });
 
+  // Verifies: replace upserts: inserts a brand-new id instead of skipping it.
   it("replace upserts: inserts a brand-new id instead of skipping it", () => {
     // Regression: forkIsolation creates a NEW row and records it as
     // `replace`; a skip-on-missing implementation desyncs the oracle from
@@ -103,6 +107,7 @@ describe("soak oracle: mutation semantics", () => {
     expect(oracle.row("SoakTask", "t-1")?.title).toBe("alpha2");
   });
 
+  // Verifies: rejects unknown entities and mutations loudly.
   it("rejects unknown entities and mutations loudly", () => {
     const oracle = seededOracle();
     expect(() => oracle.size("SoakGhost")).toThrow(/unknown oracle entity/);
@@ -112,7 +117,9 @@ describe("soak oracle: mutation semantics", () => {
   });
 });
 
+// Verifies the soak oracle: query semantics suite.
 describe("soak oracle: query semantics", () => {
+  // Verifies: applies equality, inequality, ordered, and in/nin operators.
   it("applies equality, inequality, ordered, and in/nin operators", () => {
     const oracle = seededOracle();
     expect(oracle.query("SoakTask", { where: { priority: { gt: 15 } } }).total).toBe(2);
@@ -123,6 +130,7 @@ describe("soak oracle: query semantics", () => {
     expect(oracle.query("SoakTask", { where: { priority: { nin: [10] } } }).total).toBe(2);
   });
 
+  // Verifies: mirrors the normalizer null semantics on nullable fields.
   it("mirrors the normalizer null semantics on nullable fields", () => {
     const oracle = seededOracle();
     // eq:null matches only rows whose value is null.
@@ -135,6 +143,7 @@ describe("soak oracle: query semantics", () => {
     expect(oracle.query("SoakTask", { where: { tag: { nin: ["x"] } } }).total).toBe(2);
   });
 
+  // Verifies: mirrors the normalizer is_not_null semantics for null operands.
   it("mirrors the normalizer is_not_null semantics for null operands", () => {
     const oracle = seededOracle();
     // Regression: ne:null and nin containing null map to is_not_null in the
@@ -155,6 +164,7 @@ describe("soak oracle: query semantics", () => {
     }).ids).toEqual(["t-2"]);
   });
 
+  // Verifies: evaluates string-only like with SQLite wildcard semantics.
   it("evaluates string-only like with SQLite wildcard semantics", () => {
     const oracle = seededOracle();
     expect(oracle.query("SoakTask", { where: { title: { like: "%ph%" } } }).total).toBe(1);
@@ -166,6 +176,7 @@ describe("soak oracle: query semantics", () => {
     expect(sqlLikeMatch("alpha", "b%")).toBe(false);
   });
 
+  // Verifies: orders by the requested fields with the primary-key tiebreaker.
   it("orders by the requested fields with the primary-key tiebreaker", () => {
     const oracle = seededOracle();
     const asc = oracle.query("SoakTask", { orderBy: { priority: "asc" } });
@@ -176,6 +187,7 @@ describe("soak oracle: query semantics", () => {
     expect(pkOnly.ids).toEqual(["t-3", "t-2", "t-1"]);
   });
 
+  // Verifies: applies limit/offset paging with limit 0 and out-of-range offsets.
   it("applies limit/offset paging with limit 0 and out-of-range offsets", () => {
     const oracle = seededOracle();
     expect(oracle.query("SoakTask", { limit: 0 }).ids).toEqual([]);
@@ -185,6 +197,7 @@ describe("soak oracle: query semantics", () => {
     expect(oracle.query("SoakTask", { limit: 1 }).total).toBe(3);
   });
 
+  // Verifies: rejects unknown filter fields and empty orderBy.
   it("rejects unknown filter fields and empty orderBy", () => {
     const oracle = seededOracle();
     expect(() => oracle.query("SoakTask", { where: { ghost: 1 } })).toThrow(/unknown filter field/);
