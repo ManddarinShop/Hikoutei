@@ -62,7 +62,9 @@ const SYMLINK_SUPPORTED = (() => {
   }
 })();
 
+// Verifies the soak artifacts: writer and log collection suite.
 describe("soak artifacts: writer and log collection", () => {
+  // Verifies: writes artifacts into the output dir and collects rotated internal logs.
   it("writes artifacts into the output dir and collects rotated internal logs", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "soak-artifacts-"));
     try {
@@ -88,6 +90,7 @@ describe("soak artifacts: writer and log collection", () => {
     }
   });
 
+  // Verifies: resetRunArtifacts removes only runner-owned JSONL, SQLite, and resume documents.
   it("resetRunArtifacts removes only runner-owned JSONL, SQLite, and resume documents", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "soak-artifacts-"));
     try {
@@ -127,6 +130,7 @@ describe("soak artifacts: writer and log collection", () => {
     }
   });
 
+  // Verifies: writeCheckpoint writes the marker atomically (temp file + rename).
   it("writeCheckpoint writes the marker atomically (temp file + rename)", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "soak-artifacts-"));
     try {
@@ -155,6 +159,7 @@ describe("soak artifacts: writer and log collection", () => {
     }
   });
 
+  // Verifies: never follows pre-existing symlinks at JSONL, JSON, checkpoint, markdown, or temp paths.
   it(
     "never follows pre-existing symlinks at JSONL, JSON, checkpoint, markdown, or temp paths",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -255,6 +260,7 @@ describe("soak artifacts: writer and log collection", () => {
     },
   );
 
+  // Verifies: claims unique exclusive staging names: planted symlinks can never redirect an atomic write.
   it(
     "claims unique exclusive staging names: planted symlinks can never redirect an atomic write",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -340,6 +346,7 @@ describe("soak artifacts: writer and log collection", () => {
     },
   );
 
+  // Verifies: resetRunArtifacts unlinks runner-owned staging and SQLite symlinks without touching their targets.
   it(
     "resetRunArtifacts unlinks runner-owned staging and SQLite symlinks without touching their targets",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -400,6 +407,7 @@ describe("soak artifacts: writer and log collection", () => {
     },
   );
 
+  // Verifies: collects a custom --log-file and its rotated backups, oldest first.
   it("collects a custom --log-file and its rotated backups, oldest first", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "soak-artifacts-"));
     const dir = path.join(root, "run");
@@ -441,6 +449,7 @@ describe("soak artifacts: writer and log collection", () => {
     }
   });
 
+  // Verifies: treats a blank log path as disabled: collection is empty and reset clears nothing.
   it("treats a blank log path as disabled: collection is empty and reset clears nothing", async () => {
     // Regression (Luna review): a blank/whitespace HIKOUTEI_LOG_FILE means
     // the library logger is DISABLED — it must never be trimmed into an
@@ -470,6 +479,7 @@ describe("soak artifacts: writer and log collection", () => {
     }
   });
 
+  // Verifies: never reads or deletes through a symlinked log directory or file escaping the output dir.
   it(
     "never reads or deletes through a symlinked log directory or file escaping the output dir",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -528,6 +538,7 @@ describe("soak artifacts: writer and log collection", () => {
     },
   );
 
+  // Verifies: replaces a pre-existing symlink at collected-log.txt instead of writing through it.
   it(
     "replaces a pre-existing symlink at collected-log.txt instead of writing through it",
     // Skipped only when the platform/filesystem cannot create symlinks
