@@ -1,3 +1,8 @@
+/**
+ * stable encode tests. Covers stable encoding errors; raises a structured error for an invalid date; raises a structured error for a non-finite number.
+ *
+ * Exercises the behavior through fake providers and SQLite fixtures with no live credentials.
+ */
 import { describe, expect, it } from "vitest";
 import {
   NORMALIZED_CELL_KINDS,
@@ -6,7 +11,9 @@ import {
 import { stableEncode } from "@hikoutei/contracts/encoding/stableEncode.js";
 import { StableEncodingError } from "@hikoutei/contracts/domain/errors/index.js";
 
+// Covers: stable encoding errors.
 describe("stable encoding errors", () => {
+  // Verifies: raises a structured error for an invalid date.
   it("raises a structured error for an invalid date", () => {
     let thrown: unknown;
     try {
@@ -22,6 +29,7 @@ describe("stable encoding errors", () => {
     });
   });
 
+  // Verifies: raises a structured error for a non-finite number.
   it("raises a structured error for a non-finite number", () => {
     let thrown: unknown;
     try {
