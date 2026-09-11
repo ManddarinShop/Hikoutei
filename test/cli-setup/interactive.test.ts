@@ -70,6 +70,7 @@ import {
   failed,
 } from "../support/cliSetupHarness.js";
 
+// Covers promptLoginHandoff.
 describe("promptLoginHandoff", () => {
   function capturingOutput(): { output: { write: (text: string) => void }; text: () => string } {
     let text = "";
@@ -79,6 +80,7 @@ describe("promptLoginHandoff", () => {
     };
   }
 
+  // Verifies proceeds on Enter and whitespace-only input.
   it("proceeds on Enter and whitespace-only input", async () => {
     for (const answer of ["\n", "   \n", "\t\n"]) {
       const { output } = capturingOutput();
@@ -87,6 +89,7 @@ describe("promptLoginHandoff", () => {
     }
   });
 
+  // Verifies cancels on any other input.
   it("cancels on any other input", async () => {
     for (const answer of ["n\n", "no\n", "x\n", "cancel\n"]) {
       const result = await promptLoginHandoff({
@@ -97,6 +100,7 @@ describe("promptLoginHandoff", () => {
     }
   });
 
+  // Verifies cancels on end of input.
   it("cancels on end of input", async () => {
     const result = await promptLoginHandoff({
       input: Readable.from([]),
@@ -105,6 +109,7 @@ describe("promptLoginHandoff", () => {
     expect(result).toStrictEqual({ status: "cancel" });
   });
 
+  // Verifies writes the Enter-to-login prompt with the exact re-login command.
   it("writes the Enter-to-login prompt with the exact re-login command", async () => {
     const { output, text } = capturingOutput();
     await promptLoginHandoff({ input: Readable.from(["\n"]), output });
@@ -113,6 +118,7 @@ describe("promptLoginHandoff", () => {
   });
 });
 
+// Covers confirm + login shared stdin (real Readable)
 describe("confirm + login shared stdin (real Readable)", () => {
   /**
    * Regression: the old `for await (... of input) { ... return; }` prompt
@@ -135,6 +141,7 @@ describe("confirm + login shared stdin (real Readable)", () => {
     expect(login).toStrictEqual({ status: "proceed" });
   });
 
+  // Verifies declines/cancels cleanly when the shared Readable ends after the first chunk.
   it("declines/cancels cleanly when the shared Readable ends after the first chunk", async () => {
     const shared = Readable.from(["y\n"]);
     const confirm = await confirmSetup({
@@ -149,6 +156,7 @@ describe("confirm + login shared stdin (real Readable)", () => {
   });
 });
 
+// Covers createInteractiveLoginRunner.
 describe("createInteractiveLoginRunner", () => {
   /**
    * Fake spawner that records the login command/options and lets the test
@@ -200,6 +208,7 @@ describe("createInteractiveLoginRunner", () => {
     };
   }
 
+  // Verifies spawns gcloud auth login --enable-gdrive-access --force with inherited stdio.
   it("spawns gcloud auth login --enable-gdrive-access --force with inherited stdio", async () => {
     const { spawner, calls, emitExit } = recordingSpawner();
     const runner = createInteractiveLoginRunner(spawner);
@@ -213,6 +222,7 @@ describe("createInteractiveLoginRunner", () => {
     expect(await promise).toStrictEqual({ status: "ok" });
   });
 
+  // Verifies reports ok on a clean exit.
   it("reports ok on a clean exit", async () => {
     const { spawner, emitExit } = recordingSpawner();
     const runner = createInteractiveLoginRunner(spawner);
@@ -221,6 +231,7 @@ describe("createInteractiveLoginRunner", () => {
     expect(await promise).toStrictEqual({ status: "ok" });
   });
 
+  // Verifies reports failed with the exit code on a non-zero exit.
   it("reports failed with the exit code on a non-zero exit", async () => {
     const { spawner, emitExit } = recordingSpawner();
     const runner = createInteractiveLoginRunner(spawner);
@@ -229,6 +240,7 @@ describe("createInteractiveLoginRunner", () => {
     expect(await promise).toStrictEqual({ status: "failed", code: 1 });
   });
 
+  // Verifies reports not_found on ENOENT (gcloud missing)
   it("reports not_found on ENOENT (gcloud missing)", async () => {
     const { spawner, emitError } = recordingSpawner();
     const runner = createInteractiveLoginRunner(spawner);
@@ -238,6 +250,7 @@ describe("createInteractiveLoginRunner", () => {
     expect(result).toStrictEqual({ status: "not_found" });
   });
 
+  // Verifies reports spawn_error on any other spawn failure.
   it("reports spawn_error on any other spawn failure", async () => {
     const { spawner, emitError } = recordingSpawner();
     const runner = createInteractiveLoginRunner(spawner);
@@ -247,6 +260,7 @@ describe("createInteractiveLoginRunner", () => {
     expect(result).toStrictEqual({ status: "spawn_error" });
   });
 
+  // Verifies resolves once and ignores a later lifecycle event.
   it("resolves once and ignores a later lifecycle event", async () => {
     const { spawner, emitExit, emitError } = recordingSpawner();
     const runner = createInteractiveLoginRunner(spawner);
@@ -259,6 +273,7 @@ describe("createInteractiveLoginRunner", () => {
   });
 });
 
+// Covers runSetupCli — interactive login handoff.
 describe("runSetupCli — interactive login handoff", () => {
   /**
    * Fake stdin whose single shared iterator lets consecutive prompts
@@ -378,6 +393,7 @@ describe("runSetupCli — interactive login handoff", () => {
     };
   }
 
+  // Verifies retries exactly once after a successful login when Drive scope is missing (interactive TTY)
   it("retries exactly once after a successful login when Drive scope is missing (interactive TTY)", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(
@@ -406,6 +422,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stderrText()).toBe("");
   });
 
+  // Verifies retries exactly once for gcloud_not_logged_in too.
   it("retries exactly once for gcloud_not_logged_in too", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_NOT_LOGGED_IN, "no active gcloud account"),
@@ -426,6 +443,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(login.calls()).toBe(1);
   });
 
+  // Verifies does not login again when the retry still lacks Drive scope.
   it("does not login again when the retry still lacks Drive scope", async () => {
     const authError = errorResultOf(
       SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED,
@@ -450,6 +468,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stderrText()).toContain(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED);
   });
 
+  // Verifies maps a failed login to gcloud_login_failed without retrying setup.
   it("maps a failed login to gcloud_login_failed without retrying setup", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "drive scope missing"),
@@ -475,6 +494,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stderrText()).not.toContain(SECRET_AUTHORIZATION);
   });
 
+  // Verifies maps a not_found login to gcloud_login_failed pointing at install.
   it("maps a not_found login to gcloud_login_failed pointing at install", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_NOT_LOGGED_IN, "no active account"),
@@ -495,6 +515,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stderrText()).toContain("https://cloud.google.com/sdk");
   });
 
+  // Verifies maps a spawn_error login to gcloud_login_failed.
   it("maps a spawn_error login to gcloud_login_failed", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -514,6 +535,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stderrText()).toContain(SETUP_ERROR_CODES.GCLOUD_LOGIN_FAILED);
   });
 
+  // Verifies does not run the login subprocess when --yes is given.
   it("does not run the login subprocess when --yes is given", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -533,6 +555,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stderrText()).toContain(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED);
   });
 
+  // Verifies does not run the login subprocess in --dry-run.
   it("does not run the login subprocess in --dry-run", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -550,6 +573,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(setup.calls()).toBe(1);
   });
 
+  // Verifies does not run the login subprocess when stdin is not a TTY.
   it("does not run the login subprocess when stdin is not a TTY", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -567,6 +591,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(setup.calls()).toBe(1);
   });
 
+  // Verifies does not run the login subprocess when stdout is not a TTY.
   it("does not run the login subprocess when stdout is not a TTY", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -584,6 +609,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(setup.calls()).toBe(1);
   });
 
+  // Verifies does not run the login subprocess on a CI pseudo-TTY (no prompt, no retry)
   it("does not run the login subprocess on a CI pseudo-TTY (no prompt, no retry)", async () => {
     // CI runners allocate a pseudo-TTY, so `isTTY` alone is not a safe
     // gate: the handoff must also be refused when the session is an
@@ -608,6 +634,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(setup.calls()).toBe(1);
   });
 
+  // Verifies still offers the login handoff when isCi is absent (scripted tests, real TTY)
   it("still offers the login handoff when isCi is absent (scripted tests, real TTY)", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -628,6 +655,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(login.calls()).toBe(1);
   });
 
+  // Verifies cancels (no login, no retry) when the prompt gets non-Enter input.
   it("cancels (no login, no retry) when the prompt gets non-Enter input", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -647,6 +675,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stderrText()).toContain(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED);
   });
 
+  // Verifies cancels when the prompt reaches end of input.
   it("cancels when the prompt reaches end of input", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.GCLOUD_DRIVE_ACCESS_REQUIRED, "scope missing"),
@@ -664,6 +693,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(setup.calls()).toBe(1);
   });
 
+  // Verifies does not offer login when the failure is not an auth preflight error.
   it("does not offer login when the failure is not an auth preflight error", async () => {
     const setup = scriptedRunSetup([
       errorResultOf(SETUP_ERROR_CODES.KEY_CREATE_FAILED, "key create exploded"),
@@ -681,6 +711,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(setup.calls()).toBe(1);
   });
 
+  // Verifies prints the dry-run plan and does not login when the first run is a dry run.
   it("prints the dry-run plan and does not login when the first run is a dry run", async () => {
     const setup = scriptedRunSetup([dryRunResult()]);
     const { stdout, text: stdoutText } = capturingStdout(true);
@@ -698,6 +729,7 @@ describe("runSetupCli — interactive login handoff", () => {
     expect(stdoutText()).toContain("Hikoutei setup dry run");
   });
 
+  // Verifies aborts before running setup when confirmation is declined.
   it("aborts before running setup when confirmation is declined", async () => {
     const setup = scriptedRunSetup([okResult()]);
     const { stdout, text: stdoutText } = capturingStdout(true);
@@ -716,6 +748,7 @@ describe("runSetupCli — interactive login handoff", () => {
   });
 });
 
+// Covers runSetupCli — shared stdin finalization.
 describe("runSetupCli — shared stdin finalization", () => {
   /**
    * Regression for the release blocker: the confirmation and login-handoff
@@ -847,6 +880,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     return { stderr: { write: () => undefined } };
   }
 
+  // Verifies finalizes stdin exactly once after a successful login retry, after the login resolves.
   it("finalizes stdin exactly once after a successful login retry, after the login resolves", async () => {
     const events: string[] = [];
     const setup = scriptedRunSetup([authError, okResult()]);
@@ -876,6 +910,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     expect(events).toEqual(["login-resolved", "finalize"]);
   });
 
+  // Verifies finalizes stdin on success without any login.
   it("finalizes stdin on success without any login", async () => {
     const setup = scriptedRunSetup([okResult()]);
     const finalizer = recordingFinalizer();
@@ -893,6 +928,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     expect(finalizer.calls()).toBe(1);
   });
 
+  // Verifies finalizes stdin when the retry still lacks Drive scope.
   it("finalizes stdin when the retry still lacks Drive scope", async () => {
     const setup = scriptedRunSetup([authError, authError]);
     const finalizer = recordingFinalizer();
@@ -910,6 +946,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     expect(finalizer.calls()).toBe(1);
   });
 
+  // Verifies finalizes stdin when the interactive login fails.
   it("finalizes stdin when the interactive login fails", async () => {
     const setup = scriptedRunSetup([authError]);
     const finalizer = recordingFinalizer();
@@ -928,6 +965,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     expect(finalizer.calls()).toBe(1);
   });
 
+  // Verifies finalizes stdin when the handoff is cancelled.
   it("finalizes stdin when the handoff is cancelled", async () => {
     const setup = scriptedRunSetup([authError]);
     const finalizer = recordingFinalizer();
@@ -945,6 +983,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     expect(finalizer.calls()).toBe(1);
   });
 
+  // Verifies finalizes stdin when an auth error cannot be retried (--yes)
   it("finalizes stdin when an auth error cannot be retried (--yes)", async () => {
     const setup = scriptedRunSetup([authError]);
     const finalizer = recordingFinalizer();
@@ -962,6 +1001,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     expect(finalizer.calls()).toBe(1);
   });
 
+  // Verifies finalizes stdin when confirmation is declined.
   it("finalizes stdin when confirmation is declined", async () => {
     const setup = scriptedRunSetup([okResult()]);
     const finalizer = recordingFinalizer();
@@ -980,6 +1020,7 @@ describe("runSetupCli — shared stdin finalization", () => {
     expect(finalizer.calls()).toBe(1);
   });
 
+  // Verifies finalizes stdin on a path collision before confirmation.
   it("finalizes stdin on a path collision before confirmation", async () => {
     const setup = scriptedRunSetup([okResult()]);
     const finalizer = recordingFinalizer();
@@ -1002,6 +1043,7 @@ describe("runSetupCli — shared stdin finalization", () => {
   });
 });
 
+// Covers shared stdin async iterator — subprocess lifetime regression.
 describe("shared stdin async iterator — subprocess lifetime regression", () => {
   /**
    * Deterministic subprocess proof of the release blocker behind
@@ -1092,6 +1134,7 @@ process.stdin.destroy();
     });
   }
 
+  // Verifies an unfinalized shared stdin iterator keeps the process alive after work completes.
   it("an unfinalized shared stdin iterator keeps the process alive after work completes", async () => {
     const { outcome, exitedWhileOpen } = await runPatternChild(PATTERN_SCRIPT);
     expect(outcome.output).toContain("first:y");
@@ -1104,6 +1147,7 @@ process.stdin.destroy();
     expect(outcome.exitCode).toBeNull();
   });
 
+  // Verifies destroying the shared stdin (the production finalizer) lets the process exit.
   it("destroying the shared stdin (the production finalizer) lets the process exit", async () => {
     const { outcome, exitedWhileOpen } = await runPatternChild(PATTERN_SCRIPT_WITH_DESTROY);
     expect(outcome.output).toContain("work-done");
@@ -1112,11 +1156,14 @@ process.stdin.destroy();
   });
 });
 
+// Covers isModuleMainEntry.
 describe("isModuleMainEntry", () => {
+  // Verifies returns false for an undefined entry argument.
   it("returns false for an undefined entry argument", () => {
     expect(isModuleMainEntry(undefined, "file:///tmp/hikoutei-setup.js")).toBe(false);
   });
 
+  // Verifies returns true when the entry resolves to the module file.
   it("returns true when the entry resolves to the module file", () => {
     const dir = makeTempDir();
     const modulePath = join(dir, "setup.js");
@@ -1124,6 +1171,7 @@ describe("isModuleMainEntry", () => {
     expect(isModuleMainEntry(modulePath, pathToFileURL(modulePath).href)).toBe(true);
   });
 
+  // Verifies returns true when the entry is a symlink to the module file (npm bin)
   it("returns true when the entry is a symlink to the module file (npm bin)", () => {
     const dir = makeTempDir();
     const modulePath = join(dir, "setup.js");
@@ -1133,6 +1181,7 @@ describe("isModuleMainEntry", () => {
     expect(isModuleMainEntry(linkPath, pathToFileURL(modulePath).href)).toBe(true);
   });
 
+  // Verifies returns false when the entry is a different file.
   it("returns false when the entry is a different file", () => {
     const dir = makeTempDir();
     const modulePath = join(dir, "setup.js");
@@ -1142,6 +1191,7 @@ describe("isModuleMainEntry", () => {
     expect(isModuleMainEntry(otherPath, pathToFileURL(modulePath).href)).toBe(false);
   });
 
+  // Verifies returns false when the entry path does not exist.
   it("returns false when the entry path does not exist", () => {
     const dir = makeTempDir();
     const modulePath = join(dir, "setup.js");
@@ -1149,6 +1199,7 @@ describe("isModuleMainEntry", () => {
     expect(isModuleMainEntry(join(dir, "missing.js"), pathToFileURL(modulePath).href)).toBe(false);
   });
 
+  // Verifies returns false for a non-file module URL.
   it("returns false for a non-file module URL", () => {
     const dir = makeTempDir();
     const entry = join(dir, "setup.js");
@@ -1157,7 +1208,9 @@ describe("isModuleMainEntry", () => {
   });
 });
 
+// Covers package and entry regression.
 describe("package and entry regression", () => {
+  // Verifies maps the bin to the subcommand router (dist/cli/index.js) with a node shebang.
   it("maps the bin to the subcommand router (dist/cli/index.js) with a node shebang", () => {
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
       bin: Record<string, string>;
