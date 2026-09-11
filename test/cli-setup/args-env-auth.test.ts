@@ -200,7 +200,9 @@ function fakeFifoStats(): Stats {
   } as unknown as Stats;
 }
 
+// Covers parseSetupArgs.
 describe("parseSetupArgs", () => {
+  // Verifies accepts all flags with space-separated values.
   it("accepts all flags with space-separated values", () => {
     const result = parseSetupArgs([
       "--project",
@@ -227,6 +229,7 @@ describe("parseSetupArgs", () => {
     }
   });
 
+  // Verifies accepts --flag=value form and a leading `setup` token (npm bin invocation)
   it("accepts --flag=value form and a leading `setup` token (npm bin invocation)", () => {
     const result = parseSetupArgs(["setup", "--project=my-proj", "--output=o.env", "--yes"]);
     expect(result.status).toBe("valid");
@@ -237,6 +240,7 @@ describe("parseSetupArgs", () => {
     }
   });
 
+  // Verifies applies defaults when no flags are given.
   it("applies defaults when no flags are given", () => {
     const result = parseSetupArgs([]);
     expect(result.status).toBe("valid");
@@ -250,6 +254,7 @@ describe("parseSetupArgs", () => {
     }
   });
 
+  // Verifies rejects unknown flags with invalid_args.
   it("rejects unknown flags with invalid_args", () => {
     const result = parseSetupArgs(["--frobnicate"]);
     expect(result.status).toBe("invalid");
@@ -259,6 +264,7 @@ describe("parseSetupArgs", () => {
     }
   });
 
+  // Verifies rejects a flag with a missing value.
   it("rejects a flag with a missing value", () => {
     for (const argv of [["--project"], ["--sa-name"], ["--spreadsheet-title"], ["--output"]]) {
       const result = parseSetupArgs(argv);
@@ -269,6 +275,7 @@ describe("parseSetupArgs", () => {
     }
   });
 
+  // Verifies rejects option-like and malformed --project/--sa-name values in BOTH forms (--flag value and --flag=value)
   it("rejects option-like and malformed --project/--sa-name values in BOTH forms (--flag value and --flag=value)", () => {
     // The space form treats an option-like value as a missing value: a flag
     // can never be the value of another flag.
@@ -333,6 +340,7 @@ describe("parseSetupArgs", () => {
     expect(parseSetupArgs(["--sa-name=hikoutei-sa"]).status).toBe("valid");
   });
 
+  // Verifies rejects positional arguments other than a leading setup token.
   it("rejects positional arguments other than a leading setup token", () => {
     const result = parseSetupArgs(["--yes", "extra"]);
     expect(result.status).toBe("invalid");
@@ -341,6 +349,7 @@ describe("parseSetupArgs", () => {
     }
   });
 
+  // Verifies returns help text that documents the Drive-scope prerequisite.
   it("returns help text that documents the Drive-scope prerequisite", () => {
     for (const argv of [["--help"], ["-h"], ["--yes", "--help"]]) {
       const result = parseSetupArgs(argv);
@@ -362,13 +371,16 @@ describe("parseSetupArgs", () => {
   });
 });
 
+// Covers generateProjectId.
 describe("generateProjectId", () => {
+  // Verifies produces a gcloud-compatible hikoutei slug with timestamp and random parts.
   it("produces a gcloud-compatible hikoutei slug with timestamp and random parts", () => {
     const id = generateProjectId();
     expect(id).toMatch(/^hikoutei-[a-z0-9]+-[a-z0-9]{4}$/);
     expect(id.length).toBeLessThanOrEqual(30);
   });
 
+  // Verifies varies the suffix from the injected random value at a fixed timestamp.
   it("varies the suffix from the injected random value at a fixed timestamp", () => {
     const now = 1_700_000_000_000;
     const first = generateProjectId(now, () => 0.1);
@@ -378,6 +390,7 @@ describe("generateProjectId", () => {
   });
 });
 
+// Covers confirmSetup.
 describe("confirmSetup", () => {
   function capturingOutput(): { output: { write: (text: string) => void }; text: () => string } {
     let text = "";
@@ -387,6 +400,7 @@ describe("confirmSetup", () => {
     };
   }
 
+  // Verifies confirms immediately with --yes without reading input.
   it("confirms immediately with --yes without reading input", async () => {
     const { output, text } = capturingOutput();
     const result = await confirmSetup({ yes: true, dryRun: false, input: Readable.from(["n\n"]), output });
@@ -394,12 +408,14 @@ describe("confirmSetup", () => {
     expect(text()).toBe("");
   });
 
+  // Verifies confirms immediately in dry-run mode without reading input.
   it("confirms immediately in dry-run mode without reading input", async () => {
     const { output } = capturingOutput();
     const result = await confirmSetup({ yes: false, dryRun: true, input: Readable.from(["n\n"]), output });
     expect(result).toStrictEqual({ status: "confirmed" });
   });
 
+  // Verifies confirms on y/yes answers.
   it("confirms on y/yes answers", async () => {
     for (const answer of ["y\n", "yes\n", "Y\n", "YES\n"]) {
       const { output, text } = capturingOutput();
@@ -409,6 +425,7 @@ describe("confirmSetup", () => {
     }
   });
 
+  // Verifies declines on any other answer.
   it("declines on any other answer", async () => {
     for (const answer of ["n\n", "no\n", "\n", "maybe\n"]) {
       const result = await confirmSetup({ yes: false, dryRun: false, input: Readable.from([answer]), output: { write: () => undefined } });
@@ -416,12 +433,14 @@ describe("confirmSetup", () => {
     }
   });
 
+  // Verifies declines on end of input.
   it("declines on end of input", async () => {
     const result = await confirmSetup({ yes: false, dryRun: false, input: Readable.from([]), output: { write: () => undefined } });
     expect(result).toStrictEqual({ status: "declined" });
   });
 });
 
+// Covers planSetupCommands.
 describe("planSetupCommands", () => {
   const options: RunSetupOptions = {
     runner: { async run() { throw new Error("planning must not run commands"); } },
@@ -437,6 +456,7 @@ describe("planSetupCommands", () => {
     dryRun: true,
   };
 
+  // Verifies lists the exact gcloud sequence for a fresh setup including both API enables.
   it("lists the exact gcloud sequence for a fresh setup including both API enables", () => {
     const slug = generateProjectId(1_700_000_000_000, () => 0.5);
     const plan = planSetupCommands(options, slug);
@@ -454,6 +474,7 @@ describe("planSetupCommands", () => {
     ]);
   });
 
+  // Verifies describes the scope check, marker write-ahead, human create, SA share/verify, lock, checkpoint and env.
   it("describes the scope check, marker write-ahead, human create, SA share/verify, lock, checkpoint and env", () => {
     const plan = planSetupCommands(options, "hikoutei-abc123-0000");
     const labels = plan
@@ -483,6 +504,7 @@ describe("planSetupCommands", () => {
     expect(labels.join("\n")).toContain("key_ready");
   });
 
+  // Verifies verifies an explicit project instead of creating one.
   it("verifies an explicit project instead of creating one", () => {
     const plan = planSetupCommands({ ...options, projectId: "existing-proj" }, "ignored");
     const commands = gcloudCommands(plan);
@@ -490,6 +512,7 @@ describe("planSetupCommands", () => {
     expect(commands.some((c) => c[0] === "projects" && c[1] === "create")).toBe(false);
   });
 
+  // Verifies formats the plan as shell lines with outcomes.
   it("formats the plan as shell lines with outcomes", () => {
     const rendered = formatPlan(planSetupCommands(options, "hikoutei-abc123-0000"));
     expect(rendered).toContain("$ gcloud --version");
@@ -499,10 +522,12 @@ describe("planSetupCommands", () => {
   });
 });
 
+// Covers writeSetupEnvFile.
 describe("writeSetupEnvFile", () => {
   const credentialsPath = "/abs/path/key.json";
   const spreadsheetUrl = "https://docs.google.com/spreadsheets/d/abc/edit";
 
+  // Verifies creates a fresh file with both managed keys.
   it("creates a fresh file with both managed keys", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -513,6 +538,7 @@ describe("writeSetupEnvFile", () => {
     );
   });
 
+  // Verifies preserves unrelated lines and updates both managed keys in place.
   it("preserves unrelated lines and updates both managed keys in place", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -541,6 +567,7 @@ describe("writeSetupEnvFile", () => {
     );
   });
 
+  // Verifies does not rewrite an unchanged file.
   it("does not rewrite an unchanged file", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -553,6 +580,7 @@ describe("writeSetupEnvFile", () => {
     expect(statSync(outputPath).mode & 0o777).toBe(0o600);
   });
 
+  // Verifies atomically repairs an unchanged 0644 file: exact content, fresh 0600 inode, modified true.
   it("atomically repairs an unchanged 0644 file: exact content, fresh 0600 inode, modified true", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -577,6 +605,7 @@ describe("writeSetupEnvFile", () => {
     expect(readdirSync(dir).some((name) => name.startsWith(".hikoutei-env-"))).toBe(false);
   });
 
+  // Verifies repairs an unsafe mode without touching an unrelated hardlink sharing the old inode.
   it("repairs an unsafe mode without touching an unrelated hardlink sharing the old inode", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -604,6 +633,7 @@ describe("writeSetupEnvFile", () => {
     expect(readFileSync(otherLink, "utf8")).toBe(content);
   });
 
+  // Verifies refuses to follow an existing symlink at the output path.
   it("refuses to follow an existing symlink at the output path", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -617,6 +647,7 @@ describe("writeSetupEnvFile", () => {
     expect(readFileSync(target, "utf8")).toBe("existing-content");
   });
 
+  // Verifies refuses an output that aliases the key file by inode before reading it.
   it("refuses an output that aliases the key file by inode before reading it", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -630,6 +661,7 @@ describe("writeSetupEnvFile", () => {
     expect(readFileSync(outputPath, "utf8")).toBe(SECRET_KEY_MATERIAL);
   });
 
+  // Verifies refuses a directory at the output path without touching it.
   it("refuses a directory at the output path without touching it", () => {
     const dir = makeTempDir();
     const outputDir = join(dir, "env-dir");
@@ -642,6 +674,7 @@ describe("writeSetupEnvFile", () => {
     expect(readFileSync(join(outputDir, "keep.txt"), "utf8")).toBe("kept");
   });
 
+  // Verifies refuses a FIFO at the output path without opening or reading it (no blocking)
   it("refuses a FIFO at the output path without opening or reading it (no blocking)", (ctx) => {
     if ((constants as { O_NONBLOCK?: number }).O_NONBLOCK === undefined) {
       ctx.skip();
@@ -663,6 +696,7 @@ describe("writeSetupEnvFile", () => {
     expect(lstatSync(fifoPath).isFIFO()).toBe(true);
   });
 
+  // Verifies writes with mode 0600 through a private temp file and leaves no leftovers.
   it("writes with mode 0600 through a private temp file and leaves no leftovers", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -672,6 +706,7 @@ describe("writeSetupEnvFile", () => {
   });
 });
 
+// Covers checkpoint state file.
 describe("checkpoint state file", () => {
   function projectState(overrides: Record<string, unknown> = {}): SetupState {
     return {
@@ -730,6 +765,7 @@ describe("checkpoint state file", () => {
     return base as unknown as SetupState;
   }
 
+  // Verifies validates every status of the discriminated union.
   it("validates every status of the discriminated union", () => {
     expect(validateSetupState(projectState())).toStrictEqual(projectState());
     expect(validateSetupState(keyStartedState())).toStrictEqual(keyStartedState());
@@ -747,6 +783,7 @@ describe("checkpoint state file", () => {
     );
   });
 
+  // Verifies requires the stored saEmail to equal the canonical derivation for EVERY status.
   it("requires the stored saEmail to equal the canonical derivation for EVERY status", () => {
     const foreign = "attacker@evil-project.iam.gserviceaccount.com";
     // A foreign/different-SA email is refused in every status: project
@@ -775,6 +812,7 @@ describe("checkpoint state file", () => {
     ).not.toBeNull();
   });
 
+  // Verifies validates the key marker and the sorted/deduplicated key baseline.
   it("validates the key marker and the sorted/deduplicated key baseline", () => {
     const saEmail = "hikoutei-sa@hikoutei-proj.iam.gserviceaccount.com";
     const baseline = [
@@ -805,6 +843,7 @@ describe("checkpoint state file", () => {
     expect(validateSetupState(keyStartedState({ keyBaseline: [42] }))).toBeNull();
   });
 
+  // Verifies rejects malformed payloads.
   it("rejects malformed payloads", () => {
     expect(validateSetupState(null)).toBeNull();
     expect(validateSetupState([])).toBeNull();
@@ -903,6 +942,7 @@ describe("checkpoint state file", () => {
     expect(validateSetupState(spreadsheetState({ status: "spreadsheet_share_started", creationMarker: VALID_MARKER }))).toBeNull();
   });
 
+  // Verifies validates key markers with the restricted UUID v4 format.
   it("validates key markers with the restricted UUID v4 format", () => {
     expect(isValidKeyMarker(VALID_KEY_MARKER)).toBe(true);
     expect(isValidKeyMarker("123e4567-e89b-52d3-a456-426614174000")).toBe(false);
@@ -910,6 +950,7 @@ describe("checkpoint state file", () => {
     expect(isValidKeyMarker(42)).toBe(false);
   });
 
+  // Verifies rejects a stored spreadsheetUrl for every status (the URL is derived from the id)
   it("rejects a stored spreadsheetUrl for every status (the URL is derived from the id)", () => {
     expect(validateSetupState(projectState({ spreadsheetUrl: SPREADSHEET_URL }))).toBeNull();
     expect(validateSetupState(startedState({ spreadsheetUrl: SPREADSHEET_URL }))).toBeNull();
@@ -921,6 +962,7 @@ describe("checkpoint state file", () => {
     expect("spreadsheetUrl" in (state as SetupState)).toBe(false);
   });
 
+  // Verifies validates creation markers with the restricted UUID v4 format.
   it("validates creation markers with the restricted UUID v4 format", () => {
     expect(isValidCreationMarker(VALID_MARKER)).toBe(true);
     expect(isValidCreationMarker("123e4567-e89b-42d3-a456-42661417400G")).toBe(false);
@@ -931,6 +973,7 @@ describe("checkpoint state file", () => {
     expect(isValidCreationMarker(undefined)).toBe(false);
   });
 
+  // Verifies loads none/invalid/loaded states.
   it("loads none/invalid/loaded states", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -947,6 +990,7 @@ describe("checkpoint state file", () => {
     expect(loadSetupState(statePath)).toStrictEqual({ status: "loaded", state: projectState() });
   });
 
+  // Verifies never forwards JSON.parse exception text for a malformed checkpoint (token-like and key-like sentinels)
   it("never forwards JSON.parse exception text for a malformed checkpoint (token-like and key-like sentinels)", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -974,6 +1018,7 @@ describe("checkpoint state file", () => {
     }
   });
 
+  // Verifies refuses a symlink at the checkpoint path without following it.
   it("refuses a symlink at the checkpoint path without following it", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -989,6 +1034,7 @@ describe("checkpoint state file", () => {
     expect(readFileSync(victim, "utf8")).toBe(JSON.stringify(projectState()));
   });
 
+  // Verifies refuses a directory at the checkpoint path.
   it("refuses a directory at the checkpoint path", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1000,6 +1046,7 @@ describe("checkpoint state file", () => {
     }
   });
 
+  // Verifies refuses a FIFO at the checkpoint path without blocking (POSIX)
   it("refuses a FIFO at the checkpoint path without blocking (POSIX)", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1019,6 +1066,7 @@ describe("checkpoint state file", () => {
     expect(lstatSync(statePath).isFIFO()).toBe(true);
   });
 
+  // Verifies fails closed when the checkpoint is replaced by a non-regular entry between lstat and open.
   it("fails closed when the checkpoint is replaced by a non-regular entry between lstat and open", () => {
     const statePath = join(makeTempDir(), SETUP_STATE_FILE_NAME);
     const closed: number[] = [];
@@ -1047,6 +1095,7 @@ describe("checkpoint state file", () => {
     expect(closed).toStrictEqual([99]);
   });
 
+  // Verifies fails closed when the checkpoint is replaced by a DIFFERENT regular file between lstat and open.
   it("fails closed when the checkpoint is replaced by a DIFFERENT regular file between lstat and open", () => {
     const statePath = join(makeTempDir(), SETUP_STATE_FILE_NAME);
     const closed: number[] = [];
@@ -1075,6 +1124,7 @@ describe("checkpoint state file", () => {
     expect(closed).toStrictEqual([99]);
   });
 
+  // Verifies maps ELOOP/EMLINK from the no-follow open to a symlink refusal.
   it("maps ELOOP/EMLINK from the no-follow open to a symlink refusal", () => {
     const statePath = join(makeTempDir(), SETUP_STATE_FILE_NAME);
     const fs: SetupStateLoadFs = {
@@ -1097,6 +1147,7 @@ describe("checkpoint state file", () => {
     }
   });
 
+  // Verifies opens the checkpoint with no-follow non-blocking flags and reads through the descriptor.
   it("opens the checkpoint with no-follow non-blocking flags and reads through the descriptor", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1120,6 +1171,7 @@ describe("checkpoint state file", () => {
     expect(openFlags).toStrictEqual([expected]);
   });
 
+  // Verifies saves atomically with mode 0600 and no temp leftovers.
   it("saves atomically with mode 0600 and no temp leftovers", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1134,6 +1186,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies applies and verifies 0600 through the still-open temp descriptor and never pathname-chmods.
   it("applies and verifies 0600 through the still-open temp descriptor and never pathname-chmods", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1167,6 +1220,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies loops on short writes until every UTF-8 byte is written (checkpoint, multibyte content)
   it("loops on short writes until every UTF-8 byte is written (checkpoint, multibyte content)", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1195,6 +1249,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies fails safely on a zero-progress checkpoint write: no rename, destination unchanged, owned temp removed.
   it("fails safely on a zero-progress checkpoint write: no rename, destination unchanged, owned temp removed", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1223,6 +1278,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies treats negative, non-integer, and over-remaining write counts as safe failures (checkpoint)
   it("treats negative, non-integer, and over-remaining write counts as safe failures (checkpoint)", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1269,6 +1325,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies cleans up the owned temp and rethrows when the post-write close fails (checkpoint); no rename, no double-close.
   it("cleans up the owned temp and rethrows when the post-write close fails (checkpoint); no rename, no double-close", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1307,6 +1364,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies fsyncs the containing directory after the rename (durability) with no-follow flags and one close.
   it("fsyncs the containing directory after the rename (durability) with no-follow flags and one close", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1360,6 +1418,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies reports a directory-fsync failure after the rename WITHOUT deleting the destination (next run sees the checkpoint)
   it("reports a directory-fsync failure after the rename WITHOUT deleting the destination (next run sees the checkpoint)", () => {
     expect.assertions(8);
     const dir = makeTempDir();
@@ -1409,6 +1468,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, statePath)).toHaveLength(0);
   });
 
+  // Verifies reports a directory-fsync open failure for the checkpoint path with SETUP_DIR_FSYNC_OPEN_FAILED.
   it("reports a directory-fsync open failure for the checkpoint path with SETUP_DIR_FSYNC_OPEN_FAILED", () => {
     expect.assertions(5);
     const dir = makeTempDir();
@@ -1452,6 +1512,7 @@ describe("checkpoint state file", () => {
     expect(unlinkCalls).toBe(0);
   });
 
+  // Verifies reports a directory close failure for the checkpoint path with SETUP_DIR_FSYNC_CLOSE_FAILED.
   it("reports a directory close failure for the checkpoint path with SETUP_DIR_FSYNC_CLOSE_FAILED", () => {
     expect.assertions(5);
     const dir = makeTempDir();
@@ -1495,6 +1556,7 @@ describe("checkpoint state file", () => {
     expect(loadSetupState(statePath)).toStrictEqual({ status: "loaded", state: projectState() });
   });
 
+  // Verifies reports a directory-fsync open failure for the env path with OUTPUT_DIR_FSYNC_OPEN_FAILED.
   it("reports a directory-fsync open failure for the env path with OUTPUT_DIR_FSYNC_OPEN_FAILED", () => {
     expect.assertions(5);
     const dir = makeTempDir();
@@ -1538,6 +1600,7 @@ describe("checkpoint state file", () => {
     expect(unlinkCalls).toBe(0);
   });
 
+  // Verifies reports a directory-fsync failure for the env path with OUTPUT_RENAME_DURABLE_FAILED.
   it("reports a directory-fsync failure for the env path with OUTPUT_RENAME_DURABLE_FAILED", () => {
     expect.assertions(6);
     const dir = makeTempDir();
@@ -1584,6 +1647,7 @@ describe("checkpoint state file", () => {
     expect(unlinkCalls).toBe(0);
   });
 
+  // Verifies reports a directory close failure for the env path with OUTPUT_DIR_FSYNC_CLOSE_FAILED.
   it("reports a directory close failure for the env path with OUTPUT_DIR_FSYNC_CLOSE_FAILED", () => {
     expect.assertions(4);
     const dir = makeTempDir();
@@ -1624,6 +1688,7 @@ describe("checkpoint state file", () => {
     expect((caughtError as Error).message).toMatch(/simulated directory close failure/);
   });
 
+  // Verifies applies and verifies 0600 through the still-open descriptor for the env temp write.
   it("applies and verifies 0600 through the still-open descriptor for the env temp write", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -1651,6 +1716,7 @@ describe("checkpoint state file", () => {
     expect(readFileSync(outputPath, "utf8")).toBe("GOOGLE_APPLICATION_CREDENTIALS=/tmp/key.json\n");
   });
 
+  // Verifies loops on short writes until every UTF-8 byte is written (env, multibyte content)
   it("loops on short writes until every UTF-8 byte is written (env, multibyte content)", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -1679,6 +1745,7 @@ describe("checkpoint state file", () => {
     expect(readdirSync(dir).some((name) => name.startsWith(".hikoutei-env-"))).toBe(false);
   });
 
+  // Verifies fails safely on a zero-progress env write: no rename, destination unchanged, owned temp removed.
   it("fails safely on a zero-progress env write: no rename, destination unchanged, owned temp removed", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -1705,6 +1772,7 @@ describe("checkpoint state file", () => {
     expect(readdirSync(dir).some((name) => name.startsWith(".hikoutei-env-"))).toBe(false);
   });
 
+  // Verifies cleans up the owned temp and rethrows when the post-write close fails (env); no rename, no double-close.
   it("cleans up the owned temp and rethrows when the post-write close fails (env); no rename, no double-close", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -1739,6 +1807,7 @@ describe("checkpoint state file", () => {
     expect(readdirSync(dir).some((name) => name.startsWith(".hikoutei-env-"))).toBe(false);
   });
 
+  // Verifies uses a unique per-run temp name so a crash orphan never blocks the next save.
   it("uses a unique per-run temp name so a crash orphan never blocks the next save", () => {
     const statePath = "/tmp/state.json";
     const a = uniqueSetupStateTempPath(statePath);
@@ -1755,6 +1824,7 @@ describe("checkpoint state file", () => {
     expect(tempLeftovers(dir, realState)).toHaveLength(0);
   });
 
+  // Verifies is not blocked by a stale fixed .tmp entry left by a crashed older run.
   it("is not blocked by a stale fixed .tmp entry left by a crashed older run", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1768,6 +1838,7 @@ describe("checkpoint state file", () => {
     expect(readFileSync(fixedTemp, "utf8")).toBe("stale-orphan");
   });
 
+  // Verifies fails safely when a symlink already exists at the temp path (never follows or removes it)
   it("fails safely when a symlink already exists at the temp path (never follows or removes it)", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1787,6 +1858,7 @@ describe("checkpoint state file", () => {
     expect(existsSync(statePath)).toBe(false);
   });
 
+  // Verifies fails safely when a hardlink already exists at the temp path (never truncates or removes it)
   it("fails safely when a hardlink already exists at the temp path (never truncates or removes it)", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1806,6 +1878,7 @@ describe("checkpoint state file", () => {
     expect(existsSync(statePath)).toBe(false);
   });
 
+  // Verifies fails safely when a regular file already exists at the temp path (never overwrites it)
   it("fails safely when a regular file already exists at the temp path (never overwrites it)", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -1820,6 +1893,7 @@ describe("checkpoint state file", () => {
     expect(existsSync(statePath)).toBe(false);
   });
 
+  // Verifies detects owner, project, sa-name, title, and key-path conflicts.
   it("detects owner, project, sa-name, title, and key-path conflicts", () => {
     const state = spreadsheetState({ status: "complete" });
     const base = {
@@ -1850,6 +1924,7 @@ describe("checkpoint state file", () => {
     expect(checkStateCompatibility(state, { ...base, projectId: "a" }).status).toBe("conflict");
   });
 
+  // Verifies validates service-account key metadata through the secure reader without exposing key material.
   it("validates service-account key metadata through the secure reader without exposing key material", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -1899,6 +1974,7 @@ describe("checkpoint state file", () => {
     expect(SERVICE_ACCOUNT_KEY_ID_PATTERN.test(FIXED_KEY_ID)).toBe(true);
   });
 
+  // Verifies rejects symlinks, non-regular files, and chmod failures with owner-only enforcement.
   it("rejects symlinks, non-regular files, and chmod failures with owner-only enforcement", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -1943,6 +2019,7 @@ describe("checkpoint state file", () => {
     }
   });
 
+  // Verifies returns invalid instead of throwing when the descriptor fstat or read fails (no thrown-text leak)
   it("returns invalid instead of throwing when the descriptor fstat or read fails (no thrown-text leak)", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -1984,6 +2061,7 @@ describe("checkpoint state file", () => {
     });
   });
 
+  // Verifies sanitizes lstat and open failures to stable path-only messages (no thrown-text leak, no stray calls)
   it("sanitizes lstat and open failures to stable path-only messages (no thrown-text leak, no stray calls)", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2073,6 +2151,7 @@ describe("checkpoint state file", () => {
     }
   });
 
+  // Verifies closes the descriptor exactly once when the secured read fails.
   it("closes the descriptor exactly once when the secured read fails", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2096,6 +2175,7 @@ describe("checkpoint state file", () => {
     expect(closed).toHaveLength(1);
   });
 
+  // Verifies does not let a close failure override the safe invalid result or leak close text.
   it("does not let a close failure override the safe invalid result or leak close text", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2117,6 +2197,7 @@ describe("checkpoint state file", () => {
     });
   });
 
+  // Verifies opens the key with O_RDONLY|O_NOFOLLOW|O_NONBLOCK (where defined)
   it("opens the key with O_RDONLY|O_NOFOLLOW|O_NONBLOCK (where defined)", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2144,6 +2225,7 @@ describe("checkpoint state file", () => {
     expect(capturedFlags).toBe(expected);
   });
 
+  // Verifies refuses a FIFO or directory swapped in after the lstat check: no chmod, no read, one close.
   it("refuses a FIFO or directory swapped in after the lstat check: no chmod, no read, one close", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2200,6 +2282,7 @@ describe("checkpoint state file", () => {
     expect(statSync(dirPath).mode & 0o777).toBe(0o755);
   });
 
+  // Verifies refuses a DIFFERENT regular file swapped in after the lstat check: no chmod, no read, one close.
   it("refuses a DIFFERENT regular file swapped in after the lstat check: no chmod, no read, one close", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2231,6 +2314,7 @@ describe("checkpoint state file", () => {
     expect(closed).toStrictEqual([55]);
   });
 
+  // Verifies promotes validated key credentials into memory through the secure boundary (never key material in results)
   it("promotes validated key credentials into memory through the secure boundary (never key material in results)", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2276,6 +2360,7 @@ describe("checkpoint state file", () => {
     expect(readServiceAccountKeyCredentialSecurely(keyPath).status).toBe("invalid");
   });
 
+  // Verifies returns promptly on a real FIFO at the key path (never blocks)
   it("returns promptly on a real FIFO at the key path (never blocks)", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2295,6 +2380,7 @@ describe("checkpoint state file", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
+  // Verifies corrects a reused 0644 key to 0600 through the descriptor.
   it("corrects a reused 0644 key to 0600 through the descriptor", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2310,6 +2396,7 @@ describe("checkpoint state file", () => {
     expect(statSync(keyPath).mode & 0o777).toBe(SERVICE_ACCOUNT_KEY_FILE_MODE);
   });
 
+  // Verifies rejects non-empty malformed private keys and non-RSA key types before any mutation.
   it("rejects non-empty malformed private keys and non-RSA key types before any mutation", () => {
     const dir = makeTempDir();
     const keyPath = join(dir, "key.json");
@@ -2361,6 +2448,7 @@ describe("checkpoint state file", () => {
     });
   });
 
+  // Verifies parses the raw key JSON without filesystem access.
   it("parses the raw key JSON without filesystem access", () => {
     const ok = parseServiceAccountKeyJson(validKeyJson("p", "sa@p.iam.gserviceaccount.com"), "fixture");
     expect(ok).toStrictEqual({
@@ -2379,11 +2467,13 @@ describe("checkpoint state file", () => {
   });
 });
 
+// Covers setup lock.
 describe("setup lock", () => {
   function lockPathFor(dir: string): string {
     return setupLockPath(join(dir, SETUP_STATE_FILE_NAME));
   }
 
+  // Verifies acquires and releases an empty 0700 directory exclusively.
   it("acquires and releases an empty 0700 directory exclusively", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2408,6 +2498,7 @@ describe("setup lock", () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
+  // Verifies fails as busy for ANY pre-existing entry and keeps it untouched.
   it("fails as busy for ANY pre-existing entry and keeps it untouched", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2443,6 +2534,7 @@ describe("setup lock", () => {
     expect(readdirSync(lockPath)).toHaveLength(0);
   });
 
+  // Verifies classifies EEXIST as busy and other mkdir failures as failed.
   it("classifies EEXIST as busy and other mkdir failures as failed", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2483,6 +2575,7 @@ describe("setup lock", () => {
     }
   });
 
+  // Verifies fails closed when the created directory cannot be verified and removes it.
   it("fails closed when the created directory cannot be verified and removes it", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2509,6 +2602,7 @@ describe("setup lock", () => {
     expect(closed).toBe(1);
   });
 
+  // Verifies fails closed when the created directory cannot be opened and removes it.
   it("fails closed when the created directory cannot be opened and removes it", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2536,6 +2630,7 @@ describe("setup lock", () => {
     expect(removed).toBe(true);
   });
 
+  // Verifies releases only the exact directory this run created (identity-verified)
   it("releases only the exact directory this run created (identity-verified)", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2554,6 +2649,7 @@ describe("setup lock", () => {
     expect(lstatSync(lockPath).isDirectory()).toBe(true);
   });
 
+  // Verifies never deletes a lock re-acquired after release by an earlier identity.
   it("never deletes a lock re-acquired after release by an earlier identity", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2580,6 +2676,7 @@ describe("setup lock", () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
+  // Verifies fails closed when the path descriptor differs from the owned descriptor (injected race)
   it("fails closed when the path descriptor differs from the owned descriptor (injected race)", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2663,6 +2760,7 @@ describe("setup lock", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
+  // Verifies fails closed when the lock path cannot be opened as a directory (replaced by a file/symlink)
   it("fails closed when the lock path cannot be opened as a directory (replaced by a file/symlink)", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2705,6 +2803,7 @@ describe("setup lock", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
+  // Verifies closes the owned descriptor exactly once when its fstat fails (injected)
   it("closes the owned descriptor exactly once when its fstat fails (injected)", () => {
     const dir = makeTempDir();
     const lockPath = lockPathFor(dir);
@@ -2760,6 +2859,7 @@ describe("setup lock", () => {
   });
 });
 
+// Covers human auth.
 describe("human auth", () => {
   function runnerReturning(stdout: string): GcloudRunner {
     return {
@@ -2778,11 +2878,13 @@ describe("human auth", () => {
     },
   };
 
+  // Verifies returns the memory-only token and owner when Drive scope is present.
   it("returns the memory-only token and owner when Drive scope is present", async () => {
     const result = await checkHumanDriveAccess(runnerReturning(`${FAKE_TOKEN}\n`), okValidator);
     expect(result).toStrictEqual({ status: "ok", accessToken: FAKE_TOKEN, ownerEmail: FAKE_OWNER });
   });
 
+  // Verifies accepts the drive.file scope as sufficient.
   it("accepts the drive.file scope as sufficient", () => {
     expect(hasDriveScope(`${DRIVE_SCOPE} https://www.googleapis.com/auth/spreadsheets`)).toBe(true);
     expect(hasDriveScope(`${DRIVE_FILE_SCOPE} https://www.googleapis.com/auth/spreadsheets`)).toBe(true);
@@ -2790,6 +2892,7 @@ describe("human auth", () => {
     expect(hasDriveScope("")).toBe(false);
   });
 
+  // Verifies fails with gcloud_drive_access_required and the exact re-login command when scope is missing.
   it("fails with gcloud_drive_access_required and the exact re-login command when scope is missing", async () => {
     const validator: TokenValidator = {
       async validate() {
@@ -2805,6 +2908,7 @@ describe("human auth", () => {
     }
   });
 
+  // Verifies fails with user_token_failed when the token cannot be validated.
   it("fails with user_token_failed when the token cannot be validated", async () => {
     const failingValidator: TokenValidator = {
       async validate() {
@@ -2819,6 +2923,7 @@ describe("human auth", () => {
     }
   });
 
+  // Verifies fails with user_token_failed when token retrieval fails or is malformed.
   it("fails with user_token_failed when token retrieval fails or is malformed", async () => {
     const failedRunner: GcloudRunner = {
       async run() {
@@ -2839,6 +2944,7 @@ describe("human auth", () => {
     }
   });
 
+  // Verifies never forwards raw gcloud streams for token failures (status-only message)
   it("never forwards raw gcloud streams for token failures (status-only message)", async () => {
     // Even when stdout/stderr carry the token, a JWT, or credentials, the
     // failure message exposes only the exit status.
@@ -2870,6 +2976,7 @@ describe("human auth", () => {
     }
   });
 
+  // Verifies validates tokeninfo payloads with runtime guards.
   it("validates tokeninfo payloads with runtime guards", () => {
     expect(extractTokenInfo({ email: FAKE_OWNER, scope: DRIVE_SCOPE })).toStrictEqual({
       email: FAKE_OWNER,
@@ -2882,6 +2989,7 @@ describe("human auth", () => {
     expect(() => extractTokenInfo({ email: 42, scope: DRIVE_SCOPE })).toThrow();
   });
 
+  // Verifies rejects control/secret-like emails with a strict printable format (never echoed)
   it("rejects control/secret-like emails with a strict printable format (never echoed)", async () => {
     // A strict dedicated email pattern: whitespace, control characters, and
     // newlines anywhere in the email are refused, so a control-bearing
@@ -2946,6 +3054,7 @@ describe("human auth", () => {
     expect(ok).toStrictEqual({ status: "ok", accessToken: FAKE_TOKEN, ownerEmail: FAKE_OWNER });
   });
 
+  // Verifies posts the token to tokeninfo and promotes the validated response.
   it("posts the token to tokeninfo and promotes the validated response", async () => {
     let capturedUrl: string | undefined;
     let capturedInit: RequestInit | undefined;
@@ -2965,6 +3074,7 @@ describe("human auth", () => {
     expect(String(capturedInit?.body)).toBe(`access_token=${encodeURIComponent(FAKE_TOKEN)}`);
   });
 
+  // Verifies fails token validation on non-OK and malformed tokeninfo responses.
   it("fails token validation on non-OK and malformed tokeninfo responses", async () => {
     const nonOkFetch: typeof fetch = async () => new Response("invalid_grant", { status: 400 });
     await expect(createTokeninfoValidator(nonOkFetch).validate(FAKE_TOKEN)).rejects.toThrow("HTTP 400");
@@ -2975,7 +3085,9 @@ describe("human auth", () => {
   });
 });
 
+// Covers sheets factory guards.
 describe("sheets factory guards", () => {
+  // Verifies builds the create request with the marker in appProperties and asks for appProperties in fields.
   it("builds the create request with the marker in appProperties and asks for appProperties in fields", () => {
     const request = buildDriveFileCreateRequest("My Sheet", VALID_MARKER);
     expect(request.requestBody).toStrictEqual({
@@ -2993,6 +3105,7 @@ describe("sheets factory guards", () => {
     expect(() => buildDriveFileCreateRequest("My Sheet", "not-a-marker")).toThrow();
   });
 
+  // Verifies promotes drive.files.create payloads: non-empty id, spreadsheet mime, matching name, exact marker.
   it("promotes drive.files.create payloads: non-empty id, spreadsheet mime, matching name, exact marker", () => {
     const payload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
       id: "abc",
@@ -3024,6 +3137,7 @@ describe("sheets factory guards", () => {
     ).toThrow();
   });
 
+  // Verifies rejects missing, malformed, and wrong marker values in create responses without leaking them.
   it("rejects missing, malformed, and wrong marker values in create responses without leaking them", () => {
     const payload = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
       id: "abc",
@@ -3075,6 +3189,7 @@ describe("sheets factory guards", () => {
     }
   });
 
+  // Verifies promotes marker-query file lists and rejects malformed entries.
   it("promotes marker-query file lists and rejects malformed entries", () => {
     const entry = {
       id: "abc",
@@ -3100,6 +3215,7 @@ describe("sheets factory guards", () => {
     expect(() => extractMarkerFileList({ files: [{ id: "a", name: "n", mimeType: "t", appProperties: "x" }] })).toThrow();
   });
 
+  // Verifies validates marker file list pages including the optional nextPageToken and the required incompleteSearch flag.
   it("validates marker file list pages including the optional nextPageToken and the required incompleteSearch flag", () => {
     const entry = {
       id: "abc",
@@ -3152,6 +3268,7 @@ describe("sheets factory guards", () => {
     expect(() => extractMarkerFileListPage({ files: [], nextPageToken: null, incompleteSearch: false })).toThrow();
   });
 
+  // Verifies fails closed on missing, true, and malformed incompleteSearch (never a partial-result verdict)
   it("fails closed on missing, true, and malformed incompleteSearch (never a partial-result verdict)", () => {
     // Drive's `incompleteSearch` flag must be EXACTLY false: a missing,
     // true, or malformed value means the server could not fully search the
@@ -3211,6 +3328,7 @@ describe("sheets factory guards", () => {
     return { api, requests };
   }
 
+  // Verifies pages drive.files.list and finds the marker match only on page 2 (exact query, fields, and pageToken)
   it("pages drive.files.list and finds the marker match only on page 2 (exact query, fields, and pageToken)", async () => {
     const { api, requests } = fakeMarkerListApi([
       { files: [], nextPageToken: "tok-1" , incompleteSearch: false },
@@ -3244,6 +3362,7 @@ describe("sheets factory guards", () => {
     ]);
   });
 
+  // Verifies aggregates two exact marker matches split across pages (never a false single match)
   it("aggregates two exact marker matches split across pages (never a false single match)", async () => {
     const { api, requests } = fakeMarkerListApi([
       { files: [], nextPageToken: "tok-1" , incompleteSearch: false },
@@ -3254,6 +3373,7 @@ describe("sheets factory guards", () => {
     expect(requests).toHaveLength(2);
   });
 
+  // Verifies still aggregates a duplicate hidden on a later page when page 1 already matched.
   it("still aggregates a duplicate hidden on a later page when page 1 already matched", async () => {
     const { api } = fakeMarkerListApi([
       { files: [markerEntry("sheet-a")], nextPageToken: "tok-1" , incompleteSearch: false },
@@ -3263,6 +3383,7 @@ describe("sheets factory guards", () => {
     expect(matches.map((match) => match.spreadsheetId)).toStrictEqual(["sheet-a", "sheet-b"]);
   });
 
+  // Verifies fails closed on a malformed marker page payload or continuation token without leaking it.
   it("fails closed on a malformed marker page payload or continuation token without leaking it", async () => {
     for (const page of [{ files: "nope" }, { files: [], nextPageToken: 42, incompleteSearch: false }, { files: [], nextPageToken: "", incompleteSearch: false }]) {
       const { api } = fakeMarkerListApi([page]);
@@ -3276,6 +3397,7 @@ describe("sheets factory guards", () => {
     await expect(listAllMarkerFiles(api, VALID_MARKER)).rejects.toThrow();
   });
 
+  // Verifies never leaks continuation tokens or the marker in pagination failures.
   it("never leaks continuation tokens or the marker in pagination failures", async () => {
     const { api } = fakeMarkerListApi([
       { files: [], nextPageToken: "tok-secret-1", incompleteSearch: false },
@@ -3291,6 +3413,7 @@ describe("sheets factory guards", () => {
     }
   });
 
+  // Verifies stops on a repeated continuation token instead of looping forever.
   it("stops on a repeated continuation token instead of looping forever", async () => {
     const { api, requests } = fakeMarkerListApi([
       { files: [], nextPageToken: "tok-1" , incompleteSearch: false },
@@ -3301,6 +3424,7 @@ describe("sheets factory guards", () => {
     expect(requests).toHaveLength(2);
   });
 
+  // Verifies fails closed beyond the hard page bound even with distinct tokens.
   it("fails closed beyond the hard page bound even with distinct tokens", async () => {
     const pages = Array.from({ length: MAX_MARKER_FILE_LIST_PAGES }, (_, index) => ({
       files: [],
@@ -3312,17 +3436,20 @@ describe("sheets factory guards", () => {
     expect(requests).toHaveLength(MAX_MARKER_FILE_LIST_PAGES);
   });
 
+  // Verifies validates the marker before any API call.
   it("validates the marker before any API call", async () => {
     const { api, requests } = fakeMarkerListApi([]);
     await expect(listAllMarkerFiles(api, "not-a-uuid")).rejects.toThrow();
     expect(requests).toHaveLength(0);
   });
 
+  // Verifies builds edit URLs from ids.
   it("builds edit URLs from ids", () => {
     expect(spreadsheetEditUrl("abc123")).toBe("https://docs.google.com/spreadsheets/d/abc123/edit");
     expect(spreadsheetEditUrl("Abc_123-xYz")).toBe("https://docs.google.com/spreadsheets/d/Abc_123-xYz/edit");
   });
 
+  // Verifies refuses a malformed id in the edit URL builder without leaking it.
   it("refuses a malformed id in the edit URL builder without leaking it", () => {
     for (const id of ["", "a b", "a\nb", "a\tSECRET", "a\u0000b", "a\u0007b", "a/b", "a.b", "a:b", "a?b"]) {
       expect(() => spreadsheetEditUrl(id)).toThrow();
@@ -3341,6 +3468,7 @@ describe("sheets factory guards", () => {
     }
   });
 
+  // Verifies validates permission lists (identity types require emailAddress) and plans reuse/upgrade/create.
   it("validates permission lists (identity types require emailAddress) and plans reuse/upgrade/create", () => {
     const permissions = [
       { id: "p1", emailAddress: "human@example.com", role: "owner", type: "user" as const },
@@ -3405,6 +3533,7 @@ describe("sheets factory guards", () => {
     return { api, listRequests, updates, creates };
   }
 
+  // Verifies validates permission list pages including the optional nextPageToken.
   it("validates permission list pages including the optional nextPageToken", () => {
     const page = {
       permissions: [{ id: "p1", emailAddress: "sa@proj.iam.gserviceaccount.com", role: "writer", type: "user" }],
@@ -3433,6 +3562,7 @@ describe("sheets factory guards", () => {
     expect(() => extractPermissionListPage({ permissions: [], nextPageToken: null })).toThrow();
   });
 
+  // Verifies pages permissions.list and reuses a writer found on a later page (zero create/update)
   it("pages permissions.list and reuses a writer found on a later page (zero create/update)", async () => {
     const { api, listRequests, updates, creates } = fakePermissionApi([
       { permissions: [{ id: "p-human", emailAddress: FAKE_OWNER, role: "owner", type: "user" }], nextPageToken: "tok-1" },
@@ -3450,6 +3580,7 @@ describe("sheets factory guards", () => {
     ]);
   });
 
+  // Verifies upgrades a reader found on a later page (one update, zero creates)
   it("upgrades a reader found on a later page (one update, zero creates)", async () => {
     const { api, updates, creates } = fakePermissionApi([
       { permissions: [], nextPageToken: "tok-1" },
@@ -3463,6 +3594,7 @@ describe("sheets factory guards", () => {
     expect(creates).toHaveLength(0);
   });
 
+  // Verifies creates the permission only after the final page when the SA is absent everywhere.
   it("creates the permission only after the final page when the SA is absent everywhere", async () => {
     const { api, listRequests, creates } = fakePermissionApi([
       { permissions: [], nextPageToken: "tok-1" },
@@ -3481,6 +3613,7 @@ describe("sheets factory guards", () => {
     expect(listRequests.map((request) => request.pageToken)).toStrictEqual([undefined, "tok-1", "tok-2"]);
   });
 
+  // Verifies fails closed on a malformed page payload or continuation token without leaking it.
   it("fails closed on a malformed page payload or continuation token without leaking it", async () => {
     for (const page of [
       { permissions: "nope" },
@@ -3498,6 +3631,7 @@ describe("sheets factory guards", () => {
     await expect(ensureSaWriterPermission(api, SPREADSHEET_ID, "sa@proj.iam.gserviceaccount.com")).rejects.toThrow();
   });
 
+  // Verifies stops on a repeated continuation token instead of looping forever.
   it("stops on a repeated continuation token instead of looping forever", async () => {
     const { api, listRequests } = fakePermissionApi([
       { permissions: [], nextPageToken: "tok-1" },
@@ -3508,6 +3642,7 @@ describe("sheets factory guards", () => {
     expect(listRequests).toHaveLength(2);
   });
 
+  // Verifies fails closed beyond the hard page bound even with distinct tokens.
   it("fails closed beyond the hard page bound even with distinct tokens", async () => {
     const pages = Array.from({ length: MAX_PERMISSION_LIST_PAGES }, (_, index) => ({
       permissions: [],
@@ -3519,6 +3654,7 @@ describe("sheets factory guards", () => {
     expect(listRequests).toHaveLength(MAX_PERMISSION_LIST_PAGES);
   });
 
+  // Verifies never mutates more than one duplicate target permission across pages.
   it("never mutates more than one duplicate target permission across pages", async () => {
     const { api, updates, creates } = fakePermissionApi([
       { permissions: [{ id: "p-sa-1", emailAddress: "sa@proj.iam.gserviceaccount.com", role: "reader", type: "user" }], nextPageToken: "tok-1" },
@@ -3535,6 +3671,7 @@ describe("sheets factory guards", () => {
     expect(creates).toHaveLength(0);
   });
 
+  // Verifies permits permissions without emailAddress for non-identity types and ignores them in planning.
   it("permits permissions without emailAddress for non-identity types and ignores them in planning", () => {
     const anyone = { id: "p3", role: "reader", type: "anyone" };
     const domain = { id: "p4", role: "reader", type: "domain" };
@@ -3548,6 +3685,7 @@ describe("sheets factory guards", () => {
     });
   });
 
+  // Verifies validates drive file metadata for the ownership check.
   it("validates drive file metadata for the ownership check", () => {
     const payload = {
       id: "abc",
@@ -3575,6 +3713,7 @@ describe("sheets factory guards", () => {
     expect(() => extractDriveFileMetadata({ ...payload, id: "a b" }, "abc")).toThrow();
   });
 
+  // Verifies rejects malformed Drive ids at every untrusted SDK boundary (newline/control/space injection)
   it("rejects malformed Drive ids at every untrusted SDK boundary (newline/control/space injection)", () => {
     const createPayload = (id: unknown): Record<string, unknown> => ({
       id,
@@ -3598,6 +3737,7 @@ describe("sheets factory guards", () => {
   });
 });
 
+// Covers SA access verifier.
 describe("SA access verifier", () => {
   function recordingSleeper(): { sleeper: Sleeper; delays: number[] } {
     const delays: number[] = [];
@@ -3654,6 +3794,7 @@ describe("SA access verifier", () => {
   const fresh = { keyFresh: true, shareFresh: false };
   const reused = { keyFresh: false, shareFresh: false };
 
+  // Verifies retries invalid JWT signature on a fresh key and succeeds with the exact schedule.
   it("retries invalid JWT signature on a fresh key and succeeds with the exact schedule", async () => {
     const { sleeper, delays } = recordingSleeper();
     const client = scriptedClient([
@@ -3668,6 +3809,7 @@ describe("SA access verifier", () => {
     expect(client.receivedCredentials).toStrictEqual([TEST_CREDENTIALS]);
   });
 
+  // Verifies does not retry invalid JWT signature on a reused key.
   it("does not retry invalid JWT signature on a reused key", async () => {
     const { sleeper, delays } = recordingSleeper();
     const client = scriptedClient([new Error("invalid_grant: Invalid JWT Signature")]);
@@ -3679,6 +3821,7 @@ describe("SA access verifier", () => {
     expect(client.attempts()).toBe(1);
   });
 
+  // Verifies does not treat generic invalid_grant/expired credentials as propagation.
   it("does not treat generic invalid_grant/expired credentials as propagation", async () => {
     const { sleeper, delays } = recordingSleeper();
     const client = scriptedClient([new Error("invalid_grant: token has been expired")]);
@@ -3690,6 +3833,7 @@ describe("SA access verifier", () => {
     expect(client.attempts()).toBe(1);
   });
 
+  // Verifies retries 403/404 only when the writer permission was created/upgraded this run.
   it("retries 403/404 only when the writer permission was created/upgraded this run", async () => {
     for (const error of [httpError(403), httpError(404)]) {
       // Fresh share: full eight-attempt schedule.
@@ -3714,6 +3858,7 @@ describe("SA access verifier", () => {
     }
   });
 
+  // Verifies retries 429/5xx regardless of key/share freshness and exhausts the schedule.
   it("retries 429/5xx regardless of key/share freshness and exhausts the schedule", async () => {
     for (const error of [httpError(429), httpError(500), httpError(503)]) {
       const { sleeper, delays } = recordingSleeper();
@@ -3727,6 +3872,7 @@ describe("SA access verifier", () => {
     }
   });
 
+  // Verifies fails immediately on permanent 4xx, network failures, malformed, and mismatched payloads.
   it("fails immediately on permanent 4xx, network failures, malformed, and mismatched payloads", async () => {
     for (const error of [httpError(400), httpError(401), new Error("ENOTFOUND token.example")]) {
       const { sleeper, delays } = recordingSleeper();
@@ -3771,6 +3917,7 @@ describe("SA access verifier", () => {
     }
   });
 
+  // Verifies classifies retryable errors by status and freshness context.
   it("classifies retryable errors by status and freshness context", () => {
     expect(isRetryableVerifyError(new Error("invalid_grant: Invalid JWT Signature"), fresh)).toBe(true);
     expect(isRetryableVerifyError(new Error("invalid_grant: Invalid JWT Signature"), reused)).toBe(false);
@@ -3785,6 +3932,7 @@ describe("SA access verifier", () => {
     expect(isRetryableVerifyError(new Error("ENOTFOUND"), fresh)).toBe(false);
   });
 
+  // Verifies succeeds on the first attempt without sleeping.
   it("succeeds on the first attempt without sleeping", async () => {
     const { sleeper, delays } = recordingSleeper();
     const client = scriptedClient([]);
@@ -3794,6 +3942,7 @@ describe("SA access verifier", () => {
     expect(client.attempts()).toBe(1);
   });
 
+  // Verifies rejects a malformed spreadsheet id BEFORE the client factory or the SDK is touched.
   it("rejects a malformed spreadsheet id BEFORE the client factory or the SDK is touched", async () => {
     for (const spreadsheetId of ["", "a b", "a\nb", "a\tb", "a\u0000b", "a/b", "a.b", "a:b", "a?b", 42, null, undefined]) {
       const { sleeper, delays } = recordingSleeper();
@@ -3810,6 +3959,7 @@ describe("SA access verifier", () => {
     }
   });
 
+  // Verifies uses ONLY the in-memory validated credentials: replacing the key path after validation cannot redirect the verifier.
   it("uses ONLY the in-memory validated credentials: replacing the key path after validation cannot redirect the verifier", async () => {
     // Read the credential through the secure descriptor boundary, then
     // REPLACE the file behind the validated path with a foreign credential:
@@ -3861,10 +4011,12 @@ describe("SA access verifier", () => {
   });
 });
 
+// Covers SetupPathSafetyError carrier codes (Phase 6)
 describe("SetupPathSafetyError carrier codes (Phase 6)", () => {
   const credentialsPath = "/abs/path/key.json";
   const spreadsheetUrl = "https://docs.google.com/spreadsheets/d/abc/edit";
 
+  // Verifies writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_SYMLINK_REFUSED for a symlink.
   it("writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_SYMLINK_REFUSED for a symlink", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -3881,6 +4033,7 @@ describe("SetupPathSafetyError carrier codes (Phase 6)", () => {
     }
   });
 
+  // Verifies writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_NOT_REGULAR_FILE for a directory.
   it("writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_NOT_REGULAR_FILE for a directory", () => {
     const dir = makeTempDir();
     const outputDir = join(dir, "env-dir");
@@ -3895,6 +4048,7 @@ describe("SetupPathSafetyError carrier codes (Phase 6)", () => {
     }
   });
 
+  // Verifies writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_ALIASES_RESERVED for an alias.
   it("writeSetupEnvFile throws SetupPathSafetyError with OUTPUT_ALIASES_RESERVED for an alias", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -3911,6 +4065,7 @@ describe("SetupPathSafetyError carrier codes (Phase 6)", () => {
     }
   });
 
+  // Verifies atomicWritePrivateFile throws SetupPathSafetyError with SETUP_WRITE_NO_PROGRESS on zero-byte write.
   it("atomicWritePrivateFile throws SetupPathSafetyError with SETUP_WRITE_NO_PROGRESS on zero-byte write", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -3939,6 +4094,7 @@ describe("SetupPathSafetyError carrier codes (Phase 6)", () => {
     }
   });
 
+  // Verifies saveSetupState throws SetupPathSafetyError with CHECKPOINT_TEMP_EXISTS on EEXIST.
   it("saveSetupState throws SetupPathSafetyError with CHECKPOINT_TEMP_EXISTS on EEXIST", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -3965,6 +4121,7 @@ describe("SetupPathSafetyError carrier codes (Phase 6)", () => {
     }
   });
 
+  // Verifies atomicWritePrivateFile throws SetupPathSafetyError with OUTPUT_TEMP_PERMISSION_VERIFY_FAILED on mode mismatch.
   it("atomicWritePrivateFile throws SetupPathSafetyError with OUTPUT_TEMP_PERMISSION_VERIFY_FAILED on mode mismatch", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
