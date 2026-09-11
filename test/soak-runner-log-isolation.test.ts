@@ -94,7 +94,9 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner fresh-run log isolation (MEDIUM 7).
 describeLongSoak("soak runner fresh-run log isolation (MEDIUM 7)", () => {
+  // Verifies: a fresh run in a reused output dir never retains stale SQLite rows or log backups.
   it(
     "a fresh run in a reused output dir never retains stale SQLite rows or log backups",
     { timeout: 120_000 },
@@ -190,6 +192,7 @@ describeLongSoak("soak runner fresh-run log isolation (MEDIUM 7)", () => {
     },
   );
 
+  // Verifies: a fresh-run crash window never resumes the previous run identity (state/checkpoint removed before the DB opens).
   it(
     "a fresh-run crash window never resumes the previous run identity (state/checkpoint removed before the DB opens)",
     { timeout: 120_000 },
@@ -250,7 +253,9 @@ describeLongSoak("soak runner fresh-run log isolation (MEDIUM 7)", () => {
 });
 
 
+// Suite: soak runner same-process logger isolation.
 describeLongSoak("soak runner same-process logger isolation", () => {
+  // Verifies: repeated runs in one Node process keep per-run logger env and log files.
   it(
     "repeated runs in one Node process keep per-run logger env and log files",
     { timeout: 120_000 },
@@ -338,7 +343,9 @@ describeLongSoak("soak runner same-process logger isolation", () => {
 });
 
 
+// Suite: soak runner fresh-run tmp staging isolation.
 describeLongSoak("soak runner fresh-run tmp staging isolation", () => {
+  // Verifies: a fresh run removes stale atomic-write staging files without touching arbitrary files.
   it(
     "a fresh run removes stale atomic-write staging files without touching arbitrary files",
     { timeout: 120_000 },
