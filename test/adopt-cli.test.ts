@@ -39,7 +39,9 @@ function baseArgv(extra: readonly string[] = []): string[] {
   return ["--entity", "Invoice", "--tab", "Invoices", ...extra];
 }
 
+// Covers parseAdoptArgs.
 describe("parseAdoptArgs", () => {
+  // Verifies applies the documented defaults.
   it("applies the documented defaults", () => {
     const parsed = parseAdoptArgs(baseArgv());
     expect(parsed.status).toBe("valid");
@@ -54,6 +56,7 @@ describe("parseAdoptArgs", () => {
     });
   });
 
+  // Verifies accepts the full flag surface.
   it("accepts the full flag surface", () => {
     const parsed = parseAdoptArgs([
       "--entity", "Invoice",
@@ -80,17 +83,20 @@ describe("parseAdoptArgs", () => {
     expect(parsed.options.json).toBe(true);
   });
 
+  // Verifies rejects unknown flags, missing values, and missing required flags.
   it("rejects unknown flags, missing values, and missing required flags", () => {
     expect(parseAdoptArgs(["--wat"]).status).toBe("invalid");
     expect(parseAdoptArgs(["--entity"]).status).toBe("invalid");
     expect(parseAdoptArgs(["--tab", "Invoices"]).status).toBe("invalid");
   });
 
+  // Verifies rejects an invalid --mode value.
   it("rejects an invalid --mode value", () => {
     const parsed = parseAdoptArgs([...baseArgv(), "--mode", "yolo"]);
     expect(parsed.status).toBe("invalid");
   });
 
+  // Verifies parses repeated --map bindings into the columnMap (§12)
   it("parses repeated --map bindings into the columnMap (§12)", () => {
     const parsed = parseAdoptArgs(baseArgv([
       "--map", "Invoice No=invoiceNo",
@@ -104,12 +110,14 @@ describe("parseAdoptArgs", () => {
     });
   });
 
+  // Verifies rejects a malformed --map binding.
   it("rejects a malformed --map binding", () => {
     expect(parseAdoptArgs(baseArgv(["--map", "Invoice No=invoiceNo".replace("=invoiceNo", "")])).status).toBe("invalid");
     expect(parseAdoptArgs(baseArgv(["--map", "novalue"])).status).toBe("invalid");
     expect(parseAdoptArgs(baseArgv(["--map", "=total"])).status).toBe("invalid");
   });
 
+  // Verifies requires --entities in adopt mode but not in dry-run mode.
   it("requires --entities in adopt mode but not in dry-run mode", () => {
     const adopt = parseAdoptArgs([...baseArgv(), "--mode", "adopt"]);
     expect(adopt.status).toBe("invalid");
@@ -117,6 +125,7 @@ describe("parseAdoptArgs", () => {
     expect(dryRun.status).toBe("valid");
   });
 
+  // Verifies parses repeated --adopt flags into N entity specs.
   it("parses repeated --adopt flags into N entity specs", () => {
     const parsed = parseAdoptArgs([
       "--adopt", "Invoice=Invoices;Invoice No=invoiceNo",
@@ -133,6 +142,7 @@ describe("parseAdoptArgs", () => {
     expect(parsed.options.tabName).toBeUndefined();
   });
 
+  // Verifies rejects malformed --adopt values.
   it("rejects malformed --adopt values", () => {
     for (const bad of [
       "Invoice",            // no '='
@@ -147,6 +157,7 @@ describe("parseAdoptArgs", () => {
     }
   });
 
+  // Verifies rejects mixing --adopt with the legacy --entity/--tab flags (exit 2)
   it("rejects mixing --adopt with the legacy --entity/--tab flags (exit 2)", () => {
     const parsed = parseAdoptArgs([
       "--entity", "Invoice", "--tab", "Invoices",
@@ -157,6 +168,7 @@ describe("parseAdoptArgs", () => {
     expect(parsed.failure.code).toBe("invalid_args");
   });
 
+  // Verifies rejects per-run flags when several --adopt entries are given.
   it("rejects per-run flags when several --adopt entries are given", () => {
     const parsed = parseAdoptArgs([
       "--adopt", "Invoice=Invoices", "--adopt", "Customer=Customers",
@@ -167,6 +179,7 @@ describe("parseAdoptArgs", () => {
     expect(parsed.failure.code).toBe("invalid_args");
   });
 
+  // Verifies carries the --map columnMap through a SINGLE --adopt entry (F2)
   it("carries the --map columnMap through a SINGLE --adopt entry (F2)", () => {
     const parsed = parseAdoptArgs(["--adopt", "Invoice=Invoices", "--map", "H=p"]);
     expect(parsed.status).toBe("valid");
@@ -175,6 +188,7 @@ describe("parseAdoptArgs", () => {
     expect(parsed.options.columnMap).toEqual({ H: "p" });
   });
 
+  // Verifies shows help on -h/--help.
   it("shows help on -h/--help", () => {
     for (const flag of ["-h", "--help"]) {
       const parsed = parseAdoptArgs([flag]);
@@ -241,7 +255,9 @@ function sinks(stdout: string[], stderr: string[] = []) {
   };
 }
 
+// Covers renderAdoptionReport.
 describe("renderAdoptionReport", () => {
+  // Verifies renders a ready report with bindings, ignored columns, and next step.
   it("renders a ready report with bindings, ignored columns, and next step", () => {
     const text = renderAdoptionReport(readyEntityReport(), true);
     expect(text).toContain("READY");
@@ -252,6 +268,7 @@ describe("renderAdoptionReport", () => {
     expect(text).toContain("--mode adopt");
   });
 
+  // Verifies renders blocked reports with the problem list.
   it("renders blocked reports with the problem list", () => {
     const text = renderAdoptionReport(blockedEntityReport(), false);
     expect(text).toContain("BLOCKED");
@@ -259,6 +276,7 @@ describe("renderAdoptionReport", () => {
   });
 });
 
+// Covers runAdoptCli.
 describe("runAdoptCli", () => {
   const baseOptions = {
     entityName: "Invoice",
@@ -270,6 +288,7 @@ describe("runAdoptCli", () => {
     json: false,
   };
 
+  // Verifies dry-run: renders the report and exits 0 when READY.
   it("dry-run: renders the report and exits 0 when READY", async () => {
     const stdout: string[] = [];
     const { runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
@@ -283,6 +302,7 @@ describe("runAdoptCli", () => {
     expect(stdout.join("")).toContain("READY");
   });
 
+  // Verifies dry-run: exits 1 when BLOCKED.
   it("dry-run: exits 1 when BLOCKED", async () => {
     const stdout: string[] = [];
     const { runner } = runnerReturning(dryRunResult(blockedEntityReport(), false));
@@ -295,6 +315,7 @@ describe("runAdoptCli", () => {
     expect(code).toBe(ADOPT_RUNTIME_ERROR_EXIT_CODE);
   });
 
+  // Verifies dry-run --json: emits the raw report JSON.
   it("dry-run --json: emits the raw report JSON", async () => {
     const stdout: string[] = [];
     const { runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
@@ -309,6 +330,7 @@ describe("runAdoptCli", () => {
     expect(parsed).toMatchObject({ mode: "dry-run", ok: true });
   });
 
+  // Verifies passes the adopt spec and env overrides to the runner.
   it("passes the adopt spec and env overrides to the runner", async () => {
     const stdout: string[] = [];
     const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
@@ -342,6 +364,7 @@ describe("runAdoptCli", () => {
     expect(calls[0]!.entities).toEqual([CliProbe]);
   });
 
+  // Verifies adopt mode: confirms before running; a DECLINED confirmation exits 1 on stderr with zero side effects.
   it("adopt mode: confirms before running; a DECLINED confirmation exits 1 on stderr with zero side effects", async () => {
     // Declined: the input yields "n". Terra S2/S3: exit 1 (automation must
     // not read a silently skipped adoption as success) and the prompt/cancel
@@ -363,6 +386,7 @@ describe("runAdoptCli", () => {
     expect(stdout).toEqual([]);
   });
 
+  // Verifies finalizes stdin exactly once on every outcome (Terra S1)
   it("finalizes stdin exactly once on every outcome (Terra S1)", async () => {
     for (const options of [
       baseOptions,
@@ -381,6 +405,7 @@ describe("runAdoptCli", () => {
     }
   });
 
+  // Verifies finalizes stdin even when the runner throws (Terra S1)
   it("finalizes stdin even when the runner throws (Terra S1)", async () => {
     let finalizations = 0;
     const code = await runAdoptCli({
@@ -394,6 +419,7 @@ describe("runAdoptCli", () => {
     expect(finalizations).toBe(1);
   });
 
+  // Verifies adopt mode: --yes skips the prompt and reports success.
   it("adopt mode: --yes skips the prompt and reports success", async () => {
     const stdout: string[] = [];
     const code = await runAdoptCli({
@@ -406,6 +432,7 @@ describe("runAdoptCli", () => {
     expect(stdout.join("")).toContain("Adoption complete");
   });
 
+  // Verifies maps a sync-disabled result to exit 1 with a stable error line.
   it("maps a sync-disabled result to exit 1 with a stable error line", async () => {
     const stderr: string[] = [];
     const code = await runAdoptCli({
@@ -418,6 +445,7 @@ describe("runAdoptCli", () => {
     expect(stderr.join("")).toContain("hikoutei-adopt:sync_disabled:");
   });
 
+  // Verifies maps a runner throw with a code to the machine-readable error line.
   it("maps a runner throw with a code to the machine-readable error line", async () => {
     const stderr: string[] = [];
     const code = await runAdoptCli({
@@ -431,6 +459,7 @@ describe("runAdoptCli", () => {
   });
 });
 
+// Covers runAdoptCli (multi --adopt)
 describe("runAdoptCli (multi --adopt)", () => {
   const multiOptions = {
     adopts: [
@@ -444,6 +473,7 @@ describe("runAdoptCli (multi --adopt)", () => {
     json: false,
   };
 
+  // Verifies passes ALL entity specs to the runner as one adopt.entities record.
   it("passes ALL entity specs to the runner as one adopt.entities record", async () => {
     const stdout: string[] = [];
     const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
@@ -464,6 +494,7 @@ describe("runAdoptCli (multi --adopt)", () => {
     });
   });
 
+  // Verifies renders a dry-run report for BOTH entities.
   it("renders a dry-run report for BOTH entities", async () => {
     const customer = { ...readyEntityReport(), entityName: "Customer", tabName: "Customers" };
     const result: TypedSheetsWithSyncResult = {
@@ -485,6 +516,7 @@ describe("runAdoptCli (multi --adopt)", () => {
     expect(text).toContain('tab "Customers"');
   });
 
+  // Verifies a single --adopt entry applies the legacy per-run flags to that one entity.
   it("a single --adopt entry applies the legacy per-run flags to that one entity", async () => {
     const stdout: string[] = [];
     const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
@@ -509,6 +541,7 @@ describe("runAdoptCli (multi --adopt)", () => {
     });
   });
 
+  // Verifies single --adopt + --map: the flow merges the --map columnMap into the entity spec (F2)
   it("single --adopt + --map: the flow merges the --map columnMap into the entity spec (F2)", async () => {
     const stdout: string[] = [];
     const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
@@ -532,6 +565,7 @@ describe("runAdoptCli (multi --adopt)", () => {
     });
   });
 
+  // Verifies single --adopt: the INLINE map wins over the flow-level --map on a conflict (F2)
   it("single --adopt: the INLINE map wins over the flow-level --map on a conflict (F2)", async () => {
     const stdout: string[] = [];
     const { calls, runner } = runnerReturning(dryRunResult(readyEntityReport(), true));
