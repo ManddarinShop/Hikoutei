@@ -23,7 +23,9 @@ import {
 
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 
+// Verifies Sheets date-serial conversion round-trips canonical timestamps exactly.
 describe("date serial round-trip normalization", () => {
+  // Verifies dates with non-zero milliseconds survive the round-trip exactly.
   it("survives a date with non-zero milliseconds exactly", () => {
     // 2024-03-15T00:00:00.002Z is the drift case found in the live soak
     // class: its serial is a hair below the true day fraction, so the
@@ -39,6 +41,7 @@ describe("date serial round-trip normalization", () => {
     }
   });
 
+  // Verifies whole-second and whole-day dates keep their exact canonical rendering.
   it("preserves exact whole-second and whole-day dates", () => {
     // Dates whose serial is an exact binary fraction must keep their exact
     // canonical rendering (the existing provider tests rely on these).
@@ -52,6 +55,7 @@ describe("date serial round-trip normalization", () => {
     }
   });
 
+  // Verifies the serial wire output is unchanged (rounding applies to reads only).
   it("keeps the serial wire output unchanged", () => {
     // The wire serial is the Excel 1900-system day offset; rounding is
     // applied only on the read-back conversion, never on writes.
@@ -63,6 +67,7 @@ describe("date serial round-trip normalization", () => {
     );
   });
 
+  // Verifies invalid serials still throw RangeError exactly like the unrounded path.
   it("fails on invalid serials exactly like the unrounded conversion", () => {
     // NaN and non-finite serials still produce an invalid Date whose
     // toISOString() throws a RangeError; rounding must not mask that.
