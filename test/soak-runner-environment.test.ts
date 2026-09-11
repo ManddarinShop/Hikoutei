@@ -54,19 +54,23 @@ import {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+// Suite: soak runner exported redaction vocabularies.
 describe("soak runner exported redaction vocabularies", () => {
+  // Verifies: exposes the expected error codes used by the workload.
   it("exposes the expected error codes used by the workload", () => {
     expect(EXPECTED_ERROR_CODES.invalidField).toBe("invalid_scalar_value");
     expect(EXPECTED_ERROR_CODES.invalidQuery).toBe("invalid_query");
     expect(EXPECTED_ERROR_CODES.unmanagedEntity).toBe("unmanaged_entity");
   });
 
+  // Verifies: exposes a closed set of failure reason codes.
   it("exposes a closed set of failure reason codes", () => {
     expect(FAILURE_REASON_CODES.ROLLBACK_VERIFICATION).toBe("rollback-verification");
     expect(FAILURE_REASON_CODES.QUERY_MISMATCH).toBe("query-mismatch");
     expect(FAILURE_REASON_CODES.UNEXPECTED_THROW).toBe("unexpected-throw");
   });
 
+  // Verifies: lists every known stable code as a recognisable string.
   it("lists every known stable code as a recognisable string", () => {
     expect(KNOWN_STABLE_CODES).toContain("invalid_query");
     expect(KNOWN_STABLE_CODES).toContain("google_sheets_api_http_error");
@@ -76,6 +80,7 @@ describe("soak runner exported redaction vocabularies", () => {
     }
   });
 
+  // Verifies: lists every known stable class name.
   it("lists every known stable class name", () => {
     expect(KNOWN_STABLE_CLASSES).toContain("Error");
     expect(KNOWN_STABLE_CLASSES).toContain("HikouteiError");
@@ -85,6 +90,7 @@ describe("soak runner exported redaction vocabularies", () => {
     }
   });
 
+  // Verifies: exposes the stable table and entity name vocabularies.
   it("exposes the stable table and entity name vocabularies", () => {
     expect(KNOWN_TABLE_NAMES).toContain("soak_customers");
     expect(KNOWN_TABLE_NAMES).toContain("soak_orders");
@@ -93,9 +99,11 @@ describe("soak runner exported redaction vocabularies", () => {
   });
 });
 
+// Suite: soak runner plain-node ts-loader failure predicate.
 describe("soak runner plain-node ts-loader failure predicate", () => {
   const sourceURL = new URL("file:///repo/src/module.ts");
 
+  // Verifies: accepts the canonical loader shape with a matching url.
   it("accepts the canonical loader shape with a matching url", () => {
     const err = Object.assign(
       new Error('Unknown file extension ".ts" for /repo/src/module.ts'),
@@ -104,6 +112,7 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
     expect(isExpectedPlainNodeTsLoaderFailure(err, sourceURL)).toBe(true);
   });
 
+  // Verifies: accepts the canonical loader shape with no url (exact message).
   it("accepts the canonical loader shape with no url (exact message)", () => {
     const err = Object.assign(
       new Error('Unknown file extension ".ts" for /repo/src/module.ts'),
@@ -112,6 +121,7 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
     expect(isExpectedPlainNodeTsLoaderFailure(err, sourceURL)).toBe(true);
   });
 
+  // Verifies: rejects a conflicting url even when the message names the source.
   it("rejects a conflicting url even when the message names the source", () => {
     const err = Object.assign(
       new Error('Unknown file extension ".ts" for /repo/src/module.ts'),
@@ -120,6 +130,7 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
     expect(isExpectedPlainNodeTsLoaderFailure(err, sourceURL)).toBe(false);
   });
 
+  // Verifies: rejects an arbitrary code-shaped runtime error that mentions the source path.
   it("rejects an arbitrary code-shaped runtime error that mentions the source path", () => {
     const err = Object.assign(
       new Error(
@@ -130,6 +141,7 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
     expect(isExpectedPlainNodeTsLoaderFailure(err, sourceURL)).toBe(false);
   });
 
+  // Verifies: rejects a non-canonical message for the correct code and no url.
   it("rejects a non-canonical message for the correct code and no url", () => {
     const err = Object.assign(
       new Error('Unknown file extension ".ts" happened for /repo/src/module.ts here'),
@@ -138,6 +150,7 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
     expect(isExpectedPlainNodeTsLoaderFailure(err, sourceURL)).toBe(false);
   });
 
+  // Verifies: rejects an empty-string url even when the message is canonical.
   it("rejects an empty-string url even when the message is canonical", () => {
     const err = Object.assign(
       new Error('Unknown file extension ".ts" for /repo/src/module.ts'),
@@ -146,6 +159,7 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
     expect(isExpectedPlainNodeTsLoaderFailure(err, sourceURL)).toBe(false);
   });
 
+  // Verifies: rejects a non-string url even when the message is canonical.
   it("rejects a non-string url even when the message is canonical", () => {
     const err = Object.assign(
       new Error('Unknown file extension ".ts" for /repo/src/module.ts'),
@@ -154,6 +168,7 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
     expect(isExpectedPlainNodeTsLoaderFailure(err, sourceURL)).toBe(false);
   });
 
+  // Verifies: rejects a null url even when the message is canonical.
   it("rejects a null url even when the message is canonical", () => {
     const err = Object.assign(
       new Error('Unknown file extension ".ts" for /repo/src/module.ts'),
@@ -163,7 +178,9 @@ describe("soak runner plain-node ts-loader failure predicate", () => {
   });
 });
 
+// Suite: soak runner system-state readiness reader resolution.
 describe("soak runner system-state readiness reader resolution", () => {
+  // Verifies: returns immediate-ready when the source module is absent, even with dist present.
   it("returns immediate-ready when the source module is absent, even with dist present", async () => {
     const reader = await resolveSystemStateReadinessReader({
       sourceExists: () => false,
@@ -179,6 +196,7 @@ describe("soak runner system-state readiness reader resolution", () => {
     expect(reader({})).toEqual({ status: "ready" });
   });
 
+  // Verifies: never falls back to dist under Vitest even for the expected loader shape.
   it("never falls back to dist under Vitest even for the expected loader shape", async () => {
     const sourceURL = new URL("file:///repo/src/shared/observability/internalLog.ts");
     const loaderShape = Object.assign(
@@ -200,6 +218,7 @@ describe("soak runner system-state readiness reader resolution", () => {
     })).rejects.toThrow();
   });
 
+  // Verifies: rethrows a real source error even with dist present and fallback allowed.
   it("rethrows a real source error even with dist present and fallback allowed", async () => {
     await expect(resolveSystemStateReadinessReader({
       sourceURL: new URL("file:///repo/src/a.ts"),
@@ -213,6 +232,7 @@ describe("soak runner system-state readiness reader resolution", () => {
     })).rejects.toThrow("bad syntax");
   });
 
+  // Verifies: falls back to dist only for the expected loader shape in a plain-Node env.
   it("falls back to dist only for the expected loader shape in a plain-Node env", async () => {
     const sourceURL = new URL("file:///repo/src/shared/observability/internalLog.ts");
     const loaderShape = Object.assign(
@@ -233,7 +253,9 @@ describe("soak runner system-state readiness reader resolution", () => {
   });
 });
 
+// Suite: soak cleanup live-env precondition.
 describe("soak cleanup live-env precondition", () => {
+  // Verifies: fails closed when either required live sandbox env var is missing.
   it("fails closed when either required live sandbox env var is missing", () => {
     expect(cleanupLiveEnvMissingReason(undefined, undefined))
       .toContain("HIKOUTEI_SYNC_SPREADSHEET_URL");
@@ -246,6 +268,7 @@ describe("soak cleanup live-env precondition", () => {
       .toContain("GOOGLE_APPLICATION_CREDENTIALS");
   });
 
+  // Verifies: never leaks the environment values, only the variable names.
   it("never leaks the environment values, only the variable names", () => {
     const missingBoth = cleanupLiveEnvMissingReason("", "fake/path/creds.json") ?? "";
     expect(missingBoth).not.toContain("creds.json");
@@ -254,6 +277,7 @@ describe("soak cleanup live-env precondition", () => {
     expect(missingCreds).not.toContain("docs.google.com");
   });
 
+  // Verifies: returns null when both required env vars are present.
   it("returns null when both required env vars are present", () => {
     expect(cleanupLiveEnvMissingReason("https://docs.google.com/spreadsheets/d/AbC123_xyz", "/path/creds.json"))
       .toBeNull();
