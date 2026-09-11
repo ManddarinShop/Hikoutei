@@ -210,7 +210,9 @@ async function createStorage() {
   return { orm, storage };
 }
 
+// Covers existing-sheet adoption seeding engine.
 describe("existing-sheet adoption seeding engine", () => {
+  // Verifies blocks seeding when an observed cell kind would be quarantined by polling (fail-closed).
   it("blocks seeding when an observed cell kind would be quarantined by polling (fail-closed)", () => {
     // The live-incident shape: a numeric sheet cell bound to a string-declared
     // property. Seeding must refuse with the stable code BEFORE any SQLite
@@ -226,6 +228,7 @@ describe("existing-sheet adoption seeding engine", () => {
     );
   });
 
+  // Verifies binds every observed row: binding, canonical INSERT, business key, observed visible state.
   it("binds every observed row: binding, canonical INSERT, business key, observed visible state", async () => {
     const { orm, storage } = await createStorage();
     try {
@@ -280,6 +283,7 @@ describe("existing-sheet adoption seeding engine", () => {
     }
   });
 
+  // Verifies rejects provider-generated anchors that are not derived from the PK (stability gate).
   it("rejects provider-generated anchors that are not derived from the PK (stability gate)", async () => {
     const { orm, storage } = await createStorage();
     try {
@@ -336,6 +340,7 @@ describe("existing-sheet adoption seeding engine", () => {
     }
   });
 
+  // Verifies absorbs the first human edit of a seeded row without quarantine (D6).
   it("absorbs the first human edit of a seeded row without quarantine (D6)", async () => {
     const { orm, storage } = await createStorage();
     try {
