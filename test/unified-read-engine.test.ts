@@ -246,7 +246,9 @@ function expectCapsHonored(transport: StubSheetsTransport): void {
   }
 }
 
+// Verifies the pure band-planning rules: chunking, packing, and calibration.
 describe("readPlan pure planner", () => {
+  // Verifies small bounds collapse to the byte-identical historical open band.
   it("collapses small bounds to the byte-identical historical open band", () => {
     const calibration = createReadCalibration();
     const bands = planRowBands({
@@ -263,6 +265,7 @@ describe("readPlan pure planner", () => {
     expect(bands).toEqual([{ address: "'Users'!A1:F1048576", cells: 6_000 }]);
   });
 
+  // Verifies an unknown bound plans the historical open band unchunked.
   it("plans the historical open band unchunked when NO bound is known", () => {
     const bands = planRowBands({
       addressPrefix: "'Users'!",
@@ -278,6 +281,7 @@ describe("readPlan pure planner", () => {
     expect(bands).toEqual([{ address: "'Users'!B2:B1048576", cells: 0 }]);
   });
 
+  // Verifies over-bound plans chunk with full coverage and an open-ended last band.
   it("chunks past the bound and keeps the LAST band open-ended", () => {
     const calibration = createReadCalibration();
     const bands = planRowBands({
@@ -310,6 +314,7 @@ describe("readPlan pure planner", () => {
     }
   });
 
+  // Verifies a proven extent closes the last band instead of leaving it open.
   it("closes the last band when the caller proves the extent (row sets)", () => {
     const bands = planRowBands({
       addressPrefix: "'Users'!",
@@ -328,6 +333,7 @@ describe("readPlan pure planner", () => {
     expect(bands[0]!.address).not.toContain("1048576");
   });
 
+  // Verifies band packing honors both the range cap and the hard byte ceiling.
   it("packs bands under the range cap AND the hard byte estimate", () => {
     const calibration = createReadCalibration();
     // 45 tiny bands: one request per 40 (range cap dominates).
@@ -354,6 +360,7 @@ describe("readPlan pure planner", () => {
     }
   });
 
+  // Verifies calibration only grows estimates and stays within its multiplier bound.
   it("calibration grows estimates (budget reduction) and never shrinks below 1", () => {
     const calibration = createReadCalibration();
     calibration.observe("values-only", 1_000, 9_000_000); // 9 KB/cell vs 120 B/cell
@@ -369,7 +376,9 @@ describe("readPlan pure planner", () => {
   });
 });
 
+// Verifies polling-lane reads stream in capped bands with per-band telemetry at 30k scale.
 describe("lane A polling through the engine (30k scale)", () => {
+  // Verifies cold titles settle with one enumeration, then band the gate read with telemetry.
   it("settles cold titles with ONE metadata enumeration, then bands the gate read", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedInputRows(spreadsheet, 30_000);
@@ -416,6 +425,7 @@ describe("lane A polling through the engine (30k scale)", () => {
     expect(added.some((request) => request.ranges.length === 0)).toBe(false);
   }, 120_000);
 
+  // Verifies a banded escalation observation reassembles rows exactly once, in order.
   it("reassembles a banded escalation observation without dropped or duplicated rows", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedSystemRows(spreadsheet, 12_000);
@@ -438,7 +448,9 @@ describe("lane A polling through the engine (30k scale)", () => {
   }, 120_000);
 });
 
+// Verifies preflight-lane receipt reads chunk cold full reads and band from the cursor after.
 describe("lane B preflight base through the engine (30k receipts)", () => {
+  // Verifies the cold receipt full read chunks and the next dispatch reads only the tail band.
   it("cold receipt full read is chunked; the cursor bands immediately after", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemRows(spreadsheet, 30_000);
@@ -472,6 +484,7 @@ describe("lane B preflight base through the engine (30k receipts)", () => {
     }
   }, 180_000);
 
+  // Verifies a duplicate effectId split across receipt bands fails closed.
   it("fails closed on a duplicate effectId that straddles receipt bands", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemRows(spreadsheet, 10);
@@ -488,7 +501,9 @@ describe("lane B preflight base through the engine (30k receipts)", () => {
   }, 120_000);
 });
 
+// Verifies the receipt-init subvariant classifies a missing-tab 400 and creates the tab.
 describe("refreshReceiptForWrite (receipt-init subvariant)", () => {
+  // Verifies the missing-tab 400 classifies as still-absent with atomic tab creation.
   it("classifies the missing-tab 400 as still-absent and creates the tab atomically", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemRows(spreadsheet, 3);
@@ -528,7 +543,9 @@ describe("refreshReceiptForWrite (receipt-init subvariant)", () => {
   });
 });
 
+// Verifies the all-lane 30k simulation streams every request within caps.
 describe("30k-scale end-to-end simulation (all lanes, no uncapped request)", () => {
+  // Verifies burst, gate, and probe stream within caps with bounded per-band bytes.
   it("burst + gate + probe all stream within caps with bounded per-band bytes", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemRows(spreadsheet, 30_000);
