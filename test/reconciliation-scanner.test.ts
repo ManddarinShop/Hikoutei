@@ -1,3 +1,11 @@
+/**
+ * Reconciliation scanner tests for `runReconciliationScan`.
+ *
+ * Exercises drift detection between the canonical SQLite state and the
+ * Sheets projection using MikroORM/SQLite fixtures with a fake provider:
+ * row matching by anchor and business key, correction-effect scheduling,
+ * and fail-closed behavior on duplicates, fences, and uncertain delivery.
+ */
 import {
   defineEntity,
   MikroORM,
@@ -43,6 +51,7 @@ EntitySchema.setClass(Entity);
 
 const SYSTEM_HEADERS = ["id", "status", "_deleted"] as const;
 
+// Covers runReconciliationScan.
 describe("runReconciliationScan", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -50,6 +59,7 @@ describe("runReconciliationScan", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  // Verifies reports zero drift when the sheet matches the desired state.
   it("reports zero drift when the sheet matches the desired state", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -100,6 +110,7 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  // Verifies rejects malformed canonical cells before scheduling a correction.
   it("rejects malformed canonical cells before scheduling a correction", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -134,6 +145,7 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  // Verifies matches a fast-appended row by business key without creating a duplicate.
   it("matches a fast-appended row by business key without creating a duplicate", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -181,6 +193,7 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  // Verifies matches an unanchored row by visible business key when canonical IDs are namespaced.
   it("matches an unanchored row by visible business key when canonical IDs are namespaced", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -234,6 +247,7 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  // Verifies matches a row with no physical anchor metadata by visible business key.
   it("matches a row with no physical anchor metadata by visible business key", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -283,6 +297,7 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  // Verifies does not silently match a duplicated identity and stays fail-closed.
   it("does not silently match a duplicated identity and stays fail-closed", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -346,6 +361,7 @@ describe("runReconciliationScan", () => {
     expect(payload.createIfMissing).toBe(true);
   });
 
+  // Verifies does not silently choose a row when the physical anchor is duplicated.
   it("does not silently choose a row when the physical anchor is duplicated", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -413,6 +429,7 @@ describe("runReconciliationScan", () => {
     expect(payload.createIfMissing).toBe(true);
   });
 
+  // Verifies does not accept a unique desired anchor when the desired identity is duplicated in the sheet.
   it("does not accept a unique desired anchor when the desired identity is duplicated in the sheet", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -483,6 +500,7 @@ describe("runReconciliationScan", () => {
     expect(payload.createIfMissing).toBe(true);
   });
 
+  // Verifies enqueues a correction effect when the sheet drifted from canonical.
   it("enqueues a correction effect when the sheet drifted from canonical", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -537,6 +555,7 @@ describe("runReconciliationScan", () => {
     });
   });
 
+  // Verifies enqueues a createIfMissing effect when the sheet is missing the row.
   it("enqueues a createIfMissing effect when the sheet is missing the row", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -579,6 +598,7 @@ describe("runReconciliationScan", () => {
     expect(payload.createIfMissing).toBe(true);
   });
 
+  // Verifies does not enqueue a duplicate while an equivalent correction is pending.
   it("does not enqueue a duplicate while an equivalent correction is pending", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -669,6 +689,7 @@ describe("runReconciliationScan", () => {
     expect(pendingEffect.effect_id).toBe("effect-existing");
   });
 
+  // Verifies defers corrections while the latest effect is delivery-uncertain.
   it("defers corrections while the latest effect is delivery-uncertain", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -780,6 +801,7 @@ describe("runReconciliationScan", () => {
     ))).resolves.toEqual([{ status: "delivery_uncertain" }]);
   });
 
+  // Verifies leaves extra sheet rows untouched in the report without enqueuing effects.
   it("leaves extra sheet rows untouched in the report without enqueuing effects", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -837,6 +859,7 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  // Verifies skips enqueuing effects when the reconciler cannot claim the writer fence.
   it("skips enqueuing effects when the reconciler cannot claim the writer fence", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -889,6 +912,7 @@ describe("runReconciliationScan", () => {
     await expect(noPendingEffects(adapter)).resolves.toBe(0);
   });
 
+  // Verifies supersedes a terminal failed head so the repair applies and the sheet converges.
   it("supersedes a terminal failed head so the repair applies and the sheet converges", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -987,6 +1011,7 @@ describe("runReconciliationScan", () => {
     ))).resolves.toMatchObject({ confirmed_visible_revision: 4 });
   });
 
+  // Verifies supersedes a terminal failed head with the in-flight correction when no append is needed.
   it("supersedes a terminal failed head with the in-flight correction when no append is needed", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1088,6 +1113,7 @@ describe("runReconciliationScan", () => {
       .toEqual({ kind: "string", value: "paid" });
   });
 
+  // Verifies repairs a wedged stream when the sheet already matches canonical and a follower is blocked.
   it("repairs a wedged stream when the sheet already matches canonical and a follower is blocked", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1205,6 +1231,7 @@ describe("runReconciliationScan", () => {
     });
   });
 
+  // Verifies appends a fresh repair superseding a terminal failed head when the sheet already matches and no correction is in flight.
   it("appends a fresh repair superseding a terminal failed head when the sheet already matches and no correction is in flight", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1301,6 +1328,7 @@ describe("runReconciliationScan", () => {
       .toEqual({ kind: "string", value: "paid" });
   });
 
+  // Verifies supersedes non-recoverable failed heads but leaves recoverable failed heads on the worker retry path.
   it("supersedes non-recoverable failed heads but leaves recoverable failed heads on the worker retry path", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1411,6 +1439,7 @@ describe("runReconciliationScan", () => {
     expect(ready.some((effect) => effect.effect_id === recoverable.effectId)).toBe(true);
   });
 
+  // Verifies applies a create-if-missing repair on a binding with a higher confirmed revision without regressing confirmed state.
   it("applies a create-if-missing repair on a binding with a higher confirmed revision without regressing confirmed state", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1504,6 +1533,7 @@ describe("runReconciliationScan", () => {
     expect(rescan).toMatchObject({ missingRows: 0, driftedRows: 0, effectsEnqueued: 0 });
   });
 
+  // Verifies floors the follower repair revision at the confirmed state when a create-baseline repair is in flight.
   it("floors the follower repair revision at the confirmed state when a create-baseline repair is in flight", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1639,6 +1669,7 @@ describe("runReconciliationScan", () => {
     expect(rescan).toMatchObject({ missingRows: 0, driftedRows: 0, effectsEnqueued: 0 });
   });
 
+  // Verifies repairs a clean failed-head stream from observed evidence when no confirmed state exists.
   it("repairs a clean failed-head stream from observed evidence when no confirmed state exists", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1756,6 +1787,7 @@ describe("runReconciliationScan", () => {
     });
   });
 
+  // Verifies repairs a drifted row from observed evidence when no confirmed state exists.
   it("repairs a drifted row from observed evidence when no confirmed state exists", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
@@ -1858,6 +1890,7 @@ describe("runReconciliationScan", () => {
     expect(rescan).toMatchObject({ missingRows: 0, driftedRows: 0, effectsEnqueued: 0 });
   });
 
+  // Verifies reports zero effects instead of throwing when the fence is lost during a supersede-only recovery.
   it("reports zero effects instead of throwing when the fence is lost during a supersede-only recovery", async () => {
     const { adapter, provider } = await bootstrap({
       entities: [
