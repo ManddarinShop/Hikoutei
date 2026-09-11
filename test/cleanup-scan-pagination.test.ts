@@ -69,7 +69,9 @@ const GOLDEN_PATH = join(
   "cleanup-golden.json",
 );
 
+// Covers cleanup scan pagination.
 describe("cleanup scan pagination", () => {
+  // Verifies reproduces the golden full-load repair decisions on the large fixture.
   it("reproduces the golden full-load repair decisions on the large fixture", async () => {
     const { adapter, provider } = await bootstrapLarge();
     try {
@@ -97,6 +99,7 @@ describe("cleanup scan pagination", () => {
     }
   }, 240_000);
 
+  // Verifies bounds every evidence page to the chunk size (peak scan memory is O(chunk))
   it("bounds every evidence page to the chunk size (peak scan memory is O(chunk))", async () => {
     const { adapter, provider } = await bootstrapLarge();
     try {
@@ -126,6 +129,7 @@ describe("cleanup scan pagination", () => {
     }
   }, 240_000);
 
+  // Verifies streams evidence identical to the full-load evidence on a small fixture.
   it("streams evidence identical to the full-load evidence on a small fixture", async () => {
     const { adapter, provider } = await bootstrapSmall();
     try {
@@ -166,6 +170,7 @@ describe("cleanup scan pagination", () => {
     }
   });
 
+  // Verifies handles empty tables, a single row, and mid-entity chunk splits.
   it("handles empty tables, a single row, and mid-entity chunk splits", async () => {
     const empty = await bootstrapSmallCustom({ bindings: [] });
     try {
@@ -212,6 +217,7 @@ describe("cleanup scan pagination", () => {
     }
   });
 
+  // Verifies keeps every binding's fields for multi-binding entities.
   it("keeps every binding's fields for multi-binding entities", async () => {
     // One entity, two active bindings: a flat (entity, field) cursor would
     // skip the second binding's rows at page boundaries. Whole-entity
