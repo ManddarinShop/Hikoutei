@@ -1,3 +1,8 @@
+/**
+ * sync service tests. Covers internal sync service googleSheetsApi full-provider mode; provisions an EMPTY spreadsheet, delivers effects, and polls without any Apps Script object; starts the direct Google Sheets effect worker at the 300-effect regular batch limit; uses the googleSheetsApi timeout for lease-headroom validation; uses the googleSheetsApi default timeout when the option omits requestTimeoutMs; passes lease-headroom validation with default timeouts and the default 120-second lease.
+ *
+ * Exercises the behavior through fake providers and SQLite fixtures with no live credentials.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +45,7 @@ const User = defineTypedSheetsEntity({
   },
 });
 
+// Covers: internal sync service googleSheetsApi full-provider mode.
 describe("internal sync service googleSheetsApi full-provider mode", () => {
   const services: InternalSyncService[] = [];
 
@@ -59,6 +65,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     },
   };
 
+  // Verifies: provisions an EMPTY spreadsheet, delivers effects, and polls without any Apps Script object.
   it("provisions an EMPTY spreadsheet, delivers effects, and polls without any Apps Script object", async () => {
     // A brand-new spreadsheet with no tabs at all: the full provider must
     // create every projection tab and header row through the stub transport.
@@ -143,6 +150,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(systemRow.__typed_sheets_deleted).toEqual({ kind: "boolean", value: true });
   });
 
+  // Verifies: starts the direct Google Sheets effect worker at the 300-effect regular batch limit.
   it("starts the direct Google Sheets effect worker at the 300-effect regular batch limit", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -188,6 +196,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     }
   });
 
+  // Verifies: uses the googleSheetsApi timeout for lease-headroom validation.
   it("uses the googleSheetsApi timeout for lease-headroom validation", async () => {
     // 100 s write + 2 s first-slot wait + 2 x 10 s read slots + 30 s
     // headroom = 152 s, far past the 120 s lease under test.
@@ -207,6 +216,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: uses the googleSheetsApi default timeout when the option omits requestTimeoutMs.
   it("uses the googleSheetsApi default timeout when the option omits requestTimeoutMs", async () => {
     // 60 s write + 2 s first-slot wait + 2 x 10 s read slots + 30 s
     // headroom = 112 s, still past the 85 s lease under test.
@@ -225,6 +235,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: passes lease-headroom validation with default timeouts and the default 120-second lease.
   it("passes lease-headroom validation with default timeouts and the default 120-second lease", async () => {
     // The default worst-case dispatch is 60 s write + 2 x 10 s reads + 30 s
     // headroom = 110 s (zero test pacing), which fits inside the 120 s
@@ -247,6 +258,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(service.effectSupervisor).toBeDefined();
   });
 
+  // Verifies: rejects a default-pacing lease that lacks the first-slot wait.
   it("rejects a default-pacing lease that lacks the first-slot wait", async () => {
     // Under the DEFAULT 2,000 ms interval the paced worst case is 60 s
     // write + 2 s first-slot wait + 2 x 10 s read slots + 30 s headroom =
@@ -268,6 +280,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: rejects a default-pacing lease exactly at the paced worst case.
   it("rejects a default-pacing lease exactly at the paced worst case", async () => {
     // The default interval (800 ms) participates in the bound: 60,000 +
     // 800 + 2 x 10,000 + 30,000 = 110,800 ms is exactly the worst case,
@@ -287,6 +300,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: accepts a default-pacing lease one millisecond above the paced worst case.
   it("accepts a default-pacing lease one millisecond above the paced worst case", async () => {
     // 110,801 ms beats the strict 110.8 s worst case by 1 ms, so the
     // DEFAULT 800 ms interval stays valid with the default 120 s lease.
@@ -309,6 +323,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(service.effectSupervisor).toBeDefined();
   });
 
+  // Verifies: rejects a request-start interval whose paced dispatch would outlive the effect lease.
   it("rejects a request-start interval whose paced dispatch would outlive the effect lease", async () => {
     // A 15,000 ms interval sits far above the 9,999 ms default-safe ceiling:
     // the worst-case dispatch is 60 s write + 15 s first-slot wait + 2 x 15 s
@@ -331,6 +346,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: accepts a request-start interval at the lease-safe ceiling.
   it("accepts a request-start interval at the lease-safe ceiling", async () => {
     // 9,999 ms is the largest default-safe interval: 120 s lease vs 60 s
     // write + 9,999 ms first-slot wait + 2 x 10 s read slots + 30 s headroom
@@ -355,6 +371,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(service.effectSupervisor).toBeDefined();
   });
 
+  // Verifies: rejects a request-start interval one millisecond above the lease-safe ceiling.
   it("rejects a request-start interval one millisecond above the lease-safe ceiling", async () => {
     // 10,000 ms makes the worst-case dispatch 60 s write + 10 s first-slot
     // wait + 2 x 10 s paced slots + 30 s headroom = 120 s, exactly the
@@ -376,6 +393,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: accepts a longer interval when the ACTIVE lease provides the headroom.
   it("accepts a longer interval when the ACTIVE lease provides the headroom", async () => {
     // The check uses the active lease, not the default: a 20 s interval
     // (60 s write + 20 s first-slot wait + 2 x 20 s paced slots + 30 s
@@ -399,6 +417,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(service.effectSupervisor).toBeDefined();
   });
 
+  // Verifies: rejects a longer interval when the ACTIVE lease only equals the paced worst case.
   it("rejects a longer interval when the ACTIVE lease only equals the paced worst case", async () => {
     // A 20 s interval with a 150 s lease lands exactly on the strict bound
     // (60 s write + 20 s first-slot wait + 2 x 20 s paced slots + 30 s
@@ -419,6 +438,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: rejects a lease that omits the receipt-init read and bounded admission slots.
   it("rejects a lease that omits the receipt-init read and bounded admission slots", async () => {
     // The old three-request headroom formula accepts this combination, but a
     // first fast-append/legacy apply can issue three timed reads (two
@@ -444,6 +464,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: rejects an effect lease that leaves no room for the request-start admission wait inside the writer l.
   it("rejects an effect lease that leaves no room for the request-start admission wait inside the writer lease", async () => {
     // The writer lease is renewed in-lane at the same instant as the effect
     // lease, and a request-start limiter wait (default 5 s) happens INSIDE the
@@ -466,6 +487,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: accepts an effect lease that leaves room for the request-start admission wait inside the writer leas.
   it("accepts an effect lease that leaves room for the request-start admission wait inside the writer lease", async () => {
     // 174 s effect lease + 5 s admission wait = 179 s, inside the 180 s
     // writer lease, so startup succeeds. A no-op sleep keeps the stub-based
@@ -487,6 +509,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(service.effectSupervisor).toBeDefined();
   });
 
+  // Verifies: rejects a malformed rateLimitIntervalMs before any transport call.
   it("rejects a malformed rateLimitIntervalMs before any transport call", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -506,6 +529,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies: rejects a lease that only covers the write timeout, not the two preflight reads.
   it("rejects a lease that only covers the write timeout, not the two preflight reads", async () => {
     // 120 s covers 60 s write + 30 s headroom but not 2 x 10 s of preflight
     // reads (plus the first-slot wait); a too-large read timeout must fail
@@ -526,6 +550,7 @@ describe("internal sync service googleSheetsApi full-provider mode", () => {
     });
   });
 
+  // Verifies: rejects a readTimeoutMs outside the 1..60 second bounds before any transport call.
   it("rejects a readTimeoutMs outside the 1..60 second bounds before any transport call", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -561,7 +586,9 @@ class RecordingProvisioner implements SyncSheetsProvisioner {
   }
 }
 
+// Covers: internal sync service descriptor registry validation.
 describe("internal sync service descriptor registry validation", () => {
+  // Verifies: rejects a non-token entity value with INVALID_OPTIONS before any provider work.
   it("rejects a non-token entity value with INVALID_OPTIONS before any provider work", async () => {
     await expect(createInternalSyncService({
       dbName: ":memory:",
@@ -574,6 +601,7 @@ describe("internal sync service descriptor registry validation", () => {
     });
   });
 
+  // Verifies: rejects duplicate entity names with INVALID_OPTIONS and the sync message.
   it("rejects duplicate entity names with INVALID_OPTIONS and the sync message", async () => {
     const Dup = defineTypedSheetsEntity({
       name: "SyncRegistryDup",
@@ -596,6 +624,7 @@ describe("internal sync service descriptor registry validation", () => {
     });
   });
 
+  // Verifies: rejects a shared table name with INVALID_OPTIONS and the sync message.
   it("rejects a shared table name with INVALID_OPTIONS and the sync message", async () => {
     const SharedOne = defineTypedSheetsEntity({
       name: "SyncRegistrySharedOne",
@@ -619,6 +648,7 @@ describe("internal sync service descriptor registry validation", () => {
   });
 });
 
+// Covers: internal sync service injected-provider mode.
 describe("internal sync service injected-provider mode", () => {
   const services: InternalSyncService[] = [];
 
@@ -793,6 +823,7 @@ describe("internal sync service injected-provider mode", () => {
     });
   };
 
+  // Verifies: provisions projections and delivers ORM outbox effects through the injected provider.
   it("provisions projections and delivers ORM outbox effects through the injected provider", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -863,6 +894,7 @@ describe("internal sync service injected-provider mode", () => {
     });
   });
 
+  // Verifies: persists invalid User_Input rows as durable quarantine evidence.
   it("persists invalid User_Input rows as durable quarantine evidence", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -927,6 +959,7 @@ describe("internal sync service injected-provider mode", () => {
     ]);
   });
 
+  // Verifies: wires periodic System_State reconciliation that re-detects a removed system_state row.
   it("wires periodic System_State reconciliation that re-detects a removed system_state row", async () => {
     const provider = buildPollingProvider();
     const reports: Array<{ readonly effectsEnqueued: number }> = [];
@@ -965,6 +998,7 @@ describe("internal sync service injected-provider mode", () => {
     expect(reports.some((report) => report.effectsEnqueued > 0)).toBe(true);
   });
 
+  // Verifies: recovers a terminal failed System_State head so later em.flush() writes converge.
   it("recovers a terminal failed System_State head so later em.flush() writes converge", async () => {
     const provider = buildPollingProvider();
     const service = await createInternalSyncService({
@@ -1060,6 +1094,7 @@ describe("internal sync service injected-provider mode", () => {
       .resolves.toMatchObject({ status: "completed" });
   });
 
+  // Verifies: fails startup when provisioning fails.
   it("fails startup when provisioning fails", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -1087,6 +1122,7 @@ describe("internal sync service injected-provider mode", () => {
     })).rejects.toThrow("provisioning failed");
   });
 
+  // Verifies: rejects an injected provider combined with googleSheetsApi settings before any transport call.
   it("rejects an injected provider combined with googleSheetsApi settings before any transport call", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -1106,6 +1142,7 @@ describe("internal sync service injected-provider mode", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies: polls a User_Input edit into SQLite without creating a user-projection echo.
   it("polls a User_Input edit into SQLite without creating a user-projection echo", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -1184,6 +1221,7 @@ describe("internal sync service injected-provider mode", () => {
     });
   });
 
+  // Verifies: schedules a safety full scan first, coalesces adaptive passes, then re-scans after the interval.
   it("schedules a safety full scan first, coalesces adaptive passes, then re-scans after the interval", async () => {
     const provider = buildPollingProvider();
     let captureFirstReport: ((report: MappedUserInputPollingReport) => void) | undefined;
@@ -1246,6 +1284,7 @@ describe("internal sync service injected-provider mode", () => {
     expect(provider.snapshotReadCount).toBe(beforeReScanSnapshots + 1);
   });
 
+  // Verifies: defers implicit system-wins while a processing User_Input predecessor is in flight, then applies the.
   it("defers implicit system-wins while a processing User_Input predecessor is in flight, then applies the exact pending command (issue #196)", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -1448,6 +1487,7 @@ describe("internal sync service injected-provider mode", () => {
     });
   });
 
+  // Verifies: defers implicit system-wins while a delivery-uncertain predecessor awaits its probe, then applies th.
   it("defers implicit system-wins while a delivery-uncertain predecessor awaits its probe, then applies the exact pending command (issue #196)", async () => {
     const provider = new FakeSyncSheetsProvider([
       {
@@ -1584,6 +1624,7 @@ describe("internal sync service injected-provider mode", () => {
     });
   });
 
+  // Verifies: leaves a new OPEN conflict without a pending command untouched by a polling pass.
   it("leaves a new OPEN conflict without a pending command untouched by a polling pass", async () => {
     const provider = buildPollingProviderWithOpenConflictRow();
     const service = await createInternalSyncService({
@@ -1623,6 +1664,7 @@ describe("internal sync service injected-provider mode", () => {
     });
   });
 
+  // Verifies: does not auto-resolve an existing OPEN conflict at service boot.
   it("does not auto-resolve an existing OPEN conflict at service boot", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hikoutei-boot-open-conflict-"));
     try {
@@ -1677,6 +1719,7 @@ describe("internal sync service injected-provider mode", () => {
     }
   });
 
+  // Verifies: reports inbound polling phases through the timing sink with empty operation counts.
   it("reports inbound polling phases through the timing sink with empty operation counts", async () => {
     const provider = buildPollingProvider();
     const pollingEvents: SyncTimingEvent[] = [];
@@ -1756,6 +1799,7 @@ describe("internal sync service injected-provider mode", () => {
     }
   });
 
+  // Verifies: keeps polling alive when the timing sink throws.
   it("keeps polling alive when the timing sink throws", async () => {
     const provider = buildPollingProvider();
     const service = await createInternalSyncService({
@@ -1785,6 +1829,7 @@ describe("internal sync service injected-provider mode", () => {
     expect(provider.tableReadBatchCount + provider.snapshotReadCount).toBeGreaterThan(0);
   });
 
+  // Verifies: reports zero safety-scan lag on adaptive passes inside the full-scan interval.
   it("reports zero safety-scan lag on adaptive passes inside the full-scan interval", async () => {
     const provider = buildPollingProvider();
     let nowMs = 1_000_000;
@@ -1829,6 +1874,7 @@ describe("internal sync service injected-provider mode", () => {
     ).toBe(false);
   });
 
+  // Verifies: reports overdue safety-scan lag when a safety full scan completes past the deadline.
   it("reports overdue safety-scan lag when a safety full scan completes past the deadline", async () => {
     const provider = buildPollingProvider();
     let nowMs = 1_000_000;
@@ -1872,6 +1918,7 @@ describe("internal sync service injected-provider mode", () => {
     expect(reScanLag?.durationMs).toBe(100);
   });
 
+  // Verifies: emits the safety-scan lag timing phase and keeps the deadline when a safety scan fails.
   it("emits the safety-scan lag timing phase and keeps the deadline when a safety scan fails", async () => {
     const provider = buildPollingProvider();
     let nowMs = 1_000_000;
@@ -1926,6 +1973,7 @@ describe("internal sync service injected-provider mode", () => {
   });
 });
 
+// Covers: internal sync service writer lease handoff across close/reopen.
 describe("internal sync service writer lease handoff across close/reopen", () => {
   const tempDirs: string[] = [];
   const openedServices: InternalSyncService[] = [];
@@ -1994,6 +2042,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     return join(dir, "lease-handoff.sqlite");
   };
 
+  // Verifies: releases the writer lease on close so a restarted runtime flushes immediately (issue #170).
   it("releases the writer lease on close so a restarted runtime flushes immediately (issue #170)", async () => {
     const dbName = newDbFile();
     const first = await openService(dbName, buildProvider());
@@ -2025,6 +2074,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     await second.close();
   });
 
+  // Verifies: expires both leases even when a supervisor stop() rejects, so close() retry and restart claim immedi.
   it("expires both leases even when a supervisor stop() rejects, so close() retry and restart claim immediately (issue #170)", async () => {
     const dbName = newDbFile();
     const first = await openService(dbName, buildProvider());
@@ -2080,6 +2130,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     await second.close();
   });
 
+  // Verifies: expires the claimed writer lease when startup fails, so a retry inside the lease window claims immed.
   it("expires the claimed writer lease when startup fails, so a retry inside the lease window claims immediately (issue #170)", async () => {
     const dbName = newDbFile();
     // Fail only the first provisioning pass: conflict route registration has
@@ -2130,6 +2181,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     expect(lease?.writer_epoch).toBe(2);
   });
 
+  // Verifies: drains a pending outbox effect after close and reopen on the same SQLite file.
   it("drains a pending outbox effect after close and reopen on the same SQLite file", async () => {
     const dbName = newDbFile();
     const first = await openService(dbName, buildProvider());
@@ -2164,6 +2216,7 @@ describe("internal sync service writer lease handoff across close/reopen", () =>
     });
   });
 
+  // Verifies: keeps close() idempotent after the lease release.
   it("keeps close() idempotent after the lease release", async () => {
     const dbName = newDbFile();
     const service = await openService(dbName, buildProvider());
