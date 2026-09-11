@@ -1,3 +1,10 @@
+/**
+ * Helper and CLI tests for the find-workspace-dir CI script.
+ *
+ * Covers workspace lookup by package name, manifest discovery by dependency,
+ * and CLI output and exit codes for ambiguous or invalid input. Spawns the
+ * script against temp fixture trees without touching the real workspace.
+ */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,7 +48,9 @@ function fixture() {
   return root;
 }
 
+// Covers findWorkspaceDirByPackageName.
 describe("findWorkspaceDirByPackageName", () => {
+  // Verifies finds a nested workspace by package name.
   it("finds a nested workspace by package name", () => {
     const root = fixture();
     try {
@@ -54,6 +63,7 @@ describe("findWorkspaceDirByPackageName", () => {
     }
   });
 
+  // Verifies rejects a missing name instead of guessing.
   it("rejects a missing name instead of guessing", () => {
     const root = fixture();
     try {
@@ -64,7 +74,9 @@ describe("findWorkspaceDirByPackageName", () => {
   });
 });
 
+// Covers findManifestsWithDep.
 describe("findManifestsWithDep", () => {
+  // Verifies lists manifests carrying the dep in dependencies or devDependencies.
   it("lists manifests carrying the dep in dependencies or devDependencies", () => {
     const root = fixture();
     try {
@@ -77,6 +89,7 @@ describe("findManifestsWithDep", () => {
     }
   });
 
+  // Verifies fails closed when nothing carries the dep.
   it("fails closed when nothing carries the dep", () => {
     const root = fixture();
     try {
@@ -87,7 +100,9 @@ describe("findManifestsWithDep", () => {
   });
 });
 
+// Covers find-workspace-dir CLI.
 describe("find-workspace-dir CLI", () => {
+  // Verifies prints the single package dir and lists dep manifests.
   it("prints the single package dir and lists dep manifests", () => {
     const root = fixture();
     try {
@@ -105,6 +120,7 @@ describe("find-workspace-dir CLI", () => {
     }
   });
 
+  // Verifies exits non-zero on ambiguous names and usage errors.
   it("exits non-zero on ambiguous names and usage errors", () => {
     const root = fixture();
     try {
