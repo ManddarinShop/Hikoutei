@@ -15,7 +15,7 @@
  */
 
 import { CoreErrorException } from "../domain/errors/index.js";
-import { PRESENCE_KINDS } from "../state/index.js";
+import { absentValue, PRESENCE_KINDS } from "../state/index.js";
 import type { Presence } from "../state/index.js";
 
 /** Stable transport error categories emitted by the direct provider. */
@@ -59,7 +59,7 @@ export class GoogleSheetsApiTransportError extends CoreErrorException<
     code: GoogleSheetsApiTransportErrorCode,
     message: string,
     status: Presence<number>,
-    remoteCode: Presence<string> = { kind: PRESENCE_KINDS.ABSENT },
+    remoteCode: Presence<string> = absentValue(),
   ) {
     super("adapter.google_sheets_api", code, message);
     this.status = status;

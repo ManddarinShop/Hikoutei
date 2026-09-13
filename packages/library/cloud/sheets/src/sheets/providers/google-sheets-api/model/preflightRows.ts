@@ -335,9 +335,7 @@ export function anchorColumnFor(
 
 export function indexRows(
   rows: readonly PreflightRow[],
-  options: { readonly deferIdentityDupFailClosed: boolean } = {
-    deferIdentityDupFailClosed: false,
-  },
+  options?: { readonly deferIdentityDupFailClosed: boolean },
 ): {
   readonly byAnchor: ReadonlyMap<string, PreflightRow>;
   readonly byIdentity: ReadonlyMap<string, PreflightRow>;
@@ -345,6 +343,7 @@ export function indexRows(
 } {
   const byAnchor = new Map<string, PreflightRow>();
   const byIdentity = new Map<string, PreflightRow>();
+  const deferIdentityDupFailClosed = options?.deferIdentityDupFailClosed ?? false;
   for (const row of rows) {
     if (row.physicalAnchor.kind === "present") {
       // Duplicated anchors are evidence, never rewritten: a human copy-paste
@@ -359,7 +358,7 @@ export function indexRows(
     if (row.identity.kind === "present") {
       const existing = byIdentity.get(row.identity.value);
       if (existing !== undefined) {
-        if (!options.deferIdentityDupFailClosed) {
+        if (!deferIdentityDupFailClosed) {
           invalidProviderState(
             `sync identity is duplicated: ${row.identity.value} at rows ${existing.rowNumber} and ${row.rowNumber}`,
           );
