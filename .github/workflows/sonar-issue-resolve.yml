@@ -66,11 +66,9 @@ jobs:
           ' "$response")"
           echo "found ${total} unresolved issues for rules=${RULES} on branch=${BRANCH}"
           if [[ "${{ inputs.query_only }}" == "true" ]]; then
-            echo "query-only mode: dumping first issue"
-            echo "$response" | node -e '
-              const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
-              console.log(JSON.stringify({ total: d.total, first: (d.issues ?? [])[0] }, null, 2));
-            '
+            echo "query-only mode: dumping branch state"
+            curl -sS -u "${SONAR_TOKEN}:" "https://sonarcloud.io/api/measures/component?component=${PROJECT}&branch=${BRANCH}&metricKeys=coverage,bugs,vulnerabilities,code_smells,ncloc,last_analysis" | head -c 600
+            echo
             exit 0
           fi
           if [[ "$total" == "0" ]]; then
