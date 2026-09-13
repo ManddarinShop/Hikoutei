@@ -211,6 +211,12 @@ describe("outbound effect dispatch batching", () => {
           workerId: "perf-worker",
           now: 1_000 + pass,
           maxEffects: count + 5,
+          // The default 15s wall-clock heartbeat-stale bound assumes an
+          // un-instrumented runner: under coverage instrumentation a 1,000-effect
+          // claim pass can exceed it, and the writer would then take over its
+          // OWN lease (epoch bump) and abort the pass with applied: 0. A pass
+          // of this shape is not testing takeover, so widen the stale bound.
+          writerLeaseHeartbeatStaleMs: 600_000,
         }));
       }
 
