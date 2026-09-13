@@ -5,6 +5,8 @@ import { createContext } from "./context.js";
 import { appRouter } from "./router.js";
 
 const app = express();
+// S5689: do not disclose the framework version header from example code.
+app.disable("x-powered-by");
 
 app.use(
   "/trpc",
