@@ -65,6 +65,10 @@ export interface PersistMappedObservedRowOptions {
  * Only a `persisted` observation with a present canonical commit can
  * change the entity table. Duplicate, quarantined, stale, fenced-out, and
  * conflict-only observations leave application entities untouched.
+ *
+ * S3516 accepted: every path returns the same `result` object by design —
+ * the branches differ only in side effects (OPEN-conflict audit projection,
+ * mapped entity mutation), never in the returned observation outcome.
  */
 export async function persistMappedObservedRowWithMikroOrm(
   storage: MikroOrmSqliteAdapter,

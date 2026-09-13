@@ -151,6 +151,11 @@ export async function applyMappedChange(
 }
 
 async function createMappedEntity(
+  // Intentionally returns the same per-call `commitId` on every path (S3516
+  // accepted): the branches differ in side effects — reactivating a tombstoned
+  // binding vs. writing fresh INSERT projection effects — not in the commit
+  // identity. Single-commit-id semantics are part of the storage core CAS
+  // design; do not refactor this return shape without a dedicated design pass.
   sql: SqlExecutor,
   fence: FencingContext,
   writer: ResolvedWriterOptions,

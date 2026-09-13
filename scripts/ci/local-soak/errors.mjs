@@ -158,7 +158,7 @@ async function readOpenConflictRows(context) {
   if (typeof dbName !== "string" || dbName.length === 0) return [];
   try {
     const DatabaseSync = loadDatabaseSync();
-    if (DatabaseSync === null) return [];
+    if (DatabaseSync === null) return []; // NOSONAR: loadDatabaseSync() CAN return null at runtime (node:sqlite builtin absent); Sonar cannot model getBuiltinModule returning undefined
     const database = new DatabaseSync(dbName, { readOnly: true });
     try {
       // Storage literals for the unresolved conflict lifecycle states (see
@@ -393,7 +393,7 @@ export async function bindingOutboxInflightCount(context, targetId) {
   if (typeof dbName !== "string" || dbName.length === 0) return 0;
   try {
     const DatabaseSync = loadDatabaseSync();
-    if (DatabaseSync === null) return 0;
+    if (DatabaseSync === null) return 0; // NOSONAR: loadDatabaseSync() CAN return null at runtime (node:sqlite builtin absent); Sonar cannot model getBuiltinModule returning undefined
     const database = new DatabaseSync(dbName, { readOnly: true });
     try {
       if (!tableExists(database, "row_binding") || !tableExists(database, "sheet_effect_outbox")) return 0;
