@@ -1,0 +1,92 @@
+name: SonarCloud issue resolution (ops)
+
+# One-off operations workflow: bulk-resolve SonarCloud issues as
+# FALSE-POSITIVE / WONTFIX for rules the team has consciously accepted
+# (rationale recorded in the issues' comments). Runs against a Sonar branch
+# (default: develop) using the SONAR_TOKEN repository secret. Auditable via
+# this workflow's logs; the SonarCloud web UI remains the source of truth.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rules:
+        description: "Comma-separated Sonar rule keys (e.g. javascript:S2871,typescript:S2871)"
+        required: true
+        type: string
+      transition:
+        description: "falsepositive or wontfix"
+        required: true
+        type: string
+      branch:
+        description: "Sonar branch to operate on"
+        required: false
+        default: "develop"
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: sonar-issue-resolution
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve SonarCloud issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve issues
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          RULES: ${{ inputs.rules }}
+          TRANSITION: ${{ inputs.transition }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SONAR_TOKEN:-}" ]]; then
+            echo "SONAR_TOKEN secret is missing" >&2
+            exit 1
+          fi
+          case "$TRANSITION" in
+            falsepositive|wontfix) ;;
+            *) echo "transition must be falsepositive or wontfix: $TRANSITION" >&2; exit 1 ;;
+          esac
+          PROJECT="ManddarinShop_Hikoutei"
+          search_url="https://sonarcloud.io/api/issues/search?componentKeys=${PROJECT}&branch=${BRANCH}&resolved=false&rules=${RULES}&ps=500&facets="
+          response="$(curl -sS -u "${SONAR_TOKEN}:" "${search_url}")"
+          total="$(node -e '
+            const d = JSON.parse(process.argv[1]);
+            console.log(d.total ?? 0);
+          ' "$response")"
+          echo "found ${total} unresolved issues for rules=${RULES} on branch=${BRANCH}"
+          if [[ "$total" == "0" ]]; then
+            echo "nothing to resolve"
+            exit 0
+          fi
+          keys="$(node -e '
+            const d = JSON.parse(process.argv[1]);
+            for (const i of d.issues ?? []) console.log(i.key);
+          ' "$response")"
+          resolved=0
+          refused=0
+          while IFS= read -r key; do
+            [[ -z "$key" ]] && continue
+            result="$(curl -sS -u "${SONAR_TOKEN}:" -X POST \
+              "https://sonarcloud.io/api/issues/do_transition" \
+              --data-urlencode "issue=${key}" \
+              --data-urlencode "transition=${TRANSITION}")"
+            if node -e '
+              const d = JSON.parse(process.argv[1]);
+              process.exit(d.issue ? 0 : 1);
+            ' "$result" 2>/dev/null; then
+              resolved=$((resolved + 1))
+            else
+              refused=$((refused + 1))
+              echo "refused: ${key}: $(echo "$result" | head -c 200)"
+            fi
+          done <<< "$keys"
+          echo "resolved=${resolved} refused=${refused}"
+          if [[ "$refused" -gt 0 ]]; then
+            exit 1
+          fi
