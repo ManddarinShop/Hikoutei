@@ -87,13 +87,17 @@ jobs:
           ' "$response")"
           resolved=0
           refused=0
+          comment_args=()
+          if [[ -n "$COMMENT" ]]; then
+            comment_args=(--data-urlencode "comment=${COMMENT}")
+          fi
           while IFS= read -r key; do
             [[ -z "$key" ]] && continue
             result="$(curl -sS -u "${SONAR_TOKEN}:" -X POST \
               "https://sonarcloud.io/api/issues/do_transition" \
               --data-urlencode "issue=${key}" \
               --data-urlencode "transition=${TRANSITION}" \
-              ${COMMENT:+--data-urlencode "comment=${COMMENT}")"
+              "${comment_args[@]}")"
             if node -e '
               const d = JSON.parse(process.argv[1]);
               process.exit(d.issue ? 0 : 1);
