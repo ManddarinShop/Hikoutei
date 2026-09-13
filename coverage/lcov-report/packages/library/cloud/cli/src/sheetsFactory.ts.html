@@ -1,0 +1,2410 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for packages/library/cloud/cli/src/sheetsFactory.ts</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../../../../prettify.css" />
+    <link rel="stylesheet" href="../../../../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../../../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../../../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../../../../index.html">All files</a> / <a href="index.html">packages/library/cloud/cli/src</a> sheetsFactory.ts</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>0/775</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>0/1</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>0/1</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">0% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>0/775</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line low'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a>
+<a name='L177'></a><a href='#L177'>177</a>
+<a name='L178'></a><a href='#L178'>178</a>
+<a name='L179'></a><a href='#L179'>179</a>
+<a name='L180'></a><a href='#L180'>180</a>
+<a name='L181'></a><a href='#L181'>181</a>
+<a name='L182'></a><a href='#L182'>182</a>
+<a name='L183'></a><a href='#L183'>183</a>
+<a name='L184'></a><a href='#L184'>184</a>
+<a name='L185'></a><a href='#L185'>185</a>
+<a name='L186'></a><a href='#L186'>186</a>
+<a name='L187'></a><a href='#L187'>187</a>
+<a name='L188'></a><a href='#L188'>188</a>
+<a name='L189'></a><a href='#L189'>189</a>
+<a name='L190'></a><a href='#L190'>190</a>
+<a name='L191'></a><a href='#L191'>191</a>
+<a name='L192'></a><a href='#L192'>192</a>
+<a name='L193'></a><a href='#L193'>193</a>
+<a name='L194'></a><a href='#L194'>194</a>
+<a name='L195'></a><a href='#L195'>195</a>
+<a name='L196'></a><a href='#L196'>196</a>
+<a name='L197'></a><a href='#L197'>197</a>
+<a name='L198'></a><a href='#L198'>198</a>
+<a name='L199'></a><a href='#L199'>199</a>
+<a name='L200'></a><a href='#L200'>200</a>
+<a name='L201'></a><a href='#L201'>201</a>
+<a name='L202'></a><a href='#L202'>202</a>
+<a name='L203'></a><a href='#L203'>203</a>
+<a name='L204'></a><a href='#L204'>204</a>
+<a name='L205'></a><a href='#L205'>205</a>
+<a name='L206'></a><a href='#L206'>206</a>
+<a name='L207'></a><a href='#L207'>207</a>
+<a name='L208'></a><a href='#L208'>208</a>
+<a name='L209'></a><a href='#L209'>209</a>
+<a name='L210'></a><a href='#L210'>210</a>
+<a name='L211'></a><a href='#L211'>211</a>
+<a name='L212'></a><a href='#L212'>212</a>
+<a name='L213'></a><a href='#L213'>213</a>
+<a name='L214'></a><a href='#L214'>214</a>
+<a name='L215'></a><a href='#L215'>215</a>
+<a name='L216'></a><a href='#L216'>216</a>
+<a name='L217'></a><a href='#L217'>217</a>
+<a name='L218'></a><a href='#L218'>218</a>
+<a name='L219'></a><a href='#L219'>219</a>
+<a name='L220'></a><a href='#L220'>220</a>
+<a name='L221'></a><a href='#L221'>221</a>
+<a name='L222'></a><a href='#L222'>222</a>
+<a name='L223'></a><a href='#L223'>223</a>
+<a name='L224'></a><a href='#L224'>224</a>
+<a name='L225'></a><a href='#L225'>225</a>
+<a name='L226'></a><a href='#L226'>226</a>
+<a name='L227'></a><a href='#L227'>227</a>
+<a name='L228'></a><a href='#L228'>228</a>
+<a name='L229'></a><a href='#L229'>229</a>
+<a name='L230'></a><a href='#L230'>230</a>
+<a name='L231'></a><a href='#L231'>231</a>
+<a name='L232'></a><a href='#L232'>232</a>
+<a name='L233'></a><a href='#L233'>233</a>
+<a name='L234'></a><a href='#L234'>234</a>
+<a name='L235'></a><a href='#L235'>235</a>
+<a name='L236'></a><a href='#L236'>236</a>
+<a name='L237'></a><a href='#L237'>237</a>
+<a name='L238'></a><a href='#L238'>238</a>
+<a name='L239'></a><a href='#L239'>239</a>
+<a name='L240'></a><a href='#L240'>240</a>
+<a name='L241'></a><a href='#L241'>241</a>
+<a name='L242'></a><a href='#L242'>242</a>
+<a name='L243'></a><a href='#L243'>243</a>
+<a name='L244'></a><a href='#L244'>244</a>
+<a name='L245'></a><a href='#L245'>245</a>
+<a name='L246'></a><a href='#L246'>246</a>
+<a name='L247'></a><a href='#L247'>247</a>
+<a name='L248'></a><a href='#L248'>248</a>
+<a name='L249'></a><a href='#L249'>249</a>
+<a name='L250'></a><a href='#L250'>250</a>
+<a name='L251'></a><a href='#L251'>251</a>
+<a name='L252'></a><a href='#L252'>252</a>
+<a name='L253'></a><a href='#L253'>253</a>
+<a name='L254'></a><a href='#L254'>254</a>
+<a name='L255'></a><a href='#L255'>255</a>
+<a name='L256'></a><a href='#L256'>256</a>
+<a name='L257'></a><a href='#L257'>257</a>
+<a name='L258'></a><a href='#L258'>258</a>
+<a name='L259'></a><a href='#L259'>259</a>
+<a name='L260'></a><a href='#L260'>260</a>
+<a name='L261'></a><a href='#L261'>261</a>
+<a name='L262'></a><a href='#L262'>262</a>
+<a name='L263'></a><a href='#L263'>263</a>
+<a name='L264'></a><a href='#L264'>264</a>
+<a name='L265'></a><a href='#L265'>265</a>
+<a name='L266'></a><a href='#L266'>266</a>
+<a name='L267'></a><a href='#L267'>267</a>
+<a name='L268'></a><a href='#L268'>268</a>
+<a name='L269'></a><a href='#L269'>269</a>
+<a name='L270'></a><a href='#L270'>270</a>
+<a name='L271'></a><a href='#L271'>271</a>
+<a name='L272'></a><a href='#L272'>272</a>
+<a name='L273'></a><a href='#L273'>273</a>
+<a name='L274'></a><a href='#L274'>274</a>
+<a name='L275'></a><a href='#L275'>275</a>
+<a name='L276'></a><a href='#L276'>276</a>
+<a name='L277'></a><a href='#L277'>277</a>
+<a name='L278'></a><a href='#L278'>278</a>
+<a name='L279'></a><a href='#L279'>279</a>
+<a name='L280'></a><a href='#L280'>280</a>
+<a name='L281'></a><a href='#L281'>281</a>
+<a name='L282'></a><a href='#L282'>282</a>
+<a name='L283'></a><a href='#L283'>283</a>
+<a name='L284'></a><a href='#L284'>284</a>
+<a name='L285'></a><a href='#L285'>285</a>
+<a name='L286'></a><a href='#L286'>286</a>
+<a name='L287'></a><a href='#L287'>287</a>
+<a name='L288'></a><a href='#L288'>288</a>
+<a name='L289'></a><a href='#L289'>289</a>
+<a name='L290'></a><a href='#L290'>290</a>
+<a name='L291'></a><a href='#L291'>291</a>
+<a name='L292'></a><a href='#L292'>292</a>
+<a name='L293'></a><a href='#L293'>293</a>
+<a name='L294'></a><a href='#L294'>294</a>
+<a name='L295'></a><a href='#L295'>295</a>
+<a name='L296'></a><a href='#L296'>296</a>
+<a name='L297'></a><a href='#L297'>297</a>
+<a name='L298'></a><a href='#L298'>298</a>
+<a name='L299'></a><a href='#L299'>299</a>
+<a name='L300'></a><a href='#L300'>300</a>
+<a name='L301'></a><a href='#L301'>301</a>
+<a name='L302'></a><a href='#L302'>302</a>
+<a name='L303'></a><a href='#L303'>303</a>
+<a name='L304'></a><a href='#L304'>304</a>
+<a name='L305'></a><a href='#L305'>305</a>
+<a name='L306'></a><a href='#L306'>306</a>
+<a name='L307'></a><a href='#L307'>307</a>
+<a name='L308'></a><a href='#L308'>308</a>
+<a name='L309'></a><a href='#L309'>309</a>
+<a name='L310'></a><a href='#L310'>310</a>
+<a name='L311'></a><a href='#L311'>311</a>
+<a name='L312'></a><a href='#L312'>312</a>
+<a name='L313'></a><a href='#L313'>313</a>
+<a name='L314'></a><a href='#L314'>314</a>
+<a name='L315'></a><a href='#L315'>315</a>
+<a name='L316'></a><a href='#L316'>316</a>
+<a name='L317'></a><a href='#L317'>317</a>
+<a name='L318'></a><a href='#L318'>318</a>
+<a name='L319'></a><a href='#L319'>319</a>
+<a name='L320'></a><a href='#L320'>320</a>
+<a name='L321'></a><a href='#L321'>321</a>
+<a name='L322'></a><a href='#L322'>322</a>
+<a name='L323'></a><a href='#L323'>323</a>
+<a name='L324'></a><a href='#L324'>324</a>
+<a name='L325'></a><a href='#L325'>325</a>
+<a name='L326'></a><a href='#L326'>326</a>
+<a name='L327'></a><a href='#L327'>327</a>
+<a name='L328'></a><a href='#L328'>328</a>
+<a name='L329'></a><a href='#L329'>329</a>
+<a name='L330'></a><a href='#L330'>330</a>
+<a name='L331'></a><a href='#L331'>331</a>
+<a name='L332'></a><a href='#L332'>332</a>
+<a name='L333'></a><a href='#L333'>333</a>
+<a name='L334'></a><a href='#L334'>334</a>
+<a name='L335'></a><a href='#L335'>335</a>
+<a name='L336'></a><a href='#L336'>336</a>
+<a name='L337'></a><a href='#L337'>337</a>
+<a name='L338'></a><a href='#L338'>338</a>
+<a name='L339'></a><a href='#L339'>339</a>
+<a name='L340'></a><a href='#L340'>340</a>
+<a name='L341'></a><a href='#L341'>341</a>
+<a name='L342'></a><a href='#L342'>342</a>
+<a name='L343'></a><a href='#L343'>343</a>
+<a name='L344'></a><a href='#L344'>344</a>
+<a name='L345'></a><a href='#L345'>345</a>
+<a name='L346'></a><a href='#L346'>346</a>
+<a name='L347'></a><a href='#L347'>347</a>
+<a name='L348'></a><a href='#L348'>348</a>
+<a name='L349'></a><a href='#L349'>349</a>
+<a name='L350'></a><a href='#L350'>350</a>
+<a name='L351'></a><a href='#L351'>351</a>
+<a name='L352'></a><a href='#L352'>352</a>
+<a name='L353'></a><a href='#L353'>353</a>
+<a name='L354'></a><a href='#L354'>354</a>
+<a name='L355'></a><a href='#L355'>355</a>
+<a name='L356'></a><a href='#L356'>356</a>
+<a name='L357'></a><a href='#L357'>357</a>
+<a name='L358'></a><a href='#L358'>358</a>
+<a name='L359'></a><a href='#L359'>359</a>
+<a name='L360'></a><a href='#L360'>360</a>
+<a name='L361'></a><a href='#L361'>361</a>
+<a name='L362'></a><a href='#L362'>362</a>
+<a name='L363'></a><a href='#L363'>363</a>
+<a name='L364'></a><a href='#L364'>364</a>
+<a name='L365'></a><a href='#L365'>365</a>
+<a name='L366'></a><a href='#L366'>366</a>
+<a name='L367'></a><a href='#L367'>367</a>
+<a name='L368'></a><a href='#L368'>368</a>
+<a name='L369'></a><a href='#L369'>369</a>
+<a name='L370'></a><a href='#L370'>370</a>
+<a name='L371'></a><a href='#L371'>371</a>
+<a name='L372'></a><a href='#L372'>372</a>
+<a name='L373'></a><a href='#L373'>373</a>
+<a name='L374'></a><a href='#L374'>374</a>
+<a name='L375'></a><a href='#L375'>375</a>
+<a name='L376'></a><a href='#L376'>376</a>
+<a name='L377'></a><a href='#L377'>377</a>
+<a name='L378'></a><a href='#L378'>378</a>
+<a name='L379'></a><a href='#L379'>379</a>
+<a name='L380'></a><a href='#L380'>380</a>
+<a name='L381'></a><a href='#L381'>381</a>
+<a name='L382'></a><a href='#L382'>382</a>
+<a name='L383'></a><a href='#L383'>383</a>
+<a name='L384'></a><a href='#L384'>384</a>
+<a name='L385'></a><a href='#L385'>385</a>
+<a name='L386'></a><a href='#L386'>386</a>
+<a name='L387'></a><a href='#L387'>387</a>
+<a name='L388'></a><a href='#L388'>388</a>
+<a name='L389'></a><a href='#L389'>389</a>
+<a name='L390'></a><a href='#L390'>390</a>
+<a name='L391'></a><a href='#L391'>391</a>
+<a name='L392'></a><a href='#L392'>392</a>
+<a name='L393'></a><a href='#L393'>393</a>
+<a name='L394'></a><a href='#L394'>394</a>
+<a name='L395'></a><a href='#L395'>395</a>
+<a name='L396'></a><a href='#L396'>396</a>
+<a name='L397'></a><a href='#L397'>397</a>
+<a name='L398'></a><a href='#L398'>398</a>
+<a name='L399'></a><a href='#L399'>399</a>
+<a name='L400'></a><a href='#L400'>400</a>
+<a name='L401'></a><a href='#L401'>401</a>
+<a name='L402'></a><a href='#L402'>402</a>
+<a name='L403'></a><a href='#L403'>403</a>
+<a name='L404'></a><a href='#L404'>404</a>
+<a name='L405'></a><a href='#L405'>405</a>
+<a name='L406'></a><a href='#L406'>406</a>
+<a name='L407'></a><a href='#L407'>407</a>
+<a name='L408'></a><a href='#L408'>408</a>
+<a name='L409'></a><a href='#L409'>409</a>
+<a name='L410'></a><a href='#L410'>410</a>
+<a name='L411'></a><a href='#L411'>411</a>
+<a name='L412'></a><a href='#L412'>412</a>
+<a name='L413'></a><a href='#L413'>413</a>
+<a name='L414'></a><a href='#L414'>414</a>
+<a name='L415'></a><a href='#L415'>415</a>
+<a name='L416'></a><a href='#L416'>416</a>
+<a name='L417'></a><a href='#L417'>417</a>
+<a name='L418'></a><a href='#L418'>418</a>
+<a name='L419'></a><a href='#L419'>419</a>
+<a name='L420'></a><a href='#L420'>420</a>
+<a name='L421'></a><a href='#L421'>421</a>
+<a name='L422'></a><a href='#L422'>422</a>
+<a name='L423'></a><a href='#L423'>423</a>
+<a name='L424'></a><a href='#L424'>424</a>
+<a name='L425'></a><a href='#L425'>425</a>
+<a name='L426'></a><a href='#L426'>426</a>
+<a name='L427'></a><a href='#L427'>427</a>
+<a name='L428'></a><a href='#L428'>428</a>
+<a name='L429'></a><a href='#L429'>429</a>
+<a name='L430'></a><a href='#L430'>430</a>
+<a name='L431'></a><a href='#L431'>431</a>
+<a name='L432'></a><a href='#L432'>432</a>
+<a name='L433'></a><a href='#L433'>433</a>
+<a name='L434'></a><a href='#L434'>434</a>
+<a name='L435'></a><a href='#L435'>435</a>
+<a name='L436'></a><a href='#L436'>436</a>
+<a name='L437'></a><a href='#L437'>437</a>
+<a name='L438'></a><a href='#L438'>438</a>
+<a name='L439'></a><a href='#L439'>439</a>
+<a name='L440'></a><a href='#L440'>440</a>
+<a name='L441'></a><a href='#L441'>441</a>
+<a name='L442'></a><a href='#L442'>442</a>
+<a name='L443'></a><a href='#L443'>443</a>
+<a name='L444'></a><a href='#L444'>444</a>
+<a name='L445'></a><a href='#L445'>445</a>
+<a name='L446'></a><a href='#L446'>446</a>
+<a name='L447'></a><a href='#L447'>447</a>
+<a name='L448'></a><a href='#L448'>448</a>
+<a name='L449'></a><a href='#L449'>449</a>
+<a name='L450'></a><a href='#L450'>450</a>
+<a name='L451'></a><a href='#L451'>451</a>
+<a name='L452'></a><a href='#L452'>452</a>
+<a name='L453'></a><a href='#L453'>453</a>
+<a name='L454'></a><a href='#L454'>454</a>
+<a name='L455'></a><a href='#L455'>455</a>
+<a name='L456'></a><a href='#L456'>456</a>
+<a name='L457'></a><a href='#L457'>457</a>
+<a name='L458'></a><a href='#L458'>458</a>
+<a name='L459'></a><a href='#L459'>459</a>
+<a name='L460'></a><a href='#L460'>460</a>
+<a name='L461'></a><a href='#L461'>461</a>
+<a name='L462'></a><a href='#L462'>462</a>
+<a name='L463'></a><a href='#L463'>463</a>
+<a name='L464'></a><a href='#L464'>464</a>
+<a name='L465'></a><a href='#L465'>465</a>
+<a name='L466'></a><a href='#L466'>466</a>
+<a name='L467'></a><a href='#L467'>467</a>
+<a name='L468'></a><a href='#L468'>468</a>
+<a name='L469'></a><a href='#L469'>469</a>
+<a name='L470'></a><a href='#L470'>470</a>
+<a name='L471'></a><a href='#L471'>471</a>
+<a name='L472'></a><a href='#L472'>472</a>
+<a name='L473'></a><a href='#L473'>473</a>
+<a name='L474'></a><a href='#L474'>474</a>
+<a name='L475'></a><a href='#L475'>475</a>
+<a name='L476'></a><a href='#L476'>476</a>
+<a name='L477'></a><a href='#L477'>477</a>
+<a name='L478'></a><a href='#L478'>478</a>
+<a name='L479'></a><a href='#L479'>479</a>
+<a name='L480'></a><a href='#L480'>480</a>
+<a name='L481'></a><a href='#L481'>481</a>
+<a name='L482'></a><a href='#L482'>482</a>
+<a name='L483'></a><a href='#L483'>483</a>
+<a name='L484'></a><a href='#L484'>484</a>
+<a name='L485'></a><a href='#L485'>485</a>
+<a name='L486'></a><a href='#L486'>486</a>
+<a name='L487'></a><a href='#L487'>487</a>
+<a name='L488'></a><a href='#L488'>488</a>
+<a name='L489'></a><a href='#L489'>489</a>
+<a name='L490'></a><a href='#L490'>490</a>
+<a name='L491'></a><a href='#L491'>491</a>
+<a name='L492'></a><a href='#L492'>492</a>
+<a name='L493'></a><a href='#L493'>493</a>
+<a name='L494'></a><a href='#L494'>494</a>
+<a name='L495'></a><a href='#L495'>495</a>
+<a name='L496'></a><a href='#L496'>496</a>
+<a name='L497'></a><a href='#L497'>497</a>
+<a name='L498'></a><a href='#L498'>498</a>
+<a name='L499'></a><a href='#L499'>499</a>
+<a name='L500'></a><a href='#L500'>500</a>
+<a name='L501'></a><a href='#L501'>501</a>
+<a name='L502'></a><a href='#L502'>502</a>
+<a name='L503'></a><a href='#L503'>503</a>
+<a name='L504'></a><a href='#L504'>504</a>
+<a name='L505'></a><a href='#L505'>505</a>
+<a name='L506'></a><a href='#L506'>506</a>
+<a name='L507'></a><a href='#L507'>507</a>
+<a name='L508'></a><a href='#L508'>508</a>
+<a name='L509'></a><a href='#L509'>509</a>
+<a name='L510'></a><a href='#L510'>510</a>
+<a name='L511'></a><a href='#L511'>511</a>
+<a name='L512'></a><a href='#L512'>512</a>
+<a name='L513'></a><a href='#L513'>513</a>
+<a name='L514'></a><a href='#L514'>514</a>
+<a name='L515'></a><a href='#L515'>515</a>
+<a name='L516'></a><a href='#L516'>516</a>
+<a name='L517'></a><a href='#L517'>517</a>
+<a name='L518'></a><a href='#L518'>518</a>
+<a name='L519'></a><a href='#L519'>519</a>
+<a name='L520'></a><a href='#L520'>520</a>
+<a name='L521'></a><a href='#L521'>521</a>
+<a name='L522'></a><a href='#L522'>522</a>
+<a name='L523'></a><a href='#L523'>523</a>
+<a name='L524'></a><a href='#L524'>524</a>
+<a name='L525'></a><a href='#L525'>525</a>
+<a name='L526'></a><a href='#L526'>526</a>
+<a name='L527'></a><a href='#L527'>527</a>
+<a name='L528'></a><a href='#L528'>528</a>
+<a name='L529'></a><a href='#L529'>529</a>
+<a name='L530'></a><a href='#L530'>530</a>
+<a name='L531'></a><a href='#L531'>531</a>
+<a name='L532'></a><a href='#L532'>532</a>
+<a name='L533'></a><a href='#L533'>533</a>
+<a name='L534'></a><a href='#L534'>534</a>
+<a name='L535'></a><a href='#L535'>535</a>
+<a name='L536'></a><a href='#L536'>536</a>
+<a name='L537'></a><a href='#L537'>537</a>
+<a name='L538'></a><a href='#L538'>538</a>
+<a name='L539'></a><a href='#L539'>539</a>
+<a name='L540'></a><a href='#L540'>540</a>
+<a name='L541'></a><a href='#L541'>541</a>
+<a name='L542'></a><a href='#L542'>542</a>
+<a name='L543'></a><a href='#L543'>543</a>
+<a name='L544'></a><a href='#L544'>544</a>
+<a name='L545'></a><a href='#L545'>545</a>
+<a name='L546'></a><a href='#L546'>546</a>
+<a name='L547'></a><a href='#L547'>547</a>
+<a name='L548'></a><a href='#L548'>548</a>
+<a name='L549'></a><a href='#L549'>549</a>
+<a name='L550'></a><a href='#L550'>550</a>
+<a name='L551'></a><a href='#L551'>551</a>
+<a name='L552'></a><a href='#L552'>552</a>
+<a name='L553'></a><a href='#L553'>553</a>
+<a name='L554'></a><a href='#L554'>554</a>
+<a name='L555'></a><a href='#L555'>555</a>
+<a name='L556'></a><a href='#L556'>556</a>
+<a name='L557'></a><a href='#L557'>557</a>
+<a name='L558'></a><a href='#L558'>558</a>
+<a name='L559'></a><a href='#L559'>559</a>
+<a name='L560'></a><a href='#L560'>560</a>
+<a name='L561'></a><a href='#L561'>561</a>
+<a name='L562'></a><a href='#L562'>562</a>
+<a name='L563'></a><a href='#L563'>563</a>
+<a name='L564'></a><a href='#L564'>564</a>
+<a name='L565'></a><a href='#L565'>565</a>
+<a name='L566'></a><a href='#L566'>566</a>
+<a name='L567'></a><a href='#L567'>567</a>
+<a name='L568'></a><a href='#L568'>568</a>
+<a name='L569'></a><a href='#L569'>569</a>
+<a name='L570'></a><a href='#L570'>570</a>
+<a name='L571'></a><a href='#L571'>571</a>
+<a name='L572'></a><a href='#L572'>572</a>
+<a name='L573'></a><a href='#L573'>573</a>
+<a name='L574'></a><a href='#L574'>574</a>
+<a name='L575'></a><a href='#L575'>575</a>
+<a name='L576'></a><a href='#L576'>576</a>
+<a name='L577'></a><a href='#L577'>577</a>
+<a name='L578'></a><a href='#L578'>578</a>
+<a name='L579'></a><a href='#L579'>579</a>
+<a name='L580'></a><a href='#L580'>580</a>
+<a name='L581'></a><a href='#L581'>581</a>
+<a name='L582'></a><a href='#L582'>582</a>
+<a name='L583'></a><a href='#L583'>583</a>
+<a name='L584'></a><a href='#L584'>584</a>
+<a name='L585'></a><a href='#L585'>585</a>
+<a name='L586'></a><a href='#L586'>586</a>
+<a name='L587'></a><a href='#L587'>587</a>
+<a name='L588'></a><a href='#L588'>588</a>
+<a name='L589'></a><a href='#L589'>589</a>
+<a name='L590'></a><a href='#L590'>590</a>
+<a name='L591'></a><a href='#L591'>591</a>
+<a name='L592'></a><a href='#L592'>592</a>
+<a name='L593'></a><a href='#L593'>593</a>
+<a name='L594'></a><a href='#L594'>594</a>
+<a name='L595'></a><a href='#L595'>595</a>
+<a name='L596'></a><a href='#L596'>596</a>
+<a name='L597'></a><a href='#L597'>597</a>
+<a name='L598'></a><a href='#L598'>598</a>
+<a name='L599'></a><a href='#L599'>599</a>
+<a name='L600'></a><a href='#L600'>600</a>
+<a name='L601'></a><a href='#L601'>601</a>
+<a name='L602'></a><a href='#L602'>602</a>
+<a name='L603'></a><a href='#L603'>603</a>
+<a name='L604'></a><a href='#L604'>604</a>
+<a name='L605'></a><a href='#L605'>605</a>
+<a name='L606'></a><a href='#L606'>606</a>
+<a name='L607'></a><a href='#L607'>607</a>
+<a name='L608'></a><a href='#L608'>608</a>
+<a name='L609'></a><a href='#L609'>609</a>
+<a name='L610'></a><a href='#L610'>610</a>
+<a name='L611'></a><a href='#L611'>611</a>
+<a name='L612'></a><a href='#L612'>612</a>
+<a name='L613'></a><a href='#L613'>613</a>
+<a name='L614'></a><a href='#L614'>614</a>
+<a name='L615'></a><a href='#L615'>615</a>
+<a name='L616'></a><a href='#L616'>616</a>
+<a name='L617'></a><a href='#L617'>617</a>
+<a name='L618'></a><a href='#L618'>618</a>
+<a name='L619'></a><a href='#L619'>619</a>
+<a name='L620'></a><a href='#L620'>620</a>
+<a name='L621'></a><a href='#L621'>621</a>
+<a name='L622'></a><a href='#L622'>622</a>
+<a name='L623'></a><a href='#L623'>623</a>
+<a name='L624'></a><a href='#L624'>624</a>
+<a name='L625'></a><a href='#L625'>625</a>
+<a name='L626'></a><a href='#L626'>626</a>
+<a name='L627'></a><a href='#L627'>627</a>
+<a name='L628'></a><a href='#L628'>628</a>
+<a name='L629'></a><a href='#L629'>629</a>
+<a name='L630'></a><a href='#L630'>630</a>
+<a name='L631'></a><a href='#L631'>631</a>
+<a name='L632'></a><a href='#L632'>632</a>
+<a name='L633'></a><a href='#L633'>633</a>
+<a name='L634'></a><a href='#L634'>634</a>
+<a name='L635'></a><a href='#L635'>635</a>
+<a name='L636'></a><a href='#L636'>636</a>
+<a name='L637'></a><a href='#L637'>637</a>
+<a name='L638'></a><a href='#L638'>638</a>
+<a name='L639'></a><a href='#L639'>639</a>
+<a name='L640'></a><a href='#L640'>640</a>
+<a name='L641'></a><a href='#L641'>641</a>
+<a name='L642'></a><a href='#L642'>642</a>
+<a name='L643'></a><a href='#L643'>643</a>
+<a name='L644'></a><a href='#L644'>644</a>
+<a name='L645'></a><a href='#L645'>645</a>
+<a name='L646'></a><a href='#L646'>646</a>
+<a name='L647'></a><a href='#L647'>647</a>
+<a name='L648'></a><a href='#L648'>648</a>
+<a name='L649'></a><a href='#L649'>649</a>
+<a name='L650'></a><a href='#L650'>650</a>
+<a name='L651'></a><a href='#L651'>651</a>
+<a name='L652'></a><a href='#L652'>652</a>
+<a name='L653'></a><a href='#L653'>653</a>
+<a name='L654'></a><a href='#L654'>654</a>
+<a name='L655'></a><a href='#L655'>655</a>
+<a name='L656'></a><a href='#L656'>656</a>
+<a name='L657'></a><a href='#L657'>657</a>
+<a name='L658'></a><a href='#L658'>658</a>
+<a name='L659'></a><a href='#L659'>659</a>
+<a name='L660'></a><a href='#L660'>660</a>
+<a name='L661'></a><a href='#L661'>661</a>
+<a name='L662'></a><a href='#L662'>662</a>
+<a name='L663'></a><a href='#L663'>663</a>
+<a name='L664'></a><a href='#L664'>664</a>
+<a name='L665'></a><a href='#L665'>665</a>
+<a name='L666'></a><a href='#L666'>666</a>
+<a name='L667'></a><a href='#L667'>667</a>
+<a name='L668'></a><a href='#L668'>668</a>
+<a name='L669'></a><a href='#L669'>669</a>
+<a name='L670'></a><a href='#L670'>670</a>
+<a name='L671'></a><a href='#L671'>671</a>
+<a name='L672'></a><a href='#L672'>672</a>
+<a name='L673'></a><a href='#L673'>673</a>
+<a name='L674'></a><a href='#L674'>674</a>
+<a name='L675'></a><a href='#L675'>675</a>
+<a name='L676'></a><a href='#L676'>676</a>
+<a name='L677'></a><a href='#L677'>677</a>
+<a name='L678'></a><a href='#L678'>678</a>
+<a name='L679'></a><a href='#L679'>679</a>
+<a name='L680'></a><a href='#L680'>680</a>
+<a name='L681'></a><a href='#L681'>681</a>
+<a name='L682'></a><a href='#L682'>682</a>
+<a name='L683'></a><a href='#L683'>683</a>
+<a name='L684'></a><a href='#L684'>684</a>
+<a name='L685'></a><a href='#L685'>685</a>
+<a name='L686'></a><a href='#L686'>686</a>
+<a name='L687'></a><a href='#L687'>687</a>
+<a name='L688'></a><a href='#L688'>688</a>
+<a name='L689'></a><a href='#L689'>689</a>
+<a name='L690'></a><a href='#L690'>690</a>
+<a name='L691'></a><a href='#L691'>691</a>
+<a name='L692'></a><a href='#L692'>692</a>
+<a name='L693'></a><a href='#L693'>693</a>
+<a name='L694'></a><a href='#L694'>694</a>
+<a name='L695'></a><a href='#L695'>695</a>
+<a name='L696'></a><a href='#L696'>696</a>
+<a name='L697'></a><a href='#L697'>697</a>
+<a name='L698'></a><a href='#L698'>698</a>
+<a name='L699'></a><a href='#L699'>699</a>
+<a name='L700'></a><a href='#L700'>700</a>
+<a name='L701'></a><a href='#L701'>701</a>
+<a name='L702'></a><a href='#L702'>702</a>
+<a name='L703'></a><a href='#L703'>703</a>
+<a name='L704'></a><a href='#L704'>704</a>
+<a name='L705'></a><a href='#L705'>705</a>
+<a name='L706'></a><a href='#L706'>706</a>
+<a name='L707'></a><a href='#L707'>707</a>
+<a name='L708'></a><a href='#L708'>708</a>
+<a name='L709'></a><a href='#L709'>709</a>
+<a name='L710'></a><a href='#L710'>710</a>
+<a name='L711'></a><a href='#L711'>711</a>
+<a name='L712'></a><a href='#L712'>712</a>
+<a name='L713'></a><a href='#L713'>713</a>
+<a name='L714'></a><a href='#L714'>714</a>
+<a name='L715'></a><a href='#L715'>715</a>
+<a name='L716'></a><a href='#L716'>716</a>
+<a name='L717'></a><a href='#L717'>717</a>
+<a name='L718'></a><a href='#L718'>718</a>
+<a name='L719'></a><a href='#L719'>719</a>
+<a name='L720'></a><a href='#L720'>720</a>
+<a name='L721'></a><a href='#L721'>721</a>
+<a name='L722'></a><a href='#L722'>722</a>
+<a name='L723'></a><a href='#L723'>723</a>
+<a name='L724'></a><a href='#L724'>724</a>
+<a name='L725'></a><a href='#L725'>725</a>
+<a name='L726'></a><a href='#L726'>726</a>
+<a name='L727'></a><a href='#L727'>727</a>
+<a name='L728'></a><a href='#L728'>728</a>
+<a name='L729'></a><a href='#L729'>729</a>
+<a name='L730'></a><a href='#L730'>730</a>
+<a name='L731'></a><a href='#L731'>731</a>
+<a name='L732'></a><a href='#L732'>732</a>
+<a name='L733'></a><a href='#L733'>733</a>
+<a name='L734'></a><a href='#L734'>734</a>
+<a name='L735'></a><a href='#L735'>735</a>
+<a name='L736'></a><a href='#L736'>736</a>
+<a name='L737'></a><a href='#L737'>737</a>
+<a name='L738'></a><a href='#L738'>738</a>
+<a name='L739'></a><a href='#L739'>739</a>
+<a name='L740'></a><a href='#L740'>740</a>
+<a name='L741'></a><a href='#L741'>741</a>
+<a name='L742'></a><a href='#L742'>742</a>
+<a name='L743'></a><a href='#L743'>743</a>
+<a name='L744'></a><a href='#L744'>744</a>
+<a name='L745'></a><a href='#L745'>745</a>
+<a name='L746'></a><a href='#L746'>746</a>
+<a name='L747'></a><a href='#L747'>747</a>
+<a name='L748'></a><a href='#L748'>748</a>
+<a name='L749'></a><a href='#L749'>749</a>
+<a name='L750'></a><a href='#L750'>750</a>
+<a name='L751'></a><a href='#L751'>751</a>
+<a name='L752'></a><a href='#L752'>752</a>
+<a name='L753'></a><a href='#L753'>753</a>
+<a name='L754'></a><a href='#L754'>754</a>
+<a name='L755'></a><a href='#L755'>755</a>
+<a name='L756'></a><a href='#L756'>756</a>
+<a name='L757'></a><a href='#L757'>757</a>
+<a name='L758'></a><a href='#L758'>758</a>
+<a name='L759'></a><a href='#L759'>759</a>
+<a name='L760'></a><a href='#L760'>760</a>
+<a name='L761'></a><a href='#L761'>761</a>
+<a name='L762'></a><a href='#L762'>762</a>
+<a name='L763'></a><a href='#L763'>763</a>
+<a name='L764'></a><a href='#L764'>764</a>
+<a name='L765'></a><a href='#L765'>765</a>
+<a name='L766'></a><a href='#L766'>766</a>
+<a name='L767'></a><a href='#L767'>767</a>
+<a name='L768'></a><a href='#L768'>768</a>
+<a name='L769'></a><a href='#L769'>769</a>
+<a name='L770'></a><a href='#L770'>770</a>
+<a name='L771'></a><a href='#L771'>771</a>
+<a name='L772'></a><a href='#L772'>772</a>
+<a name='L773'></a><a href='#L773'>773</a>
+<a name='L774'></a><a href='#L774'>774</a>
+<a name='L775'></a><a href='#L775'>775</a>
+<a name='L776'></a><a href='#L776'>776</a></td><td class="line-coverage quiet"><span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js"><span class="cstat-no" title="statement not covered" >/**<span class="fstat-no" title="function not covered" ><span class="branch-0 cbranch-no" title="branch not covered" ></span></span></span>
+<span class="cstat-no" title="statement not covered" > * Human-owned spreadsheet provisioning for `hikoutei setup`.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * The setup CLI creates the sync spreadsheet as the logged-in human account</span>
+<span class="cstat-no" title="statement not covered" > * (service accounts cannot own Drive/Workspace assets) using the memory-only</span>
+<span class="cstat-no" title="statement not covered" > * access token obtained by the human auth step, then grants the freshly</span>
+<span class="cstat-no" title="statement not covered" > * provisioned service account writer access through the Drive API and</span>
+<span class="cstat-no" title="statement not covered" > * verifies Drive metadata: the active human must be the owner and the</span>
+<span class="cstat-no" title="statement not covered" > * service account must be a writer. The runtime itself stays service-account</span>
+<span class="cstat-no" title="statement not covered" > * only — the human token is never persisted.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * The create request does NOT carry a client-supplied id (Drive</span>
+<span class="cstat-no" title="statement not covered" > * `files.generateIds` ids cannot create Google Workspace files): instead the</span>
+<span class="cstat-no" title="statement not covered" > * flow generates a local opaque creation marker (a UUID) and the create</span>
+<span class="cstat-no" title="statement not covered" > * request carries it as a private `appProperties` entry in the same atomic</span>
+<span class="cstat-no" title="statement not covered" > * request. A lost response or failed create is reconciled by querying Drive</span>
+<span class="cstat-no" title="statement not covered" > * for that exact marker; the flow never retries the create from the started</span>
+<span class="cstat-no" title="statement not covered" > * state.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Production implementations use google-auth-library plus @googleapis/drive;</span>
+<span class="cstat-no" title="statement not covered" > * tests inject a fake `HumanSheetApiFactory`, so unit tests never touch the</span>
+<span class="cstat-no" title="statement not covered" > * network. Every SDK response is treated as untrusted input and validated by</span>
+<span class="cstat-no" title="statement not covered" > * runtime guards before promotion.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >import { OAuth2Client } from "google-auth-library";</span>
+<span class="cstat-no" title="statement not covered" >import { drive } from "@googleapis/drive";</span>
+<span class="cstat-no" title="statement not covered" >import { isValidCreationMarker, isValidDriveId } from "./checkpoint.js";</span>
+<span class="cstat-no" title="statement not covered" >import { httpStatusOf, safeError } from "./sdkError.js";</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** OAuth scope required to create and write spreadsheets. */</span>
+<span class="cstat-no" title="statement not covered" >export const SPREADSHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Template for the human-facing spreadsheet edit URL. */</span>
+<span class="cstat-no" title="statement not covered" >export const SPREADSHEET_EDIT_URL_TEMPLATE = "https://docs.google.com/spreadsheets/d/&lt;id&gt;/edit";</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Drive MIME type of a Google Sheets spreadsheet. */</span>
+<span class="cstat-no" title="statement not covered" >export const SPREADSHEET_MIME_TYPE = "application/vnd.google-apps.spreadsheet" as const;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Private Drive `appProperties` key carrying the setup creation marker. */</span>
+<span class="cstat-no" title="statement not covered" >export const HIKOUTEI_SETUP_MARKER_KEY = "hikouteiSetupMarker" as const;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Drive fields requested from `drive.files.create` and the marker query.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * `appProperties` is requested so the create response can be validated</span>
+<span class="cstat-no" title="statement not covered" > * against the expected creation marker before the result is promoted; a</span>
+<span class="cstat-no" title="statement not covered" > * response that omits or contradicts the marker is a protocol error and the</span>
+<span class="cstat-no" title="statement not covered" > * outcome is reconciled by marker instead.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export const DRIVE_FILE_CREATE_FIELDS = "id,name,mimeType,appProperties" as const;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Drive fields requested from the creation-marker `drive.files.list`</span>
+<span class="cstat-no" title="statement not covered" > * pagination: every page carries `nextPageToken` so ALL pages are walked</span>
+<span class="cstat-no" title="statement not covered" > * before the flow decides 0/1/many over the complete result, and</span>
+<span class="cstat-no" title="statement not covered" > * `incompleteSearch` so a page the server could not fully search is</span>
+<span class="cstat-no" title="statement not covered" > * refused (a `true` value means the aggregate may be missing files, so the</span>
+<span class="cstat-no" title="statement not covered" > * flow must fail closed instead of trusting a partial lookup).</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export const MARKER_FILE_LIST_FIELDS =</span>
+<span class="cstat-no" title="statement not covered" >  "files(id,name,mimeType,appProperties),nextPageToken,incompleteSearch" as const;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Page size for the creation-marker `drive.files.list` pagination. */</span>
+<span class="cstat-no" title="statement not covered" >export const MARKER_FILE_LIST_PAGE_SIZE = 10;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Result of creating a spreadsheet as the human owner. */</span>
+<span class="cstat-no" title="statement not covered" >export interface SpreadsheetCreateResult {</span>
+<span class="cstat-no" title="statement not covered" >  readonly spreadsheetId: string;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** One validated file returned by the creation-marker query. */</span>
+<span class="cstat-no" title="statement not covered" >export interface MarkerFileInfo {</span>
+<span class="cstat-no" title="statement not covered" >  readonly spreadsheetId: string;</span>
+<span class="cstat-no" title="statement not covered" >  readonly name: string;</span>
+<span class="cstat-no" title="statement not covered" >  readonly mimeType: string;</span>
+<span class="cstat-no" title="statement not covered" >  /** Private appProperties; validated as a record when present. */</span>
+<span class="cstat-no" title="statement not covered" >  readonly appProperties: Readonly&lt;Record&lt;string, unknown&gt;&gt;;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Result of ensuring the service account can write the spreadsheet. */</span>
+<span class="cstat-no" title="statement not covered" >export interface ShareOutcome {</span>
+<span class="cstat-no" title="statement not covered" >  readonly writerRole: "reused" | "upgraded" | "created";</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Human-token sheet operations used by the setup flow. */</span>
+<span class="cstat-no" title="statement not covered" >export interface HumanSheetApi {</span>
+<span class="cstat-no" title="statement not covered" >  /**</span>
+<span class="cstat-no" title="statement not covered" >   * Creates a spreadsheet owned by the human account with the expected</span>
+<span class="cstat-no" title="statement not covered" >   * title and the creation marker as a private `appProperties` entry in the</span>
+<span class="cstat-no" title="statement not covered" >   * same atomic request. No client-supplied id is used. Throws on API or</span>
+<span class="cstat-no" title="statement not covered" >   * validation failure; the flow reconciles an unknown outcome by marker.</span>
+<span class="cstat-no" title="statement not covered" >   */</span>
+<span class="cstat-no" title="statement not covered" >  createSpreadsheet(request: { readonly title: string; readonly marker: string }): Promise&lt;SpreadsheetCreateResult&gt;;</span>
+<span class="cstat-no" title="statement not covered" >  /**</span>
+<span class="cstat-no" title="statement not covered" >   * Lists Drive files carrying the exact creation marker across ALL pages.</span>
+<span class="cstat-no" title="statement not covered" >   *</span>
+<span class="cstat-no" title="statement not covered" >   * Returns the validated matches aggregated from every `drive.files.list`</span>
+<span class="cstat-no" title="statement not covered" >   * page (the flow enforces 0/1 over the complete result). Throws when the</span>
+<span class="cstat-no" title="statement not covered" >   * lookup itself fails, so the flow treats the outcome as unknown and</span>
+<span class="cstat-no" title="statement not covered" >   * never creates a second spreadsheet.</span>
+<span class="cstat-no" title="statement not covered" >   */</span>
+<span class="cstat-no" title="statement not covered" >  findSpreadsheetByMarker(marker: string): Promise&lt;readonly MarkerFileInfo[]&gt;;</span>
+<span class="cstat-no" title="statement not covered" >  /**</span>
+<span class="cstat-no" title="statement not covered" >   * Ensures the service account is a writer on the spreadsheet (reusing an</span>
+<span class="cstat-no" title="statement not covered" >   * existing writer/owner role, upgrading a lower role, or creating the</span>
+<span class="cstat-no" title="statement not covered" >   * permission without a notification email) and verifies that the active</span>
+<span class="cstat-no" title="statement not covered" >   * human is the owner and the service account can write.</span>
+<span class="cstat-no" title="statement not covered" >   */</span>
+<span class="cstat-no" title="statement not covered" >  ensureSaWriter(request: {</span>
+<span class="cstat-no" title="statement not covered" >    spreadsheetId: string;</span>
+<span class="cstat-no" title="statement not covered" >    saEmail: string;</span>
+<span class="cstat-no" title="statement not covered" >    ownerEmail: string;</span>
+<span class="cstat-no" title="statement not covered" >  }): Promise&lt;ShareOutcome&gt;;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Builds a `HumanSheetApi` for one run; the access token lives only in the</span>
+<span class="cstat-no" title="statement not covered" > * returned client for the duration of the run.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export type HumanSheetApiFactory = (accessToken: string) =&gt; HumanSheetApi;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** SDK-boundary auth types; contain the google-auth-library version cast here. */</span>
+<span class="cstat-no" title="statement not covered" >type DriveAuth = NonNullable&lt;Parameters&lt;typeof drive&gt;[0]["auth"]&gt;;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Production factory: creates the human-token Sheets/Drive clients on demand. */</span>
+<span class="cstat-no" title="statement not covered" >export function createHumanSheetApiFactory(): HumanSheetApiFactory {</span>
+<span class="cstat-no" title="statement not covered" >  return (accessToken: string): HumanSheetApi =&gt; createHumanSheetApi(accessToken);</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Production human-token sheet API.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Builds an OAuth2Client carrying the access token, then wraps the Drive</span>
+<span class="cstat-no" title="statement not covered" > * clients (create/get/permissions). The token is held in memory only;</span>
+<span class="cstat-no" title="statement not covered" > * errors are rethrown and the flow maps them to `sheet_create_failed`,</span>
+<span class="cstat-no" title="statement not covered" > * `sheet_create_uncertain`, or `sheet_share_failed` with sanitized reasons.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function createHumanSheetApi(accessToken: string): HumanSheetApi {</span>
+<span class="cstat-no" title="statement not covered" >  const oauth = new OAuth2Client();</span>
+<span class="cstat-no" title="statement not covered" >  oauth.setCredentials({ access_token: accessToken });</span>
+<span class="cstat-no" title="statement not covered" >  const driveClient = drive({ version: "v3", auth: oauth as unknown as DriveAuth });</span>
+<span class="cstat-no" title="statement not covered" >  return {</span>
+<span class="cstat-no" title="statement not covered" >    async createSpreadsheet(request: { title: string; marker: string }): Promise&lt;SpreadsheetCreateResult&gt; {</span>
+<span class="cstat-no" title="statement not covered" >      requireCreationMarker(request.marker);</span>
+<span class="cstat-no" title="statement not covered" >      const response = await driveClient.files.create(buildDriveFileCreateRequest(request.title, request.marker));</span>
+<span class="cstat-no" title="statement not covered" >      return extractDriveFileCreateResult(response.data, request.title, request.marker);</span>
+<span class="cstat-no" title="statement not covered" >    },</span>
+<span class="cstat-no" title="statement not covered" >    async findSpreadsheetByMarker(marker: string): Promise&lt;readonly MarkerFileInfo[]&gt; {</span>
+<span class="cstat-no" title="statement not covered" >      return findMarkerFilesWithDrive(driveClient, marker);</span>
+<span class="cstat-no" title="statement not covered" >    },</span>
+<span class="cstat-no" title="statement not covered" >    async ensureSaWriter(request: {</span>
+<span class="cstat-no" title="statement not covered" >      spreadsheetId: string;</span>
+<span class="cstat-no" title="statement not covered" >      saEmail: string;</span>
+<span class="cstat-no" title="statement not covered" >      ownerEmail: string;</span>
+<span class="cstat-no" title="statement not covered" >    }): Promise&lt;ShareOutcome&gt; {</span>
+<span class="cstat-no" title="statement not covered" >      requireDriveId(request.spreadsheetId);</span>
+<span class="cstat-no" title="statement not covered" >      const outcome = await ensureSaWriterPermissionWithDrive(driveClient, request.spreadsheetId, request.saEmail);</span>
+<span class="cstat-no" title="statement not covered" >      await verifyDriveOwnership(driveClient, request.spreadsheetId, request.ownerEmail, request.saEmail);</span>
+<span class="cstat-no" title="statement not covered" >      return outcome;</span>
+<span class="cstat-no" title="statement not covered" >    },</span>
+<span class="cstat-no" title="statement not covered" >  };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Builds the public edit URL for a spreadsheet id. */</span>
+<span class="cstat-no" title="statement not covered" >export function spreadsheetEditUrl(spreadsheetId: string): string {</span>
+<span class="cstat-no" title="statement not covered" >  // The id is untrusted input at this boundary (it may come from a</span>
+<span class="cstat-no" title="statement not covered" >  // checkpoint, an SDK payload, or a caller): refuse a malformed value</span>
+<span class="cstat-no" title="statement not covered" >  // BEFORE interpolation so a newline/control/space id can never reach a</span>
+<span class="cstat-no" title="statement not covered" >  // URL or a message. The error never includes the raw id.</span>
+<span class="cstat-no" title="statement not covered" >  if (!isValidDriveId(spreadsheetId)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("a malformed spreadsheet id was refused before building the edit URL");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  return SPREADSHEET_EDIT_URL_TEMPLATE.replace("&lt;id&gt;", spreadsheetId);</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Builds the atomic `drive.files.create` request for a spreadsheet.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * The request carries the creation marker as a private `appProperties`</span>
+<span class="cstat-no" title="statement not covered" > * entry in the same atomic request (no client-supplied id is ever used) and</span>
+<span class="cstat-no" title="statement not covered" > * asks for `appProperties` in the response fields so the result can be</span>
+<span class="cstat-no" title="statement not covered" > * validated against the marker before promotion.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function buildDriveFileCreateRequest(</span>
+<span class="cstat-no" title="statement not covered" >  title: string,</span>
+<span class="cstat-no" title="statement not covered" >  marker: string,</span>
+<span class="cstat-no" title="statement not covered" >): {</span>
+<span class="cstat-no" title="statement not covered" >  readonly requestBody: {</span>
+<span class="cstat-no" title="statement not covered" >    readonly name: string;</span>
+<span class="cstat-no" title="statement not covered" >    readonly mimeType: typeof SPREADSHEET_MIME_TYPE;</span>
+<span class="cstat-no" title="statement not covered" >    readonly appProperties: { readonly [HIKOUTEI_SETUP_MARKER_KEY]: string };</span>
+<span class="cstat-no" title="statement not covered" >  };</span>
+<span class="cstat-no" title="statement not covered" >  readonly fields: typeof DRIVE_FILE_CREATE_FIELDS;</span>
+<span class="cstat-no" title="statement not covered" >} {</span>
+<span class="cstat-no" title="statement not covered" >  requireCreationMarker(marker);</span>
+<span class="cstat-no" title="statement not covered" >  return {</span>
+<span class="cstat-no" title="statement not covered" >    requestBody: {</span>
+<span class="cstat-no" title="statement not covered" >      name: title,</span>
+<span class="cstat-no" title="statement not covered" >      mimeType: SPREADSHEET_MIME_TYPE,</span>
+<span class="cstat-no" title="statement not covered" >      appProperties: { [HIKOUTEI_SETUP_MARKER_KEY]: marker },</span>
+<span class="cstat-no" title="statement not covered" >    },</span>
+<span class="cstat-no" title="statement not covered" >    fields: DRIVE_FILE_CREATE_FIELDS,</span>
+<span class="cstat-no" title="statement not covered" >  };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Validates the raw `drive.files.create` payload.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * The created file's id must be a non-empty URL-safe Drive id, the mime</span>
+<span class="cstat-no" title="statement not covered" > * type must be `application/vnd.google-apps.spreadsheet`, the returned name</span>
+<span class="cstat-no" title="statement not covered" > * must match the requested title exactly, and the returned `appProperties`</span>
+<span class="cstat-no" title="statement not covered" > * must be a record whose `hikouteiSetupMarker` value equals the expected</span>
+<span class="cstat-no" title="statement not covered" > * marker exactly; anything else is a protocol violation and the outcome is</span>
+<span class="cstat-no" title="statement not covered" > * treated as unknown (the flow reconciles by marker, never by retrying the</span>
+<span class="cstat-no" title="statement not covered" > * create and never by promoting the response). The id is validated before</span>
+<span class="cstat-no" title="statement not covered" > * it can reach a URL, the `.env` file, a summary, or a command label. The</span>
+<span class="cstat-no" title="statement not covered" > * edit URL is derived from the id deterministically and never stored.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function extractDriveFileCreateResult(</span>
+<span class="cstat-no" title="statement not covered" >  data: unknown,</span>
+<span class="cstat-no" title="statement not covered" >  expectedTitle: string,</span>
+<span class="cstat-no" title="statement not covered" >  expectedMarker: string,</span>
+<span class="cstat-no" title="statement not covered" >): SpreadsheetCreateResult {</span>
+<span class="cstat-no" title="statement not covered" >  if (!isRecord(data)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.create returned a non-object payload");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  const { id, name, mimeType, appProperties } = data;</span>
+<span class="cstat-no" title="statement not covered" >  if (!isValidDriveId(id)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.create response is missing or carries a malformed file id");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (mimeType !== SPREADSHEET_MIME_TYPE) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.create returned a file that is not a spreadsheet");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (typeof name !== "string" || name === "") {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.create response is missing the file name");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (name !== expectedTitle) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.create returned a file name that does not match the requested title");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  // The marker is the write-ahead proof of identity: a response that omits</span>
+<span class="cstat-no" title="statement not covered" >  // it, carries it malformed, or carries a different value cannot be trusted</span>
+<span class="cstat-no" title="statement not covered" >  // to be OUR spreadsheet, so it is refused as a protocol violation. The</span>
+<span class="cstat-no" title="statement not covered" >  // message never includes the marker or the title.</span>
+<span class="cstat-no" title="statement not covered" >  if (!isRecord(appProperties)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.create response is missing the appProperties marker");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (appProperties[HIKOUTEI_SETUP_MARKER_KEY] !== expectedMarker) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.create returned appProperties that do not carry the expected marker");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  return { spreadsheetId: id };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** One validated `drive.files.list` page for a creation-marker query. */</span>
+<span class="cstat-no" title="statement not covered" >export interface MarkerFileListPage {</span>
+<span class="cstat-no" title="statement not covered" >  readonly files: readonly MarkerFileInfo[];</span>
+<span class="cstat-no" title="statement not covered" >  /**</span>
+<span class="cstat-no" title="statement not covered" >   * Opaque continuation token, validated as a non-empty string when the</span>
+<span class="cstat-no" title="statement not covered" >   * untrusted payload carries one; `undefined` means the last page.</span>
+<span class="cstat-no" title="statement not covered" >   */</span>
+<span class="cstat-no" title="statement not covered" >  readonly nextPageToken: string | undefined;</span>
+<span class="cstat-no" title="statement not covered" >  /**</span>
+<span class="cstat-no" title="statement not covered" >   * Drive's completeness flag: the page is only promotable when the server</span>
+<span class="cstat-no" title="statement not covered" >   * states the search was complete (`false`). A missing, `true`, or</span>
+<span class="cstat-no" title="statement not covered" >   * malformed value fails closed — an incomplete search may hide files the</span>
+<span class="cstat-no" title="statement not covered" >   * marker reconciliation depends on, so the flow must never decide 0/1</span>
+<span class="cstat-no" title="statement not covered" >   * over a partial result.</span>
+<span class="cstat-no" title="statement not covered" >   */</span>
+<span class="cstat-no" title="statement not covered" >  readonly incompleteSearch: false;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Validates one raw `drive.files.list` page payload for a creation-marker</span>
+<span class="cstat-no" title="statement not covered" > * query.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Untrusted SDK data: every file entry must carry a non-empty URL-safe</span>
+<span class="cstat-no" title="statement not covered" > * `id`, non-empty `name` and `mimeType` strings, and `appProperties` (when</span>
+<span class="cstat-no" title="statement not covered" > * present) must be a record. The optional `nextPageToken` must be a</span>
+<span class="cstat-no" title="statement not covered" > * non-empty string when present; malformed payloads throw through the</span>
+<span class="cstat-no" title="statement not covered" > * sanitized structured path and never leak payload contents. Whether the</span>
+<span class="cstat-no" title="statement not covered" > * marker itself matches is decided by the flow, which also enforces</span>
+<span class="cstat-no" title="statement not covered" > * exactly one result before promotion.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function extractMarkerFileListPage(data: unknown): MarkerFileListPage {</span>
+<span class="cstat-no" title="statement not covered" >  if (!isRecord(data)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.list returned a non-object payload");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  const { files, nextPageToken, incompleteSearch } = data;</span>
+<span class="cstat-no" title="statement not covered" >  if (!Array.isArray(files)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.list response is missing the file list");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (incompleteSearch !== false) {</span>
+<span class="cstat-no" title="statement not covered" >    // A missing, `true`, or malformed completeness flag means the server</span>
+<span class="cstat-no" title="statement not covered" >    // could not fully search the corpus: the aggregated result may be</span>
+<span class="cstat-no" title="statement not covered" >    // missing files, so the reconciliation fails closed (the flow treats</span>
+<span class="cstat-no" title="statement not covered" >    // the create outcome as `sheet_create_uncertain` — never a rollback</span>
+<span class="cstat-no" title="statement not covered" >    // and never a second create). The raw value is never echoed.</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.list returned an incomplete search result");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (nextPageToken !== undefined &amp;&amp; (typeof nextPageToken !== "string" || nextPageToken === "")) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.list returned a malformed continuation token");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  return {</span>
+<span class="cstat-no" title="statement not covered" >    files: files.map((entry, index) =&gt; {</span>
+<span class="cstat-no" title="statement not covered" >      if (!isRecord(entry)) {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`marker query file entry ${index} is not an object`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      const { id, name, mimeType, appProperties } = entry;</span>
+<span class="cstat-no" title="statement not covered" >      if (!isValidDriveId(id)) {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`marker query file entry ${index} is missing or carries a malformed id`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      if (typeof name !== "string" || name === "") {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`marker query file entry ${index} is missing name`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      if (typeof mimeType !== "string" || mimeType === "") {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`marker query file entry ${index} is missing mimeType`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      if (appProperties !== undefined &amp;&amp; !isRecord(appProperties)) {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`marker query file entry ${index} has malformed appProperties`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      return { spreadsheetId: id, name, mimeType, appProperties: appProperties ?? {} };</span>
+<span class="cstat-no" title="statement not covered" >    }),</span>
+<span class="cstat-no" title="statement not covered" >    nextPageToken: nextPageToken === undefined ? undefined : nextPageToken,</span>
+<span class="cstat-no" title="statement not covered" >    incompleteSearch: false,</span>
+<span class="cstat-no" title="statement not covered" >  };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Validates the raw `drive.files.list` payload for a creation-marker query</span>
+<span class="cstat-no" title="statement not covered" > * (single page).</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Untrusted SDK data: every file entry must carry a non-empty URL-safe</span>
+<span class="cstat-no" title="statement not covered" > * `id`, non-empty `name` and `mimeType` strings, and `appProperties` (when</span>
+<span class="cstat-no" title="statement not covered" > * present) must be a record. The paginating marker lookup uses</span>
+<span class="cstat-no" title="statement not covered" > * `extractMarkerFileListPage`; this wrapper is kept for callers that never</span>
+<span class="cstat-no" title="statement not covered" > * paginate.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function extractMarkerFileList(data: unknown): readonly MarkerFileInfo[] {</span>
+<span class="cstat-no" title="statement not covered" >  return [...extractMarkerFileListPage(data).files];</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Rejects a malformed creation marker before it reaches the Drive API. */</span>
+<span class="cstat-no" title="statement not covered" >function requireCreationMarker(marker: string): void {</span>
+<span class="cstat-no" title="statement not covered" >  if (!isValidCreationMarker(marker)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("a malformed creation marker was refused before reaching the Drive API");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Rejects a malformed Drive id before it reaches the Drive API. */</span>
+<span class="cstat-no" title="statement not covered" >function requireDriveId(id: string): void {</span>
+<span class="cstat-no" title="statement not covered" >  if (!isValidDriveId(id)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("a malformed Drive id was refused before reaching the Drive API");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * A validated Drive permission entry.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * `emailAddress` is required only for identity-carrying types (`user`,</span>
+<span class="cstat-no" title="statement not covered" > * `group`): Google omits it for `anyone`, `anyoneWithLink`, and `domain`</span>
+<span class="cstat-no" title="statement not covered" > * permissions, so those entries promote without it and are safely ignored</span>
+<span class="cstat-no" title="statement not covered" > * by writer planning.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export type DrivePermission =</span>
+<span class="cstat-no" title="statement not covered" >  | {</span>
+<span class="cstat-no" title="statement not covered" >    readonly id: string;</span>
+<span class="cstat-no" title="statement not covered" >    readonly role: string;</span>
+<span class="cstat-no" title="statement not covered" >    readonly type: "user" | "group";</span>
+<span class="cstat-no" title="statement not covered" >    readonly emailAddress: string;</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  | {</span>
+<span class="cstat-no" title="statement not covered" >    readonly id: string;</span>
+<span class="cstat-no" title="statement not covered" >    readonly role: string;</span>
+<span class="cstat-no" title="statement not covered" >    readonly type: string;</span>
+<span class="cstat-no" title="statement not covered" >    readonly emailAddress: undefined;</span>
+<span class="cstat-no" title="statement not covered" >  };</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** The id of an existing Drive permission entry. */</span>
+<span class="cstat-no" title="statement not covered" >export type DrivePermissionId = string;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Decides the idempotent writer-ensure action for the service account.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Pure decision helper so tests can cover reuse/upgrade/create without the</span>
+<span class="cstat-no" title="statement not covered" > * network: an existing user permission with writer/owner role is reused, a</span>
+<span class="cstat-no" title="statement not covered" > * lower role is upgraded, and a missing permission is created. Entries of</span>
+<span class="cstat-no" title="statement not covered" > * other types (anyone/domain/group) are ignored safely.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export type SaWriterPlan =</span>
+<span class="cstat-no" title="statement not covered" >  | { readonly action: "reuse" }</span>
+<span class="cstat-no" title="statement not covered" >  | { readonly action: "upgrade"; readonly permissionId: DrivePermissionId }</span>
+<span class="cstat-no" title="statement not covered" >  | { readonly action: "create" };</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >export function planSaWriterAction(</span>
+<span class="cstat-no" title="statement not covered" >  permissions: readonly DrivePermission[],</span>
+<span class="cstat-no" title="statement not covered" >  saEmail: string,</span>
+<span class="cstat-no" title="statement not covered" >): SaWriterPlan {</span>
+<span class="cstat-no" title="statement not covered" >  const existing = permissions.find(</span>
+<span class="cstat-no" title="statement not covered" >    (permission) =&gt; permission.type === "user" &amp;&amp; permission.emailAddress === saEmail,</span>
+<span class="cstat-no" title="statement not covered" >  );</span>
+<span class="cstat-no" title="statement not covered" >  if (existing === undefined) {</span>
+<span class="cstat-no" title="statement not covered" >    return { action: "create" };</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (existing.role === "writer" || existing.role === "owner") {</span>
+<span class="cstat-no" title="statement not covered" >    return { action: "reuse" };</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  return { action: "upgrade", permissionId: existing.id };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Validates the raw `permissions.list` payload (single page).</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Untrusted SDK data: every entry must carry a non-empty URL-safe id, a</span>
+<span class="cstat-no" title="statement not covered" > * non-empty role and type; entries of type `user`/`group` must additionally</span>
+<span class="cstat-no" title="statement not covered" > * carry a non-empty emailAddress, while other types (where Google omits the</span>
+<span class="cstat-no" title="statement not covered" > * identity) promote without it. The paginating writer ensure uses</span>
+<span class="cstat-no" title="statement not covered" > * `extractPermissionListPage`; this wrapper is kept for callers that never</span>
+<span class="cstat-no" title="statement not covered" > * paginate (the ownership-check file metadata).</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function extractPermissionList(data: unknown): DrivePermission[] {</span>
+<span class="cstat-no" title="statement not covered" >  return [...extractPermissionListPage(data).permissions];</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Validated Drive file metadata used for the ownership check. */</span>
+<span class="cstat-no" title="statement not covered" >export interface DriveFileMetadata {</span>
+<span class="cstat-no" title="statement not covered" >  readonly ownerEmails: readonly string[];</span>
+<span class="cstat-no" title="statement not covered" >  readonly permissions: readonly DrivePermission[];</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Validates the raw `drive.files.get` payload for the ownership check.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Untrusted SDK data: the response must carry the expected URL-safe file</span>
+<span class="cstat-no" title="statement not covered" > * id (a mismatched or malformed id means the metadata belongs to a</span>
+<span class="cstat-no" title="statement not covered" > * different file and the check must fail), `owners` must be an array of</span>
+<span class="cstat-no" title="statement not covered" > * objects with a non-empty `emailAddress`, and `permissions` must validate</span>
+<span class="cstat-no" title="statement not covered" > * like a `permissions.list` payload.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function extractDriveFileMetadata(data: unknown, expectedSpreadsheetId: string): DriveFileMetadata {</span>
+<span class="cstat-no" title="statement not covered" >  if (!isRecord(data)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.get returned a non-object payload");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  const { id, owners, permissions } = data;</span>
+<span class="cstat-no" title="statement not covered" >  if (id !== expectedSpreadsheetId || !isValidDriveId(id)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.get returned metadata for a different file");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (!Array.isArray(owners)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("drive.files.get response is missing the owner list");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  const ownerEmails = owners.map((owner) =&gt; {</span>
+<span class="cstat-no" title="statement not covered" >    if (!isRecord(owner)) {</span>
+<span class="cstat-no" title="statement not covered" >      throw safeError("an owner entry is not an object");</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    const { emailAddress } = owner;</span>
+<span class="cstat-no" title="statement not covered" >    if (typeof emailAddress !== "string" || emailAddress === "") {</span>
+<span class="cstat-no" title="statement not covered" >      throw safeError("an owner entry is missing emailAddress");</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    return emailAddress;</span>
+<span class="cstat-no" title="statement not covered" >  });</span>
+<span class="cstat-no" title="statement not covered" >  return { ownerEmails, permissions: extractPermissionList({ permissions }) };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >const PERMISSION_LIST_FIELDS = "permissions(id,emailAddress,role,type),nextPageToken";</span>
+<span class="cstat-no" title="statement not covered" >const FILE_VERIFY_FIELDS = "id,owners(emailAddress),permissions(id,emailAddress,role,type)";</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Hard bound on the number of `permissions.list` pages the writer ensure</span>
+<span class="cstat-no" title="statement not covered" > * will follow before failing closed.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Spreadsheet permission lists are tiny in practice; the bound exists so a</span>
+<span class="cstat-no" title="statement not covered" > * hostile or broken API can never make the ensure loop forever with an</span>
+<span class="cstat-no" title="statement not covered" > * ever-changing sequence of distinct continuation tokens (the seen-token</span>
+<span class="cstat-no" title="statement not covered" > * guard already stops repeated tokens).</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export const MAX_PERMISSION_LIST_PAGES = 50;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Hard bound on the number of `drive.files.list` pages the creation-marker</span>
+<span class="cstat-no" title="statement not covered" > * lookup will follow before failing closed, consistent with the permission</span>
+<span class="cstat-no" title="statement not covered" > * pagination bound. The bound exists so a hostile or broken API can never</span>
+<span class="cstat-no" title="statement not covered" > * make the lookup loop forever with an ever-changing sequence of distinct</span>
+<span class="cstat-no" title="statement not covered" > * continuation tokens (the seen-token guard already stops repeated tokens).</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export const MAX_MARKER_FILE_LIST_PAGES = 50;</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** One validated `permissions.list` page. */</span>
+<span class="cstat-no" title="statement not covered" >export interface PermissionListPage {</span>
+<span class="cstat-no" title="statement not covered" >  readonly permissions: readonly DrivePermission[];</span>
+<span class="cstat-no" title="statement not covered" >  /**</span>
+<span class="cstat-no" title="statement not covered" >   * Opaque continuation token, validated as a non-empty string when the</span>
+<span class="cstat-no" title="statement not covered" >   * untrusted payload carries one; `undefined` means the last page.</span>
+<span class="cstat-no" title="statement not covered" >   */</span>
+<span class="cstat-no" title="statement not covered" >  readonly nextPageToken: string | undefined;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Validates one raw `permissions.list` page payload.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Untrusted SDK data: every entry must carry a non-empty URL-safe id, a</span>
+<span class="cstat-no" title="statement not covered" > * non-empty role and type; entries of type `user`/`group` must additionally</span>
+<span class="cstat-no" title="statement not covered" > * carry a non-empty emailAddress, while other types (where Google omits the</span>
+<span class="cstat-no" title="statement not covered" > * identity) promote without it. The optional `nextPageToken` must be a</span>
+<span class="cstat-no" title="statement not covered" > * non-empty string when present. Malformed payloads throw through the</span>
+<span class="cstat-no" title="statement not covered" > * sanitized structured path and never leak payload contents.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export function extractPermissionListPage(data: unknown): PermissionListPage {</span>
+<span class="cstat-no" title="statement not covered" >  if (!isRecord(data)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("permissions.list returned a non-object payload");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  const { permissions, nextPageToken } = data;</span>
+<span class="cstat-no" title="statement not covered" >  if (!Array.isArray(permissions)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("permissions.list response is missing the permission list");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  if (nextPageToken !== undefined &amp;&amp; (typeof nextPageToken !== "string" || nextPageToken === "")) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError("permissions.list returned a malformed continuation token");</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  return {</span>
+<span class="cstat-no" title="statement not covered" >    permissions: permissions.map((entry, index) =&gt; {</span>
+<span class="cstat-no" title="statement not covered" >      if (!isRecord(entry)) {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`permission entry ${index} is not an object`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      const { id, emailAddress, role, type } = entry;</span>
+<span class="cstat-no" title="statement not covered" >      if (!isValidDriveId(id)) {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`permission entry ${index} is missing or carries a malformed id`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      if (typeof role !== "string" || role === "") {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`permission entry ${index} is missing role`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      if (typeof type !== "string" || type === "") {</span>
+<span class="cstat-no" title="statement not covered" >        throw safeError(`permission entry ${index} is missing type`);</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      if (type === "user" || type === "group") {</span>
+<span class="cstat-no" title="statement not covered" >        if (typeof emailAddress !== "string" || emailAddress === "") {</span>
+<span class="cstat-no" title="statement not covered" >          throw safeError(`permission entry ${index} of type ${type} is missing emailAddress`);</span>
+<span class="cstat-no" title="statement not covered" >        }</span>
+<span class="cstat-no" title="statement not covered" >        return { id, role, type, emailAddress };</span>
+<span class="cstat-no" title="statement not covered" >      }</span>
+<span class="cstat-no" title="statement not covered" >      return { id, role, type, emailAddress: undefined };</span>
+<span class="cstat-no" title="statement not covered" >    }),</span>
+<span class="cstat-no" title="statement not covered" >    nextPageToken: nextPageToken === undefined ? undefined : nextPageToken,</span>
+<span class="cstat-no" title="statement not covered" >  };</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * The injectable Drive permission boundary used by the writer ensure.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Production wraps the @googleapis/drive permissions resource; tests inject</span>
+<span class="cstat-no" title="statement not covered" > * a fake so pagination, cycle guards, and request fields are exercised</span>
+<span class="cstat-no" title="statement not covered" > * without the network. Every response `data` is treated as untrusted input</span>
+<span class="cstat-no" title="statement not covered" > * and validated by runtime guards before promotion.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export interface DrivePermissionApi {</span>
+<span class="cstat-no" title="statement not covered" >  list(request: {</span>
+<span class="cstat-no" title="statement not covered" >    fileId: string;</span>
+<span class="cstat-no" title="statement not covered" >    fields: string;</span>
+<span class="cstat-no" title="statement not covered" >    pageToken?: string;</span>
+<span class="cstat-no" title="statement not covered" >  }): Promise&lt;{ readonly data: unknown }&gt;;</span>
+<span class="cstat-no" title="statement not covered" >  update(request: {</span>
+<span class="cstat-no" title="statement not covered" >    fileId: string;</span>
+<span class="cstat-no" title="statement not covered" >    permissionId: string;</span>
+<span class="cstat-no" title="statement not covered" >    requestBody: { readonly role: "writer" };</span>
+<span class="cstat-no" title="statement not covered" >  }): Promise&lt;unknown&gt;;</span>
+<span class="cstat-no" title="statement not covered" >  create(request: {</span>
+<span class="cstat-no" title="statement not covered" >    fileId: string;</span>
+<span class="cstat-no" title="statement not covered" >    requestBody: { readonly type: "user"; readonly role: "writer"; readonly emailAddress: string };</span>
+<span class="cstat-no" title="statement not covered" >    sendNotificationEmail: false;</span>
+<span class="cstat-no" title="statement not covered" >  }): Promise&lt;unknown&gt;;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Collects every permission of a file across ALL `permissions.list` pages.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Follows `nextPageToken` until it is absent, requesting the fields that</span>
+<span class="cstat-no" title="statement not covered" > * include the token. Fails closed on a malformed page payload or</span>
+<span class="cstat-no" title="statement not covered" > * continuation token, on a repeated token (cycle guard — a non-progress</span>
+<span class="cstat-no" title="statement not covered" > * loop can never spin), and on the hard page bound; API errors propagate</span>
+<span class="cstat-no" title="statement not covered" > * through the sanitized structured path. The file id is validated before</span>
+<span class="cstat-no" title="statement not covered" > * it reaches the API.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export async function listAllDrivePermissions(</span>
+<span class="cstat-no" title="statement not covered" >  api: Pick&lt;DrivePermissionApi, "list"&gt;,</span>
+<span class="cstat-no" title="statement not covered" >  spreadsheetId: string,</span>
+<span class="cstat-no" title="statement not covered" >): Promise&lt;readonly DrivePermission[]&gt; {</span>
+<span class="cstat-no" title="statement not covered" >  requireDriveId(spreadsheetId);</span>
+<span class="cstat-no" title="statement not covered" >  const all: DrivePermission[] = [];</span>
+<span class="cstat-no" title="statement not covered" >  const seenTokens = new Set&lt;string&gt;();</span>
+<span class="cstat-no" title="statement not covered" >  let pageToken: string | undefined;</span>
+<span class="cstat-no" title="statement not covered" >  for (let page = 0; ; page += 1) {</span>
+<span class="cstat-no" title="statement not covered" >    if (page &gt;= MAX_PERMISSION_LIST_PAGES) {</span>
+<span class="cstat-no" title="statement not covered" >      throw safeError("permissions.list pagination exceeded the page limit; refusing to continue");</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    const response = await api.list({</span>
+<span class="cstat-no" title="statement not covered" >      fileId: spreadsheetId,</span>
+<span class="cstat-no" title="statement not covered" >      fields: PERMISSION_LIST_FIELDS,</span>
+<span class="cstat-no" title="statement not covered" >      ...(pageToken === undefined ? {} : { pageToken }),</span>
+<span class="cstat-no" title="statement not covered" >    });</span>
+<span class="cstat-no" title="statement not covered" >    const pageResult = extractPermissionListPage(response.data);</span>
+<span class="cstat-no" title="statement not covered" >    all.push(...pageResult.permissions);</span>
+<span class="cstat-no" title="statement not covered" >    const next = pageResult.nextPageToken;</span>
+<span class="cstat-no" title="statement not covered" >    if (next === undefined) {</span>
+<span class="cstat-no" title="statement not covered" >      return all;</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    if (seenTokens.has(next)) {</span>
+<span class="cstat-no" title="statement not covered" >      throw safeError("permissions.list pagination repeated a continuation token; refusing to continue");</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    seenTokens.add(next);</span>
+<span class="cstat-no" title="statement not covered" >    pageToken = next;</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * The injectable Drive file-list boundary used by the creation-marker</span>
+<span class="cstat-no" title="statement not covered" > * lookup.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Production wraps the @googleapis/drive files resource; tests inject a</span>
+<span class="cstat-no" title="statement not covered" > * fake so pagination, cycle guards, and request fields are exercised</span>
+<span class="cstat-no" title="statement not covered" > * without the network. Every response `data` is treated as untrusted input</span>
+<span class="cstat-no" title="statement not covered" > * and validated by runtime guards before promotion.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export interface DriveFileListApi {</span>
+<span class="cstat-no" title="statement not covered" >  list(request: {</span>
+<span class="cstat-no" title="statement not covered" >    q: string;</span>
+<span class="cstat-no" title="statement not covered" >    spaces: string;</span>
+<span class="cstat-no" title="statement not covered" >    fields: string;</span>
+<span class="cstat-no" title="statement not covered" >    pageSize: number;</span>
+<span class="cstat-no" title="statement not covered" >    pageToken?: string;</span>
+<span class="cstat-no" title="statement not covered" >  }): Promise&lt;{ readonly data: unknown }&gt;;</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Collects every Drive file carrying the exact creation marker across ALL</span>
+<span class="cstat-no" title="statement not covered" > * `drive.files.list` pages.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Follows `nextPageToken` until it is absent, requesting the fields that</span>
+<span class="cstat-no" title="statement not covered" > * include the token. Fails closed on a malformed page payload or</span>
+<span class="cstat-no" title="statement not covered" > * continuation token, on a repeated token (cycle guard — a non-progress</span>
+<span class="cstat-no" title="statement not covered" > * loop can never spin), and on the hard page bound; API errors propagate</span>
+<span class="cstat-no" title="statement not covered" > * through the sanitized structured path. The marker is validated before it</span>
+<span class="cstat-no" title="statement not covered" > * reaches the API. All pages are aggregated before the result is returned,</span>
+<span class="cstat-no" title="statement not covered" > * so the flow's 0/1/many reconciliation sees the COMPLETE result: a</span>
+<span class="cstat-no" title="statement not covered" > * duplicate exact marker hidden after a short first page can never be</span>
+<span class="cstat-no" title="statement not covered" > * mistaken for a clean single match.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >export async function listAllMarkerFiles(</span>
+<span class="cstat-no" title="statement not covered" >  api: Pick&lt;DriveFileListApi, "list"&gt;,</span>
+<span class="cstat-no" title="statement not covered" >  marker: string,</span>
+<span class="cstat-no" title="statement not covered" >): Promise&lt;readonly MarkerFileInfo[]&gt; {</span>
+<span class="cstat-no" title="statement not covered" >  requireCreationMarker(marker);</span>
+<span class="cstat-no" title="statement not covered" >  const all: MarkerFileInfo[] = [];</span>
+<span class="cstat-no" title="statement not covered" >  const seenTokens = new Set&lt;string&gt;();</span>
+<span class="cstat-no" title="statement not covered" >  let pageToken: string | undefined;</span>
+<span class="cstat-no" title="statement not covered" >  for (let page = 0; ; page += 1) {</span>
+<span class="cstat-no" title="statement not covered" >    if (page &gt;= MAX_MARKER_FILE_LIST_PAGES) {</span>
+<span class="cstat-no" title="statement not covered" >      throw safeError("drive.files.list pagination exceeded the page limit; refusing to continue");</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    const response = await api.list({</span>
+<span class="cstat-no" title="statement not covered" >      q: `appProperties has { key='${HIKOUTEI_SETUP_MARKER_KEY}' and value='${marker}' }`,</span>
+<span class="cstat-no" title="statement not covered" >      spaces: "drive",</span>
+<span class="cstat-no" title="statement not covered" >      fields: MARKER_FILE_LIST_FIELDS,</span>
+<span class="cstat-no" title="statement not covered" >      pageSize: MARKER_FILE_LIST_PAGE_SIZE,</span>
+<span class="cstat-no" title="statement not covered" >      ...(pageToken === undefined ? {} : { pageToken }),</span>
+<span class="cstat-no" title="statement not covered" >    });</span>
+<span class="cstat-no" title="statement not covered" >    const pageResult = extractMarkerFileListPage(response.data);</span>
+<span class="cstat-no" title="statement not covered" >    all.push(...pageResult.files);</span>
+<span class="cstat-no" title="statement not covered" >    const next = pageResult.nextPageToken;</span>
+<span class="cstat-no" title="statement not covered" >    if (next === undefined) {</span>
+<span class="cstat-no" title="statement not covered" >      return all;</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    if (seenTokens.has(next)) {</span>
+<span class="cstat-no" title="statement not covered" >      throw safeError("drive.files.list pagination repeated a continuation token; refusing to continue");</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+<span class="cstat-no" title="statement not covered" >    seenTokens.add(next);</span>
+<span class="cstat-no" title="statement not covered" >    pageToken = next;</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Production adapter: the creation-marker lookup over the @googleapis/drive</span>
+<span class="cstat-no" title="statement not covered" > * files resource.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >async function findMarkerFilesWithDrive(</span>
+<span class="cstat-no" title="statement not covered" >  driveClient: ReturnType&lt;typeof drive&gt;,</span>
+<span class="cstat-no" title="statement not covered" >  marker: string,</span>
+<span class="cstat-no" title="statement not covered" >): Promise&lt;readonly MarkerFileInfo[]&gt; {</span>
+<span class="cstat-no" title="statement not covered" >  const files = driveClient.files;</span>
+<span class="cstat-no" title="statement not covered" >  return listAllMarkerFiles(</span>
+<span class="cstat-no" title="statement not covered" >    {</span>
+<span class="cstat-no" title="statement not covered" >      list: (request) =&gt; files.list(request),</span>
+<span class="cstat-no" title="statement not covered" >    },</span>
+<span class="cstat-no" title="statement not covered" >    marker,</span>
+<span class="cstat-no" title="statement not covered" >  );</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/** Grants or reuses the service-account writer permission; returns the outcome. */</span>
+<span class="cstat-no" title="statement not covered" >export async function ensureSaWriterPermission(</span>
+<span class="cstat-no" title="statement not covered" >  api: DrivePermissionApi,</span>
+<span class="cstat-no" title="statement not covered" >  spreadsheetId: string,</span>
+<span class="cstat-no" title="statement not covered" >  saEmail: string,</span>
+<span class="cstat-no" title="statement not covered" >): Promise&lt;ShareOutcome&gt; {</span>
+<span class="cstat-no" title="statement not covered" >  const permissions = await listAllDrivePermissions(api, spreadsheetId);</span>
+<span class="cstat-no" title="statement not covered" >  const plan = planSaWriterAction(permissions, saEmail);</span>
+<span class="cstat-no" title="statement not covered" >  switch (plan.action) {</span>
+<span class="cstat-no" title="statement not covered" >    case "reuse":</span>
+<span class="cstat-no" title="statement not covered" >      return { writerRole: "reused" };</span>
+<span class="cstat-no" title="statement not covered" >    case "upgrade":</span>
+<span class="cstat-no" title="statement not covered" >      await api.update({</span>
+<span class="cstat-no" title="statement not covered" >        fileId: spreadsheetId,</span>
+<span class="cstat-no" title="statement not covered" >        permissionId: plan.permissionId,</span>
+<span class="cstat-no" title="statement not covered" >        requestBody: { role: "writer" },</span>
+<span class="cstat-no" title="statement not covered" >      });</span>
+<span class="cstat-no" title="statement not covered" >      return { writerRole: "upgraded" };</span>
+<span class="cstat-no" title="statement not covered" >    case "create":</span>
+<span class="cstat-no" title="statement not covered" >      await api.create({</span>
+<span class="cstat-no" title="statement not covered" >        fileId: spreadsheetId,</span>
+<span class="cstat-no" title="statement not covered" >        requestBody: { type: "user", role: "writer", emailAddress: saEmail },</span>
+<span class="cstat-no" title="statement not covered" >        sendNotificationEmail: false,</span>
+<span class="cstat-no" title="statement not covered" >      });</span>
+<span class="cstat-no" title="statement not covered" >      return { writerRole: "created" };</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Production adapter: the writer ensure over the @googleapis/drive</span>
+<span class="cstat-no" title="statement not covered" > * permissions resource.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >async function ensureSaWriterPermissionWithDrive(</span>
+<span class="cstat-no" title="statement not covered" >  driveClient: ReturnType&lt;typeof drive&gt;,</span>
+<span class="cstat-no" title="statement not covered" >  spreadsheetId: string,</span>
+<span class="cstat-no" title="statement not covered" >  saEmail: string,</span>
+<span class="cstat-no" title="statement not covered" >): Promise&lt;ShareOutcome&gt; {</span>
+<span class="cstat-no" title="statement not covered" >  const permissions = driveClient.permissions;</span>
+<span class="cstat-no" title="statement not covered" >  return ensureSaWriterPermission(</span>
+<span class="cstat-no" title="statement not covered" >    {</span>
+<span class="cstat-no" title="statement not covered" >      list: (request) =&gt; permissions.list(request),</span>
+<span class="cstat-no" title="statement not covered" >      update: (request) =&gt; permissions.update(request),</span>
+<span class="cstat-no" title="statement not covered" >      create: (request) =&gt; permissions.create(request),</span>
+<span class="cstat-no" title="statement not covered" >    },</span>
+<span class="cstat-no" title="statement not covered" >    spreadsheetId,</span>
+<span class="cstat-no" title="statement not covered" >    saEmail,</span>
+<span class="cstat-no" title="statement not covered" >  );</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >/**</span>
+<span class="cstat-no" title="statement not covered" > * Verifies Drive metadata after sharing.</span>
+<span class="cstat-no" title="statement not covered" > *</span>
+<span class="cstat-no" title="statement not covered" > * Fails the share step when the active human is not an owner or the service</span>
+<span class="cstat-no" title="statement not covered" > * account is not a writer/owner — the state the sync runtime depends on.</span>
+<span class="cstat-no" title="statement not covered" > */</span>
+<span class="cstat-no" title="statement not covered" >async function verifyDriveOwnership(</span>
+<span class="cstat-no" title="statement not covered" >  driveClient: ReturnType&lt;typeof drive&gt;,</span>
+<span class="cstat-no" title="statement not covered" >  spreadsheetId: string,</span>
+<span class="cstat-no" title="statement not covered" >  ownerEmail: string,</span>
+<span class="cstat-no" title="statement not covered" >  saEmail: string,</span>
+<span class="cstat-no" title="statement not covered" >): Promise&lt;void&gt; {</span>
+<span class="cstat-no" title="statement not covered" >  const response = await driveClient.files.get({</span>
+<span class="cstat-no" title="statement not covered" >    fileId: spreadsheetId,</span>
+<span class="cstat-no" title="statement not covered" >    fields: FILE_VERIFY_FIELDS,</span>
+<span class="cstat-no" title="statement not covered" >  });</span>
+<span class="cstat-no" title="statement not covered" >  const metadata = extractDriveFileMetadata(response.data, spreadsheetId);</span>
+<span class="cstat-no" title="statement not covered" >  if (!metadata.ownerEmails.includes(ownerEmail)) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError(`the active account ${ownerEmail} is not an owner of the spreadsheet`);</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >  const saCanWrite = metadata.permissions.some(</span>
+<span class="cstat-no" title="statement not covered" >    (permission) =&gt;</span>
+<span class="cstat-no" title="statement not covered" >      permission.emailAddress === saEmail &amp;&amp;</span>
+<span class="cstat-no" title="statement not covered" >      (permission.role === "writer" || permission.role === "owner"),</span>
+<span class="cstat-no" title="statement not covered" >  );</span>
+<span class="cstat-no" title="statement not covered" >  if (!saCanWrite) {</span>
+<span class="cstat-no" title="statement not covered" >    throw safeError(`the service account ${saEmail} is not a writer on the spreadsheet`);</span>
+<span class="cstat-no" title="statement not covered" >  }</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+<span class="cstat-no" title="statement not covered" ></span>
+<span class="cstat-no" title="statement not covered" >function isRecord(value: unknown): value is Record&lt;string, unknown&gt; {</span>
+<span class="cstat-no" title="statement not covered" >  return typeof value === "object" &amp;&amp; value !== null &amp;&amp; !Array.isArray(value);</span>
+<span class="cstat-no" title="statement not covered" >}</span>
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2026-09-13T14:01:39.875Z
+            </div>
+        <script src="../../../../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../../../../sorter.js"></script>
+        <script src="../../../../../block-navigation.js"></script>
+    </body>
+</html>
+    
