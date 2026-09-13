@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       transition:
-        description: "falsepositive or wontfix"
+        description: "falsepositive, wontfix, or resolve (fixed)"
         required: true
         type: string
       branch:
@@ -60,8 +60,8 @@ jobs:
             exit 1
           fi
           case "$TRANSITION" in
-            falsepositive|wontfix) ;;
-            *) echo "transition must be falsepositive or wontfix: $TRANSITION" >&2; exit 1 ;;
+            falsepositive|wontfix|resolve) ;;
+            *) echo "transition must be falsepositive, wontfix, or resolve: $TRANSITION" >&2; exit 1 ;;
           esac
           PROJECT="ManddarinShop_Hikoutei"
           search_url="https://sonarcloud.io/api/issues/search?componentKeys=${PROJECT}&branch=${BRANCH}&resolved=false&rules=${RULES}&ps=500&facets="
