@@ -22,6 +22,11 @@ on:
         required: false
         default: "develop"
         type: string
+      query_only:
+        description: "List matching issues and exit without resolving"
+        required: false
+        default: "false"
+        type: boolean
 
 permissions: {}
 
@@ -60,6 +65,14 @@ jobs:
             console.log(d.total ?? 0);
           ' "$response")"
           echo "found ${total} unresolved issues for rules=${RULES} on branch=${BRANCH}"
+          if [[ "${{ inputs.query_only }}" == "true" ]]; then
+            echo "query-only mode: dumping first issue"
+            echo "$response" | node -e '
+              const d = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              console.log(JSON.stringify({ total: d.total, first: (d.issues ?? [])[0] }, null, 2));
+            '
+            exit 0
+          fi
           if [[ "$total" == "0" ]]; then
             echo "nothing to resolve"
             exit 0
