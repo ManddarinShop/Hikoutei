@@ -27,6 +27,11 @@ on:
         required: false
         default: "false"
         type: boolean
+      comment:
+        description: "Optional rationale recorded on each resolved issue"
+        required: false
+        default: ""
+        type: string
 
 permissions: {}
 
@@ -47,6 +52,7 @@ jobs:
           RULES: ${{ inputs.rules }}
           TRANSITION: ${{ inputs.transition }}
           BRANCH: ${{ inputs.branch }}
+          COMMENT: ${{ inputs.comment }}
         run: |
           set -euo pipefail
           if [[ -z "${SONAR_TOKEN:-}" ]]; then
@@ -86,7 +92,8 @@ jobs:
             result="$(curl -sS -u "${SONAR_TOKEN}:" -X POST \
               "https://sonarcloud.io/api/issues/do_transition" \
               --data-urlencode "issue=${key}" \
-              --data-urlencode "transition=${TRANSITION}")"
+              --data-urlencode "transition=${TRANSITION}" \
+              ${COMMENT:+--data-urlencode "comment=${COMMENT}")"
             if node -e '
               const d = JSON.parse(process.argv[1]);
               process.exit(d.issue ? 0 : 1);
