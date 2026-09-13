@@ -27,9 +27,9 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
-        # setup-node v5 package-manager-cache probes pnpm-lock.yaml and dies on
-        # "Unable to locate executable file: pnpm"; these workflows use npm only.
-        package-manager-cache: false
+          # setup-node v5 package-manager-cache probes pnpm-lock.yaml and dies on
+          # "Unable to locate executable file: pnpm"; these workflows use npm only.
+          package-manager-cache: false
 
       - name: Resolve version
         id: version

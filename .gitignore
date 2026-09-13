@@ -35,3 +35,5 @@ hikoutei-service-account-*.json
 .typed-sheets.json
 .typed-sheets.*.json
 hikoutei-sa-*.json
+# coverage artifacts
+coverage/
