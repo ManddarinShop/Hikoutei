@@ -171,7 +171,6 @@ describe("hikoutei-mcp config loader", () => {
     }));
     expect(two.status).toBe("invalid");
     if (two.status === "invalid") {
-      expect(two.status === "invalid");
       expect(two.reason).toContain("found 2");
     }
 

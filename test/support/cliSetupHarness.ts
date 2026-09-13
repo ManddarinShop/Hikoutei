@@ -105,7 +105,7 @@ export const RSA_PRIVATE_KEY_PEM = [
 
 /** Adversarial secret payloads that must never reach CLI/result strings. */
 export const SECRET_JWT =
-  "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleS0xIn0.eyJzdWIiOiJzYS0xQHByb2ouaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20ifQ.signature";
+  "eyJhbGciOiJSUzI1NiIsImtpZCI6ImtleS0xIn0.eyJzdWIiOiJzYS0xQHByb2ouaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20ifQ.signature"; // NOSONAR: adversarial fake fixture for redaction tests, never a real credential
 
 export const SECRET_KEY_MATERIAL = `-----BEGIN PRIVATE KEY-----\nSECRETKEYMATERIAL\n-----END PRIVATE KEY-----`;
 

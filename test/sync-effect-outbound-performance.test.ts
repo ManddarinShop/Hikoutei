@@ -217,8 +217,18 @@ describe("outbound effect dispatch batching", () => {
           // silent pass abort with applied: 0) and the 15s heartbeat-stale
           // bound. A pass of this shape is not testing takeover, so widen all
           // three lease knobs.
-          writerLeaseDurationMs: 600_000,
+          // Wall-clock lease knobs sized for the coverage-instrumented
+          // verify stage: under `--coverage` the per-effect postcondition
+          // verification of a 1,000-effect batch takes minutes, exceeding the
+          // default 120s effect lease and 600s writer lease, so every settle
+          // CAS refuses (`lease_until > now`) and the pass reports applied: 0
+          // even though the remote writes succeeded (verified via CI
+          // outbox-row diagnostics). This test exercises bounded batch
+          // draining, not lease takeover, so all three knobs are widened
+          // (writer lease must stay longer than the effect lease).
+          writerLeaseDurationMs: 900_000,
           writerLeaseHeartbeatStaleMs: 600_000,
+          effectLeaseDurationMs: 600_000,
         }));
       }
 
