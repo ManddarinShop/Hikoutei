@@ -147,3 +147,49 @@ jobs:
             ${{ runner.temp }}/hikoutei-root-api-smoke-result.json
             ${{ runner.temp }}/hikoutei-public-api-surface-result.json
           if-no-files-found: ignore
+
+  sonar:
+    name: Coverage and SonarCloud analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          # Full history so SonarCloud can attribute new code and decorate PRs.
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        # Version is read from the packageManager field in package.json.
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests with coverage
+        run: pnpm run test:coverage
+
+      - name: Require SonarCloud token
+        shell: bash
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Fail with a fixed, actionable line instead of an opaque scanner
+          # auth error: the secret must exist before this workflow merges.
+          if [[ -z "${SONAR_TOKEN:-}" ]]; then
+            echo "SONAR_TOKEN secret is missing: create the project on sonarcloud.io and register the token as a repository secret" >&2
+            exit 1
+          fi
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarcloud-github-action@v3
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

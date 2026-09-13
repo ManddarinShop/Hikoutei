@@ -12,6 +12,7 @@ models.json
 # Dependencies and build output
 node_modules/
 dist/
+coverage/
 .npm-cache/
 
 # Local environment

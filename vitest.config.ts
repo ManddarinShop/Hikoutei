@@ -59,5 +59,15 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.test.ts", "packages/protocol/ikisaki/test/**/*.test.ts"],
+    // V8 provider emits lcov (SonarCloud consumes coverage/lcov.info) plus a
+    // text summary for CI logs. Include patterns cover the runtime source of
+    // the root package and every workspace package; dist/scripts/website and
+    // type declarations never count.
+    coverage: {
+      provider: "v8",
+      reporter: ["lcov", "text"],
+      include: ["src/**", "packages/**/src/**"],
+      exclude: ["**/*.d.ts", "**/*.d.mts", "**/dist/**", "**/coverage/**"],
+    },
   },
 });
