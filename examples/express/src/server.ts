@@ -16,6 +16,9 @@ const hikoutei = await createTypedSheets({
 });
 
 const app = express();
+// S5689: the example server is not a production service, but it is public
+// repository code — do not disclose the framework version header.
+app.disable("x-powered-by");
 app.use(express.json());
 
 // Request-scoped EntityManager: fork per request, never share one across

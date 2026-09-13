@@ -22,9 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
 
@@ -46,14 +46,18 @@ jobs:
           HIKOUTEI_VERSION: ${{ steps.version.outputs.version }}
         run: |
           cd examples/fastify-hono
-          npm install --no-audit --no-fund --ignore-scripts "hikoutei@${HIKOUTEI_VERSION}"
+          # S8543: resolve the requested dist-tag/exact input to its exact
+          # registry version first, then install that exact version.
+          resolved="$(npm view "hikoutei@${HIKOUTEI_VERSION}" version --registry=https://registry.npmjs.org)"
+          echo "verifying hikoutei@${HIKOUTEI_VERSION} -> ${resolved}"
+          npm install --no-audit --no-fund --ignore-scripts "hikoutei@${resolved}"
 
       - name: Run Fastify+Hono scenario
         run: node scripts/ci/examples/fastify-hono.mjs --dir examples/fastify-hono --output "$RUNNER_TEMP/result.json"
 
       - name: Upload scenario result
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: example-fastify-hono-result
           path: ${{ runner.temp }}/result.json
