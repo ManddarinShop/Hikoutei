@@ -87,6 +87,7 @@ function logEvents(lines: Record<string, unknown>[], event: string): Record<stri
   return lines.filter((line) => line.event === event);
 }
 
+// Covers sheets request telemetry aggregator.
 describe("sheets request telemetry aggregator", () => {
   const savedEnv = { ...process.env };
   let tempRoot: string;
@@ -115,6 +116,7 @@ describe("sheets request telemetry aggregator", () => {
     if (tempRoot !== undefined) await rm(tempRoot, { recursive: true, force: true });
   });
 
+  // Verifies classifies 429, other 4xx, 5xx, refusals, no-status failures, and successes.
   it("classifies 429, other 4xx, 5xx, refusals, no-status failures, and successes", async () => {
     await injectLogger();
     const telemetry = createRequestTelemetry();
@@ -165,6 +167,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(summaries[0]?.component).toBe(HIKOUTEI_LOG_COMPONENTS.SHEETS);
   });
 
+  // Verifies computes max and rounded-average request durations.
   it("computes max and rounded-average request durations", async () => {
     await injectLogger();
     const telemetry = createRequestTelemetry();
@@ -179,6 +182,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(summaries[0]?.counts).toMatchObject({ maxRequestMs: 303, avgRequestMs: 201 });
   });
 
+  // Verifies aggregates write-fill metrics from fill-carrying batchUpdate events.
   it("aggregates write-fill metrics from fill-carrying batchUpdate events", async () => {
     await injectLogger(HIKOUTEI_LOG_LEVELS.DEBUG);
     const telemetry = createRequestTelemetry();
@@ -220,6 +224,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(readLine?.counts).toEqual({ operationCount: 1, httpStatus: 0, includedEffects: 999 });
   });
 
+  // Verifies omits absent fill fields from DEBUG counts and reports zero write fill.
   it("omits absent fill fields from DEBUG counts and reports zero write fill", async () => {
     await injectLogger(HIKOUTEI_LOG_LEVELS.DEBUG);
     const telemetry = createRequestTelemetry();
@@ -238,6 +243,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(perRequest[0]?.counts).toEqual({ operationCount: 1, httpStatus: 0 });
   });
 
+  // Verifies aggregates per-lane read response bytes and ignores non-read bytes.
   it("aggregates per-lane read response bytes and ignores non-read bytes", async () => {
     await injectLogger(HIKOUTEI_LOG_LEVELS.DEBUG);
     const telemetry = createRequestTelemetry();
@@ -285,6 +291,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(noBytesLine).toBeDefined();
   });
 
+  // Verifies encodes supplied adaptive route limits as sorted indexed counts.
   it("encodes supplied adaptive route limits as sorted indexed counts", async () => {
     await injectLogger();
     const telemetry = createRequestTelemetry();
@@ -302,6 +309,7 @@ describe("sheets request telemetry aggregator", () => {
     });
   });
 
+  // Verifies clears the window on flush and emits nothing for an empty window.
   it("clears the window on flush and emits nothing for an empty window", async () => {
     await injectLogger();
     const telemetry = createRequestTelemetry();
@@ -319,6 +327,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(summaries[0]?.counts).toMatchObject({ requests: 1 });
   });
 
+  // Verifies is fail-open: a malformed event and a broken sink never throw.
   it("is fail-open: a malformed event and a broken sink never throw", async () => {
     await injectLogger();
     const telemetry = createRequestTelemetry();
@@ -337,6 +346,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(() => telemetry.flushSummary()).not.toThrow();
   });
 
+  // Verifies emits per-request events only at DEBUG level, with correct fields.
   it("emits per-request events only at DEBUG level, with correct fields", async () => {
     // Default (INFO) level: per-request lines are filtered, summary remains.
     await injectLogger(undefined);
@@ -378,6 +388,7 @@ describe("sheets request telemetry aggregator", () => {
     expect(perRequest[0]?.counts).toEqual({ operationCount: 3, httpStatus: 429 });
   });
 
+  // Verifies keeps the transport-operation allowlist at the exact provider operations.
   it("keeps the transport-operation allowlist at the exact provider operations", () => {
     // The providerOperation field of the request events must pass the log's
     // redaction allowlist unchanged.
@@ -385,6 +396,7 @@ describe("sheets request telemetry aggregator", () => {
   });
 });
 
+// Covers sheets request telemetry wiring (stub transport, one HTTP 429).
 describe("sheets request telemetry wiring (stub transport, one HTTP 429)", () => {
   const TelemetryUser = defineTypedSheetsEntity({
     name: "TelemetryUser",
@@ -431,6 +443,7 @@ describe("sheets request telemetry wiring (stub transport, one HTTP 429)", () =>
     await rm(tempRoot, { recursive: true, force: true });
   });
 
+  // Verifies records the 429 in the summary while the requeued effect still applies.
   it("records the 429 in the summary while the requeued effect still applies", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -529,6 +542,7 @@ describe("sheets request telemetry wiring (stub transport, one HTTP 429)", () =>
    * effects/s and the byte census are RECORDED (console) — no wall-clock
    * assert, no pacing/batch/retry policy is observed or changed.
    */
+  // Verifies drains a 500-effect burst with bounded base reads, recorded lanes, and zero quota pressure.
   it("drains a 500-effect burst with bounded base reads, recorded lanes, and zero quota pressure", async () => {
     const BURST_SIZE = 500;
     // Guardrail, not a measurement target: the pre-banding whole-tab receipt
@@ -696,6 +710,7 @@ describe("sheets request telemetry wiring (stub transport, one HTTP 429)", () =>
  * result (an object with an array `sheets` field) across one full effect
  * dispatch, with the logger disabled vs enabled.
  */
+// Covers bootstrap telemetry gating (zero serialization when logging is off).
 describe("bootstrap telemetry gating (zero serialization when logging is off)", () => {
   const GateUser = defineTypedSheetsEntity({
     name: "GateUser",
@@ -781,6 +796,7 @@ describe("bootstrap telemetry gating (zero serialization when logging is off)", 
     return { stop: () => { vi.restoreAllMocks(); return count; } };
   }
 
+  // Verifies serializes NO transport result when the internal logger is disabled.
   it("serializes NO transport result when the internal logger is disabled", async () => {
     delete process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE];
     delete process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_LEVEL];
@@ -790,6 +806,7 @@ describe("bootstrap telemetry gating (zero serialization when logging is off)", 
     expect(getHikouteiInternalLogger().enabled).toBe(false);
   });
 
+  // Verifies positive control: an enabled logger wires the sink and estimates payloads.
   it("positive control: an enabled logger wires the sink and estimates payloads", async () => {
     process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE] = path.join(tempRoot, "gating-log.txt");
     process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_LEVEL] = HIKOUTEI_LOG_LEVELS.DEBUG;
@@ -809,6 +826,7 @@ describe("bootstrap telemetry gating (zero serialization when logging is off)", 
  * summary, that polling-lane bytes equal `JSON.stringify(raw).length` of the
  * actual stub transport reply — never the Map artifact.
  */
+// Covers polling-lane responseBytes measures the RAW transport document.
 describe("polling-lane responseBytes measures the RAW transport document", () => {
   const RawBytesUser = defineTypedSheetsEntity({
     name: "RawBytesUser",
@@ -853,6 +871,7 @@ describe("polling-lane responseBytes measures the RAW transport document", () =>
     await rm(tempRoot, { recursive: true, force: true });
   });
 
+  // Verifies records polling-lane bytes equal to the raw getSpreadsheet document, at line and summary level.
   it("records polling-lane bytes equal to the raw getSpreadsheet document, at line and summary level", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
