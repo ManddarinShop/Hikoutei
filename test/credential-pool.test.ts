@@ -88,7 +88,9 @@ const SYSTEM_DEFINITION: RegisteredSyncProjectionDefinition = {
   headers: SYSTEM_HEADERS,
 };
 
+// Covers nextPooledClientIndex (transport pool rotation)
 describe("nextPooledClientIndex (transport pool rotation)", () => {
+  // Verifies round-robins 0,1,...,N-1,0,... over sequential unbound requests.
   it("round-robins 0,1,...,N-1,0,... over sequential unbound requests", () => {
     const cursor = { next: 0 };
     const seen: number[] = [];
@@ -98,6 +100,7 @@ describe("nextPooledClientIndex (transport pool rotation)", () => {
     expect(seen).toEqual([0, 1, 0, 1, 0]);
   });
 
+  // Verifies honors an admitted index WITHOUT skewing the fallback rotation.
   it("honors an admitted index WITHOUT skewing the fallback rotation", () => {
     const cursor = { next: 0 };
     expect(nextPooledClientIndex(cursor, 3, 2)).toBe(2);
@@ -107,6 +110,7 @@ describe("nextPooledClientIndex (transport pool rotation)", () => {
     expect(nextPooledClientIndex(cursor, 3, undefined)).toBe(1);
   });
 
+  // Verifies a 1-client pool always selects index 0 (single-credential path)
   it("a 1-client pool always selects index 0 (single-credential path)", () => {
     const cursor = { next: 0 };
     for (let request = 0; request < 4; request += 1) {
@@ -115,7 +119,9 @@ describe("nextPooledClientIndex (transport pool rotation)", () => {
   });
 });
 
+// Covers credentialBinding.
 describe("credentialBinding", () => {
+  // Verifies omits the key entirely on the single-credential path.
   it("omits the key entirely on the single-credential path", () => {
     expect(credentialBinding(undefined)).toEqual({});
     expect("credentialIndex" in credentialBinding(undefined)).toBe(false);
@@ -150,7 +156,9 @@ class RecordingTransport implements GoogleSheetsApiTransport {
   }
 }
 
+// Covers provider credential pool: admission/transport index binding.
 describe("provider credential pool: admission/transport index binding", () => {
+  // Verifies stamps the admitted identity into every transport request and event.
   it("stamps the admitted identity into every transport request and event", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", {
@@ -190,6 +198,7 @@ describe("provider credential pool: admission/transport index binding", () => {
     expect(events.map((event) => event.credentialIndex)).toEqual([0, 1, 0, 1]);
   });
 
+  // Verifies a single key file keeps requests UNBOUND (byte-identical no-pool path)
   it("a single key file keeps requests UNBOUND (byte-identical no-pool path)", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", {
@@ -290,7 +299,9 @@ function makePooledDeps(
   };
 }
 
+// Covers per-identity pacing.
 describe("per-identity pacing", () => {
+  // Verifies a saturated slot 0 does not refuse a healthy slot 1 (multi-slot search)
   it("a saturated slot 0 does not refuse a healthy slot 1 (multi-slot search)", async () => {
     let now = 1_000_000;
     // Slot 0's per-minute budget is 1, slot 1's is generous: the frozen
@@ -321,6 +332,7 @@ describe("per-identity pacing", () => {
     expect(slots[1]!.readBudget.reservedCount()).toBe(2);
   });
 
+  // Verifies one identity reaching its per-minute cap does not block the other.
   it("one identity reaching its per-minute cap does not block the other", async () => {
     let now = 1_000_000;
     const slots = [makeSlot(() => now, { readBudget: 1 }), makeSlot(() => now, { readBudget: 1 })];
@@ -342,6 +354,7 @@ describe("per-identity pacing", () => {
     expect(slots[1]!.readBudget.reservedCount()).toBe(1);
   });
 
+  // Verifies combined admitted starts scale with the pool (budget x N per window)
   it("combined admitted starts scale with the pool (budget x N per window)", async () => {
     let now = 1_000_000;
     const slots = [makeSlot(() => now, { readBudget: 2 }), makeSlot(() => now, { readBudget: 2 })];
@@ -371,6 +384,7 @@ describe("per-identity pacing", () => {
     expect(slots[1]!.readBudget.reservedCount()).toBe(2);
   });
 
+  // Verifies an all-slot lane refusal rolls back every provisional budget reservation.
   it("an all-slot lane refusal rolls back every provisional budget reservation", async () => {
     // Huge pacing interval + finite budgets: after ONE admitted start per
     // slot the BUDGET gate keeps admitting while the LANE gate refuses on
@@ -403,7 +417,9 @@ describe("per-identity pacing", () => {
   });
 });
 
+// Covers per-identity AIMD independence.
 describe("per-identity AIMD independence", () => {
+  // Verifies a 429 on identity 0 leaves identity 1's pacing interval at 1x.
   it("a 429 on identity 0 leaves identity 1's pacing interval at 1x", async () => {
     let now = 1_000_000;
     const slots = [makeSlot(() => now, { intervalMs: 800 }), makeSlot(() => now, { intervalMs: 800 })];
@@ -452,7 +468,9 @@ function writeKeyFile(dir: string, name: string, payload: unknown): string {
   return path;
 }
 
+// Covers key-file shape guard (fails at construction, not first request)
 describe("key-file shape guard (fails at construction, not first request)", () => {
+  // Verifies rejects a JSON object that is not a service-account credential.
   it("rejects a JSON object that is not a service-account credential", () => {
     const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-key-"));
     try {
@@ -469,6 +487,7 @@ describe("key-file shape guard (fails at construction, not first request)", () =
     }
   });
 
+  // Verifies rejects blank service-account fields without leaking values.
   it("rejects blank service-account fields without leaking values", () => {
     const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-key-"));
     try {
@@ -499,6 +518,7 @@ describe("key-file shape guard (fails at construction, not first request)", () =
     }
   });
 
+  // Verifies a well-shaped key file constructs without touching the network.
   it("a well-shaped key file constructs without touching the network", () => {
     const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-key-"));
     try {
@@ -521,7 +541,9 @@ describe("key-file shape guard (fails at construction, not first request)", () =
   });
 });
 
+// Covers adoption reader transport: pool-only startup.
 describe("adoption reader transport: pool-only startup", () => {
+  // Verifies constructs from the pool's key files at port-call time (shape guard, no wire calls)
   it("constructs from the pool's key files at port-call time (shape guard, no wire calls)", async () => {
     // Pool-only deployments have no ADC file: the composition adoption
     // reader must load the pooled credentials at construction, riding the
@@ -563,7 +585,9 @@ describe("adoption reader transport: pool-only startup", () => {
   });
 });
 
+// Covers HIKOUTEI_SYNC_CREDENTIALS parsing.
 describe("HIKOUTEI_SYNC_CREDENTIALS parsing", () => {
+  // Verifies rejects a non-blank value whose segments are empty (never falls back to ADC)
   it("rejects a non-blank value whose segments are empty (never falls back to ADC)", async () => {
     await expect(
       resolveSyncCredentialPoolEnv({ [SYNC_ENV_KEYS.CREDENTIAL_POOL_FILES]: ",," }),
@@ -583,6 +607,7 @@ describe("HIKOUTEI_SYNC_CREDENTIALS parsing", () => {
     });
   });
 
+  // Verifies treats only genuinely blank input as unset.
   it("treats only genuinely blank input as unset", async () => {
     await expect(resolveSyncCredentialPoolEnv({})).resolves.toBeUndefined();
     await expect(
@@ -590,6 +615,7 @@ describe("HIKOUTEI_SYNC_CREDENTIALS parsing", () => {
     ).resolves.toBeUndefined();
   });
 
+  // Verifies parses and validates a trimmed comma-separated pool list.
   it("parses and validates a trimmed comma-separated pool list", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-env-"));
     try {
