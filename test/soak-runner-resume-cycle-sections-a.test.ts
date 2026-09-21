@@ -94,6 +94,7 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner resume cycle sections (mode/cadence).
 describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
   /** Runs one completed short local run and returns its artifact directory. */
   async function completedRunDir(name: string, durationHours = 0.001): Promise<string> {
@@ -126,6 +127,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     await write(pathToFile, `${lines.join("\n")}\n`, "utf8");
   }
 
+  // Verifies: rejects a probe-cadence cycle whose probe section was removed.
   it(
     "rejects a probe-cadence cycle whose probe section was removed",
     { timeout: 90_000 },
@@ -141,6 +143,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a local-mode probe that is not the documented skipped shape.
   it(
     "rejects a local-mode probe that is not the documented skipped shape",
     { timeout: 90_000 },
@@ -158,6 +161,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a probe section on an off-cadence cycle.
   it(
     "rejects a probe section on an off-cadence cycle",
     { timeout: 90_000 },
@@ -172,6 +176,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a convergence section in a local-mode cycle.
   it(
     "rejects a convergence section in a local-mode cycle",
     { timeout: 90_000 },
@@ -186,6 +191,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a cycle whose tablesTouched does not match the active selected table set.
   it(
     "rejects a cycle whose tablesTouched does not match the active selected table set",
     { timeout: 90_000 },
@@ -203,6 +209,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a reopen-cadence cycle whose reopen result was removed.
   it(
     "rejects a reopen-cadence cycle whose reopen result was removed",
     { timeout: 90_000 },
@@ -218,6 +225,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: accepts the abort shape as the reopen-cadence exception.
   it(
     "accepts the abort shape as the reopen-cadence exception",
     { timeout: 90_000 },
@@ -246,6 +254,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a live-mode cycle whose convergence section was removed.
   it(
     "rejects a live-mode cycle whose convergence section was removed",
     { timeout: 90_000 },
@@ -321,6 +330,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     return runDir;
   }
 
+  // Verifies: accepts live-shaped cycle records past the section gate.
   it(
     "accepts live-shaped cycle records past the section gate",
     { timeout: 90_000 },
@@ -349,6 +359,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a convergence section whose cycle does not match the record's cycle.
   it(
     "rejects a convergence section whose cycle does not match the record's cycle",
     { timeout: 90_000 },
@@ -365,6 +376,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects an ok convergence section carrying count fields.
   it(
     "rejects an ok convergence section carrying count fields",
     { timeout: 90_000 },
@@ -380,6 +392,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a local probe section carrying fields a local probe never has.
   it(
     "rejects a local probe section carrying fields a local probe never has",
     { timeout: 90_000 },
@@ -395,6 +408,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a live probe whose table is not the deterministic round-robin target.
   it(
     "rejects a live probe whose table is not the deterministic round-robin target",
     { timeout: 90_000 },
@@ -423,6 +437,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a live probe failure reason outside the probe vocabulary.
   it(
     "rejects a live probe failure reason outside the probe vocabulary",
     { timeout: 90_000 },
@@ -448,6 +463,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: accepts a failed live probe artifact carrying a statusClass past the proof.
   it(
     "accepts a failed live probe artifact carrying a statusClass past the proof",
     { timeout: 90_000 },
@@ -511,6 +527,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a failed live probe whose statusClass is raw or unknown.
   it(
     "rejects a failed live probe whose statusClass is raw or unknown",
     { timeout: 90_000 },
@@ -541,6 +558,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a reopen section that omits an active table.
   it(
     "rejects a reopen section that omits an active table",
     { timeout: 90_000 },
@@ -555,6 +573,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a reopen count that contradicts the deterministic replay.
   it(
     "rejects a reopen count that contradicts the deterministic replay",
     { timeout: 90_000 },
@@ -574,6 +593,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a forged failed reopen status whose counts all match the deterministic replay.
   it(
     "rejects a forged failed reopen status whose counts all match the deterministic replay",
     { timeout: 90_000 },
@@ -594,6 +614,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: accepts a failed reopen whose counts differ from the replay (evidence-differing counts).
   it(
     "accepts a failed reopen whose counts differ from the replay (evidence-differing counts)",
     { timeout: 90_000 },
