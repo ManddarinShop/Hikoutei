@@ -10,6 +10,15 @@ import {
   CONTRACTS_INPUT_ERROR_CODES,
   ContractsInputError,
 } from "../domain/errors/input.js";
+import { PRESENCE_KINDS } from "../state/constants.js";
+import type { Presence } from "../state/types.js";
+
+/** Converts a nullable SQL column into an explicit presence state. */
+export function fromSqlNullable<T>(value: T | null): Presence<T> {
+  return value === null
+    ? { kind: PRESENCE_KINDS.ABSENT }
+    : { kind: PRESENCE_KINDS.PRESENT, value };
+}
 
 /** Values accepted as bound parameters by the SQLite-backed adapters. */
 export type SqlParameter = string | number | bigint | boolean | Uint8Array | null;
