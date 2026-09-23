@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import type { HikouteiEntity, ResolvedHikouteiEntityDescriptor } from "../../api/entity.js";
 import type { Hikoutei } from "../../api/hikouteiCore.js";
 import type { EntityDescriptorResolutionFailure } from "../../api/internalEntityRegistry.js";
-import type { TypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import type {
   InternalSyncEntityConfig,
   InternalSyncProjectionConfig,
