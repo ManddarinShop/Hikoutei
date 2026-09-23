@@ -15,7 +15,7 @@ import { PRESENCE_KINDS, type Presence } from "@hikoutei/contracts/state/index.j
 import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
-import type { PreflightContext, PreflightRow } from "./preflightContext.js";
+import type { PreflightContext, PreflightRow } from "./preflightTypes.js";
 import type { EffectPlan, PlannedReceipt, WorkingRow } from "./plannerContracts.js";
 import { isDeletionEffect } from "./plannerDeletion.js";
 

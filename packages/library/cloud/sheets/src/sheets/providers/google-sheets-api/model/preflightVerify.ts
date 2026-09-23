@@ -58,7 +58,7 @@ import type {
   ParsedGridData,
   PreflightContext,
   PreflightRow,
-} from "./preflightContext.js";
+} from "./preflightTypes.js";
 
 /**
  * Hard cap on ranges per `spreadsheets.get`, shared engine-wide (the

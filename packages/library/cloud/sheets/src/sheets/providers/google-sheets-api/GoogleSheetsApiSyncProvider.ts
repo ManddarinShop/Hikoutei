@@ -79,7 +79,7 @@ import {
   type GoogleSheetsApiTransport,
 } from "./transport/googleSheetsApiTransport.js";
 import { ReceiptReadCursor, createReadCalibration } from "@hikoutei/ikisaki";
-import type { PreflightReceipt } from "./model/preflightContext.js";
+import type { PreflightReceipt } from "./model/preflightTypes.js";
 import { RequestStartLimiter, ReadQoSScheduler } from "@hikoutei/ikisaki";
 import {
   QUOTA_GOVERNOR_LANES,

@@ -41,8 +41,8 @@ import { presentValue, absentValue, PRESENCE_KINDS } from "@hikoutei/contracts/s
 import { GOOGLE_SHEETS_API_DEFAULTS, GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS, GOOGLE_SHEETS_API_PREFLIGHT_FIELDS } from "../model/preflightFields.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
-import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
-import type { ParsedSheet } from "../model/preflightContext.js";
+import type { PreflightContext, PreflightRow } from "../model/preflightTypes.js";
+import type { ParsedSheet } from "../model/preflightTypes.js";
 import { planEffectBatch } from "../model/planner.js";
 import { currentHash } from "../model/plannerWorkingRow.js";
 import {

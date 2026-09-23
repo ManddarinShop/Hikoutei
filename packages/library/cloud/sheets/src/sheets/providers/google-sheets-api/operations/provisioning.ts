@@ -22,7 +22,7 @@ import {
 } from "../model/preflightHeaders.js";
 import { parseSpreadsheetDocument, requireApiContainer } from "../model/preflightParsing.js";
 import { checkColumnFor, gridRowCells, requireGridDataForSheet } from "../model/preflightRows.js";
-import type { ParsedGridData } from "../model/preflightContext.js";
+import type { ParsedGridData } from "../model/preflightTypes.js";
 import { GOOGLE_SHEETS_API_ROW_ID_HEADER, GOOGLE_SHEETS_API_ROW_CHECK_HEADER } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState, GET_REPLY_MALFORMED } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
