@@ -44,7 +44,7 @@ import type {
   InternalSyncProjectionConfig,
 } from "./contracts.js";
 import type { RegisteredTypedSheetsMappedProjection } from "@hikoutei/storage/orm/persistence/support/contracts.js";
-import type { TypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import type { MappedFlushSyncHook } from "@hikoutei/storage/orm/persistence/support/contracts.js";
 import type {
   TypedSheetsEntityMapping,
