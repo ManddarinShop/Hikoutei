@@ -25,7 +25,7 @@ import { presentValue, absentValue } from "@hikoutei/contracts/state/index.js";
 import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS } from "../constants.js";
 import { invalidProviderRequest } from "../errors.js";
-import type { PreflightContext } from "./preflightContext.js";
+import type { PreflightContext } from "./preflightTypes.js";
 import type {
   EffectPlan,
   PlannedReceipt,

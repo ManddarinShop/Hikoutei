@@ -55,7 +55,7 @@ import type {
   ParsedSheet,
   PreflightContext,
   PreflightReceipt,
-} from "../model/preflightContext.js";
+} from "../model/preflightTypes.js";
 import {
   enumerateSheetProperties,
 } from "../model/preflightContext.js";

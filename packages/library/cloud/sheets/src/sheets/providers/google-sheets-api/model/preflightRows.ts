@@ -40,7 +40,7 @@ import type {
   ParsedSheet,
   ParsedSpreadsheetDocument,
   PreflightRow,
-} from "./preflightContext.js";
+} from "./preflightTypes.js";
 
 /**
  * Resolves a tab by title or fails closed when it is absent from an

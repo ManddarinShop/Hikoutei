@@ -9,7 +9,7 @@
 import type { SyncProjectionEffect } from "@hikoutei/contracts/sheets/syncSheets.js";
 import { EFFECT_KINDS } from "@hikoutei/contracts/domain/model/constants.js";
 import { GOOGLE_SHEETS_API_EFFECT_REASONS, fullRowDeletionReason } from "../constants.js";
-import type { PreflightContext } from "./preflightContext.js";
+import type { PreflightContext } from "./preflightTypes.js";
 
 /** Validates the full-row deletion guard exactly like `validateDeletion_`. */
 export function validateDeletion(
