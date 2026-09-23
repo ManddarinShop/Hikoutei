@@ -13,7 +13,7 @@ import type {
 import type { RegisteredSyncProjectionDefinition } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import type {
   SyncTimingSink,
-} from "../../../sync/telemetry/syncTiming.js";
+} from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import type {
   CanonicalCommitInput,
   CanonicalFieldWrite,

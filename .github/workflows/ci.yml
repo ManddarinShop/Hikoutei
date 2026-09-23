@@ -53,6 +53,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Enforce package dependency boundaries
+        run: pnpm run audit:deps
+
       - name: Typecheck production code
         run: pnpm run typecheck
 

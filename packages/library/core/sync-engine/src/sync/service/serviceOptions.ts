@@ -38,14 +38,25 @@ import {
   type EffectWorkerSupervisor,
   type WorkerReport,
 } from "@hikoutei/ikisaki";
-import type { SyncServiceStorage } from "./compositionPorts.js";
+import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import type { MappedUserInputPollingReport } from "@hikoutei/contracts/sheets/userInputPolling.js";
-import type { SyncTimingSink } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
+import type { SyncTimingSink } from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import type { SyncPollingSupervisor } from "./SyncPollingSupervisor.js";
 import {
   SYNC_SERVICE_ERROR_CODES,
   SyncServiceError,
 } from "./errors.js";
+
+/**
+ * Storage surface owned by the internal sync service: the engine consumes
+ * the adapter-neutral SQL executor plus graceful close. The concrete
+ * MikroORM adapter satisfies this structurally; the composition root owns
+ * the construction (and any adapter-specific casting inside `composition/`).
+ */
+export type SyncServiceStorage = SqlStorageAdapter & {
+  /** Closes the underlying SQLite connection; `force` skips graceful waits. */
+  close(force?: boolean): Promise<void>;
+};
 
 /** Provider capability required by internal service startup (incl. table reads). */
 export type InternalSyncProvider = SyncSheetsProvider & SyncSheetsTableReader;

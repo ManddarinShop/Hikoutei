@@ -31,7 +31,7 @@ import {
   type WorkerReport,
 } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../outbound/SheetsEffectDispatcher.js";
-import type { SyncTimingSink } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
+import type { SyncTimingSink } from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import {
   describeErrorForInternalLog,
   HIKOUTEI_LOG_LEVELS,

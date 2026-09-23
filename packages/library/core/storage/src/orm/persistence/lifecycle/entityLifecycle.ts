@@ -17,7 +17,7 @@ import {
 import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import type { Presence } from "@hikoutei/contracts/state/types.js";
-import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
+import { SYNC_TIMING_SCOPES } from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
 } from "@hikoutei/contracts/storage/scalar.js";

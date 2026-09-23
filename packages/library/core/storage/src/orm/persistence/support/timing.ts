@@ -10,7 +10,7 @@ import {
   type SyncTimingOperationCounts,
   type SyncTimingOperationKind,
   type SyncTimingSink,
-} from "../../../sync/telemetry/syncTiming.js";
+} from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
   type ScalarEntityFlushChange,
