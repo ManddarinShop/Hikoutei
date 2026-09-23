@@ -33,7 +33,6 @@ import {
 import { SETUP_ERROR_CODES, setupPathSafetyError } from "./errors.js";
 import { errorResult, type SetupErrorResult } from "./flowResult.js";
 import { findSetupPathCollision } from "./setupPathCollision.js";
-import type { RunSetupOptions } from "./setupFlow.js";
 
 /** The .env keys the setup CLI manages. */
 export const SETUP_ENV_KEYS = {
@@ -386,7 +385,11 @@ function removeOwnedTempFile(tempPath: string, dev: number, ino: number, fs: Set
  * or hardlink planted after the preflight must never redirect a write to a
  * reserved file. Returns an error result on collision, `null` when safe.
  */
-export function revalidateSetupPaths(options: RunSetupOptions): SetupErrorResult | null {
+export function revalidateSetupPaths(options: {
+  readonly keyPath: string;
+  readonly outputPath: string;
+  readonly statePath: string;
+}): SetupErrorResult | null {
   const collision = findSetupPathCollision({
     keyPath: options.keyPath,
     outputPath: options.outputPath,
