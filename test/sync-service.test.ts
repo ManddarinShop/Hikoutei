@@ -28,7 +28,7 @@ import type {
   SyncSheetsProvisionRoute,
 } from "@hikoutei/contracts/sheets/sheetsProvisioning.js";
 import type { MappedUserInputPollingReport } from "@hikoutei/storage/persistence/providers/mikro-orm/observation/MikroOrmUserInputPolling.js";
-import type { SyncTimingEvent } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
+import type { SyncTimingEvent } from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import { FakeSyncSheetsProvider } from "./support/FakeSyncSheetsProvider.js";
 import {
   StubSpreadsheet,

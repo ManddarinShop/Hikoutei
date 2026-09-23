@@ -74,6 +74,14 @@ module.exports = {
       to: { path: `^${ENGINE}/|^@hikoutei/sync-engine` },
     },
     {
+      name: "storage-not-into-sheets",
+      comment:
+        "Storage may depend on provider-neutral contracts, never the Google Sheets adapter.",
+      severity: "error",
+      from: { path: "^packages/library/core/storage/src/" },
+      to: { path: "^packages/library/cloud/sheets/(?:src|dist)/|^@hikoutei/sheets" },
+    },
+    {
       name: "sheets-into-engine-observability-only",
       comment:
         "The Google Sheets provider may reuse ONLY the engine's shared/observability log modules (internalLog/logEvents). Any other sheets->engine edge is an error: the provider belongs below the engine, and the engine must never import @hikoutei/sheets.",
@@ -132,6 +140,14 @@ module.exports = {
         pathNot:
           "^packages/library/core/contracts/src/|^(node:)?(crypto|zod|path|fs|fs/promises|@hikoutei/kohkai|@hikoutei/contracts|@hikoutei/ikisaki)(\\.d\\.ts($|\\?)|($|/))|(^|/)node_modules/|^packages/protocol/ikisaki/dist/",
       },
+    },
+    {
+      name: "sync-engine-no-cycles",
+      comment:
+        "The sync-engine file graph stays acyclic (compositionPorts/serviceOptions type-only cycle break): any circular edge inside packages/library/core/sync-engine/src fails the audit.",
+      severity: "error",
+      from: { path: "^packages/library/core/sync-engine/src/" },
+      to: { circular: true },
     },
     {
       name: "no-cycles",
