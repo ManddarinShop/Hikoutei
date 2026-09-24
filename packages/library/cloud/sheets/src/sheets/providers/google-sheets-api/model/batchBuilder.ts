@@ -88,6 +88,33 @@ export function resolveApplyBatchBudget(
   return { includeCount: 0, schemaErrorIndices, hasMore: false };
 }
 
+/**
+ * Binary-searches the largest count in `[minCount, total]` whose built prefix fits
+ * the byte budget (upper-mid, so the search converges upward). Apply prefix
+ * searches pass 0 so an over-budget first effect yields 0 (schema_error);
+ * fast-append resolvers pass 1 so a single over-budget row is still included
+ * and fails deterministically at the API instead of deferring forever.
+ */
+export function largestFittingCount(
+  total: number,
+  build: (count: number) => { readonly bytes: number },
+  maxBatchBytes: number,
+  minCount: number,
+): number {
+  if (total <= 0) return 0;
+  let low = minCount;
+  let high = total;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (build(mid).bytes <= maxBatchBytes) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return low;
+}
+
 function largestFittingPrefix(
   plans: readonly EffectPlan[],
   context: PreflightContext,
@@ -99,21 +126,15 @@ function largestFittingPrefix(
   start: number,
   end: number,
 ): number {
-  let low = start;
-  let high = end;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    const built = buildApplyBatchRequests(context, plans.slice(start, mid), {
+  return start + largestFittingCount(
+    end - start,
+    (count) => buildApplyBatchRequests(context, plans.slice(start, start + count), {
       updatedAt: options.updatedAt,
       includeReceipts: options.includeReceipts,
-    });
-    if (built.bytes <= options.maxBatchBytes) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return low;
+    }),
+    options.maxBatchBytes,
+    0,
+  );
 }
 
 /**
@@ -275,21 +296,15 @@ function largestCombinedFittingPrefix(
   start: number,
   end: number,
 ): number {
-  let low = start;
-  let high = end;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    const built = buildCombinedApplyRequests(prefixCombinedRoutes(routes, start, mid), {
+  return start + largestFittingCount(
+    end - start,
+    (count) => buildCombinedApplyRequests(prefixCombinedRoutes(routes, start, start + count), {
       updatedAt: options.updatedAt,
       includeReceipts: options.includeReceipts,
-    });
-    if (built.bytes <= options.maxBatchBytes) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return low;
+    }),
+    options.maxBatchBytes,
+    0,
+  );
 }
 
 /** Slices the flat plan list to the `[start, end)` window across route groups. */
@@ -393,18 +408,9 @@ export function resolveAppendBudget(
   maxBatchBytes: number,
 ): { readonly includeCount: number; readonly hasMore: boolean } {
   if (rows.length === 0) return { includeCount: 0, hasMore: false };
-  let low = 1;
-  let high = rows.length;
   // The first row is always included (documented above).
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (build(mid).bytes <= maxBatchBytes) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return { includeCount: low, hasMore: low < rows.length };
+  const includeCount = largestFittingCount(rows.length, build, maxBatchBytes, 1);
+  return { includeCount, hasMore: includeCount < rows.length };
 }
 
 /** Builds one atomic fast-append batch for a prefix of pending rows. */

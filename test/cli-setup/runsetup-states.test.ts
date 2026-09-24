@@ -59,6 +59,7 @@ import {
 import {
   GcloudRunner,
   GcloudRunResult,
+  createGcloudRunner,
 } from "@hikoutei/cli/gcloudRunner.js";
 import {
   DRIVE_ACCESS_COMMAND,
@@ -3666,6 +3667,50 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(readFileSync(keyPath, "utf8")).toBe("final-key");
   });
 
+  // Verifies re-inspects both quarantine paths after a lost rename race instead of trusting stale evidence (#673).
+  it("re-inspects both quarantine paths after a lost rename race instead of trusting stale evidence", () => {
+    const dir = makeTempDir();
+    const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
+    const marker = VALID_KEY_MARKER;
+    const stageDir = keyStageDir(keyPath, marker);
+    const cleanupDir = keyCleanupDir(keyPath, marker);
+    writeFileSync(keyPath, "final-key", "utf8");
+    mkdirSync(stageDir, { mode: 0o700 });
+    // Pre-rename inspection sees stage present / cleanup absent; the rename
+    // then reports ENOENT after the stage vanished AND a cleanup directory
+    // appeared, so the stale absent-cleanup evidence must not yield success.
+    const fs: KeyCleanupFs = {
+      lstatSync,
+      renameSync(from, to) {
+        if (from === stageDir) {
+          rmdirSync(stageDir);
+          mkdirSync(to, { mode: 0o700 });
+          writeFileSync(join(to, "key.json"), "leftover", "utf8");
+          const lost = new Error("gone") as NodeJS.ErrnoException;
+          lost.code = "ENOENT";
+          throw lost;
+        }
+        renameSync(from, to);
+      },
+      readdirSync,
+      unlinkSync,
+      rmdirSync,
+      openSync,
+      fchmodSync,
+      fstatSync,
+      closeSync,
+    };
+    const error = cleanupOwnedStage(keyPath, marker, fs);
+    // The freshly present cleanup directory is finished (here: a staged
+    // mismatch), never reported already-clean from stale evidence.
+    expect(error).not.toBeNull();
+    if (error !== null) {
+      expect(error.message).toContain("is not the installed key");
+    }
+    expect(readFileSync(keyPath, "utf8")).toBe("final-key");
+    expect(readFileSync(join(stageDir, "key.json"), "utf8")).toBe("leftover");
+  });
+
   // Verifies enforces owner-only 0700 on a pre-existing stage directory before gcloud writes.
   it("enforces owner-only 0700 on a pre-existing stage directory before gcloud writes", () => {
     const dir = makeTempDir();
@@ -3683,6 +3728,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
       const stat = lstatSync(stageDir);
       expect(stat.dev).toBe(prepared.dev);
       expect(stat.ino).toBe(prepared.ino);
+      closeSync(prepared.fd);
     }
     expect(statSync(stageDir).mode & 0o777).toBe(0o700);
   });
@@ -3806,6 +3852,49 @@ describe("runSetup — key write-ahead reconciliation", () => {
     expect(harness.created).toHaveLength(0);
     expect(harness.shares).toHaveLength(0);
     // The immediate post-create check failed without any poll delay.
+    expect(harness.sleepCalls).toHaveLength(0);
+  });
+
+  // Verifies post-spawn defense in depth rejects staged output from a runner that ignores cwd identity (#673).
+  it("fails closed when an injected runner returns output from a replaced staging directory", async () => {
+    const dir = makeTempDir();
+    const harness = createHarness(dir);
+    // This injected runner deliberately ignores cwdIdentity and simulates
+    // an unsafe implementation writing into a same-type replacement. The
+    // production runner's wrapper rejects that replacement before gcloud
+    // runs; this test keeps the post-spawn check as defense in depth.
+    harness.runnerScript = (args, options) => {
+      if (args[0] === "iam" && args[2] === "keys" && args[3] === "create") {
+        const stageDir = options?.cwd as string;
+        rmSync(stageDir, { recursive: true, force: true });
+        mkdirSync(stageDir, { mode: 0o700 });
+        const iamAccount = args[6] as string;
+        const projectId = iamAccount.split("@")[1]?.replace(".iam.gserviceaccount.com", "") ?? "unknown";
+        writeFileSync(join(stageDir, "key.json"), validKeyJson(projectId, iamAccount, FIXED_KEY_ID), "utf8");
+        chmodSync(join(stageDir, "key.json"), 0o640);
+        return { status: "ok", stdout: "", stderr: "" };
+      }
+      return freshSetupScript(harness.keyPath)(args, options);
+    };
+
+    const result = await harness.run();
+    expectError(result, SETUP_ERROR_CODES.KEY_CREATE_FAILED);
+    if (result.status === "error") {
+      expect(result.message).toContain("replaced");
+      expect(result.message).not.toContain("BEGIN PRIVATE KEY");
+    }
+    expect(keyCreateCalls(harness)).toBe(1);
+    expect(keyDeleteCalls(harness)).toBe(0);
+    // The flow installed no key and left the replacement untouched: the
+    // genuine-looking key there was never read, chmod'ed, or installed.
+    expect(existsSync(harness.keyPath)).toBe(false);
+    const stageDir = keyStageDir(harness.keyPath, readState(harness.statePath).keyMarker as string);
+    expect(lstatSync(stageDir).isDirectory()).toBe(true);
+    expect(statSync(join(stageDir, "key.json")).mode & 0o777).toBe(0o640);
+    expect(readState(harness.statePath).status).toBe("key_create_started");
+    expect(harness.created).toHaveLength(0);
+    expect(harness.shares).toHaveLength(0);
+    // The post-spawn check failed before any propagation poll delay.
     expect(harness.sleepCalls).toHaveLength(0);
   });
 
@@ -4645,5 +4734,189 @@ describe("setup artifact ignore rules", () => {
     for (const path of paths) {
       expect(matched).toContain(path);
     }
+  });
+});
+
+// Covers the staging-cwd write window (#673): the production runner binds
+// the key-create child CWD to the verified directory object through an
+// isolated Node wrapper (chdir + statSync('.') identity check, no parent
+// CWD change, no native binding). A temporary fake `gcloud` executable on
+// a temporary PATH proves the relative `key.json` write lands in the
+// verified stage on match and never executes on pathname replacement.
+describe("gcloud runner staging-cwd wrapper", () => {
+  /** Temporarily provides the fake gcloud environment only while the child process is spawned. */
+  function withFakeGcloudEnvironment(
+    binDir: string,
+    logPath: string,
+    run: () => Promise<GcloudRunResult>,
+  ): Promise<GcloudRunResult> {
+    const previousPath = process.env.PATH;
+    const previousLog = process.env.FAKE_GCLOUD_LOG;
+    process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+    process.env.FAKE_GCLOUD_LOG = logPath;
+    try {
+      // GcloudRunner starts the wrapper synchronously before returning its promise.
+      return run();
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousLog === undefined) {
+        delete process.env.FAKE_GCLOUD_LOG;
+      } else {
+        process.env.FAKE_GCLOUD_LOG = previousLog;
+      }
+    }
+  }
+  /** Installs a temporary fake `gcloud` that writes relative `key.json` and logs each execution. */
+  function installFakeGcloud(binDir: string, logPath: string): void {
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, "gcloud"),
+      [
+        "#!/bin/sh",
+        'echo "executed:$PWD:$*" >> "$FAKE_GCLOUD_LOG"',
+        "printf 'staged-by-fake-gcloud' > key.json",
+        "printf 'fake-stdout'",
+        "printf 'fake-stderr' >&2",
+        "exit 0",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(join(binDir, "gcloud"), 0o755);
+    writeFileSync(logPath, "", "utf8");
+  }
+
+  // Verifies a matching identity runs fake gcloud with the bound CWD so relative key.json lands in the verified stage.
+  it("writes relative key.json into the verified stage directory on identity match", async () => {
+    const dir = makeTempDir();
+    const binDir = makeTempDir();
+    const logPath = join(dir, "gcloud-calls.log");
+    installFakeGcloud(binDir, logPath);
+    const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
+    const prepared = prepareStageDir(keyPath, VALID_KEY_MARKER);
+    expect(prepared.status).toBe("ok");
+    if (prepared.status !== "ok") return;
+    const stageDir = keyStageDir(keyPath, VALID_KEY_MARKER);
+    const parentCwd = process.cwd();
+    const result = await withFakeGcloudEnvironment(binDir, logPath, () =>
+      createGcloudRunner().run(
+        [
+          "iam",
+          "service-accounts",
+          "keys",
+          "create",
+          "key.json",
+          "--iam-account",
+          "sa@p.iam.gserviceaccount.com",
+          "--project",
+          "p",
+        ],
+        {
+          cwd: stageDir,
+          cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+          cwdFd: prepared.fd,
+        },
+      ),
+    );
+    closeSync(prepared.fd);
+    expect(result).toStrictEqual({ status: "ok", stdout: "fake-stdout", stderr: "fake-stderr" });
+    // The parent process CWD never changed and the relative write landed
+    // in the verified stage directory.
+    expect(process.cwd()).toBe(parentCwd);
+    expect(readFileSync(join(stageDir, "key.json"), "utf8")).toBe("staged-by-fake-gcloud");
+    expect(readFileSync(logPath, "utf8")).toContain("executed:");
+  });
+
+  // Verifies a different inherited descriptor fails closed even when the CWD path itself matches.
+  it("does not execute gcloud when the inherited descriptor is not the requested staging directory", async () => {
+    const dir = makeTempDir();
+    const binDir = makeTempDir();
+    const logPath = join(dir, "gcloud-calls.log");
+    installFakeGcloud(binDir, logPath);
+    const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
+    const prepared = prepareStageDir(keyPath, VALID_KEY_MARKER);
+    expect(prepared.status).toBe("ok");
+    if (prepared.status !== "ok") return;
+    const stageDir = keyStageDir(keyPath, VALID_KEY_MARKER);
+    const wrongFd = openSync(dir, constants.O_RDONLY);
+    expect(fstatSync(wrongFd).ino).not.toBe(prepared.ino);
+    let result: GcloudRunResult;
+    try {
+      result = await withFakeGcloudEnvironment(binDir, logPath, () =>
+        createGcloudRunner().run(
+          [
+            "iam",
+            "service-accounts",
+            "keys",
+            "create",
+            "key.json",
+            "--iam-account",
+            "sa@p.iam.gserviceaccount.com",
+            "--project",
+            "p",
+          ],
+          {
+            cwd: stageDir,
+            cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+            cwdFd: wrongFd,
+          },
+        ),
+      );
+    } finally {
+      closeSync(wrongFd);
+      closeSync(prepared.fd);
+    }
+    expect(result).toStrictEqual({ status: "failed", code: null, stdout: "", stderr: "" });
+    expect(readFileSync(logPath, "utf8")).toBe("");
+    expect(existsSync(join(stageDir, "key.json"))).toBe(false);
+  });
+
+  // Verifies replacing the staging pathname before wrapper launch never executes gcloud and never writes there.
+  it("does not execute gcloud when the stage pathname was replaced before wrapper launch", async () => {
+    const dir = makeTempDir();
+    const binDir = makeTempDir();
+    const logPath = join(dir, "gcloud-calls.log");
+    installFakeGcloud(binDir, logPath);
+    const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
+    const prepared = prepareStageDir(keyPath, VALID_KEY_MARKER);
+    expect(prepared.status).toBe("ok");
+    if (prepared.status !== "ok") return;
+    const stageDir = keyStageDir(keyPath, VALID_KEY_MARKER);
+    // Attacker replaces the verified directory with a fresh directory at
+    // the same pathname (different device/inode) before wrapper launch.
+    rmSync(stageDir, { recursive: true, force: true });
+    mkdirSync(stageDir, { mode: 0o700 });
+    const parentCwd = process.cwd();
+    const result = await withFakeGcloudEnvironment(binDir, logPath, () =>
+      createGcloudRunner().run(
+        [
+          "iam",
+          "service-accounts",
+          "keys",
+          "create",
+          "key.json",
+          "--iam-account",
+          "sa@p.iam.gserviceaccount.com",
+          "--project",
+          "p",
+        ],
+        {
+          cwd: stageDir,
+          cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+          cwdFd: prepared.fd,
+        },
+      ),
+    );
+    closeSync(prepared.fd);
+    // Identity mismatch: gcloud never ran — a closed failure with no
+    // streams to trust, never `not_found` or `ok`.
+    expect(result).toStrictEqual({ status: "failed", code: null, stdout: "", stderr: "" });
+    expect(process.cwd()).toBe(parentCwd);
+    expect(readFileSync(logPath, "utf8")).toBe("");
+    expect(existsSync(join(stageDir, "key.json"))).toBe(false);
   });
 });

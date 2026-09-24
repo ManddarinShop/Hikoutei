@@ -378,6 +378,20 @@ describe("inspectChecksPollingTable", () => {
     expect(vanished.kind).toBe(CHECKS_POLLING_DECISION_KINDS.ESCALATE);
   });
 
+  it("escalates a band-blank gap row carrying no identity or check evidence", () => {
+    // Compound case: a populated row with a blank identity and a
+    // missing/foreign/literal check cell reaches the gate with no usable
+    // evidence in any narrow band. The reader surfaces it as a blank row
+    // and the gate must escalate it to the whole-table observation (which
+    // owns quarantine/orphan handling) instead of treating it as absent.
+    const gap = inspectChecksPollingTable(mapping, checksResult([
+      cleanRow(2, ID_1, "anchor-u1"),
+      cleanRow(3, ID_2, "anchor-u2"),
+      { rowNumber: 4, identity: null, anchor: absentValue(), check: absentValue() },
+    ]), state());
+    expect(gap.kind).toBe(CHECKS_POLLING_DECISION_KINDS.ESCALATE);
+  });
+
   it("escalates anchor deletion, duplication, and misplacement", () => {
     // A human deleted the system row-id cell: only the whole-table
     // observation owns anchor re-assignment/orphan evidence.
@@ -649,6 +663,55 @@ describe("check-gated mapped polling pass (provider + storage)", () => {
       expect(status?.normalized_value).toBe(JSON.stringify(HUMAN_EDIT));
     } finally {
       await fullOrm.close(true);
+    }
+  });
+
+  it("escalates populated orphan rows with blank identity and no proven check to quarantine", async () => {
+    // Compound regression: a physical row with data cells but a blank
+    // identity and no proven row-check text must not be silently omitted
+    // by the adaptive gate — it must reach the normal observation and
+    // quarantine handling for unknown rows.
+    const orm = await createOrm();
+    try {
+      const storage = createMikroOrmSqliteAdapter(orm);
+      await migrateMikroOrmSqliteStorageSchema(storage);
+      const writer = deterministicWriter("orphan");
+      await seedStore(storage, writer);
+      const { transport, tab } = seedGateSheet(false);
+      // Row 4: human-typed status with NO identity, NO anchor, and NO check
+      // formula — every narrow band is blank for this row.
+      tab.cells.set("3,1", toStubCell(HUMAN_EDIT));
+      // Row 5: same, but the check cell holds a pasted literal — unproven
+      // check evidence that must not satisfy the gate either.
+      tab.cells.set("4,1", toStubCell(HUMAN_EDIT));
+      tab.cells.set("4,3", toStubCell(cell.string("stale-check-literal")));
+      // Row 6 is a trailing orphan with no populated cells in any narrow
+      // band; the Sheet grid still reports it because column B is populated.
+      tab.cells.set("5,1", toStubCell(HUMAN_EDIT));
+      const provider = gateProvider(transport);
+      const report = await pollMappedUserInputWithMikroOrm({
+        storage,
+        provider,
+        mappings: [mapping],
+        writer,
+        mode: MAPPED_USER_INPUT_POLL_MODES.ADAPTIVE,
+      });
+      expect(report.mode).toBe("adaptive");
+      expect(report.invalidRows).toBe(3);
+      expect(report.quarantinedRows).toBe(3);
+      expect(report.changedRows).toBe(0);
+      expect(report.appliedRows).toBe(0);
+      // The known rows are untouched by the orphan escalation.
+      const status = await storage.read(({ sql }) => sql.all<{ readonly normalized_value: string }>(
+        "SELECT normalized_value FROM entity_field_state WHERE field_name = 'status' ORDER BY entity_id",
+        [],
+      ));
+      expect(status.map((row) => row.normalized_value)).toEqual([
+        JSON.stringify(PENDING),
+        JSON.stringify(PENDING),
+      ]);
+    } finally {
+      await orm.close(true);
     }
   });
 });

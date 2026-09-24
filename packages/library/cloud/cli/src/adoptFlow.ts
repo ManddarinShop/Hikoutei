@@ -78,6 +78,23 @@ export async function runAdoptCli(input: RunAdoptCliInput): Promise<number> {
 async function runAdoptCliInner(input: RunAdoptCliInput): Promise<number> {
   const { options } = input;
 
+  // Reject duplicate --adopt entity names before confirmation or any
+  // provider/API work: buildAdoption keys the spec by entity name, so a
+  // duplicate would silently drop the first entry (last-wins).
+  if (options.adopts !== undefined) {
+    const duplicates = duplicateAdoptEntityNames(options.adopts);
+    if (duplicates.length > 0) {
+      const quoted = duplicates.map((name) => `"${name}"`).join(", ");
+      return reportError(
+        input,
+        Object.assign(
+          new Error(`duplicate --adopt ${duplicates.length === 1 ? "entity" : "entities"} ${quoted} — each --adopt entity name must be unique`),
+          { code: "duplicate_entity" },
+        ),
+      );
+    }
+  }
+
   // Build the adoption spec + confirmation summary from either the legacy
   // single-entity flags or the repeatable multi `--adopt` entries.
   const adoption = buildAdoption(options);
@@ -192,6 +209,27 @@ export function renderAdoptionReport(entity: AdoptionEntityReport, ok: boolean):
   }
   lines.push("");
   return lines.join("\n");
+}
+
+/**
+ * Returns duplicate entity names with each listed once in first-duplicate
+ * order, preserving unique input order for the error message.
+ */
+function duplicateAdoptEntityNames(entries: readonly { readonly entityName: string }[]): string[] {
+  const seen = new Set<string>();
+  const reported = new Set<string>();
+  const duplicates: string[] = [];
+  for (const entry of entries) {
+    if (seen.has(entry.entityName)) {
+      if (!reported.has(entry.entityName)) {
+        reported.add(entry.entityName);
+        duplicates.push(entry.entityName);
+      }
+    } else {
+      seen.add(entry.entityName);
+    }
+  }
+  return duplicates;
 }
 
 /**

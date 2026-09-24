@@ -388,7 +388,112 @@ describe("checkpoint credential pool", () => {
       ),
     ).toBeNull();
     expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [
+            poolEntry(projectId, 1),
+            poolEntry(projectId, 3),
+          ],
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1), { ...poolEntry(projectId, 2), keyPath: "/tmp/noncanonical.json" }],
+        }),
+      ),
+    ).toBeNull();
+    expect(
       validateSetupState({ ...completeState(projectId), status: "spreadsheet_shared", pool: [poolEntry(projectId, 1)] }),
+    ).toBeNull();
+  });
+
+  // Verifies round-trips an in-flight pool-key write-ahead through save/load.
+  it("round-trips an in-flight pool-key write-ahead through save/load", () => {
+    const dir = makeTempDir();
+    const statePath = join(dir, SETUP_STATE_FILE_NAME);
+    const projectId = "pool-proj";
+    const state = completeState(projectId, {
+      pool: [poolEntry(projectId, 1), poolEntry(projectId, 2)],
+      poolKeyStarted: {
+        index: 3,
+        saName: "hikoutei-sa-3",
+        saEmail: serviceAccountEmail("hikoutei-sa-3", projectId),
+        keyPath: "/tmp/hikoutei-service-account-3.json",
+        keyMarker: "123e4567-e89b-42d3-a456-426614174000",
+        keyBaseline: [],
+      },
+    });
+    saveSetupState(statePath, state);
+    const loaded = loadSetupState(statePath);
+    expect(loaded.status).toBe("loaded");
+    if (loaded.status === "loaded") {
+      expect(loaded.state).toStrictEqual(state);
+    }
+  });
+
+  // Verifies rejects a pool-key write-ahead before completion and malformed write-aheads.
+  it("rejects a pool-key write-ahead before completion and malformed write-aheads", () => {
+    const projectId = "pool-proj";
+    const writeAhead = {
+      index: 2,
+      saName: "hikoutei-sa-2",
+      saEmail: serviceAccountEmail("hikoutei-sa-2", projectId),
+      keyPath: "/tmp/hikoutei-service-account-2.json",
+      keyMarker: "123e4567-e89b-42d3-a456-426614174000",
+      keyBaseline: [],
+    };
+    expect(
+      validateSetupState({ ...completeState(projectId), status: "spreadsheet_shared", poolKeyStarted: writeAhead }),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1)],
+          poolKeyStarted: { ...writeAhead, keyMarker: "not-a-uuid" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1)],
+          poolKeyStarted: { ...writeAhead, index: 1 },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1)],
+          poolKeyStarted: { ...writeAhead, saEmail: "evil@x.iam.gserviceaccount.com" },
+        }),
+      ),
+    ).toBeNull();
+    const pool = [poolEntry(projectId, 1), poolEntry(projectId, 2)];
+    const indexThreeWriteAhead = {
+      ...writeAhead,
+      index: 3,
+      saName: "hikoutei-sa-3",
+      saEmail: serviceAccountEmail("hikoutei-sa-3", projectId),
+      keyPath: "/tmp/hikoutei-service-account-3.json",
+    };
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool,
+          poolKeyStarted: { ...indexThreeWriteAhead, index: 4 },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool,
+          poolKeyStarted: { ...indexThreeWriteAhead, keyPath: "/tmp/noncanonical.json" },
+        }),
+      ),
     ).toBeNull();
   });
 
@@ -689,16 +794,21 @@ describe("runSetup credential pool flow", () => {
     expect(readFileSync(harness.outputPath, "utf8")).not.toContain("HIKOUTEI_SYNC_CREDENTIALS");
     expect(harness.verifyCalls).toHaveLength(2);
 
-    // Recover and resume: entry 2 is skipped, entry 3 completes.
+    // Recover with a smaller request: entry 2 is skipped and the in-flight
+    // entry 3 is reconciled without issuing a second key create.
     harness.failShareFor.clear();
     const callsBefore = harness.calls.length;
     const sharesBefore = harness.shares.length;
     const verifiesBefore = harness.verifyCalls.length;
-    const second = await harness.run({ saCount: 3 });
+    const second = await harness.run({ saCount: 2 });
     expect(second.status).toBe("ok");
     if (second.status !== "ok" || second.dryRun) return;
     const delta = harness.calls.slice(callsBefore);
     expect(delta.join("\n")).not.toContain("hikoutei-sa-2");
+    expect(delta.some((command) =>
+      command[0] === "iam" && command[2] === "keys" && command[3] === "create" &&
+      command[command.indexOf("--iam-account") + 1] === third,
+    )).toBe(false);
     expect(harness.shares.slice(sharesBefore).map((s) => s.saEmail)).toStrictEqual([third]);
     expect(harness.verifyCalls.slice(verifiesBefore)).toHaveLength(1);
     expect(second.summary.poolSize).toBe(3);
@@ -904,5 +1014,147 @@ describe("runSetupCli service-account count wiring", () => {
     expect(result.code).toBe(0);
     expect(result.paramsSaCount).toBe(1);
     expect(result.stdout).not.toContain("Service accounts to create?");
+  });
+});
+
+// Covers pool-key write-ahead, preservation, collision, derived-name, and dry-run regressions.
+describe("credential pool write-ahead and preservation regressions", () => {
+  // Verifies a mid-pool-key crash persists its marker/baseline and the resume reconciles without a second key create.
+  it("persists a pool-key write-ahead and resumes reconcile-only without a duplicate key", async () => {
+    const dir = makeTempDir();
+    const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
+    const harness = createPoolHarness(dir, cloud);
+    const third = serviceAccountEmail("hikoutei-sa-3", "pool-proj");
+    harness.failShareFor.add(third);
+
+    const first = await harness.run({ saCount: 3 });
+    expectError(first, SETUP_ERROR_CODES.SHEET_SHARE_FAILED);
+    // The in-flight pool key write-ahead is durable on the complete checkpoint.
+    const mid = JSON.parse(readFileSync(harness.statePath, "utf8")) as {
+      status: string;
+      pool: { saName: string; saEmail: string; keyPath: string }[];
+      poolKeyStarted?: {
+        index: number;
+        saName: string;
+        saEmail: string;
+        keyPath: string;
+        keyMarker: string;
+        keyBaseline: unknown;
+      };
+    };
+    expect(mid.status).toBe("complete");
+    expect(mid.pool).toHaveLength(2);
+    expect(mid.poolKeyStarted?.index).toBe(3);
+    expect(mid.poolKeyStarted?.saEmail).toBe(third);
+    expect(mid.poolKeyStarted?.keyPath).toBe(poolKeyPath(harness.keyPath, 3));
+    expect(typeof mid.poolKeyStarted?.keyMarker).toBe("string");
+    const keyCreates = (calls: readonly string[][]): number =>
+      calls.filter((c) => c[0] === "iam" && c[2] === "keys" && c[3] === "create").length;
+    const createsBefore = keyCreates(harness.calls);
+
+    // Resume: entry 3 reconciles (no second create) and completes the pool.
+    harness.failShareFor.clear();
+    const second = await harness.run({ saCount: 3 });
+    expect(second.status).toBe("ok");
+    if (second.status !== "ok" || second.dryRun) return;
+    expect(second.summary.poolSize).toBe(3);
+    expect(keyCreates(harness.calls)).toBe(createsBefore);
+    const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as {
+      pool: unknown[];
+      poolKeyStarted?: unknown;
+    };
+    expect(final.pool).toHaveLength(3);
+    expect("poolKeyStarted" in final).toBe(false);
+  });
+
+  // Verifies a default-count rerun still reconciles an in-flight pool key.
+  it("reconciles an in-flight pool key on a default-count rerun", async () => {
+    const dir = makeTempDir();
+    const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
+    const harness = createPoolHarness(dir, cloud);
+    const second = serviceAccountEmail("hikoutei-sa-2", "pool-proj");
+    harness.failShareFor.add(second);
+
+    const first = await harness.run({ saCount: 2 });
+    expectError(first, SETUP_ERROR_CODES.SHEET_SHARE_FAILED);
+    const createsBeforeResume = harness.calls.filter(
+      (command) => command[0] === "iam" && command[2] === "keys" && command[3] === "create",
+    ).length;
+
+    harness.failShareFor.clear();
+    const resumed = await harness.run();
+    expect(resumed.status).toBe("ok");
+    if (resumed.status !== "ok" || resumed.dryRun) return;
+    expect(resumed.summary.poolSize).toBe(2);
+    expect(
+      harness.calls.filter(
+        (command) => command[0] === "iam" && command[2] === "keys" && command[3] === "create",
+      ),
+    ).toHaveLength(createsBeforeResume);
+    expect(readFileSync(harness.outputPath, "utf8")).toContain(
+      `${SETUP_ENV_KEYS.CREDENTIAL_POOL}=${harness.keyPath},${poolKeyPath(harness.keyPath, 2)}`,
+    );
+    const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as {
+      pool: unknown[];
+      poolKeyStarted?: unknown;
+    };
+    expect(final.pool).toHaveLength(2);
+    expect("poolKeyStarted" in final).toBe(false);
+  });
+
+  // Verifies a default (no-flag) rerun keeps the full pool and its .env line.
+  it("keeps the full pool and its .env line on a default rerun", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const first = await harness.run({ saCount: 3 });
+    expect(first.status).toBe("ok");
+    // Default rerun (no saCount): nothing is removed.
+    const second = await harness.run();
+    expect(second.status).toBe("ok");
+    if (second.status !== "ok" || second.dryRun) return;
+    expect(second.summary.poolSize).toBe(3);
+    expect(second.summary.poolKeptEntries).toBe(3);
+    expect(second.summary.poolPaths).toHaveLength(3);
+    expect(readFileSync(harness.outputPath, "utf8")).toContain(`${SETUP_ENV_KEYS.CREDENTIAL_POOL}=`);
+    const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as { pool: unknown[] };
+    expect(final.pool).toHaveLength(3);
+  });
+
+  // Verifies a pool key path colliding with --output is rejected before any cloud call.
+  it("rejects a pool key path aliasing --output before any cloud call", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const result = await harness.run({ saCount: 2, outputPath: poolKeyPath(harness.keyPath, 2) });
+    expectError(result, SETUP_ERROR_CODES.INVALID_ARGS);
+    expect(harness.calls).toHaveLength(0);
+    expect(existsSync(harness.statePath)).toBe(false);
+  });
+
+  // Verifies an over-long --sa-name that cannot expand is rejected before any cloud call.
+  it("rejects derived pool names that are not canonical before any cloud call", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const result = await harness.run({ saCount: 2, saName: "a".repeat(29) });
+    expectError(result, SETUP_ERROR_CODES.INVALID_ARGS);
+    expect(harness.calls).toHaveLength(0);
+    expect(existsSync(harness.statePath)).toBe(false);
+  });
+
+  // Verifies a dry run plans the requested pool and validates derived names without mutating.
+  it("plans the requested pool on a dry run and validates derived names", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const planned = await harness.run({ saCount: 3, dryRun: true });
+    expect(planned.status).toBe("ok");
+    if (planned.status !== "ok" || !planned.dryRun) return;
+    const text = JSON.stringify(planned.commands);
+    expect(text).toContain("hikoutei-sa-2");
+    expect(text).toContain("hikoutei-sa-3");
+    expect(text).toContain("HIKOUTEI_SYNC_CREDENTIALS");
+    expect(harness.calls).toHaveLength(0);
+    expect(existsSync(harness.statePath)).toBe(false);
+
+    const invalid = await harness.run({ saCount: 2, saName: "a".repeat(29), dryRun: true });
+    expectError(invalid, SETUP_ERROR_CODES.INVALID_ARGS);
   });
 });

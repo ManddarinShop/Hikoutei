@@ -696,6 +696,49 @@ describe("writeSetupEnvFile", () => {
     expect(lstatSync(fifoPath).isFIFO()).toBe(true);
   });
 
+  // Verifies rejects a same-type replacement between lstat and open before reading (#673).
+  it("rejects a same-type replacement between lstat and open before reading", () => {
+    const dir = makeTempDir();
+    const outputPath = join(dir, ".env");
+    writeFileSync(outputPath, "FOO=bar\n", "utf8");
+    let readCalled = false;
+    // The lstat-verified file (dev 7 / ino 70) is swapped for a different
+    // regular file (dev 7 / ino 71) before the open: the descriptor must be
+    // bound to the verified identity, never read as though it were checked.
+    const loadFs = {
+      lstatSync: (_path: string) => ({
+        isSymbolicLink: () => false,
+        isFile: () => true,
+        dev: 7,
+        ino: 70,
+      }),
+      openSync: (_path: string, _flags: number) => 997,
+      fstatSync: (_fd: number) => ({
+        isFile: () => true,
+        dev: 7,
+        ino: 71,
+        mode: 0o100600,
+      }),
+      readFileSync: (_fd: number, _encoding: "utf8") => {
+        readCalled = true;
+        return "EVIL=1\n";
+      },
+      closeSync: (_fd: number) => {},
+    };
+    try {
+      writeSetupEnvFile(outputPath, credentialsPath, spreadsheetUrl, [], [], loadFs);
+      expect.unreachable("a same-type replacement must be refused before reading");
+    } catch (error) {
+      expect((error as InstanceType<typeof SetupPathSafetyError>).code).toBe(
+        SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE,
+      );
+      expect((error as Error).message).toMatch(/replaced/);
+    }
+    // The replacement was never read and the real file is untouched.
+    expect(readCalled).toBe(false);
+    expect(readFileSync(outputPath, "utf8")).toBe("FOO=bar\n");
+  });
+
   // Verifies writes with mode 0600 through a private temp file and leaves no leftovers.
   it("writes with mode 0600 through a private temp file and leaves no leftovers", () => {
     const dir = makeTempDir();

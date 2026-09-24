@@ -109,13 +109,17 @@ async function main(): Promise<void> {
   }
 
   const tokens = new Map<string, HikouteiEntity<object>>();
-  for (const entity of configResult.config.entities) {
-    const token = defineTypedSheetsEntity({
-      name: entity.name,
-      tableName: entity.tableName,
-      properties: entity.properties,
-    }) as HikouteiEntity<object>;
-    tokens.set(entity.name, token);
+  try {
+    for (const entity of configResult.config.entities) {
+      const token = defineTypedSheetsEntity({
+        name: entity.name,
+        tableName: entity.tableName,
+        properties: entity.properties,
+      }) as HikouteiEntity<object>;
+      tokens.set(entity.name, token);
+    }
+  } catch (error: unknown) {
+    failStartup(`invalid entity descriptor: ${messageOf(error)}`);
   }
 
   const dbName = resolveDbName(process.env);

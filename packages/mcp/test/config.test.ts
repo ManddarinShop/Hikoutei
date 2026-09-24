@@ -119,7 +119,38 @@ describe("hikoutei-mcp config loader", () => {
     }));
     expect(reserved.status).toBe("invalid");
     if (reserved.status === "invalid") {
-      expect(reserved.reason).toContain("reserved by SQLite");
+      expect(reserved.reason).toContain("reserved by Hikoutei or SQLite");
+    }
+  });
+
+  it("rejects invalid property identifiers, non-string/number primaries, and Hikoutei-reserved tables", async () => {
+    const badProperty = await loadHikouteiMcpConfig(writeConfig({
+      entities: [{ name: "e", tableName: "e", properties: { "not a prop": { type: "string", primary: true } } }],
+    }));
+    expect(badProperty.status).toBe("invalid");
+    if (badProperty.status === "invalid") {
+      expect(badProperty.reason).toContain('"not a prop"');
+    }
+
+    const booleanPrimary = await loadHikouteiMcpConfig(writeConfig({
+      entities: [{ name: "e", tableName: "e", properties: { flag: { type: "boolean", primary: true } } }],
+    }));
+    expect(booleanPrimary.status).toBe("invalid");
+    if (booleanPrimary.status === "invalid") {
+      expect(booleanPrimary.reason).toContain("string or number");
+    }
+
+    const datePrimary = await loadHikouteiMcpConfig(writeConfig({
+      entities: [{ name: "e", tableName: "e", properties: { at: { type: "date", primary: true } } }],
+    }));
+    expect(datePrimary.status).toBe("invalid");
+
+    const hikouteiReserved = await loadHikouteiMcpConfig(writeConfig({
+      entities: [{ name: "e", tableName: "entity_state", properties: { id: { type: "string", primary: true } } }],
+    }));
+    expect(hikouteiReserved.status).toBe("invalid");
+    if (hikouteiReserved.status === "invalid") {
+      expect(hikouteiReserved.reason).toContain("reserved by Hikoutei or SQLite");
     }
   });
 

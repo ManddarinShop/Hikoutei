@@ -51,6 +51,34 @@ const SCALAR_TYPES: ReadonlySet<string> = new Set(["string", "number", "boolean"
 const ALLOWED_PROPERTY_KEYS: ReadonlySet<string> = new Set(["type", "primary", "nullable"]);
 const ALLOWED_ENTITY_KEYS: ReadonlySet<string> = new Set(["name", "tableName", "properties"]);
 const SQL_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Table names owned by Hikoutei's SQLite sync schema; mirrors `defineTypedSheetsEntity`. */
+const RESERVED_TABLE_NAMES: ReadonlySet<string> = new Set([
+  "sheet_registry",
+  "physical_sheet_registry",
+  "row_binding",
+  "projection_row_binding",
+  "entity_state",
+  "entity_field_state",
+  "sheet_visible_state",
+  "sheet_visible_field_state",
+  "event_batch",
+  "event_log",
+  "event_observation",
+  "observation_receipt",
+  "event_row",
+  "event_field",
+  "sync_conflict",
+  "quarantine_record",
+  "resolution_command",
+  "business_key_index",
+  "sheet_effect_outbox",
+  "writer_lease",
+  "sqlite_master",
+  "sqlite_schema",
+  "sqlite_sequence",
+  "sqlite_temp_master",
+  "sqlite_temp_schema",
+]);
 
 /**
  * Resolves which config file to use: `--config <path>` flag, then the
@@ -200,6 +228,10 @@ function validateProperties(
   const properties: Record<string, HikouteiMcpPropertyConfig> = {};
   for (const [propertyName, options] of Object.entries(propertiesInput)) {
     const propertyLabel = `${label}."${propertyName}"`;
+    if (!SQL_IDENTIFIER_PATTERN.test(propertyName)) {
+      problems.push(`${propertyLabel} must match ${SQL_IDENTIFIER_PATTERN}.`);
+      continue;
+    }
     if (!isRecord(options)) {
       problems.push(`${propertyLabel} must be an object with a "type".`);
       continue;
@@ -223,6 +255,12 @@ function validateProperties(
     }
     if (options.nullable !== undefined && typeof options.nullable !== "boolean") {
       problems.push(`${propertyLabel}.nullable must be a boolean.`);
+      continue;
+    }
+    if (options.primary === true && (options.type === "boolean" || options.type === "date")) {
+      problems.push(
+        `${propertyLabel} must be a string or number scalar to serve as primary key in v1.`
+      );
       continue;
     }
     if (options.primary === true && options.nullable === true) {
@@ -259,8 +297,8 @@ function requireTableName(
   const tableName = requireIdentifier(value, label, problems);
   if (tableName === null) return null;
   const lower = tableName.toLowerCase();
-  if (lower.startsWith("sqlite_")) {
-    problems.push(`${label} "${tableName}" is reserved by SQLite.`);
+  if (RESERVED_TABLE_NAMES.has(lower) || lower.startsWith("sqlite_")) {
+    problems.push(`${label} "${tableName}" is reserved by Hikoutei or SQLite.`);
     return null;
   }
   return tableName;

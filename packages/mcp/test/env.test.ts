@@ -60,4 +60,13 @@ EMPTY=
     const result = await loadEnvFile(join(tmpdir(), "definitely-absent.env"), {});
     expect(result).toEqual({ applied: 0, skipped: [] });
   });
+
+  it("preserves a defined empty-string process value over .env", async () => {
+    const path = writeEnv("EMPTY_OK=file-value\n");
+    const target: Record<string, string | undefined> = { EMPTY_OK: "" };
+    const result = await loadEnvFile(path, target);
+    expect(target.EMPTY_OK).toBe("");
+    expect(result.skipped).toEqual(["EMPTY_OK"]);
+    expect(result.applied).toBe(0);
+  });
 });
