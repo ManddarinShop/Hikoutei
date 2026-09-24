@@ -3728,6 +3728,7 @@ describe("runSetup — key write-ahead reconciliation", () => {
       const stat = lstatSync(stageDir);
       expect(stat.dev).toBe(prepared.dev);
       expect(stat.ino).toBe(prepared.ino);
+      closeSync(prepared.fd);
     }
     expect(statSync(stageDir).mode & 0o777).toBe(0o700);
   });
@@ -4814,15 +4815,64 @@ describe("gcloud runner staging-cwd wrapper", () => {
           "--project",
           "p",
         ],
-        { cwd: stageDir, cwdIdentity: { dev: prepared.dev, ino: prepared.ino } },
+        {
+          cwd: stageDir,
+          cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+          cwdFd: prepared.fd,
+        },
       ),
     );
+    closeSync(prepared.fd);
     expect(result).toStrictEqual({ status: "ok", stdout: "fake-stdout", stderr: "fake-stderr" });
     // The parent process CWD never changed and the relative write landed
     // in the verified stage directory.
     expect(process.cwd()).toBe(parentCwd);
     expect(readFileSync(join(stageDir, "key.json"), "utf8")).toBe("staged-by-fake-gcloud");
     expect(readFileSync(logPath, "utf8")).toContain("executed:");
+  });
+
+  // Verifies a different inherited descriptor fails closed even when the CWD path itself matches.
+  it("does not execute gcloud when the inherited descriptor is not the requested staging directory", async () => {
+    const dir = makeTempDir();
+    const binDir = makeTempDir();
+    const logPath = join(dir, "gcloud-calls.log");
+    installFakeGcloud(binDir, logPath);
+    const keyPath = join(dir, DEFAULT_KEY_FILE_NAME);
+    const prepared = prepareStageDir(keyPath, VALID_KEY_MARKER);
+    expect(prepared.status).toBe("ok");
+    if (prepared.status !== "ok") return;
+    const stageDir = keyStageDir(keyPath, VALID_KEY_MARKER);
+    const wrongFd = openSync(dir, constants.O_RDONLY);
+    expect(fstatSync(wrongFd).ino).not.toBe(prepared.ino);
+    let result: GcloudRunResult;
+    try {
+      result = await withFakeGcloudEnvironment(binDir, logPath, () =>
+        createGcloudRunner().run(
+          [
+            "iam",
+            "service-accounts",
+            "keys",
+            "create",
+            "key.json",
+            "--iam-account",
+            "sa@p.iam.gserviceaccount.com",
+            "--project",
+            "p",
+          ],
+          {
+            cwd: stageDir,
+            cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+            cwdFd: wrongFd,
+          },
+        ),
+      );
+    } finally {
+      closeSync(wrongFd);
+      closeSync(prepared.fd);
+    }
+    expect(result).toStrictEqual({ status: "failed", code: null, stdout: "", stderr: "" });
+    expect(readFileSync(logPath, "utf8")).toBe("");
+    expect(existsSync(join(stageDir, "key.json"))).toBe(false);
   });
 
   // Verifies replacing the staging pathname before wrapper launch never executes gcloud and never writes there.
@@ -4854,9 +4904,14 @@ describe("gcloud runner staging-cwd wrapper", () => {
           "--project",
           "p",
         ],
-        { cwd: stageDir, cwdIdentity: { dev: prepared.dev, ino: prepared.ino } },
+        {
+          cwd: stageDir,
+          cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+          cwdFd: prepared.fd,
+        },
       ),
     );
+    closeSync(prepared.fd);
     // Identity mismatch: gcloud never ran — a closed failure with no
     // streams to trust, never `not_found` or `ok`.
     expect(result).toStrictEqual({ status: "failed", code: null, stdout: "", stderr: "" });

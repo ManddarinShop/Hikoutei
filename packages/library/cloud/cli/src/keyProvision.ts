@@ -59,18 +59,14 @@
  * unsafe types or permission failures reject the run without touching
  * foreign entries. The key create runs gcloud with a RELATIVE `key.json`
  * destination from the staging directory as the subprocess working
- * directory (runner `cwd` plus the expected device/inode `cwdIdentity`),
- * with the staging directory re-verified (type/mode/identity through a
- * no-follow descriptor) IMMEDIATELY before the spawn AND its identity
- * (device/inode) re-checked IMMEDIATELY after the spawn returns, before
- * the result is recorded or any staged output is trusted. The runner
- * executes the create through a small isolated Node child
- * (`process.execPath`, parent CWD untouched) that `chdir`s into the
- * staging pathname, verifies `statSync('.')` against the expected
- * identity, and only on an exact match invokes `gcloud` with no `cwd`
- * option (inheriting the now object-bound directory): a replacement
- * before the wrapper `chdir` exits without invoking gcloud, and a
- * replacement after the `chdir` cannot redirect the child's CWD — the
+ * directory (runner `cwd`, expected identity, and a pinned directory fd),
+ * with the staging directory re-verified through a no-follow descriptor
+ * immediately before spawn and its identity checked again immediately
+ * after spawn, before the result is recorded or staged output is trusted.
+ * The isolated Node child (`process.execPath`, parent CWD untouched)
+ * compares its `statSync('.')` with `fstatSync(3)` for the inherited pinned
+ * fd. A replacement cannot pass by reusing the old inode, and gcloud
+ * inherits the verified object-bound CWD — the
  * staging-cwd write window (#673) is closed with portable built-ins, no
  * native binding. The post-spawn identity re-check stays as defense in
  * depth. A transient swap-back (the
@@ -888,6 +884,7 @@ async function settleKeyPass(
     const stageDir = keyStageDir(input.keyPath, input.keyMarker);
     const stillSecure = verifyStageDirBeforeSubprocess(stageDir, prepared);
     if (stillSecure !== null) {
+      closePreparedStageDir(prepared.fd);
       return { status: "error", error: stillSecure };
     }
     const keyCreateCommand = [
@@ -903,25 +900,31 @@ async function settleKeyPass(
       input.projectId,
     ] as const;
     let keyCreate: GcloudRunResult;
+    let afterSpawn: SetupErrorResult | null = null;
     try {
-      keyCreate = await runner.run(keyCreateCommand, {
-        cwd: stageDir,
-        cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
-      });
-    } catch {
-      // The invocation threw (spawn/transport failure) after gcloud may or
-      // may not have written the staged key. Treat it as a lost result and
-      // poll the deterministic stage + current key list below instead of
-      // bubbling an unexpected error; the thrown text is never forwarded.
-      keyCreate = { status: "failed", code: null, stdout: "", stderr: "" };
+      try {
+        keyCreate = await runner.run(keyCreateCommand, {
+          cwd: stageDir,
+          cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+          cwdFd: prepared.fd,
+        });
+      } catch {
+        // The invocation threw (spawn/transport failure) after gcloud may or
+        // may not have written the staged key. Treat it as a lost result and
+        // poll the deterministic stage + current key list below instead of
+        // bubbling an unexpected error; the thrown text is never forwarded.
+        keyCreate = { status: "failed", code: null, stdout: "", stderr: "" };
+      }
+      // Keep the prepared directory descriptor open through this path check:
+      // otherwise an unlinked inode could be reused before dev/ino comparison.
+      afterSpawn = verifyStageDirIdentityAfterSpawn(stageDir, prepared);
+    } finally {
+      closePreparedStageDir(prepared.fd);
     }
-    // Post-spawn identity check (defense in depth behind the wrapper's
-    // object-bound CWD): BEFORE the result is recorded or any staged
-    // output is trusted, a mismatch — or a vanished directory — fails
-    // closed with nothing from the replacement read, chmod'ed, installed,
-    // or cleaned up, and the `key_create_started` checkpoint is retained
-    // for a reconcile-only resume.
-    const afterSpawn = verifyStageDirIdentityAfterSpawn(stageDir, prepared);
+    // Before the result is recorded or any staged output is trusted, a
+    // mismatch — or a vanished directory — fails closed with nothing from
+    // the replacement read, chmod'ed, installed, or cleaned up, and the
+    // `key_create_started` checkpoint is retained for a reconcile-only resume.
     if (afterSpawn !== null) {
       return { status: "error", error: afterSpawn };
     }
@@ -987,8 +990,7 @@ function uncertainResult(message: string): SetupErrorResult {
 const KEY_STAGE_DIR_MODE = 0o700;
 
 /**
- * Creates the deterministic staging directory (mode 0700) and returns its
- * identity.
+ * Creates or secures the deterministic staging directory and pins it open.
  *
  * A pre-existing entry is accepted only when it is a real directory (a
  * crash between the checkpoint write and the create leaves an empty owned
@@ -998,10 +1000,9 @@ const KEY_STAGE_DIR_MODE = 0o700;
  * platform supports it (the mode is applied and verified on the open
  * descriptor, never via a check-then-chmod path race), and any unsafe
  * type/permission failure rejects the run without touching foreign
- * entries. The returned device/inode is the identity the pre-subprocess
- * re-verification compares against. Exported so tests can exercise the
- * pre-existing-directory security path directly (it is only reachable
- * from the one fresh create).
+ * entries. Its open descriptor pins the directory object through process
+ * launch, preventing inode reuse from making a replacement appear identical.
+ * Exported so tests can exercise the pre-existing-directory path directly.
  */
 export function prepareStageDir(keyPath: string, keyMarker: string): PreparedStageDir {
   const stageDir = keyStageDir(keyPath, keyMarker);
@@ -1017,51 +1018,32 @@ export function prepareStageDir(keyPath: string, keyMarker: string): PreparedSta
         ),
       };
     }
-    const secured = secureExistingStageDir(stageDir, defaultKeyCleanupFs, "staging directory");
-    return secured.status === "ok"
-      ? { status: "ok", dev: secured.dev, ino: secured.ino }
-      : { status: "error", error: secured.error };
   }
-  // Freshly created: capture the identity (device/inode) so the
-  // pre-subprocess verification can prove the directory at the staging
-  // path is still the one this invocation created.
-  try {
-    const stat = lstatSync(stageDir);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      // The directory we just created was replaced before it could be
-      // verified: fail closed and never touch the replacement.
-      return {
-        status: "error",
-        error: errorResult(
-          SETUP_ERROR_CODES.KEY_CREATE_FAILED,
-          `the staging directory ${stageDir} is not a plain directory; remove it after ` +
-            `confirming it is not needed and rerun setup`,
-        ),
-      };
-    }
-    return { status: "ok", dev: stat.dev, ino: stat.ino };
-  } catch (error) {
-    return {
-      status: "error",
-      error: errorResult(
-        SETUP_ERROR_CODES.KEY_CREATE_FAILED,
-        `could not verify the staging directory ${stageDir}: ${messageOf(error)}; remove it ` +
-          `after confirming it is not needed and rerun setup`,
-      ),
-    };
-  }
+  const secured = secureExistingStageDir(stageDir, defaultKeyCleanupFs, "staging directory");
+  return secured.status === "ok"
+    ? { status: "ok", dev: secured.dev, ino: secured.ino, fd: secured.fd }
+    : { status: "error", error: secured.error };
 }
 
 /**
  * Result of preparing the deterministic staging directory.
  *
- * `ok` carries the prepared directory's device/inode so the subprocess
- * pre-verification can prove the path still names the exact directory this
- * invocation created/secured.
+ * `ok` carries a pinned descriptor and its device/inode identity so the
+ * subprocess wrapper can verify its working directory against the exact
+ * open filesystem object.
  */
 export type PreparedStageDir =
-  | { readonly status: "ok"; readonly dev: number; readonly ino: number }
+  | { readonly status: "ok"; readonly dev: number; readonly ino: number; readonly fd: number }
   | { readonly status: "error"; readonly error: SetupErrorResult };
+
+/** Closes the pinned staging descriptor after the subprocess identity check. */
+function closePreparedStageDir(fd: number): void {
+  try {
+    closeSync(fd);
+  } catch {
+    // Preserve the setup result; the descriptor is no longer in use.
+  }
+}
 
 /**
  * Re-verifies the staging directory immediately before the gcloud
@@ -1071,9 +1053,9 @@ export type PreparedStageDir =
  * device/inode identity, and owner-only mode are verified THROUGH the
  * descriptor against the identity captured by `prepareStageDir`; only an
  * exact match is allowed to receive an `fchmod` (the directory is ours).
- * The runner then binds the child CWD to this verified object through
- * the isolated wrapper (chdir + `statSync('.')` check), so a replacement
- * slipped in after this check cannot redirect the credential write; the
+ * The pinned prepared descriptor is inherited by the wrapper, which
+ * compares `statSync('.')` with `fstatSync(3)` before gcloud runs; a path
+ * replacement cannot pass merely by reusing the inode number. The
  * post-spawn identity re-check stays as defense in depth. A replacement
  * — symlink, non-directory, foreign directory, or mode failure — fails
  * closed BEFORE the spawn and is never chmod'ed, read, or written
@@ -1193,27 +1175,23 @@ function verifyStageDirIdentityAfterSpawn(
 }
 
 /**
- * Result of securing a pre-existing deterministic directory.
- *
- * `ok` carries the verified directory's device/inode so callers can
- * re-check identity later (e.g. immediately before an install).
+ * Result of securing a deterministic directory; successful preparation
+ * returns its descriptor so the staging create can pin the object.
  */
 type SecuredDirectoryResult =
-  | { readonly status: "ok"; readonly dev: number; readonly ino: number }
+  | { readonly status: "ok"; readonly dev: number; readonly ino: number; readonly fd: number }
   | { readonly status: "error"; readonly error: SetupErrorResult };
 
 /**
- * Verifies and secures a pre-existing deterministic directory.
+ * Verifies and secures a deterministic directory through a no-follow fd.
  *
  * The entry must be a plain directory (a symlink or non-directory is
- * refused and left untouched). The directory is opened with `O_NOFOLLOW`
- * where the platform defines it, its type is confirmed on the descriptor,
- * and its mode is enforced to owner-only 0700 through `fchmod` on that
- * descriptor with the resulting mode verified before close — so a swap
- * between the type check and the chmod cannot redirect the chmod onto a
- * foreign target. Any open/type/chmod failure fails closed; entries inside
- * the directory are never touched. `label` names the directory kind in
- * messages ("staging directory" or "cleanup directory").
+ * refused and left untouched). Descriptor and pathname identities are
+ * matched before any mode change; the mode is enforced through `fchmod`
+ * and verified on the descriptor. Success returns the still-open fd so a
+ * caller can pin the object across process launch; other callers close it
+ * after this check. Entries inside the directory are never touched.
+ * `label` names the directory kind in messages.
  */
 function secureExistingStageDir(
   dirPath: string,
@@ -1221,6 +1199,7 @@ function secureExistingStageDir(
   label: string,
 ): SecuredDirectoryResult {
   let fd: number;
+  let keepOpen = false;
   try {
     fd = fs.openSync(dirPath, constants.O_RDONLY | noFollowFlag() | directoryFlag());
   } catch (error) {
@@ -1245,13 +1224,20 @@ function secureExistingStageDir(
   }
   try {
     let stat = fs.fstatSync(fd);
-    if (!stat.isDirectory()) {
+    const pathStat = fs.lstatSync(dirPath);
+    if (
+      !stat.isDirectory() ||
+      pathStat.isSymbolicLink() ||
+      !pathStat.isDirectory() ||
+      pathStat.dev !== stat.dev ||
+      pathStat.ino !== stat.ino
+    ) {
       return {
         status: "error",
         error: errorResult(
           SETUP_ERROR_CODES.KEY_CREATE_FAILED,
-          `the ${label} ${dirPath} is not a plain directory; remove it after confirming it ` +
-            `is not needed and rerun setup`,
+          `the ${label} ${dirPath} is not the verified plain directory; remove it after confirming ` +
+            `it is not needed and rerun setup`,
         ),
       };
     }
@@ -1279,7 +1265,8 @@ function secureExistingStageDir(
         };
       }
     }
-    return { status: "ok", dev: stat.dev, ino: stat.ino };
+    keepOpen = true;
+    return { status: "ok", dev: stat.dev, ino: stat.ino, fd };
   } catch (error) {
     return {
       status: "error",
@@ -1289,10 +1276,12 @@ function secureExistingStageDir(
       ),
     };
   } finally {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      // The security verdict is the one to report.
+    if (!keepOpen) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // The security verdict is the one to report.
+      }
     }
   }
 }
@@ -1354,6 +1343,11 @@ function inspectStagedKeyParent(keyPath: string, keyMarker: string): StagedKeyPa
   const secured = secureExistingStageDir(stageDir, defaultKeyCleanupFs, "staging directory");
   if (secured.status === "error") {
     return { status: "error", error: secured.error };
+  }
+  try {
+    defaultKeyCleanupFs.closeSync(secured.fd);
+  } catch {
+    // Keep the validation result; the descriptor is no longer needed here.
   }
   return { status: "present", dev: secured.dev, ino: secured.ino };
 }
@@ -1743,6 +1737,11 @@ export function cleanupOwnedStage(
   const secured = secureExistingStageDir(cleanupDir, fs, "cleanup directory");
   if (secured.status === "error") {
     return secured.error;
+  }
+  try {
+    fs.closeSync(secured.fd);
+  } catch {
+    // Keep the validation result; the descriptor is no longer needed here.
   }
 
   let entries: readonly string[];

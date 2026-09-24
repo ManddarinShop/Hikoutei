@@ -34,22 +34,23 @@ export interface GcloudRunOptions {
   /**
    * Working directory of the subprocess. Only the key create sets it, to
    * run with a RELATIVE `key.json` destination from the staging
-   * directory. When `cwdIdentity` is also present the runner launches a
-   * small isolated Node wrapper (`process.execPath`) that `chdir`s into
-   * the pathname, verifies `statSync('.')` against the expected
-   * device/inode, and only on an exact match invokes `gcloud` with no
-   * `cwd` option (inheriting the wrapper's now object-bound directory).
-   * A pre-`chdir` replacement exits without invoking gcloud; a
-   * post-`chdir` replacement cannot redirect the child's CWD. The parent
-   * process CWD is never changed. Other callers omit both fields and run
+   * directory. When `cwdIdentity` and `cwdFd` are present, the runner
+   * launches an isolated Node wrapper (`process.execPath`) that `chdir`s
+   * into the pathname and verifies `statSync('.')` against the pinned
+   * descriptor and expected identity before invoking `gcloud` with no
+   * `cwd` option. Pinning the fd prevents inode reuse from validating a
+   * replacement. The parent process CWD is never changed. Other callers omit
+   * these fields and run
    * `gcloud` directly (see `keyProvision.ts`).
    */
   readonly cwd?: string;
   /**
    * Expected staging identity captured by `prepareStageDir`. Only
-   * meaningful with `cwd`; the key-create call always sets both.
+   * meaningful with `cwd`; the key-create call always sets it with `cwdFd`.
    */
   readonly cwdIdentity?: GcloudCwdIdentity;
+  /** Open staging-directory descriptor kept alive through the child launch. */
+  readonly cwdFd?: number;
 }
 
 /** Runs gcloud with the given arguments and returns the process outcome. */
@@ -194,10 +195,13 @@ function spawnAsLoginSpawner(
 export function createGcloudRunner(): GcloudRunner {
   return {
     run(args: readonly string[], options?: GcloudRunOptions): Promise<GcloudRunResult> {
-      // Only the key create sets cwd + cwdIdentity; every other caller
-      // runs gcloud directly below with no wrapper involved.
-      if (options?.cwd !== undefined && options?.cwdIdentity !== undefined) {
-        return runKeyCreateInVerifiedCwd(args, options.cwd, options.cwdIdentity);
+      // Only the key create sets the verified CWD fields; every other
+      // caller runs gcloud directly below with no wrapper involved.
+      if (options?.cwd !== undefined && options.cwdIdentity !== undefined) {
+        if (options.cwdFd === undefined) {
+          return Promise.resolve({ status: "failed", code: null, stdout: "", stderr: "" });
+        }
+        return runKeyCreateInVerifiedCwd(args, options.cwd, options.cwdIdentity, options.cwdFd);
       }
       return new Promise((resolve) => {
         execFile(
@@ -233,11 +237,10 @@ export function createGcloudRunner(): GcloudRunner {
  *
  * The parent process CWD is never changed: a small isolated Node child
  * (via `process.execPath`, no shell) `chdir`s into the staging pathname,
- * checks `statSync('.')` against the expected device/inode captured by
- * `prepareStageDir`, and only on an exact match spawns `gcloud` with no
- * `cwd` option so it inherits the wrapper's now object-bound directory.
- * A replacement before the wrapper `chdir` exits without invoking gcloud;
- * a replacement after the `chdir` cannot redirect the child's CWD.
+ * compares `statSync('.')` with `fstatSync(3)` for the inherited pinned
+ * descriptor and the expected identity, then only on an exact match spawns
+ * `gcloud` with no `cwd` option so it inherits the wrapper's object-bound
+ * directory. A pathname replacement cannot pass by reusing the old inode.
  *
  * Control reporting never parses ordinary gcloud output: the wrapper
  * appends one trailer line carrying a per-call random token
@@ -250,13 +253,14 @@ function runKeyCreateInVerifiedCwd(
   args: readonly string[],
   stageDir: string,
   expected: GcloudCwdIdentity,
+  stageFd: number,
 ): Promise<GcloudRunResult> {
   // Per-call random token so only this invocation's wrapper can report
   // its control statuses; gcloud output cannot guess it (and never
   // receives it via the environment).
   const token = randomBytes(16).toString("hex");
   return new Promise((resolve) => {
-    execFile(
+    const child = spawn(
       process.execPath,
       [
         "-e",
@@ -268,46 +272,62 @@ function runKeyCreateInVerifiedCwd(
         token,
       ],
       {
-        encoding: "utf8",
-        maxBuffer: MAX_BUFFER_BYTES,
+        stdio: ["ignore", "pipe", "pipe", stageFd],
         // No `cwd` or `env` override: the wrapper starts in the caller's
-        // environment and binds its own CWD, leaving both untouched here.
-      },
-      (error: unknown, stdout: string, stderr: string) => {
-        const parsed = parseStageWrapperTrailer(stderr, token);
-        if (parsed === null) {
-          // The wrapper crashed or its output was truncated: fail closed
-          // with the same shape as a spawn failure. Never report
-          // `not_found` here; that status is reserved for the wrapper's
-          // explicit gcloud-missing trailer.
-          const errno = error as NodeJS.ErrnoException | null;
-          const code =
-            errno !== null && typeof errno.code === "number" ? errno.code : null;
-          resolve({ status: "failed", code, stdout, stderr });
-          return;
-        }
-        const gcloudStderr = stderr.slice(0, parsed.trailerIndex);
-        if (parsed.status === "cwd_mismatch" || parsed.status === "wrapper_error") {
-          // The pathname did not name the verified directory when the
-          // wrapper bound its CWD: gcloud was never invoked.
-          resolve({ status: "failed", code: null, stdout: "", stderr: "" });
-          return;
-        }
-        if (parsed.status === "not_found") {
-          resolve({ status: "not_found" });
-          return;
-        }
-        if (parsed.status === "spawn_error") {
-          resolve({ status: "failed", code: null, stdout, stderr: gcloudStderr });
-          return;
-        }
-        if (parsed.status === "ok") {
-          resolve({ status: "ok", stdout, stderr: gcloudStderr });
-          return;
-        }
-        resolve({ status: "failed", code: parsed.code, stdout, stderr: gcloudStderr });
+        // environment and receives the pinned directory at fd 3.
       },
     );
+    let stdout = "";
+    let stderr = "";
+    let spawnError: NodeJS.ErrnoException | null = null;
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      spawnError = error;
+    });
+    child.on("close", (exitCode: number | null) => {
+      const parsed = parseStageWrapperTrailer(stderr, token);
+      if (parsed === null) {
+        // The wrapper crashed or its output was truncated: fail closed
+        // with the same shape as a spawn failure. Never report
+        // `not_found` here; that status is reserved for the wrapper's
+        // explicit gcloud-missing trailer.
+        const code =
+          typeof exitCode === "number"
+            ? exitCode
+            : spawnError !== null && typeof spawnError.code === "number"
+              ? spawnError.code
+              : null;
+        resolve({ status: "failed", code, stdout, stderr });
+        return;
+      }
+      const gcloudStderr = stderr.slice(0, parsed.trailerIndex);
+      if (parsed.status === "cwd_mismatch" || parsed.status === "wrapper_error") {
+        // The pathname did not name the pinned directory when the wrapper
+        // bound its CWD: gcloud was never invoked.
+        resolve({ status: "failed", code: null, stdout: "", stderr: "" });
+        return;
+      }
+      if (parsed.status === "not_found") {
+        resolve({ status: "not_found" });
+        return;
+      }
+      if (parsed.status === "spawn_error") {
+        resolve({ status: "failed", code: null, stdout, stderr: gcloudStderr });
+        return;
+      }
+      if (parsed.status === "ok") {
+        resolve({ status: "ok", stdout, stderr: gcloudStderr });
+        return;
+      }
+      resolve({ status: "failed", code: parsed.code, stdout, stderr: gcloudStderr });
+    });
   });
 }
 
@@ -349,9 +369,9 @@ function parseStageWrapperTrailer(stderr: string, token: string): StageWrapperTr
  * Isolated wrapper evaluated by the child Node (`node -e`).
  *
  * Uses only portable built-ins (`node:fs`, `node:child_process`): chdir
- * into the staging pathname, verify `statSync('.')` against the expected
- * device/inode, and only on an exact match spawn `gcloud` with no `cwd`
- * option (inheriting the object-bound CWD) and no shell. Control values
+ * into the staging pathname, compare `statSync('.')` with `fstatSync(3)`
+ * and the expected identity, then only on an exact match spawn `gcloud`
+ * with no `cwd` option (inheriting the object-bound CWD) and no shell. Control values
  * are passed as wrapper arguments, never added to or removed from the
  * inherited environment; the gcloud child receives the original env.
  * Written without template literals so the outer `node -e` string needs
@@ -372,10 +392,10 @@ const STAGE_CWD_WRAPPER_SCRIPT = [
   "function report(suffix) { process.stderr.write(token + ' status=' + suffix + '\\n'); }",
   "try { process.chdir(stageDir); }",
   "catch (e) { report('cwd_mismatch'); return; }",
-  "let st;",
-  "try { st = fs.statSync('.'); }",
+  "let st, pinned;",
+  "try { st = fs.statSync('.'); pinned = fs.fstatSync(3); }",
   "catch (e) { report('cwd_mismatch'); return; }",
-  "if (st.dev !== expectedDev || st.ino !== expectedIno) { report('cwd_mismatch'); return; }",
+  "if (!st.isDirectory() || !pinned.isDirectory() || pinned.dev !== expectedDev || pinned.ino !== expectedIno || st.dev !== pinned.dev || st.ino !== pinned.ino) { report('cwd_mismatch'); return; }",
   "let result;",
   "try { result = cp.spawnSync('gcloud', gcloudArgs, { encoding: 'utf8', maxBuffer: 1048576 }); }",
   "catch (e) { report('spawn_error'); return; }",
