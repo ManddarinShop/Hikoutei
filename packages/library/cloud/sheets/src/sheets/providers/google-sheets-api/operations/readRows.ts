@@ -30,7 +30,7 @@ import {
   GOOGLE_SHEETS_API_VALUES_FIELDS,
 } from "../model/preflightFields.js";
 import { parseSpreadsheetDocument } from "../model/preflightParsing.js";
-import type { ParsedGridData } from "../model/preflightContext.js";
+import type { ParsedGridData } from "../model/preflightTypes.js";
 import { invalidProviderState } from "../errors.js";
 import type { GoogleSheetsApiWriteRequest } from "../transport/googleSheetsApiTransport.js";
 import {

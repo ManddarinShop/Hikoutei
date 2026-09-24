@@ -10,7 +10,7 @@
 
 import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { setupLockPath, setupStateTempPath } from "./checkpoint.js";
+import { setupLockPath, setupStateTempPath } from "./setupPaths.js";
 
 /**
  * Result of checking the setup file paths for canonical collisions.

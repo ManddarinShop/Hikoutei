@@ -175,20 +175,15 @@ export const SETUP_STATE_VERSION = 1;
 /** Checkpoint file permission after write (owner read/write only). */
 export const SETUP_STATE_FILE_MODE = 0o600;
 
-/** Service-account key file permission after setup (owner read/write only). */
-export const SERVICE_ACCOUNT_KEY_FILE_MODE = 0o600;
-
-/**
- * Restricted format of a service-account key id (`private_key_id`).
- *
- * Google user-managed service-account key ids are 16 lowercase hex digits;
- * the pattern accepts 16-40 hex digits so the setup never rejects a valid
- * key, while still refusing arbitrary payload text. The key id is NOT
- * secret: it is the last segment of the key's IAM resource name
- * (`projects/<project>/serviceAccounts/<email>/keys/<id>`) and is used to
- * match a local key file against the cloud key list during reconciliation.
- */
-export const SERVICE_ACCOUNT_KEY_ID_PATTERN = /^[0-9a-fA-F]{16,40}$/;
+// Compat re-exports: the shared key constants moved verbatim to the
+// dependency-free `keyContract.ts` leaf, breaking the previous
+// checkpoint ↔ keyMaterial module cycle. The checkpoint module path stays
+// stable for existing importers (tests, setupFlow, keyProvision).
+export {
+  SERVICE_ACCOUNT_KEY_FILE_MODE,
+  SERVICE_ACCOUNT_KEY_ID_PATTERN,
+} from "./keyContract.js";
+import { SERVICE_ACCOUNT_KEY_ID_PATTERN } from "./keyContract.js";
 
 /**
  * Restricted format of a creation marker: a lowercase UUID v4 as produced by
@@ -472,37 +467,14 @@ export type StateCompatibility =
   | { readonly status: "ok" }
   | { readonly status: "conflict"; readonly message: string };
 
-/** Validated metadata of a service-account key JSON file. */
-export interface ServiceAccountKeyMetadata {
-  readonly projectId: string;
-  readonly clientEmail: string;
-  /** Non-secret `private_key_id`; matches the last segment of the IAM key resource name. */
-  readonly keyId: string;
-}
-
-/**
- * Result of reading and validating a service-account key file.
- *
- * Only the descriptor-based secure reader is used; the plain pathname
- * reader was removed because a check-then-read sequence cannot be secured
- * against a mid-read alias swap.
- */
-export type KeyMetadataResult =
-  | { readonly status: "ok"; readonly metadata: ServiceAccountKeyMetadata }
-  | { readonly status: "invalid"; readonly message: string };
-
-/**
- * Result of the secure, descriptor-based key file read.
- *
- * `absent` means the path does not exist (the caller decides whether a
- * missing key is valid for the current checkpoint status); `invalid` means
- * the path exists but is not a regular file, could not be secured to mode
- * 0600, or does not parse as a service-account key for any project.
- */
-export type SecureKeyReadResult =
-  | { readonly status: "absent" }
-  | { readonly status: "ok"; readonly metadata: ServiceAccountKeyMetadata }
-  | { readonly status: "invalid"; readonly message: string };
+// Compat re-exports: the shared key metadata/result types moved verbatim
+// to the `keyContract.ts` leaf with the constants above; the checkpoint
+// module path stays stable for existing importers.
+export {
+  type KeyMetadataResult,
+  type SecureKeyReadResult,
+  type ServiceAccountKeyMetadata,
+} from "./keyContract.js";
 
 /**
  * Filesystem operations the secure checkpoint load uses; injectable for

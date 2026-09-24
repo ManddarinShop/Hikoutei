@@ -36,7 +36,7 @@ import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import { identityFromNormalizedCell } from "../model/valueNormalization.js";
-import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
+import type { PreflightContext, PreflightRow } from "../model/preflightTypes.js";
 import type { PlannedReceipt, WorkingRow } from "../model/plannerContracts.js";
 import {
   buildAppendBatchRequests,

@@ -24,7 +24,7 @@ import type {
   GoogleSheetsApiWriteRequest,
 } from "../transport/googleSheetsApiTransport.js";
 import { serializeBatchUpdateRequests } from "../transport/googleSheetsApiTransport.js";
-import type { PreflightContext } from "./preflightContext.js";
+import type { PreflightContext } from "./preflightTypes.js";
 import type { EffectPlan, PlanMutation, PlannedReceipt, WorkingRow } from "./plannerContracts.js";
 import { allocateSheetId, buildRowCheckFormula } from "@hikoutei/ikisaki";
 import { columnLetters, toApiUserEnteredValue } from "./valueNormalization.js";

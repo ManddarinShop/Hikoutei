@@ -49,7 +49,7 @@ import { SYNC_ROW_CHECK_HEADER } from "@hikoutei/contracts/sheets/rowCheck.js";
 import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { GOOGLE_SHEETS_API_ROW_CHECK_FIELDS } from "../model/preflightFields.js";
 import { invalidProviderRequest } from "../errors.js";
-import type { ParsedGridData } from "../model/preflightContext.js";
+import type { ParsedGridData } from "../model/preflightTypes.js";
 import { apiStringValue } from "../model/preflightParsing.js";
 import {
   anchorColumnFor,
