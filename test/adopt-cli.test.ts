@@ -587,4 +587,33 @@ describe("runAdoptCli (multi --adopt)", () => {
       },
     });
   });
+
+  // Verifies rejects duplicate --adopt entity names before confirmation/runner work (#676)
+  it("rejects duplicate --adopt entity names before confirmation/runner work", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let calls = 0;
+    const code = await runAdoptCli({
+      options: {
+        ...multiOptions,
+        mode: "adopt" as const,
+        yes: false,
+        adopts: [
+          { entityName: "Invoice", tabName: "Invoices" },
+          { entityName: "Invoice", tabName: "Invoices_v2" },
+        ],
+      },
+      entities: [CliProbe],
+      runner: (async () => { calls += 1; return dryRunResult(readyEntityReport(), true); }),
+      output: { write: (text: string) => { stdout.push(text); } },
+      error: { write: (text: string) => { stderr.push(text); } },
+      input: (async function* () { yield "y\n"; })(),
+    });
+    expect(code).toBe(ADOPT_RUNTIME_ERROR_EXIT_CODE);
+    expect(calls).toBe(0);
+    expect(stderr.join("")).toContain("hikoutei-adopt:duplicate_entity:");
+    expect(stderr.join("")).toContain('"Invoice"');
+    expect(stderr.join("")).not.toContain("Continue?");
+    expect(stdout).toEqual([]);
+  });
 });

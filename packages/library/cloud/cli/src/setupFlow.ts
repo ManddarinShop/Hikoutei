@@ -66,7 +66,6 @@
  * available.
  */
 
-import { basename, dirname, join } from "node:path";
 import {
   acquireSetupLock,
   checkStateCompatibility,
@@ -99,6 +98,7 @@ import {
   type EnvFileWriteResult,
 } from "./envFileWriter.js";
 import { findSetupPathCollision, type SetupPathCollision } from "./setupPathCollision.js";
+import { poolKeyPath } from "./setupPaths.js";
 import {
   readServiceAccountKeyCredentialSecurely,
   readServiceAccountKeySecurely,
@@ -108,6 +108,7 @@ import {
 // setupFlow import path is kept stable for existing importers.
 export { writeSetupEnvFile, atomicWritePrivateFile, SETUP_ENV_KEYS } from "./envFileWriter.js";
 export { findSetupPathCollision, type SetupPathCollision } from "./setupPathCollision.js";
+export { poolKeyPath };
 import { createSafeRunner, type GcloudRunner, type GcloudRunResult } from "./gcloudRunner.js";
 import {
   boundedCheckReporter,
@@ -486,12 +487,62 @@ export function planSetupCommands(options: RunSetupOptions, slug: string): reado
       outcome:
         "GOOGLE_APPLICATION_CREDENTIALS and HIKOUTEI_SYNC_SPREADSHEET_URL set; unrelated lines preserved; written atomically via a private temp file + rename, never through a symlink alias",
     },
-    {
-      kind: "file",
-      label: `release setup lock ${lockPath}`,
-      outcome: "released",
-    },
   );
+  // The requested credential pool is part of the dry-run plan: one
+  // ensure/key/share/verify group per additional account, both pool
+  // checkpoint writes, and the pool .env rewrite. Single-SA runs plan
+  // exactly as before.
+  const dryRunSaCount = options.saCount ?? 1;
+  for (let index = 2; index <= dryRunSaCount; index += 1) {
+    const poolSaName = `${options.saName}-${index}`;
+    const poolEmail = serviceAccountEmail(poolSaName, projectId);
+    const poolPath = poolKeyPath(options.keyPath, index);
+    commands.push(
+      {
+        kind: "gcloud",
+        command: ["iam", "service-accounts", "create", poolSaName, "--project", projectId, "--display-name", "hikoutei setup"],
+        outcome: `pool service account ${index} created (reused when it already exists)`,
+      },
+      {
+        kind: "file",
+        label: `checkpoint ${options.statePath}`,
+        outcome: `pool key ${index} write-ahead marker and baseline persisted before its single create; a resume reconciles and never creates a duplicate`,
+      },
+      {
+        kind: "gcloud",
+        command: ["iam", "service-accounts", "keys", "create", KEY_STAGE_PLACEHOLDER, "--iam-account", poolEmail, "--project", projectId],
+        outcome:
+          `pool key ${index} created in a private staging directory, validated there, and installed atomically at ${poolPath}`,
+      },
+      {
+        kind: "api",
+        label: `drive.permissions: share ${poolEmail} as writer`,
+        outcome: `pool service account ${index} granted writer access without a notification email`,
+      },
+      {
+        kind: "api",
+        label: `spreadsheets.get with the ${poolEmail} key`,
+        outcome: `pool service-account access ${index} verified`,
+      },
+      {
+        kind: "file",
+        label: `checkpoint ${options.statePath}`,
+        outcome: `verified pool entry ${index} persisted; its in-flight write-ahead is cleared`,
+      },
+    );
+  }
+  if (dryRunSaCount > 1) {
+    commands.push({
+      kind: "file",
+      label: `write ${options.outputPath}`,
+      outcome: `HIKOUTEI_SYNC_CREDENTIALS set to the ${dryRunSaCount}-entry credential pool; unrelated lines preserved`,
+    });
+  }
+  commands.push({
+    kind: "file",
+    label: `release setup lock ${lockPath}`,
+    outcome: "released",
+  });
   return commands;
 }
 
@@ -607,14 +658,25 @@ export async function runSetup(options: RunSetupOptions): Promise<SetupResult> {
       `invalid sa-count value: expected a positive integer between 1 and ${MAX_SETUP_SA_COUNT}`,
     );
   }
+  // Derived pool identities are validated before anything runs (dry runs
+  // included): an over-long `--sa-name` that cannot expand into N valid
+  // `<saName>-<i>` accounts is a usage error, never a mid-run failure
+  // after the primary resources were already mutated.
+  const poolPlanError = validatePoolPlan(options.saName, options.saCount ?? 1);
+  if (poolPlanError !== null) {
+    return errorResult(SETUP_ERROR_CODES.INVALID_ARGS, poolPlanError);
+  }
   // Reject canonical path collisions before anything else runs: `--output`
   // must never alias the key, checkpoint, checkpoint temp, or lock path, and
-  // the key must never alias the checkpoint, temp, or lock. This is a usage
-  // error, not a runtime failure.
+  // the key must never alias the checkpoint, temp, or lock. Planned
+  // credential-pool key paths (entries 2..N) are reserved too: a pool key
+  // aliasing any reserved path rejects the run before any mutation. This is
+  // a usage error, not a runtime failure.
   const collision = findSetupPathCollision({
     keyPath: options.keyPath,
     outputPath: options.outputPath,
     statePath: options.statePath,
+    poolKeyPaths: plannedPoolKeyPaths(options.keyPath, options.saCount ?? 1),
   });
   if (collision.status === "collision") {
     return errorResult(SETUP_ERROR_CODES.INVALID_ARGS, collision.message);
@@ -771,6 +833,17 @@ async function runSetupLocked(
     return errorResult(SETUP_ERROR_CODES.SETUP_STATE_INVALID, checkpointResult.message);
   }
   const checkpoint = checkpointResult.status === "loaded" ? checkpointResult.state : undefined;
+  if (
+    checkpoint?.status === "complete" &&
+    ((checkpoint.pool?.length ?? 1) > MAX_SETUP_SA_COUNT ||
+      (checkpoint.poolKeyStarted?.index ?? 0) > MAX_SETUP_SA_COUNT)
+  ) {
+    return errorResult(
+      SETUP_ERROR_CODES.SETUP_STATE_INVALID,
+      `the credential pool in ${options.statePath} exceeds the supported maximum of ${MAX_SETUP_SA_COUNT}; ` +
+        `remove the setup state and rerun setup`,
+    );
+  }
 
   // Report the resume context once: the phases a checkpoint guarantees as
   // already complete. cloud_auth and drive_access are never
@@ -781,6 +854,25 @@ async function runSetupLocked(
       type: "resumed",
       completedFromCheckpoint: checkpointCompletedPhases(checkpoint.status),
     });
+  }
+
+  // Stored + planned pool key paths must never alias a reserved path: a
+  // checkpointed pool (or in-flight pool write-ahead) that collides with
+  // the current run's key/output/state/temp/lock rejects the run here,
+  // still before any mutation (the project phase is the first writer).
+  const storedPoolPaths = storedPoolKeyPaths(checkpoint);
+  if (storedPoolPaths.length > 0 || (options.saCount ?? 1) > 1) {
+    const poolCollision = findSetupPathCollision({
+      keyPath: options.keyPath,
+      outputPath: options.outputPath,
+      statePath: options.statePath,
+      poolKeyPaths: [
+        ...new Set([...plannedPoolKeyPaths(options.keyPath, options.saCount ?? 1), ...storedPoolPaths]),
+      ],
+    });
+    if (poolCollision.status === "collision") {
+      return errorResult(SETUP_ERROR_CODES.INVALID_ARGS, poolCollision.message);
+    }
   }
 
   // Key file: on resume it must exist and match the checkpoint once the
@@ -1430,8 +1522,15 @@ async function runSetupLocked(
   // spreadsheet URL is derived from the id — never trusted from storage.
   // Revalidate the reserved paths immediately before this write so an alias
   // planted mid-run can never redirect the .env write onto the key or the
-  // checkpoint.
-  const envPreflight = revalidateSetupPaths(options);
+  // checkpoint. A checkpointed pool survives smaller/default reruns: its
+  // paths are preserved in the .env (the writer only emits the pool line
+  // for >= 2 paths, so a fresh single-SA run still strips a stale line)
+  // and reserved against aliasing, exactly like the primary key.
+  const preservedPoolPaths = checkpointPoolEntries(checkpoint).map((entry) => entry.keyPath);
+  const poolReservedPaths = [
+    ...new Set([...plannedPoolKeyPaths(options.keyPath, options.saCount ?? 1), ...storedPoolKeyPaths(checkpoint)]),
+  ];
+  const envPreflight = revalidateSetupPaths(options, poolReservedPaths);
   if (envPreflight !== null) {
     return envPreflight;
   }
@@ -1443,7 +1542,8 @@ async function runSetupLocked(
       options.outputPath,
       options.keyPath,
       spreadsheetEditUrl(spreadsheet.spreadsheetId),
-      [options.statePath, setupLockPath(options.statePath), setupStateTempPath(options.statePath)],
+      [options.statePath, setupLockPath(options.statePath), setupStateTempPath(options.statePath), ...poolReservedPaths],
+      preservedPoolPaths,
     );
   } catch (error) {
     return errorResult(
@@ -1501,10 +1601,29 @@ async function runSetupLocked(
     resumed: checkpoint !== undefined,
   };
   // Single-SA runs return exactly as before (no pool checkpoint key, no
-  // pool env line, no pool progress); the pool expansion below runs only
-  // when more than one service account was requested.
+  // pool env line, no pool progress) — unless a checkpointed pool exists:
+  // resuming a pooled setup with a smaller or default count never removes
+  // entries, so the stored pool (with its kept count) is reported and the
+  // .env above already preserved its pool line. The pool expansion below
+  // runs only when more than one service account was requested.
   const saCount = options.saCount ?? 1;
-  if (saCount <= 1) {
+  const checkpointPool = checkpointPoolEntries(checkpoint);
+  const hasPoolKeyInFlight =
+    checkpoint?.status === "complete" && checkpoint.poolKeyStarted !== undefined;
+  if (saCount <= 1 && !hasPoolKeyInFlight) {
+    if (checkpointPool.length > 0) {
+      return {
+        status: "ok",
+        dryRun: false,
+        commands: executed,
+        summary: {
+          ...baseSummary,
+          poolSize: checkpointPool.length,
+          poolPaths: checkpointPool.map((entry) => entry.keyPath),
+          poolKeptEntries: checkpointPool.length,
+        },
+      };
+    }
     return {
       status: "ok",
       dryRun: false,
@@ -1646,17 +1765,87 @@ async function ensureServiceAccount(
 }
 
 /**
- * Derives the key path for pool entry `index` (2-based) next to the
- * primary key path, mirroring the primary naming: `name-2.json` beside
- * `name.json` (or `name-2` beside an extensionless `name`). The directory
- * is preserved and no existing file is ever touched here.
+ * Planned key paths for pool entries 2..N next to the primary key path.
+ *
+ * Empty for single-SA runs, so single-account callers are unchanged.
  */
-export function poolKeyPath(primaryKeyPath: string, index: number): string {
-  const base = basename(primaryKeyPath);
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
-  return join(dirname(primaryKeyPath), `${stem}-${index}${ext}`);
+function plannedPoolKeyPaths(primaryKeyPath: string, saCount: number): string[] {
+  const paths: string[] = [];
+  for (let index = 2; index <= saCount; index += 1) {
+    paths.push(poolKeyPath(primaryKeyPath, index));
+  }
+  return paths;
+}
+
+/**
+ * Validates every derived `<saName>-<i>` pool account name for entries
+ * 2..N against the canonical service-account format.
+ *
+ * Returns an `invalid_args` message, or null when the plan is valid. Runs
+ * before any subprocess, API call, or file mutation (dry runs included),
+ * so an over-long `--sa-name` that cannot expand into N valid accounts
+ * fails before the primary resources are mutated. Single-SA runs always
+ * validate (the loop is empty).
+ */
+function validatePoolPlan(saName: string, saCount: number): string | null {
+  for (let index = 2; index <= saCount; index += 1) {
+    const derived = `${saName}-${index}`;
+    if (!isValidServiceAccountName(derived)) {
+      return (
+        `service-account name "${saName}" is too long to expand into a ${saCount}-account ` +
+        `pool ("${derived}" is not a valid service-account name); use a shorter --sa-name`
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * Additional key paths (entries 2..N) stored in a loaded checkpoint plus
+ * any in-flight pool-key write-ahead. Entry 1 is the primary key and is
+ * already reserved separately.
+ *
+ * Empty unless the checkpoint is `complete` with a pool, so single-SA
+ * resumes are unchanged.
+ */
+function storedPoolKeyPaths(checkpoint: SetupState | undefined): string[] {
+  if (checkpoint?.status !== "complete") {
+    return [];
+  }
+  // Entry 1 is the primary key path, already reserved by `options.keyPath`.
+  const paths = (checkpoint.pool ?? []).slice(1).map((entry) => entry.keyPath);
+  if (checkpoint.poolKeyStarted !== undefined) {
+    paths.push(checkpoint.poolKeyStarted.keyPath);
+  }
+  return paths;
+}
+
+/**
+ * Additional key paths (entries 2..N) carried by a checkpoint STATE value
+ * plus any in-flight pool-key write-ahead. Entry 1 is reserved separately
+ * as the primary key.
+ *
+ * Empty unless the state is `complete` with a pool.
+ */
+function statePoolPaths(state: SetupState): string[] {
+  if (state.status !== "complete") {
+    return [];
+  }
+  // Entry 1 is the primary key path, already reserved by `options.keyPath`.
+  const paths = (state.pool ?? []).slice(1).map((entry) => entry.keyPath);
+  if (state.poolKeyStarted !== undefined) {
+    paths.push(state.poolKeyStarted.keyPath);
+  }
+  return paths;
+}
+
+/**
+ * Pool entries stored in a loaded checkpoint.
+ *
+ * Empty for fresh runs and single-SA checkpoints.
+ */
+function checkpointPoolEntries(checkpoint: SetupState | undefined): readonly SetupPoolEntry[] {
+  return checkpoint?.status === "complete" ? (checkpoint.pool ?? []) : [];
 }
 
 /** Prompt text for the interactive service-account count question. */
@@ -1762,22 +1951,23 @@ type PoolExpansionResult =
  *
  * Runs after the primary flow reached `complete`: for each missing entry
  * it ensures the `<saName>-<i>` service account exists (the same
- * ensure/create path as the primary), issues its key with the same
- * settlement loop (`settleServiceAccountKey` with `fresh` permission and
- * its own marker/baseline), grants it writer access, verifies access with
- * the same verifier, and persists the entry to the `complete` checkpoint
- * IMMEDIATELY — a mid-pool failure keeps entries 1..i-1 so the resume
- * skips them. Failures use the same error codes as the primary path.
+ * ensure/create path as the primary), issues its key under a per-entry
+ * write-ahead (the fresh baseline plus a new marker are persisted as
+ * `poolKeyStarted` on the `complete` checkpoint BEFORE the single create,
+ * and only the invocation that just persisted it may create with `fresh`
+ * permission), grants it writer access, verifies access with the same
+ * verifier, and persists the entry to the `complete` checkpoint
+ * IMMEDIATELY (clearing the write-ahead) — a mid-pool failure keeps
+ * entries 1..i-1 so the resume skips them, and a crash at any pool-key
+ * boundary resumes by reconciling the stored marker/baseline with
+ * `reconcile` permission instead of creating a second key (an unmatched
+ * cloud key fails with `key_create_uncertain`; nothing is ever deleted
+ * automatically). Failures use the same error codes as the primary path.
  * Finally the `.env` file is rewritten with the comma-separated
  * `HIKOUTEI_SYNC_CREDENTIALS` pool line. The bounded key/verify progress
  * reporters stay unwired here (the tracker hosts one bounded kind per
  * phase): only generic operation events are emitted under
  * `pool_expansion`, which never advances the overall ten-phase count.
- *
- * // ponytail: no per-pool-SA key write-ahead checkpoint; a crash between
- * // a pool key create and its pool-entry persist leaves an orphaned cloud
- * // key that the retry treats as baseline (fails uncertain, never
- * // duplicates silently). Persist per-SA key markers if this ever matters.
  */
 async function expandCredentialPool(
   runner: GcloudRunner,
@@ -1827,12 +2017,19 @@ async function expandCredentialPool(
     }
   }
   // Keep-all resume: resuming with a smaller --sa-count never removes
-  // entries — the loop below only appends missing entries 2..N, so the
-  // pool only grows and the summary reports the actual (larger) size.
+  // entries, and any existing write-ahead is reconciled before returning.
   const keptPoolEntries = storedPool?.length ?? 0;
   const pool: SetupPoolEntry[] = storedPool !== undefined ? [...storedPool] : [primaryEntry];
+  // A crashed pool-key run leaves its write-ahead on the complete
+  // checkpoint: the next run reconciles that entry only (stored
+  // marker/baseline, reconcile permission) and never creates a second key
+  // for it. Only the first missing index can carry a write-ahead — every
+  // persisted entry clears it.
+  const resumedPoolKey = reloaded.state.poolKeyStarted;
+  const resumedPoolKeyIndex = pool.length + 1;
+  const targetSaCount = Math.max(context.saCount, resumedPoolKey === undefined ? 0 : resumedPoolKeyIndex);
 
-  for (let index = pool.length + 1; index <= context.saCount; index += 1) {
+  for (let index = pool.length + 1; index <= targetSaCount; index += 1) {
     const saName = `${options.saName}-${index}`;
     if (!isValidServiceAccountName(saName)) {
       return {
@@ -1856,25 +2053,97 @@ async function expandCredentialPool(
       return ensured;
     }
 
-    progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
-    const keyList = await listUserManagedServiceAccountKeys(runner, executed, {
-      projectId: context.projectId,
-      saEmail,
-      purpose: "baseline",
-    });
-    progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
-    if (keyList.status === "error") {
-      return { status: "error", error: keyList.error };
+    // Pool-key write-ahead: a resumed write-ahead for THIS index settles
+    // reconcile-only with the stored marker/baseline (no fresh baseline
+    // list — the stored baseline scopes the reconciliation, exactly like
+    // the primary key_create_started resume); otherwise the fresh baseline
+    // is listed and the new marker plus baseline are persisted BEFORE the
+    // single create, and only this invocation (fresh permission) may issue
+    // it.
+    let settled: Awaited<ReturnType<typeof settleServiceAccountKey>>;
+    if (resumedPoolKey !== undefined && index === resumedPoolKeyIndex) {
+      if (
+        resumedPoolKey.index !== index ||
+        resumedPoolKey.saName !== saName ||
+        resumedPoolKey.saEmail !== saEmail ||
+        resumedPoolKey.keyPath !== keyPath
+      ) {
+        return {
+          status: "error",
+          error: errorResult(
+            SETUP_ERROR_CODES.SETUP_STATE_INVALID,
+            `the in-flight pool key in ${options.statePath} does not match pool entry ${index}; ` +
+              `remove the setup state and rerun setup`,
+          ),
+        };
+      }
+      settled = await settleServiceAccountKey(runner, executed, {
+        keyPath,
+        projectId: context.projectId,
+        saEmail,
+        keyMarker: resumedPoolKey.keyMarker,
+        baseline: resumedPoolKey.keyBaseline,
+        createPermission: "reconcile",
+        sleeper: keySleeper,
+      });
+    } else {
+      progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
+      const keyList = await listUserManagedServiceAccountKeys(runner, executed, {
+        projectId: context.projectId,
+        saEmail,
+        purpose: "baseline",
+      });
+      progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.KEY_LIST });
+      if (keyList.status === "error") {
+        return { status: "error", error: keyList.error };
+      }
+      const keyMarker = generateCreationMarker();
+      progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.CHECKPOINT_PERSIST });
+      const writeAheadBase = spreadsheetState(
+        options,
+        context.projectId,
+        context.ownerEmail,
+        context.title,
+        context.primaryEmail,
+        { spreadsheetId: context.spreadsheetId },
+        "complete",
+        context.projectMode,
+        context.keyOrigin,
+        context.shareOrigin,
+      );
+      if (writeAheadBase.status !== "complete") {
+        // Unreachable: the builder returns the requested status; fail
+        // closed rather than create a key without its write-ahead.
+        return {
+          status: "error",
+          error: errorResult(
+            SETUP_ERROR_CODES.SETUP_STATE_INVALID,
+            `could not persist the credential pool in ${options.statePath}; remove the setup state and rerun setup`,
+          ),
+        };
+      }
+      const writeAheadError = persistState(options, executed, {
+        ...writeAheadBase,
+        pool: [...pool],
+        poolKeyStarted: { index, saName, saEmail, keyPath, keyMarker, keyBaseline: [...keyList.names] },
+      });
+      progress.report({ type: "operation_completed", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.CHECKPOINT_PERSIST });
+      if (writeAheadError !== null) {
+        return { status: "error", error: writeAheadError };
+      }
+      // This invocation JUST persisted the fresh pool-key write-ahead, so
+      // it is the only one allowed to issue the single key create for
+      // this entry (fresh permission).
+      settled = await settleServiceAccountKey(runner, executed, {
+        keyPath,
+        projectId: context.projectId,
+        saEmail,
+        keyMarker,
+        baseline: keyList.names,
+        createPermission: "fresh",
+        sleeper: keySleeper,
+      });
     }
-    const settled = await settleServiceAccountKey(runner, executed, {
-      keyPath,
-      projectId: context.projectId,
-      saEmail,
-      keyMarker: generateCreationMarker(),
-      baseline: keyList.names,
-      createPermission: "fresh",
-      sleeper: keySleeper,
-    });
     if (settled.status === "error") {
       return settled;
     }
@@ -1996,12 +2265,20 @@ async function expandCredentialPool(
   progress.report({ type: "operation_started", phase: POOL_EXPANSION_PHASE, operation: SETUP_PROGRESS_OPERATIONS.ENV_WRITE });
   let envModified = false;
   try {
+    // The pool keys are reserved against aliasing here too: the rewritten
+    // .env must never land on (or be read through) a pool key path.
+    const poolPaths = pool.map((entry) => entry.keyPath);
+    const poolKeyPaths = poolPaths.slice(1);
+    const poolCollision = revalidateSetupPaths(options, poolKeyPaths);
+    if (poolCollision !== null) {
+      return { status: "error", error: poolCollision };
+    }
     const poolWrite = writeSetupEnvFile(
       options.outputPath,
       options.keyPath,
       spreadsheetEditUrl(context.spreadsheetId),
-      [options.statePath, setupLockPath(options.statePath), setupStateTempPath(options.statePath)],
-      pool.map((entry) => entry.keyPath),
+      [options.statePath, setupLockPath(options.statePath), setupStateTempPath(options.statePath), ...poolKeyPaths],
+      poolPaths,
     );
     envModified = poolWrite.modified;
   } catch (error) {
@@ -2461,8 +2738,16 @@ function persistState(
 ): SetupErrorResult | null {
   // Fail closed if a reserved path alias appeared after the initial
   // preflight: the checkpoint write must never be redirected by a symlink
-  // or hardlink that was not there when the run started.
-  const revalidated = revalidateSetupPaths(options);
+  // or hardlink that was not there when the run started. Planned pool key
+  // paths plus the pool paths carried by the state being saved are
+  // reserved too, so an alias planted mid-run can never redirect a pool
+  // checkpoint write onto a key or the .env.
+  const revalidated = revalidateSetupPaths(options, [
+    ...new Set([
+      ...plannedPoolKeyPaths(options.keyPath, options.saCount ?? 1),
+      ...statePoolPaths(state),
+    ]),
+  ]);
   if (revalidated !== null) {
     return revalidated;
   }

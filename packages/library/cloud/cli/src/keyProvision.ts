@@ -59,11 +59,24 @@
  * unsafe types or permission failures reject the run without touching
  * foreign entries. The key create runs gcloud with a RELATIVE `key.json`
  * destination from the staging directory as the subprocess working
- * directory (runner `cwd`), with the staging directory re-verified
- * (type/mode/identity through a no-follow descriptor) IMMEDIATELY before
- * the spawn; the credential write is thereby bound to the validated
- * private staging directory for cooperating setup actors, and a
- * replacement at the staging pathname is never silently trusted. The same parent validation runs BEFORE the staged key is ever read during reconciliation: `key.json` is never inspected,
+ * directory (runner `cwd` plus the expected device/inode `cwdIdentity`),
+ * with the staging directory re-verified (type/mode/identity through a
+ * no-follow descriptor) IMMEDIATELY before the spawn AND its identity
+ * (device/inode) re-checked IMMEDIATELY after the spawn returns, before
+ * the result is recorded or any staged output is trusted. The runner
+ * executes the create through a small isolated Node child
+ * (`process.execPath`, parent CWD untouched) that `chdir`s into the
+ * staging pathname, verifies `statSync('.')` against the expected
+ * identity, and only on an exact match invokes `gcloud` with no `cwd`
+ * option (inheriting the now object-bound directory): a replacement
+ * before the wrapper `chdir` exits without invoking gcloud, and a
+ * replacement after the `chdir` cannot redirect the child's CWD — the
+ * staging-cwd write window (#673) is closed with portable built-ins, no
+ * native binding. The post-spawn identity re-check stays as defense in
+ * depth. A transient swap-back (the
+ * replacement removed before the post-spawn check) leaves no key in the
+ * real directory, so the bounded settlement below ends `uncertain`
+ * without ever trusting the foreign directory. The same parent validation runs BEFORE the staged key is ever read during reconciliation: `key.json` is never inspected,
  * opened, chmod'ed, or read unless its deterministic parent is absent or a
  * plain directory verified/secured to 0700 through the no-follow
  * descriptor, and a symlinked or non-directory stage parent fails closed
@@ -862,12 +875,16 @@ async function settleKeyPass(
       return { status: "error", error: prepared.error };
     }
     // The gcloud create runs with the staging directory as the subprocess
-    // working directory and a RELATIVE `key.json` destination, so the
-    // credential write is bound to the validated private directory instead
-    // of a pathname that could be swapped mid-run. Immediately before the
-    // spawn, the directory is re-verified (no-follow descriptor, type,
-    // identity, owner-only mode) against the identity captured by
-    // prepareStageDir: a replacement is never silently trusted.
+    // working directory and a RELATIVE `key.json` destination. Immediately
+    // before the spawn, the directory is re-verified (no-follow
+    // descriptor, type, identity, owner-only mode) against the identity
+    // captured by prepareStageDir; the runner then binds the child CWD to
+    // that verified object through an isolated Node wrapper (chdir +
+    // statSync('.') identity check, gcloud inherits the bound directory
+    // with no `cwd` option), so a replacement at the staging pathname
+    // cannot redirect the credential write. Immediately AFTER the spawn
+    // returns the identity is re-checked again before the result is
+    // recorded, as defense in depth.
     const stageDir = keyStageDir(input.keyPath, input.keyMarker);
     const stillSecure = verifyStageDirBeforeSubprocess(stageDir, prepared);
     if (stillSecure !== null) {
@@ -887,13 +904,26 @@ async function settleKeyPass(
     ] as const;
     let keyCreate: GcloudRunResult;
     try {
-      keyCreate = await runner.run(keyCreateCommand, { cwd: stageDir });
+      keyCreate = await runner.run(keyCreateCommand, {
+        cwd: stageDir,
+        cwdIdentity: { dev: prepared.dev, ino: prepared.ino },
+      });
     } catch {
       // The invocation threw (spawn/transport failure) after gcloud may or
       // may not have written the staged key. Treat it as a lost result and
       // poll the deterministic stage + current key list below instead of
       // bubbling an unexpected error; the thrown text is never forwarded.
       keyCreate = { status: "failed", code: null, stdout: "", stderr: "" };
+    }
+    // Post-spawn identity check (defense in depth behind the wrapper's
+    // object-bound CWD): BEFORE the result is recorded or any staged
+    // output is trusted, a mismatch — or a vanished directory — fails
+    // closed with nothing from the replacement read, chmod'ed, installed,
+    // or cleaned up, and the `key_create_started` checkpoint is retained
+    // for a reconcile-only resume.
+    const afterSpawn = verifyStageDirIdentityAfterSpawn(stageDir, prepared);
+    if (afterSpawn !== null) {
+      return { status: "error", error: afterSpawn };
     }
     executed.push({
       kind: "gcloud",
@@ -1040,12 +1070,14 @@ export type PreparedStageDir =
  * The directory is opened WITHOUT following symlinks and its type,
  * device/inode identity, and owner-only mode are verified THROUGH the
  * descriptor against the identity captured by `prepareStageDir`; only an
- * exact match is allowed to receive an `fchmod` (the directory is ours),
- * and the subprocess runs with that directory as its working directory and
- * a RELATIVE `key.json` destination, so the credential write is bound to
- * the validated private directory. A replacement — symlink, non-directory,
- * foreign directory, or mode failure — fails closed BEFORE the spawn and
- * is never chmod'ed, read, or written through.
+ * exact match is allowed to receive an `fchmod` (the directory is ours).
+ * The runner then binds the child CWD to this verified object through
+ * the isolated wrapper (chdir + `statSync('.')` check), so a replacement
+ * slipped in after this check cannot redirect the credential write; the
+ * post-spawn identity re-check stays as defense in depth. A replacement
+ * — symlink, non-directory, foreign directory, or mode failure — fails
+ * closed BEFORE the spawn and is never chmod'ed, read, or written
+ * through.
  */
 function verifyStageDirBeforeSubprocess(
   stageDir: string,
@@ -1104,6 +1136,60 @@ function verifyStageDirBeforeSubprocess(
       // The security verdict is the one to report.
     }
   }
+}
+
+/**
+ * Re-checks the staging directory identity immediately AFTER the gcloud
+ * key-create subprocess returns, before its result is recorded or any
+ * staged output is trusted (defense in depth behind the wrapper's
+ * object-bound CWD, which already prevents the write from landing in a
+ * replacement).
+ *
+ * Only the exact device/inode captured by `prepareStageDir` passes;
+ * anything else fails closed with `key_create_failed` and nothing from
+ * the replacement is ever read, chmod'ed, installed, or cleaned up.
+ * Deliberately chmod-free (unlike the pre-spawn check): the entry may be
+ * foreign, so its mode is never touched. A transient swap-back — the
+ * replacement removed before this check — leaves no key in the real
+ * directory, so the bounded settlement ends `uncertain` without ever
+ * trusting the foreign directory.
+ */
+function verifyStageDirIdentityAfterSpawn(
+  stageDir: string,
+  expected: { readonly dev: number; readonly ino: number },
+): SetupErrorResult | null {
+  let lst: Stats | undefined;
+  try {
+    lst = lstatSync(stageDir);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return errorResult(
+        SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+        `the staging directory ${stageDir} disappeared while the key was being created; ` +
+          `nothing was trusted — rerun setup`,
+      );
+    }
+    return errorResult(
+      SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+      `could not re-verify the staging directory ${stageDir}: ${messageOf(error)}; nothing ` +
+        `was trusted — rerun setup`,
+    );
+  }
+  if (lst === undefined || lst.isSymbolicLink() || !lst.isDirectory()) {
+    return errorResult(
+      SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+      `the staging directory ${stageDir} is not a plain directory; nothing was trusted — ` +
+        `remove it after confirming it is not needed and rerun setup`,
+    );
+  }
+  if (lst.dev !== expected.dev || lst.ino !== expected.ino) {
+    return errorResult(
+      SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+      `the staging directory ${stageDir} was replaced while the key was being created; ` +
+        `nothing was trusted — remove the replacement after confirming it is not needed and rerun setup`,
+    );
+  }
+  return null;
 }
 
 /**
@@ -1417,6 +1503,61 @@ const defaultKeyCleanupFs: KeyCleanupFs = {
  * libuv binding, so this quarantine + post-rename identity design is the
  * permitted boundary for the pathname unlink race.
  */
+/** Fresh re-inspection of the stage/cleanup pair after a lost rename race. */
+type StageCleanupReinspection =
+  | {
+      readonly status: "ok";
+      readonly stage: Stats | undefined;
+      readonly cleanup: Stats | undefined;
+    }
+  | { readonly status: "error"; readonly error: SetupErrorResult };
+
+/**
+ * Re-reads both quarantine paths after `renameSync` reports ENOENT.
+ *
+ * Either entry may have appeared, vanished, or been replaced since the
+ * pre-rename inspection, so the stale pair must not decide the outcome.
+ * A non-ENOENT inspection failure fails closed; otherwise the fresh pair
+ * is returned (an entry confirmed absent is `undefined`).
+ */
+function reinspectStageAndCleanup(
+  stageDir: string,
+  cleanupDir: string,
+  fs: KeyCleanupFs,
+): StageCleanupReinspection {
+  let stage: Stats | undefined;
+  try {
+    stage = fs.lstatSync(stageDir);
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "ENOENT") {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+          `could not inspect the staging directory ${stageDir}: ${messageOf(error)}; rerun setup to finish`,
+        ),
+      };
+    }
+    stage = undefined;
+  }
+  let cleanup: Stats | undefined;
+  try {
+    cleanup = fs.lstatSync(cleanupDir);
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "ENOENT") {
+      return {
+        status: "error",
+        error: errorResult(
+          SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+          `could not inspect the cleanup directory ${cleanupDir}: ${messageOf(error)}; rerun setup to finish`,
+        ),
+      };
+    }
+    cleanup = undefined;
+  }
+  return { status: "ok", stage, cleanup };
+}
+
 export function cleanupOwnedStage(
   keyPath: string,
   keyMarker: string,
@@ -1508,10 +1649,40 @@ export function cleanupOwnedStage(
       fs.renameSync(stageDir, cleanupDir);
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") {
-        // The stage directory vanished between the check and the rename:
-        // nothing was quarantined; resume from whatever is at the cleanup
-        // path below.
+        // The rename lost a source-or-destination race (the stage vanished
+        // or the cleanup parent changed under us): the pre-rename
+        // `cleanupLst` is now stale evidence and must not decide the
+        // outcome. Re-inspect BOTH paths fresh — only a freshly confirmed
+        // absent/absent pair is already-clean.
+        const fresh = reinspectStageAndCleanup(stageDir, cleanupDir, fs);
+        if (fresh.status === "error") {
+          return fresh.error;
+        }
+        if (fresh.stage === undefined && fresh.cleanup === undefined) {
+          return null;
+        }
+        if (fresh.stage !== undefined && fresh.cleanup !== undefined) {
+          return errorResult(
+            SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+            `both the staging directory ${stageDir} and the cleanup directory ${cleanupDir} exist; ` +
+              `remove one after confirming it is not needed and rerun setup`,
+          );
+        }
+        if (fresh.stage !== undefined) {
+          // The stage is (still) there but the rename reported ENOENT, so
+          // the quarantine never happened: fail closed and let the next
+          // run retry it instead of deleting through a path we never
+          // quarantined.
+          return errorResult(
+            SETUP_ERROR_CODES.KEY_CREATE_FAILED,
+            `could not quarantine the staging directory ${stageDir}: the directory changed ` +
+              `during the rename; rerun setup to finish`,
+          );
+        }
+        // Stage confirmed absent with a freshly present cleanup directory:
+        // finish that directory below (it is re-validated there).
         stageLst = undefined;
+        cleanupLst = fresh.cleanup;
       } else {
         return errorResult(
           SETUP_ERROR_CODES.KEY_CREATE_FAILED,

@@ -8,10 +8,11 @@
  * another, and so on; the message carries the specific detail. The 16 path-safety
  * carrier codes (CHECKPOINT_TEMP_*, OUTPUT_*, SETUP_WRITE_NO_PROGRESS,
  * SETUP_DIR_FSYNC_*, SETUP_RENAME_DURABLE_*) are operation-level: 16 distinct
- * codes cover 15 recoverable path-safety throw sites (OUTPUT_SYMLINK_REFUSED
- * and OUTPUT_NOT_REGULAR_FILE are each reused at two sites) so the boundary
- * catch can preserve machine-readable specificity instead of collapsing to a
- * generic write code.
+ * codes cover 16 recoverable path-safety throw sites (OUTPUT_SYMLINK_REFUSED
+ * is reused at two sites and OUTPUT_NOT_REGULAR_FILE at three: the lstat
+ * boundary, the descriptor type check, and the descriptor-identity check)
+ * so the boundary catch can preserve machine-readable specificity instead
+ * of collapsing to a generic write code.
  */
 
 export const SETUP_ERROR_CODES = {
@@ -126,7 +127,7 @@ export function setupFailure(code: SetupErrorCode, message: string): SetupFailur
 }
 
 /**
- * Typed internal carrier thrown by the 15 recoverable path-safety sites.
+ * Typed internal carrier thrown by the 16 recoverable path-safety sites.
  *
  * The nearest boundary catch extracts the code when present and falls back
  * to the existing generic code (OUTPUT_WRITE_FAILED / SETUP_STATE_WRITE_FAILED)

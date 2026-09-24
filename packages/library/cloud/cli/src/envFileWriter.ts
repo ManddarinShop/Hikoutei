@@ -77,8 +77,9 @@ const ENV_FILE_MODE = 0o600;
  * refused before any open so a FIFO can never block), the file is opened
  * WITHOUT following symlinks (`O_NOFOLLOW` where supported) and
  * non-blocking (`O_NONBLOCK` where supported), the descriptor is
- * fstat-verified as a regular file BEFORE a single byte is read (covering
- * a non-regular replacement between the lstat check and the open), and any
+ * fstat-verified as the SAME file the lstat observed (device/inode
+ * identity, covering a same-type replacement as well as a non-regular one)
+ * BEFORE a single byte is read, and any
  * alias of the credentials file or other reserved paths (hardlink/symlink
  * alias — the key contents are never read through it) is refused before a
  * single byte is read. The preserved env content is built in memory and written to a unique private sibling temp
@@ -106,8 +107,14 @@ export function writeSetupEnvFile(
    * with commas and no spaces, matching the runtime pool parser.
    */
   poolPaths: readonly string[] = [],
+  /**
+   * Filesystem used for the existing-output read; injectable so tests can
+   * prove the descriptor-identity check without a racy real swap. The
+   * atomic write below always uses the default filesystem.
+   */
+  loadFs: EnvFileLoadFs = defaultEnvFileLoadFs,
 ): EnvFileWriteResult {
-  const read = readExistingEnvFile(outputPath, [credentialsPath, ...reservedPaths]);
+  const read = readExistingEnvFile(outputPath, [credentialsPath, ...reservedPaths], loadFs);
   const existing = read.existing;
   const created = read.created;
 
@@ -144,6 +151,43 @@ interface ExistingEnvRead {
 }
 
 /**
+ * Filesystem operations the existing-output read uses; injectable for
+ * tests (same-type replacement-descriptor coverage without a racy real
+ * swap).
+ *
+ * Both `lstatSync` and `fstatSync` expose the device/inode so the read can
+ * BIND the opened descriptor to the entry the lstat verified: a file
+ * replaced between the type check and the open is refused before a single
+ * byte is read. Mirrors `SetupStateLoadFs` in checkpoint.ts.
+ */
+export interface EnvFileLoadFs {
+  lstatSync(path: string): {
+    isSymbolicLink(): boolean;
+    isFile(): boolean;
+    readonly dev: number;
+    readonly ino: number;
+  };
+  openSync(path: string, flags: number): number;
+  fstatSync(fd: number): {
+    isFile(): boolean;
+    readonly dev: number;
+    readonly ino: number;
+    readonly mode: number;
+  };
+  readFileSync(fd: number, encoding: "utf8"): string;
+  closeSync(fd: number): void;
+}
+
+/** The default filesystem for the existing-output read. */
+const defaultEnvFileLoadFs: EnvFileLoadFs = {
+  lstatSync,
+  openSync: (path, flags) => openSync(path, flags),
+  fstatSync,
+  readFileSync,
+  closeSync,
+};
+
+/**
  * Reads an existing .env output without following symlinks or aliases.
  *
  * A symlink at the output path is rejected outright (the target could be
@@ -152,41 +196,47 @@ interface ExistingEnvRead {
  * FIFOs, devices, and sockets are refused BEFORE any open, so a FIFO can
  * never block the open or a later read. The file is opened with `O_NOFOLLOW`
  * (where supported) plus `O_NONBLOCK` (where supported), the descriptor is
- * fstat-verified as a regular file BEFORE a single byte is read — this
- * covers a non-regular replacement (for example a FIFO planted between the
- * lstat check and the open) and prevents a FIFO open/read from blocking —
- * and the descriptor inode is compared against every reserved path; any
- * match is refused before reading. A missing file is `created` with empty
- * content. Throws on unsafe entries; the caller preserves carrier codes
- * (`SetupPathSafetyError`) and falls back to `output_write_failed` for other errors.
+ * fstat-verified as a regular file with the SAME device/inode the lstat
+ * observed BEFORE a single byte is read — covering a same-type replacement
+ * (a different regular file swapped in between the lstat check and the
+ * open) as well as a non-regular replacement — and the descriptor inode is
+ * compared against every reserved path; any match is refused before
+ * reading. A missing file is `created` with empty content. Throws on unsafe
+ * entries; the caller preserves carrier codes (`SetupPathSafetyError`) and
+ * falls back to `output_write_failed` for other errors.
  */
-function readExistingEnvFile(outputPath: string, reservedPaths: readonly string[]): ExistingEnvRead {
+function readExistingEnvFile(
+  outputPath: string,
+  reservedPaths: readonly string[],
+  fs: EnvFileLoadFs = defaultEnvFileLoadFs,
+): ExistingEnvRead {
+  let lst: ReturnType<EnvFileLoadFs["lstatSync"]> | undefined;
   try {
-    const lst = lstatSync(outputPath);
-    if (lst.isSymbolicLink()) {
-      throw setupPathSafetyError(
-        SETUP_ERROR_CODES.OUTPUT_SYMLINK_REFUSED,
-        `refusing to follow a symlink at the output path ${outputPath}; remove the symlink and retry`,
-      );
-    }
-    if (!lst.isFile()) {
-      // Directories, FIFOs, devices, and sockets are never opened or read:
-      // a FIFO open without O_NONBLOCK would block indefinitely.
-      throw setupPathSafetyError(
-        SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE,
-        `the output path ${outputPath} is not a regular file; remove it and retry`,
-      );
-    }
+    lst = fs.lstatSync(outputPath);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return { existing: "", created: true, mode: 0 };
     }
     throw error;
   }
+  if (lst.isSymbolicLink()) {
+    throw setupPathSafetyError(
+      SETUP_ERROR_CODES.OUTPUT_SYMLINK_REFUSED,
+      `refusing to follow a symlink at the output path ${outputPath}; remove the symlink and retry`,
+    );
+  }
+  if (!lst.isFile()) {
+    // Directories, FIFOs, devices, and sockets are never opened or read:
+    // a FIFO open without O_NONBLOCK would block indefinitely.
+    throw setupPathSafetyError(
+      SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE,
+      `the output path ${outputPath} is not a regular file; remove it and retry`,
+    );
+  }
 
   let fd: number;
   try {
-    fd = openSync(outputPath, constants.O_RDONLY | noFollowFlag() | nonBlockFlag());
+    fd = fs.openSync(outputPath, constants.O_RDONLY | noFollowFlag() | nonBlockFlag());
   } catch (error) {
     if (isNodeError(error) && (error.code === "ELOOP" || error.code === "EMLINK")) {
       // The entry became a symlink between the lstat check and the open
@@ -199,7 +249,7 @@ function readExistingEnvFile(outputPath: string, reservedPaths: readonly string[
     throw error;
   }
   try {
-    const stat = fstatSync(fd);
+    const stat = fs.fstatSync(fd);
     if (!stat.isFile()) {
       // A non-regular entry replaced the output between the lstat check and
       // the open (e.g. a FIFO planted mid-run): refuse without reading it
@@ -207,6 +257,18 @@ function readExistingEnvFile(outputPath: string, reservedPaths: readonly string[
       throw setupPathSafetyError(
         SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE,
         `the output path ${outputPath} is not a regular file; remove it and retry`,
+      );
+    }
+    if (stat.dev !== lst.dev || stat.ino !== lst.ino) {
+      // The descriptor is NOT the file the lstat verified: a same-type
+      // replacement (a different regular file) was swapped in between the
+      // lstat check and the open. Refuse before a single byte is read —
+      // the checked file's content must never be confused with the
+      // replacement's. Reuses the regular-file carrier: the opened entry
+      // is not the verified regular file.
+      throw setupPathSafetyError(
+        SETUP_ERROR_CODES.OUTPUT_NOT_REGULAR_FILE,
+        `the output path ${outputPath} was replaced before it could be read; remove it and retry`,
       );
     }
     const alias = reservedPaths.find((path) => sameInodeAsPath(stat, path));
@@ -218,10 +280,10 @@ function readExistingEnvFile(outputPath: string, reservedPaths: readonly string[
     }
     // The owner bits come from the SAME secured descriptor read, so the
     // mode-repair decision below can never race a check-then-use sequence.
-    return { existing: readFileSync(fd, "utf8"), created: false, mode: Number(stat.mode) & 0o777 };
+    return { existing: fs.readFileSync(fd, "utf8"), created: false, mode: Number(stat.mode) & 0o777 };
   } finally {
     try {
-      closeSync(fd);
+      fs.closeSync(fd);
     } catch {
       // The read error is the one to report.
     }
@@ -386,11 +448,15 @@ function removeOwnedTempFile(tempPath: string, dev: number, ino: number, fs: Set
  * or hardlink planted after the preflight must never redirect a write to a
  * reserved file. Returns an error result on collision, `null` when safe.
  */
-export function revalidateSetupPaths(options: RunSetupOptions): SetupErrorResult | null {
+export function revalidateSetupPaths(options: RunSetupOptions, extraReserved: readonly string[] = []): SetupErrorResult | null {
   const collision = findSetupPathCollision({
     keyPath: options.keyPath,
     outputPath: options.outputPath,
     statePath: options.statePath,
+    // Planned pool keys plus caller-supplied stored pool keys (checkpoint
+    // pool entries and any in-flight pool write-ahead): an alias planted
+    // mid-run must never redirect a checkpoint or .env write.
+    poolKeyPaths: extraReserved,
   });
   if (collision.status === "collision") {
     return errorResult(

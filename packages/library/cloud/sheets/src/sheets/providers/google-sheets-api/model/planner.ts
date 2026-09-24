@@ -58,12 +58,10 @@ export function planEffectBatch(
   context: PreflightContext,
 ): readonly EffectPlan[] {
   const plans: EffectPlan[] = [];
-  const working = new Map<number, WorkingRow>();
   const byAnchor = new Map<string, WorkingRow>();
   const byIdentity = new Map<string, WorkingRow>();
   for (const row of context.rows) {
     const copy = toWorkingRow(row);
-    working.set(copy.rowNumber, copy);
     // Mirrors indexRows: only the FIRST row per anchor value enters the
     // index (duplicated anchors are evidence, never rewritten), so a
     // duplicated anchor resolves deterministically instead of drifting to
@@ -120,7 +118,6 @@ export function planEffectBatch(
       }
       row = createWorkingRow(effect, nextAppendRow);
       nextAppendRow += 1;
-      working.set(row.rowNumber, row);
       if (row.anchor.kind === PRESENCE_KINDS.PRESENT) {
         byAnchor.set(row.anchor.value, row);
       }

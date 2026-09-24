@@ -32,10 +32,10 @@ export type SetupPathCollision =
 
 /**
  * Rejects canonical collisions among key, output, checkpoint, checkpoint
- * temp, and lock paths.
+ * temp, lock, and credential-pool key paths.
  *
- * Returns a stable structured usage error message when any two of the five
- * reserved paths resolve to the same file (symlink aliases, dangling symlink
+ * Returns a stable structured usage error message when any two reserved
+ * paths resolve to the same file (symlink aliases, dangling symlink
  * targets, hardlinks, and case aliases on case-insensitive platforms
  * included); the caller maps it to `invalid_args`. This check is purely
  * local and runs before any confirmation or mutation.
@@ -44,6 +44,14 @@ export function findSetupPathCollision(input: {
   readonly keyPath: string;
   readonly outputPath: string;
   readonly statePath: string;
+  /**
+   * Planned or stored credential-pool key paths (entries 2..N). Every
+   * pool key is a reserved setup artifact: aliasing the output, the key,
+   * the checkpoint, the temp, the lock, or another pool key rejects the
+   * run before any mutation. Empty by default so single-SA callers are
+   * unchanged.
+   */
+  readonly poolKeyPaths?: readonly string[];
 }): SetupPathCollision {
   try {
     const candidates = [
@@ -52,6 +60,7 @@ export function findSetupPathCollision(input: {
       { label: "the setup checkpoint path", path: input.statePath },
       { label: "the setup checkpoint temp path", path: setupStateTempPath(input.statePath) },
       { label: "the setup lock path", path: setupLockPath(input.statePath) },
+      ...(input.poolKeyPaths ?? []).map((path) => ({ label: "the credential pool key path", path })),
     ];
     const canonical = candidates.map(({ path }) => canonicalPath(path));
     const folded = caseFolded(canonical);
@@ -64,12 +73,14 @@ export function findSetupPathCollision(input: {
           (folded !== null && folded[i] === folded[j]) ||
           sameFile(a.path, b.path);
         if (same) {
+          const includesPoolPath =
+            a.label === "the credential pool key path" || b.label === "the credential pool key path";
+          const guidance = includesPoolPath
+            ? "choose different paths for --output, the key file, credential-pool keys, and the setup state"
+            : "choose different paths for --output, the key file, and the setup state";
           return {
             status: "collision",
-            message:
-              `${a.label} ${a.path} resolves to ` +
-              `${b.label} ${b.path}; choose different ` +
-              `paths for --output, the key file, and the setup state`,
+            message: `${a.label} ${a.path} resolves to ${b.label} ${b.path}; ${guidance}`,
           };
         }
       }
