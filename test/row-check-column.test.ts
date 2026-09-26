@@ -179,7 +179,9 @@ function rowChecksRequest(
   };
 }
 
+// Covers check-column formula at row creation.
 describe("check-column formula at row creation", () => {
+  // Verifies writes the deterministic token-join formula cell into the check column on create.
   it("writes the deterministic token-join formula cell into the check column on create", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedInputTab(spreadsheet);
@@ -246,6 +248,7 @@ describe("check-column formula at row creation", () => {
     expect(expected).toBe("s2:u1|n4:3.14|b4:TRUE");
   });
 
+  // Verifies keeps the created row findable: the check column never enters range-scoped reads or hashes.
   it("keeps the created row findable: the check column never enters range-scoped reads or hashes", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedInputTab(spreadsheet);
@@ -284,6 +287,7 @@ describe("check-column formula at row creation", () => {
     expect(Object.keys(snapshot.rows[0]?.cells ?? {})).toEqual([...INPUT_HEADERS]);
   });
 
+  // Verifies recalculates the check after a field update and preserves the formula cell.
   it("recalculates the check after a field update and preserves the formula cell", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedInputTab(spreadsheet);
@@ -336,7 +340,9 @@ describe("check-column formula at row creation", () => {
   });
 });
 
+// Covers narrow row-check read.
 describe("narrow row-check read", () => {
+  // Verifies requests ONLY the identity + anchor + check column bands with the row-check mask.
   it("requests ONLY the identity + anchor + check column bands with the row-check mask", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedInputTab(spreadsheet);
@@ -354,6 +360,7 @@ describe("narrow row-check read", () => {
     expect(last?.fields).toBe(GOOGLE_SHEETS_API_ROW_CHECK_FIELDS);
   });
 
+  // Verifies renders mixed value shapes exactly as SQLite.
   it("renders mixed value shapes exactly as SQLite's expected renderer does", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedInputTab(spreadsheet);
@@ -387,6 +394,7 @@ describe("narrow row-check read", () => {
     expect(checks?.rows[3]?.check).toEqual(presentValue("s8:date-ish|n5:45292|s0:"));
   });
 
+  // Verifies encodes delimiter collisions and blank permutations into DISTINCT checks.
   it("encodes delimiter collisions and blank permutations into DISTINCT checks", async () => {
     // REGRESSION (review finding 1): the historical `TEXTJOIN` gate was
     // non-injective — ["a|b","c"] and ["a","b|c"] joined identically, and
@@ -415,6 +423,7 @@ describe("narrow row-check read", () => {
     expect(texts[2]).not.toBe(texts[3]);
   });
 
+  // Verifies reports NO check evidence when the formula cell was replaced by a literal.
   it("reports NO check evidence when the formula cell was replaced by a literal", async () => {
     // REGRESSION (review finding 2): a human pastes the check cell's own
     // text as a LITERAL. The literal renders the same string forever (it
@@ -440,6 +449,7 @@ describe("narrow row-check read", () => {
     expect(after?.rows[0]?.check).toEqual(absentValue());
   });
 
+  // Verifies reports the system row-id (anchor) band for row-mapping evidence.
   it("reports the system row-id (anchor) band for row-mapping evidence", async () => {
     // REGRESSION (review finding 4): the narrow read must carry the anchor
     // cell so the polling gate can see anchor deletion/duplication/
@@ -464,6 +474,7 @@ describe("narrow row-check read", () => {
     expect(after?.rows[0]?.check.kind).toBe("present");
   });
 
+  // Verifies surfaces a human edit as a check mismatch on the very next read.
   it("surfaces a human edit as a check mismatch on the very next read", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedInputTab(spreadsheet);
@@ -480,6 +491,7 @@ describe("narrow row-check read", () => {
     expect(after?.rows[0]?.check).toEqual(presentValue("s2:u1|n3:999|s0:"));
   });
 
+  // Verifies reports checks_unavailable for a legacy tab without the check header.
   it("reports checks_unavailable for a legacy tab without the check header", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedInputTab(spreadsheet, { checkHeader: false });
@@ -491,6 +503,7 @@ describe("narrow row-check read", () => {
     expect(checks?.status).toBe("checks_unavailable");
   });
 
+  // Verifies treats legacy rows without a formula as absent check evidence (mixed mode).
   it("treats legacy rows without a formula as absent check evidence (mixed mode)", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seedInputTab(spreadsheet);
@@ -509,6 +522,7 @@ describe("narrow row-check read", () => {
   });
 });
 
+// Covers rowNumbers-scoped observation (targeted full-field band read).
 describe("rowNumbers-scoped observation (targeted full-field band read)", () => {
   function seededTab(spreadsheet: StubSpreadsheet): StubSheet {
     const tab = seedInputTab(spreadsheet);
@@ -531,6 +545,7 @@ describe("rowNumbers-scoped observation (targeted full-field band read)", () => 
     };
   }
 
+  // Verifies reads only the header row + the requested contiguous band and snapshots only those rows.
   it("reads only the header row + the requested contiguous band and snapshots only those rows", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = seededTab(spreadsheet);
@@ -559,6 +574,7 @@ describe("rowNumbers-scoped observation (targeted full-field band read)", () => 
     expect(observed?.anchors.existing).toBe(2);
   });
 
+  // Verifies expands an over-budget band plan into sequential band requests (no whole-table degradation).
   it("expands an over-budget band plan into sequential band requests (no whole-table degradation)", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedInputTab(spreadsheet);
@@ -594,7 +610,9 @@ describe("rowNumbers-scoped observation (targeted full-field band read)", () => 
   });
 });
 
+// Covers check-column polling read size.
 describe("check-column polling read size", () => {
+  // Verifies keeps the polling read payload narrow versus the whole-table observation.
   it("keeps the polling read payload narrow versus the whole-table observation", async () => {
     // SIZE REGRESSION GUARD: 300 seeded rows; the gated read must stay
     // dramatically smaller than the historical whole-table polling
@@ -654,7 +672,9 @@ describe("check-column polling read size", () => {
   });
 });
 
+// Covers row check renderer (contracts single source).
 describe("row check renderer (contracts single source)", () => {
+  // Verifies renders one POSITIONAL token per column: tagged types, escaped text.
   it("renders one POSITIONAL token per column: tagged types, escaped text", () => {
     const fields: Readonly<Record<string, NormalizedCell | undefined>> = {
       a: cell.string("x"),
@@ -667,6 +687,7 @@ describe("row check renderer (contracts single source)", () => {
       .toBe("s1:x|s0:|s0:|n1:0|b5:FALSE");
   });
 
+  // Verifies is injective: delimiter collisions, blank permutations, and type twins never share a check.
   it("is injective: delimiter collisions, blank permutations, and type twins never share a check", () => {
     const join = (a: NormalizedCell, b: NormalizedCell) =>
       computeRowCheckValue(["a", "b"], (h) => (h === "a" ? a : b))!;
@@ -685,6 +706,7 @@ describe("row check renderer (contracts single source)", () => {
       .not.toBe(join(cell.string("a"), cell.string("b|c")));
   });
 
+  // Verifies returns null when a header has no canonical value (not derivable).
   it("returns null when a header has no canonical value (not derivable)", () => {
     expect(computeRowCheckValue(["a", "b"], (header) =>
       header === "a" ? cell.string("x") : undefined)).toBe(null);
