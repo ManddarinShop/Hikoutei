@@ -42,6 +42,7 @@ const StatusUser = defineTypedSheetsEntity({
 
 const SPREADSHEET_ID = "sync-status-1";
 
+// Verifies the internal sync status reader.
 describe("internal sync status reader", () => {
   const services: InternalSyncService[] = [];
   const tempDirs: string[] = [];
@@ -125,12 +126,14 @@ describe("internal sync status reader", () => {
     throw new Error("effect outbox did not drain within the expected pass count");
   }
 
+  // Verifies local mode is reported for a database file that does not exist.
   it("reports local mode for a database file that does not exist", async () => {
     const missing = join(tmpdir(), `hikoutei-status-absent-${randomUUID()}.sqlite`);
     await expect(readHikouteiSyncStatus({ dbName: missing })).resolves.toEqual({ mode: "local" });
     await expect(listHikouteiConflicts({ dbName: missing })).resolves.toEqual([]);
   });
 
+  // Verifies local mode is reported for a local-only runtime database.
   it("reports local mode for a local-only runtime database", async () => {
     const dbName = tempDbName("local");
     const service = await openSync(new StubSheetsTransport(new StubSpreadsheet()), writeCredentialsFile(), dbName);
@@ -156,6 +159,7 @@ describe("internal sync status reader", () => {
     await runtime.close();
   });
 
+  // Verifies sync mode is reported with the bound spreadsheet and drained outbox.
   it("reports sync mode with the bound spreadsheet and drained outbox", async () => {
     const dbName = tempDbName("drained");
     const service = await openSync(new StubSheetsTransport(new StubSpreadsheet()), writeCredentialsFile(), dbName);
@@ -173,6 +177,7 @@ describe("internal sync status reader", () => {
     });
   });
 
+  // Verifies pending outbox effects written after the last delivery pass are counted.
   it("counts pending outbox effects written after the last delivery pass", async () => {
     const dbName = tempDbName("pending");
     const service = await openSync(new StubSheetsTransport(new StubSpreadsheet()), writeCredentialsFile(), dbName);
@@ -193,6 +198,7 @@ describe("internal sync status reader", () => {
     }
   });
 
+  // Verifies an OPEN human-edit conflict is listed with decoded values.
   it("lists an OPEN human-edit conflict with decoded values", async () => {
     const credentialsPath = writeCredentialsFile();
     const dbName = tempDbName("conflict");
@@ -251,6 +257,7 @@ describe("internal sync status reader", () => {
     }
   });
 
+  // Verifies malformed arguments are rejected with structured codes.
   it("rejects malformed arguments with structured codes", async () => {
     const dbName = tempDbName("guards");
     await expect(readHikouteiSyncStatus({ dbName })).resolves.toEqual({ mode: "local" });
