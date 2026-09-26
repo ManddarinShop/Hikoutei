@@ -234,7 +234,9 @@ function tabIds(client: FakeClient, plan: PlanLike): string[] {
 // Tests.
 // ---------------------------------------------------------------------------
 
+// Suite: sheetCorruptionDetection scenario.
 describe("sheetCorruptionDetection scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -243,6 +245,7 @@ describe("sheetCorruptionDetection scenario", () => {
     expect(ids).toContain("sheet-corruption-detection");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("sheet-corruption-detection");
     expect(scenario.kind).toBe("data");
@@ -274,6 +277,7 @@ describe("sheetCorruptionDetection scenario", () => {
     expect(spec!.nullable).not.toBe(true);
   });
 
+  // Verifies: varies the plan across different seeds.
   it("varies the plan across different seeds", () => {
     const serialized = new Set<string>();
     for (let seed = 1; seed <= 8; seed += 1) {
@@ -282,6 +286,7 @@ describe("sheetCorruptionDetection scenario", () => {
     expect(serialized.size).toBeGreaterThan(1);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = corruptPlan("duplicate-identity");
     const context = {
@@ -300,6 +305,7 @@ describe("sheetCorruptionDetection scenario", () => {
   });
 });
 
+// Suite: detectCorruption (pure tab-shape detector).
 describe("detectCorruption (pure tab-shape detector)", () => {
   const CLEAN = [
     ["id", "name", "tier", "active", "signupAt"],
@@ -307,6 +313,7 @@ describe("detectCorruption (pure tab-shape detector)", () => {
     ["actor-2", "Bob", "silver", "false", "2024-02-01T00:00:00Z"],
   ];
 
+  // Verifies: returns clean for a well-formed tab.
   it("returns clean for a well-formed tab", () => {
     expect(scenario.detectCorruption(CLEAN)).toEqual({ status: "clean" });
     // A clean tab stays clean even with the dedicated-row scope.
@@ -315,6 +322,7 @@ describe("detectCorruption (pure tab-shape detector)", () => {
     ).toEqual({ status: "clean" });
   });
 
+  // Verifies: detects a duplicate identity (kind duplicate-identity, never repaired).
   it("detects a duplicate identity (kind duplicate-identity, never repaired)", () => {
     const rows = [
       ["id", "name", "tier", "active", "signupAt"],
@@ -332,6 +340,7 @@ describe("detectCorruption (pure tab-shape detector)", () => {
     expect(JSON.stringify(verdict)).not.toContain("corrupt-");
   });
 
+  // Verifies: detects a cell-shifted row (identity column pushed blank).
   it("detects a cell-shifted row (identity column pushed blank)", () => {
     const rows = [
       ["id", "name", "tier", "active", "signupAt"],
@@ -348,6 +357,7 @@ describe("detectCorruption (pure tab-shape detector)", () => {
     expect(JSON.stringify(verdict)).not.toContain("corrupt-");
   });
 
+  // Verifies: detects a missing required field on the anchored dedicated row.
   it("detects a missing required field on the anchored dedicated row", () => {
     const rows = [
       ["id", "name", "tier", "active", "signupAt"],
@@ -368,6 +378,7 @@ describe("detectCorruption (pure tab-shape detector)", () => {
     expect(scenario.detectCorruption(rows)).toEqual({ status: "clean" });
   });
 
+  // Verifies: detects missing and malformed header rows.
   it("detects missing and malformed header rows", () => {
     const missingId = [
       ["name", "tier", "active"],
@@ -401,6 +412,7 @@ describe("detectCorruption (pure tab-shape detector)", () => {
     });
   });
 
+  // Verifies: treats fully blank rows as padding, not corruption.
   it("treats fully blank rows as padding, not corruption", () => {
     const rows = [
       ["id", "name", "tier", "active", "signupAt"],
@@ -411,7 +423,9 @@ describe("detectCorruption (pure tab-shape detector)", () => {
   });
 });
 
+// Suite: sheetCorruptionDetection execute (fake client).
 describe("sheetCorruptionDetection execute (fake client)", () => {
+  // Verifies: injects a duplicate identity, detects it, and records repaired:false (ok).
   it("injects a duplicate identity, detects it, and records repaired:false (ok)", async () => {
     const plan = corruptPlan("duplicate-identity");
     const client = new FakeClient();
@@ -430,6 +444,7 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(tabIds(client, plan)).not.toContain(plan.target.dedicatedId);
   });
 
+  // Verifies: injects a cell-shifted row, detects it, and cleans up (ok).
   it("injects a cell-shifted row, detects it, and cleans up (ok)", async () => {
     const plan = corruptPlan("shifted-cell");
     const client = new FakeClient();
@@ -444,6 +459,7 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(tabIds(client, plan)).not.toContain(plan.target.dedicatedId);
   });
 
+  // Verifies: injects a missing required field through the guarded write seam and detects it (ok).
   it("injects a missing required field through the guarded write seam and detects it (ok)", async () => {
     const plan = corruptPlan("missing-field");
     const client = new FakeClient();
@@ -463,6 +479,7 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(tabIds(client, plan)).not.toContain(plan.target.dedicatedId);
   });
 
+  // Verifies: records an identity-shifted guarded injection rejection as a transient skip, not a failure.
   it("records an identity-shifted guarded injection rejection as a transient skip, not a failure", async () => {
     // The guarded write seam rejects the missing-field injection with the
     // fail-closed `identity_shifted` class when a CONCURRENT actor shifted
@@ -482,6 +499,7 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies an injected-but-undetected corruption as failed (guard miss).
   it("classifies an injected-but-undetected corruption as failed (guard miss)", async () => {
     // The injection is observable to the verification read but the DETECTION
     // read fails to surface it (the read seam misses the corruption): the
@@ -500,6 +518,7 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records a readTabRows rejection as failed, never a transient skip.
   it("records a readTabRows rejection as failed, never a transient skip", async () => {
     // Narrowed transient scope: ONLY the direct writes (`mutateInputCell`
     // / `injectInputCells`) may classify as `identity-shifted-transient`.
@@ -520,6 +539,7 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: guarantees independent cleanup: a failed injected-row delete still removes the row.
   it("guarantees independent cleanup: a failed injected-row delete still removes the row", async () => {
     const plan = corruptPlan("duplicate-identity");
     const client = new FakeClient();
@@ -535,6 +555,7 @@ describe("sheetCorruptionDetection execute (fake client)", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears.
   it("skips truthfully when the dedicated row's projection never appears", async () => {
     const plan = corruptPlan("duplicate-identity");
     const client = new FakeClient();
