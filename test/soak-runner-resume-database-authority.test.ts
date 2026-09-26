@@ -94,7 +94,9 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner resume database authority (HIGH 1).
 describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
+  // Verifies: rejects a missing soak.sqlite without recreating an empty authority.
   it(
     "rejects a missing soak.sqlite without recreating an empty authority",
     { timeout: 90_000 },
@@ -115,6 +117,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects an empty soak.sqlite instead of silently resetting the authority.
   it(
     "rejects an empty soak.sqlite instead of silently resetting the authority",
     { timeout: 90_000 },
@@ -130,6 +133,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a symlinked soak.sqlite before inspecting or opening the external database.
   it(
     "rejects a symlinked soak.sqlite before inspecting or opening the external database",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -161,6 +165,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a symlinked SQLite sidecar before any inspection or open.
   it(
     "rejects a symlinked SQLite sidecar before any inspection or open",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -193,6 +198,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: a fresh run unlinks runner-owned SQLite symlinks without touching their targets.
   it(
     "a fresh run unlinks runner-owned SQLite symlinks without touching their targets",
     // Skipped only when the platform/filesystem cannot create symlinks
@@ -219,6 +225,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a row-count mismatch against state.tableRows before mutating.
   it(
     "rejects a row-count mismatch against state.tableRows before mutating",
     { timeout: 90_000 },
@@ -240,6 +247,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a drifted schema (dropped table) before any workload mutation.
   it(
     "rejects a drifted schema (dropped table) before any workload mutation",
     { timeout: 90_000 },
@@ -268,6 +276,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a foreign row in the interrupted-cycle authority before any workload mutation.
   it(
     "rejects a foreign row in the interrupted-cycle authority before any workload mutation",
     { timeout: 90_000 },
@@ -302,6 +311,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a same-count field mutation in the interrupted-cycle authority.
   it(
     "rejects a same-count field mutation in the interrupted-cycle authority",
     { timeout: 90_000 },
@@ -334,6 +344,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: accepts and reconciles a forkIsolation row caught between its two flushes (end-to-end resume).
   it(
     "accepts and reconciles a forkIsolation row caught between its two flushes (end-to-end resume)",
     { timeout: 120_000 },
@@ -428,6 +439,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a forkIsolation row whose content matches neither deterministic stage.
   it(
     "rejects a forkIsolation row whose content matches neither deterministic stage",
     { timeout: 120_000 },
@@ -477,6 +489,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a deleted actor row in a RECORDED cycle instead of passing as an interrupted prefix.
   it(
     "rejects a deleted actor row in a RECORDED cycle instead of passing as an interrupted prefix",
     { timeout: 90_000 },
@@ -508,6 +521,7 @@ describeLongSoak("soak runner resume database authority (HIGH 1)", () => {
     },
   );
 
+  // Verifies: rejects a tampered actor row in a RECORDED cycle (same-count mutation).
   it(
     "rejects a tampered actor row in a RECORDED cycle (same-count mutation)",
     { timeout: 90_000 },
@@ -585,7 +599,9 @@ async function findCycleFiveActorRow(db: import("node:sqlite").DatabaseSync): Pr
 }
 
 
+// Suite: soak runner resume schema inspection (MEDIUM 4).
 describeLongSoak("soak runner resume schema inspection (MEDIUM 4)", () => {
+  // Verifies: derives the expected soak columns from the REAL authority schema.
   it(
     "derives the expected soak columns from the REAL authority schema",
     { timeout: 60_000 },
@@ -605,6 +621,7 @@ describeLongSoak("soak runner resume schema inspection (MEDIUM 4)", () => {
     },
   );
 
+  // Verifies: rejects a dropped table with zero expected rows before the runtime opens.
   it(
     "rejects a dropped table with zero expected rows before the runtime opens",
     { timeout: 90_000 },
@@ -642,6 +659,7 @@ describeLongSoak("soak runner resume schema inspection (MEDIUM 4)", () => {
     },
   );
 
+  // Verifies: rejects a dropped column with zero expected rows before the runtime opens.
   it(
     "rejects a dropped column with zero expected rows before the runtime opens",
     { timeout: 90_000 },
