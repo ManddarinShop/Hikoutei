@@ -94,6 +94,7 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner recovery record integrity (HIGH 2).
 describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
   /** Runs one completed short run and returns its artifact directory. */
   async function completedRunDir(name: string): Promise<string> {
@@ -109,6 +110,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     ).rejects.toThrow(pattern);
   }
 
+  // Verifies: rejects a corrupt/partial cycles.jsonl line as untrusted completion proof.
   it(
     "rejects a corrupt/partial cycles.jsonl line as untrusted completion proof",
     { timeout: 90_000 },
@@ -120,6 +122,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a gap in the completed cycle history.
   it(
     "rejects a gap in the completed cycle history",
     { timeout: 90_000 },
@@ -137,6 +140,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a duplicate cycle record.
   it(
     "rejects a duplicate cycle record",
     { timeout: 90_000 },
@@ -151,6 +155,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a malformed cycle record (unknown field).
   it(
     "rejects a malformed cycle record (unknown field)",
     { timeout: 90_000 },
@@ -167,6 +172,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects an operation-record count mismatch against the deterministic actor stream.
   it(
     "rejects an operation-record count mismatch against the deterministic actor stream",
     { timeout: 90_000 },
@@ -181,6 +187,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a duplicate operation identity.
   it(
     "rejects a duplicate operation identity",
     { timeout: 90_000 },
@@ -195,6 +202,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a completed checkpoint whose resource sample is missing.
   it(
     "rejects a completed checkpoint whose resource sample is missing",
     { timeout: 90_000 },
@@ -209,6 +217,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects state cumulative counters that contradict the recorded cycle history.
   it(
     "rejects state cumulative counters that contradict the recorded cycle history",
     { timeout: 90_000 },
@@ -223,6 +232,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects an operation record whose actor/index identity lies outside the deterministic grid.
   it(
     "rejects an operation record whose actor/index identity lies outside the deterministic grid",
     { timeout: 90_000 },
@@ -242,6 +252,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects an operation record whose kind/table does not match the stored seed's plan.
   it(
     "rejects an operation record whose kind/table does not match the stored seed's plan",
     { timeout: 90_000 },
@@ -264,6 +275,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects operation records beyond the checkpointed cycle window.
   it(
     "rejects operation records beyond the checkpointed cycle window",
     { timeout: 90_000 },
@@ -281,6 +293,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a resource sample beyond the checkpointed state.
   it(
     "rejects a resource sample beyond the checkpointed state",
     { timeout: 90_000 },
@@ -298,6 +311,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a cycle record beyond the checkpointed state.
   it(
     "rejects a cycle record beyond the checkpointed state",
     { timeout: 90_000 },
@@ -315,6 +329,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a truncated operation stream for a provable reopen-abort cycle.
   it(
     "rejects a truncated operation stream for a provable reopen-abort cycle",
     { timeout: 90_000 },
@@ -343,6 +358,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a truncated actor suffix on a provable reopen-abort cycle.
   it(
     "rejects a truncated actor suffix on a provable reopen-abort cycle",
     { timeout: 90_000 },
@@ -375,6 +391,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects an abort record that deviates from the runner's exact abort contract.
   it(
     "rejects an abort record that deviates from the runner's exact abort contract",
     { timeout: 90_000 },
@@ -401,6 +418,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: advances state from a recorded provable reopen-abort cycle via the completed-cycle recovery.
   it(
     "advances state from a recorded provable reopen-abort cycle via the completed-cycle recovery",
     { timeout: 120_000 },
@@ -482,6 +500,7 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
     },
   );
 
+  // Verifies: rejects a truncated grid on a RECORDED provable reopen-abort cycle before state advance.
   it(
     "rejects a truncated grid on a RECORDED provable reopen-abort cycle before state advance",
     { timeout: 120_000 },
@@ -522,7 +541,9 @@ describeLongSoak("soak runner recovery record integrity (HIGH 2)", () => {
 });
 
 
+// Suite: soak runner final state-write finalization (MEDIUM 4).
 describeLongSoak("soak runner final state-write finalization (MEDIUM 4)", () => {
+  // Verifies: fails the summary when the final state write itself fails and never omits it.
   it(
     "fails the summary when the final state write itself fails and never omits it",
     { timeout: 90_000 },
@@ -556,7 +577,9 @@ describeLongSoak("soak runner final state-write finalization (MEDIUM 4)", () => 
 });
 
 
+// Suite: soak runner late runtime open cleanup (HIGH 3).
 describeLongSoak("soak runner late runtime open cleanup (HIGH 3)", () => {
+  // Verifies: closes a late initial open and fails with deadline_expired.
   it(
     "closes a late initial open and fails with deadline_expired",
     { timeout: 60_000 },
@@ -584,6 +607,7 @@ describeLongSoak("soak runner late runtime open cleanup (HIGH 3)", () => {
     },
   );
 
+  // Verifies: reports a persistent close failure of the late initial open on the rethrown error.
   it(
     "reports a persistent close failure of the late initial open on the rethrown error",
     { timeout: 60_000 },
@@ -614,6 +638,7 @@ describeLongSoak("soak runner late runtime open cleanup (HIGH 3)", () => {
     },
   );
 
+  // Verifies: tracks and closes a late replacement runtime from a failed reopen handoff.
   it(
     "tracks and closes a late replacement runtime from a failed reopen handoff",
     { timeout: 120_000 },
@@ -650,7 +675,9 @@ describeLongSoak("soak runner late runtime open cleanup (HIGH 3)", () => {
 });
 
 
+// Suite: soak runner final state marker on bookkeeping failure (HIGH 4).
 describeLongSoak("soak runner final state marker on bookkeeping failure (HIGH 4)", () => {
+  // Verifies: persists close-failure markers even when an earlier bookkeeping failure stopped the run.
   it(
     "persists close-failure markers even when an earlier bookkeeping failure stopped the run",
     { timeout: 90_000 },
