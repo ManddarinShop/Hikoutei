@@ -97,13 +97,16 @@ const BOUNDARY_ERROR_CLASSES: readonly string[] = [
   GoogleSheetsApiTransportError.name,
 ];
 
+// Verifies the HIKOUTEI_LOG_STABLE_CODES registry.
 describe("HIKOUTEI_LOG_STABLE_CODES registry", () => {
+  // Verifies every stable code the source taxonomy can emit is allowlisted.
   it("allowlists every stable code the source taxonomy can emit", () => {
     for (const code of TAXONOMY_CODES) {
       expect(HIKOUTEI_LOG_STABLE_CODES, `missing taxonomy code: ${code}`).toContain(code);
     }
   });
 
+  // Verifies no stale values exist beyond the node:sqlite driver family.
   it("carries no stale values beyond the node:sqlite driver family", () => {
     const extras = HIKOUTEI_LOG_STABLE_CODES.filter(
       (code) => !TAXONOMY_CODES.includes(code) && !DRIVER_FAMILY_CODES.includes(code),
@@ -111,6 +114,7 @@ describe("HIKOUTEI_LOG_STABLE_CODES registry", () => {
     expect(extras).toEqual([]);
   });
 
+  // Verifies the driver family matches exactly what node:sqlite surfaces.
   it("keeps the driver family exactly at the code node:sqlite surfaces", () => {
     const driverCodes = HIKOUTEI_LOG_STABLE_CODES.filter(
       (code) => !TAXONOMY_CODES.includes(code),
@@ -119,7 +123,9 @@ describe("HIKOUTEI_LOG_STABLE_CODES registry", () => {
   });
 });
 
+// Verifies the HIKOUTEI_LOG_STABLE_CLASSES registry.
 describe("HIKOUTEI_LOG_STABLE_CLASSES registry", () => {
+  // Verifies every first-party error class at the log boundary is allowlisted.
   it("allowlists every first-party error class at the log boundary", () => {
     for (const className of BOUNDARY_ERROR_CLASSES) {
       expect(HIKOUTEI_LOG_STABLE_CLASSES, `missing class: ${className}`).toContain(
@@ -129,7 +135,9 @@ describe("HIKOUTEI_LOG_STABLE_CLASSES registry", () => {
   });
 });
 
+// Verifies the registry wiring in the formatter.
 describe("registry wiring in the formatter", () => {
+  // Verifies allowlisted codes/classes pass and unknown values are redacted.
   it("passes allowlisted codes/classes and redacts unknown values", () => {
     const valid = formatHikouteiLogLine({
       event: HIKOUTEI_LOG_EVENTS.EM_FLUSH_FAILED,
