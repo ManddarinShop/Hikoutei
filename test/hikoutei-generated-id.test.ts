@@ -1,3 +1,10 @@
+/**
+ * Generated primary-key tests for entities with assigned identifiers.
+ *
+ * Covers numeric and string id assignment, flush persistence of generated
+ * keys, and downstream sync projection of generated rows. Uses SQLite
+ * fixtures with a fake sync provider and no live Sheets.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -42,6 +49,7 @@ class RecordingProvisioner implements SyncSheetsProvisioner {
   }
 }
 
+// Covers sqlite-generated numeric id.
 describe("sqlite-generated numeric id", () => {
   const runtimes: Hikoutei[] = [];
   const services: InternalSyncService[] = [];
@@ -51,6 +59,7 @@ describe("sqlite-generated numeric id", () => {
     await Promise.all(services.splice(0).map((service) => service.close().catch(() => undefined)));
   });
 
+  // Verifies assigns a numeric id to an id-less insert and backfills the entity.
   it("assigns a numeric id to an id-less insert and backfills the entity", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [NumericItem] });
     runtimes.push(hikoutei);
@@ -65,6 +74,7 @@ describe("sqlite-generated numeric id", () => {
     expect(Number.isSafeInteger(first.id)).toBe(true);
   });
 
+  // Verifies reads, updates, and removes through the assigned numeric id.
   it("reads, updates, and removes through the assigned numeric id", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [NumericItem] });
     runtimes.push(hikoutei);
@@ -93,6 +103,7 @@ describe("sqlite-generated numeric id", () => {
     await expect(hikoutei.em.fork().findOne(NumericItem, { id: assigned })).resolves.toBeNull();
   });
 
+  // Verifies keeps explicit numeric ids and string primary keys on their existing contract.
   it("keeps explicit numeric ids and string primary keys on their existing contract", async () => {
     const hikoutei = await createTypedSheets({
       dbName: ":memory:",
@@ -126,6 +137,7 @@ describe("sqlite-generated numeric id", () => {
     });
   });
 
+  // Verifies carries the same numeric id and entity:<id> anchor through canonical and outbox state.
   it("carries the same numeric id and entity:<id> anchor through canonical and outbox state", async () => {
     const systemSheetId = "entity:generated_numeric_items:system_state";
     const userInputSheetId = "entity:generated_numeric_items:user_input";
