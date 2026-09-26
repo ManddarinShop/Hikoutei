@@ -62,7 +62,9 @@ function rowsForDistribution(tabCount: number, runId = "run-1", attemptMarker = 
   };
 }
 
+// Covers planTabDistribution.
 describe("planTabDistribution", () => {
+  // Verifies splits 10,000 records evenly across 1/2/4/10/20 tabs.
   it("splits 10,000 records evenly across 1/2/4/10/20 tabs", () => {
     for (const tabCount of TAB_COUNTS) {
       const distribution = requireValidDistribution(tabCount);
@@ -82,10 +84,12 @@ describe("planTabDistribution", () => {
     }
   });
 
+  // Verifies uses the default total of 10,000 when totalRows is omitted.
   it("uses the default total of 10,000 when totalRows is omitted", () => {
     expect(planTabDistribution({ tabCount: 4 }).status).toBe("valid");
   });
 
+  // Verifies rejects non-positive or non-integer tab counts.
   it("rejects non-positive or non-integer tab counts", () => {
     for (const tabCount of [0, -1, 3.5, Number.NaN]) {
       const result = planTabDistribution({ tabCount });
@@ -95,6 +99,7 @@ describe("planTabDistribution", () => {
     }
   });
 
+  // Verifies rejects row totals that do not divide evenly.
   it("rejects row totals that do not divide evenly", () => {
     for (const totalRows of [0, -100, 3.5, Number.NaN]) {
       expect(planTabDistribution({ tabCount: 4, totalRows }).status).toBe("invalid");
@@ -105,6 +110,7 @@ describe("planTabDistribution", () => {
     expect(uneven.reason).toContain("divisible");
   });
 
+  // Verifies rejects unsafe integer tab counts and row totals.
   it("rejects unsafe integer tab counts and row totals", () => {
     // 2^53 and anything above Number.MAX_SAFE_INTEGER must never reach
     // Array.from({ length }) or sequence math.
@@ -113,7 +119,9 @@ describe("planTabDistribution", () => {
   });
 });
 
+// Covers buildTabRows.
 describe("buildTabRows", () => {
+  // Verifies produces 10,000 unique deterministic keys across a 20-tab split.
   it("produces 10,000 unique deterministic keys across a 20-tab split", () => {
     const { rowsByTab } = rowsForDistribution(20);
     const flattened = rowsByTab.flat();
@@ -126,6 +134,7 @@ describe("buildTabRows", () => {
     }
   });
 
+  // Verifies is deterministic and keeps the global sequence contiguous.
   it("is deterministic and keeps the global sequence contiguous", () => {
     const first = rowsForDistribution(4, "run-x");
     const second = rowsForDistribution(4, "run-x");
@@ -135,12 +144,14 @@ describe("buildTabRows", () => {
     expect(flattened[flattened.length - 1]?.[1]).toBe("009999");
   });
 
+  // Verifies derives tab identity from the tabIndex cellId.
   it("derives tab identity from the tabIndex cellId", () => {
     const { rowsByTab } = rowsForDistribution(2);
     expect(rowsByTab[0]?.[0]?.[0]).toContain("-tab0-");
     expect(rowsByTab[1]?.[0]?.[0]).toContain("-tab1-");
   });
 
+  // Verifies gives every attempt its own disjoint deterministic key set.
   it("gives every attempt its own disjoint deterministic key set", () => {
     // Stale-data protection: warm-up w0, measured r0 and r1 must all write
     // DIFFERENT keys into the same ranges, so verification against the
@@ -164,7 +175,9 @@ describe("buildTabRows", () => {
   });
 });
 
+// Covers both payload forms describe the same dataset.
 describe("both payload forms describe the same dataset", () => {
+  // Verifies matches flattened UpdateCellsRequest values to the source rows.
   it("matches flattened UpdateCellsRequest values to the source rows", () => {
     for (const tabCount of TAB_COUNTS) {
       const { distribution, rowsByTab } = rowsForDistribution(tabCount);
@@ -184,6 +197,7 @@ describe("both payload forms describe the same dataset", () => {
     }
   });
 
+  // Verifies matches flattened ValueRange values to the source rows.
   it("matches flattened ValueRange values to the source rows", () => {
     for (const tabCount of TAB_COUNTS) {
       const { distribution, rowsByTab } = rowsForDistribution(tabCount);
@@ -198,6 +212,7 @@ describe("both payload forms describe the same dataset", () => {
     }
   });
 
+  // Verifies produces identical cell totals in both forms.
   it("produces identical cell totals in both forms", () => {
     for (const tabCount of TAB_COUNTS) {
       const { distribution, rowsByTab } = rowsForDistribution(tabCount);
@@ -226,6 +241,7 @@ describe("both payload forms describe the same dataset", () => {
     }
   });
 
+  // Verifies writes only userEnteredValue.stringValue with a minimal fields mask.
   it("writes only userEnteredValue.stringValue with a minimal fields mask", () => {
     const { distribution, rowsByTab } = rowsForDistribution(1);
     const requests = buildUpdateCellsRequests({
@@ -249,6 +265,7 @@ describe("both payload forms describe the same dataset", () => {
     }
   });
 
+  // Verifies rejects tabs without a string title.
   it("rejects tabs without a string title", () => {
     expect(() =>
       buildValueRanges({ tabs: [{ title: null as unknown as string, rows: [] }] })
@@ -258,6 +275,7 @@ describe("both payload forms describe the same dataset", () => {
     ).toThrow(/non-empty string title/);
   });
 
+  // Verifies produces ranges and row counts that match the payload.
   it("produces ranges and row counts that match the payload", () => {
     const { distribution, rowsByTab } = rowsForDistribution(4);
     const ranges = buildValueRanges({
@@ -274,7 +292,9 @@ describe("both payload forms describe the same dataset", () => {
   });
 });
 
+// Covers single-write-request construction.
 describe("single-write-request construction", () => {
+  // Verifies builds exactly one request entry per tab for both paths.
   it("builds exactly one request entry per tab for both paths", () => {
     for (const tabCount of TAB_COUNTS) {
       const { distribution, rowsByTab } = rowsForDistribution(tabCount);
@@ -298,22 +318,27 @@ describe("single-write-request construction", () => {
     }
   });
 
+  // Verifies keeps the two API identifiers stable.
   it("keeps the two API identifiers stable", () => {
     expect(BATCH_WRITE_APIS).toEqual(["updateCells", "valuesBatchUpdate"]);
   });
 });
 
+// Covers measurePayloadBytes.
 describe("measurePayloadBytes", () => {
+  // Verifies counts ASCII bytes exactly.
   it("counts ASCII bytes exactly", () => {
     expect(measurePayloadBytes({ a: "b" })).toBe(9); // {"a":"b"}
     expect(measurePayloadBytes([])).toBe(2); // []
   });
 
+  // Verifies counts UTF-8 bytes, not characters.
   it("counts UTF-8 bytes, not characters", () => {
     // {"a":"가"} is 9 characters but 11 UTF-8 bytes (가 is 3 bytes).
     expect(measurePayloadBytes({ a: "가" })).toBe(11);
   });
 
+  // Verifies scales with dataset size.
   it("scales with dataset size", () => {
     const { rowsByTab } = rowsForDistribution(1);
     const body = {
@@ -324,7 +349,9 @@ describe("measurePayloadBytes", () => {
   });
 });
 
+// Covers computeThroughput.
 describe("computeThroughput", () => {
+  // Verifies computes rows/s and cells/s from duration.
   it("computes rows/s and cells/s from duration", () => {
     expect(computeThroughput({ rows: TOTAL_RECORDS, durationMs: 10_000 })).toEqual({
       rowsPerSecond: 1000,
@@ -336,6 +363,7 @@ describe("computeThroughput", () => {
     });
   });
 
+  // Verifies yields zeros for empty or non-positive input.
   it("yields zeros for empty or non-positive input", () => {
     expect(computeThroughput({ rows: 0, durationMs: 1000 })).toEqual({
       rowsPerSecond: 0,
@@ -352,7 +380,9 @@ describe("computeThroughput", () => {
   });
 });
 
+// Covers classifyValuesBatchUpdateResponse.
 describe("classifyValuesBatchUpdateResponse", () => {
+  // Verifies accepts integer counts matching the payload.
   it("accepts integer counts matching the payload", () => {
     expect(classifyValuesBatchUpdateResponse(TOTAL_RECORDS, TOTAL_RECORDS * BENCH_COLUMNS, TOTAL_RECORDS)).toEqual({
       status: "ok",
@@ -361,6 +391,7 @@ describe("classifyValuesBatchUpdateResponse", () => {
     });
   });
 
+  // Verifies flags missing totalUpdatedRows as a response-format anomaly.
   it("flags missing totalUpdatedRows as a response-format anomaly", () => {
     expect(classifyValuesBatchUpdateResponse(undefined, undefined, TOTAL_RECORDS)).toMatchObject({
       status: "anomaly",
@@ -374,6 +405,7 @@ describe("classifyValuesBatchUpdateResponse", () => {
     });
   });
 
+  // Verifies flags non-integer counts as response-format anomalies.
   it("flags non-integer counts as response-format anomalies", () => {
     expect(classifyValuesBatchUpdateResponse("10000", 30_000, TOTAL_RECORDS)).toMatchObject({
       status: "anomaly",
@@ -385,6 +417,7 @@ describe("classifyValuesBatchUpdateResponse", () => {
     });
   });
 
+  // Verifies flags wrong integer counts as response-format anomalies.
   it("flags wrong integer counts as response-format anomalies", () => {
     expect(classifyValuesBatchUpdateResponse(9999, 29_997, TOTAL_RECORDS)).toMatchObject({
       status: "anomaly",
@@ -397,11 +430,14 @@ describe("classifyValuesBatchUpdateResponse", () => {
   });
 });
 
+// Covers classifyUpdateCellsReplies.
 describe("classifyUpdateCellsReplies", () => {
+  // Verifies accepts a 1:1 reply mapping.
   it("accepts a 1:1 reply mapping", () => {
     expect(classifyUpdateCellsReplies([{}, {}, {}], 3)).toEqual({ status: "ok", requestCount: 3 });
   });
 
+  // Verifies flags a missing replies array.
   it("flags a missing replies array", () => {
     expect(classifyUpdateCellsReplies(undefined, 3)).toMatchObject({
       status: "anomaly",
@@ -411,6 +447,7 @@ describe("classifyUpdateCellsReplies", () => {
     });
   });
 
+  // Verifies flags a wrong reply count.
   it("flags a wrong reply count", () => {
     expect(classifyUpdateCellsReplies([{}], 3)).toMatchObject({
       status: "anomaly",
@@ -419,6 +456,7 @@ describe("classifyUpdateCellsReplies", () => {
     });
   });
 
+  // Verifies flags malformed reply entries.
   it("flags malformed reply entries", () => {
     expect(classifyUpdateCellsReplies([null, {}], 2)).toMatchObject({
       status: "anomaly",
@@ -428,7 +466,9 @@ describe("classifyUpdateCellsReplies", () => {
   });
 });
 
+// Covers parsePositiveIntEnv.
 describe("parsePositiveIntEnv", () => {
+  // Verifies falls back when the variable is absent or blank.
   it("falls back when the variable is absent or blank", () => {
     expect(parsePositiveIntEnv({}, "DIRECT_BATCH_WARMUP", 1)).toEqual({ status: "valid", value: 1 });
     expect(parsePositiveIntEnv({ DIRECT_BATCH_WARMUP: "   " }, "DIRECT_BATCH_WARMUP", 1)).toEqual({
@@ -437,11 +477,13 @@ describe("parsePositiveIntEnv", () => {
     });
   });
 
+  // Verifies parses valid integers.
   it("parses valid integers", () => {
     expect(parsePositiveIntEnv({ K: "5" }, "K", 1)).toEqual({ status: "valid", value: 5 });
     expect(parsePositiveIntEnv({ K: "0" }, "K", 1)).toEqual({ status: "valid", value: 0 });
   });
 
+  // Verifies classifies non-integer values clearly.
   it("classifies non-integer values clearly", () => {
     for (const raw of ["abc", "1.5", "-1", "1,2"]) {
       const result = parsePositiveIntEnv({ K: raw }, "K", 1);
@@ -452,6 +494,7 @@ describe("parsePositiveIntEnv", () => {
     }
   });
 
+  // Verifies enforces the minimum.
   it("enforces the minimum", () => {
     const result = parsePositiveIntEnv({ K: "0" }, "K", 3, { min: 1 });
     expect(result.status).toBe("invalid");
@@ -459,6 +502,7 @@ describe("parsePositiveIntEnv", () => {
     expect(result.code).toBe("below_minimum");
   });
 
+  // Verifies rejects values above Number.MAX_SAFE_INTEGER as unsafe.
   it("rejects values above Number.MAX_SAFE_INTEGER as unsafe", () => {
     // 9007199254740993 rounds to 2^53, which is not a safe integer.
     const unsafe = parsePositiveIntEnv({ K: "9007199254740993" }, "K", 1);
@@ -474,7 +518,9 @@ describe("parsePositiveIntEnv", () => {
   });
 });
 
+// Covers parseOptionalTabCounts.
 describe("parseOptionalTabCounts", () => {
+  // Verifies defaults to the 1/2/4/10/20 matrix when absent.
   it("defaults to the 1/2/4/10/20 matrix when absent", () => {
     expect(parseOptionalTabCounts(undefined)).toEqual({
       status: "valid",
@@ -483,6 +529,7 @@ describe("parseOptionalTabCounts", () => {
     expect(DEFAULT_TAB_COUNTS).toEqual([1, 2, 4, 10, 20]);
   });
 
+  // Verifies parses a valid subset.
   it("parses a valid subset", () => {
     expect(parseOptionalTabCounts("1, 10, 20")).toEqual({
       status: "valid",
@@ -490,11 +537,13 @@ describe("parseOptionalTabCounts", () => {
     });
   });
 
+  // Verifies rejects an empty list.
   it("rejects an empty list", () => {
     expect(parseOptionalTabCounts("")).toMatchObject({ status: "invalid", code: "empty" });
     expect(parseOptionalTabCounts(" , ")).toMatchObject({ status: "invalid", code: "empty" });
   });
 
+  // Verifies rejects non-integer, non-positive, and uneven counts.
   it("rejects non-integer, non-positive, and uneven counts", () => {
     expect(parseOptionalTabCounts("1,abc")).toMatchObject({
       status: "invalid",
@@ -514,6 +563,7 @@ describe("parseOptionalTabCounts", () => {
     });
   });
 
+  // Verifies validates against a custom totalRows.
   it("validates against a custom totalRows", () => {
     expect(parseOptionalTabCounts("5", 5000)).toEqual({ status: "valid", tabCounts: [5] });
     expect(parseOptionalTabCounts("3", 5000)).toMatchObject({
@@ -522,6 +572,7 @@ describe("parseOptionalTabCounts", () => {
     });
   });
 
+  // Verifies rejects counts above Number.MAX_SAFE_INTEGER as unsafe.
   it("rejects counts above Number.MAX_SAFE_INTEGER as unsafe", () => {
     expect(parseOptionalTabCounts("9007199254740993")).toMatchObject({
       status: "invalid",
@@ -534,7 +585,9 @@ describe("parseOptionalTabCounts", () => {
   });
 });
 
+// Covers evaluateVerifiedTabs.
 describe("evaluateVerifiedTabs", () => {
+  // Verifies passes when every expected row is present exactly once.
   it("passes when every expected row is present exactly once", () => {
     const { rowsByTab } = rowsForDistribution(2, "run-1", "r0");
     const result = evaluateVerifiedTabs({
@@ -552,6 +605,7 @@ describe("evaluateVerifiedTabs", () => {
     }
   });
 
+  // Verifies fails when stale data from an earlier attempt is still in the ranges.
   it("fails when stale data from an earlier attempt is still in the ranges", () => {
     // The critical stale-data case: attempt r1's write did not apply (no-op
     // or partial), so the ranges still hold attempt r0's keys. Verification
@@ -573,6 +627,7 @@ describe("evaluateVerifiedTabs", () => {
     }
   });
 
+  // Verifies fails when an expected key is duplicated in the read-back data.
   it("fails when an expected key is duplicated in the read-back data", () => {
     const { rowsByTab } = rowsForDistribution(1, "run-1", "r0");
     const duplicated = [...rowsByTab[0]!, rowsByTab[0]![0]!];
@@ -585,6 +640,7 @@ describe("evaluateVerifiedTabs", () => {
     expect(result.tabs[0]?.extra).toBe(1);
   });
 
+  // Verifies fails when a tab read is missing entirely.
   it("fails when a tab read is missing entirely", () => {
     const { rowsByTab } = rowsForDistribution(2, "run-1", "r0");
     const result = evaluateVerifiedTabs({
@@ -597,13 +653,16 @@ describe("evaluateVerifiedTabs", () => {
   });
 });
 
+// Covers classifyAttemptOutcome.
 describe("classifyAttemptOutcome", () => {
+  // Verifies counts a repetition as a success only when response AND verification both pass.
   it("counts a repetition as a success only when response AND verification both pass", () => {
     expect(classifyAttemptOutcome({ responseOk: true, verified: true })).toEqual({
       status: "success",
     });
   });
 
+  // Verifies preserves failed-response-but-verified evidence without calling it a success.
   it("preserves failed-response-but-verified evidence without calling it a success", () => {
     // A lost-response write that actually applied: the data is proven, but
     // the response was not valid, so it is never a successful benchmark
@@ -613,12 +672,14 @@ describe("classifyAttemptOutcome", () => {
     });
   });
 
+  // Verifies classifies a valid response with failing verification separately.
   it("classifies a valid response with failing verification separately", () => {
     expect(classifyAttemptOutcome({ responseOk: true, verified: false })).toEqual({
       status: "verification_failed",
     });
   });
 
+  // Verifies classifies a failed response with failing verification as write_failed.
   it("classifies a failed response with failing verification as write_failed", () => {
     expect(classifyAttemptOutcome({ responseOk: false, verified: false })).toEqual({
       status: "write_failed",
@@ -626,9 +687,11 @@ describe("classifyAttemptOutcome", () => {
   });
 });
 
+// Covers scenario order (seeded shuffle)
 describe("scenario order (seeded shuffle)", () => {
   const TAB_COUNTS_FOR_ORDER = [1, 2, 4, 10, 20];
 
+  // Verifies is a deterministic permutation of every (tabCount, api) pair.
   it("is a deterministic permutation of every (tabCount, api) pair", () => {
     const first = planScenarioOrder({ tabCounts: TAB_COUNTS_FOR_ORDER, seed: DEFAULT_SCENARIO_SEED });
     const second = planScenarioOrder({ tabCounts: TAB_COUNTS_FOR_ORDER, seed: DEFAULT_SCENARIO_SEED });
@@ -645,6 +708,7 @@ describe("scenario order (seeded shuffle)", () => {
     expect([...expected].every((key) => actual.has(key))).toBe(true);
   });
 
+  // Verifies changes the order when the seed changes (no fixed-order bias)
   it("changes the order when the seed changes (no fixed-order bias)", () => {
     const defaultSeed = planScenarioOrder({ tabCounts: TAB_COUNTS_FOR_ORDER, seed: DEFAULT_SCENARIO_SEED });
     const otherSeed = planScenarioOrder({ tabCounts: TAB_COUNTS_FOR_ORDER, seed: 1 });
@@ -653,10 +717,12 @@ describe("scenario order (seeded shuffle)", () => {
     expect(defaultSeed.order[0]).not.toEqual(otherSeed.order[0]);
   });
 
+  // Verifies uses the default seed when none is given.
   it("uses the default seed when none is given", () => {
     expect(planScenarioOrder({ tabCounts: TAB_COUNTS_FOR_ORDER }).seed).toBe(DEFAULT_SCENARIO_SEED);
   });
 
+  // Verifies createSeededShuffle never mutates its input.
   it("createSeededShuffle never mutates its input", () => {
     const shuffle = createSeededShuffle(42);
     const input = [1, 2, 3, 4, 5];
@@ -666,7 +732,9 @@ describe("scenario order (seeded shuffle)", () => {
   });
 });
 
+// Covers parseSeedEnv.
 describe("parseSeedEnv", () => {
+  // Verifies falls back when the variable is absent or blank.
   it("falls back when the variable is absent or blank", () => {
     expect(parseSeedEnv({}, "DIRECT_BATCH_SEED", 7)).toEqual({ status: "valid", value: 7 });
     expect(parseSeedEnv({ DIRECT_BATCH_SEED: " " }, "DIRECT_BATCH_SEED", 7)).toEqual({
@@ -675,6 +743,7 @@ describe("parseSeedEnv", () => {
     });
   });
 
+  // Verifies parses a valid 32-bit seed.
   it("parses a valid 32-bit seed", () => {
     expect(parseSeedEnv({ DIRECT_BATCH_SEED: "20260804" }, "DIRECT_BATCH_SEED", 7)).toEqual({
       status: "valid",
@@ -686,6 +755,7 @@ describe("parseSeedEnv", () => {
     });
   });
 
+  // Verifies rejects non-integer and out-of-range seeds.
   it("rejects non-integer and out-of-range seeds", () => {
     for (const raw of ["abc", "1.5", "-1"]) {
       const result = parseSeedEnv({ DIRECT_BATCH_SEED: raw }, "DIRECT_BATCH_SEED", 7);
