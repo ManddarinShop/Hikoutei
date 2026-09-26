@@ -1,3 +1,9 @@
+/**
+ * Tests for the values-only mapped User_Input fast-polling preflight.
+ * Covers `inspectFastPollingTable`: skipping metadata when visible values match
+ * canonical state, escalating visible edits without accepting them, and the
+ * field-type, blank-cell, header-mismatch, and missing-row escalation paths.
+ */
 import { describe, expect, it } from "vitest";
 
 import { FIELD_OWNERSHIPS } from "@hikoutei/contracts/domain/model/constants.js";
@@ -98,7 +104,9 @@ function result(rows: SyncTableRowsResult["rows"]): SyncTableRowsResult {
   };
 }
 
+// Verifies the values-only mapped User_Input preflight.
 describe("values-only mapped User_Input preflight", () => {
+  // Verifies metadata is skipped when every visible value matches canonical state.
   it("skips metadata when every visible value matches canonical state", () => {
     const decision = inspectFastPollingTable(mapping, result([
       {
@@ -114,6 +122,7 @@ describe("values-only mapped User_Input preflight", () => {
     });
   });
 
+  // Verifies a visible edit escalates without being accepted in the preflight.
   it("escalates a visible edit without accepting it in the preflight", () => {
     const decision = inspectFastPollingTable(mapping, result([
       {
@@ -132,6 +141,7 @@ describe("values-only mapped User_Input preflight", () => {
     });
   });
 
+  // Verifies ambiguous, unknown, and missing rows escalate for full inspection.
   it("escalates ambiguous, unknown, and missing rows for full inspection", () => {
     const unknown = inspectFastPollingTable(mapping, result([
       {
@@ -265,7 +275,9 @@ function richResult(rows: SyncTableRowsResult["rows"]): SyncTableRowsResult {
   };
 }
 
+// Verifies values-only preflight field-type and escalation coverage.
 describe("values-only preflight field-type and escalation coverage", () => {
+  // Verifies matching scalar and optional-null cells count as unchanged.
   it("treats matching string/number/boolean/date and optional-null cells as unchanged", () => {
     const decision = inspectFastPollingTable(richMapping, richResult([
       { rowNumber: 2, fields: richFields() },
@@ -278,6 +290,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
     });
   });
 
+  // Verifies a changed number, boolean, or date value escalates.
   it("escalates when a number, boolean, or date value changes", () => {
     const numberChanged = inspectFastPollingTable(richMapping, richResult([
       { rowNumber: 2, fields: richFields({ score: { kind: "number", value: 43 } }) },
@@ -294,6 +307,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
     expect(dateChanged).toMatchObject({ needsFullMetadata: true, changedRows: 1 });
   });
 
+  // Verifies blank, empty, or wrong-kind required cells escalate without counting a change.
   it("escalates without counting a change when a required cell is blank, empty, or the wrong kind", () => {
     const blankRequired = inspectFastPollingTable(richMapping, richResult([
       { rowNumber: 2, fields: richFields({ score: null }) },
@@ -313,6 +327,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
     expect(wrongKind.changedRows).toBe(0);
   });
 
+  // Verifies a header or registered-range mismatch throws instead of silently skipping.
   it("throws on a header or registered-range mismatch instead of silently skipping", () => {
     const mismatchedHeaders = {
       sheetName: "Rich_Input",
@@ -331,6 +346,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
     expect(() => inspectFastPollingTable(richMapping, mismatchedRange, richState())).toThrow();
   });
 
+  // Verifies one changed row among several unchanged rows escalates the whole table.
   it("escalates the whole table when one row changes among several unchanged rows", () => {
     const secondId: NormalizedCell = { kind: "string", value: "r2" };
     const stateWithTwo: MappedPollingState = {
@@ -375,6 +391,7 @@ describe("values-only preflight field-type and escalation coverage", () => {
     });
   });
 
+  // Verifies an active canonical entity with no visible User_Input row escalates.
   it("escalates when an active canonical entity has no visible User_Input row", () => {
     const decision = inspectFastPollingTable(richMapping, richResult([]), richState());
 
