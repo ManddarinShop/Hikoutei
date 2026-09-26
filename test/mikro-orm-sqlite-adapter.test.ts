@@ -1,3 +1,10 @@
+/**
+ * Integration tests for the MikroORM SQLite adapter.
+ * Verifies the adapter commits ORM entities, canonical state, and outbox SQL in
+ * one transaction, migrates the schema, fences writer leases, runs the Sheets
+ * effect worker, persists observations and resolutions, and fails closed on
+ * inconsistent row-binding states.
+ */
 import {
   defineEntity,
   MikroORM,
@@ -162,7 +169,9 @@ interface ActiveCandidateStateRow {
   readonly candidate_epoch: number;
 }
 
+// Verifies the MikroORM SQLite adapter transaction and storage behavior.
 describe("MikroOrmSqliteAdapter", () => {
+  // Verifies an exact baseline is required for explicit synthetic observation evidence.
   it("requires an exact baseline for explicit synthetic observation evidence", () => {
     const input = createQuarantinedObservationInput();
     expect(() => validatePersistObservedRowInput({
@@ -181,6 +190,7 @@ describe("MikroOrmSqliteAdapter", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  // Verifies an ORM entity and typed-sheets outbox SQL commit together.
   it("commits an ORM entity and typed-sheets outbox SQL together", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -221,6 +231,7 @@ describe("MikroOrmSqliteAdapter", () => {
     ]);
   });
 
+  // Verifies a standalone MikroORM SQLite adapter opens without an application-owned ORM.
   it("opens a standalone MikroORM SQLite adapter without an application-owned ORM", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -249,6 +260,7 @@ describe("MikroOrmSqliteAdapter", () => {
     }
   });
 
+  // Verifies a suffixed :memory: dbName normalizes to the exact in-memory marker.
   it("normalizes a suffixed :memory: dbName to the exact in-memory marker (no CWD file)", async () => {
     // node:sqlite treats ONLY the exact string ":memory:" as in-memory; a
     // suffixed name like ":memory:<uuid>" silently becomes a real file in the
@@ -278,6 +290,7 @@ describe("MikroOrmSqliteAdapter", () => {
     expect(readdirSync(process.cwd()).filter((name) => name.startsWith(":memory:"))).toEqual(before);
   });
 
+  // Verifies entity and raw outbox SQL roll back together when the transaction fails.
   it("rolls the entity and raw outbox SQL back together when the transaction fails", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -310,6 +323,7 @@ describe("MikroOrmSqliteAdapter", () => {
     expect(effects).toEqual([]);
   });
 
+  // Verifies adapter-neutral SQL binds to the same transaction boundary.
   it("binds adapter-neutral SQL to the same transaction boundary", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -338,6 +352,7 @@ describe("MikroOrmSqliteAdapter", () => {
     });
   });
 
+  // Verifies the typed-sheets schema migrates through the MikroORM SQLite connection.
   it("migrates the typed-sheets schema through the MikroORM SQLite connection", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -378,6 +393,7 @@ describe("MikroOrmSqliteAdapter", () => {
     expect(tables.map((table) => table.name)).toContain("sheet_effect_outbox");
   });
 
+  // Verifies the adapter transaction is used for writer lease fencing.
   it("uses the adapter transaction for writer lease fencing", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -439,6 +455,7 @@ describe("MikroOrmSqliteAdapter", () => {
     });
   });
 
+  // Verifies a Sheets projection registers and reads through the MikroORM adapter.
   it("registers and reads a Sheets projection through the MikroORM adapter", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -494,6 +511,7 @@ describe("MikroOrmSqliteAdapter", () => {
     });
   });
 
+  // Verifies an outbox effect is claimed and applied through the MikroORM adapter.
   it("claims and applies an outbox effect through the MikroORM adapter", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -577,6 +595,7 @@ describe("MikroOrmSqliteAdapter", () => {
     });
   });
 
+  // Verifies the Sheets effect worker runs through the MikroORM adapter.
   it("runs the Sheets effect worker through the MikroORM adapter", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -670,6 +689,7 @@ describe("MikroOrmSqliteAdapter", () => {
     })).resolves.toEqual({ effect_id: effect.effectId, status: "applied" });
   });
 
+  // Verifies a quarantined observation persists through the MikroORM transaction.
   it("persists a quarantined observation through the MikroORM transaction", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -727,6 +747,7 @@ describe("MikroOrmSqliteAdapter", () => {
     });
   });
 
+  // Verifies an accepted observation and canonical insert persist through the MikroORM transaction.
   it("persists an accepted observation and canonical insert through the MikroORM transaction", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -793,6 +814,7 @@ describe("MikroOrmSqliteAdapter", () => {
     })).resolves.toEqual({ entity_id: "order-accepted", state: "active" });
   });
 
+  // Verifies a concurrently tombstoned binding routes to STALE instead of aborting.
   it("routes a concurrently tombstoned binding to STALE instead of aborting as inconsistent storage", async () => {
     // The polling snapshot captured this binding as active; scenario cleanup
     // tombstoned it before the inbound conflict observation persisted. This
@@ -839,6 +861,7 @@ describe("MikroOrmSqliteAdapter", () => {
     expect(result).toEqual({ kind: "stale" });
   });
 
+  // Verifies an ACTIVE binding with no entity reference fails closed as inconsistent storage.
   it("fails closed as inconsistent storage when an ACTIVE binding has no entity reference", async () => {
     // An ACTIVE row binding with a NULL entity reference is an impossible
     // state (an invariant violation), never a lifecycle race: an active
@@ -879,6 +902,7 @@ describe("MikroOrmSqliteAdapter", () => {
     )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
   });
 
+  // Verifies a TOMBSTONED binding with no entity reference fails closed as inconsistent storage.
   it("fails closed as inconsistent storage on a TOMBSTONED binding with no entity reference", async () => {
     // A tombstoned binding must still point at its former entity. A tombstoned
     // binding with a NULL entity is an invariant violation the schema does not
@@ -917,6 +941,7 @@ describe("MikroOrmSqliteAdapter", () => {
     )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
   });
 
+  // Verifies a CANDIDATE binding carrying an entity fails closed as inconsistent storage.
   it("fails closed as inconsistent storage on a CANDIDATE binding that carries an entity", async () => {
     // A candidate binding must have no entity (it awaits activation). A
     // candidate with an entity is an invariant violation, never a lifecycle
@@ -953,6 +978,7 @@ describe("MikroOrmSqliteAdapter", () => {
     )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
   });
 
+  // Verifies an AMBIGUOUS binding carrying an entity fails closed as inconsistent storage.
   it("fails closed as inconsistent storage on an AMBIGUOUS binding that carries an entity", async () => {
     // An ambiguous binding has no trusted identity, so it must carry no
     // entity. An ambiguous binding with an entity is an invariant violation,
@@ -990,6 +1016,7 @@ describe("MikroOrmSqliteAdapter", () => {
     )).rejects.toMatchObject({ code: "observation_storage_inconsistent" });
   });
 
+  // Verifies a CANDIDATE binding with no entity routes to STALE as a legitimate lifecycle race.
   it("routes a CANDIDATE binding with no entity to STALE (legitimate lifecycle race)", async () => {
     // A candidate binding awaiting activation (no entity) is an expected
     // lifecycle race, not corrupt storage: the observed conflict has no active
@@ -1028,6 +1055,7 @@ describe("MikroOrmSqliteAdapter", () => {
     expect(result).toEqual({ kind: "stale" });
   });
 
+  // Verifies an AMBIGUOUS binding with no entity routes to STALE as a legitimate lifecycle race.
   it("routes an AMBIGUOUS binding with no entity to STALE (legitimate lifecycle race)", async () => {
     // An ambiguous binding with no trusted identity (no entity) is an expected
     // lifecycle race, not corrupt storage: the observed conflict has no active
@@ -1066,6 +1094,7 @@ describe("MikroOrmSqliteAdapter", () => {
     expect(result).toEqual({ kind: "stale" });
   });
 
+  // Verifies the automatic conflict resolver lease renews and rejects a silent takeover.
   it("renews the automatic conflict resolver lease and rejects a silent takeover", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -1119,6 +1148,7 @@ describe("MikroOrmSqliteAdapter", () => {
     ))).resolves.toEqual({ writer_epoch: fence.writerEpoch });
   });
 
+  // Verifies a resolved conflict command persists through the MikroORM transaction.
   it("persists a resolved conflict command through the MikroORM transaction", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -1180,6 +1210,7 @@ describe("MikroOrmSqliteAdapter", () => {
     });
   });
 
+  // Verifies system-wins defers until an in-flight predecessor has completed remotely.
   it("defers system-wins until an in-flight predecessor has completed remotely", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -1304,6 +1335,7 @@ describe("MikroOrmSqliteAdapter", () => {
     ]);
   });
 
+  // Verifies system-wins defers until a delivery-uncertain predecessor is probe-settled.
   it("defers system-wins until a delivery-uncertain predecessor is probe-settled", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -1384,6 +1416,7 @@ describe("MikroOrmSqliteAdapter", () => {
     ))).resolves.toEqual({ status: CONFLICT_STATUSES.RESOLVED });
   });
 
+  // Verifies an ORM entity rolls back with its pending Sheets effect when outbox insertion fails.
   it("rolls an ORM entity back with its pending Sheets effect when outbox insertion fails", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -1454,6 +1487,7 @@ describe("MikroOrmSqliteAdapter", () => {
     ]);
   });
 
+  // Verifies an ORM entity, canonical state, and pending Sheets effect commit together.
   it("commits an ORM entity, canonical state, and pending Sheets effect together", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -1559,6 +1593,7 @@ describe("MikroOrmSqliteAdapter", () => {
     ]);
   });
 
+  // Verifies a stale canonical reactivation rolls back with its pending effects.
   it("rolls a stale canonical reactivation back with its pending effects", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
