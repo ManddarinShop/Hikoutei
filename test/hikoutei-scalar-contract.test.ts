@@ -95,6 +95,7 @@ function seed(em: EntityManager, ids: readonly string[]): void {
   }
 }
 
+// Verifies the scalar equality read contract.
 describe("scalar equality read contract", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -108,6 +109,7 @@ describe("scalar equality read contract", () => {
     return runtime;
   }
 
+  // Verifies find() with no filter returns every persisted row.
   it("find() with no filter returns every persisted row", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -118,6 +120,7 @@ describe("scalar equality read contract", () => {
     expect(all.map((row) => row.id).sort()).toEqual(["a", "b", "c"]);
   });
 
+  // Verifies an equality filter matching nothing returns an empty array.
   it("find() with an equality filter that matches nothing returns an empty array", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -130,6 +133,7 @@ describe("scalar equality read contract", () => {
     expect(none).toEqual([]);
   });
 
+  // Verifies equality filters match number, boolean, and date scalars.
   it("matches equality filters on number, boolean, and date scalars", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -150,6 +154,7 @@ describe("scalar equality read contract", () => {
       .map((row) => row.id)).toEqual(["n1"]);
   });
 
+  // Verifies findOne() returns the match when present and null when absent.
   it("findOne() returns the single match when present and null when absent", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -160,6 +165,7 @@ describe("scalar equality read contract", () => {
     await expect(em.findOne(Article, { id: "missing" })).resolves.toBeNull();
   });
 
+  // Verifies find() exposes a readonly entity array.
   it("exposes a readonly entity array from find()", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -181,6 +187,7 @@ describe("scalar equality read contract", () => {
   });
 });
 
+// Verifies scalar limit/offset paging compatibility.
 describe("scalar limit/offset paging compatibility", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -194,6 +201,7 @@ describe("scalar limit/offset paging compatibility", () => {
     return runtime;
   }
 
+  // Verifies limit and limit+offset slice equality-filtered reads deterministically.
   it("limit and limit+offset slice equality-filtered reads deterministically", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -238,6 +246,7 @@ describe("scalar limit/offset paging compatibility", () => {
   });
 });
 
+// Verifies managed-entity input and identity boundaries.
 describe("managed-entity input and identity boundaries", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -251,6 +260,7 @@ describe("managed-entity input and identity boundaries", () => {
     return runtime;
   }
 
+  // Verifies create() rejects an undeclared property before any write.
   it("create() rejects an undeclared property before any write", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -269,6 +279,7 @@ describe("managed-entity input and identity boundaries", () => {
     }));
   });
 
+  // Verifies create() with a duplicate primary key rejects an identity conflict.
   it("create() with a duplicate primary key in one fork rejects an identity conflict", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -284,6 +295,7 @@ describe("managed-entity input and identity boundaries", () => {
     }));
   });
 
+  // Verifies persist() rejects an object the fork did not create or load.
   it("persist() rejects an object this fork did not create or load", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -301,6 +313,7 @@ describe("managed-entity input and identity boundaries", () => {
     }));
   });
 
+  // Verifies persist() rejects an entity materialized by a different fork.
   it("persist() rejects an entity materialized by a different fork", async () => {
     const hikoutei = await openRuntime();
     const owner = hikoutei.em.fork();
@@ -319,6 +332,7 @@ describe("managed-entity input and identity boundaries", () => {
   });
 });
 
+// Verifies the scalar offset-only pagination regression.
 describe("scalar offset-only pagination regression", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -338,6 +352,7 @@ describe("scalar offset-only pagination regression", () => {
   // `LIMIT -1 OFFSET n` (a negative LIMIT means "no upper bound"). These
   // assertions pin the intended result so a future regression in the adapter
   // fails the suite directly, instead of resurrecting the SQLite syntax error.
+  // Verifies find() with offset and no limit returns every row after the offset.
   it("find() with offset and no limit returns every row after the offset", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -351,6 +366,7 @@ describe("scalar offset-only pagination regression", () => {
     expect(tail.map((row) => row.id)).toEqual(["c", "d", "e"]);
   });
 
+  // Verifies find() with offset 0 and no limit returns every row.
   it("find() with offset 0 and no limit returns every row", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -364,6 +380,7 @@ describe("scalar offset-only pagination regression", () => {
     expect(all.map((row) => row.id)).toEqual(["a", "b", "c", "d", "e"]);
   });
 
+  // Verifies find() with an offset beyond the row count returns an empty array.
   it("find() with an offset beyond the row count returns an empty array", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
