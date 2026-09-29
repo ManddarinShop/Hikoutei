@@ -118,7 +118,9 @@ class FakeClient {
 // Tests.
 // ---------------------------------------------------------------------------
 
+// Suite: humanEditPublicDelete scenario.
 describe("humanEditPublicDelete scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -127,6 +129,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(ids).toContain("human-edit-public-delete");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("human-edit-public-delete");
     expect(scenario.kind).toBe("data");
@@ -151,6 +154,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(plan.jitterMs).toBeGreaterThan(0);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = racePlan();
     const context = {
@@ -168,6 +172,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: verifies the delete wins and the row is absent (no resurrection) (ok).
   it("verifies the delete wins and the row is absent (no resurrection) (ok)", async () => {
     // Core hypothesis: a human edit raced with a public-API delete must never
     // resurrect the deleted row. When the delete commits and the row is absent
@@ -190,6 +195,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: fails when a late human edit resurrects the row after the delete won.
   it("fails when a late human edit resurrects the row after the delete won", async () => {
     // The sync worker applies the human edit asynchronously, so the deleted
     // row can be resurrected AFTER it first appears absent. The old code
@@ -222,6 +228,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-stale rejection as a real failure (scenario-error).
   it("classifies a non-stale rejection as a real failure (scenario-error)", async () => {
     // A rejected delete is an expected stale conflict ONLY on exact
     // CAS/stale evidence. A non-stale (validation/transport) rejection is a
@@ -247,6 +254,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records an identity-shifted human-write rejection as a transient skip, not a failure.
   it("records an identity-shifted human-write rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human write with
     // the stable `identity_shifted` class when a CONCURRENT actor shifted
@@ -267,6 +275,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = racePlan();
     const client = new FakeClient();
@@ -283,6 +292,7 @@ describe("humanEditPublicDelete scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: removes the dedicated row in the guaranteed finally even when the delete rejects.
   it("removes the dedicated row in the guaranteed finally even when the delete rejects", async () => {
     // The finally path removes the dedicated row and mirrors the delete even
     // when the public delete's flush rejects, so SQLite and the oracle stay
