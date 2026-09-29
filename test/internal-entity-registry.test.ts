@@ -1,3 +1,9 @@
+/**
+ * Unit tests for the internal entity descriptor registry.
+ * Covers `resolveEntityDescriptors`: indexing resolved descriptors by entity
+ * name in encounter order, plus the invalid-token, duplicate-name, and
+ * duplicate-table failure reports.
+ */
 import { describe, expect, it } from "vitest";
 
 import { defineTypedSheetsEntity } from "@hikoutei/sync-engine/api/entity.js";
@@ -30,7 +36,9 @@ function defineUser(name: string, tableName: string) {
   });
 }
 
+// Verifies resolveEntityDescriptors indexes descriptors and reports registry failures.
 describe("resolveEntityDescriptors", () => {
+  // Verifies resolved descriptors are indexed by entity name in encounter order.
   it("indexes resolved descriptors by entity name in encounter order", () => {
     const First = defineUser("FirstRegistry", "first_registry");
     const Second = defineUser("SecondRegistry", "second_registry");
@@ -52,6 +60,7 @@ describe("resolveEntityDescriptors", () => {
     });
   });
 
+  // Verifies a non-token value is reported as an invalid-token failure.
   it("reports a non-token value as invalid-token", () => {
     const User = defineUser("TokenOwner", "token_owner");
     const { factory, failures } = captureResolutionError();
@@ -62,6 +71,7 @@ describe("resolveEntityDescriptors", () => {
     expect(failures).toEqual([{ kind: "invalid-token" }]);
   });
 
+  // Verifies a duplicate entity name is reported with the colliding name.
   it("reports a duplicate entity name with the colliding name", () => {
     const First = defineUser("RegistryDup", "registry_dup_a");
     const Second = defineUser("RegistryDup", "registry_dup_b");
@@ -73,6 +83,7 @@ describe("resolveEntityDescriptors", () => {
     expect(failures).toEqual([{ kind: "duplicate-name", entityName: "RegistryDup" }]);
   });
 
+  // Verifies a shared table name is reported with both entity names in encounter order.
   it("reports a shared table name with both entity names in encounter order", () => {
     const First = defineUser("RegistrySharedOne", "registry_shared_table");
     const Second = defineUser("RegistrySharedTwo", "registry_shared_table");
@@ -91,6 +102,7 @@ describe("resolveEntityDescriptors", () => {
     ]);
   });
 
+  // Verifies a list with multiple problems reports at most one failure.
   it("reports at most one failure for a list with multiple problems", () => {
     const First = defineUser("RegistryMulti", "registry_multi_a");
     const Second = defineUser("RegistryMulti", "registry_multi_b");
