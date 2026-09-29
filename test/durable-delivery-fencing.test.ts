@@ -1,3 +1,12 @@
+/**
+ * Tests for durable outbound delivery and spreadsheet-authority fencing.
+ *
+ * Covers migrating the outbox and authority tables with durable probe columns, upgrading a legacy
+ * v4 outbox without losing rows, persisting dispatch identity so only uncertain effects surface at
+ * probe time, and rejecting stale spreadsheet authority while recovering expired processing work
+ * as uncertain.
+ */
+
 import { defineEntity, MikroORM, NodeSqliteDialect, p, SqliteDriver } from "@mikro-orm/sql";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -18,6 +27,7 @@ import { MikroOrmSqliteAdapter } from "@hikoutei/storage/persistence/providers/m
 import { APPLICABILITY_KINDS, PRESENCE_KINDS } from "@hikoutei/contracts/state/constants.js";
 import type { NewEffect } from "@hikoutei/ikisaki";
 
+// Covers durable delivery and spreadsheet fencing.
 describe("durable delivery and spreadsheet fencing", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -25,6 +35,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  // Verifies migrates the outbox and authority tables with durable probe columns.
   it("migrates the outbox and authority tables with durable probe columns", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -48,6 +59,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     ))).resolves.toEqual({ name: "spreadsheet_authority" });
   });
 
+  // Verifies upgrades a v4 outbox table to durable delivery without losing rows.
   it("upgrades a v4 outbox table to durable delivery without losing rows", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -152,6 +164,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     });
   });
 
+  // Verifies persists dispatch identity and only exposes uncertain effects at probe time.
   it("persists dispatch identity and only exposes uncertain effects at probe time", async () => {
     const { adapter, fence } = await setupStorage(openOrms, "probe-worker", 1_000);
     const effect = makeEffect();
@@ -184,6 +197,7 @@ describe("durable delivery and spreadsheet fencing", () => {
     ]);
   });
 
+  // Verifies rejects stale spreadsheet authority and recovers expired processing as uncertain.
   it("rejects stale spreadsheet authority and recovers expired processing as uncertain", async () => {
     const { adapter, fence } = await setupStorage(openOrms, "authority-a", 3_000);
     await expect(ensureSpreadsheetAuthorityWithAdapter(adapter, {
