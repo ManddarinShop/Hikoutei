@@ -456,7 +456,12 @@ export async function hasMappedRowActiveCandidateWithSql(
         `row binding ${rowBindingId} carries one-sided active candidate pointer state`,
       );
     }
-    if (conflictIdSet && row.conflict_status !== CONFLICT_STATUSES.RESOLVED) {
+    if (
+      conflictIdSet &&
+      (row.conflict_status === null ||
+        row.conflict_status === CONFLICT_STATUSES.OPEN ||
+        row.conflict_status === CONFLICT_STATUSES.NEEDS_REBASE)
+    ) {
       blocked = true;
     }
   }
