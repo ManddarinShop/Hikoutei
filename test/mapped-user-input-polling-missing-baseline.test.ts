@@ -1,3 +1,9 @@
+/**
+ * Tests for mapped User_Input polling with a missing visible baseline.
+ * Verifies a changed known-key row that cannot build compare-and-set evidence
+ * is isolated (durably quarantined by the coordinator) without blocking valid
+ * unrelated rows in the same pass.
+ */
 import {
   defineEntity,
   MikroORM,
@@ -202,7 +208,9 @@ function accumulator() {
   };
 }
 
+// Verifies polling isolates a changed known-key row with no visible baseline.
 describe("mapped User_Input polling isolates a changed known-key row with no visible baseline", () => {
+  // Verifies a valid row is not blocked when the missing-baseline row cannot build evidence.
   it("does not block a valid row in the same pass when the missing-baseline row cannot build evidence", async () => {
     // The real Google provider leaves visibleRevision / visibleHash ABSENT on
     // every snapshot row; the confirmed baseline lives only in SQLite.
@@ -239,7 +247,9 @@ describe("mapped User_Input polling isolates a changed known-key row with no vis
   });
 });
 
+// Verifies the polling coordinator isolates a missing-baseline row.
 describe("mapped User_Input polling coordinator isolates a missing-baseline row", () => {
+  // Verifies the missing-baseline row is durably quarantined while an unrelated row applies.
   it("durably quarantines the missing-baseline row and applies an unrelated row in the same pass", async () => {
     const orm = await createOrm();
     try {
