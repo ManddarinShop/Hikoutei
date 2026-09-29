@@ -55,7 +55,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Suite: soak runner deadline clock.
 describe("soak runner deadline clock", () => {
+  // Verifies: deadlineRemainingMs clamps at zero once the deadline has passed.
   it("deadlineRemainingMs clamps at zero once the deadline has passed", () => {
     const now = 1_000_000;
     expect(deadlineRemainingMs(now + 5_000, now)).toBe(5_000);
@@ -65,6 +67,7 @@ describe("soak runner deadline clock", () => {
     expect(deadlineRemainingMs(now - 10_000, now)).toBe(0);
   });
 
+  // Verifies: deadlineRemainingMs falls back to the real clock when nowMs is omitted.
   it("deadlineRemainingMs falls back to the real clock when nowMs is omitted", () => {
     const before = Date.now();
     const remaining = deadlineRemainingMs(Date.now() + 60_000);
@@ -77,6 +80,7 @@ describe("soak runner deadline clock", () => {
     void after;
   });
 
+  // Verifies: boundedSleep resolves at the deadline when the poll outlives the budget.
   it("boundedSleep resolves at the deadline when the poll outlives the budget", async () => {
     const startedAt = Date.now();
     await boundedSleep(5_000, startedAt + 120, startedAt);
@@ -85,6 +89,7 @@ describe("soak runner deadline clock", () => {
     expect(elapsed).toBeLessThan(1_000); // far under the 5s poll
   });
 
+  // Verifies: boundedSleep resolves immediately once the deadline is already passed.
   it("boundedSleep resolves immediately once the deadline is already passed", async () => {
     const startedAt = Date.now();
     await boundedSleep(5_000, startedAt - 1, startedAt);
@@ -93,7 +98,9 @@ describe("soak runner deadline clock", () => {
   });
 });
 
+// Suite: soak runner safe epoch timestamps.
 describe("soak runner safe epoch timestamps", () => {
+  // Verifies: accepts only finite timestamps inside the ISO date range.
   it("accepts only finite timestamps inside the ISO date range", () => {
     expect(isSafeEpochTimestampMs(Date.now())).toBe(true);
     expect(isSafeEpochTimestampMs(0)).toBe(true);
@@ -101,11 +108,13 @@ describe("soak runner safe epoch timestamps", () => {
     expect(isSafeEpochTimestampMs(8_640_000_000_000_000)).toBe(true);
   });
 
+  // Verifies: rejects timestamps outside the ISO renderable range.
   it("rejects timestamps outside the ISO renderable range", () => {
     expect(isSafeEpochTimestampMs(8_640_000_000_000_001)).toBe(false);
     expect(isSafeEpochTimestampMs(-8_640_000_000_000_001)).toBe(false);
   });
 
+  // Verifies: rejects non-finite and non-number values.
   it("rejects non-finite and non-number values", () => {
     expect(isSafeEpochTimestampMs(Number.POSITIVE_INFINITY)).toBe(false);
     expect(isSafeEpochTimestampMs(Number.NEGATIVE_INFINITY)).toBe(false);
@@ -116,6 +125,7 @@ describe("soak runner safe epoch timestamps", () => {
     expect(isSafeEpochTimestampMs({})).toBe(false);
   });
 
+  // Verifies: renders every accepted boundary with toISOString without throwing.
   it("renders every accepted boundary with toISOString without throwing", () => {
     for (const value of [0, 8_640_000_000_000_000, -8_640_000_000_000_000, Date.now()]) {
       expect(() => new Date(value).toISOString()).not.toThrow();
@@ -124,7 +134,9 @@ describe("soak runner safe epoch timestamps", () => {
   });
 });
 
+// Suite: soak runner spreadsheet URL id parsing.
 describe("soak runner spreadsheet URL id parsing", () => {
+  // Verifies: extracts an id from the documented google docs layout.
   it("extracts an id from the documented google docs layout", () => {
     expect(parseSpreadsheetIdFromUrl(
       "https://docs.google.com/spreadsheets/d/AbC123_xyz/edit",
@@ -140,16 +152,19 @@ describe("soak runner spreadsheet URL id parsing", () => {
     )).toBe("AbC123_xyz");
   });
 
+  // Verifies: accepts only the top-level /d/<ID> fallback layout on the documented host.
   it("accepts only the top-level /d/<ID> fallback layout on the documented host", () => {
     expect(parseSpreadsheetIdFromUrl("https://docs.google.com/d/AbC_123")).toBe("AbC_123");
   });
 
+  // Verifies: strips query and fragment before parsing.
   it("strips query and fragment before parsing", () => {
     expect(parseSpreadsheetIdFromUrl(
       "https://docs.google.com/spreadsheets/d/AbC123_xyz/edit?tab=t.0#gid=5",
     )).toBe("AbC123_xyz");
   });
 
+  // Verifies: rejects foreign hosts, schemes, and malformed ids.
   it("rejects foreign hosts, schemes, and malformed ids", () => {
     expect(parseSpreadsheetIdFromUrl("https://evil.example/d/AbC123_xyz")).toBeUndefined();
     expect(parseSpreadsheetIdFromUrl("http://docs.google.com/spreadsheets/d/AbC")).toBeUndefined();
@@ -171,7 +186,9 @@ describe("soak runner spreadsheet URL id parsing", () => {
   });
 });
 
+// Suite: soak runner projection id extraction.
 describe("soak runner projection id extraction", () => {
+  // Verifies: extracts ids and counts non-empty blank-id rows as extra rows.
   it("extracts ids and counts non-empty blank-id rows as extra rows", () => {
     const rows = [
       ["r1", "a"],
@@ -183,6 +200,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(1);
   });
 
+  // Verifies: ignores fully empty trailing padding rows.
   it("ignores fully empty trailing padding rows", () => {
     const rows = [
       ["r1", "a"],
@@ -195,6 +213,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(0);
   });
 
+  // Verifies: treats null and undefined id cells with content as blank-id rows.
   it("treats null and undefined id cells with content as blank-id rows", () => {
     const rows = [
       [null, "x"],
@@ -206,6 +225,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(2);
   });
 
+  // Verifies: excludes durable tombstone rows from the active id set.
   it("excludes durable tombstone rows from the active id set", () => {
     const rows = [
       ["r1", "a", "FALSE"],
@@ -217,6 +237,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(0);
   });
 
+  // Verifies: treats tombstone displays conservatively: TRUE case-insensitive and boolean true only.
   it("treats tombstone displays conservatively: TRUE case-insensitive and boolean true only", () => {
     const rows = [
       ["r1", "a", "true"],
@@ -231,6 +252,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(0);
   });
 
+  // Verifies: counts blank-id content rows as extra even when the tombstone looks set.
   it("counts blank-id content rows as extra even when the tombstone looks set", () => {
     const rows = [
       ["r1", "a", "FALSE"],
@@ -242,6 +264,7 @@ describe("soak runner projection id extraction", () => {
     expect(blankIdRows).toBe(1);
   });
 
+  // Verifies: keeps the two-argument behavior when no tombstone column is given.
   it("keeps the two-argument behavior when no tombstone column is given", () => {
     const rows = [
       ["r1", "a", "TRUE"],
@@ -253,7 +276,9 @@ describe("soak runner projection id extraction", () => {
   });
 });
 
+// Suite: soak runner resume recovery planner.
 describe("soak runner resume recovery planner", () => {
+  // Verifies: returns undefined when there is no checkpoint or the cycle completed.
   it("returns undefined when there is no checkpoint or the cycle completed", () => {
     expect(planResumeRecovery(undefined, { lastCompletedCycle: 3 }, new Map())).toBeUndefined();
     expect(planResumeRecovery(
@@ -263,6 +288,7 @@ describe("soak runner resume recovery planner", () => {
     )).toBeUndefined();
   });
 
+  // Verifies: flags a stale in-flight marker when state already checkpoints the cycle.
   it("flags a stale in-flight marker when state already checkpoints the cycle", () => {
     const result = planResumeRecovery(
       { version: 1, runId: "r", status: "in-flight", cycle: 7 },
@@ -272,6 +298,7 @@ describe("soak runner resume recovery planner", () => {
     expect(result).toEqual({ cycle: 7, reason: RECOVERY_REASONS.STALE_IN_FLIGHT_MARKER });
   });
 
+  // Verifies: treats a present cycle record as a completed but uncheckpointed cycle.
   it("treats a present cycle record as a completed but uncheckpointed cycle", () => {
     const cycleRecords = new Map([[8, { cycle: 8 }]]);
     const result = planResumeRecovery(
@@ -285,6 +312,7 @@ describe("soak runner resume recovery planner", () => {
     });
   });
 
+  // Verifies: reconciles an interrupted cycle with no cycle record.
   it("reconciles an interrupted cycle with no cycle record", () => {
     const result = planResumeRecovery(
       { version: 1, runId: "r", status: "in-flight", cycle: 8 },
@@ -297,6 +325,7 @@ describe("soak runner resume recovery planner", () => {
     });
   });
 
+  // Verifies: exposes a frozen vocabulary of recovery reasons.
   it("exposes a frozen vocabulary of recovery reasons", () => {
     expect(Object.isFrozen(RECOVERY_REASONS)).toBe(true);
     expect(Object.values(RECOVERY_REASONS)).toEqual([
@@ -307,7 +336,9 @@ describe("soak runner resume recovery planner", () => {
   });
 });
 
+// Suite: soak runner stable error tags.
 describe("soak runner stable error tags", () => {
+  // Verifies: maps raw non-object input to the stable unknown category.
   it("maps raw non-object input to the stable unknown category", () => {
     expect(stableErrorTag(undefined)).toBe("unknown");
     expect(stableErrorTag(null)).toBe("unknown");
@@ -315,6 +346,7 @@ describe("soak runner stable error tags", () => {
     expect(stableErrorTag(42)).toBe("unknown");
   });
 
+  // Verifies: sanitizes custom error class names in progress diagnostics.
   it("sanitizes custom error class names in progress diagnostics", () => {
     const raw = new Error("boom");
     raw.name = "EvilAt/Users/secret/ya29.jwt";
@@ -323,6 +355,7 @@ describe("soak runner stable error tags", () => {
     expect(stableErrorTag({ name: "SoakReopenCleanupError" })).toBe("SoakReopenCleanupError");
   });
 
+  // Verifies: combines an allowlisted code with the class name.
   it("combines an allowlisted code with the class name", () => {
     expect(stableErrorTag({ name: "HikouteiError", code: "sync_startup_failed" }))
       .toBe("HikouteiError (sync_startup_failed)");
@@ -330,19 +363,23 @@ describe("soak runner stable error tags", () => {
       .toBe("DirectSheetsError (invalid_sync_provisioning)");
   });
 
+  // Verifies: collapses an unknown code to the class name only.
   it("collapses an unknown code to the class name only", () => {
     expect(stableErrorTag({ name: "HikouteiError", code: "ya29.jwt-token" }))
       .toBe("HikouteiError");
   });
 });
 
+// Suite: soak runner redacted CLI diagnostics.
 describe("soak runner redacted CLI diagnostics", () => {
+  // Verifies: maps non-object input to the stable unknown category.
   it("maps non-object input to the stable unknown category", () => {
     expect(describeSoakFailure(undefined)).toBe("unknown");
     expect(describeSoakFailure(null)).toBe("unknown");
     expect(describeSoakFailure("boom")).toBe("unknown");
   });
 
+  // Verifies: sanitizes custom class names in CLI diagnostics.
   it("sanitizes custom class names in CLI diagnostics", () => {
     const raw = new Error("boom");
     raw.name = "Error: at /Users/secret/file.ts";
@@ -350,6 +387,7 @@ describe("soak runner redacted CLI diagnostics", () => {
     expect(describeSoakFailure(new Error("plain"))).toBe("Error");
   });
 
+  // Verifies: prints only allowlisted code or status-class text.
   it("prints only allowlisted code or status-class text", () => {
     expect(describeSoakFailure({
       name: "HikouteiError",
@@ -365,6 +403,7 @@ describe("soak runner redacted CLI diagnostics", () => {
     })).toBe("HikouteiError (invalid_query)");
   });
 
+  // Verifies: collapses unknown codes and status classes to the class name only.
   it("collapses unknown codes and status classes to the class name only", () => {
     expect(describeSoakFailure({
       name: "DirectSheetsError",
@@ -377,7 +416,9 @@ describe("soak runner redacted CLI diagnostics", () => {
   });
 });
 
+// Suite: soak runner redaction allowlists.
 describe("soak runner redaction allowlists", () => {
+  // Verifies: sanitizeStableCode keeps only known stable codes.
   it("sanitizeStableCode keeps only known stable codes", () => {
     expect(sanitizeStableCode("invalid_query")).toBe("invalid_query");
     expect(sanitizeStableCode("sync_startup_failed")).toBe("sync_startup_failed");
@@ -386,6 +427,7 @@ describe("soak runner redaction allowlists", () => {
     expect(sanitizeStableCode(undefined)).toBe("unknown");
   });
 
+  // Verifies: sanitizeErrorClass keeps only allowlisted class names.
   it("sanitizeErrorClass keeps only allowlisted class names", () => {
     expect(sanitizeErrorClass("Error")).toBe("Error");
     expect(sanitizeErrorClass("HikouteiError")).toBe("HikouteiError");
@@ -394,6 +436,7 @@ describe("soak runner redaction allowlists", () => {
     expect(sanitizeErrorClass(undefined)).toBe("unknown");
   });
 
+  // Verifies: sanitizeStatusClass normalizes http statuses and keeps named classes.
   it("sanitizeStatusClass normalizes http statuses and keeps named classes", () => {
     expect(sanitizeStatusClass("http_403")).toBe("http_403");
     expect(sanitizeStatusClass("http_200")).toBe("http_200");
@@ -405,6 +448,7 @@ describe("soak runner redaction allowlists", () => {
     expect(sanitizeStatusClass(undefined)).toBe("unknown");
   });
 
+  // Verifies: sanitizeReason keeps only the stable reason vocabulary.
   it("sanitizeReason keeps only the stable reason vocabulary", () => {
     expect(sanitizeReason("query-mismatch")).toBe("query-mismatch");
     expect(sanitizeReason("unexpected-throw")).toBe("unexpected-throw");
@@ -414,6 +458,7 @@ describe("soak runner redaction allowlists", () => {
     expect(sanitizeReason(undefined)).toBe("unknown");
   });
 
+  // Verifies: sanitizeTableName keeps only soak table and entity names.
   it("sanitizeTableName keeps only soak table and entity names", () => {
     expect(sanitizeTableName("soak_customers")).toBe("soak_customers");
     expect(sanitizeTableName("SoakCustomer")).toBe("SoakCustomer");
@@ -422,6 +467,7 @@ describe("soak runner redaction allowlists", () => {
     expect(sanitizeTableName(undefined)).toBe("unknown");
   });
 
+  // Verifies: sanitizeCounts keeps only finite numeric identifier-shaped pairs.
   it("sanitizeCounts keeps only finite numeric identifier-shaped pairs", () => {
     expect(sanitizeCounts({ added: 3, updated: 0, deleted: 1 }))
       .toEqual({ added: 3, updated: 0, deleted: 1 });
@@ -432,6 +478,7 @@ describe("soak runner redaction allowlists", () => {
     expect(sanitizeCounts({ added: Number.POSITIVE_INFINITY })).toBeUndefined();
   });
 
+  // Verifies: sanitizeRecordFields strips free-form text and keeps safe scalars.
   it("sanitizeRecordFields strips free-form text and keeps safe scalars", () => {
     const input = {
       cycle: 7,
@@ -461,6 +508,7 @@ describe("soak runner redaction allowlists", () => {
     expect(JSON.stringify(result)).not.toContain("ya29");
   });
 
+  // Verifies: sanitizeRecordFields walks arrays and drops unsafe elements.
   it("sanitizeRecordFields walks arrays and drops unsafe elements", () => {
     const input = {
       history: [
@@ -480,6 +528,7 @@ describe("soak runner redaction allowlists", () => {
     expect(JSON.stringify(result)).not.toContain("AbC-secret");
   });
 
+  // Verifies: sanitizeRecordFields drops unknown statuses and table names.
   it("sanitizeRecordFields drops unknown statuses and table names", () => {
     const result = sanitizeRecordFields({
       status: "provider-RANDOM",
