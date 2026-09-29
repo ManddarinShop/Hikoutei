@@ -42,7 +42,9 @@ const RUNTIME_ERROR_CODE_FAMILIES = [
   TYPED_SHEETS_ORM_ERROR_CODES,
 ] as const;
 
+// Verifies the internal log stable-code registry.
 describe("internal log stable-code registry", () => {
+  // Verifies every runtime error-code constant is covered so drift fails the suite.
   it("covers every runtime error-code constant so drift fails the suite", () => {
     const registry = new Set(HIKOUTEI_LOG_STABLE_CODES);
     const uncovered: string[] = [];
@@ -56,6 +58,7 @@ describe("internal log stable-code registry", () => {
     expect(uncovered).toEqual([]);
   });
 
+  // Verifies the registry contains no secret-like values.
   it("contains no secret-like values (no dots, @, slashes, or URLs)", () => {
     for (const code of HIKOUTEI_LOG_STABLE_CODES) {
       // `ERR_SQLITE_ERROR` is the exact stable node:sqlite driver code the
@@ -66,6 +69,7 @@ describe("internal log stable-code registry", () => {
     expect(new Set(HIKOUTEI_LOG_STABLE_CODES).size).toBe(HIKOUTEI_LOG_STABLE_CODES.length);
   });
 
+  // Verifies the registry contains only stable, non-secret error class names.
   it("contains only stable, non-secret error class names", () => {
     for (const className of HIKOUTEI_LOG_STABLE_CLASSES) {
       expect(className).toMatch(/^[A-Za-z][A-Za-z0-9_]*$/);
@@ -80,6 +84,7 @@ describe("internal log stable-code registry", () => {
     }
   });
 
+  // Verifies exactly the provider operation/reason classification constants are allowlisted.
   it("allowlists exactly the provider operation/reason classification constants", () => {
     // Exact contract: the runtime allowlist must equal the classification
     // constants in both directions, so adding a constant without allowlisting
