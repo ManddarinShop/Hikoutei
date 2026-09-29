@@ -10,6 +10,7 @@
 import type { EffectStatus } from "@hikoutei/contracts/domain/model/constants.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import {
+  CONFLICT_STATUSES,
   ROW_BINDING_STATES,
 } from "@hikoutei/contracts/domain/model/constants.js";
 import type {
@@ -424,11 +425,13 @@ export function readMappedLatestAppliedProjectionEffectWithSql(
  * Returns whether one projection row carries an unresolved active candidate.
  *
  * An orphaned candidate pointer (no conflict row) blocks too, mirroring the
- * outbound candidate gate: the projection must never be overwritten while
- * any candidate evidence is present. Any two-sided pointer blocks regardless
- * of conflict status: a pointer that survives a RESOLVED conflict is a
- * malformed state that normal resolution clears in the same transaction, and
- * the row must fail closed instead of being overwritten. A one-sided pointer
+ * outbound candidate gate (`hasActiveUserInputCandidateWithSql` blocks on a
+ * missing conflict row or an OPEN/NEEDS_REBASE conflict and opens once the
+ * conflict is RESOLVED): the projection must never be overwritten while
+ * unresolved candidate evidence is present. A two-sided pointer to a
+ * RESOLVED conflict is already resolved, so it does not block; only a
+ * pointer whose conflict is still OPEN/NEEDS_REBASE (or orphaned) blocks.
+ * A one-sided pointer
  * (only the conflict ID or only the hash set) is a storage-consistency
  * failure: the row must never be treated as candidate-free, so the read
  * throws instead of letting a mapped update/delete overwrite it.
@@ -453,7 +456,7 @@ export async function hasMappedRowActiveCandidateWithSql(
         `row binding ${rowBindingId} carries one-sided active candidate pointer state`,
       );
     }
-    if (conflictIdSet) {
+    if (conflictIdSet && row.conflict_status !== CONFLICT_STATUSES.RESOLVED) {
       blocked = true;
     }
   }
