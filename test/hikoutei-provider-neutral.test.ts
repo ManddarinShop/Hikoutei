@@ -1,3 +1,10 @@
+/**
+ * Provider-neutral EntityManager tests against an in-memory persistence contract.
+ *
+ * Covers lifecycle and dirty tracking through a fake scalar provider, proving
+ * the manager depends only on the internal contract rather than MikroORM or
+ * SQLite types. No real storage or Sheets I/O is involved.
+ */
 import { describe, expect, it } from "vitest";
 
 import { defineTypedSheetsEntity, HIKOUTEI_ERROR_CODES } from "../src/index.js";
@@ -229,7 +236,9 @@ function buildManager() {
   return { provider, em };
 }
 
+// Covers EntityManager provider-neutral semantics.
 describe("EntityManager provider-neutral semantics", () => {
+  // Verifies emits one insert for a new entity and one update for a dirty field.
   it("emits one insert for a new entity and one update for a dirty field", async () => {
     const { provider, em } = buildManager();
 
@@ -247,6 +256,7 @@ describe("EntityManager provider-neutral semantics", () => {
     ]);
   });
 
+  // Verifies emits a delete for a removed managed entity.
   it("emits a delete for a removed managed entity", async () => {
     const { provider, em } = buildManager();
 
@@ -262,6 +272,7 @@ describe("EntityManager provider-neutral semantics", () => {
     expect(await em.findOne(Product, { id: "p2" })).toBeNull();
   });
 
+  // Verifies does not depend on any SQL executor or ORM type.
   it("does not depend on any SQL executor or ORM type", async () => {
     // The fake provider implements only ScalarEntityPersistenceProvider; if the
     // manager required SqlExecutor/MikroORM types this would not typecheck.
@@ -271,6 +282,7 @@ describe("EntityManager provider-neutral semantics", () => {
     expect(await em.findOne(Product, { id: "x" })).toMatchObject({ id: "x" });
   });
 
+  // Verifies combines rows and count against one provider snapshot.
   it("combines rows and count against one provider snapshot", async () => {
     const { provider, em } = buildManager();
     for (const id of ["a", "b"]) {
@@ -287,6 +299,7 @@ describe("EntityManager provider-neutral semantics", () => {
   });
 });
 
+// Covers EntityManager offset-only paging contract.
 describe("EntityManager offset-only paging contract", () => {
   // These are provider-neutral guarantees that hold for every engine behind
   // the public EntityManager: the query carries an offset through without a
@@ -317,6 +330,7 @@ describe("EntityManager offset-only paging contract", () => {
     expect(await em.find(Product, {}, { limit: 0, offset: 2 })).toEqual([]);
   });
 
+  // Verifies rejects a negative or non-integer offset before reaching the provider.
   it("rejects a negative or non-integer offset before reaching the provider", async () => {
     const { em } = buildManager();
     await expect(em.find(Product, {}, { offset: -1 })).rejects.toMatchObject({
@@ -327,6 +341,7 @@ describe("EntityManager offset-only paging contract", () => {
     });
   });
 
+  // Verifies rejects paging options on findOne.
   it("rejects paging options on findOne", async () => {
     const { em } = buildManager();
     // findOne intentionally has no paging surface; the option is rejected at the
@@ -341,6 +356,7 @@ describe("EntityManager offset-only paging contract", () => {
   });
 });
 
+// Covers EntityManager limit paging contract.
 describe("EntityManager limit paging contract", () => {
   // The default primary-key ascending order is a provider-neutral guarantee
   // that must hold for every paging trigger, not only `offset`. A bare
@@ -382,6 +398,7 @@ describe("EntityManager limit paging contract", () => {
   });
 });
 
+// Covers EntityManager query shape validation.
 describe("EntityManager query shape validation", () => {
   // The top-level filter and options must be plain objects. These runtime
   // boundaries are reached when an application builds a query dynamically and
@@ -399,6 +416,7 @@ describe("EntityManager query shape validation", () => {
   });
 });
 
+// Covers EntityManager explicit null filter contract.
 describe("EntityManager explicit null filter contract", () => {
   // An omitted `where` (undefined) is the empty, match-all filter, but an
   // explicit `null` is a malformed query that must fail with the stable
@@ -422,6 +440,7 @@ describe("EntityManager explicit null filter contract", () => {
     });
   });
 
+  // Verifies treats an omitted where as the empty match-all filter.
   it("treats an omitted where as the empty match-all filter", async () => {
     const { em } = buildManager();
     em.persist(em.create(Product, { id: "a", label: "a", price: 1 }));
