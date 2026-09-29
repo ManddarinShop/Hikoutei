@@ -425,9 +425,10 @@ export function readMappedLatestAppliedProjectionEffectWithSql(
  *
  * An orphaned candidate pointer (no conflict row) blocks too, mirroring the
  * outbound candidate gate: the projection must never be overwritten while
- * unresolved candidate evidence is present. Only OPEN/NEEDS_REBASE pointers
- * block; a pointer surviving a RESOLVED conflict is already resolved and
- * does not block, matching the worker gate. A one-sided pointer
+ * any candidate evidence is present. Any two-sided pointer blocks regardless
+ * of conflict status: a pointer that survives a RESOLVED conflict is a
+ * malformed state that normal resolution clears in the same transaction, and
+ * the row must fail closed instead of being overwritten. A one-sided pointer
  * (only the conflict ID or only the hash set) is a storage-consistency
  * failure: the row must never be treated as candidate-free, so the read
  * throws instead of letting a mapped update/delete overwrite it.
@@ -453,13 +454,7 @@ export async function hasMappedRowActiveCandidateWithSql(
       );
     }
     if (conflictIdSet) {
-      if (
-        row.conflict_status === null ||
-        row.conflict_status === "OPEN" ||
-        row.conflict_status === "NEEDS_REBASE"
-      ) {
-        blocked = true;
-      }
+      blocked = true;
     }
   }
   return blocked;
