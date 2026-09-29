@@ -1451,7 +1451,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ]);
   });
 
-  it("16. a two-sided active candidate pointer to a RESOLVED conflict fails closed instead of overwriting", async () => {
+  it("16. a two-sided active candidate pointer to a RESOLVED conflict no longer blocks mapped writes", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
     const anchor = await createEntity(service, provider, "u1", "pending");
@@ -1460,15 +1460,20 @@ describe("issue #196 system-advance conflict resolution", () => {
     await service.pollingSupervisor.runOnce();
 
     // Normal resolution clears the pointer in the same transaction that
-    // marks the conflict RESOLVED, so this state is unreachable through real
-    // code paths; seed it directly to prove the candidate gate fails closed.
+    // marks the conflict RESOLVED. A surviving pointer to a RESOLVED
+    // conflict is treated as resolved, mirroring the outbound candidate
+    // gate (`hasActiveUserInputCandidateWithSql` opens once the conflict
+    // is RESOLVED) so mapped writes after resolution are not blocked
+    // forever; only an OPEN/NEEDS_REBASE (or orphaned) pointer blocks.
+    // Seed the surviving-pointer state directly to prove the gate opens.
     await service.storage.transaction(({ sql }) => sql.run(
       "UPDATE sync_conflict SET status = 'RESOLVED', resolution_command_id = 'sync:system-wins:conflict:corrupt:1:2' WHERE status = 'OPEN'",
     ));
 
-    // The mapped UPDATE must not treat the row as candidate-free: the
-    // full-row User_Input projection stays suppressed and the human's row
-    // is never overwritten.
+    // The mapped UPDATE treats the row as candidate-free: canonical
+    // advances and a fresh User_Input projection effect is queued. The
+    // provider row still shows the pre-delivery human value until the
+    // effect dispatches.
     const effectsBefore = await service.storage.read(({ sql }) => sql.all<{
       readonly effect_id: string;
     }>(
@@ -1489,26 +1494,20 @@ describe("issue #196 system-advance conflict resolution", () => {
       "SELECT effect_id FROM sheet_effect_outbox WHERE projection = ? ORDER BY stream_sequence",
       [SYNC_PROJECTIONS.USER_INPUT],
     ));
-    expect(effectsAfter.map((effect) => effect.effect_id)).toEqual(
-      effectsBefore.map((effect) => effect.effect_id),
-    );
+    expect(effectsAfter.length).toBe(effectsBefore.length + 1);
     expect(provider.readRow(USER_INPUT_SHEET_ID, anchor).fields.status).toEqual({
       kind: "string",
       value: "human-edit",
     });
 
-    // The mapped DELETE fails closed with the structured blocked error and
-    // rolls back completely.
+    // The mapped DELETE is no longer blocked once the conflict is
+    // RESOLVED: it commits and the entity is gone.
     const deleteManager = service.hikoutei.em.fork();
     const deleteUser = await deleteManager.findOne(User, { id: "u1" });
     if (deleteUser === null) throw new Error("expected the conflicted entity");
     deleteManager.remove(deleteUser);
-    await expect(deleteManager.flush()).rejects.toMatchObject({
-      code: "projection_outbox_blocked",
-    });
-    await expect(service.hikoutei.em.fork().findOne(User, { id: "u1" })).resolves.toMatchObject({
-      status: "overwrite",
-    });
+    await expect(deleteManager.flush()).resolves.toBeUndefined();
+    await expect(service.hikoutei.em.fork().findOne(User, { id: "u1" })).resolves.toBeNull();
     expect(provider.readRow(USER_INPUT_SHEET_ID, anchor).fields.status).toEqual({
       kind: "string",
       value: "human-edit",
