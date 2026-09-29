@@ -24,7 +24,9 @@ import {
   defineTypedSheetsEntity,
 } from "../src/index.js";
 
+// Verifies the root entrypoint exposes exactly the intended runtime values.
 describe("root public export allowlist", () => {
+  // Verifies the root entrypoint exposes exactly the intended runtime values.
   it("exposes exactly the intended runtime values from the root entrypoint", () => {
     // Type-only re-exports (HikouteiEntity, HikouteiFilter, EntityManager, ...)
     // do not appear as runtime keys; only value exports do.
@@ -49,6 +51,7 @@ describe("root public export allowlist", () => {
     ]);
   });
 
+  // Verifies internal factory, provider, and descriptor helpers stay hidden.
   it("does not re-export internal factory, provider, or descriptor helpers as values", () => {
     const namespace = hikouteiRoot as Record<string, unknown>;
     // Engine/provider/SQL symbols that must never be part of the public contract.
@@ -321,6 +324,7 @@ function collectDeclarationSpecifiers(
   return specifiers;
 }
 
+// Verifies the public declaration graph never reaches engine/provider/SDK modules.
 describe("public declaration graph does not reach engine/provider/SDK modules", () => {
   // The faithful public type surface is the GENERATED declaration graph, not
   // raw source: emitted `.d.ts` files strip comments and elide value-only
@@ -331,6 +335,7 @@ describe("public declaration graph does not reach engine/provider/SDK modules", 
   // auth library. The compile-time root leak guards above remain the
   // symbol-level check that specific internal storage types are not re-exported
   // from the root; together the two checks cover the public boundary.
+  // Verifies MikroORM, the Sheets SDK, and Google auth stay out of the declaration graph.
   it("keeps MikroORM, the Google Sheets SDK, and Google auth out of the root declaration graph", () => {
     const { declarations, rootDeclarationPath, diagnostics } =
       emitPublicDeclarationGraph(auditRootEntry);
@@ -425,6 +430,7 @@ describe("public declaration graph does not reach engine/provider/SDK modules", 
   });
 });
 
+// Verifies the specifier collector covers inline import-type references.
 describe("collectDeclarationSpecifiers covers inline import-type references", () => {
   // The declaration emitter keeps inline import types such as
   // `import("...").Type` and `typeof import("...").Type` in type positions
@@ -434,6 +440,7 @@ describe("collectDeclarationSpecifiers covers inline import-type references", ()
   // type would slip through the audit. This pins that behavior at the unit
   // level so a regression in the walker is caught independently of the full
   // in-memory declaration emit.
+  // Verifies import-type and typeof import-type specifiers are collected too.
   it("collects import-type and typeof import-type module specifiers alongside import/export statements", () => {
     const source = [
       'import type { Foo } from "./foo";',
@@ -456,6 +463,7 @@ describe("collectDeclarationSpecifiers covers inline import-type references", ()
   });
 });
 
+// Verifies entity descriptors reject relation, join, and populate options.
 describe("entity descriptor rejects relation, join, and populate options", () => {
   // Hikoutei is scalar-only: relations, foreign keys, joins, populate, and
   // cascade/eager/lazy loading are explicitly out of scope and must be rejected
@@ -478,6 +486,7 @@ describe("entity descriptor rejects relation, join, and populate options", () =>
     "inversedBy",
   ] as const;
 
+  // Verifies each relational option is rejected with INVALID_ENTITY_DESCRIPTOR.
   it.each(forbiddenOptions)("rejects the %s relational option", (option) => {
     let caught: HikouteiError | undefined;
     try {
@@ -501,6 +510,7 @@ describe("entity descriptor rejects relation, join, and populate options", () =>
   });
 });
 
+// Verifies the package.json packaging contract pins the import boundary.
 describe("package.json packaging contract pins the import boundary", () => {
   // The root-allowlist, compile-time leak guards, and the in-memory
   // declaration-graph walk above all prove the SOURCE root entrypoint does not
@@ -528,6 +538,7 @@ describe("package.json packaging contract pins the import boundary", () => {
     readonly files?: unknown;
   };
 
+  // Verifies the exports map exposes only the root and the sync-status subpath.
   it("exposes exactly the root and the unstable sync-status subpath from the exports map", () => {
     // `.` with `types`/`import` conditions keeps every other specifier
     // (including `./dist/api/internalEntityManager.js`) resolving to
@@ -548,6 +559,7 @@ describe("package.json packaging contract pins the import boundary", () => {
     });
   });
 
+  // Verifies only the built dist directory is shipped.
   it("ships only the built dist directory", () => {
     // npm always includes package.json, README, and LICENSE regardless of the
     // `files` allowlist, so pinning `files` to ["dist"] is precisely what keeps
@@ -555,6 +567,7 @@ describe("package.json packaging contract pins the import boundary", () => {
     expect(pkg.files).toEqual(["dist"]);
   });
 
+  // Verifies the main and types entrypoints route into dist.
   it("routes the main and types entrypoints into dist", () => {
     expect(pkg.main).toBe("./dist/index.js");
     expect(pkg.types).toBe("./dist/index.d.ts");
