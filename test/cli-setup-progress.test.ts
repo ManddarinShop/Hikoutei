@@ -170,7 +170,9 @@ function prefixEvents(phase: (typeof SETUP_PROGRESS_PHASES)[number]): readonly S
   return events;
 }
 
+// Covers setupProgress helpers.
 describe("setupProgress helpers", () => {
+  // Verifies renders a clamped progress bar for fill ratios.
   it("renders a clamped progress bar for fill ratios", () => {
     expect(renderProgressBar(0)).toBe(`[${"░".repeat(20)}]`);
     expect(renderProgressBar(1)).toBe(`[${"█".repeat(20)}]`);
@@ -180,12 +182,14 @@ describe("setupProgress helpers", () => {
     expect(renderProgressBar(2)).toBe(renderProgressBar(1));
   });
 
+  // Verifies computes whole-percent of completed phases (0..100)
   it("computes whole-percent of completed phases (0..100)", () => {
     expect(overallPercent(0)).toBe(0);
     expect(overallPercent(SETUP_PROGRESS_PHASE_COUNT)).toBe(100);
     expect(overallPercent(5)).toBe(50);
   });
 
+  // Verifies clamps the overall-percent input to the ten logical phases.
   it("clamps the overall-percent input to the ten logical phases", () => {
     // The tracker count is already clamped, but the helper itself must
     // never render a negative percent or more than 100% from an
@@ -198,6 +202,7 @@ describe("setupProgress helpers", () => {
     expect(overallPercent(999)).toBe(100);
   });
 
+  // Verifies detects an automation session only from a non-empty CI value.
   it("detects an automation session only from a non-empty CI value", () => {
     // Mirrors the de-facto CI convention used by the renderer decision:
     // any non-empty value (GitHub Actions, GitLab CI, CircleCI, Travis,
@@ -209,12 +214,14 @@ describe("setupProgress helpers", () => {
     expect(isCiEnvironment({ CI: "0" })).toBe(true);
   });
 
+  // Verifies lists exactly ten phases in execution order.
   it("lists exactly ten phases in execution order", () => {
     expect(SETUP_PROGRESS_PHASES).toHaveLength(10);
     expect(SETUP_PROGRESS_PHASES[0]).toBe("cloud_auth");
     expect(SETUP_PROGRESS_PHASES[9]).toBe("output");
   });
 
+  // Verifies exposes fixed safe operation labels and bounded-check labels.
   it("exposes fixed safe operation labels and bounded-check labels", () => {
     expect(SETUP_PROGRESS_OPERATIONS.DRIVE_SCOPE).toBe("verifying Drive access");
     expect(SETUP_PROGRESS_OPERATIONS.PROJECT_CREATE).toBe("creating project");
@@ -222,6 +229,7 @@ describe("setupProgress helpers", () => {
     expect(SETUP_PROGRESS_BOUNDED_OPERATIONS.SA_ACCESS).toBe("access check");
   });
 
+  // Verifies enables interactive output only on TTY without NO_COLOR or CI.
   it("enables interactive output only on TTY without NO_COLOR or CI", () => {
     // The default-env calls use an explicit empty env so the assertions
     // hold regardless of the ambient NO_COLOR/CI of the test runner.
@@ -241,6 +249,7 @@ describe("setupProgress helpers", () => {
     expect(shouldUseInteractiveProgress(false, { CI: "true" })).toBe(false);
   });
 
+  // Verifies returns a no-op sink for undefined and swallows throwing callbacks.
   it("returns a no-op sink for undefined and swallows throwing callbacks", () => {
     expect(safeProgressSink(undefined)).toBe(NOOP_PROGRESS_SINK);
     const bomb: SetupProgressSink = { report: () => { throw new Error("boom"); } };
@@ -249,7 +258,9 @@ describe("setupProgress helpers", () => {
   });
 });
 
+// Covers SetupProgressTracker.
 describe("SetupProgressTracker", () => {
+  // Verifies tracks completed phases and reaches 100% only after every phase completes.
   it("tracks completed phases and reaches 100% only after every phase completes", () => {
     const tracker = new SetupProgressTracker();
     expect(tracker.completedCount).toBe(0);
@@ -264,6 +275,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.currentPhase).toBeUndefined();
   });
 
+  // Verifies rejects duplicate completion: the count never increments twice.
   it("rejects duplicate completion: the count never increments twice", () => {
     const tracker = new SetupProgressTracker();
     for (const event of prefixEvents("project")) {
@@ -279,6 +291,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.isComplete("project")).toBe(true);
   });
 
+  // Verifies rejects a phase_completed for a phase that is not in progress.
   it("rejects a phase_completed for a phase that is not in progress", () => {
     const tracker = new SetupProgressTracker();
     tracker.apply(started("cloud_auth"));
@@ -290,6 +303,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.apply(completed("drive_access"))).toBe(false);
   });
 
+  // Verifies rejects out-of-order phase_started events without throwing.
   it("rejects out-of-order phase_started events without throwing", () => {
     const tracker = new SetupProgressTracker();
     tracker.apply(started("cloud_auth"));
@@ -305,6 +319,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.currentPhase).toBeUndefined();
   });
 
+  // Verifies rejects a checkpoint-source completion whose earlier phases are incomplete.
   it("rejects a checkpoint-source completion whose earlier phases are incomplete", () => {
     const tracker = new SetupProgressTracker();
     expect(tracker.apply(completed("project", "checkpoint"))).toBe(false);
@@ -317,6 +332,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.completedCount).toBe(3);
   });
 
+  // Verifies validates operation start/complete pairing.
   it("validates operation start/complete pairing", () => {
     const tracker = new SetupProgressTracker();
     // An operation outside a phase is rejected.
@@ -332,6 +348,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.activeOperation).toBeUndefined();
   });
 
+  // Verifies validates bounded-check operation pairing and attempt info.
   it("validates bounded-check operation pairing and attempt info", () => {
     const tracker = new SetupProgressTracker();
     for (const event of prefixEvents("service_account_key")) {
@@ -353,6 +370,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.apply(checkOperation("operation_started", "service_account_key", SETUP_PROGRESS_BOUNDED_OPERATIONS.KEY_SETTLE, 9))).toBe(false);
   });
 
+  // Verifies rejects attempt/maxAttempts pairs beyond the fixed eight-attempt contract.
   it("rejects attempt/maxAttempts pairs beyond the fixed eight-attempt contract", () => {
     const tracker = new SetupProgressTracker();
     for (const event of prefixEvents("service_account_key")) {
@@ -392,6 +410,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.activeRetry?.maxAttempts).toBe(BOUNDED_CHECK_MAX_ATTEMPTS);
   });
 
+  // Verifies validates retry kind/phase consistency and attempt bounds.
   it("validates retry kind/phase consistency and attempt bounds", () => {
     const tracker = new SetupProgressTracker();
     for (const event of prefixEvents("service_account_key")) {
@@ -420,6 +439,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.apply(keyWait(1, 2000))).toBe(false);
   });
 
+  // Verifies accepts only valid checkpoint phase lists (prefixes of the resumable phases)
   it("accepts only valid checkpoint phase lists (prefixes of the resumable phases)", () => {
     const tracker = new SetupProgressTracker();
     // Empty (project_selected resume) and real prefixes are accepted.
@@ -430,6 +450,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.isResumed).toBe(true);
   });
 
+  // Verifies rejects invalid checkpoint phase lists without throwing.
   it("rejects invalid checkpoint phase lists without throwing", () => {
     const reject = (list: readonly unknown[]): void => {
       const tracker = new SetupProgressTracker();
@@ -452,6 +473,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.apply({ type: "resumed", completedFromCheckpoint: undefined as unknown as readonly SetupProgressPhase[] })).toBe(false);
   });
 
+  // Verifies rejects phase_failed events with non-stable codes or a non-current phase.
   it("rejects phase_failed events with non-stable codes or a non-current phase", () => {
     const tracker = new SetupProgressTracker();
     for (const event of prefixEvents("share")) {
@@ -472,6 +494,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.currentPhase).toBeUndefined();
   });
 
+  // Verifies clamps the overall count to the ten logical phases.
   it("clamps the overall count to the ten logical phases", () => {
     const tracker = new SetupProgressTracker();
     tracker.apply({ type: "resumed", completedFromCheckpoint: ["project", "apis", "service_account", "service_account_key", "spreadsheet", "share", "sa_access"] });
@@ -488,6 +511,7 @@ describe("SetupProgressTracker", () => {
     expect(overallPercent(tracker.completedCount)).toBe(100);
   });
 
+  // Verifies resetTransient clears in-progress state so a login retry can re-run phases.
   it("resetTransient clears in-progress state so a login retry can re-run phases", () => {
     const tracker = new SetupProgressTracker();
     // Scenario A: the first attempt died mid-cloud_auth (auth preflight).
@@ -514,6 +538,7 @@ describe("SetupProgressTracker", () => {
     expect(tracker.isComplete("drive_access")).toBe(true);
   });
 
+  // Verifies a phase_started after a failure clears the failure display (retry context)
   it("a phase_started after a failure clears the failure display (retry context)", () => {
     const tracker = new SetupProgressTracker();
     tracker.apply(started("cloud_auth"));
@@ -525,7 +550,9 @@ describe("SetupProgressTracker", () => {
   });
 });
 
+// Covers boundedCheckReporter.
 describe("boundedCheckReporter", () => {
+  // Verifies forwards check and wait events as operation/retry events for the key phase.
   it("forwards check and wait events as operation/retry events for the key phase", () => {
     const { sink, events } = capturingSink();
     const report = boundedCheckReporter(sink, "service_account_key", "key_settlement");
@@ -556,6 +583,7 @@ describe("boundedCheckReporter", () => {
     ]);
   });
 
+  // Verifies forwards the sa_access kind with its own bounded operation label.
   it("forwards the sa_access kind with its own bounded operation label", () => {
     const { sink, events } = capturingSink();
     const report = boundedCheckReporter(sink, "sa_access", "sa_access");
@@ -568,6 +596,7 @@ describe("boundedCheckReporter", () => {
     });
   });
 
+  // Verifies is a no-op for the NOOP sink (no event emitted)
   it("is a no-op for the NOOP sink (no event emitted)", () => {
     const report: BoundedCheckReporter = boundedCheckReporter(NOOP_PROGRESS_SINK, "service_account_key", "key_settlement");
     expect(() =>
@@ -576,7 +605,9 @@ describe("boundedCheckReporter", () => {
   });
 });
 
+// Covers append-only progress renderer (CI / non-TTY / NO_COLOR)
 describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
+  // Verifies prints one static line per phase/retry/failure event with no ANSI.
   it("prints one static line per phase/retry/failure event with no ANSI", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -597,6 +628,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
     expect(out).not.toContain("\x1b[");
   });
 
+  // Verifies never schedules a clock tick in append-only mode.
   it("never schedules a clock tick in append-only mode", () => {
     const { output } = capturingOutput();
     const scheduled: unknown[] = [];
@@ -611,6 +643,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
     expect(scheduled).toHaveLength(0);
   });
 
+  // Verifies ordinary operation events update state without printing a line.
   it("ordinary operation events update state without printing a line", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -627,6 +660,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
     expect(out).not.toContain("verifying Drive access\n");
   });
 
+  // Verifies draws nothing for a rejected event.
   it("draws nothing for a rejected event", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -646,6 +680,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
     expect(text()).not.toContain("waiting");
   });
 
+  // Verifies annotates resume with the already-complete step count.
   it("annotates resume with the already-complete step count", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -664,6 +699,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
     expect(out).toContain("[  50% | 5/10] Service-account key");
   });
 
+  // Verifies prints a failure line on fail()
   it("prints a failure line on fail()", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -675,6 +711,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
     expect(text()).toContain("[ FAIL | sheet_share_failed] Share and ownership");
   });
 
+  // Verifies prints one line per bounded-check attempt including the final 8/8.
   it("prints one line per bounded-check attempt including the final 8/8", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -701,6 +738,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
     expect(out).not.toContain("\x1b[");
   });
 
+  // Verifies prints the suspended phase's failure line after suspend()
   it("prints the suspended phase's failure line after suspend()", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -717,6 +755,7 @@ describe("append-only progress renderer (CI / non-TTY / NO_COLOR)", () => {
   });
 });
 
+// Covers interactive progress renderer (TTY)
 describe("interactive progress renderer (TTY)", () => {
   /** Builds a renderer with injectable clock/scheduler so tests need no real timers. */
   function interactiveRenderer() {
@@ -759,6 +798,7 @@ describe("interactive progress renderer (TTY)", () => {
     return { renderer, text, tick, activeHandles: () => handles.filter((h) => !h.cancelled) };
   }
 
+  // Verifies draws a four-line in-place block with ANSI cursor/erase sequences.
   it("draws a four-line in-place block with ANSI cursor/erase sequences", () => {
     const { renderer, text } = interactiveRenderer();
     renderer.report(started("cloud_auth"));
@@ -770,6 +810,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(out).toContain("working… google cloud authentication");
   });
 
+  // Verifies shows a fixed working label for a generic operation.
   it("shows a fixed working label for a generic operation", () => {
     const { renderer, text } = interactiveRenderer();
     for (const event of prefixEvents("drive_access")) {
@@ -782,6 +823,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(text()).toContain("working… drive access");
   });
 
+  // Verifies shows the bounded check attempt/max between waits and animates a known wait.
   it("shows the bounded check attempt/max between waits and animates a known wait", () => {
     const { renderer, text, tick, activeHandles } = interactiveRenderer();
     for (const event of prefixEvents("service_account_key")) {
@@ -802,6 +844,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(activeHandles().length).toBe(0);
   });
 
+  // Verifies shows the failure code in the detail line after fail()
   it("shows the failure code in the detail line after fail()", () => {
     const { renderer, text } = interactiveRenderer();
     for (const event of prefixEvents("share")) {
@@ -813,6 +856,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(text()).toContain("✗ Share");
   });
 
+  // Verifies shows the next pending phase in the Overall label between phases and reserves 'complete' for 10/10.
   it("shows the next pending phase in the Overall label between phases and reserves 'complete' for 10/10", () => {
     const { renderer, text } = interactiveRenderer();
     // cloud_auth completes: no phase is current at the 1/10 boundary, so
@@ -838,6 +882,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(text()).toMatch(/(?<!\d)100% +10\/10 +complete/);
   });
 
+  // Verifies fail() after suspend() renders the suspended phase's failure.
   it("fail() after suspend() renders the suspended phase's failure", () => {
     const { renderer, text } = interactiveRenderer();
     for (const event of prefixEvents("drive_access")) {
@@ -853,6 +898,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(text()).toContain("✗ Drive access");
   });
 
+  // Verifies resume() clears the suspended phase so a retry failure uses the retry's own state.
   it("resume() clears the suspended phase so a retry failure uses the retry's own state", () => {
     const { renderer, text } = interactiveRenderer();
     for (const event of prefixEvents("drive_access")) {
@@ -875,6 +921,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(text()).not.toContain("✗ Drive access");
   });
 
+  // Verifies resume() clears the suspended phase in append-only mode too.
   it("resume() clears the suspended phase in append-only mode too", () => {
     const { output, text } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: false });
@@ -892,6 +939,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(out).not.toContain("[ FAIL | setup_in_progress] Drive access");
   });
 
+  // Verifies suspend() clears the block, the timer, and the in-progress tracker state.
   it("suspend() clears the block, the timer, and the in-progress tracker state", () => {
     const { renderer, text, activeHandles } = interactiveRenderer();
     for (const event of prefixEvents("service_account_key")) {
@@ -910,6 +958,7 @@ describe("interactive progress renderer (TTY)", () => {
     expect(text()).toContain("working… google cloud authentication");
   });
 
+  // Verifies finish() renders the final block and clears the timer.
   it("finish() renders the final block and clears the timer", () => {
     const { renderer, text, activeHandles } = interactiveRenderer();
     for (const event of prefixEvents("service_account_key")) {
@@ -924,6 +973,7 @@ describe("interactive progress renderer (TTY)", () => {
   });
 });
 
+// Covers createSaAccessVerifier progress events.
 describe("createSaAccessVerifier progress events", () => {
   /** Raw reporter events produced by the verifier (pre-wiring shapes). */
   type RawCheckEvent =
@@ -951,6 +1001,7 @@ describe("createSaAccessVerifier progress events", () => {
     return { events: () => raw, promise };
   }
 
+  // Verifies reports every attempt 1/8..N/8 and a wait only after retryable failures.
   it("reports every attempt 1/8..N/8 and a wait only after retryable failures", async () => {
     let calls = 0;
     const { events, promise } = eventsOf(() => ({
@@ -977,6 +1028,7 @@ describe("createSaAccessVerifier progress events", () => {
     ]);
   });
 
+  // Verifies fails immediately with no wait for a non-retryable failure.
   it("fails immediately with no wait for a non-retryable failure", async () => {
     const { events, promise } = eventsOf(() => ({
       async get(): Promise<{ readonly data: unknown }> {
@@ -991,6 +1043,7 @@ describe("createSaAccessVerifier progress events", () => {
     ]);
   });
 
+  // Verifies reports all eight attempts with the exact 2,4,8,16,30,30,30s schedule on exhaustion.
   it("reports all eight attempts with the exact 2,4,8,16,30,30,30s schedule on exhaustion", async () => {
     const { events, promise } = eventsOf(() => ({
       async get(): Promise<{ readonly data: unknown }> {
@@ -1007,6 +1060,7 @@ describe("createSaAccessVerifier progress events", () => {
     expect(events().filter((e) => e.type === "check_completed")).toHaveLength(SA_VERIFY_MAX_ATTEMPTS);
   });
 
+  // Verifies swallows a throwing progress callback without changing the verdict.
   it("swallows a throwing progress callback without changing the verdict", async () => {
     const verifier: SaAccessVerifier = createSaAccessVerifier({
       sleeper: { sleep: async () => { /* instant */ } },
@@ -1029,6 +1083,7 @@ describe("createSaAccessVerifier progress events", () => {
   });
 });
 
+// Covers settleServiceAccountKey progress events.
 describe("settleServiceAccountKey progress events", () => {
   /** Scripts a settle that never produces evidence: the key list is always
    * empty and (for fresh) the create writes no staged key, so the bounded
@@ -1072,6 +1127,7 @@ describe("settleServiceAccountKey progress events", () => {
     };
   }
 
+  // Verifies numbers the fresh post-create immediate evidence 1/8 and exhausts at 8/8 with the exact schedule.
   it("numbers the fresh post-create immediate evidence 1/8 and exhausts at 8/8 with the exact schedule", async () => {
     const { events, code, creates } = await exhaustWith("fresh");
     expect(creates).toBe(1);
@@ -1092,6 +1148,7 @@ describe("settleServiceAccountKey progress events", () => {
     });
   });
 
+  // Verifies numbers the reconcile first evidence 1/8 (no create is issued)
   it("numbers the reconcile first evidence 1/8 (no create is issued)", async () => {
     const { events, code, creates } = await exhaustWith("reconcile");
     expect(creates).toBe(0);
@@ -1225,6 +1282,7 @@ function createProgressHarness(dir: string): {
   return harness;
 }
 
+// Covers runSetup progress integration.
 describe("runSetup progress integration", () => {
   const RESUME_PROJECT = "hikoutei-proj";
   const RESUME_TITLE = `hikoutei-sync-${RESUME_PROJECT}`;
@@ -1238,6 +1296,7 @@ describe("runSetup progress integration", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  // Verifies emits the ten phases in order and reaches 100% on a fresh successful run.
   it("emits the ten phases in order and reaches 100% on a fresh successful run", async () => {
     const harness = createProgressHarness(dir);
     const { sink, events } = capturingSink();
@@ -1261,6 +1320,7 @@ describe("runSetup progress integration", () => {
     expect(tracker.completedCount).toBe(SETUP_PROGRESS_PHASE_COUNT);
   });
 
+  // Verifies emits fixed safe operation boundaries around the notable steps.
   it("emits fixed safe operation boundaries around the notable steps", async () => {
     const harness = createProgressHarness(dir);
     const { sink, events } = capturingSink();
@@ -1286,6 +1346,7 @@ describe("runSetup progress integration", () => {
     expect(starts).toBe(ends);
   });
 
+  // Verifies emits key-settlement checks 1/8..N/8 and exact waits when propagation is delayed.
   it("emits key-settlement checks 1/8..N/8 and exact waits when propagation is delayed", async () => {
     const harness = createProgressHarness(dir);
     // Hide the created key for the first two post-create list calls so the
@@ -1311,6 +1372,7 @@ describe("runSetup progress integration", () => {
     expect((waits[1] as { readonly delayMs: number }).delayMs).toBe(4000);
   });
 
+  // Verifies represents the final 8/8 exhaustion with the exact 2,4,8,16,30,30,30s schedule.
   it("represents the final 8/8 exhaustion with the exact 2,4,8,16,30,30,30s schedule", async () => {
     const harness = createProgressHarness(dir);
     // The key never appears in the list: the bounded window exhausts at
@@ -1332,6 +1394,7 @@ describe("runSetup progress integration", () => {
     expect(waits.map((e) => (e as { readonly delayMs: number }).delayMs)).toStrictEqual([...KEY_SETTLE_POLL_DELAYS_MS]);
   });
 
+  // Verifies emits resumed + checkpoint-complete phases and skips re-running them.
   it("emits resumed + checkpoint-complete phases and skips re-running them", async () => {
     // First run: complete.
     const harness = createProgressHarness(dir);
@@ -1415,6 +1478,7 @@ describe("runSetup progress integration", () => {
     return tracker;
   }
 
+  // Verifies reports the spreadsheet phase once on a spreadsheet_create_started resume (reconcile runs as the current phase)
   it("reports the spreadsheet phase once on a spreadsheet_create_started resume (reconcile runs as the current phase)", async () => {
     const harness = createProgressHarness(dir);
     writeResumeKey(harness, RESUME_PROJECT);
@@ -1471,6 +1535,7 @@ describe("runSetup progress integration", () => {
     expect(tracker.completedCount).toBe(SETUP_PROGRESS_PHASE_COUNT);
   });
 
+  // Verifies never re-reports the spreadsheet phase on a spreadsheet_created resume (checkpoint-guaranteed)
   it("never re-reports the spreadsheet phase on a spreadsheet_created resume (checkpoint-guaranteed)", async () => {
     const harness = createProgressHarness(dir);
     writeResumeKey(harness, RESUME_PROJECT);
@@ -1516,6 +1581,7 @@ describe("runSetup progress integration", () => {
     expect(tracker.isComplete("spreadsheet")).toBe(true);
   });
 
+  // Verifies never re-reports the spreadsheet phase on a spreadsheet_share_started resume (share still runs)
   it("never re-reports the spreadsheet phase on a spreadsheet_share_started resume (share still runs)", async () => {
     const harness = createProgressHarness(dir);
     writeResumeKey(harness, RESUME_PROJECT);
@@ -1557,6 +1623,7 @@ describe("runSetup progress integration", () => {
     expect(tracker.completedCount).toBe(SETUP_PROGRESS_PHASE_COUNT);
   });
 
+  // Verifies never re-reports spreadsheet or share on a spreadsheet_shared resume (both checkpoint-guaranteed)
   it("never re-reports spreadsheet or share on a spreadsheet_shared resume (both checkpoint-guaranteed)", async () => {
     const harness = createProgressHarness(dir);
     writeResumeKey(harness, RESUME_PROJECT);
@@ -1602,6 +1669,7 @@ describe("runSetup progress integration", () => {
     expect(tracker.isComplete("share")).toBe(true);
   });
 
+  // Verifies never re-reports spreadsheet, share, or sa_access on a complete resume.
   it("never re-reports spreadsheet, share, or sa_access on a complete resume", async () => {
     const harness = createProgressHarness(dir);
     writeResumeKey(harness, RESUME_PROJECT);
@@ -1637,6 +1705,7 @@ describe("runSetup progress integration", () => {
     expect(tracker.isComplete("sa_access")).toBe(true);
   });
 
+  // Verifies emits no progress events in dry-run mode.
   it("emits no progress events in dry-run mode", async () => {
     const harness = createProgressHarness(dir);
     const { sink, events } = capturingSink();
@@ -1648,6 +1717,7 @@ describe("runSetup progress integration", () => {
     expect(events()).toHaveLength(0);
   });
 
+  // Verifies a throwing progress callback never changes the setup result.
   it("a throwing progress callback never changes the setup result", async () => {
     const harness = createProgressHarness(dir);
     const bomb: SetupProgressSink = { report: () => { throw new Error("renderer exploded"); } };
@@ -1655,6 +1725,7 @@ describe("runSetup progress integration", () => {
     expect(result.status).toBe("ok");
   });
 
+  // Verifies never places secrets, paths, emails, or ids in progress events.
   it("never places secrets, paths, emails, or ids in progress events", async () => {
     const harness = createProgressHarness(dir);
     const { sink, events } = capturingSink();
@@ -1665,6 +1736,7 @@ describe("runSetup progress integration", () => {
     }
   });
 
+  // Verifies reports the key phase when a fresh run reuses an existing key.
   it("reports the key phase when a fresh run reuses an existing key", async () => {
     const harness = createProgressHarness(dir);
     // A pre-existing validated key (no checkpoint) plus a matching
@@ -1707,6 +1779,7 @@ describe("runSetup progress integration", () => {
     expect(keyWork).toHaveLength(0);
   });
 
+  // Verifies reports the key phase when a project_selected resume reuses the key.
   it("reports the key phase when a project_selected resume reuses the key", async () => {
     const harness = createProgressHarness(dir);
     // A crashed run left a project_selected checkpoint and the key file;
@@ -1759,6 +1832,7 @@ describe("runSetup progress integration", () => {
   });
 });
 
+// Covers runSetupCli login handoff with the progress renderer.
 describe("runSetupCli login handoff with the progress renderer", () => {
   /** Fake stdin whose single shared iterator lets consecutive prompts
    * (confirmSetup, then promptLoginHandoff) draw chunks in order. */
@@ -1812,6 +1886,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     };
   }
 
+  // Verifies suspends the renderer before the inherited login and re-renders the retry to 100%.
   it("suspends the renderer before the inherited login and re-renders the retry to 100%", async () => {
     let calls = 0;
     const runSetup: RunSetupCliContext["runSetup"] = async (): Promise<SetupResult> => {
@@ -1898,6 +1973,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     expect(stderrText()).toContain("✓ Output");
   });
 
+  // Verifies renders the failed phase with its stable code on a final error.
   it("renders the failed phase with its stable code on a final error", async () => {
     const { output, text: stderrText } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: true, interactive: true, now: () => 0 });
@@ -1931,6 +2007,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     expect(stderrText()).toContain("✗ Project");
   });
 
+  // Verifies renders the suspended phase failure when the login handoff is cancelled.
   it("renders the suspended phase failure when the login handoff is cancelled", async () => {
     const { output, text: stderrText } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: true, interactive: true, now: () => 0 });
@@ -1966,6 +2043,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     expect(stderrText()).toContain("✗ Drive access");
   });
 
+  // Verifies renders the suspended phase failure when the inherited login fails.
   it("renders the suspended phase failure when the inherited login fails", async () => {
     const { output, text: stderrText } = capturingOutput();
     const renderer = createSetupProgressRenderer({ output, isTty: true, interactive: true, now: () => 0 });
@@ -2001,6 +2079,7 @@ describe("runSetupCli login handoff with the progress renderer", () => {
     expect(stderrText()).toContain("✗ Drive access");
   });
 
+  // Verifies labels a retry failure against the retry's own state, never the stale suspended phase.
   it("labels a retry failure against the retry's own state, never the stale suspended phase", async () => {
     let calls = 0;
     const { output, text: stderrText } = capturingOutput();
