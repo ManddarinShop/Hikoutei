@@ -1,3 +1,11 @@
+/**
+ * Field-level evaluation tests for observed user edits.
+ *
+ * Covers insert, update, and delete field transitions with revision
+ * compare-and-set evidence, conflict blocking, batch routing, and structured
+ * errors for missing canonical state. Runs purely in memory against the
+ * evaluation contract with no SQLite or Sheets I/O.
+ */
 import { describe, expect, it } from "vitest";
 import {
   CANONICAL_RESOLUTION_STATUSES,
@@ -110,7 +118,9 @@ const existingRow = (
   fields,
 });
 
+// Covers field evaluation.
 describe("field evaluation", () => {
+  // Verifies accepts an inserted field with its first field revision.
   it("accepts an inserted field with its first field revision", () => {
     const row: ObservedInsertRowChange = {
       rowBindingId,
@@ -147,6 +157,7 @@ describe("field evaluation", () => {
     });
   });
 
+  // Verifies partially accepts fields whose base revisions differ independently.
   it("partially accepts fields whose base revisions differ independently", () => {
     const result = evaluateUserFields(
       existingRow([
@@ -190,6 +201,7 @@ describe("field evaluation", () => {
     expect(result.nextEntityRevision).toBe(4);
   });
 
+  // Verifies returns a conflict result without an entity revision when every field is stale.
   it("returns a conflict result without an entity revision when every field is stale", () => {
     const result = evaluateUserFields(
       existingRow([
@@ -212,6 +224,7 @@ describe("field evaluation", () => {
     expect(result).not.toHaveProperty("nextEntityRevision");
   });
 
+  // Verifies treats an active conflict as blocking the next field attempt.
   it("treats an active conflict as blocking the next field attempt", () => {
     const context: FieldEvaluationContext = {
       ...baseContext(),
@@ -261,6 +274,7 @@ describe("field evaluation", () => {
     expect(result.outcome).toBe(ROW_OUTCOMES.CONFLICT);
   });
 
+  // Verifies accepts a validated delete as a row-level revision transition.
   it("accepts a validated delete as a row-level revision transition", () => {
     const row: ObservedDeleteRowChange = {
       rowBindingId,
@@ -288,6 +302,7 @@ describe("field evaluation", () => {
     });
   });
 
+  // Verifies routes a validated row through the batch evaluator.
   it("routes a validated row through the batch evaluator", () => {
     const batch: ObservedEditBatch = {
       batchId: "batch-1",
@@ -318,6 +333,7 @@ describe("field evaluation", () => {
     expect(result.rowResults[0]?.outcome).toBe(ROW_OUTCOMES.ACCEPTED);
   });
 
+  // Verifies throws a structured error when an existing row has no canonical state.
   it("throws a structured error when an existing row has no canonical state", () => {
     expect(() => evaluateUserFields(
       existingRow([

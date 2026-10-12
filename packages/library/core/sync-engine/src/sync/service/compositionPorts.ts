@@ -28,7 +28,10 @@ import { SyncServiceError, SYNC_SERVICE_ERROR_CODES } from "./errors.js";
 import type {
   InternalSyncProvider,
   InternalSyncServiceOptions,
+  SyncServiceStorage,
 } from "./serviceOptions.js";
+// Re-exported so existing `compositionPorts.js` type importers keep working.
+export type { SyncServiceStorage } from "./serviceOptions.js";
 import type {
   RegisteredSyncProjectionDefinition,
   SyncSheetsProvisioner,
@@ -36,13 +39,12 @@ import type {
 import type { GoogleSheetsApiProviderOptions } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import type { MappedUserInputPollingReport } from "@hikoutei/contracts/sheets/userInputPolling.js";
 import type { ScalarEntityFlushCoordinator, ScalarEntityPersistenceProvider } from "@hikoutei/contracts/storage/scalar.js";
-import type { SqlStorageAdapter } from "@hikoutei/contracts/storage/sql.js";
 import type { HikouteiEntity } from "../../api/entity.js";
 import type {
   InternalSyncProjectionConfig,
 } from "./contracts.js";
 import type { RegisteredTypedSheetsMappedProjection } from "@hikoutei/storage/orm/persistence/support/contracts.js";
-import type { TypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import type { MappedFlushSyncHook } from "@hikoutei/storage/orm/persistence/support/contracts.js";
 import type {
   TypedSheetsEntityMapping,
@@ -51,17 +53,6 @@ import type {
 import type {
   GoogleSheetsApiAdoptionReader,
 } from "./adopt/existingSheetAdoption.js";
-
-/**
- * Storage surface owned by the internal sync service: the engine consumes
- * the adapter-neutral SQL executor plus graceful close. The concrete
- * MikroORM adapter satisfies this structurally; the composition root owns
- * the construction (and any adapter-specific casting inside `composition/`).
- */
-export type SyncServiceStorage = SqlStorageAdapter & {
-  /** Closes the underlying SQLite connection; `force` skips graceful waits. */
-  close(force?: boolean): Promise<void>;
-};
 
 /** One registered mapped projection definition (planner resources). */
 export type SyncMappedRuntimeRegistrations = readonly RegisteredTypedSheetsMappedProjection[];

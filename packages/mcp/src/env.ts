@@ -74,7 +74,9 @@ export async function loadEnvFile(
   const skipped: string[] = [];
   let applied = 0;
   for (const [key, value] of Object.entries(parsed)) {
-    if (target[key] !== undefined && target[key] !== "") {
+    // Any defined process value (including "") wins over `.env`: the file
+    // only fills keys that are entirely absent from the target env.
+    if (target[key] !== undefined) {
       skipped.push(key);
       continue;
     }

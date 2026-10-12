@@ -15,7 +15,9 @@ import {
   RequestStartLimiter,
 } from "@hikoutei/ikisaki";
 
+// Covers RequestStartLimiter.
 describe("RequestStartLimiter", () => {
+  // Verifies waits only the remaining interval since the previous start.
   it("waits only the remaining interval since the previous start", async () => {
     let now = 1_000_000;
     const limiter = new RequestStartLimiter({
@@ -33,6 +35,7 @@ describe("RequestStartLimiter", () => {
     expect(await limiter.waitForSlot()).toBe(0);
   });
 
+  // Verifies keeps two concurrent callers at least intervalMs apart.
   it("keeps two concurrent callers at least intervalMs apart", async () => {
     let now = 1_000_000;
     const limiter = new RequestStartLimiter({
@@ -62,6 +65,7 @@ describe("RequestStartLimiter", () => {
     expect(limiter.lastStart()).toBe(1_002_200);
   });
 
+  // Verifies never waits with a zero interval and records every start.
   it("never waits with a zero interval and records every start", async () => {
     let now = 42;
     const limiter = new RequestStartLimiter({
@@ -81,6 +85,7 @@ describe("RequestStartLimiter", () => {
     expect(limiter.lastStart()).toBe(42);
   });
 
+  // Verifies refuses a bounded wait beyond the maximum WITHOUT reserving the slot.
   it("refuses a bounded wait beyond the maximum WITHOUT reserving the slot", async () => {
     // A NO-OP sleep models concurrent callers arriving in the same clock
     // tick while an earlier reservation sleeps: the queue never drains by
@@ -106,6 +111,7 @@ describe("RequestStartLimiter", () => {
     expect(limiter.lastStart()).toBe(1_001_100);
   });
 
+  // Verifies still admits after time advances past the refused slot (no poisoning).
   it("still admits after time advances past the refused slot (no poisoning)", async () => {
     let now = 1_000_000;
     const limiter = new RequestStartLimiter({
@@ -131,6 +137,7 @@ describe("RequestStartLimiter", () => {
     expect(limiter.lastStart()).toBe(1_002_200);
   });
 
+  // Verifies refuses every queued reservation beyond one interval under concurrency.
   it("refuses every queued reservation beyond one interval under concurrency", async () => {
     let now = 1_000_000;
     const limiter = new RequestStartLimiter({
@@ -174,6 +181,7 @@ describe("RequestStartLimiter", () => {
     });
   });
 
+  // Verifies rejects an invalid maximum wait bound and admits every zero-interval caller.
   it("rejects an invalid maximum wait bound and admits every zero-interval caller", async () => {
     const limiter = new RequestStartLimiter({ intervalMs: 0 });
     expect(await limiter.waitForSlot(0)).toEqual({ status: "admitted", waitedMs: 0 });
@@ -186,6 +194,7 @@ describe("RequestStartLimiter", () => {
     expect(bounded.lastStart()).toBeUndefined();
   });
 
+  // Verifies throws RateLimitOptionsError with INTERVAL_NON_NEGATIVE_REQUIRED for invalid constructor intervalMs.
   it("throws RateLimitOptionsError with INTERVAL_NON_NEGATIVE_REQUIRED for invalid constructor intervalMs", () => {
     expect.assertions(3);
     try {
@@ -201,6 +210,7 @@ describe("RequestStartLimiter", () => {
     }
   });
 
+  // Verifies throws RateLimitOptionsError with MAX_WAIT_NON_NEGATIVE_REQUIRED for invalid maxWaitMs.
   it("throws RateLimitOptionsError with MAX_WAIT_NON_NEGATIVE_REQUIRED for invalid maxWaitMs", async () => {
     expect.assertions(3);
     const limiter = new RequestStartLimiter({ intervalMs: 1_100 });

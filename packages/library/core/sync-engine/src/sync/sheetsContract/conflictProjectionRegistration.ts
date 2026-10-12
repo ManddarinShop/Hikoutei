@@ -24,8 +24,8 @@ import {
 } from "../../orm/mapping/projection.js";
 import type {
   RegisteredTypedSheetsMappedProjection,
-  TypedSheetsEntityWriterOptions,
 } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import {
   resolveTypedSheetsEntityWriterOptions,
 } from "@hikoutei/storage/orm/persistence/flush/flushCoordinator.js";

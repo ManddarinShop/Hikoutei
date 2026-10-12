@@ -132,6 +132,7 @@ interface CapturedDiagnostic {
   readonly message: string;
 }
 
+// Covers env-driven sync auto-start.
 describe("env-driven sync auto-start", () => {
   const services: InternalSyncService[] = [];
   const tempDirs: string[] = [];
@@ -386,6 +387,7 @@ describe("env-driven sync auto-start", () => {
     expect(parseSpreadsheetIdFromUrl("https://docs.google.com/spreadsheets/d/1AbC/copy")).toBe("1AbC");
   });
 
+  // Verifies rejects URLs without a spreadsheet ID segment.
   it("rejects URLs without a spreadsheet ID segment", () => {
     expect(parseSpreadsheetIdFromUrl("")).toBeUndefined();
     expect(parseSpreadsheetIdFromUrl("not a url")).toBeUndefined();
@@ -422,6 +424,7 @@ describe("env-driven sync auto-start", () => {
     await result.hikoutei.close();
   });
 
+  // Verifies classifies an unparseable spreadsheet URL and never touches the transport.
   it("classifies an unparseable spreadsheet URL and never touches the transport", async () => {
     const diagnostics: CapturedDiagnostic[] = [];
     const credentialsPath = writeCredentialsFile(credentialsDir());
@@ -450,6 +453,7 @@ describe("env-driven sync auto-start", () => {
     expect(diagnostics[0]?.message).not.toContain("Unable to extract");
   });
 
+  // Verifies classifies a missing credentials file before any remote contact.
   it("classifies a missing credentials file before any remote contact", async () => {
     const credentialsPath = join(credentialsDir(), "missing.json");
     const { transport } = newTransport();
@@ -466,6 +470,7 @@ describe("env-driven sync auto-start", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies classifies an unset credentials env var as a missing credentials file.
   it("classifies an unset credentials env var as a missing credentials file", async () => {
     const { transport } = newTransport();
     await expect(createTypedSheetsWithSync({
@@ -481,6 +486,7 @@ describe("env-driven sync auto-start", () => {
     });
   });
 
+  // Verifies classifies a credentials file that is not valid JSON.
   it("classifies a credentials file that is not valid JSON", async () => {
     const dir = credentialsDir();
     const credentialsPath = join(dir, "broken.json");
@@ -498,6 +504,7 @@ describe("env-driven sync auto-start", () => {
     expect(transport.getSpreadsheetCalls).toBe(0);
   });
 
+  // Verifies classifies a credentials file with missing required fields.
   it("classifies a credentials file with missing required fields", async () => {
     const dir = credentialsDir();
     const credentialsPath = writeCredentialsFile(dir, { private_key: "" });
@@ -514,6 +521,7 @@ describe("env-driven sync auto-start", () => {
     expect(transport.getSpreadsheetCalls).toBe(0);
   });
 
+  // Verifies validates credentials files at the unit boundary.
   it("validates credentials files at the unit boundary", async () => {
     const dir = credentialsDir();
     const good = writeCredentialsFile(dir);
@@ -530,6 +538,7 @@ describe("env-driven sync auto-start", () => {
     });
   });
 
+  // Verifies classifies an HTTP 401 transport rejection as an auth failure.
   it("classifies an HTTP 401 transport rejection as an auth failure", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
@@ -546,6 +555,7 @@ describe("env-driven sync auto-start", () => {
     expect(transport.getSpreadsheetCalls).toBeGreaterThan(0);
   });
 
+  // Verifies classifies an HTTP 403 rejection as an access-denied with the client email.
   it("classifies an HTTP 403 rejection as an access-denied with the client email", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
@@ -561,6 +571,7 @@ describe("env-driven sync auto-start", () => {
     });
   });
 
+  // Verifies classifies an HTTP 404 rejection as a missing spreadsheet with the parsed ID.
   it("classifies an HTTP 404 rejection as a missing spreadsheet with the parsed ID", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
@@ -576,6 +587,7 @@ describe("env-driven sync auto-start", () => {
     });
   });
 
+  // Verifies classifies a timeout as a generic startup failure without leaking the URL.
   it("classifies a timeout as a generic startup failure without leaking the URL", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const diagnostics: CapturedDiagnostic[] = [];
@@ -596,6 +608,7 @@ describe("env-driven sync auto-start", () => {
     }
   });
 
+  // Verifies never passes secret-like paths, emails, or messages to injected diagnostic sinks.
   it("never passes secret-like paths, emails, or messages to injected diagnostic sinks", async () => {
     // Regression (Luna review): injected diagnostic sinks must receive
     // sanitized stable class/code data only — full failure messages can
@@ -651,6 +664,7 @@ describe("env-driven sync auto-start", () => {
     expect(diagnostics[0]?.message).not.toContain("@");
   });
 
+  // Verifies emits the stable redacted class/code summary through the default console sink.
   it("emits the stable redacted class/code summary through the default console sink", async () => {
     // Luna: the DEFAULT diagnostic sink (console) must emit the
     // already-redacted stable class/code summary on startup failure — not
@@ -696,6 +710,7 @@ describe("env-driven sync auto-start", () => {
     }
   });
 
+  // Verifies collapses injected failure name/code into fixed safe classes/codes in sink text.
   it("collapses injected failure name/code into fixed safe classes/codes in sink text", () => {
     // Regression (Luna review): the diagnostic sink summary interpolates
     // failure.name and failure.code, which are runtime strings. They must be
@@ -732,6 +747,7 @@ describe("env-driven sync auto-start", () => {
     );
   });
 
+  // Verifies preserves the classified HikouteiError unchanged when the diagnostic sink throws.
   it("preserves the classified HikouteiError unchanged when the diagnostic sink throws", async () => {
     // Luna: the diagnostic sink is fail-open — a throwing injected (or
     // default) sink must never replace the original classified startup
@@ -769,6 +785,7 @@ describe("env-driven sync auto-start", () => {
     expect((thrown as Error).message).not.toBe("diagnostic sink exploded");
   });
 
+  // Verifies fails closed on malformed interval env values before any remote contact.
   it("fails closed on malformed interval env values before any remote contact", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
@@ -796,6 +813,7 @@ describe("env-driven sync auto-start", () => {
     expect(transport2.getSpreadsheetCalls).toBe(0);
   });
 
+  // Verifies accepts a plain decimal interval value and rejects Number()-accepted non-decimal forms.
   it("accepts a plain decimal interval value and rejects Number()-accepted non-decimal forms", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
 
@@ -845,6 +863,7 @@ describe("env-driven sync auto-start", () => {
     })).toBeUndefined();
   });
 
+  // Verifies accepts a plain decimal integer within the 2,000..9,999 ms bounds.
   it("accepts a plain decimal integer within the 2,000..9,999 ms bounds", () => {
     // The env floor (2,000 ms) and the provider's default interval (800 ms,
     // internal-only tuning target) are asserted independently here.
@@ -868,6 +887,7 @@ describe("env-driven sync auto-start", () => {
     expect(MAX_SYNC_RATE_LIMIT_INTERVAL_MS).toBe(9_999);
   });
 
+  // Verifies rejects non-decimal, out-of-bounds, and malformed pacing values.
   it("rejects non-decimal, out-of-bounds, and malformed pacing values", () => {
     // Number() would coerce several of these (0x10 -> 16, 1e3 -> 1000,
     // -1 -> -1, " 2500" -> 2500); the decimal-only bounded contract must
@@ -888,6 +908,7 @@ describe("env-driven sync auto-start", () => {
     }
   });
 
+  // Verifies rejects an unsafe pacing override before any remote contact when the real provider is used.
   it("rejects an unsafe pacing override before any remote contact when the real provider is used", async () => {
     // No transport is injected, so the real Google Sheets provider path is
     // active: an override whose paced dispatch could outlive the default
@@ -909,6 +930,7 @@ describe("env-driven sync auto-start", () => {
     }
   });
 
+  // Verifies ignores the pacing env override when a fake transport is injected.
   it("ignores the pacing env override when a fake transport is injected", async () => {
     // The internal override applies ONLY to the real Google Sheets provider:
     // injected fake transports keep ZERO test pacing, so the provisioning
@@ -933,6 +955,7 @@ describe("env-driven sync auto-start", () => {
     expect(gap).toBeLessThan(500);
   });
 
+  // Verifies ignores an invalid pacing env override when a fake transport is injected.
   it("ignores an invalid pacing env override when a fake transport is injected", async () => {
     // A malformed or unsafe override must never break local/fake mode: with
     // an injected fake transport the env key is not consulted at all, so the
@@ -970,6 +993,7 @@ describe("env-driven sync auto-start", () => {
     });
   });
 
+  // Verifies derives single-column projection shapes for a one-property entity.
   it("derives single-column projection shapes for a one-property entity", () => {
     expect(buildSyncProjections([SinglePropertyUser], "spreadsheet-1")).toEqual({
       spreadsheetId: "spreadsheet-1",
@@ -986,6 +1010,7 @@ describe("env-driven sync auto-start", () => {
     });
   });
 
+  // Verifies derives multi-letter projection ranges for a 27-property entity.
   it("derives multi-letter projection ranges for a 27-property entity", () => {
     // columnLetters(27) -> "AA" and columnLetters(28) -> "AB", exactly the
     // helper buildSyncProjections uses to build the whole-column ranges.
@@ -1050,6 +1075,7 @@ describe("env-driven sync auto-start", () => {
     expect(report.rowsScanned).toBeGreaterThanOrEqual(1);
   });
 
+  // Verifies provisions a single-column User_Input tab and drains an append for a one-property entity.
   it("provisions a single-column User_Input tab and drains an append for a one-property entity", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { spreadsheet, transport } = newTransport();
@@ -1088,6 +1114,7 @@ describe("env-driven sync auto-start", () => {
     });
   });
 
+  // Verifies applies the parsed full-scan interval to the polling cadence.
   it("applies the parsed full-scan interval to the polling cadence", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
@@ -1108,6 +1135,7 @@ describe("env-driven sync auto-start", () => {
     expect(report.safetyFullScan).toBe(true);
   });
 
+  // Verifies keeps the polling loop active at the parsed polling interval.
   it("keeps the polling loop active at the parsed polling interval", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const { transport } = newTransport();
@@ -1222,6 +1250,7 @@ describe("env-driven sync auto-start", () => {
     await session3.hikoutei.close();
   });
 
+  // Verifies takes over a CRASHED runtime.
   it("takes over a CRASHED runtime's writer leases via stale heartbeat and drains immediately (restart-stall fix)", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const dbName = tempDbName("heartbeat-restart");
@@ -1255,6 +1284,7 @@ describe("env-driven sync auto-start", () => {
     await session2.hikoutei.close();
   });
 
+  // Verifies relaunches IMMEDIATELY after a crash (heartbeat 3s old, lease still live) via the startup wait gate.
   it("relaunches IMMEDIATELY after a crash (heartbeat 3s old, lease still live) via the startup wait gate", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const dbName = tempDbName("startup-gate-relaunch");
@@ -1289,6 +1319,7 @@ describe("env-driven sync auto-start", () => {
     await session2.hikoutei.close();
   }, 30_000);
 
+  // Verifies records a human edit during downtime as a durable OPEN conflict and resolves only after a later same-field canonical advance (issue #196).
   it("records a human edit during downtime as a durable OPEN conflict and resolves only after a later same-field canonical advance (issue #196)", async () => {
     const credentialsPath = writeCredentialsFile(credentialsDir());
     const dbName = tempDbName("conflict");
@@ -1408,6 +1439,7 @@ describe("env-driven sync auto-start", () => {
    * ids). Read-shape counts come from the stub transport's recorded ranges;
    * effects/s is RECORDED, never wall-clock-asserted.
    */
+  // Verifies restarts a crashed burst runtime with one cold full receipt read, then bands, and lands every effect once.
   it("restarts a crashed burst runtime with one cold full receipt read, then bands, and lands every effect once", async () => {
     const BURST_SIZE = 200;
     const credentialsPath = writeCredentialsFile(credentialsDir());
@@ -1493,6 +1525,7 @@ describe("env-driven sync auto-start", () => {
    * same way; effects for the non-conflicting rows all land exactly once.
    * effects/s and the read census are RECORDED.
    */
+  // Verifies detects human edits on DATE and boolean columns under narrowed reads after a burst (generality variant).
   it("detects human edits on DATE and boolean columns under narrowed reads after a burst (generality variant)", async () => {
     const BURST_SIZE = 40;
     const BASELINE_ISO = "2024-01-05T00:00:00.000Z";
@@ -1639,6 +1672,7 @@ describe("env-driven sync auto-start", () => {
    * zero validation ranges, proving the evidence is attributed to the
    * checkbox route config and not incidentally present.
    */
+  // Verifies carries checkbox data-validation evidence only for a configured checkbox route.
   it("carries checkbox data-validation evidence only for a configured checkbox route", async () => {
     // The checkbox evidence rides the same batch-builder append path the
     // service uses (pushAppendWrites), so the SYSTEM-shaped route carries
@@ -1768,6 +1802,7 @@ describe("env-driven sync auto-start", () => {
     }
   });
 
+  // Verifies fails closed through the public factory when the sync env is configured badly.
   it("fails closed through the public factory when the sync env is configured badly", async () => {
     const previousUrl = process.env.HIKOUTEI_SYNC_SPREADSHEET_URL;
     const previousCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -1794,6 +1829,7 @@ describe("env-driven sync auto-start", () => {
     }
   });
 
+  // Verifies forwards providerOptions.onRequest to the sync provider.
   it("forwards providerOptions.onRequest to the sync provider's request sink", async () => {
     // The public telemetry hook must reach the provider's redacted sink:
     // startup provisioning performs real (stubbed) transport calls, so the
@@ -1817,6 +1853,7 @@ describe("env-driven sync auto-start", () => {
     )).toBe(true);
   });
 
+  // Verifies rejects a non-callable providerOptions.onRequest at the public boundary.
   it("rejects a non-callable providerOptions.onRequest at the public boundary", async () => {
     // Boundary validation runs before any env/transport decision, so this
     // fails closed without starting anything.
@@ -1830,6 +1867,7 @@ describe("env-driven sync auto-start", () => {
   });
 });
 
+// Covers pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC).
 describe("pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC)", () => {
   const tempDirs: string[] = [];
   const startedServices: InternalSyncService[] = [];
@@ -1858,6 +1896,7 @@ describe("pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC)",
     return path;
   }
 
+  // Verifies starts with a valid pool and NO GOOGLE_APPLICATION_CREDENTIALS.
   it("starts with a valid pool and NO GOOGLE_APPLICATION_CREDENTIALS", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hikoutei-pool-start-"));
     tempDirs.push(dir);
@@ -1883,6 +1922,7 @@ describe("pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC)",
     }
   });
 
+  // Verifies starts with a providerOptions-only pool (no env pool, no ADC).
   it("starts with a providerOptions-only pool (no env pool, no ADC)", async () => {
     // Terra round-3 regression: the EFFECTIVE pool is resolved from the env
     // first, else providerOptions.serviceAccountKeyFiles. A non-empty
@@ -1912,6 +1952,7 @@ describe("pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC)",
     }
   });
 
+  // Verifies names the providerOptions pool slot-0 identity in the 403 hint.
   it("names the providerOptions pool slot-0 identity in the 403 hint", async () => {
     // The 403 access-denied hint must derive from the EFFECTIVE pool's slot 0
     // (the identity startup validation and adoption signing ride), never
@@ -1937,6 +1978,7 @@ describe("pool-only deployment startup (HIKOUTEI_SYNC_CREDENTIALS without ADC)",
     });
   });
 
+  // Verifies still fails closed without a pool AND without ADC credentials.
   it("still fails closed without a pool AND without ADC credentials", async () => {
     const spreadsheet = new StubSpreadsheet();
     await expect(createTypedSheetsWithSync({

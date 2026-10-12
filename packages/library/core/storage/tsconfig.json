@@ -15,11 +15,10 @@
     "outDir": "dist",
     "baseUrl": "../../../..",
     "paths": {
-      // Hermetic self/cross maps: the reached-in root-src files import the
-      // moved packages back by name; mapping both to source (never dist)
-      // removes any build-order dependency between the two packages.
-      "@hikoutei/storage/*": ["packages/library/core/storage/src/*"],
-      "@hikoutei/sheets/*": ["packages/library/cloud/sheets/src/*"]
+      // Hermetic self map: reached-in root-src files import this package back
+      // by name; mapping to source (never dist) removes any build-order
+      // dependency.
+      "@hikoutei/storage/*": ["packages/library/core/storage/src/*"]
     },
     "declaration": true,
     "declarationMap": true,

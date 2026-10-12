@@ -142,7 +142,9 @@ beforeEach(() => {
   loggerHooks.holdDrain = false;
 });
 
+// Covers cross-runtime reentrant close (runtime identity).
 describe("cross-runtime reentrant close (runtime identity)", () => {
+  // Verifies a close() on runtime B from inside A.
   it(
     "a close() on runtime B from inside A's hook awaits B's in-flight attempt",
     async () => {
@@ -198,6 +200,7 @@ describe("cross-runtime reentrant close (runtime identity)", () => {
     },
   );
 
+  // Verifies a cross-runtime close() from A.
   it(
     "a cross-runtime close() from A's hook observes B's ORIGINAL failure and fails A's close",
     async () => {
@@ -234,7 +237,9 @@ describe("cross-runtime reentrant close (runtime identity)", () => {
   );
 });
 
+// Covers close attempt slot lifetime (drain completes before release).
 describe("close attempt slot lifetime (drain completes before release)", () => {
+  // Verifies a detached setImmediate scheduled by the hook cannot bypass the close attempt once the hook ended.
   it(
     "a detached setImmediate scheduled by the hook cannot bypass the close attempt once the hook ended",
     async () => {
@@ -271,6 +276,7 @@ describe("close attempt slot lifetime (drain completes before release)", () => {
     },
   );
 
+  // Verifies a detached promise callback scheduled by the hook awaits the same close/drain attempt.
   it(
     "a detached promise callback scheduled by the hook awaits the same close/drain attempt",
     async () => {
@@ -314,6 +320,7 @@ describe("close attempt slot lifetime (drain completes before release)", () => {
     },
   );
 
+  // Verifies a close() during the drain of a FAILED attempt awaits the same attempt until drain completes.
   it(
     "a close() during the drain of a FAILED attempt awaits the same attempt until drain completes",
     async () => {
@@ -360,6 +367,7 @@ describe("close attempt slot lifetime (drain completes before release)", () => {
     },
   );
 
+  // Verifies a close() entering after performClose but during the drain awaits the same attempt until drain completes.
   it(
     "a close() entering after performClose but during the drain awaits the same attempt until drain completes",
     async () => {
@@ -403,6 +411,7 @@ describe("close attempt slot lifetime (drain completes before release)", () => {
     },
   );
 
+  // Verifies a throwing drain is fail-open: it never masks the close outcome and the slot is still released.
   it(
     "a throwing drain is fail-open: it never masks the close outcome and the slot is still released",
     async () => {

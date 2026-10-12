@@ -196,6 +196,7 @@ function seedBothRows(em: FakeEm, client: FakeClient, plan: PlanLike): void {
 // ---------------------------------------------------------------------------
 
 describe("shiftedHumanEdit scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -204,6 +205,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(ids).toContain("shifted-human-edit");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("shifted-human-edit");
     expect(scenario.kind).toBe("data");
@@ -226,12 +228,14 @@ describe("shiftedHumanEdit scenario", () => {
     expect(plan.humanValue).toMatch(/^shift-/);
   });
 
+  // Verifies: varies the plan across different seeds.
   it("varies the plan across different seeds", () => {
     const a = buildPlan(777);
     const b = buildPlan(778);
     expect(b).not.toEqual(a);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = racePlan();
     const context = {
@@ -249,6 +253,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: classifies a fail-closed identity_shifted rejection as expected, not a failure.
   it("classifies a fail-closed identity_shifted rejection as expected, not a failure", async () => {
     // The pure classifier unit: only the stable `statusClass` guard evidence
     // (DirectSheetsError) counts; a plain error or a code-only error never
@@ -274,6 +279,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a fail-closed identity_shifted shifter-delete rejection as expected.
   it("classifies a fail-closed identity_shifted shifter-delete rejection as expected", async () => {
     // The delete's own guard failed closed (it could not verify the intended
     // shifter identity): also expected, never a failure.
@@ -289,6 +295,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies an edit that lands on the intended identity as ok and cleans up.
   it("classifies an edit that lands on the intended identity as ok and cleans up", async () => {
     const plan = racePlan();
     const client = new FakeClient();
@@ -312,6 +319,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: asserts a resolved edit that wrote to the WRONG identity is a failure (#364 invariant).
   it("asserts a resolved edit that wrote to the WRONG identity is a failure (#364 invariant)", async () => {
     // The core assertion: a resolved human edit whose value is NOT on the
     // intended identity row is the wrong-identity write the guard must never
@@ -331,6 +339,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-shift edit rejection as a failure.
   it("classifies a non-shift edit rejection as a failure", async () => {
     const plan = racePlan();
     const client = new FakeClient();
@@ -345,6 +354,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated rows' projection never appears (gating).
   it("skips truthfully when the dedicated rows' projection never appears (gating)", async () => {
     const plan = racePlan();
     const client = new FakeClient();
@@ -361,6 +371,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: recover is idempotent and removes both dedicated rows.
   it("recover is idempotent and removes both dedicated rows", async () => {
     const plan = racePlan();
     const em = new FakeEm();
@@ -383,6 +394,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(second.removed).toBe(0);
   });
 
+  // Verifies: guarantees independent cleanup: both dedicated rows are removed even when the race failed.
   it("guarantees independent cleanup: both dedicated rows are removed even when the race failed", async () => {
     // A scenario-error path (the wrong-identity write) still runs the
     // guaranteed finally: both dedicated rows must be gone from the store.
@@ -397,6 +409,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: accepts an OPEN sync_conflict as conflict-recorded when the resolved edit is not on the intended ide.
   it("accepts an OPEN sync_conflict as conflict-recorded when the resolved edit is not on the intended identity", async () => {
     // Core harness fix: the resolved edit's value is not observable on the
     // intended Sheet identity, but it was ingested as an OPEN sync_conflict
@@ -442,6 +455,7 @@ describe("shiftedHumanEdit scenario", () => {
     });
   });
 
+  // Verifies: records cleanup-unresolved-conflict and keeps both rows when the conflict never clears.
   it("records cleanup-unresolved-conflict and keeps both rows when the conflict never clears", async () => {
     // The resolve-then-delete cleanup advances the race row's field, but the
     // conflict record never leaves the blocking state within the bound. Both
@@ -473,6 +487,7 @@ describe("shiftedHumanEdit scenario", () => {
     expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
   });
 
+  // Verifies: records cleanup-outbox-busy and keeps both rows when either binding outbox never drains.
   it("records cleanup-outbox-busy and keeps both rows when either binding outbox never drains", async () => {
     // The race verifies cleanly (`guard-invariant-verified`, no conflict),
     // but a candidate effect for one dedicated binding is stuck in flight

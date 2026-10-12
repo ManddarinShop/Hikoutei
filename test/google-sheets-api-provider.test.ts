@@ -369,7 +369,9 @@ class DelayingTransport implements GoogleSheetsApiTransport {
   }
 }
 
+// Covers GoogleSheetsApiSyncProvider route and preflight validation.
 describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
+  // Verifies rejects a request whose route does not match the registered definition.
   it("rejects a request whose route does not match the registered definition", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -389,6 +391,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     expect(transport.getSpreadsheetCalls).toBe(0);
   });
 
+  // Verifies rejects an unknown physical sheet.
   it("rejects an unknown physical sheet", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -403,6 +406,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     })).rejects.toMatchObject({ code: SYNC_SHEETS_ERROR_CODES.INVALID_PROVISIONING_DEFINITIONS });
   });
 
+  // Verifies fails closed on header drift, duplicate headers, and missing headers.
   it("fails closed on header drift, duplicate headers, and missing headers", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: ["id", "name", "status"] });
@@ -414,6 +418,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies requests a valid REST field mask for preflight grid reads.
   it("requests a valid REST field mask for preflight grid reads", async () => {
     // GridData has no sheetId of its own (the parent sheet properties
     // identify the grid) and row anchors are plain cell values now, so the
@@ -470,6 +475,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     expect(result.results[0]?.status).toBe("applied");
   });
 
+  // Verifies rejects malformed SDK payloads with runtime guards before mutation.
   it("rejects malformed SDK payloads with runtime guards before mutation", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -482,6 +488,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies tolerates duplicated anchors from a copy-paste and still processes other rows.
   it("tolerates duplicated anchors from a copy-paste and still processes other rows", async () => {
     // Copying a row copies its UUID cell, so two rows carry the same anchor.
     // The preflight must not throw: the anchor index keeps the FIRST row per
@@ -546,6 +553,7 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
     });
   });
 
+  // Verifies still fails closed on duplicate identities.
   it("still fails closed on duplicate identities", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -583,7 +591,9 @@ describe("GoogleSheetsApiSyncProvider route and preflight validation", () => {
 
 });
 
+// Covers GoogleSheetsApiSyncProvider applyEffects planning and batches.
 describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => {
+  // Verifies batches effects spanning MULTIPLE tabs into ONE batchUpdate targeting different sheetIds.
   it("batches effects spanning MULTIPLE tabs into ONE batchUpdate targeting different sheetIds", async () => {
     const spreadsheet = new StubSpreadsheet();
     // Seed two tabs that belong to one spreadsheet; the provider groups a
@@ -638,6 +648,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     });
   });
 
+  // Verifies rejects a multi-route apply in inline postcondition mode before any mutation.
   it("rejects a multi-route apply in inline postcondition mode before any mutation", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -673,6 +684,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies plans multiple creates into one target+receipt batch.
   it("plans multiple creates into one target+receipt batch", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -729,6 +741,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(receiptTab?.cell(1, 0)?.userEnteredValue?.stringValue).toBe("create-1");
   });
 
+  // Verifies does not re-create the receipt tab on a later batch after its first creation.
   it("does not re-create the receipt tab on a later batch after its first creation", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -772,6 +785,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
       sheet.title === GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toHaveLength(1);
   });
 
+  // Verifies enumerates every sheet (no ranges) before the ranged data call and reads a hidden receipt tab.
   it("enumerates every sheet (no ranges) before the ranged data call and reads a hidden receipt tab", async () => {
     const spreadsheet = new StubSpreadsheet();
     const writtenFields = {
@@ -830,6 +844,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies finds a created row by targetId for a later effect with a different anchor.
   it("finds a created row by targetId for a later effect with a different anchor", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -871,6 +886,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     });
   });
 
+  // Verifies updates scattered fields only and preserves date serials with the canonical format.
   it("updates scattered fields only and preserves date serials with the canonical format", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -935,6 +951,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(dateCell?.userEnteredValue?.numberValue).toBe(expectedSerial);
   });
 
+  // Verifies rejects a visible guard mismatch without mutating the sheet.
   it("rejects a visible guard mismatch without mutating the sheet", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -978,6 +995,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).status).toEqual(cell.string("pending"));
   });
 
+  // Verifies applies an update whose guard hash contains a drifted date serial.
   it("applies an update whose guard hash contains a drifted date serial", async () => {
     // Regression for the direct-live soak `visible_guard_mismatch`: the sheet
     // row was written with `dateSerialFromIso(iso)`, and the unrounded
@@ -1032,6 +1050,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(statusCell?.userEnteredValue?.numberValue).toBe(dateSerialFromIso(driftedIso));
   });
 
+  // Verifies rejects a candidate reconcile whose expected candidate hash does not match.
   it("rejects a candidate reconcile whose expected candidate hash does not match", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -1074,6 +1093,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies returns repair_reobserve when the repair guard hash does not match.
   it("returns repair_reobserve when the repair guard hash does not match", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -1114,6 +1134,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies replays a receipted effect as already_applied without a second mutation.
   it("replays a receipted effect as already_applied without a second mutation", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -1164,6 +1185,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(receiptTab?.cell(2, 0)?.userEnteredValue?.stringValue).toBeUndefined();
   });
 
+  // Verifies rejects a receipted effect reused with a different payload.
   it("rejects a receipted effect reused with a different payload", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1190,6 +1212,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies replays a duplicate effect ID inside one request against its planned receipt.
   it("replays a duplicate effect ID inside one request against its planned receipt", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1212,6 +1235,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(systemTab.lastContentRow()).toBe(1);
   });
 
+  // Verifies rejects a duplicate effect ID with a different payload inside one request.
   it("rejects a duplicate effect ID with a different payload inside one request", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1242,6 +1266,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(receiptTab?.lastContentRow()).toBe(1);
   });
 
+  // Verifies deletes contiguous and noncontiguous rows with descending deleteDimension requests.
   it("deletes contiguous and noncontiguous rows with descending deleteDimension requests", async () => {
     const spreadsheet = new StubSpreadsheet();
     const rows = [
@@ -1292,6 +1317,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(stubRowFields(inputTab, 3, USER_INPUT_HEADERS).id).toEqual(cell.string("u5"));
   });
 
+  // Verifies rejects a delete whose fields do not cover every header.
   it("rejects a delete whose fields do not cover every header", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedUserInputTab(spreadsheet, [
@@ -1323,6 +1349,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies rejects resolution_delete outside the sync_conflicts projection.
   it("rejects resolution_delete outside the sync_conflicts projection", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1340,6 +1367,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies writes dates as serials with the canonical format for appended columns.
   it("writes dates as serials with the canonical format for appended columns", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -1371,6 +1399,7 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
     expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).__typed_sheets_deleted).toEqual(cell.bool(false));
   });
 
+  // Verifies applies setDataValidation for checkbox headers on appended rows.
   it("applies setDataValidation for checkbox headers on appended rows", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
@@ -1405,7 +1434,9 @@ describe("GoogleSheetsApiSyncProvider applyEffects planning and batches", () => 
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared).
 describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", () => {
+  // Verifies serializes shared receipt-tab creation across two stale prepared writes.
   it("serializes shared receipt-tab creation across two stale prepared writes", async () => {
     // Two routes on the SAME spreadsheet, both preflighted when the shared
     // receipt tab was still absent. Both prepared states carry a stale
@@ -1490,6 +1521,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
     });
   });
 
+  // Verifies refreshes a stale absent-receipt preflight with ONE write-lane ranged read before appending.
   it("refreshes a stale absent-receipt preflight with ONE write-lane ranged read before appending", async () => {
     // Regression: the stale-receipt refresh used to run a range-less
     // enumeration AND a ranged data read on the write lane. With defaults that
@@ -1556,6 +1588,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
       .toEqual(cell.string("stale-refresh-1"));
   });
 
+  // Verifies treats the API.
   it("treats the API's missing-range rejection of the receipt refresh as still-absent", async () => {
     // The real API answers a range that names a missing tab with a proven
     // pre-mutation 400. The single ranged refresh read relies on that
@@ -1660,6 +1693,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
     })])).rejects.toMatchObject({ code: GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR });
   });
 
+  // Verifies produces the same result and write as the single applyEffects wrapper.
   it("produces the same result and write as the single applyEffects wrapper", async () => {
     const effects = [
       effect({
@@ -1716,6 +1750,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
     });
   });
 
+  // Verifies rejects a prepared state produced by a different provider instance before any write.
   it("rejects a prepared state produced by a different provider instance before any write", async () => {
     const request: ApplySyncEffectsRequest = {
       physicalSheetId: SYSTEM_SHEET_ID,
@@ -1748,6 +1783,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
       sheet.title === GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toHaveLength(0);
   });
 
+  // Verifies rejects a prepared state applied twice (sequential reuse) with no second mutation.
   it("rejects a prepared state applied twice (sequential reuse) with no second mutation", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1779,6 +1815,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
     expect(transport.batchUpdateCalls).toBe(callsAfterFirst);
   });
 
+  // Verifies rejects concurrent reuse of one prepared state with no second mutation.
   it("rejects concurrent reuse of one prepared state with no second mutation", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -1812,6 +1849,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
     expect(transport.batchUpdateCalls).toBe(1);
   });
 
+  // Verifies appends receipts without loss when two stale same-spreadsheet writes race with the receipt tab PRESENT.
   it("appends receipts without loss when two stale same-spreadsheet writes race with the receipt tab PRESENT", async () => {
     // Cross-route read-ahead overlap invariant: two routes on the same
     // spreadsheet preflight while the shared receipt tab is present, then a
@@ -1908,6 +1946,7 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
     });
   });
 
+  // Verifies preserves both appended rows when two same-route prepared appends run out of order.
   it("preserves both appended rows when two same-route prepared appends run out of order", async () => {
     // Two prepared states for the SAME route (only reachable by a caller that
     // bypasses the worker's same-route sequencing and the coordinator lane).
@@ -1972,7 +2011,9 @@ describe("GoogleSheetsApiSyncProvider split apply (preflight + applyPrepared)", 
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider fast append.
 describe("GoogleSheetsApiSyncProvider fast append", () => {
+  // Verifies appends rows spanning MULTIPLE tabs in ONE batchUpdate targeting different sheetIds.
   it("appends rows spanning MULTIPLE tabs in ONE batchUpdate targeting different sheetIds", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2056,6 +2097,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     });
   });
 
+  // Verifies serializes shared receipt-tab creation across two concurrent fast appends.
   it("serializes shared receipt-tab creation across two concurrent fast appends", async () => {
     // Two fast appends on the SAME spreadsheet, both preflighting the shared
     // receipt tab absent. When their target+receipt batches run concurrently
@@ -2125,6 +2167,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(identities.map((value) => value?.value).sort()).toEqual(["ra", "rb"].sort());
   });
 
+  // Verifies appends up to 1,000 rows per request and defers the suffix.
   it("appends up to 1,000 rows per request and defers the suffix", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2152,6 +2195,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(result.results[0]?.visibleHash).toBeTypeOf("string");
   });
 
+  // Verifies replays a receipted append without appending twice.
   it("replays a receipted append without appending twice", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2188,6 +2232,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(receiptTab?.lastContentRow()).toBe(2);
   });
 
+  // Verifies fails closed on duplicate identities without appending.
   it("fails closed on duplicate identities without appending", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2210,6 +2255,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies requires an identity field for the route before any preflight read.
   it("requires an identity field for the route before any preflight read", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedUserInputTab(spreadsheet, []);
@@ -2229,6 +2275,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies rejects a multi-route request with an identity-less route before any preflight read.
   it("rejects a multi-route request with an identity-less route before any preflight read", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2276,6 +2323,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies appends a single-route request whose row overrides point to another tab on the overridden tab.
   it("appends a single-route request whose row overrides point to another tab on the overridden tab", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2335,6 +2383,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(systemTab.lastContentRow()).toBe(0);
   });
 
+  // Verifies fails closed when an append row omits payloadHash.
   it("fails closed when an append row omits payloadHash", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2358,6 +2407,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies fails closed when an append row field is not a normalized cell.
   it("fails closed when an append row field is not a normalized cell", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2379,6 +2429,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies fails closed when the identity field cell is not a string or number.
   it("fails closed when the identity field cell is not a string or number", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2399,6 +2450,7 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies defers a byte-budget append suffix and completes it on the next call.
   it("defers a byte-budget append suffix and completes it on the next call", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2482,7 +2534,9 @@ describe("GoogleSheetsApiSyncProvider fast append", () => {
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider byte budget.
 describe("GoogleSheetsApiSyncProvider byte budget", () => {
+  // Verifies sends only the order-preserving prefix and returns hasMore past the budget.
   it("sends only the order-preserving prefix and returns hasMore past the budget", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2511,6 +2565,7 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     expect(systemTab.lastContentRow()).toBe(result.results.length);
   });
 
+  // Verifies turns a single oversize effect into schema_error and keeps the rest.
   it("turns a single oversize effect into schema_error and keeps the rest", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2550,6 +2605,7 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     expect(stubRowFields(systemTab, 2, SYSTEM_HEADERS).id).toEqual(cell.string("small"));
   });
 
+  // Verifies skips an oversize effect in a multi-tab group and applies the following valid effects without row gaps.
   it("skips an oversize effect in a multi-tab group and applies the following valid effects without row gaps", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, []);
@@ -2630,6 +2686,7 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     expect(stubRowFields(inputTab, 2, USER_INPUT_HEADERS).id).toEqual(cell.string("u-input"));
   });
 
+  // Verifies skips receipt refresh and write when every bounded effect is a schema error and the receipt tab is absent.
   it("skips receipt refresh and write when every bounded effect is a schema error and the receipt tab is absent", async () => {
     // With NO included plan able to write (an oversized effect with a tight
     // batch budget yields an empty `included` set) and the receipt tab absent
@@ -2668,6 +2725,7 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     expect(spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toBeUndefined();
   });
 
+  // Verifies skips the receipt refresh for a guard-mismatch no-op batch when the receipt tab is absent.
   it("skips the receipt refresh for a guard-mismatch no-op batch when the receipt tab is absent", async () => {
     // A guard-mismatch/repair-reobserve plan set is a deterministic no-op: no
     // mutation and no receipt. The receipt-init refresh (whose write-lane
@@ -2714,6 +2772,7 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     expect(spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toBeUndefined();
   });
 
+  // Verifies skips the multi-route receipt refresh when every included plan is a deterministic no-op.
   it("skips the multi-route receipt refresh when every included plan is a deterministic no-op", async () => {
     // Same guard on the combined multi-tab path: two routes whose plans are
     // all guard mismatches carry no mutation and no receipt, so the write
@@ -2773,6 +2832,7 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
     expect(spreadsheet.findTab(GOOGLE_SHEETS_API_RECEIPT_SHEET_NAME)).toBeUndefined();
   });
 
+  // Verifies measures the SDK-wrapped wire body, so wrapper overhead trims the batch.
   it("measures the SDK-wrapped wire body, so wrapper overhead trims the batch", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -2814,7 +2874,9 @@ describe("GoogleSheetsApiSyncProvider byte budget", () => {
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider postcondition recovery.
 describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
+  // Verifies classifies an applied effect from receipt evidence.
   it("classifies an applied effect from receipt evidence", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -2865,6 +2927,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     expect(postcondition.snapshotHash).toEqual({ kind: "absent" });
   });
 
+  // Verifies never assumes a missing row closes a delete without its receipt.
   it("never assumes a missing row closes a delete without its receipt", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedUserInputTab(spreadsheet, []);
@@ -2887,6 +2950,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     expect(postcondition.disposition).toBe("unavailable");
   });
 
+  // Verifies classifies a deletion as applied only when its receipt is present.
   it("classifies a deletion as applied only when its receipt is present", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedUserInputTab(spreadsheet, []);
@@ -2919,6 +2983,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     });
   });
 
+  // Verifies treats a matching row without a receipt as unavailable.
   it("treats a matching row without a receipt as unavailable", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -2956,6 +3021,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     });
   });
 
+  // Verifies classifies unapplied and changed states from the visible hash.
   it("classifies unapplied and changed states from the visible hash", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -3016,6 +3082,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     expect(changedPostcondition.disposition).toBe("changed");
   });
 
+  // Verifies classifies a batch of postconditions with one shared read.
   it("classifies a batch of postconditions with one shared read", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -3122,6 +3189,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     });
   }
 
+  // Verifies settles a landed batch as applied from scoped band reads (cold cursor).
   it("settles a landed batch as applied from scoped band reads (cold cursor)", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedLandedWrite(spreadsheet);
@@ -3136,6 +3204,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     }
   });
 
+  // Verifies settles a receipt-landed but pre-write row as unapplied (redrive).
   it("settles a receipt-landed but pre-write row as unapplied (redrive)", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -3178,6 +3247,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     expect(postcondition.disposition).toBe("unapplied");
   });
 
+  // Verifies decides a missing receipt from bands alone under a live cursor even when a full read times out.
   it("decides a missing receipt from bands alone under a live cursor even when a full read times out", async () => {
     // The drain-blocking defect this guards: a genuinely not-landed effect
     // under a warm cursor used to route through the historical whole-table
@@ -3233,6 +3303,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     expect(postcondition.disposition).toBe("unapplied");
   });
 
+  // Verifies decides a missing receipt from a cold cursor.
   it("decides a missing receipt from a cold cursor's full receipt coverage", async () => {
     // Cursor-invalid (fresh process) counterpart: the base read itself is
     // the historical FULL receipt read, so the miss is proven by complete
@@ -3269,6 +3340,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     }
   });
 
+  // Verifies carries responseBytes telemetry on the scoped probe verification read.
   it("carries responseBytes telemetry on the scoped probe verification read", async () => {
     // The verification pass runs its OWN paced getSpreadsheet with a raw
     // meta carrier; the event must measure the RAW document like every
@@ -3291,6 +3363,7 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
     }
   });
 
+  // Verifies requests key-column and row BANDS (never whole-tab ranges) once the receipt cursor is live.
   it("requests key-column and row BANDS (never whole-tab ranges) once the receipt cursor is live", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedLandedWrite(spreadsheet);
@@ -3324,7 +3397,9 @@ describe("GoogleSheetsApiSyncProvider postcondition recovery", () => {
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider transport classification and telemetry.
 describe("GoogleSheetsApiSyncProvider transport classification and telemetry", () => {
+  // Verifies classifies malformed 2xx replies as delivery-uncertain.
   it("classifies malformed 2xx replies as delivery-uncertain", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -3345,6 +3420,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(outcome.kind).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
   });
 
+  // Verifies classifies pre-mutation 4xx rejections as explicit remote failures.
   it("classifies pre-mutation 4xx rejections as explicit remote failures", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -3366,6 +3442,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(outcome.httpStatus).toEqual({ kind: "present", value: 400 });
   });
 
+  // Verifies classifies HTTP $status as $kind.
   it.each([
     { status: 429, apiErrorStatus: "RESOURCE_EXHAUSTED", kind: TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN },
     { status: 500, apiErrorStatus: "INTERNAL", kind: TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN },
@@ -3382,6 +3459,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(classifyTransportOutcome(error).kind).toBe(kind);
   });
 
+  // Verifies classifies timeout and network errors as delivery-uncertain.
   it("classifies timeout and network errors as delivery-uncertain", () => {
     const timeout = new GoogleSheetsApiTransportError(
       GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT,
@@ -3407,6 +3485,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(classifyTransportOutcome(invalid).kind).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
   });
 
+  // Verifies maps plain and class-like gaxios failures without weakening the raw boundary.
   it("maps plain and class-like gaxios failures without weakening the raw boundary", () => {
     // Keep the existing plain shaped fixture contract intact.
     const plain = classifyGoogleSheetsApiError({
@@ -3457,6 +3536,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(timeout.code).toBe(GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.TIMEOUT);
   });
 
+  // Verifies classifies HTTP 408 as retryable exactly like the shared transport boundary.
   it("classifies HTTP 408 as retryable exactly like the shared transport boundary", () => {
     // The shared classifier treats 408 as delivery-uncertain (the request
     // may have committed before the timeout); the transport's own telemetry
@@ -3485,6 +3565,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(classifyTransportOutcome(error).kind).toBe(TRANSPORT_OUTCOME_KINDS.DELIVERY_UNCERTAIN);
   });
 
+  // Verifies paces reads against reads and writes against writes through independent limiters.
   it("paces reads against reads and writes against writes through independent limiters", async () => {
     let now = 1_000_000;
     const events: Array<{ readonly pacing: "preflight" | "write"; readonly at: number }> = [];
@@ -3555,6 +3636,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect((writeStarts[0] ?? 0) - (readStarts[1] ?? 0)).toBeLessThan(1_100);
   });
 
+  // Verifies reports the limiter.
   it("reports the limiter's own pacing wait on read and write request events", async () => {
     let now = 1_000_000;
     const events: Array<{
@@ -3619,6 +3701,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(waitedWrite?.pacingWaitMs).toBe(1_100);
   });
 
+  // Verifies emits redacted request telemetry without payload or identity material.
   it("emits redacted request telemetry without payload or identity material", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -3661,6 +3744,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(typeof write.pacingWaitMs).toBe("number");
   });
 
+  // Verifies estimates getSpreadsheet response bytes scaled with the payload size.
   it("estimates getSpreadsheet response bytes scaled with the payload size", async () => {
     // The preflight-vs-polling latency investigation needs payload evidence:
     // every successful getSpreadsheet event must carry a responseBytes
@@ -3705,6 +3789,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(typeof write?.responseBytes).toBe("number");
   });
 
+  // Verifies computes no responseBytes when no telemetry sink is attached.
   it("computes no responseBytes when no telemetry sink is attached", async () => {
     // Zero-overhead gate: without onRequest the provider must not serialize
     // responses. The event simply never exists, so the assertion is that a
@@ -3724,6 +3809,7 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
     expect(result.results[0]?.status).toBe("applied");
   });
 
+  // Verifies never forwards an arbitrary remote code into onRequest telemetry.
   it("never forwards an arbitrary remote code into onRequest telemetry", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -3764,7 +3850,9 @@ describe("GoogleSheetsApiSyncProvider transport classification and telemetry", (
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider inline postcondition mode.
 describe("GoogleSheetsApiSyncProvider inline postcondition mode", () => {
+  // Verifies writes target mutations first, verifies, then writes receipts.
   it("writes target mutations first, verifies, then writes receipts", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [
@@ -3810,9 +3898,11 @@ describe("GoogleSheetsApiSyncProvider inline postcondition mode", () => {
   });
 });
 
+// Covers preflight payload reduction: cursor-banded receipts + scoped fast-append verification.
 describe("preflight payload reduction: cursor-banded receipts + scoped fast-append verification", () => {
   const CANONICAL_DATE_FORMAT = GOOGLE_SHEETS_API_DATE_NUMBER_FORMAT_OBJECT;
 
+  // Verifies (a) matches a date-cell CAS guard through the single full-evidence read.
   it("(a) matches a date-cell CAS guard through the single full-evidence read", async () => {
     const spreadsheet = new StubSpreadsheet();
     const fields = {
@@ -3842,6 +3932,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(fullMaskData[0]?.ranges).toContain("'Users_System'!A1:C1048576");
   });
 
+  // Verifies (a) still detects a human edit to a date cell through the same snapshot.
   it("(a) still detects a human edit to a date cell through the same snapshot", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, [{
@@ -3875,6 +3966,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies (b) a human date-format on a numeric identity cannot evade identity dedupe.
   it("(b) a human date-format on a numeric identity cannot evade identity dedupe", async () => {
     // Row 3 is a human-added copy of row 2's numeric identity 45100 with the
     // canonical DATE pattern applied to the identity cell. The full-evidence
@@ -3914,6 +4006,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     )).toHaveLength(1);
   });
 
+  // Verifies (b) a real duplicate numeric identity still fails closed.
   it("(b) a real duplicate numeric identity still fails closed", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", {
@@ -3939,6 +4032,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     })])).rejects.toThrow(/sync identity is duplicated/);
   });
 
+  // Verifies (c) appends land past human blanks with exact anchors in one whole-table read.
   it("(c) appends land past human blanks with exact anchors in one whole-table read", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedReceiptTab(spreadsheet, []);
@@ -3973,6 +4067,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
       .toBe(GOOGLE_SHEETS_API_PREFLIGHT_FIELDS);
   });
 
+  // Verifies (c) the steady fast-append dispatch keeps the historical two paced reads.
   it("(c) the steady fast-append dispatch keeps the historical two paced reads", async () => {
     // Pure-insert batch, string identity, receipt tab present: enumeration +
     // ONE column-scoped base read + the write. No verification read is
@@ -4010,6 +4105,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(tab.cell(2, 0)?.userEnteredValue?.stringValue).toBe("u2");
   });
 
+  // Verifies (d) a key-row gap refuses scoped mode: whole-table full-evidence fallback.
   it("(d) a key-row gap refuses scoped mode: whole-table full-evidence fallback", async () => {
     // 45 data rows separated by human blank rows: the scoped bands cannot
     // prove what the blank rows hold, so the dispatch falls back to the
@@ -4092,6 +4188,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(fallbackBytes).toBeGreaterThan(baseBytes);
   });
 
+  // Verifies (e) answers a multi-range read with ONE cropped grid per range, in order.
   it("(e) answers a multi-range read with ONE cropped grid per range, in order", async () => {
     // Stub realism contract: a banded `spreadsheets.get` returns one
     // GridData per requested range (in request order), each cropped to its
@@ -4132,6 +4229,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(secondRowValues).toHaveLength(2);
   });
 
+  // Verifies resolves verification cells across the ordered per-range grid list.
   it("resolves verification cells across the ordered per-range grid list", () => {
     const entered = (value: string): Record<string, unknown> => ({
       userEnteredValue: { stringValue: value },
@@ -4146,6 +4244,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(resolveVerifyCell(grids, 1, 1)).toBeNull();
   });
 
+  // Verifies plans identity bands first and merges consecutive rows (no overflow rung).
   it("plans identity bands first and merges consecutive rows (no overflow rung)", () => {
     const context = verificationContextFixture({});
     const calibration = createReadCalibration();
@@ -4176,6 +4275,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(scatteredPlan.items).toHaveLength(41);
   });
 
+  // Verifies blanks a banded row whose verification anchor proves it shifted.
   it("blanks a banded row whose verification anchor proves it shifted", () => {
     const baseRow = preflightRow(2, {
       physicalAnchor: presentValue("sync-anchor:a1"),
@@ -4205,6 +4305,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(patched.byAnchor.has("sync-anchor:a1")).toBe(false);
   });
 
+  // Verifies blanks a banded row whose verification anchor is MISSING (shifted-in human row).
   it("blanks a banded row whose verification anchor is MISSING (shifted-in human row)", () => {
     const baseRow = preflightRow(2, {
       physicalAnchor: presentValue("sync-anchor:a1"),
@@ -4237,6 +4338,7 @@ describe("preflight payload reduction: cursor-banded receipts + scoped fast-appe
     expect(patched.byIdentity.has("someone-else")).toBe(false);
   });
 
+  // Verifies promotes a date-formatted numeric identity through the verification band.
   it("promotes a date-formatted numeric identity through the verification band", () => {
     const plain = preflightRow(2, {
       cells: { id: cell.number(45100), status: cell.string("pending") },

@@ -59,7 +59,7 @@ Search order: `--config <path>` flag → `HIKOUTEI_MCP_CONFIG` env var →
 }
 ```
 
-- `type` is one of `string`, `number`, `boolean`, `date` (ISO 8601 strings cross the tool boundary).
+- `type` is one of `string`, `number`, `boolean`, `date`. Date values cross the tool boundary as canonical UTC ISO 8601 date-times: `YYYY-MM-DDTHH:mm:ss.sssZ` (for example, `2026-08-01T12:30:00.000Z`).
 - Exactly one property per entity must be `primary: true`; it is immutable after create.
 - Names and table names must be SQL identifiers; tables reserved by Hikoutei or SQLite are rejected.
 
@@ -71,9 +71,7 @@ Search order: `--config <path>` flag → `HIKOUTEI_MCP_CONFIG` env var →
 | `GOOGLE_APPLICATION_CREDENTIALS` | Service-account key file path (from `hikoutei setup`) |
 | `HIKOUTEI_DB_PATH` | SQLite path; default `./hikoutei.sqlite` |
 
-The server loads `.env` (or `--env <path>`) into gaps in the environment before startup, so the
-`.env` written by `hikoutei setup` can be reused as-is. Variables already set in the process
-always win.
+The server loads `.env` (or `--env <path>`) only into variables absent from the process environment; a defined process value, even an empty string, wins. The `.env` written by `hikoutei setup` can be reused as-is.
 
 ### Client setup
 

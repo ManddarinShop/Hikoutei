@@ -1,3 +1,9 @@
+/**
+ * Shared validation predicate tests for contracts and storage boundaries.
+ *
+ * Pins the non-empty, safe-integer, normalized-cell, UTC-date, semantic-identity,
+ * and SQL-row decoding helpers that guard untrusted input across the codebase.
+ */
 import { describe, expect, it } from "vitest";
 import { isNormalizedCell } from "@hikoutei/contracts/encoding/normalizedCell.js";
 import {
@@ -19,13 +25,16 @@ import {
 } from "@hikoutei/contracts/domain/errors/index.js";
 import { decodeSqlRow } from "@hikoutei/contracts/storage/sql.js";
 
+// Verifies the shared validation predicates suite.
 describe("shared validation predicates", () => {
+  // Verifies: recognizes non-empty strings.
   it("recognizes non-empty strings", () => {
     expect(isNonEmptyString("value")).toBe(true);
     expect(isNonEmptyString("")).toBe(false);
     expect(isNonEmptyString(null)).toBe(false);
   });
 
+  // Verifies: recognizes safe integer ranges.
   it("recognizes safe integer ranges", () => {
     expect(isPositiveSafeInteger(1)).toBe(true);
     expect(isPositiveSafeInteger(0)).toBe(false);
@@ -35,6 +44,7 @@ describe("shared validation predicates", () => {
     expect(isNonNegativeSafeInteger(-1)).toBe(false);
   });
 
+  // Verifies: recognizes canonical normalized cells.
   it("recognizes canonical normalized cells", () => {
     expect(isNormalizedCell(null)).toBe(true);
     expect(isNormalizedCell({ kind: "string", value: "text" })).toBe(true);
@@ -48,12 +58,14 @@ describe("shared validation predicates", () => {
     expect(isNormalizedCell({ kind: "string", value: "text", extra: true })).toBe(false);
   });
 
+  // Verifies: recognizes canonical UTC dates.
   it("recognizes canonical UTC dates", () => {
     expect(isCanonicalUtcIsoDate("2026-01-02T03:04:05.000Z")).toBe(true);
     expect(isCanonicalUtcIsoDate("2026-01-02T03:04:05Z")).toBe(false);
     expect(isCanonicalUtcIsoDate("not-a-date")).toBe(false);
   });
 
+  // Verifies: promotes semantic identifiers only after runtime validation.
   it("promotes semantic identifiers only after runtime validation", () => {
     expect.assertions(18);
     expect(requireSemanticString<"entity-id">("entity-1", "entity ID")).toBe("entity-1");
@@ -90,6 +102,7 @@ describe("shared validation predicates", () => {
     }
   });
 
+  // Verifies: decodeSqlRow throws ContractsInputError for non-object values.
   it("decodeSqlRow throws ContractsInputError for non-object values", () => {
     expect.assertions(6);
     try {
@@ -108,6 +121,7 @@ describe("shared validation predicates", () => {
     }
   });
 
+  // Verifies: recognizes non-empty lists.
   it("recognizes non-empty lists", () => {
     expect(isNonEmptyList(["item"])).toBe(true);
     expect(isNonEmptyList([])).toBe(false);

@@ -37,7 +37,9 @@ const SECRETS = [
   "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 ];
 
+// Verifies the soak redaction: stable codes suite.
 describe("soak redaction: stable codes", () => {
+  // Verifies: passes allowlisted codes and maps every secret-like value to unknown.
   it("passes allowlisted codes and maps every secret-like value to unknown", () => {
     for (const code of KNOWN_STABLE_CODES) {
       expect(sanitizeStableCode(code)).toBe(code);
@@ -51,7 +53,9 @@ describe("soak redaction: stable codes", () => {
   });
 });
 
+// Verifies the soak redaction: error classes and status classes suite.
 describe("soak redaction: error classes and status classes", () => {
+  // Verifies: passes allowlisted classes and maps unknown names to unknown.
   it("passes allowlisted classes and maps unknown names to unknown", () => {
     for (const errorClass of KNOWN_STABLE_CLASSES) {
       expect(sanitizeErrorClass(errorClass)).toBe(errorClass);
@@ -66,6 +70,7 @@ describe("soak redaction: error classes and status classes", () => {
     expect(sanitizeErrorClass("Error: at /Users/secret/file.ts")).toBe("unknown");
   });
 
+  // Verifies: classifies numeric HTTP statuses and known named classes only.
   it("classifies numeric HTTP statuses and known named classes only", () => {
     expect(sanitizeStatusClass(403)).toBe("unknown"); // non-string input
     expect(sanitizeStatusClass("http_403")).toBe("http_403");
@@ -93,7 +98,9 @@ describe("soak redaction: error classes and status classes", () => {
   });
 });
 
+// Verifies the soak redaction: reasons suite.
 describe("soak redaction: reasons", () => {
+  // Verifies: passes the stable reason vocabulary and maps everything else to unknown.
   it("passes the stable reason vocabulary and maps everything else to unknown", () => {
     expect(KNOWN_REASON_CODES).toContain(FAILURE_REASON_CODES.QUERY_MISMATCH);
     expect(KNOWN_REASON_CODES).toContain("cycle-error");
@@ -112,7 +119,9 @@ describe("soak redaction: reasons", () => {
   });
 });
 
+// Verifies the soak redaction: table names suite.
 describe("soak redaction: table names", () => {
+  // Verifies: passes the soak vocabulary and maps unknown names to unknown.
   it("passes the soak vocabulary and maps unknown names to unknown", () => {
     for (const table of KNOWN_TABLE_NAMES) {
       expect(sanitizeTableName(table)).toBe(table);
@@ -127,7 +136,9 @@ describe("soak redaction: table names", () => {
   });
 });
 
+// Verifies the soak redaction: scenario failure kinds and stable error tags suite.
 describe("soak redaction: scenario failure kinds and stable error tags", () => {
+  // Verifies: passes the allowlisted failure kinds and maps everything else to unknown.
   it("passes the allowlisted failure kinds and maps everything else to unknown", () => {
     for (const kind of KNOWN_FAILURE_KINDS) {
       expect(sanitizeFailureKind(kind)).toBe(kind);
@@ -141,6 +152,7 @@ describe("soak redaction: scenario failure kinds and stable error tags", () => {
     expect(sanitizeFailureKind(42)).toBe("unknown");
   });
 
+  // Verifies: passes canonical stable error tags and collapses crafted ones.
   it("passes canonical stable error tags and collapses crafted ones", () => {
     expect(sanitizeErrorTag("Error")).toBe("Error");
     expect(sanitizeErrorTag("TypeError")).toBe("TypeError");
@@ -163,6 +175,7 @@ describe("soak redaction: scenario failure kinds and stable error tags", () => {
     }
   });
 
+  // Verifies: the record walker keeps reasonTag/failureKinds and collapses injected text.
   it("the record walker keeps reasonTag/failureKinds and collapses injected text", () => {
     const sanitized = sanitizeRecordFields({
       status: "failed",
@@ -182,7 +195,9 @@ describe("soak redaction: scenario failure kinds and stable error tags", () => {
   });
 });
 
+// Verifies the soak redaction: counts suite.
 describe("soak redaction: counts", () => {
+  // Verifies: keeps only identifier-shaped keys with finite numeric values.
   it("keeps only identifier-shaped keys with finite numeric values", () => {
     expect(sanitizeCounts({ applied: 2, missing: 1 })).toEqual({ applied: 2, missing: 1 });
     expect(sanitizeCounts({ applied: 2, "bad key!": 1, secret: "ya29.token", n: NaN }))
@@ -194,7 +209,9 @@ describe("soak redaction: counts", () => {
   });
 });
 
+// Verifies the soak redaction: record walker suite.
 describe("soak redaction: record walker", () => {
+  // Verifies: sanitizes every sensitive field of nested records.
   it("sanitizes every sensitive field of nested records", () => {
     const record = sanitizeRecordFields({
       status: "failed",
@@ -230,6 +247,7 @@ describe("soak redaction: record walker", () => {
     });
   });
 
+  // Verifies: sanitizes arrays element-wise.
   it("sanitizes arrays element-wise", () => {
     const result = sanitizeRecordFields([
       { code: "ya29.jwt" },
@@ -240,6 +258,7 @@ describe("soak redaction: record walker", () => {
     expect(result).toEqual([{ code: "unknown" }, 42]);
   });
 
+  // Verifies: drops unknown/free-form keys and arbitrary strings (injection test).
   it("drops unknown/free-form keys and arbitrary strings (injection test)", () => {
     // MEDIUM 6: free-form keys (message, stack, payload, id, value, url,
     // path) and arbitrary nested strings must never survive the walker,
@@ -282,6 +301,7 @@ describe("soak redaction: record walker", () => {
     expect(JSON.stringify(record)).not.toMatch(/ya29|docs\.google|service-account|human-edit/);
   });
 
+  // Verifies: maps unknown status strings to the fixed unknown category.
   it("maps unknown status strings to the fixed unknown category", () => {
     expect(sanitizeRecordFields({ status: "https://evil.example" })).toEqual({
       status: "unknown",
@@ -292,6 +312,7 @@ describe("soak redaction: record walker", () => {
     });
   });
 
+  // Verifies: drops non-identifier keys even when their values are numeric.
   it("drops non-identifier keys even when their values are numeric", () => {
     // Counts keys must be identifier-shaped: a crafted key like
     // "docs.google.com" must not survive even with a numeric value.

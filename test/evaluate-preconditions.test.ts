@@ -1,3 +1,10 @@
+/**
+ * Structural precondition tests for promoting raw observed row changes.
+ *
+ * Covers promotion of raw insert, update, and delete payloads into typed
+ * row operations, ownership checks, and quarantine routing for malformed
+ * input. Runs purely in memory against the evaluation contract.
+ */
 import { describe, expect, it } from "vitest";
 import {
   DELETE_EVIDENCE,
@@ -13,7 +20,9 @@ const snapshot = {
   fields: new Map(),
 };
 
+// Covers structural preconditions.
 describe("structural preconditions", () => {
+  // Verifies promotes a raw insert into an insert-specific row type.
   it("promotes a raw insert into an insert-specific row type", () => {
     const rawRow: RawObservedRowChange = {
       rowBindingId: "binding-1",
@@ -40,6 +49,7 @@ describe("structural preconditions", () => {
     expect("deleteEvidence" in result.row).toBe(false);
   });
 
+  // Verifies rejects an existing-row shape without its after snapshot.
   it("rejects an existing-row shape without its after snapshot", () => {
     const rawRow = {
       rowBindingId: "binding-1",
@@ -67,6 +77,7 @@ describe("structural preconditions", () => {
     });
   });
 
+  // Verifies rejects non-finite or negative visible revisions at the raw boundary.
   it("rejects non-finite or negative visible revisions at the raw boundary", () => {
     for (const baseVisibleRevision of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
       const result = validateStructuralPreconditions({
@@ -89,6 +100,7 @@ describe("structural preconditions", () => {
     }
   });
 
+  // Verifies rejects a snapshot whose fields are not a normalized row map.
   it("rejects a snapshot whose fields are not a normalized row map", () => {
     const result = validateStructuralPreconditions({
       rowBindingId: "binding-1",
@@ -109,6 +121,7 @@ describe("structural preconditions", () => {
     });
   });
 
+  // Verifies keeps delete evidence as an explicit state instead of null.
   it("keeps delete evidence as an explicit state instead of null", () => {
     const rawRow: RawObservedRowChange = {
       rowBindingId: "binding-1",

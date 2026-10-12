@@ -1,3 +1,8 @@
+/**
+ * sync effect recovery tests. Covers sync effect recovery; reads an unapplied failed effect before returning it to pending; reads failed effects for one projection in a single postcondition batch; recovers failed rows persisted with the legacy retryable error code; keeps a receipt-less orphan row delivery-uncertain instead of closing or redriving; terminally records an explicit structured remote failure.
+ *
+ * Exercises the behavior through fake providers and SQLite fixtures with no live credentials.
+ */
 import {
   defineEntity,
   MikroORM,
@@ -45,6 +50,7 @@ class Entity extends EntitySchema.class {}
 
 EntitySchema.setClass(Entity);
 
+// Covers: sync effect recovery.
 describe("sync effect recovery", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -52,6 +58,7 @@ describe("sync effect recovery", () => {
     await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
   });
 
+  // Verifies: reads an unapplied failed effect before returning it to pending.
   it("reads an unapplied failed effect before returning it to pending", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -118,6 +125,7 @@ describe("sync effect recovery", () => {
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
+  // Verifies: reads failed effects for one projection in a single postcondition batch.
   it("reads failed effects for one projection in a single postcondition batch", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -173,6 +181,7 @@ describe("sync effect recovery", () => {
     await expect(readStatus(adapter, effects[1]!.effectId)).resolves.toBe("pending");
   });
 
+  // Verifies: recovers failed rows persisted with the legacy retryable error code.
   it("recovers failed rows persisted with the legacy retryable error code", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -238,6 +247,7 @@ describe("sync effect recovery", () => {
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
+  // Verifies: keeps a receipt-less orphan row delivery-uncertain instead of closing or redriving.
   it("keeps a receipt-less orphan row delivery-uncertain instead of closing or redriving", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -326,6 +336,7 @@ describe("sync effect recovery", () => {
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("delivery_uncertain");
   });
 
+  // Verifies: terminally records an explicit structured remote failure.
   it("terminally records an explicit structured remote failure", async () => {
     const result = await runWorkerWithThrownProvider(openOrms, new GoogleSheetsApiTransportError(
       GOOGLE_SHEETS_API_TRANSPORT_ERROR_CODES.HTTP_ERROR,
@@ -346,6 +357,7 @@ describe("sync effect recovery", () => {
     expect(result.errorCode).toBe("provider_remote_error");
   });
 
+  // Verifies: recovers a partial remote write followed by an ambiguous batch failure.
   it("recovers a partial remote write followed by an ambiguous batch failure", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -435,6 +447,7 @@ describe("sync effect recovery", () => {
     expect(result.status).toBe("pending");
   });
 
+  // Verifies: recovers a fast append that reports applied without receipt evidence.
   it("recovers a fast append that reports applied without receipt evidence", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -478,6 +491,7 @@ describe("sync effect recovery", () => {
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
+  // Verifies: does not replay a receipt-only append when a non-delete row was manually removed.
   it("does not replay a receipt-only append when a non-delete row was manually removed", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -563,6 +577,7 @@ describe("sync effect recovery", () => {
     ))).resolves.toEqual({ last_error_code: "postcondition_changed" });
   });
 
+  // Verifies: retries a lost fast-append response through the registered identity.
   it("retries a lost fast-append response through the registered identity", async () => {
     const orm = await createOrm();
     openOrms.push(orm);
@@ -618,6 +633,7 @@ describe("sync effect recovery", () => {
     await expect(readStatus(adapter, effect.effectId)).resolves.toBe("applied");
   });
 
+  // Verifies: recovers a committed append whose reply was reported invalid through the real provider, then drains .
   it("recovers a committed append whose reply was reported invalid through the real provider, then drains its same-stream follower", async () => {
     const orm = await createOrm();
     openOrms.push(orm);

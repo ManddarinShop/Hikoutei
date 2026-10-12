@@ -18,7 +18,9 @@ import {
   shouldFallBackToDistOnSourceFailure,
 } from "../scripts/ci/local-soak/runner.mjs";
 
+// Verifies the soak PRNG determinism suite.
 describe("soak PRNG determinism", () => {
+  // Verifies: reproduces the identical stream for the same seed.
   it("reproduces the identical stream for the same seed", () => {
     const first = new SeededRandom(20260814);
     const second = new SeededRandom(20260814);
@@ -27,12 +29,14 @@ describe("soak PRNG determinism", () => {
     expect(a).toEqual(b);
   });
 
+  // Verifies: produces different streams for different seeds.
   it("produces different streams for different seeds", () => {
     const a = Array.from({ length: 20 }, () => new SeededRandom(1).next());
     const b = Array.from({ length: 20 }, () => new SeededRandom(2).next());
     expect(a).not.toEqual(b);
   });
 
+  // Verifies: bounds int() and pick() to their inputs.
   it("bounds int() and pick() to their inputs", () => {
     const rng = new SeededRandom(7);
     for (let index = 0; index < 100; index += 1) {
@@ -45,6 +49,7 @@ describe("soak PRNG determinism", () => {
     expect(() => new SeededRandom(1.5)).toThrow(/seed/);
   });
 
+  // Verifies: derives child seeds deterministically and within range.
   it("derives child seeds deterministically and within range", () => {
     expect(deriveSeed(20260814, 7)).toBe(deriveSeed(20260814, 7));
     const derived = deriveSeed(20260814, 7);
@@ -54,17 +59,21 @@ describe("soak PRNG determinism", () => {
   });
 });
 
+// Verifies the soak seed parsing suite.
 describe("soak seed parsing", () => {
+  // Verifies: accepts decimal and hex seeds.
   it("accepts decimal and hex seeds", () => {
     expect(parseSeed("20260814")).toBe(20260814);
     expect(parseSeed("0x1f")).toBe(31);
   });
 
+  // Verifies: applies the documented default when absent.
   it("applies the documented default when absent", () => {
     expect(parseSeed(undefined)).toBe(0x50414b53);
     expect(parseSeed("")).toBe(0x50414b53);
   });
 
+  // Verifies: rejects malformed or out-of-range seeds.
   it("rejects malformed or out-of-range seeds", () => {
     expect(() => parseSeed("abc")).toThrow(/--seed/);
     expect(() => parseSeed("-1")).toThrow(/--seed/);
@@ -72,7 +81,9 @@ describe("soak seed parsing", () => {
   });
 });
 
+// Verifies the soak spreadsheet URL parsing suite.
 describe("soak spreadsheet URL parsing", () => {
+  // Verifies: extracts the ID from documented spreadsheet URL shapes.
   it("extracts the ID from documented spreadsheet URL shapes", () => {
     expect(parseSpreadsheetIdFromUrl(
       "https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/edit",
@@ -85,12 +96,14 @@ describe("soak spreadsheet URL parsing", () => {
     )).toBe("1AbCdEfGhIjKlMnOpQrStUvWxYz");
   });
 
+  // Verifies: returns undefined for non-spreadsheet or malformed URLs.
   it("returns undefined for non-spreadsheet or malformed URLs", () => {
     expect(parseSpreadsheetIdFromUrl("https://example.com/not-sheets")).toBeUndefined();
     expect(parseSpreadsheetIdFromUrl("https://docs.google.com/spreadsheets/d/")).toBeUndefined();
     expect(parseSpreadsheetIdFromUrl("")).toBeUndefined();
   });
 
+  // Verifies: requires HTTPS for schemed URLs but keeps documented scheme-less forms.
   it("requires HTTPS for schemed URLs but keeps documented scheme-less forms", () => {
     // A schemed URL must be https; a non-https scheme (even with the
     // documented host) must be refused so a hostile or stale env value can
@@ -116,6 +129,7 @@ describe("soak spreadsheet URL parsing", () => {
     )).toBe("1AbC");
   });
 
+  // Verifies: rejects spreadsheet IDs with invalid characters.
   it("rejects spreadsheet IDs with invalid characters", () => {
     // Only URL-safe base64 ID characters (letters, digits, `-`, `_`) are
     // accepted; whitespace, punctuation, and percent-encoded octets are not.
@@ -147,6 +161,7 @@ describe("soak spreadsheet URL parsing", () => {
     )).toBe("1AbC-x_9");
   });
 
+  // Verifies: rejects malformed path prefixes before the d segment.
   it("rejects malformed path prefixes before the d segment", () => {
     // Only the documented host + `d/<ID>` / `spreadsheets/d/<ID>` layouts are
     // accepted. Any arbitrary prefix segment placed before `spreadsheets/d`
@@ -177,6 +192,7 @@ describe("soak spreadsheet URL parsing", () => {
     )).toBe("1AbC");
   });
 
+  // Verifies: rejects unsupported suffix segments after the ID.
   it("rejects unsupported suffix segments after the ID", () => {
     // Only the documented trailing forms are allowed: `/edit` and/or a
     // trailing slash. Any other suffix segment must be refused.
@@ -201,6 +217,7 @@ describe("soak spreadsheet URL parsing", () => {
     )).toBe("1AbC");
   });
 
+  // Verifies: rejects arbitrary hosts so cleanup can never target an unintended spreadsheet.
   it("rejects arbitrary hosts so cleanup can never target an unintended spreadsheet", () => {
     // The documented URL authority is docs.google.com; any other host with a
     // spreadsheet-shaped path must be rejected, never resolved to an id.
@@ -213,6 +230,7 @@ describe("soak spreadsheet URL parsing", () => {
     )).toBeUndefined();
   });
 
+  // Verifies: never returns whitespace or query fragments.
   it("never returns whitespace or query fragments", () => {
     expect(parseSpreadsheetIdFromUrl(
       "https://docs.google.com/spreadsheets/d/ab cd",
@@ -223,11 +241,13 @@ describe("soak spreadsheet URL parsing", () => {
   });
 });
 
+// Verifies the soak source-vs-dist import fallback guard suite.
 describe("soak source-vs-dist import fallback guard", () => {
   afterEach(() => {
     delete process.env.VITEST;
   });
 
+  // Verifies: falls back to dist only outside Vitest (the plain-Node CLI case).
   it("falls back to dist only outside Vitest (the plain-Node CLI case)", () => {
     // Plain Node CLI: the TS source is never loadable, so a source-load
     // failure is the expected unsupported-TS-loader case and falls back to
@@ -236,6 +256,7 @@ describe("soak source-vs-dist import fallback guard", () => {
     expect(shouldFallBackToDistOnSourceFailure()).toBe(true);
   });
 
+  // Verifies: rethrows source failures under Vitest so a compile error is never masked by stale dist.
   it("rethrows source failures under Vitest so a compile error is never masked by stale dist", () => {
     // Vitest always loads the TS source; any failure there is a real source
     // bug and must be rethrown, never silently swapped for a stale dist copy.

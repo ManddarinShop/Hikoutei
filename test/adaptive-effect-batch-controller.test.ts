@@ -1,3 +1,11 @@
+/**
+ * Tests for the adaptive effect batch controller that sizes per-route outbound batches.
+ *
+ * Covers the starting limit, halving on unhealthy (high-latency) observations, growth on
+ * consecutive healthy observations, short-burst coalescing without buffering effect rows in
+ * memory, and constructor validation that rejects an inverted minimum/maximum with a coded error.
+ */
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -5,7 +13,9 @@ import {
   AdaptiveEffectBatchController,
 } from "@hikoutei/ikisaki";
 
+// Covers adaptive effect batch controller.
 describe("adaptive effect batch controller", () => {
+  // Verifies starts at one hundred, halves unhealthy routes, and grows stable routes.
   it("starts at one hundred, halves unhealthy routes, and grows stable routes", () => {
     const controller = new AdaptiveEffectBatchController({ coalesceWindowMs: 0 });
 
@@ -26,6 +36,7 @@ describe("adaptive effect batch controller", () => {
     expect(controller.limitFor("route-a")).toBe(150);
   });
 
+  // Verifies coalesces only a short burst without holding effect rows in memory.
   it("coalesces only a short burst without holding effect rows in memory", async () => {
     vi.useFakeTimers();
     try {
@@ -39,6 +50,7 @@ describe("adaptive effect batch controller", () => {
     }
   });
 
+  // Verifies throws AdaptiveBatchOptionsError with code for invalid limits.
   it("throws AdaptiveBatchOptionsError with code for invalid limits", () => {
     try {
       new AdaptiveEffectBatchController({ minimum: 20, maximum: 5 });

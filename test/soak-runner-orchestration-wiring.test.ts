@@ -116,7 +116,9 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner live close-deadline orchestration wiring.
 describe("soak runner live close-deadline orchestration wiring", () => {
+  // Verifies: constructs the direct client AND admits the live cycle with the SAME bounded close deadline, and base admission stops a new cycle.
   it(
     "constructs the direct client AND admits the live cycle with the SAME bounded close deadline, and base admission stops a new cycle",
     { timeout: 30_000 },

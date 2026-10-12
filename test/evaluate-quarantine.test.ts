@@ -1,3 +1,10 @@
+/**
+ * Quarantine routing tests for rows that fail structural or ownership checks.
+ *
+ * Covers user-row and system-row quarantine paths, repair status mapping,
+ * and outcome classification for unprocessable observed changes. Pure
+ * in-memory evaluation with no persistence or provider involvement.
+ */
 import { describe, expect, it } from "vitest";
 import {
   CANONICAL_RESOLUTION_STATUSES,
@@ -71,7 +78,9 @@ const canonical: CanonicalEntityState = {
   ]),
 };
 
+// Covers quarantine result contracts.
 describe("quarantine result contracts", () => {
+  // Verifies marks generic quarantine without a repair plan or entity revision.
   it("marks generic quarantine without a repair plan or entity revision", () => {
     const result = quarantineRow(row, QUARANTINE_REASONS.INVALID_EVENT);
 
@@ -85,6 +94,7 @@ describe("quarantine result contracts", () => {
     expect(result).not.toHaveProperty("nextEntityRevision");
   });
 
+  // Verifies creates an explicit repair decision for a system-only edit.
   it("creates an explicit repair decision for a system-only edit", () => {
     const result = quarantineSystemRow(
       row,
@@ -107,6 +117,7 @@ describe("quarantine result contracts", () => {
     expect(result).not.toHaveProperty("nextEntityRevision");
   });
 
+  // Verifies explains why system repair is not planned without canonical state.
   it("explains why system repair is not planned without canonical state", () => {
     const result = quarantineSystemRow(
       row,

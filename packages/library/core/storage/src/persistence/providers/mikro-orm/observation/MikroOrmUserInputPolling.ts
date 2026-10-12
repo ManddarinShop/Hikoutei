@@ -18,7 +18,7 @@ import {
   emptySyncTimingOperationCounts,
   SYNC_TIMING_SCOPES,
   type SyncTimingSink,
-} from "@hikoutei/storage/sync/telemetry/syncTiming.js";
+} from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import {
   isSyncSheetsRowChecksReader,
   isSyncSheetsTableReader,

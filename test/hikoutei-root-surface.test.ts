@@ -1,3 +1,8 @@
+/**
+ * Guards the root entrypoint (`src/index.ts`) public surface contract.
+ * Asserts the stable entity-lifecycle API is exported, internal engine symbols
+ * stay hidden, and removed sync options are rejected at compile time.
+ */
 import { describe, expect, it } from "vitest";
 
 // Root entrypoint: only the stable public surface should be reachable here.
@@ -10,7 +15,9 @@ import {
   HIKOUTEI_SCALAR_TYPES,
 } from "../src/index.js";
 
+// Verifies the root entrypoint only exposes the stable public surface.
 describe("root public surface", () => {
+  // Verifies the entity-lifecycle API is exported from the root entrypoint.
   it("exposes the stable entity-lifecycle API from the root entrypoint", () => {
     expect(typeof defineTypedSheetsEntity).toBe("function");
     expect(typeof createTypedSheets).toBe("function");
@@ -19,6 +26,7 @@ describe("root public surface", () => {
     expect(HIKOUTEI_SCALAR_TYPES.STRING).toBe("string");
   });
 
+  // Verifies internal provider, ORM, and SQL types stay out of the root.
   it("does not re-export internal provider, ORM, or SQL types from the root", () => {
     const namespace = hikouteiRoot as Record<string, unknown>;
     // Internal engine symbols that must never be part of the public contract.

@@ -12,9 +12,9 @@
  * `.env` file.
  */
 
-import type { KeyMetadataResult, SecureKeyReadResult } from "./checkpoint.js";
-import { SERVICE_ACCOUNT_KEY_FILE_MODE, SERVICE_ACCOUNT_KEY_ID_PATTERN } from "./checkpoint.js";
-import { noFollowFlag, nonBlockFlag } from "./envFileWriter.js";
+import type { KeyMetadataResult, SecureKeyReadResult } from "./keyContract.js";
+import { SERVICE_ACCOUNT_KEY_FILE_MODE, SERVICE_ACCOUNT_KEY_ID_PATTERN } from "./keyContract.js";
+import { noFollowFlag, nonBlockFlag } from "./setupPaths.js";
 import { createPrivateKey } from "node:crypto";
 import {
   closeSync,

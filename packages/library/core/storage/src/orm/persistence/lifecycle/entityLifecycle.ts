@@ -17,7 +17,7 @@ import {
 import { stableHash } from "@hikoutei/contracts/encoding/stableEncode.js";
 import type { NormalizedCell } from "@hikoutei/contracts/encoding/types.js";
 import type { Presence } from "@hikoutei/contracts/state/types.js";
-import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
+import { SYNC_TIMING_SCOPES } from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import {
   SCALAR_ENTITY_CHANGE_KINDS,
 } from "@hikoutei/contracts/storage/scalar.js";
@@ -151,6 +151,11 @@ export async function applyMappedChange(
 }
 
 async function createMappedEntity(
+  // Intentionally returns the same per-call `commitId` on every path (S3516
+  // accepted): the branches differ in side effects — reactivating a tombstoned
+  // binding vs. writing fresh INSERT projection effects — not in the commit
+  // identity. Single-commit-id semantics are part of the storage core CAS
+  // design; do not refactor this return shape without a dedicated design pass.
   sql: SqlExecutor,
   fence: FencingContext,
   writer: ResolvedWriterOptions,

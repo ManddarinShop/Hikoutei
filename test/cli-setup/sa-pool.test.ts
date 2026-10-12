@@ -76,7 +76,9 @@ afterEach(() => {
   tempDirs.length = 0;
 });
 
+// Covers parseSetupArgs --sa-count.
 describe("parseSetupArgs --sa-count", () => {
+  // Verifies leaves saCount absent by default (default 1, never prompts downstream)
   it("leaves saCount absent by default (default 1, never prompts downstream)", () => {
     const result = parseSetupArgs([]);
     expect(result.status).toBe("valid");
@@ -86,6 +88,7 @@ describe("parseSetupArgs --sa-count", () => {
     }
   });
 
+  // Verifies accepts 1..10 in both --flag value and --flag=value forms.
   it("accepts 1..10 in both --flag value and --flag=value forms", () => {
     for (const argv of [["--sa-count", "1"], ["--sa-count", "10"], ["--sa-count=3"]]) {
       const result = parseSetupArgs(argv);
@@ -96,6 +99,7 @@ describe("parseSetupArgs --sa-count", () => {
     }
   });
 
+  // Verifies rejects 0, negative, non-integer, and non-numeric values with invalid_args.
   it("rejects 0, negative, non-integer, and non-numeric values with invalid_args", () => {
     for (const argv of [
       ["--sa-count", "0"],
@@ -112,6 +116,7 @@ describe("parseSetupArgs --sa-count", () => {
     }
   });
 
+  // Verifies rejects values above the cap with the quota-exhaustion usage error.
   it("rejects values above the cap with the quota-exhaustion usage error", () => {
     const result = parseSetupArgs(["--sa-count", "11"]);
     expect(result.status).toBe("invalid");
@@ -124,6 +129,7 @@ describe("parseSetupArgs --sa-count", () => {
     expect(MAX_SETUP_SA_COUNT).toBe(10);
   });
 
+  // Verifies documents --sa-count in the help text.
   it("documents --sa-count in the help text", () => {
     expect(SETUP_HELP_TEXT).toContain("--sa-count");
     expect(SETUP_HELP_TEXT).toContain("HIKOUTEI_SYNC_CREDENTIALS");
@@ -131,6 +137,7 @@ describe("parseSetupArgs --sa-count", () => {
   });
 });
 
+// Covers resolveSaCountForSetup (interactive prompt)
 describe("resolveSaCountForSetup (interactive prompt)", () => {
   /** Reader over a scripted line queue; records prompt writes. */
   function scriptedReader(lines: ReadonlyArray<string | null>): {
@@ -148,6 +155,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     };
   }
 
+  // Verifies never prompts with --yes, --dry-run, non-TTY, or an explicit flag.
   it("never prompts with --yes, --dry-run, non-TTY, or an explicit flag", async () => {
     const throwing = (): Promise<string | null> => {
       throw new Error("must not prompt");
@@ -164,6 +172,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     }
   });
 
+  // Verifies treats empty input and end-of-input as 1.
   it("treats empty input and end-of-input as 1", async () => {
     for (const lines of [[""], ["   "], [null]]) {
       const writes: string[] = [];
@@ -182,6 +191,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     expect(SA_COUNT_PROMPT).toBe("Service accounts to create? [1]: ");
   });
 
+  // Verifies accepts a valid count on the first answer.
   it("accepts a valid count on the first answer", async () => {
     const writes: string[] = [];
     const reader = scriptedReader(["3"]);
@@ -197,6 +207,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     expect(writes).toStrictEqual([SA_COUNT_PROMPT]);
   });
 
+  // Verifies re-asks once after invalid input, then accepts a valid answer.
   it("re-asks once after invalid input, then accepts a valid answer", async () => {
     const writes: string[] = [];
     const reader = scriptedReader(["banana", "2"]);
@@ -212,6 +223,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     expect(writes).toStrictEqual([SA_COUNT_PROMPT, SA_COUNT_PROMPT]);
   });
 
+  // Verifies fails with a usage error after two invalid answers.
   it("fails with a usage error after two invalid answers", async () => {
     const reader = scriptedReader(["0", "99"]);
     const resolved = await resolveSaCountForSetup({
@@ -228,6 +240,7 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
     }
   });
 
+  // Verifies fails closed on invalid input followed by end-of-input (no silent default)
   it("fails closed on invalid input followed by end-of-input (no silent default)", async () => {
     const writes: string[] = [];
     const reader = scriptedReader(["banana", null]);
@@ -247,7 +260,9 @@ describe("resolveSaCountForSetup (interactive prompt)", () => {
   });
 });
 
+// Covers writeSetupEnvFile credential pool.
 describe("writeSetupEnvFile credential pool", () => {
+  // Verifies writes no pool line for a single-SA run.
   it("writes no pool line for a single-SA run", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -259,6 +274,7 @@ describe("writeSetupEnvFile credential pool", () => {
     expect(readFileSync(outputPath, "utf8")).not.toContain("HIKOUTEI_SYNC_CREDENTIALS");
   });
 
+  // Verifies writes a comma-joined pool line with no spaces for N=3.
   it("writes a comma-joined pool line with no spaces for N=3", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -280,6 +296,7 @@ describe("writeSetupEnvFile credential pool", () => {
     expect(second).toStrictEqual({ created: false, modified: false });
   });
 
+  // Verifies removes a stale pool line on a single-SA rewrite.
   it("removes a stale pool line on a single-SA rewrite", () => {
     const dir = makeTempDir();
     const outputPath = join(dir, ".env");
@@ -298,6 +315,7 @@ describe("writeSetupEnvFile credential pool", () => {
   });
 });
 
+// Covers checkpoint credential pool.
 describe("checkpoint credential pool", () => {
   /** Minimal complete state for a project; pool added via overrides. */
   function completeState(projectId: string, overrides: Record<string, unknown> = {}): SetupState {
@@ -327,6 +345,7 @@ describe("checkpoint credential pool", () => {
     };
   }
 
+  // Verifies round-trips a pool through save/load.
   it("round-trips a pool through save/load", () => {
     const dir = makeTempDir();
     const statePath = join(dir, SETUP_STATE_FILE_NAME);
@@ -340,6 +359,7 @@ describe("checkpoint credential pool", () => {
     }
   });
 
+  // Verifies keeps single-SA checkpoints unchanged (no pool key)
   it("keeps single-SA checkpoints unchanged (no pool key)", () => {
     const projectId = "pool-proj";
     const validated = validateSetupState(JSON.parse(JSON.stringify(completeState(projectId))));
@@ -349,6 +369,7 @@ describe("checkpoint credential pool", () => {
     expect("pool" in (validated as unknown as Record<string, unknown>)).toBe(false);
   });
 
+  // Verifies rejects empty pools, foreign emails, entry-1 mismatches, and pre-complete pools.
   it("rejects empty pools, foreign emails, entry-1 mismatches, and pre-complete pools", () => {
     const projectId = "pool-proj";
     expect(validateSetupState(completeState(projectId, { pool: [] }))).toBeNull();
@@ -367,10 +388,116 @@ describe("checkpoint credential pool", () => {
       ),
     ).toBeNull();
     expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [
+            poolEntry(projectId, 1),
+            poolEntry(projectId, 3),
+          ],
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1), { ...poolEntry(projectId, 2), keyPath: "/tmp/noncanonical.json" }],
+        }),
+      ),
+    ).toBeNull();
+    expect(
       validateSetupState({ ...completeState(projectId), status: "spreadsheet_shared", pool: [poolEntry(projectId, 1)] }),
     ).toBeNull();
   });
 
+  // Verifies round-trips an in-flight pool-key write-ahead through save/load.
+  it("round-trips an in-flight pool-key write-ahead through save/load", () => {
+    const dir = makeTempDir();
+    const statePath = join(dir, SETUP_STATE_FILE_NAME);
+    const projectId = "pool-proj";
+    const state = completeState(projectId, {
+      pool: [poolEntry(projectId, 1), poolEntry(projectId, 2)],
+      poolKeyStarted: {
+        index: 3,
+        saName: "hikoutei-sa-3",
+        saEmail: serviceAccountEmail("hikoutei-sa-3", projectId),
+        keyPath: "/tmp/hikoutei-service-account-3.json",
+        keyMarker: "123e4567-e89b-42d3-a456-426614174000",
+        keyBaseline: [],
+      },
+    });
+    saveSetupState(statePath, state);
+    const loaded = loadSetupState(statePath);
+    expect(loaded.status).toBe("loaded");
+    if (loaded.status === "loaded") {
+      expect(loaded.state).toStrictEqual(state);
+    }
+  });
+
+  // Verifies rejects a pool-key write-ahead before completion and malformed write-aheads.
+  it("rejects a pool-key write-ahead before completion and malformed write-aheads", () => {
+    const projectId = "pool-proj";
+    const writeAhead = {
+      index: 2,
+      saName: "hikoutei-sa-2",
+      saEmail: serviceAccountEmail("hikoutei-sa-2", projectId),
+      keyPath: "/tmp/hikoutei-service-account-2.json",
+      keyMarker: "123e4567-e89b-42d3-a456-426614174000",
+      keyBaseline: [],
+    };
+    expect(
+      validateSetupState({ ...completeState(projectId), status: "spreadsheet_shared", poolKeyStarted: writeAhead }),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1)],
+          poolKeyStarted: { ...writeAhead, keyMarker: "not-a-uuid" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1)],
+          poolKeyStarted: { ...writeAhead, index: 1 },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool: [poolEntry(projectId, 1)],
+          poolKeyStarted: { ...writeAhead, saEmail: "evil@x.iam.gserviceaccount.com" },
+        }),
+      ),
+    ).toBeNull();
+    const pool = [poolEntry(projectId, 1), poolEntry(projectId, 2)];
+    const indexThreeWriteAhead = {
+      ...writeAhead,
+      index: 3,
+      saName: "hikoutei-sa-3",
+      saEmail: serviceAccountEmail("hikoutei-sa-3", projectId),
+      keyPath: "/tmp/hikoutei-service-account-3.json",
+    };
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool,
+          poolKeyStarted: { ...indexThreeWriteAhead, index: 4 },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      validateSetupState(
+        completeState(projectId, {
+          pool,
+          poolKeyStarted: { ...indexThreeWriteAhead, keyPath: "/tmp/noncanonical.json" },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  // Verifies treats saCount as a run option: a stored pool never conflicts.
   it("treats saCount as a run option: a stored pool never conflicts", () => {
     const projectId = "pool-proj";
     const validated = validateSetupState(
@@ -392,7 +519,9 @@ describe("checkpoint credential pool", () => {
   });
 });
 
+// Covers poolKeyPath.
 describe("poolKeyPath", () => {
+  // Verifies mirrors the primary naming next to the primary path.
   it("mirrors the primary naming next to the primary path", () => {
     expect(poolKeyPath("/tmp/hikoutei-service-account.json", 2)).toBe("/tmp/hikoutei-service-account-2.json");
     expect(poolKeyPath("/tmp/custom-key.json", 10)).toBe("/tmp/custom-key-10.json");
@@ -551,7 +680,9 @@ function keyCommandEmails(calls: readonly string[][]): string[] {
     .map((c) => c[c.indexOf("--iam-account") + 1] as string);
 }
 
+// Covers runSetup credential pool flow.
 describe("runSetup credential pool flow", () => {
+  // Verifies N=1 (default) writes no pool key, no pool env line, and no pool progress.
   it("N=1 (default) writes no pool key, no pool env line, and no pool progress", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -566,6 +697,7 @@ describe("runSetup credential pool flow", () => {
     expect(harness.events.some((e) => e.type === "phase_started" && e.phase === POOL_EXPANSION_PHASE)).toBe(false);
   });
 
+  // Verifies N=3 provisions 3 SAs/keys/shares/verifies and writes the pool env.
   it("N=3 provisions 3 SAs/keys/shares/verifies and writes the pool env", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -646,6 +778,7 @@ describe("runSetup credential pool flow", () => {
     expect(tracker.isComplete(POOL_EXPANSION_PHASE)).toBe(true);
   });
 
+  // Verifies resume mid-pool skips completed entries without redoing their cloud calls.
   it("resume mid-pool skips completed entries without redoing their cloud calls", async () => {
     const dir = makeTempDir();
     const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
@@ -661,16 +794,21 @@ describe("runSetup credential pool flow", () => {
     expect(readFileSync(harness.outputPath, "utf8")).not.toContain("HIKOUTEI_SYNC_CREDENTIALS");
     expect(harness.verifyCalls).toHaveLength(2);
 
-    // Recover and resume: entry 2 is skipped, entry 3 completes.
+    // Recover with a smaller request: entry 2 is skipped and the in-flight
+    // entry 3 is reconciled without issuing a second key create.
     harness.failShareFor.clear();
     const callsBefore = harness.calls.length;
     const sharesBefore = harness.shares.length;
     const verifiesBefore = harness.verifyCalls.length;
-    const second = await harness.run({ saCount: 3 });
+    const second = await harness.run({ saCount: 2 });
     expect(second.status).toBe("ok");
     if (second.status !== "ok" || second.dryRun) return;
     const delta = harness.calls.slice(callsBefore);
     expect(delta.join("\n")).not.toContain("hikoutei-sa-2");
+    expect(delta.some((command) =>
+      command[0] === "iam" && command[2] === "keys" && command[3] === "create" &&
+      command[command.indexOf("--iam-account") + 1] === third,
+    )).toBe(false);
     expect(harness.shares.slice(sharesBefore).map((s) => s.saEmail)).toStrictEqual([third]);
     expect(harness.verifyCalls.slice(verifiesBefore)).toHaveLength(1);
     expect(second.summary.poolSize).toBe(3);
@@ -681,6 +819,7 @@ describe("runSetup credential pool flow", () => {
     expect(final.pool).toHaveLength(3);
   });
 
+  // Verifies resume with a smaller saCount keeps the full pool and reports kept entries.
   it("resume with a smaller saCount keeps the full pool and reports kept entries", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -706,6 +845,7 @@ describe("runSetup credential pool flow", () => {
     expect(final.pool).toHaveLength(3);
   });
 
+  // Verifies reuses an existing matching key file for a pool SA instead of creating.
   it("reuses an existing matching key file for a pool SA instead of creating", async () => {
     const dir = makeTempDir();
     const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
@@ -727,6 +867,7 @@ describe("runSetup credential pool flow", () => {
     expect(JSON.parse(readFileSync(secondPath, "utf8")).client_email).toBe(secondEmail);
   });
 
+  // Verifies rejects an out-of-range saCount with invalid_args before any cloud call.
   it("rejects an out-of-range saCount with invalid_args before any cloud call", async () => {
     const dir = makeTempDir();
     const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
@@ -737,6 +878,7 @@ describe("runSetup credential pool flow", () => {
   });
 });
 
+// Covers setup progress pool phase.
 describe("setup progress pool phase", () => {
   /** Full ten-phase completion prefix so the pool phase may legally start. */
   function completeFixedPhases(tracker: SetupProgressTracker): void {
@@ -758,6 +900,7 @@ describe("setup progress pool phase", () => {
     }
   }
 
+  // Verifies accepts the pool phase after output without moving the overall count.
   it("accepts the pool phase after output without moving the overall count", () => {
     const tracker = new SetupProgressTracker();
     // Rejected before the fixed phases complete.
@@ -774,6 +917,7 @@ describe("setup progress pool phase", () => {
   });
 });
 
+// Covers runSetupCli service-account count wiring.
 describe("runSetupCli service-account count wiring", () => {
   function capturingSink(): { write: (text: string) => void; text: () => string } {
     let text = "";
@@ -846,6 +990,7 @@ describe("runSetupCli service-account count wiring", () => {
     return { code, paramsSaCount, stdout: stdout.text(), stderr: stderr.text() };
   }
 
+  // Verifies prompts once on a TTY without --sa-count and passes the answer through.
   it("prompts once on a TTY without --sa-count and passes the answer through", async () => {
     const result = await runCli({ stdinChunks: ["y\n", "3\n"], isTTY: true });
     expect(result.code).toBe(0);
@@ -853,6 +998,7 @@ describe("runSetupCli service-account count wiring", () => {
     expect(result.stdout).toContain("Service accounts to create?");
   });
 
+  // Verifies never prompts with --sa-count and passes the flag through.
   it("never prompts with --sa-count and passes the flag through", async () => {
     const result = await runCli({ saCount: 2, stdinChunks: ["y\n"], isTTY: true });
     expect(result.code).toBe(0);
@@ -860,6 +1006,7 @@ describe("runSetupCli service-account count wiring", () => {
     expect(result.stdout).not.toContain("Service accounts to create?");
   });
 
+  // Verifies never prompts off-TTY and defaults to 1.
   it("never prompts off-TTY and defaults to 1", async () => {
     // Off-TTY the confirmation still reads stdin (existing behavior), but
     // the count prompt never fires: the flag default (1) is used.
@@ -867,5 +1014,147 @@ describe("runSetupCli service-account count wiring", () => {
     expect(result.code).toBe(0);
     expect(result.paramsSaCount).toBe(1);
     expect(result.stdout).not.toContain("Service accounts to create?");
+  });
+});
+
+// Covers pool-key write-ahead, preservation, collision, derived-name, and dry-run regressions.
+describe("credential pool write-ahead and preservation regressions", () => {
+  // Verifies a mid-pool-key crash persists its marker/baseline and the resume reconciles without a second key create.
+  it("persists a pool-key write-ahead and resumes reconcile-only without a duplicate key", async () => {
+    const dir = makeTempDir();
+    const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
+    const harness = createPoolHarness(dir, cloud);
+    const third = serviceAccountEmail("hikoutei-sa-3", "pool-proj");
+    harness.failShareFor.add(third);
+
+    const first = await harness.run({ saCount: 3 });
+    expectError(first, SETUP_ERROR_CODES.SHEET_SHARE_FAILED);
+    // The in-flight pool key write-ahead is durable on the complete checkpoint.
+    const mid = JSON.parse(readFileSync(harness.statePath, "utf8")) as {
+      status: string;
+      pool: { saName: string; saEmail: string; keyPath: string }[];
+      poolKeyStarted?: {
+        index: number;
+        saName: string;
+        saEmail: string;
+        keyPath: string;
+        keyMarker: string;
+        keyBaseline: unknown;
+      };
+    };
+    expect(mid.status).toBe("complete");
+    expect(mid.pool).toHaveLength(2);
+    expect(mid.poolKeyStarted?.index).toBe(3);
+    expect(mid.poolKeyStarted?.saEmail).toBe(third);
+    expect(mid.poolKeyStarted?.keyPath).toBe(poolKeyPath(harness.keyPath, 3));
+    expect(typeof mid.poolKeyStarted?.keyMarker).toBe("string");
+    const keyCreates = (calls: readonly string[][]): number =>
+      calls.filter((c) => c[0] === "iam" && c[2] === "keys" && c[3] === "create").length;
+    const createsBefore = keyCreates(harness.calls);
+
+    // Resume: entry 3 reconciles (no second create) and completes the pool.
+    harness.failShareFor.clear();
+    const second = await harness.run({ saCount: 3 });
+    expect(second.status).toBe("ok");
+    if (second.status !== "ok" || second.dryRun) return;
+    expect(second.summary.poolSize).toBe(3);
+    expect(keyCreates(harness.calls)).toBe(createsBefore);
+    const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as {
+      pool: unknown[];
+      poolKeyStarted?: unknown;
+    };
+    expect(final.pool).toHaveLength(3);
+    expect("poolKeyStarted" in final).toBe(false);
+  });
+
+  // Verifies a default-count rerun still reconciles an in-flight pool key.
+  it("reconciles an in-flight pool key on a default-count rerun", async () => {
+    const dir = makeTempDir();
+    const cloud: PoolFakeCloud = { serviceAccounts: new Set(), keys: new Set() };
+    const harness = createPoolHarness(dir, cloud);
+    const second = serviceAccountEmail("hikoutei-sa-2", "pool-proj");
+    harness.failShareFor.add(second);
+
+    const first = await harness.run({ saCount: 2 });
+    expectError(first, SETUP_ERROR_CODES.SHEET_SHARE_FAILED);
+    const createsBeforeResume = harness.calls.filter(
+      (command) => command[0] === "iam" && command[2] === "keys" && command[3] === "create",
+    ).length;
+
+    harness.failShareFor.clear();
+    const resumed = await harness.run();
+    expect(resumed.status).toBe("ok");
+    if (resumed.status !== "ok" || resumed.dryRun) return;
+    expect(resumed.summary.poolSize).toBe(2);
+    expect(
+      harness.calls.filter(
+        (command) => command[0] === "iam" && command[2] === "keys" && command[3] === "create",
+      ),
+    ).toHaveLength(createsBeforeResume);
+    expect(readFileSync(harness.outputPath, "utf8")).toContain(
+      `${SETUP_ENV_KEYS.CREDENTIAL_POOL}=${harness.keyPath},${poolKeyPath(harness.keyPath, 2)}`,
+    );
+    const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as {
+      pool: unknown[];
+      poolKeyStarted?: unknown;
+    };
+    expect(final.pool).toHaveLength(2);
+    expect("poolKeyStarted" in final).toBe(false);
+  });
+
+  // Verifies a default (no-flag) rerun keeps the full pool and its .env line.
+  it("keeps the full pool and its .env line on a default rerun", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const first = await harness.run({ saCount: 3 });
+    expect(first.status).toBe("ok");
+    // Default rerun (no saCount): nothing is removed.
+    const second = await harness.run();
+    expect(second.status).toBe("ok");
+    if (second.status !== "ok" || second.dryRun) return;
+    expect(second.summary.poolSize).toBe(3);
+    expect(second.summary.poolKeptEntries).toBe(3);
+    expect(second.summary.poolPaths).toHaveLength(3);
+    expect(readFileSync(harness.outputPath, "utf8")).toContain(`${SETUP_ENV_KEYS.CREDENTIAL_POOL}=`);
+    const final = JSON.parse(readFileSync(harness.statePath, "utf8")) as { pool: unknown[] };
+    expect(final.pool).toHaveLength(3);
+  });
+
+  // Verifies a pool key path colliding with --output is rejected before any cloud call.
+  it("rejects a pool key path aliasing --output before any cloud call", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const result = await harness.run({ saCount: 2, outputPath: poolKeyPath(harness.keyPath, 2) });
+    expectError(result, SETUP_ERROR_CODES.INVALID_ARGS);
+    expect(harness.calls).toHaveLength(0);
+    expect(existsSync(harness.statePath)).toBe(false);
+  });
+
+  // Verifies an over-long --sa-name that cannot expand is rejected before any cloud call.
+  it("rejects derived pool names that are not canonical before any cloud call", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const result = await harness.run({ saCount: 2, saName: "a".repeat(29) });
+    expectError(result, SETUP_ERROR_CODES.INVALID_ARGS);
+    expect(harness.calls).toHaveLength(0);
+    expect(existsSync(harness.statePath)).toBe(false);
+  });
+
+  // Verifies a dry run plans the requested pool and validates derived names without mutating.
+  it("plans the requested pool on a dry run and validates derived names", async () => {
+    const dir = makeTempDir();
+    const harness = createPoolHarness(dir, { serviceAccounts: new Set(), keys: new Set() });
+    const planned = await harness.run({ saCount: 3, dryRun: true });
+    expect(planned.status).toBe("ok");
+    if (planned.status !== "ok" || !planned.dryRun) return;
+    const text = JSON.stringify(planned.commands);
+    expect(text).toContain("hikoutei-sa-2");
+    expect(text).toContain("hikoutei-sa-3");
+    expect(text).toContain("HIKOUTEI_SYNC_CREDENTIALS");
+    expect(harness.calls).toHaveLength(0);
+    expect(existsSync(harness.statePath)).toBe(false);
+
+    const invalid = await harness.run({ saCount: 2, saName: "a".repeat(29), dryRun: true });
+    expectError(invalid, SETUP_ERROR_CODES.INVALID_ARGS);
   });
 });

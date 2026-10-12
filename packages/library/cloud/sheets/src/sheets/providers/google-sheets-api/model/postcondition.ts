@@ -18,7 +18,7 @@ import {
   classifyCasPostcondition,
   type CasClassifyInput,
 } from "@hikoutei/ikisaki";
-import type { PreflightContext, PreflightReceipt } from "./preflightContext.js";
+import type { PreflightContext, PreflightReceipt } from "./preflightTypes.js";
 import {
   currentHash,
   findWorkingRow,

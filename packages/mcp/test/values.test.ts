@@ -128,6 +128,53 @@ describe("validateRecordData", () => {
       expect(bad.reason).toContain("cannot be updated");
     }
   });
+  it("accepts an omitted numeric primary on create but type-checks supplied values", () => {
+    const omitted = validateRecordData(logs, { message: "hello" }, "create");
+    expect(omitted.status).toBe("valid");
+    if (omitted.status !== "valid") return;
+    expect(omitted.value).toEqual({ message: "hello" });
+
+    const badType = validateRecordData(logs, { seq: "seven", message: "hello" }, "create");
+    expect(badType.status).toBe("invalid");
+
+    const stringPrimaryStillRequired = validateRecordData(tasks, {
+      title: "x",
+      done: true,
+      dueAt: "2026-08-01T00:00:00.000Z",
+    }, "create");
+    expect(stringPrimaryStillRequired.status).toBe("invalid");
+  });
+
+  it("reads required fields from own input properties only", () => {
+    const inherited = Object.create({ title: "inherited", done: true, dueAt: "2026-08-01T00:00:00.000Z" });
+    inherited.id = "t1";
+    const result = validateRecordData(tasks, inherited, "create");
+    expect(result.status).toBe("invalid");
+    if (result.status === "invalid") {
+      expect(result.reason).toContain('"title"');
+    }
+  });
+
+  it("rejects non-canonical date strings even when Date parses them", () => {
+    const loose = validateRecordData(tasks, {
+      id: "t1",
+      title: "x",
+      done: true,
+      dueAt: "August 1, 2026",
+    }, "create");
+    expect(loose.status).toBe("invalid");
+    if (loose.status === "invalid") {
+      expect(loose.reason).toContain("ISO 8601");
+    }
+
+    const dateOnly = validateRecordData(tasks, {
+      id: "t1",
+      title: "x",
+      done: true,
+      dueAt: "2026-08-01",
+    }, "create");
+    expect(dateOnly.status).toBe("invalid");
+  });
 });
 
 describe("validatePrimaryId", () => {

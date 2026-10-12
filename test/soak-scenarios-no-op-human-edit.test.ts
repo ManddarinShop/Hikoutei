@@ -136,6 +136,7 @@ function liveContext(
 // ---------------------------------------------------------------------------
 
 describe("noOpHumanEdit scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -144,6 +145,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(ids).toContain("no-op-human-edit");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("no-op-human-edit");
     expect(scenario.kind).toBe("data");
@@ -172,6 +174,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(plan.humanValue).toBe(toCellString(row[plan.target.field]));
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const seed = 777;
     const plan = buildPlan(seed);
@@ -190,6 +193,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: verifies a no-op write leaves the value unchanged and no false conflict (ok).
   it("verifies a no-op write leaves the value unchanged and no false conflict (ok)", async () => {
     const seed = 777;
     const plan = buildPlan(seed);
@@ -211,6 +215,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: leaves the authority value unchanged after the same-value write (no-op invariant).
   it("leaves the authority value unchanged after the same-value write (no-op invariant)", async () => {
     // Core hypothesis: a human writing the SAME value already present in a
     // cell must be a no-op — no false conflict, no revision churn. The value
@@ -240,6 +245,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-stale human-write rejection as a real failure (scenario-error).
   it("classifies a non-stale human-write rejection as a real failure (scenario-error)", async () => {
     // A no-op write must never reject. A non-stale (transport) rejection is
     // a real failure, never an expected conflict.
@@ -257,6 +263,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records an identity-shifted no-op write rejection as a transient skip, not a failure.
   it("records an identity-shifted no-op write rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the same-value write
     // with the stable `identity_shifted` class when a CONCURRENT actor
@@ -278,6 +285,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: fails when the authority value changes after the same-value write (revision churn).
   it("fails when the authority value changes after the same-value write (revision churn)", async () => {
     // The no-op invariant is broken when the authority observes a DIFFERENT
     // value on the dedicated row after the same-value write: a false
@@ -299,6 +307,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const seed = 777;
     const plan = buildPlan(seed);
@@ -316,6 +325,7 @@ describe("noOpHumanEdit scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records cleanup-outbox-busy and keeps the row when the binding outbox never drains.
   it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
     // The no-op verified stably, but a candidate effect for the binding is
     // stuck in flight past the bounded drain wait. The row must be KEPT —

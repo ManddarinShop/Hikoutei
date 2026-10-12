@@ -253,7 +253,9 @@ function fakeProperties() {
   ];
 }
 
+// Covers soak sheets direct: request deadline and timeout.
 describe("soak sheets direct: request deadline and timeout", () => {
+  // Verifies uses the configured default timeout when no deadline is set.
   it("uses the configured default timeout when no deadline is set", () => {
     expect(resolveRequestTimeoutMs(DEFAULT_REQUEST_TIMEOUT_MS, undefined, 1_000)).toBe(
       DEFAULT_REQUEST_TIMEOUT_MS,
@@ -261,6 +263,7 @@ describe("soak sheets direct: request deadline and timeout", () => {
     expect(resolveRequestTimeoutMs(5_000, undefined, 1_000)).toBe(5_000);
   });
 
+  // Verifies caps the timeout at the remaining deadline when the deadline is nearer.
   it("caps the timeout at the remaining deadline when the deadline is nearer", () => {
     // 40s left of a 120s default: the request must use 40s, never the full
     // default that could outlive the run budget.
@@ -268,16 +271,19 @@ describe("soak sheets direct: request deadline and timeout", () => {
       .toBe(40_000);
   });
 
+  // Verifies keeps the default when the deadline is farther away than the default.
   it("keeps the default when the deadline is farther away than the default", () => {
     expect(resolveRequestTimeoutMs(DEFAULT_REQUEST_TIMEOUT_MS, 10_000 + 400_000, 10_000))
       .toBe(DEFAULT_REQUEST_TIMEOUT_MS);
   });
 
+  // Verifies floors the timeout at zero for an already-past deadline.
   it("floors the timeout at zero for an already-past deadline", () => {
     expect(resolveRequestTimeoutMs(DEFAULT_REQUEST_TIMEOUT_MS, 10_000, 12_000)).toBe(0);
     expect(resolveRequestTimeoutMs(DEFAULT_REQUEST_TIMEOUT_MS, 10_000, 10_000)).toBe(0);
   });
 
+  // Verifies aborts with the stable deadline_expired status class once expired.
   it("aborts with the stable deadline_expired status class once expired", () => {
     expect(() => assertWithinRequestDeadline(10_000, 9_999)).not.toThrow();
     expect(() => assertWithinRequestDeadline(10_000, 10_000)).toThrow(DirectSheetsError);
@@ -292,6 +298,7 @@ describe("soak sheets direct: request deadline and timeout", () => {
     expect(() => assertWithinRequestDeadline(undefined, 1_000_000)).not.toThrow();
   });
 
+  // Verifies resolveDeadlineTimeout computes the check and timeout from ONE atomic clock read.
   it("resolveDeadlineTimeout computes the check and timeout from ONE atomic clock read", () => {
     // MEDIUM 5: the guard and the timeout share a single remaining-budget
     // calculation, so the deadline can never cross between two checks and
@@ -303,6 +310,7 @@ describe("soak sheets direct: request deadline and timeout", () => {
     expect(resolveDeadlineTimeout(5_000, undefined, 1_000)).toBe(5_000);
   });
 
+  // Verifies resolveDeadlineTimeout never returns a 0ms timeout once the deadline is reached.
   it("resolveDeadlineTimeout never returns a 0ms timeout once the deadline is reached", () => {
     // MEDIUM 5: at/past the deadline the atomic resolver THROWS the stable
     // deadline_expired error instead of returning 0 — a 0ms timeout would
@@ -320,7 +328,9 @@ describe("soak sheets direct: request deadline and timeout", () => {
   });
 });
 
+// Covers soak sheets direct: cleanup tab selection.
 describe("soak sheets direct: cleanup tab selection", () => {
+  // Verifies subset cleanup deletes only the named projection tabs, never the receipt tab.
   it("subset cleanup deletes only the named projection tabs, never the receipt tab", () => {
     const targets = resolveTabsToDelete(
       fakeProperties(),
@@ -331,6 +341,7 @@ describe("soak sheets direct: cleanup tab selection", () => {
     expect(targets).not.toContain(7); // receipt tab survives a subset cleanup
   });
 
+  // Verifies full cleanup additionally removes the shared receipt tab.
   it("full cleanup additionally removes the shared receipt tab", () => {
     const targets = resolveTabsToDelete(
       fakeProperties(),
@@ -340,6 +351,7 @@ describe("soak sheets direct: cleanup tab selection", () => {
     expect(targets).toEqual([1, 2, 3, 7]);
   });
 
+  // Verifies skips entries without a usable sheetId or title.
   it("skips entries without a usable sheetId or title", () => {
     const targets = resolveTabsToDelete(
       [
@@ -355,10 +367,12 @@ describe("soak sheets direct: cleanup tab selection", () => {
     expect(targets).toEqual([1, 3]);
   });
 
+  // Verifies returns an empty list when nothing matches.
   it("returns an empty list when nothing matches", () => {
     expect(resolveTabsToDelete(fakeProperties(), ["SoakOrder_System"], false)).toEqual([]);
   });
 
+  // Verifies fails closed when a matching tab carries a malformed sheetId.
   it("fails closed when a matching tab carries a malformed sheetId", () => {
     // A string sheetId must never reach a delete request.
     expect(() => resolveTabsToDelete(
@@ -384,6 +398,7 @@ describe("soak sheets direct: cleanup tab selection", () => {
   });
 });
 
+// Covers soak sheets direct: operation (phase) deadline.
 describe("soak sheets direct: operation (phase) deadline", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -410,6 +425,7 @@ describe("soak sheets direct: operation (phase) deadline", () => {
     release!(undefined);
   }
 
+  // Verifies combines the run deadline with the phase deadline as the earlier bound.
   it("combines the run deadline with the phase deadline as the earlier bound", () => {
     // No deadlines at all: no effective deadline.
     expect(combinedDeadlineAtMs(undefined, undefined)).toBeUndefined();
@@ -423,6 +439,7 @@ describe("soak sheets direct: operation (phase) deadline", () => {
     expect(combinedDeadlineAtMs(10_000, 10_000)).toBe(10_000);
   });
 
+  // Verifies readTabRows timeouts against the phase deadline and aborts when the phase expires.
   it(
     "readTabRows timeouts against the phase deadline and aborts when the phase expires",
     async () => {
@@ -460,6 +477,7 @@ describe("soak sheets direct: operation (phase) deadline", () => {
     },
   );
 
+  // Verifies a client built with the resolved live CLOSE deadline reads after the base deadline.
   it("a client built with the resolved live CLOSE deadline reads after the base deadline", async () => {
     // The orchestration constructs the live direct observation client with
     // the bounded CLOSE deadline (resolveCycleDeadlineAtMs live), NOT the
@@ -501,6 +519,7 @@ describe("soak sheets direct: operation (phase) deadline", () => {
     ]);
   });
 
+  // Verifies a client built with ONLY the base deadline rejects the same post-base read.
   it("a client built with ONLY the base deadline rejects the same post-base read", async () => {
     // Negative control: the old (buggy) wiring built the client with the
     // base deadline alone. A read that starts after the base deadline then
@@ -533,6 +552,7 @@ describe("soak sheets direct: operation (phase) deadline", () => {
     expect(fakeRequests).toHaveLength(0);
   });
 
+  // Verifies mutateInputCell uses the phase deadline for EVERY request and aborts after the phase expires.
   it(
     "mutateInputCell uses the phase deadline for EVERY request and aborts after the phase expires",
     async () => {
@@ -584,6 +604,7 @@ describe("soak sheets direct: operation (phase) deadline", () => {
     },
   );
 
+  // Verifies deleteTabs caps BOTH requests at the phase deadline.
   it(
     "deleteTabs caps BOTH requests at the phase deadline",
     async () => {
@@ -619,6 +640,7 @@ describe("soak sheets direct: operation (phase) deadline", () => {
   );
 });
 
+// Covers soak sheets direct: per-request deadline timeouts (MEDIUM 5).
 describe("soak sheets direct: per-request deadline timeouts (MEDIUM 5)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -645,6 +667,7 @@ describe("soak sheets direct: per-request deadline timeouts (MEDIUM 5)", () => {
     release!(undefined);
   }
 
+  // Verifies mutateInputCell resolves a fresh timeout immediately before EVERY request.
   it(
     "mutateInputCell resolves a fresh timeout immediately before EVERY request",
     async () => {
@@ -697,6 +720,7 @@ describe("soak sheets direct: per-request deadline timeouts (MEDIUM 5)", () => {
     },
   );
 
+  // Verifies deleteTabs resolves a fresh timeout for the write after the sheet-list read.
   it(
     "deleteTabs resolves a fresh timeout for the write after the sheet-list read",
     async () => {
@@ -728,6 +752,7 @@ describe("soak sheets direct: per-request deadline timeouts (MEDIUM 5)", () => {
     },
   );
 
+  // Verifies a later request aborts with deadline_expired once the deadline passed.
   it(
     "a later request aborts with deadline_expired once the deadline passed",
     async () => {
@@ -766,6 +791,7 @@ describe("soak sheets direct: per-request deadline timeouts (MEDIUM 5)", () => {
   );
 });
 
+// Covers soak sheets direct: request-start pacing.
 describe("soak sheets direct: request-start pacing", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -785,12 +811,14 @@ describe("soak sheets direct: request-start pacing", () => {
     }
   });
 
+  // Verifies defaults to the library-compatible 2,500 ms pacing.
   it("defaults to the library-compatible 2,500 ms pacing", () => {
     expect(DEFAULT_REQUEST_START_INTERVAL_MS).toBe(2_500);
     expect(() => createDirectSheetsClient({ requestStartIntervalMs: -1 }))
       .toThrow(RangeError);
   });
 
+  // Verifies spaces consecutive observation reads one interval apart.
   it("spaces consecutive observation reads one interval apart", async () => {
     vi.useFakeTimers();
     const startMs = 7_000_000;
@@ -816,6 +844,7 @@ describe("soak sheets direct: request-start pacing", () => {
     await Promise.all([first, second]);
   });
 
+  // Verifies paces reads AND writes of one mutation through the shared gate.
   it("paces reads AND writes of one mutation through the shared gate", async () => {
     vi.useFakeTimers();
     const startMs = 8_000_000;
@@ -855,6 +884,7 @@ describe("soak sheets direct: request-start pacing", () => {
     await pending;
   });
 
+  // Verifies holds concurrent callers so no two requests start within one interval.
   it("holds concurrent callers so no two requests start within one interval", async () => {
     vi.useFakeTimers();
     const startMs = 9_000_000;
@@ -874,6 +904,7 @@ describe("soak sheets direct: request-start pacing", () => {
     await Promise.all([first, second]);
   });
 
+  // Verifies aborts with deadline_expired when the pacing wait overshoots the deadline.
   it("aborts with deadline_expired when the pacing wait overshoots the deadline", async () => {
     vi.useFakeTimers();
     const startMs = 10_000_000;
@@ -908,6 +939,7 @@ function releasePacingGate(): void {
   release!(undefined);
 }
 
+// Covers soak sheets direct: batched tab reads (readTabsRows).
 describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -934,6 +966,7 @@ describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
     release!(undefined);
   }
 
+  // Verifies reads every requested tab in ONE get with one range per tab, in order.
   it("reads every requested tab in ONE get with one range per tab, in order", async () => {
     vi.useFakeTimers();
     const startMs = 20_000_000;
@@ -970,6 +1003,7 @@ describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
     ]);
   });
 
+  // Verifies keys rows by title, ignores unrequested response sheets, and maps absent tabs to empty rows.
   it("keys rows by title, ignores unrequested response sheets, and maps absent tabs to empty rows", async () => {
     vi.useFakeTimers();
     const startMs = 20_100_000;
@@ -1006,6 +1040,7 @@ describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
     ]);
   });
 
+  // Verifies readTabRows routes through the batch helper with a single range.
   it("readTabRows routes through the batch helper with a single range", async () => {
     vi.useFakeTimers();
     const startMs = 20_200_000;
@@ -1028,6 +1063,7 @@ describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
     ]);
   });
 
+  // Verifies holds the whole batch under ONE pacing slot.
   it("holds the whole batch under ONE pacing slot", async () => {
     vi.useFakeTimers();
     const startMs = 20_300_000;
@@ -1051,6 +1087,7 @@ describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
     await Promise.all([first, second]);
   });
 
+  // Verifies uses ONE atomic timeout for the whole batch and aborts once the phase expires.
   it("uses ONE atomic timeout for the whole batch and aborts once the phase expires", async () => {
     vi.useFakeTimers();
     const startMs = 20_400_000;
@@ -1090,6 +1127,7 @@ describe("soak sheets direct: batched tab reads (readTabsRows)", () => {
   });
 });
 
+// Covers soak sheets direct: runtime failure classifier (fault injection).
 describe("soak sheets direct: runtime failure classifier (fault injection)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1109,6 +1147,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     }
   });
 
+  // Verifies classifies numeric HTTP from response.status, top-level status, and numeric code.
   it("classifies numeric HTTP from response.status, top-level status, and numeric code", () => {
     // response.status (gaxios GaxiosError shape).
     expect(classifyDirectError({ response: { status: 403 } })).toEqual({
@@ -1136,6 +1175,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     });
   });
 
+  // Verifies classifies timeout and deadline shapes as retryable timeout.
   it("classifies timeout and deadline shapes as retryable timeout", () => {
     expect(classifyDirectError({ code: "ETIMEDOUT" })).toEqual({
       statusClass: "timeout",
@@ -1163,6 +1203,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     })).toEqual({ statusClass: "timeout", retryable: true });
   });
 
+  // Verifies classifies the REAL gaxios timeout shape but never an arbitrary AbortError.
   it("classifies the REAL gaxios timeout shape but never an arbitrary AbortError", () => {
     // A real gaxios timeout surfaces as a generic `name:'Error'` with NO
     // top-level code, an `AbortError` cause, and a `TimeoutError` signal
@@ -1185,6 +1226,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     })).toEqual({ statusClass: "unknown", retryable: false });
   });
 
+  // Verifies classifies known network codes as retryable network.
   it("classifies known network codes as retryable network", () => {
     for (const code of ["ECONNRESET", "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EPIPE"]) {
       expect(classifyDirectError({ code })).toEqual({
@@ -1194,6 +1236,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     }
   });
 
+  // Verifies classifies a gaxios-wrapped native-fetch network code from a bounded cause chain.
   it("classifies a gaxios-wrapped native-fetch network code from a bounded cause chain", () => {
     // A native-fetch network failure wrapped by gaxios can surface its
     // allowlisted code at `error.cause.cause.code` (top-level `code` is
@@ -1215,6 +1258,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     })).toEqual({ statusClass: "http_404", retryable: false });
   });
 
+  // Verifies aliases the legacy network_or_unknown SDK code to canonical network.
   it("aliases the legacy network_or_unknown SDK code to canonical network", () => {
     // The legacy gaxios `network_or_unknown` code is retryable network,
     // never a distinct emitted class.
@@ -1224,6 +1268,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     });
   });
 
+  // Verifies picks the FIRST integer HTTP status across precedence levels.
   it("picks the FIRST integer HTTP status across precedence levels", () => {
     // A malformed higher-priority candidate must not suppress a later
     // valid numeric value, and strings are never coerced into statuses.
@@ -1249,6 +1294,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     });
   });
 
+  // Verifies falls back to unknown (never retryable) and retains no raw text.
   it("falls back to unknown (never retryable) and retains no raw text", () => {
     // An arbitrary SDK code is unknown, never retained.
     expect(classifyDirectError({ code: "SOME_RANDOM_PROVIDER_CODE" })).toEqual({
@@ -1276,6 +1322,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     expect(classifyDirectError("boom")).toEqual({ statusClass: "unknown", retryable: false });
   });
 
+  // Verifies classifies deterministic missing states as non-retryable harness classes.
   it("classifies deterministic missing states as non-retryable harness classes", async () => {
     vi.useFakeTimers();
     const startMs = 30_000_000;
@@ -1332,6 +1379,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     await tabRejection;
   });
 
+  // Verifies fails closed on malformed headers before writing (duplicate id/field, empty, headerName===.
   it("fails closed on malformed headers before writing (duplicate id/field, empty, headerName==='id')", async () => {
     vi.useFakeTimers();
     const startMs = 30_100_000;
@@ -1395,6 +1443,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     ]);
   });
 
+  // Verifies rejects a malformed sheetId from the snapshot read (never reaches the write).
   it("rejects a malformed sheetId from the snapshot read (never reaches the write)", async () => {
     vi.useFakeTimers();
     const startMs = 30_200_000;
@@ -1416,6 +1465,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     expect(fakeRequests).toEqual([{ method: "get", timeout: DEFAULT_REQUEST_TIMEOUT_MS }]);
   });
 
+  // Verifies rejects a malformed sheetId during cleanup selection (never reaches the delete).
   it("rejects a malformed sheetId during cleanup selection (never reaches the delete)", async () => {
     vi.useFakeTimers();
     const startMs = 30_300_000;
@@ -1438,6 +1488,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     expect(fakeRequests).toEqual([{ method: "get", timeout: DEFAULT_REQUEST_TIMEOUT_MS }]);
   });
 
+  // Verifies fails before writing on an invalid pre-write identity index (request-count proof).
   it("fails before writing on an invalid pre-write identity index (request-count proof)", async () => {
     vi.useFakeTimers();
     const startMs = 30_400_000;
@@ -1477,6 +1528,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     ]);
   });
 
+  // Verifies rejects a whitespace-only header before writing.
   it("rejects a whitespace-only header before writing", async () => {
     vi.useFakeTimers();
     const startMs = 30_500_000;
@@ -1495,6 +1547,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     expect(fakeRequests).toEqual([{ method: "get", timeout: DEFAULT_REQUEST_TIMEOUT_MS }]);
   });
 
+  // Verifies rejects a non-array data.sheets reply in the mutation snapshot read as malformed_reply.
   it("rejects a non-array data.sheets reply in the mutation snapshot read as malformed_reply", async () => {
     vi.useFakeTimers();
     const startMs = 30_600_000;
@@ -1514,6 +1567,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
     expect(fakeRequests).toEqual([{ method: "get", timeout: DEFAULT_REQUEST_TIMEOUT_MS }]);
   });
 
+  // Verifies rejects a non-array data.sheets reply in cleanup as malformed_reply.
   it("rejects a non-array data.sheets reply in cleanup as malformed_reply", async () => {
     vi.useFakeTimers();
     const startMs = 30_700_000;
@@ -1535,6 +1589,7 @@ describe("soak sheets direct: runtime failure classifier (fault injection)", () 
   });
 });
 
+// Covers soak sheets direct: identity-shift postcondition guard.
 describe("soak sheets direct: identity-shift postcondition guard", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1561,6 +1616,7 @@ describe("soak sheets direct: identity-shift postcondition guard", () => {
     release!(undefined);
   }
 
+  // Verifies rejects identity_shifted when a row insert shifts the write target (stale index).
   it(
     "rejects identity_shifted when a row insert shifts the write target (stale index)",
     async () => {
@@ -1626,6 +1682,7 @@ describe("soak sheets direct: identity-shift postcondition guard", () => {
     },
   );
 
+  // Verifies resolves ok when the value landed on exactly the intended identity row.
   it("resolves ok when the value landed on exactly the intended identity row", async () => {
     vi.useFakeTimers();
     const startMs = 40_100_000;
@@ -1655,7 +1712,9 @@ describe("soak sheets direct: identity-shift postcondition guard", () => {
   });
 });
 
+// Covers soak sheets direct: evaluateInputPostcondition.
 describe("soak sheets direct: evaluateInputPostcondition", () => {
+  // Verifies accepts exactly one intended identity row displaying the value.
   it("accepts exactly one intended identity row displaying the value", () => {
     expect(evaluateInputPostcondition({
       beforeRows: [
@@ -1672,6 +1731,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies accepts a legitimate duplicate display value on a non-target identity.
   it("accepts a legitimate duplicate display value on a non-target identity", () => {
     // A non-target identity already displays the same value before the
     // write (e.g. an invalid-input restoration/probe); the write must not
@@ -1693,6 +1753,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies rejects when the value was placed on a different identity (collateral row).
   it("rejects when the value was placed on a different identity (collateral row)", () => {
     // The intended identity row still exists but does NOT display the value;
     // the value appears on another identity (the shifted write target).
@@ -1712,6 +1773,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies rejects when the intended identity row is absent after the write.
   it("rejects when the intended identity row is absent after the write", () => {
     expect(evaluateInputPostcondition({
       beforeRows: [
@@ -1728,6 +1790,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies rejects when the identity row is duplicated.
   it("rejects when the identity row is duplicated", () => {
     expect(evaluateInputPostcondition({
       beforeRows: [
@@ -1745,6 +1808,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies does not compare non-target identities (concurrent actors update them).
   it("does not compare non-target identities (concurrent actors update them)", () => {
     // A non-target identity's target field changed between snapshots: that
     // is NOT proven collateral — concurrent actors legitimately update
@@ -1767,6 +1831,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies rejects identity_shifted when the write-coordinate row is a different identity displaying the value.
   it("rejects identity_shifted when the write-coordinate row is a different identity displaying the value", () => {
     // The intended identity row still displays the value, but the post-read
     // row at the ORIGINAL write coordinate now belongs to a different
@@ -1789,6 +1854,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies treats a collateral value overwritten before the post-read as unobservable.
   it("treats a collateral value overwritten before the post-read as unobservable", () => {
     // The write-coordinate row belongs to a different identity but does NOT
     // display the requested value (it was overwritten again before the
@@ -1811,6 +1877,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies allows a new/deleted unrelated row (async projection) without comparing by order.
   it("allows a new/deleted unrelated row (async projection) without comparing by order", () => {
     // A new unrelated row appears and an unrelated row disappears between
     // snapshots; the target write is still verified by identity, never by
@@ -1832,6 +1899,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies rejects when a required header is missing.
   it("rejects when a required header is missing", () => {
     expect(evaluateInputPostcondition({
       beforeRows: [
@@ -1845,6 +1913,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies rejects malformed headers (duplicate id, duplicate field, empty, headerName===.
   it("rejects malformed headers (duplicate id, duplicate field, empty, headerName==='id')", () => {
     // Duplicate id header.
     expect(evaluateInputPostcondition({
@@ -1888,6 +1957,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies normalizes sparse cells and skips fully blank/padding rows.
   it("normalizes sparse cells and skips fully blank/padding rows", () => {
     // undefined/null/"" are the same blank: a sparse trailing cell and a
     // fully blank padding row are treated as blank and never counted as
@@ -1910,6 +1980,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies fails closed on a non-empty row with a blank identity.
   it("fails closed on a non-empty row with a blank identity", () => {
     expect(evaluateInputPostcondition({
       beforeRows: [["id", "title"], ["", "old"]],
@@ -1920,6 +1991,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies fails closed on a non-string identity in a non-empty row.
   it("fails closed on a non-string identity in a non-empty row", () => {
     // A numeric identity cell is a malformed row: fail closed, never a
     // coerced/ambiguous identity.
@@ -1932,6 +2004,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies fails closed on a duplicated nonblank identity.
   it("fails closed on a duplicated nonblank identity", () => {
     expect(evaluateInputPostcondition({
       beforeRows: [["id", "title"], ["task-main-c1", "old"]],
@@ -1947,6 +2020,7 @@ describe("soak sheets direct: evaluateInputPostcondition", () => {
   });
 });
 
+// Covers soak sheets direct: multi-field human write (mutateInputCells).
 describe("soak sheets direct: multi-field human write (mutateInputCells)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1969,6 +2043,7 @@ describe("soak sheets direct: multi-field human write (mutateInputCells)", () =>
     release!(undefined);
   }
 
+  // Verifies writes every requested field in ONE batchUpdate and verifies by identity.
   it("writes every requested field in ONE batchUpdate and verifies by identity", async () => {
     vi.useFakeTimers();
     const startMs = 40_200_000;
@@ -2015,6 +2090,7 @@ describe("soak sheets direct: multi-field human write (mutateInputCells)", () =>
     });
   });
 
+  // Verifies rejects identity_shifted when a row insert shifts the multi-field target.
   it("rejects identity_shifted when a row insert shifts the multi-field target", async () => {
     vi.useFakeTimers();
     const startMs = 40_300_000;
@@ -2052,6 +2128,7 @@ describe("soak sheets direct: multi-field human write (mutateInputCells)", () =>
     ]);
   });
 
+  // Verifies rejects missing_identity when the intended identity row is absent.
   it("rejects missing_identity when the intended identity row is absent", async () => {
     vi.useFakeTimers();
     const startMs = 40_400_000;
@@ -2077,6 +2154,7 @@ describe("soak sheets direct: multi-field human write (mutateInputCells)", () =>
   });
 });
 
+// Covers soak sheets direct: human row insert (insertInputRow).
 describe("soak sheets direct: human row insert (insertInputRow)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -2099,6 +2177,7 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
     release!(undefined);
   }
 
+  // Verifies appends a new row (id + fields) in ONE batchUpdate and verifies it landed.
   it("appends a new row (id + fields) in ONE batchUpdate and verifies it landed", async () => {
     vi.useFakeTimers();
     const startMs = 40_500_000;
@@ -2142,6 +2221,7 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
     });
   });
 
+  // Verifies rejects identity_shifted when the id already exists (no write issued).
   it("rejects identity_shifted when the id already exists (no write issued)", async () => {
     vi.useFakeTimers();
     const startMs = 40_600_000;
@@ -2164,6 +2244,7 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
     expect(fakeRequests.map((request) => request.method)).toEqual(["get"]);
   });
 
+  // Verifies rejects identity_shifted when the inserted identity is absent after the write.
   it("rejects identity_shifted when the inserted identity is absent after the write", async () => {
     vi.useFakeTimers();
     const startMs = 40_700_000;
@@ -2192,6 +2273,7 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
     });
   });
 
+  // Verifies does not overwrite a concurrent insert (atomic appendCells).
   it("does not overwrite a concurrent insert (atomic appendCells)", async () => {
     vi.useFakeTimers();
     const startMs = 40_750_000;
@@ -2227,6 +2309,7 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
     ]);
   });
 
+  // Verifies places appended values by RESOLVED header column index (id not first).
   it("places appended values by RESOLVED header column index (id not first)", async () => {
     vi.useFakeTimers();
     const startMs = 40_775_000;
@@ -2273,6 +2356,7 @@ describe("soak sheets direct: human row insert (insertInputRow)", () => {
   });
 });
 
+// Covers soak sheets direct: human row delete (deleteInputRow).
 describe("soak sheets direct: human row delete (deleteInputRow)", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -2295,6 +2379,7 @@ describe("soak sheets direct: human row delete (deleteInputRow)", () => {
     release!(undefined);
   }
 
+  // Verifies deletes the matching row in ONE batchUpdate and verifies the identity is gone.
   it("deletes the matching row in ONE batchUpdate and verifies the identity is gone", async () => {
     vi.useFakeTimers();
     const startMs = 40_800_000;
@@ -2328,6 +2413,7 @@ describe("soak sheets direct: human row delete (deleteInputRow)", () => {
     });
   });
 
+  // Verifies rejects missing_identity when the identity row is absent (no write issued).
   it("rejects missing_identity when the identity row is absent (no write issued)", async () => {
     vi.useFakeTimers();
     const startMs = 40_900_000;
@@ -2350,6 +2436,7 @@ describe("soak sheets direct: human row delete (deleteInputRow)", () => {
     expect(fakeRequests.map((request) => request.method)).toEqual(["get"]);
   });
 
+  // Verifies rejects identity_shifted when the identity is still present after the delete.
   it("rejects identity_shifted when the identity is still present after the delete", async () => {
     vi.useFakeTimers();
     const startMs = 41_000_000;
@@ -2380,6 +2467,7 @@ describe("soak sheets direct: human row delete (deleteInputRow)", () => {
     });
   });
 
+  // Verifies rejects identity_shifted when a stale deleteDimension destroys a non-target row.
   it("rejects identity_shifted when a stale deleteDimension destroys a non-target row", async () => {
     vi.useFakeTimers();
     const startMs = 41_050_000;
@@ -2419,7 +2507,9 @@ describe("soak sheets direct: human row delete (deleteInputRow)", () => {
   });
 });
 
+// Covers soak sheets direct: multi-field / insert / delete pure postconditions.
 describe("soak sheets direct: multi-field / insert / delete pure postconditions", () => {
+  // Verifies evaluateInputPreWriteMulti resolves ready with field columns and rowIndex.
   it("evaluateInputPreWriteMulti resolves ready with field columns and rowIndex", () => {
     expect(evaluateInputPreWriteMulti({
       rows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
@@ -2433,6 +2523,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     });
   });
 
+  // Verifies evaluateInputPreWriteMulti returns missing for an absent identity.
   it("evaluateInputPreWriteMulti returns missing for an absent identity", () => {
     expect(evaluateInputPreWriteMulti({
       rows: [["id", "title", "status"], ["other", "a", "b"]],
@@ -2441,6 +2532,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "missing" });
   });
 
+  // Verifies evaluateInputPreWriteMulti fails closed on a missing field header.
   it("evaluateInputPreWriteMulti fails closed on a missing field header", () => {
     expect(evaluateInputPreWriteMulti({
       rows: [["id", "title"], ["task-main-c1", "old"]],
@@ -2449,6 +2541,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "fail", statusClass: "missing_header" });
   });
 
+  // Verifies evaluateInputPostconditionMulti accepts all fields on the intended identity.
   it("evaluateInputPostconditionMulti accepts all fields on the intended identity", () => {
     expect(evaluateInputPostconditionMulti({
       beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
@@ -2459,6 +2552,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies evaluateInputPostconditionMulti rejects when one field did not land.
   it("evaluateInputPostconditionMulti rejects when one field did not land", () => {
     expect(evaluateInputPostconditionMulti({
       beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
@@ -2469,6 +2563,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies evaluateInputPostconditionMulti rejects a collateral write at the write coordinate.
   it("evaluateInputPostconditionMulti rejects a collateral write at the write coordinate", () => {
     expect(evaluateInputPostconditionMulti({
       beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
@@ -2484,6 +2579,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies evaluateInsertPostcondition accepts a landed insert.
   it("evaluateInsertPostcondition accepts a landed insert", () => {
     expect(evaluateInsertPostcondition({
       afterRows: [
@@ -2497,6 +2593,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies evaluateInsertPostcondition rejects an absent inserted identity.
   it("evaluateInsertPostcondition rejects an absent inserted identity", () => {
     expect(evaluateInsertPostcondition({
       afterRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
@@ -2506,6 +2603,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies evaluateDeletePostcondition accepts a landed delete.
   it("evaluateDeletePostcondition accepts a landed delete", () => {
     expect(evaluateDeletePostcondition({
       beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
@@ -2514,6 +2612,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "ok" });
   });
 
+  // Verifies evaluateDeletePostcondition rejects a still-present identity.
   it("evaluateDeletePostcondition rejects a still-present identity", () => {
     expect(evaluateDeletePostcondition({
       beforeRows: [["id", "title", "status"], ["task-main-c1", "old", "open"]],
@@ -2522,6 +2621,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies evaluateDeletePostcondition rejects an absent pre-write identity.
   it("evaluateDeletePostcondition rejects an absent pre-write identity", () => {
     expect(evaluateDeletePostcondition({
       beforeRows: [["id", "title", "status"], ["other", "a", "b"]],
@@ -2530,6 +2630,7 @@ describe("soak sheets direct: multi-field / insert / delete pure postconditions"
     })).toEqual({ status: "identity_shifted" });
   });
 
+  // Verifies evaluateDeletePostcondition rejects an unexplained loss of a non-target identity.
   it("evaluateDeletePostcondition rejects an unexplained loss of a non-target identity", () => {
     // A stale deleteDimension shifted onto a different row (because a
     // concurrent actor deleted the target first) destroyed a non-target

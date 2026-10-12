@@ -11,32 +11,39 @@
 import { describe, expect, it } from "vitest";
 import { CLOCK_SLOP_MS, isDeadlineExpired } from "../scripts/ci/local-soak/timing.mjs";
 
+// Covers isDeadlineExpired clock-slop semantics.
 describe("isDeadlineExpired clock-slop semantics", () => {
+  // Verifies reports expired exactly at the deadline.
   it("reports expired exactly at the deadline", () => {
     expect(isDeadlineExpired(1_000, 1_000)).toBe(true);
   });
 
+  // Verifies treats a 1ms-short clock reading as expired via the slop.
   it("treats a 1ms-short clock reading as expired via the slop", () => {
     // A bounded sleep waking marginally short of the deadline must still
     // read expired, or a doomed write starts against an expired budget.
     expect(isDeadlineExpired(1_000, 1_000 - 1)).toBe(true);
   });
 
+  // Verifies reports not expired for a clearly-future deadline.
   it("reports not expired for a clearly-future deadline", () => {
     expect(isDeadlineExpired(1_000, 1_000 - 10)).toBe(false);
   });
 
+  // Verifies does not misfire when the budget is far from expiring.
   it("does not misfire when the budget is far from expiring", () => {
     // Far-future deadlines never read expired under the default slop.
     expect(isDeadlineExpired(1_000, 1_000 - 1_000)).toBe(false);
     expect(isDeadlineExpired(Number.MAX_SAFE_INTEGER)).toBe(false);
   });
 
+  // Verifies allows an explicit zero slop for exact zero-tolerance semantics.
   it("allows an explicit zero slop for exact zero-tolerance semantics", () => {
     expect(isDeadlineExpired(1_000, 1_000, 0)).toBe(true);
     expect(isDeadlineExpired(1_000, 1_000 - 1, 0)).toBe(false);
   });
 
+  // Verifies proves the exact slop boundary with fixed nowMs values.
   it("proves the exact slop boundary with fixed nowMs values", () => {
     // Fixed-clock pure-function proof of the boundary: exactly-at-deadline
     // and up-to-CLOCK_SLOP_MS-short read expired; anything further short
@@ -54,6 +61,7 @@ describe("isDeadlineExpired clock-slop semantics", () => {
     expect(isDeadlineExpired(deadline, deadline - 3)).toBe(false);
   });
 
+  // Verifies defaults nowMs to Date.now() and slopMs to CLOCK_SLOP_MS.
   it("defaults nowMs to Date.now() and slopMs to CLOCK_SLOP_MS", () => {
     // Deterministic defaults-path check purely via the relative distance to
     // any real now: a deadline epoch far in the past is always expired (no

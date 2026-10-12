@@ -270,7 +270,9 @@ function formulaCell(
   };
 }
 
+// Covers GoogleSheetsApiSyncProvider provisioning.
 describe("GoogleSheetsApiSyncProvider provisioning", () => {
+  // Verifies creates missing tabs and headers in ONE batch, in input order.
   it("creates missing tabs and headers in ONE batch, in input order", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -308,6 +310,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(conflictsTab?.cell(0, 12)?.userEnteredValue?.stringValue).toBe("Status");
   });
 
+  // Verifies treats an existing exact header row as a no-op with zero mutations.
   it("treats an existing exact header row as a no-op with zero mutations", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -325,6 +328,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(result.initializedHeaders).toEqual([]);
   });
 
+  // Verifies initializes the row-check header on a content tab provisioned without it.
   it("initializes the row-check header on a content tab provisioned without it", async () => {
     // Migration path: a tab provisioned by a version predating the check
     // column keeps its exact registered headers (verified, no re-provision
@@ -362,6 +366,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(retry.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies fails closed when the row-check column slot holds a foreign header.
   it("fails closed when the row-check column slot holds a foreign header", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -378,6 +383,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies grows a narrow grid with addDimension before the check-column header write.
   it("grows a narrow grid with addDimension before the check-column header write", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: SYSTEM_HEADERS });
@@ -406,6 +412,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(inputTab.cell(0, 3)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_check");
   });
 
+  // Verifies rejects a legacy User_Input content tab without the system column.
   it("rejects a legacy User_Input content tab without the system column", async () => {
     // A tab provisioned by an older version has only the user-field headers;
     // provisioning must fail closed with the re-provision message instead of
@@ -425,6 +432,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies initializes headers on a truly empty existing tab without recreating it.
   it("initializes headers on a truly empty existing tab without recreating it", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", {});
@@ -446,6 +454,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(spreadsheet.findTab("Users_System")?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
   });
 
+  // Verifies ignores formatting-only cells when deciding whether a tab has content.
   it("ignores formatting-only cells when deciding whether a tab has content", async () => {
     // A blank-but-formatted tab must be initialized like a truly empty one:
     // Apps Script getLastRow()/getLastColumn() ignore formatting-only cells,
@@ -463,6 +472,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(spreadsheet.findTab("Users_System")?.cell(0, 0)?.userEnteredValue?.stringValue).toBe("id");
   });
 
+  // Verifies fails closed on a malformed userEnteredValue instead of initializing headers.
   it("fails closed on a malformed userEnteredValue instead of initializing headers", async () => {
     // A content cell whose userEnteredValue wrapper is a primitive is a
     // malformed reply: provisioning must fail closed with the stable code
@@ -478,6 +488,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies fails closed on a malformed format wrapper instead of initializing headers.
   it("fails closed on a malformed format wrapper instead of initializing headers", async () => {
     // A present userEnteredFormat/effectiveFormat (and its nested numberFormat)
     // must be a record; a primitive wrapper must fail closed, never be treated
@@ -495,6 +506,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies logs a stable redacted response_invalid record for a malformed provisioning cell.
   it("logs a stable redacted response_invalid record for a malformed provisioning cell", async () => {
     const tempRoot = await mkdtemp(path.join(tmpdir(), "hikoutei-provision-log-"));
     const originalLogFile = process.env[HIKOUTEI_LOG_ENV_KEYS.LOG_FILE];
@@ -540,6 +552,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     }
   });
 
+  // Verifies treats a tab with one value cell anywhere as content that must match headers.
   it("treats a tab with one value cell anywhere as content that must match headers", async () => {
     // A single entered value outside the header row makes the tab a content
     // tab; with no registered header row the exact-match verification fails
@@ -555,6 +568,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies fails closed on content tabs whose headers drift, with ZERO batchUpdate mutations.
   it("fails closed on content tabs whose headers drift, with ZERO batchUpdate mutations", async () => {
     // Reordered header row.
     const reordered = new StubSpreadsheet();
@@ -599,6 +613,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(narrowTransport.getSpreadsheetCalls).toBe(0);
   });
 
+  // Verifies fails closed on duplicate tab names before any transport call.
   it("fails closed on duplicate tab names before any transport call", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -612,6 +627,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies is idempotent after a lost response: retry succeeds without rewriting.
   it("is idempotent after a lost response: retry succeeds without rewriting", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -629,6 +645,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(retry.initializedHeaders).toEqual([]);
   });
 
+  // Verifies allocates sheet ids that never collide with existing tabs.
   it("allocates sheet ids that never collide with existing tabs", async () => {
     const spreadsheet = new StubSpreadsheet();
     // A pre-existing tab with a known low sheet id.
@@ -648,6 +665,7 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
     expect(Number.isSafeInteger(created?.sheetId)).toBe(true);
   });
 
+  // Verifies provisions quoted tab names and registered ranges beyond Z.
   it("provisions quoted tab names and registered ranges beyond Z", async () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);
@@ -695,7 +713,9 @@ describe("GoogleSheetsApiSyncProvider provisioning", () => {
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider values-only table reads.
 describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
+  // Verifies reads several tabs through ONE getSpreadsheet call in request order.
   it("reads several tabs through ONE getSpreadsheet call in request order", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 2);
@@ -738,6 +758,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     expect(results[1]?.rows).toHaveLength(2);
   });
 
+  // Verifies normalizes strings, numbers, booleans, dates, and blanks with getValues semantics.
   it("normalizes strings, numbers, booleans, dates, and blanks with getValues semantics", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -779,6 +800,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     });
   });
 
+  // Verifies resolves formula cells to their computed effective value.
   it("resolves formula cells to their computed effective value", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -798,6 +820,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     expect(result.rows[0]?.fields.status).toEqual(cell.number(84));
   });
 
+  // Verifies returns error cells as their formatted error string literal.
   it("returns error cells as their formatted error string literal", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -821,6 +844,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     expect(result.rows[0]?.fields.status).toEqual(cell.string("#DIV/0!"));
   });
 
+  // Verifies fails closed when a literal cell carries a malformed effectiveValue.
   it("fails closed when a literal cell carries a malformed effectiveValue", async () => {
     // A present effectiveValue must be a record even on a literal/non-formula
     // cell. A primitive effectiveValue is a malformed reply and must fail
@@ -849,6 +873,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     });
   });
 
+  // Verifies fails closed when a valid entered format hides a malformed effective format.
   it("fails closed when a valid entered format hides a malformed effective format", async () => {
     // Both present format wrappers (and their nested numberFormat containers)
     // must be validated before entered is preferred over effective, so a
@@ -879,6 +904,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
     });
   });
 
+  // Verifies fails closed on a missing tab, header drift, and malformed payloads.
   it("fails closed on a missing tab, header drift, and malformed payloads", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -906,6 +932,7 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
       .rejects.toThrow(/table read response must contain a sheets array/);
   });
 
+  // Verifies treats unchecked checkbox cells as blank rows.
   it("treats unchecked checkbox cells as blank rows", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
@@ -929,7 +956,9 @@ describe("GoogleSheetsApiSyncProvider values-only table reads", () => {
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider anchors and snapshots.
 describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
+  // Verifies assigns missing anchors in one batch and re-reads so the snapshot sees them.
   it("assigns missing anchors in one batch and re-reads so the snapshot sees them", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_Input", {
@@ -965,6 +994,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     );
   });
 
+  // Verifies reports unanchored rows from readSnapshot without any mutation.
   it("reports unanchored rows from readSnapshot without any mutation", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 2);
@@ -979,6 +1009,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     expect(snapshot.rows.every((row) => row.physicalAnchor.kind === "absent")).toBe(true);
   });
 
+  // Verifies reports duplicate anchors across rows as evidence.
   it("reports duplicate anchors across rows as evidence", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_Input", {
@@ -1004,6 +1035,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     ]);
   });
 
+  // Verifies treats system-column edits as anchor state, never as user-field edits.
   it("treats system-column edits as anchor state, never as user-field edits", async () => {
     // A user overwrites or blanks the UUID column. The column is invisible to
     // user-field hashing, so no conflict or quarantine can arise; the ensure
@@ -1038,6 +1070,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     expect(inputTab?.cell(0, 2)?.userEnteredValue?.stringValue).toBe("__hikoutei_row_id");
   });
 
+  // Verifies treats whitespace-only anchor cells as missing and re-anchors them.
   it("treats whitespace-only anchor cells as missing and re-anchors them", async () => {
     // Mirroring the header validation's trim rule, a system-column cell made
     // of only whitespace is not an anchor: the ensure pass re-anchors it with
@@ -1062,6 +1095,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     expect(inputTab?.cell(2, 2)?.userEnteredValue?.stringValue).toMatch(/^sync-anchor:/);
   });
 
+  // Verifies skips checkbox-false-only rows as blank for anchors and snapshots.
   it("skips checkbox-false-only rows as blank for anchors and snapshots", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Conflicts", { headers: CONFLICT_HEADERS });
@@ -1086,6 +1120,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     expect(observed.snapshot.unanchoredRows).toEqual([3]);
   });
 
+  // Verifies fails closed when a user property collides with the system row-id header.
   it("fails closed when a user property collides with the system row-id header", async () => {
     // A mapping whose user fields include __hikoutei_row_id is a header
     // collision: the provider rejects it before any read or mutation.
@@ -1114,6 +1149,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies rejects a legacy User_Input tab without the system column with a re-provision error.
   it("rejects a legacy User_Input tab without the system column with a re-provision error", async () => {
     // A tab provisioned by an older version has only the user-field headers.
     // Every read path must fail closed with the re-provision message instead
@@ -1135,6 +1171,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     expect(transport.batchUpdateCalls).toBe(0);
   });
 
+  // Verifies assigns anchors to 500 rows in one atomic batch (no metadata quota bound).
   it("assigns anchors to 500 rows in one atomic batch (no metadata quota bound)", async () => {
     // The old developer-metadata scheme capped a User_Input tab at roughly
     // 410-420 rows per sheet quota; anchors as cell values have no such
@@ -1170,6 +1207,7 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
     expect(transport.batchUpdateCalls).toBe(1);
   });
 
+  // Verifies observeSnapshots shares one anchor write and one re-read across tabs.
   it("observeSnapshots shares one anchor write and one re-read across tabs", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
@@ -1197,7 +1235,9 @@ describe("GoogleSheetsApiSyncProvider anchors and snapshots", () => {
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider snapshot fidelity.
 describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
+  // Verifies keeps the outbound preflight masks and adds separate observation/values masks.
   it("keeps the outbound preflight masks and adds separate observation/values masks", () => {
     // Row anchors are cell values in the User_Input system column, so no
     // mask requests developer metadata anymore.
@@ -1229,6 +1269,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(GOOGLE_SHEETS_API_PROVISION_FIELDS).not.toContain("effectiveValue");
   });
 
+  // Verifies classifies formula cells with the sha256 formula hash.
   it("classifies formula cells with the sha256 formula hash", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -1248,6 +1289,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(status?.stableHash.kind).toBe("absent");
   });
 
+  // Verifies classifies every covered cell of one merged range with its full A1 notation.
   it("classifies every covered cell of one merged range with its full A1 notation", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -1281,6 +1323,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(snapshot.rows[0]?.cells.id?.cellKind).toBe("literal");
   });
 
+  // Verifies classifies every supported displayed error code.
   it("classifies every supported displayed error code", async () => {
     const codes = ["#REF!", "#DIV/0!", "#N/A", "#VALUE!", "#NAME?", "#NUM!", "#ERROR!", "#NULL!"];
     const spreadsheet = new StubSpreadsheet();
@@ -1306,6 +1349,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     });
   });
 
+  // Verifies emits stableHash evidence for literals AND blank cells (stableHash(null)).
   it("emits stableHash evidence for literals AND blank cells (stableHash(null))", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -1328,6 +1372,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(blank?.stableHash).toEqual({ kind: "present", value: stableHash(null) });
   });
 
+  // Verifies normalizes canonical-format numbers as dates in snapshots.
   it("normalizes canonical-format numbers as dates in snapshots", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -1345,6 +1390,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     );
   });
 
+  // Verifies lightweight mode omits stableHash and merge/formula detection.
   it("lightweight mode omits stableHash and merge/formula detection", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -1380,6 +1426,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     });
   });
 
+  // Verifies detects displayed error strings in lightweight mode from raw values.
   it("detects displayed error strings in lightweight mode from raw values", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -1400,6 +1447,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(snapshot.rows[0]?.cells.status?.stableHash.kind).toBe("absent");
   });
 
+  // Verifies produces stable snapshot hashes equal to the wire-shape computation.
   it("produces stable snapshot hashes equal to the wire-shape computation", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_Input", { headers: [...USER_INPUT_HEADERS, "__hikoutei_row_id"] });
@@ -1417,6 +1465,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(first.snapshotHash).toBe(stableHash(wire));
   });
 
+  // Verifies uses a lighter request mask for lightweight user_input reads.
   it("uses a lighter request mask for lightweight user_input reads", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
@@ -1442,6 +1491,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(fullRequest?.fields).toContain("dataValidation");
   });
 
+  // Verifies rejects unknown readMode values with INVALID_EFFECT_PAYLOAD before any read.
   it("rejects unknown readMode values with INVALID_EFFECT_PAYLOAD before any read", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
@@ -1457,6 +1507,7 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
     expect(transport.getSpreadsheetCalls).toBe(0);
   });
 
+  // Verifies rejects user_input readMode on non-user_input projections.
   it("rejects user_input readMode on non-user_input projections", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
@@ -1469,7 +1520,9 @@ describe("GoogleSheetsApiSyncProvider snapshot fidelity", () => {
   });
 });
 
+// Covers GoogleSheetsApiSyncProvider pacing and telemetry.
 describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
+  // Verifies paces each preflight transport call and emits one event per request.
   it("paces each preflight transport call and emits one event per request", async () => {
     let now = 1_000_000;
     const events: GoogleSheetsApiRequestEvent[] = [];
@@ -1508,6 +1561,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(readEvents.every((event) => event.operationCount === 1)).toBe(true);
   });
 
+  // Verifies routes outbound preflight reads as preflight and polling reads as polling.
   it("routes outbound preflight reads as preflight and polling reads as polling", async () => {
     const events: GoogleSheetsApiRequestEvent[] = [];
     const spreadsheet = new StubSpreadsheet();
@@ -1546,6 +1600,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(pollingReads).toHaveLength(1);
   });
 
+  // Verifies paces reads among themselves and starts a write beside the reads (independent limiters).
   it("paces reads among themselves and starts a write beside the reads (independent limiters)", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
@@ -1582,6 +1637,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(now).toBe(1_001_100);
   });
 
+  // Verifies serializes reads against reads and writes against writes with independent limiters.
   it("serializes reads against reads and writes against writes with independent limiters", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
@@ -1632,6 +1688,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(now).toBe(1_003_300);
   });
 
+  // Verifies refuses a queued fourth request beyond one interval with zero remote calls.
   it("refuses a queued fourth request beyond one interval with zero remote calls", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
@@ -1708,6 +1765,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(transport.requestStarts[2]?.at).toBe(1_002_200);
   });
 
+  // Verifies paces WRITES on their own limiter, never queued behind reads.
   it("paces WRITES on their own limiter, never queued behind reads", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
@@ -1779,6 +1837,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(now).toBe(1_003_300);
   });
 
+  // Verifies paces postcondition reads on the WRITE limiter: not refused when the read limiter is saturated.
   it("paces postcondition reads on the WRITE limiter: not refused when the read limiter is saturated", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
@@ -1838,6 +1897,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(postcondition?.status).toBe("fulfilled");
   });
 
+  // Verifies paces postcondition reads on the WRITE limiter: refused when the write limiter is saturated.
   it("paces postcondition reads on the WRITE limiter: refused when the write limiter is saturated", async () => {
     let now = 1_000_000;
     const spreadsheet = new StubSpreadsheet();
@@ -1933,6 +1993,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(lateWrite).toBeDefined();
   });
 
+  // Verifies validates the admission bound before deadline arithmetic and caps the remaining-time bound.
   it("validates the admission bound before deadline arithmetic and caps the remaining-time bound", async () => {
     // The shared-deadline helper pre-derives each gate's remaining-time
     // bound, so an invalid CONFIGURED bound (negative, non-integer, NaN) must
@@ -2043,6 +2104,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(seenLaneBounds[0]).toBe(1_100);
   });
 
+  // Verifies applies the read timeout to every getSpreadsheet call but not writes.
   it("applies the read timeout to every getSpreadsheet call but not writes", async () => {
     const spreadsheet = new StubSpreadsheet();
     seedSystemTab(spreadsheet, 1);
@@ -2066,6 +2128,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(provider.timeoutMs).toBe(60_000);
   });
 
+  // Verifies skips the inline verify read when an INLINE apply contains only deletions.
   it("skips the inline verify read when an INLINE apply contains only deletions", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_Input", {
@@ -2122,6 +2185,7 @@ describe("GoogleSheetsApiSyncProvider pacing and telemetry", () => {
     expect(transport.getSpreadsheetRequests).toHaveLength(2);
   });
 
+  // Verifies rejects a readTimeoutMs outside the 1..60 second bounds at construction.
   it("rejects a readTimeoutMs outside the 1..60 second bounds at construction", () => {
     const spreadsheet = new StubSpreadsheet();
     const transport = new StubSheetsTransport(spreadsheet);

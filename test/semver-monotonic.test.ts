@@ -1,3 +1,9 @@
+/**
+ * Dev-channel semver ordering and monotonic-update tests.
+ *
+ * Pins the comparison, monotonicity gate, develop-tag resolution, and next-dev
+ * computation in scripts/ci/semver-monotonic.mjs, including the CLI surface.
+ */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +25,9 @@ function run(...args: string[]) {
   return spawnSync(process.execPath, [scriptPath, ...args], { encoding: "utf8" });
 }
 
+// Verifies the compareDevChannelVersions suite.
 describe("compareDevChannelVersions", () => {
+  // Verifies: orders the legacy dev counter numerically, not lexically.
   it("orders the legacy dev counter numerically, not lexically", () => {
     expect(compareDevChannelVersions("0.9.31-dev.9", "0.9.31-dev.10")).toStrictEqual({
       status: "valid",
@@ -31,6 +39,7 @@ describe("compareDevChannelVersions", () => {
     });
   });
 
+  // Verifies: compares the base triple before the dev counter.
   it("compares the base triple before the dev counter", () => {
     expect(compareDevChannelVersions("0.9.31-dev.99", "0.9.32-dev.1")).toStrictEqual({
       status: "valid",
@@ -42,6 +51,7 @@ describe("compareDevChannelVersions", () => {
     });
   });
 
+  // Verifies: treats a legacy dev prerelease as above its stable base on the dev channel.
   it("treats a legacy dev prerelease as above its stable base on the dev channel", () => {
     expect(compareDevChannelVersions("0.9.31", "0.9.31-dev.1")).toStrictEqual({
       status: "valid",
@@ -57,6 +67,7 @@ describe("compareDevChannelVersions", () => {
     });
   });
 
+  // Verifies: treats a -dev prerelease as below its same-triple stable.
   it("treats a -dev prerelease as below its same-triple stable", () => {
     expect(compareDevChannelVersions("0.10.1-dev", "0.10.1")).toStrictEqual({
       status: "valid",
@@ -72,6 +83,7 @@ describe("compareDevChannelVersions", () => {
     });
   });
 
+  // Verifies: follows the triple when stable and prerelease triples differ.
   it("follows the triple when stable and prerelease triples differ", () => {
     expect(compareDevChannelVersions("0.10.1-dev", "0.10.0")).toStrictEqual({
       status: "valid",
@@ -91,6 +103,7 @@ describe("compareDevChannelVersions", () => {
     });
   });
 
+  // Verifies: orders -dev below legacy -dev.N on the same triple.
   it("orders -dev below legacy -dev.N on the same triple", () => {
     expect(compareDevChannelVersions("0.10.1-dev", "0.10.1-dev.1")).toStrictEqual({
       status: "valid",
@@ -98,6 +111,7 @@ describe("compareDevChannelVersions", () => {
     });
   });
 
+  // Verifies: supports large numeric components without floating-point rounding.
   it("supports large numeric components without floating-point rounding", () => {
     expect(
       compareDevChannelVersions(
@@ -110,6 +124,7 @@ describe("compareDevChannelVersions", () => {
     ).toStrictEqual({ status: "valid", comparison: -1 });
   });
 
+  // Verifies: rejects malformed or foreign-prerelease versions.
   it("rejects malformed or foreign-prerelease versions", () => {
     for (const value of ["0.9.31-beta.1", "0.9", "v0.9.31", "0.9.31-dev.x", "0.10.1.DEV", "0.10.1.dev", ""]) {
       expect(compareDevChannelVersions(value, "0.10.1-dev")).toMatchObject({
@@ -120,7 +135,9 @@ describe("compareDevChannelVersions", () => {
   });
 });
 
+// Verifies the isMonotonicDevChannelUpdate suite.
 describe("isMonotonicDevChannelUpdate", () => {
+  // Verifies: allows forward and equal targets but refuses regressions.
   it("allows forward and equal targets but refuses regressions", () => {
     expect(isMonotonicDevChannelUpdate("0.9.31-dev.9", "0.9.31-dev.10")).toStrictEqual({
       status: "valid",
@@ -142,6 +159,7 @@ describe("isMonotonicDevChannelUpdate", () => {
     });
   });
 
+  // Verifies: orders the new -dev form monotonically without moving backward.
   it("orders the new -dev form monotonically without moving backward", () => {
     expect(isMonotonicDevChannelUpdate("0.10.1-dev", "0.10.2-dev")).toStrictEqual({
       status: "valid",
@@ -166,6 +184,7 @@ describe("isMonotonicDevChannelUpdate", () => {
     });
   });
 
+  // Verifies: fails closed on unparsable input.
   it("fails closed on unparsable input", () => {
     expect(isMonotonicDevChannelUpdate("garbage", "0.10.1-dev")).toMatchObject({
       status: "invalid",
@@ -174,7 +193,9 @@ describe("isMonotonicDevChannelUpdate", () => {
   });
 });
 
+// Verifies the resolveDevelopTag suite.
 describe("resolveDevelopTag", () => {
+  // Verifies: resolves a -dev tag to the full version string.
   it("resolves a -dev tag to the full version string", () => {
     expect(resolveDevelopTag("develop-v0.10.1-dev")).toStrictEqual({
       status: "valid",
@@ -182,18 +203,21 @@ describe("resolveDevelopTag", () => {
     });
   });
 
+  // Verifies: rejects legacy -dev.N tags so the two formats never mix.
   it("rejects legacy -dev.N tags so the two formats never mix", () => {
     const result = resolveDevelopTag("develop-v0.9.31-dev.2");
     expect(result.status).toBe("invalid");
     expect((result as { reason: string }).reason).toContain("-dev.N");
   });
 
+  // Verifies: rejects plain develop-vX.Y.Z tags so they cannot publish stable versions.
   it("rejects plain develop-vX.Y.Z tags so they cannot publish stable versions", () => {
     const result = resolveDevelopTag("develop-v0.10.1");
     expect(result.status).toBe("invalid");
     expect((result as { reason: string }).reason).toContain("-dev");
   });
 
+  // Verifies: rejects malformed tags.
   it("rejects malformed tags", () => {
     for (const tag of ["develop-v0.9", "develop-v0.10.1-dev.1.2", "release-v0.10.1-dev", ""]) {
       expect(resolveDevelopTag(tag)).toMatchObject({ status: "invalid" });
@@ -201,7 +225,9 @@ describe("resolveDevelopTag", () => {
   });
 });
 
+// Verifies the computeNextDevVersion suite.
 describe("computeNextDevVersion", () => {
+  // Verifies: marches the patch from latest when the dev tag is absent.
   it("marches the patch from latest when the dev tag is absent", () => {
     expect(computeNextDevVersion("0.10.0", "")).toStrictEqual({
       status: "valid",
@@ -213,6 +239,7 @@ describe("computeNextDevVersion", () => {
     });
   });
 
+  // Verifies: marches from latest when the dev triple is behind or equal.
   it("marches from latest when the dev triple is behind or equal", () => {
     // Behind (legacy form): triple 0.9.9 <= latest 0.10.0.
     expect(computeNextDevVersion("0.10.0", "0.9.9-dev.5")).toStrictEqual({
@@ -231,6 +258,7 @@ describe("computeNextDevVersion", () => {
     });
   });
 
+  // Verifies: marches from the dev triple when it is ahead of latest.
   it("marches from the dev triple when it is ahead of latest", () => {
     expect(computeNextDevVersion("0.10.0", "0.10.1-dev")).toStrictEqual({
       status: "valid",
@@ -247,6 +275,7 @@ describe("computeNextDevVersion", () => {
     });
   });
 
+  // Verifies: migrates the legacy dev tag 0.9.33-dev.4 to 0.9.34-dev with no counter carry.
   it("migrates the legacy dev tag 0.9.33-dev.4 to 0.9.34-dev with no counter carry", () => {
     expect(computeNextDevVersion("0.9.33", "0.9.33-dev.4")).toStrictEqual({
       status: "valid",
@@ -264,6 +293,7 @@ describe("computeNextDevVersion", () => {
     });
   });
 
+  // Verifies: supports large numeric components without floating-point rounding.
   it("supports large numeric components without floating-point rounding", () => {
     expect(computeNextDevVersion("9007199254740993.0.0", "")).toStrictEqual({
       status: "valid",
@@ -271,6 +301,7 @@ describe("computeNextDevVersion", () => {
     });
   });
 
+  // Verifies: fails closed on a malformed latest or dev tag value.
   it("fails closed on a malformed latest or dev tag value", () => {
     expect(computeNextDevVersion("0.10.0-dev.1", "")).toMatchObject({
       status: "invalid",
@@ -288,6 +319,7 @@ describe("computeNextDevVersion", () => {
   });
 });
 
+// Verifies the computed dev versions are real npm versions suite.
 describe("computed dev versions are real npm versions", () => {
   // npm's prerelease rule: numeric triple + hyphen + dot-separated
   // identifiers of [0-9A-Za-z-], each non-empty (numeric identifiers carry
@@ -300,6 +332,7 @@ describe("computed dev versions are real npm versions", () => {
     return typeof value === "string" && NPM_PRERELEASE_PATTERN.test(value);
   }
 
+  // Verifies: pins the npm prerelease rule against known-valid and known-invalid versions.
   it("pins the npm prerelease rule against known-valid and known-invalid versions", () => {
     for (const valid of ["0.10.1-dev", "0.9.34-dev", "1.0.0-alpha.1"]) {
       expect(isNpmValidPrerelease(valid)).toBe(true);
@@ -309,6 +342,7 @@ describe("computed dev versions are real npm versions", () => {
     }
   });
 
+  // Verifies: emits only npm-valid prereleases, including the legacy migration step.
   it("emits only npm-valid prereleases, including the legacy migration step", () => {
     const cases: Array<[string, string]> = [
       ["0.10.0", ""],
@@ -323,6 +357,7 @@ describe("computed dev versions are real npm versions", () => {
     }
   });
 
+  // Verifies: survives a real .
   it(
     "survives a real `npm version` in a throwaway package (no registry, no git)",
     { timeout: 30_000 },
@@ -359,13 +394,16 @@ describe("computed dev versions are real npm versions", () => {
   );
 });
 
+// Verifies the semver-monotonic CLI suite.
 describe("semver-monotonic CLI", () => {
+  // Verifies: resolves a -dev tag and prints the version.
   it("resolves a -dev tag and prints the version", () => {
     const result = run("--resolve-tag=develop-v0.10.1-dev");
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("0.10.1-dev\n");
   });
 
+  // Verifies: rejects a legacy -dev.N tag with a machine-readable error.
   it("rejects a legacy -dev.N tag with a machine-readable error", () => {
     const result = run("--resolve-tag=develop-v0.9.31-dev.2");
     expect(result.status).toBe(1);
@@ -374,6 +412,7 @@ describe("semver-monotonic CLI", () => {
     expect(result.stderr).toContain("-dev.N");
   });
 
+  // Verifies: rejects a plain develop tag with a machine-readable error.
   it("rejects a plain develop tag with a machine-readable error", () => {
     const result = run("--resolve-tag=develop-v0.10.1");
     expect(result.status).toBe(1);
@@ -382,6 +421,7 @@ describe("semver-monotonic CLI", () => {
     expect(result.stderr).toContain("-dev");
   });
 
+  // Verifies: exits 0 for monotonic and 1 for backward channel moves.
   it("exits 0 for monotonic and 1 for backward channel moves", () => {
     const forward = run("--monotonic", "--current=0.10.1-dev", "--target=0.10.2-dev");
     expect(forward.status).toBe(0);
@@ -392,6 +432,7 @@ describe("semver-monotonic CLI", () => {
     expect(backward.stderr).toContain("semver-monotonic:channel_backward:");
   });
 
+  // Verifies: exits 3 (not the backward 1) for malformed --monotonic input.
   it("exits 3 (not the backward 1) for malformed --monotonic input", () => {
     const invalidCurrent = run("--monotonic", "--current=not-a-version", "--target=0.10.1-dev");
     expect(invalidCurrent.status).toBe(3);
@@ -401,6 +442,7 @@ describe("semver-monotonic CLI", () => {
     expect(invalidTarget.stderr).toContain("semver-monotonic:invalid_version:");
   });
 
+  // Verifies: compares >=2^53 components without Number precision loss.
   it("compares >=2^53 components without Number precision loss", () => {
     const forward = run(
       "--monotonic",
@@ -417,6 +459,7 @@ describe("semver-monotonic CLI", () => {
     expect(backward.stderr).toContain("semver-monotonic:channel_backward:");
   });
 
+  // Verifies: computes the next dev version from latest and current dev.
   it("computes the next dev version from latest and current dev", () => {
     const result = run("--next-dev", "--latest=0.10.0", "--current-dev=0.10.1-dev");
     expect(result.status).toBe(0);
@@ -426,12 +469,14 @@ describe("semver-monotonic CLI", () => {
     expect(fresh.stdout).toBe("0.10.1-dev\n");
   });
 
+  // Verifies: migrates the legacy dev tag through the CLI.
   it("migrates the legacy dev tag through the CLI", () => {
     const result = run("--next-dev", "--latest=0.9.33", "--current-dev=0.9.33-dev.4");
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("0.9.34-dev\n");
   });
 
+  // Verifies: rejects missing or unexpected arguments as usage errors.
   it("rejects missing or unexpected arguments as usage errors", () => {
     const noMode = run("--current=0.10.0", "--target=0.10.1-dev");
     expect(noMode.status).toBe(2);

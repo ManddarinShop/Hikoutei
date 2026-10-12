@@ -94,6 +94,7 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner resume cycle sections (mode/cadence).
 describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
   /** Runs one completed short local run and returns its artifact directory. */
   async function completedRunDir(name: string, durationHours = 0.001): Promise<string> {
@@ -168,6 +169,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
   }
 
 
+  // Verifies: rejects an ok reopen whose full-scan evidence is failed (a failed scan is never ok).
   it(
     "rejects an ok reopen whose full-scan evidence is failed (a failed scan is never ok)",
     { timeout: 90_000 },
@@ -188,6 +190,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: records a same-count full-scan failure as failed reopen status and accepts the failed-scan record on resume.
   it(
     "records a same-count full-scan failure as failed reopen status and accepts the failed-scan record on resume",
     { timeout: 120_000 },
@@ -227,6 +230,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: accepts the plan-derived tablesTouched union for a low-workload actor stream.
   it(
     "accepts the plan-derived tablesTouched union for a low-workload actor stream",
     { timeout: 120_000 },
@@ -269,6 +273,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: binds the human-edit replay override to a successful recorded probe (live exact DB proof).
   it(
     "binds the human-edit replay override to a successful recorded probe (live exact DB proof)",
     // The live-mode positive and negative controls each open the real sync
@@ -373,6 +378,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: rejects a forged ok probe with adjusted counters but an unchanged DB (DB-backed probe evidence).
   it(
     "rejects a forged ok probe with adjusted counters but an unchanged DB (DB-backed probe evidence)",
     { timeout: 180_000 },
@@ -402,6 +408,7 @@ describeLongSoak("soak runner resume cycle sections (mode/cadence)", () => {
     },
   );
 
+  // Verifies: replays the FULL recorded probe history for a completed-cycle recovery (earlier probe + later recorded cycle).
   it(
     "replays the FULL recorded probe history for a completed-cycle recovery (earlier probe + later recorded cycle)",
     // See the sibling live exact-DB-proof test: the quota-safe pacing makes

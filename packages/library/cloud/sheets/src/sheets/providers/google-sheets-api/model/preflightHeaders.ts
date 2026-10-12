@@ -14,7 +14,7 @@ import { GOOGLE_SHEETS_API_ROW_ID_HEADER } from "../constants.js";
 import { invalidProviderState } from "../errors.js";
 import { apiStringValue } from "./preflightParsing.js";
 import { gridRowCells } from "./preflightRows.js";
-import type { ParsedGridData } from "./preflightContext.js";
+import type { ParsedGridData } from "./preflightTypes.js";
 
 /** Message used when a user_input tab lacks the system row-id column. */
 export const SYSTEM_COLUMN_REPROVISION_MESSAGE =

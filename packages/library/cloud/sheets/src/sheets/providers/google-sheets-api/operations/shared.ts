@@ -29,7 +29,7 @@ import {
   HIKOUTEI_LOG_COMPONENTS,
   HIKOUTEI_LOG_EVENTS,
 } from "@hikoutei/contracts/shared/observability/logEvents.js";
-import type { GoogleSheetsApiRequestEvent } from "../GoogleSheetsApiSyncProvider.js";
+import type { GoogleSheetsApiRequestEvent } from "@hikoutei/contracts/sheets/googleSheetsApi.js";
 import type { GoogleSheetsApiTransport } from "../transport/googleSheetsApiTransport.js";
 import {
   createEngineRuntime as createNeutralEngineRuntime,
@@ -55,7 +55,7 @@ import type {
   ParsedSheet,
   PreflightContext,
   PreflightReceipt,
-} from "../model/preflightContext.js";
+} from "../model/preflightTypes.js";
 import {
   enumerateSheetProperties,
 } from "../model/preflightContext.js";

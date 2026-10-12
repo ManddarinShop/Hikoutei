@@ -1,3 +1,10 @@
+/**
+ * Public EntityManager lifecycle tests for createTypedSheets.
+ *
+ * Covers create, persist, find, remove, flush, and transactional flows
+ * through SQLite-backed MikroORM fixtures, including identity-map isolation
+ * and rollback semantics. No sync provider or live Sheets involvement.
+ */
 import { defineEntity, p } from "@mikro-orm/sql";
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
@@ -74,6 +81,7 @@ const ColonEntityAB = defineTypedSheetsEntity({
   properties: { id: { type: "string", primary: true }, value: { type: "string" } },
 });
 
+// Covers createTypedSheets public lifecycle.
 describe("createTypedSheets public lifecycle", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -90,6 +98,7 @@ describe("createTypedSheets public lifecycle", () => {
     return runtime;
   }
 
+  // Verifies creates, persists, and reads a scalar entity through the public API.
   it("creates, persists, and reads a scalar entity through the public API", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -103,6 +112,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(reloaded).toMatchObject({ id: "u1", name: "Ada", age: 36, active: true, nickname: null });
   });
 
+  // Verifies tracks dirty fields on a loaded entity without engine dirty tracking.
   it("tracks dirty fields on a loaded entity without engine dirty tracking", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -124,6 +134,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(fresh).toMatchObject({ id: "u2", name: "Grace Hopper", age: 41, active: false });
   });
 
+  // Verifies does not emit an update when a loaded entity is unchanged.
   it("does not emit an update when a loaded entity is unchanged", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -137,6 +148,7 @@ describe("createTypedSheets public lifecycle", () => {
     await expect(em.flush()).resolves.toBeUndefined();
   });
 
+  // Verifies removes a managed entity and tombstones it from SQLite.
   it("removes a managed entity and tombstones it from SQLite", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -152,6 +164,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await hikoutei.em.fork().findOne(User, { id: "u4" })).toBeNull();
   });
 
+  // Verifies commits a transactional unit of work atomically.
   it("commits a transactional unit of work atomically", async () => {
     const hikoutei = await openRuntime();
 
@@ -165,6 +178,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await em.findOne(Counter, { id: "tx-counter" })).toMatchObject({ value: 7 });
   });
 
+  // Verifies reads its own writes inside a transactional callback.
   it("reads its own writes inside a transactional callback", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -180,6 +194,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies allows the same primary key in different entity tables.
   it("allows the same primary key in different entity tables", async () => {
     const hikoutei = await openRuntime();
 
@@ -196,6 +211,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies keeps identity-map keys unambiguous when names and IDs contain colons.
   it("keeps identity-map keys unambiguous when names and IDs contain colons", async () => {
     const hikoutei = await createTypedSheets({
       dbName: ":memory:",
@@ -214,6 +230,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(first).not.toBe(second);
   });
 
+  // Verifies rolls back a transactional unit of work when the callback rejects.
   it("rolls back a transactional unit of work when the callback rejects", async () => {
     const hikoutei = await openRuntime();
 
@@ -228,6 +245,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await hikoutei.em.fork().findOne(User, { id: "rollback" })).toBeNull();
   });
 
+  // Verifies restores the common Unit of Work after a transaction rollback.
   it("restores the common Unit of Work after a transaction rollback", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -245,6 +263,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await em.findOne(User, { id: "retry" })).toMatchObject({ name: "Retry" });
   });
 
+  // Verifies restores entities loaded inside a failed transaction for retry.
   it("restores entities loaded inside a failed transaction for retry", async () => {
     const hikoutei = await openRuntime();
     const seed = hikoutei.em.fork();
@@ -270,6 +289,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies rejects primary-key mutation before deleting a managed entity.
   it("rejects primary-key mutation before deleting a managed entity", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -283,6 +303,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies removes a canceled insert from the identity map.
   it("removes a canceled insert from the identity map", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -296,6 +317,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies supports equality filters with paging on find().
   it("supports equality filters with paging on find()", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -311,6 +333,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(limited).toHaveLength(2);
   });
 
+  // Verifies supports typed operators across string, number, boolean, and Date fields.
   it("supports typed operators across string, number, boolean, and Date fields", async () => {
     const hikoutei = await createTypedSheets({
       dbName: ":memory:",
@@ -348,6 +371,7 @@ describe("createTypedSheets public lifecycle", () => {
       .map((row) => row.id)).toEqual(["a", "d"]);
   });
 
+  // Verifies uses explicit set semantics for nullable values and empty membership sets.
   it("uses explicit set semantics for nullable values and empty membership sets", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
     runtimes.push(hikoutei);
@@ -381,6 +405,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await ids({ note: { nin: [null, "Ada"] } })).toEqual(["c"]);
   });
 
+  // Verifies orders deterministically for explicit ordering and pagination.
   it("orders deterministically for explicit ordering and pagination", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
     runtimes.push(hikoutei);
@@ -405,6 +430,7 @@ describe("createTypedSheets public lifecycle", () => {
       .toBe("c");
   });
 
+  // Verifies counts filters and returns an unpaged total from findAndCount.
   it("counts filters and returns an unpaged total from findAndCount", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
     runtimes.push(hikoutei);
@@ -453,6 +479,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies preserves identity-map and pending Unit-of-Work semantics for rich reads.
   it("preserves identity-map and pending Unit-of-Work semantics for rich reads", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
     runtimes.push(hikoutei);
@@ -479,6 +506,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect(await em.count(RichQueryRow)).toBe(2);
   });
 
+  // Verifies rejects malformed query objects before they reach the provider.
   it("rejects malformed query objects before they reach the provider", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [RichQueryRow] });
     runtimes.push(hikoutei);
@@ -503,6 +531,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies rejects a primary-key mutation on a managed entity at flush.
   it("rejects a primary-key mutation on a managed entity at flush", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -519,6 +548,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies initializes the local runtime only and does not contact a remote provider.
   it("initializes the local runtime only and does not contact a remote provider", async () => {
     // createTypedSheets opens SQLite and creates entity tables only. There is no
     // provider client in scope, so this asserts the no-remote contract by path:
@@ -529,6 +559,7 @@ describe("createTypedSheets public lifecycle", () => {
     expect("setupSheets" in hikoutei).toBe(false);
   });
 
+  // Verifies keeps public writes in SQLite without creating sync state.
   it("keeps public writes in SQLite without creating sync state", async () => {
     const dbName = join(tmpdir(), `hikoutei-public-${randomUUID()}.sqlite`);
     const hikoutei = await createTypedSheets({
@@ -566,6 +597,7 @@ describe("createTypedSheets public lifecycle", () => {
     }
   });
 
+  // Verifies round-trips date scalars through the provider-neutral contract.
   it("round-trips date scalars through the provider-neutral contract", async () => {
     const hikoutei = await createTypedSheets({
       dbName: ":memory:",
@@ -586,6 +618,7 @@ describe("createTypedSheets public lifecycle", () => {
     );
   });
 
+  // Verifies rejects non-finite numbers and empty primary keys at flush.
   it("rejects non-finite numbers and empty primary keys at flush", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -605,6 +638,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies validates nullable and undefined filters.
   it("validates nullable and undefined filters", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();
@@ -619,6 +653,7 @@ describe("createTypedSheets public lifecycle", () => {
     });
   });
 
+  // Verifies rejects a non-canonical stored date instead of normalizing it.
   it("rejects a non-canonical stored date instead of normalizing it", async () => {
     const dbName = join(tmpdir(), `hikoutei-invalid-date-${randomUUID()}.sqlite`);
     const hikoutei = await createTypedSheets({
@@ -662,6 +697,7 @@ describe("createTypedSheets public lifecycle", () => {
     }
   });
 
+  // Verifies stores and reads booleans and nullable scalars faithfully.
   it("stores and reads booleans and nullable scalars faithfully", async () => {
     const hikoutei = await openRuntime();
     const em = hikoutei.em.fork();

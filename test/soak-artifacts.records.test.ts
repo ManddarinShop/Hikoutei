@@ -61,7 +61,9 @@ const SYMLINK_SUPPORTED = (() => {
   }
 })();
 
+// Verifies the soak artifacts: operation records suite.
 describe("soak artifacts: operation records", () => {
+  // Verifies: records redacted failure metadata with stable reason codes.
   it("records redacted failure metadata with stable reason codes", () => {
     const record = operationRecord(
       7,
@@ -84,6 +86,7 @@ describe("soak artifacts: operation records", () => {
     expect(record).not.toHaveProperty("message");
   });
 
+  // Verifies: carries stable library codes but omits optional fields when absent.
   it("carries stable library codes but omits optional fields when absent", () => {
     const record = operationRecord(
       1,
@@ -97,6 +100,7 @@ describe("soak artifacts: operation records", () => {
     expect(record.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  // Verifies: re-sanitizes secret-like code, reason, table, and counts at the boundary.
   it("re-sanitizes secret-like code, reason, table, and counts at the boundary", () => {
     const secrets = [
       "ya29.jwt-abcdefghijklmnop",
@@ -143,7 +147,9 @@ describe("soak artifacts: operation records", () => {
   });
 });
 
+// Verifies the soak artifacts: cycle records suite.
 describe("soak artifacts: cycle records", () => {
+  // Verifies: flattens the explicit operations summary shape into the JSONL record.
   it("flattens the explicit operations summary shape into the JSONL record", () => {
     const record = cycleRecord(5, {
       durationMs: 40,
@@ -158,6 +164,7 @@ describe("soak artifacts: cycle records", () => {
     expect(record.tablesTouched).toEqual(["soak_tasks"]);
   });
 
+  // Verifies: includes optional probe/convergence/reopen sections only when present.
   it("includes optional probe/convergence/reopen sections only when present", () => {
     const withProbe = cycleRecord(10, {
       durationMs: 1,
@@ -177,6 +184,7 @@ describe("soak artifacts: cycle records", () => {
     expect(withReopen.reopen).toEqual({ status: "ok", soak_tasks: 9 });
   });
 
+  // Verifies: re-sanitizes nested probe/abort sections at the boundary.
   it("re-sanitizes nested probe/abort sections at the boundary", () => {
     const secret = "ya29.jwt-token@example.com";
     const record = cycleRecord(10, {
@@ -211,6 +219,7 @@ describe("soak artifacts: cycle records", () => {
     expect(JSON.stringify(record)).not.toContain("/Users/secret");
   });
 
+  // Verifies: preserves an allowlisted abort statusClass and collapses arbitrary text.
   it("preserves an allowlisted abort statusClass and collapses arbitrary text", () => {
     const record = cycleRecord(11, {
       durationMs: 1,
@@ -248,7 +257,9 @@ describe("soak artifacts: cycle records", () => {
   });
 });
 
+// Verifies the soak artifacts: resources and markdown summary suite.
 describe("soak artifacts: resources and markdown summary", () => {
+  // Verifies: samples numeric process resources without any path or env data.
   it("samples numeric process resources without any path or env data", async () => {
     const record = await resourceRecord(3, 4096);
     expect(record.cycle).toBe(3);
@@ -260,6 +271,7 @@ describe("soak artifacts: resources and markdown summary", () => {
     expect(JSON.stringify(record)).not.toMatch(/HIKOUTEI|GOOGLE|credential/i);
   });
 
+  // Verifies: renders a redacted markdown summary from the explicit operations shape.
   it("renders a redacted markdown summary from the explicit operations shape", () => {
     const markdown = renderSummaryMarkdown({
       scenario: "local-multitable-soak",
@@ -288,6 +300,7 @@ describe("soak artifacts: resources and markdown summary", () => {
     expect(markdown).not.toMatch(/docs\.google\.com|spreadsheets\/d\//);
   });
 
+  // Verifies: renders a scenario totals line so a scenario-only failure stays visible.
   it("renders a scenario totals line so a scenario-only failure stays visible", () => {
     const markdown = renderSummaryMarkdown({
       scenario: "local-multitable-soak",
@@ -314,6 +327,7 @@ describe("soak artifacts: resources and markdown summary", () => {
     expect(markdown).toContain("Status: **failed**");
   });
 
+  // Verifies: renders the recovery, cleanup, replacement-cleanup, and finalization sections.
   it("renders the recovery, cleanup, replacement-cleanup, and finalization sections", () => {
     const markdown = renderSummaryMarkdown({
       scenario: "local-multitable-soak",
@@ -355,7 +369,9 @@ describe("soak artifacts: resources and markdown summary", () => {
   });
 });
 
+// Verifies the soak log collection: logger contract mirror suite.
 describe("soak log collection: logger contract mirror", () => {
+  // Verifies: mirrors the internal logger.
   it("mirrors the internal logger's serialization contract exactly", () => {
     // The collector runs under plain Node and cannot import src/** TS, so
     // it carries a deliberate mirror of the logger's contract. Any drift
@@ -378,6 +394,7 @@ describe("soak log collection: logger contract mirror", () => {
     expect([...LOGGED_CLASS_MIRROR].sort()).toEqual([...HIKOUTEI_LOG_STABLE_CLASSES].sort());
   });
 
+  // Verifies: validates single lines: pass allowlisted shapes, drop secrets.
   it("validates single lines: pass allowlisted shapes, drop secrets", () => {
     const valid = sanitizeCollectedLogLine(
       JSON.stringify({

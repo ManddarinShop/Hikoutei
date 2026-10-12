@@ -40,15 +40,17 @@ import {
   GOOGLE_SHEETS_API_PREFLIGHT_BASE_FIELDS,
   GOOGLE_SHEETS_API_PREFLIGHT_FIELDS,
 } from "../model/preflightFields.js";
-import type { PreflightReadShape } from "../model/preflightContext.js";
+import type {
+  ParsedSheet,
+  ParsedSpreadsheetDocument,
+  PreflightContext,
+  PreflightReadShape,
+} from "../model/preflightTypes.js";
 import {
   enumerateSheetProperties,
   readPreflightData,
   readPreflightDataForRoutes,
   readReceiptsAggregate,
-  type ParsedSheet,
-  type ParsedSpreadsheetDocument,
-  type PreflightContext,
 } from "../model/preflightContext.js";
 import {
   packReadRequests,

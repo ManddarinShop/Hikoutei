@@ -1,3 +1,8 @@
+/**
+ * sync effect supervisor tests. Covers EffectWorkerSupervisor; coalesces concurrent manual and background passes; drains an externally triggered pass before stop resolves; continues bounded passes until the outbox reports idle; backs off after a pass error and retries the pass; runs reconciliation after the worker pass and drains discovered corrections.
+ *
+ * Exercises the behavior through fake providers and SQLite fixtures with no live credentials.
+ */
 import { describe, expect, it } from "vitest";
 
 import { PRESENCE_KINDS } from "@hikoutei/contracts/state/index.js";
@@ -7,7 +12,9 @@ import {
 } from "@hikoutei/ikisaki";
 import type { ReconciliationScanReport } from "@hikoutei/sync-engine/sync/outbound/reconciliation/ReconciliationScanner.js";
 
+// Covers: EffectWorkerSupervisor.
 describe("EffectWorkerSupervisor", () => {
+  // Verifies: coalesces concurrent manual and background passes.
   it("coalesces concurrent manual and background passes", async () => {
     let calls = 0;
     let resolvePass!: (report: WorkerReport) => void;
@@ -33,6 +40,7 @@ describe("EffectWorkerSupervisor", () => {
     ]);
   });
 
+  // Verifies: drains an externally triggered pass before stop resolves.
   it("drains an externally triggered pass before stop resolves", async () => {
     let resolvePass!: (report: WorkerReport) => void;
     const pendingPass = new Promise<WorkerReport>((resolve) => {
@@ -55,6 +63,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(stopped).toBe(true);
   });
 
+  // Verifies: continues bounded passes until the outbox reports idle.
   it("continues bounded passes until the outbox reports idle", async () => {
     let calls = 0;
     let stopPromise: Promise<void> | undefined;
@@ -78,6 +87,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(supervisor.isRunning()).toBe(false);
   });
 
+  // Verifies: backs off after a pass error and retries the pass.
   it("backs off after a pass error and retries the pass", async () => {
     let calls = 0;
     const waits: number[] = [];
@@ -109,6 +119,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(errors).toHaveLength(1);
   });
 
+  // Verifies: runs reconciliation after the worker pass and drains discovered corrections.
   it("runs reconciliation after the worker pass and drains discovered corrections", async () => {
     let workerCalls = 0;
     let reconciliationCalls = 0;
@@ -145,6 +156,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(supervisor.isRunning()).toBe(false);
   });
 
+  // Verifies: isolates reconciliation errors and keeps the worker loop alive.
   it("isolates reconciliation errors and keeps the worker loop alive", async () => {
     let workerCalls = 0;
     let reconciliationCalls = 0;
@@ -181,6 +193,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(reconciliationErrors[0]).toBeInstanceOf(Error);
   });
 
+  // Verifies: backs off when a pass only requeues work without forward progress.
   it("backs off when a pass only requeues work without forward progress", async () => {
     // A response-loss / postcondition-unapplied loop: the pass claimed work
     // but only requeued it. The supervisor must back off so a struggling
@@ -217,6 +230,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(waits.every((durationMs) => durationMs !== 5_000)).toBe(true);
   });
 
+  // Verifies: keeps draining immediately when a requeuing pass also applies work.
   it("keeps draining immediately when a requeuing pass also applies work", async () => {
     // Forward progress (an applied effect) must not be penalized even when the
     // same pass requeued another effect: the drain loop continues without a
@@ -250,6 +264,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(waits).toEqual([]);
   });
 
+  // Verifies: runs reconciliation on schedule while the worker stays busy.
   it("runs reconciliation on schedule while the worker stays busy", async () => {
     // The old pass-idle gate starved reconciliation while a wedged stream
     // kept the worker busy. Reconciliation is a lazy repair net that must run
@@ -289,6 +304,7 @@ describe("EffectWorkerSupervisor", () => {
     expect(supervisor.isRunning()).toBe(false);
   });
 
+  // Verifies: waits for the outbox to become idle before reconciliation.
   it("waits for the outbox to become idle before reconciliation", async () => {
     let workerCalls = 0;
     let reconciliationCalls = 0;

@@ -57,7 +57,9 @@ const descriptors = resolveEntityDescriptors([AdoptInvoice], () => {
 const adoptDescriptor = descriptors.get("AdoptInvoice")!;
 const USER_OWNED = ["invoiceNo", "customer", "total", "note"];
 
+// Covers adoptionColumnLetter via the shared 1-based helper.
 describe("adoptionColumnLetter via the shared 1-based helper", () => {
+  // Verifies converts 1-based column numbers to spreadsheet letters.
   it("converts 1-based column numbers to spreadsheet letters", () => {
     expect(columnLetters(1)).toBe("A");
     expect(columnLetters(26)).toBe("Z");
@@ -80,7 +82,9 @@ function analyze(headers: readonly string[], rows: readonly (readonly (string | 
   });
 }
 
+// Covers analyzeExistingSheetAdoptionEntity.
 describe("analyzeExistingSheetAdoptionEntity", () => {
+  // Verifies binds by header name with position-independent bindings on a contiguous sheet.
   it("binds by header name with position-independent bindings on a contiguous sheet", () => {
     const report = analyze(
       ["invoiceNo", "customer", "total", "note"],
@@ -100,6 +104,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(report.tabsToProvision).toEqual(["Invoices_System", "Invoices_Conflicts"]);
   });
 
+  // Verifies binds out-of-order headers, ignores extra columns, and flags segmented writes.
   it("binds out-of-order headers, ignores extra columns, and flags segmented writes", () => {
     const report = analyze(
       ["customer", "memo", "invoiceNo", "total", "note"],
@@ -120,6 +125,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     ]);
   });
 
+  // Verifies blocks when a non-nullable entity field has no matching column.
   it("blocks when a non-nullable entity field has no matching column", () => {
     const report = analyze(["invoiceNo", "customer"], [["INV-1", "Acme"]]);
     expect(report.status).toBe("blocked");
@@ -128,6 +134,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(missing?.severity).toBe("error");
   });
 
+  // Verifies reports a nullable missing field as a warning while staying ready.
   it("reports a nullable missing field as a warning while staying ready", () => {
     const report = analyze(["invoiceNo", "customer", "total"], [["INV-1", "Acme", "100"]]);
     expect(report.status).toBe("ready");
@@ -135,6 +142,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(missing?.severity).toBe("warning");
   });
 
+  // Verifies falls back to a generated PK column when no column matches the primary key.
   it("falls back to a generated PK column when no column matches the primary key", () => {
     const report = analyze(
       ["customer", "total"],
@@ -147,6 +155,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(report.problems.some((p) => p.code === "NO_PK_CANDIDATE" && p.severity === "warning")).toBe(true);
   });
 
+  // Verifies uses an explicit identityFrom column that differs from the property name.
   it("uses an explicit identityFrom column that differs from the property name", () => {
     const report = analyzeExistingSheetAdoptionEntity({
       entityName: "AdoptInvoice",
@@ -163,6 +172,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(report.bindings.some((b) => b.field === "invoiceNo" && b.header === "InvoiceNo")).toBe(true);
   });
 
+  // Verifies blocks with row numbers when identity values duplicate.
   it("blocks with row numbers when identity values duplicate", () => {
     const report = analyzeExistingSheetAdoptionEntity({
       entityName: "AdoptInvoice",
@@ -183,6 +193,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(report.pk.duplicates).toEqual([{ value: "INV-1", rowNumbers: [2, 3] }]);
   });
 
+  // Verifies blocks when identity cells are empty and reports their row numbers.
   it("blocks when identity cells are empty and reports their row numbers", () => {
     const report = analyzeExistingSheetAdoptionEntity({
       entityName: "AdoptInvoice",
@@ -201,6 +212,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(report.problems.some((p) => p.code === "EMPTY_IDENTITY_VALUE")).toBe(true);
   });
 
+  // Verifies counts fully empty rows without treating them as identity duplicates.
   it("counts fully empty rows without treating them as identity duplicates", () => {
     const report = analyze(
       ["id", "customer", "total", "note"],
@@ -210,6 +222,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
     expect(report.status).toBe("ready");
   });
 
+  // Verifies trims header whitespace when binding by name.
   it("trims header whitespace when binding by name", () => {
     const report = analyze(
       ["invoiceNo ", "customer", "total", "note"],
@@ -220,6 +233,7 @@ describe("analyzeExistingSheetAdoptionEntity", () => {
   });
 });
 
+// Covers review regression: adopt-mode layout blockers surface in dry-run.
 describe("review regression: adopt-mode layout blockers surface in dry-run", () => {
   const projections = {
     spreadsheetId: "adopt-spreadsheet",
@@ -252,6 +266,7 @@ describe("review regression: adopt-mode layout blockers surface in dry-run", () 
       userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED },
     });
 
+  // Verifies blocks a segmented layout in the REPORT (never ready-then-rejected).
   it("blocks a segmented layout in the REPORT (never ready-then-rejected)", async () => {
     try {
       await planWith(
@@ -267,6 +282,7 @@ describe("review regression: adopt-mode layout blockers surface in dry-run", () 
     }
   });
 
+  // Verifies blocks a declaration-order mismatch in the REPORT.
   it("blocks a declaration-order mismatch in the REPORT", async () => {
     try {
       await planWith(
@@ -280,6 +296,7 @@ describe("review regression: adopt-mode layout blockers surface in dry-run", () 
     }
   });
 
+  // Verifies blocks when the row-id append column is occupied.
   it("blocks when the row-id append column is occupied", async () => {
     try {
       await planWith(
@@ -294,6 +311,7 @@ describe("review regression: adopt-mode layout blockers surface in dry-run", () 
   });
 });
 
+// Covers existing-sheet adoption bootstrap gate.
 describe("existing-sheet adoption bootstrap gate", () => {
   const services: { close: () => Promise<void> }[] = [];
 
@@ -331,6 +349,7 @@ describe("existing-sheet adoption bootstrap gate", () => {
     }
   }
 
+  // Verifies dry-run reads the foreign tab and throws the full report without starting the service.
   it("dry-run reads the foreign tab and throws the full report without starting the service", async () => {
     let report: ExistingSheetAdoptionRunReport | undefined;
     try {
@@ -354,6 +373,7 @@ describe("existing-sheet adoption bootstrap gate", () => {
     expect(report.entities[0]!.columnsToBeAdded).toEqual(["__hikoutei_row_id"]);
   });
 
+  // Verifies dry-run blocks with problems when identity values duplicate.
   it("dry-run blocks with problems when identity values duplicate", async () => {
     class DuplicateTabTransport extends ForeignTabTransport {
       public override async getValues(): Promise<{ values?: readonly (readonly (string | number | boolean | null)[])[] }> {
@@ -378,6 +398,7 @@ describe("existing-sheet adoption bootstrap gate", () => {
     }
   });
 
+  // Verifies rejects adoption without the direct googleSheetsApi provider.
   it("rejects adoption without the direct googleSheetsApi provider", async () => {
     await expect(createInternalSyncService({
       dbName: ":memory:",
@@ -390,6 +411,7 @@ describe("existing-sheet adoption bootstrap gate", () => {
     });
   });
 
+  // Verifies validates each adopted entity independently (unknown entity rejected).
   it("validates each adopted entity independently (unknown entity rejected)", async () => {
     // D7 Phase A removed the single-entity gate, but per-entity validation
     // still fires for every entry: "Ghost" is absent from the projections.
@@ -411,6 +433,7 @@ describe("existing-sheet adoption bootstrap gate", () => {
     });
   });
 
+  // Verifies requires the adopt tabName to equal the configured userInput route.
   it("requires the adopt tabName to equal the configured userInput route", async () => {
     await expect(createInternalSyncService({
       dbName: ":memory:",
@@ -426,6 +449,7 @@ describe("existing-sheet adoption bootstrap gate", () => {
 });
 
 
+// Covers review regression: header ambiguity and layout edge cases.
 describe("review regression: header ambiguity and layout edge cases", () => {
   const analyze = (headers: readonly string[], rows: readonly (readonly (string | undefined)[])[], identityFrom?: string) =>
     analyzeExistingSheetAdoptionEntity({
@@ -439,6 +463,7 @@ describe("review regression: header ambiguity and layout edge cases", () => {
       syncConflictsTabName: "Invoices_Conflicts",
     });
 
+  // Verifies binds an interleaved identityFrom column without listing it as ignored.
   it("binds an interleaved identityFrom column without listing it as ignored", () => {
     // Custom identity column at an interleaved position: it must appear in
     // the bindings (with correct segments) and never in ignoredColumns.
@@ -463,6 +488,7 @@ describe("review regression: header ambiguity and layout edge cases", () => {
     expect(report.pk).toEqual({ source: "existing-column", column: "InvoiceNo" });
   });
 
+  // Verifies fails closed on duplicate normalized headers.
   it("fails closed on duplicate normalized headers", () => {
     const report = analyze(["invoiceNo", "invoiceNo ", "customer", "total", "note"], [["INV-1", "dup", "Acme", "100", ""]]);
     expect(report.status).toBe("blocked");
@@ -471,18 +497,21 @@ describe("review regression: header ambiguity and layout edge cases", () => {
 expect(dup?.detail?.columns).toEqual(["A", "B"]);
   });
 
+  // Verifies fails closed on an empty tab instead of reporting ready.
   it("fails closed on an empty tab instead of reporting ready", () => {
     const report = analyze([], []);
     expect(report.status).toBe("blocked");
     expect(report.problems.some((p) => p.code === "EMPTY_TAB")).toBe(true);
   });
 
+  // Verifies builds a quoted, grid-wide read range.
   it("builds a quoted, grid-wide read range", () => {
     expect(adoptionTabRange("Invoices", 26)).toBe("'Invoices'!A1:Z");
     expect(adoptionTabRange("Team's Sheet", 100)).toBe("'Team''s Sheet'!A1:CV");
   });
 });
 
+// Covers review round 2 regressions.
 describe("review round 2 regressions", () => {
   const projections = {
     spreadsheetId: "adopt-spreadsheet",
@@ -524,6 +553,7 @@ describe("review round 2 regressions", () => {
       userOwnedFieldsByEntity: { AdoptInvoice: USER_OWNED },
     });
 
+  // Verifies blocks when the row-id append column has DATA below an EMPTY header (data loss guard).
   it("blocks when the row-id append column has DATA below an EMPTY header (data loss guard)", async () => {
     // The appended column's header is blank but live data sits below it:
     // header-only inspection would treat the column as free and
@@ -540,6 +570,7 @@ describe("review round 2 regressions", () => {
     }
   });
 
+  // Verifies does NOT block generated-PK adoption: virtual PK appended last satisfies the declaration order.
   it("does NOT block generated-PK adoption: virtual PK appended last satisfies the declaration order", async () => {
     const plan = await planWith(
       ["customer", "total", "note"],
@@ -562,6 +593,7 @@ describe("review round 2 regressions", () => {
     expect(plan.entities[0]!.dataRows).toHaveLength(2);
   });
 
+  // Verifies blocks an identityFrom alias whose header differs from the PK property name.
   it("blocks an identityFrom alias whose header differs from the PK property name", async () => {
     try {
       await planWith(
@@ -579,6 +611,7 @@ describe("review round 2 regressions", () => {
     }
   });
 
+  // Verifies blocks whitespace-padded headers (provisioning requires exact headers).
   it("blocks whitespace-padded headers (provisioning requires exact headers)", async () => {
     try {
       await planWith(
@@ -592,6 +625,7 @@ describe("review round 2 regressions", () => {
     }
   });
 
+  // Verifies does not duplicate a single-entity ready report.
   it("does not duplicate a single-entity ready report", async () => {
     const plan = await planWith(
       ["invoiceNo", "customer", "total", "note"],
@@ -603,6 +637,7 @@ describe("review round 2 regressions", () => {
     expect(plan.entities).toHaveLength(1);
   });
 });
+// Covers columnMap — explicit header → property bindings (design §12).
 describe("columnMap — explicit header → property bindings (design §12)", () => {
   // Legacy headers that do NOT match the property names. Column order still
   // follows the entity declaration order (C4): invoiceNo, customer, total.
@@ -668,6 +703,7 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     );
   }
 
+  // Verifies binds headers through the map and reports the mapped-from headers.
   it("binds headers through the map and reports the mapped-from headers", async () => {
     const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap);
     const entity = report.entities[0]!;
@@ -685,6 +721,7 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     ]);
   });
 
+  // Verifies keeps name-binding for fields not in the map.
   it("keeps name-binding for fields not in the map", async () => {
     const report = await dryRunReport(
       ["memo", "Invoice No", "customer", "Total (USD)", "note"],
@@ -699,12 +736,14 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     expect(byField.note).toMatchObject({ columnLetter: "E", header: "note" });
   });
 
+  // Verifies absorbs the D4 identityFrom alias when the map binds the PK header.
   it("absorbs the D4 identityFrom alias when the map binds the PK header", async () => {
     const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap, "adopt", "Invoice No");
     expect(report.entities[0]!.status).toBe("ready");
     expect(report.entities[0]!.problems.some((p) => p.code === "IDENTITY_ALIAS_UNSUPPORTED")).toBe(false);
   });
 
+  // Verifies still blocks an identityFrom alias WITHOUT a map (D4 unchanged).
   it("still blocks an identityFrom alias WITHOUT a map (D4 unchanged)", async () => {
     const report = await dryRunReport(
       ["Invoice No", "customer", "total"],
@@ -716,12 +755,14 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     expect(report.entities[0]!.problems.some((p) => p.code === "IDENTITY_ALIAS_UNSUPPORTED")).toBe(true);
   });
 
+  // Verifies resolves the PK through the map with identityFrom auto.
   it("resolves the PK through the map with identityFrom auto", async () => {
     const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap);
     const entity = report.entities[0]!;
     expect(entity.pk).toMatchObject({ source: "existing-column", column: "Invoice No" });
   });
 
+  // Verifies flags a map header that does not exist in the tab (typo exposure).
   it("flags a map header that does not exist in the tab (typo exposure)", async () => {
     const report = await dryRunReport(
       ["Invoice No", "customer", "Total (USD)"],
@@ -735,6 +776,7 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     expect(entity.status).toBe("blocked");
   });
 
+  // Verifies flags a map value that the entity does not declare.
   it("flags a map value that the entity does not declare", async () => {
     const report = await dryRunReport(
       ["Invoice No", "customer", "total"],
@@ -744,6 +786,7 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_MAP_UNKNOWN_PROPERTY")).toBe(true);
   });
 
+  // Verifies flags two headers mapping to one property.
   it("flags two headers mapping to one property", async () => {
     const report = await dryRunReport(
       ["Invoice No", "Other Invoice", "customer", "total"],
@@ -753,6 +796,7 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     expect(report.entities[0]!.problems.some((p) => p.code === "COLUMN_MAP_DUPLICATE_PROPERTY")).toBe(true);
   });
 
+  // Verifies enforces the declaration ORDER over mapped fields (C4).
   it("enforces the declaration ORDER over mapped fields (C4)", async () => {
     // The map cannot reorder: sheet order invoiceNo, total, customer vs the
     // declaration order invoiceNo, customer, total must block.
@@ -764,12 +808,14 @@ describe("columnMap — explicit header → property bindings (design §12)", ()
     expect(report.entities[0]!.problems.some((p) => p.code === "DECLARATION_ORDER_MISMATCH")).toBe(true);
   });
 
+  // Verifies adopt mode with the legacy map is READY end to end.
   it("adopt mode with the legacy map is READY end to end", async () => {
     const report = await dryRunReport(legacyHeaders, legacyRows, legacyColumnMap, "adopt");
     expect(report.ok).toBe(true);
   });
 });
 
+// Covers D7 Phase A: multi-entity adoption (2 entities, no single-entity gate).
 describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)", () => {
   const AdoptMember = defineTypedSheetsEntity({
     name: "AdoptMember",
@@ -848,6 +894,7 @@ describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)"
       },
     );
 
+  // Verifies plans 2 ready entities in one dry-run and derives distinct system/conflict tabs.
   it("plans 2 ready entities in one dry-run and derives distinct system/conflict tabs", async () => {
     const report = await reportOrThrow(twoEntityPlan("dry-run"));
     expect(report.ok).toBe(true);
@@ -865,6 +912,7 @@ describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)"
     expect(member!.tabsToProvision).toEqual(["Members_System", "Members_Conflicts"]);
   });
 
+  // Verifies returns a 2-entity startup plan in adopt mode.
   it("returns a 2-entity startup plan in adopt mode", async () => {
     const plan = await twoEntityPlan("adopt");
     expect(plan.report.ok).toBe(true);
@@ -876,6 +924,7 @@ describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)"
     expect(byEntity.AdoptMember!.dataRows).toHaveLength(2);
   });
 
+  // Verifies isolates failures: a blocked entity never hides the ready one.
   it("isolates failures: a blocked entity never hides the ready one", async () => {
     class MissingColumnTransport extends TwoTabTransport {
       public override async getValues(input: { range: string }): Promise<{ values?: readonly (readonly (string | number | boolean | null)[])[] }> {
@@ -908,6 +957,7 @@ describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)"
     expect(invoice!.problems.some((p) => p.code === "MISSING_FIELD")).toBe(false);
   });
 
+  // Verifies accepts 2 adopted entities at the service-options layer (gate removed).
   it("accepts 2 adopted entities at the service-options layer (gate removed)", async () => {
     let report: ExistingSheetAdoptionRunReport | undefined;
     try {
@@ -935,6 +985,7 @@ describe("D7 Phase A: multi-entity adoption (2 entities, no single-entity gate)"
   });
 });
 
+// Covers D7 F3/F4 regressions: case-variant tabs and empty adopt.entities.
 describe("D7 F3/F4 regressions: case-variant tabs and empty adopt.entities", () => {
   const AdoptB = defineTypedSheetsEntity({
     name: "AdoptB",
@@ -984,6 +1035,7 @@ describe("D7 F3/F4 regressions: case-variant tabs and empty adopt.entities", () 
     }
   }
 
+  // Verifies rejects two entities whose adopt tabNames differ only by case BEFORE mutation (INVALID_OPTIONS).
   it("rejects two entities whose adopt tabNames differ only by case BEFORE mutation (INVALID_OPTIONS)", async () => {
     await expect(createInternalSyncService({
       dbName: ":memory:",
@@ -1003,6 +1055,7 @@ describe("D7 F3/F4 regressions: case-variant tabs and empty adopt.entities", () 
     });
   });
 
+  // Verifies rejects an empty adopt.entities record (INVALID_OPTIONS, F4).
   it("rejects an empty adopt.entities record (INVALID_OPTIONS, F4)", async () => {
     // Single-entity projections (AdoptB absent) so the adopt validation is
     // what fires, not the unknown-projection check.
@@ -1030,6 +1083,7 @@ describe("D7 F3/F4 regressions: case-variant tabs and empty adopt.entities", () 
   });
 });
 
+// Covers D7 correction round 2: fail-closed validates ALL entities before ANY sheet write.
 describe("D7 correction round 2: fail-closed validates ALL entities before ANY sheet write", () => {
   const AdoptMember = defineTypedSheetsEntity({
     name: "AdoptMember",
@@ -1083,6 +1137,7 @@ describe("D7 correction round 2: fail-closed validates ALL entities before ANY s
     }
   }
 
+  // Verifies rejects a multi-entity adoption when entity 2 is preseeded, writing ZERO sheet columns.
   it("rejects a multi-entity adoption when entity 2 is preseeded, writing ZERO sheet columns", async () => {
     // Entity 2 (AdoptMember) is preseeded through the public local-only
     // runtime so its ORM entity table already holds a row when the bootstrap

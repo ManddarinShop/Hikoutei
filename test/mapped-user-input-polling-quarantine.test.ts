@@ -1,3 +1,9 @@
+/**
+ * Tests for mapped User_Input polling quarantine behavior.
+ * Covers deferred conflict evidence eligibility (stale, duplicate, quarantined,
+ * and fenced observations) and quarantining of non-literal cells — formulas,
+ * merged cells, and errors — even when the cached value matches canonical.
+ */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -193,7 +199,9 @@ function accumulator() {
   };
 }
 
+// Verifies deferred conflict evidence eligibility.
 describe("deferred conflict evidence eligibility", () => {
+  // Verifies stale, duplicate, quarantined, and fenced observations are excluded.
   it("excludes stale, duplicate, quarantined, and fenced observations", () => {
     const results: PersistObservedRowResult[] = [
       { kind: OBSERVATION_WRITE_RESULT_KINDS.FENCED_OUT },
@@ -233,7 +241,9 @@ describe("deferred conflict evidence eligibility", () => {
   });
 });
 
+// Verifies full metadata observation quarantines non-literal User_Input cells.
 describe("full metadata observation quarantines non-literal User_Input cells", () => {
+  // Verifies a matching literal row is accepted and a changed literal value escalates.
   it("accepts a matching literal row and escalates a changed literal value", () => {
     const unchanged = inspectSnapshot(mapping, observed(literalCell(pendingStatus)), state(), accumulator(), []);
     expect(unchanged).toEqual([]);
@@ -246,6 +256,7 @@ describe("full metadata observation quarantines non-literal User_Input cells", (
     expect(prepared).toHaveLength(1);
   });
 
+  // Verifies formula, merged, and error cells are quarantined even when the cached value matches.
   it("quarantines formula, merged, and error cells even when the cached value matches canonical", () => {
     // The cached value equals canonical "pending"; only the full metadata
     // observation can see the non-literal cell kind and quarantine it.
@@ -267,6 +278,7 @@ describe("full metadata observation quarantines non-literal User_Input cells", (
     }
   });
 
+  // Verifies a formula-valued row defers to full scan since the preflight cannot see the formula.
   it("defers a formula-valued row to full scan: the values-only preflight cannot see the formula", () => {
     // The fast path reads values only. A formula cell whose cached value
     // matches canonical looks unchanged, so the preflight skips metadata.

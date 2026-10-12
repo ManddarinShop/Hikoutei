@@ -109,6 +109,7 @@ function expectAdoptDryRun(result: TypedSheetsWithSyncResult): AdoptDryRunResult
   return result;
 }
 
+// Covers public adoption API (createTypedSheetsWithSync + adopt).
 describe("public adoption API (createTypedSheetsWithSync + adopt)", () => {
   const tempDirs: string[] = [];
 
@@ -139,10 +140,12 @@ describe("public adoption API (createTypedSheetsWithSync + adopt)", () => {
     return path;
   }
 
+  // Verifies exports the adoption surface from the public barrel.
   it("exports the adoption surface from the public barrel", () => {
     expect(typeof createTypedSheetsWithSync).toBe("function");
   });
 
+  // Verifies public result union exposes only the runtime handle (no internal service).
   it("public result union exposes only the runtime handle (no internal service)", async () => {
     // Local-only path (no spreadsheet URL): proves the wrapper loads and the
     // union shape is the public contract, without credentials or network.
@@ -156,6 +159,7 @@ describe("public adoption API (createTypedSheetsWithSync + adopt)", () => {
     expect((result as unknown as Record<string, unknown>).service).toBeUndefined();
   });
 
+  // Verifies fails fast when adopt references an entity outside the runtime (public path, no transport).
   it("fails fast when adopt references an entity outside the runtime (public path, no transport)", async () => {
     const dir = credentialsDir();
     const credentialsPath = writeCredentialsFile(dir);
@@ -168,6 +172,7 @@ describe("public adoption API (createTypedSheetsWithSync + adopt)", () => {
   });
 });
 
+// Covers adoption behavior behind the public bridge (stub transport).
 describe("adoption behavior behind the public bridge (stub transport)", () => {
   const tempDirs: string[] = [];
 
@@ -211,6 +216,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     });
   }
 
+  // Verifies dry-run returns the report result and does NOT mutate the spreadsheet.
   it("dry-run returns the report result and does NOT mutate the spreadsheet", async () => {
     const spreadsheet = foreignSpreadsheet();
     const result = await runDryRun(spreadsheet, {
@@ -239,6 +245,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     expect(spreadsheet.sheets[0]!.cells.has("0,4")).toBe(false);
   });
 
+  // Verifies respects explicit systemState/syncConflicts tab-name overrides.
   it("respects explicit systemState/syncConflicts tab-name overrides", async () => {
     const result = await runDryRun(foreignSpreadsheet(), {
       mode: "dry-run",
@@ -257,6 +264,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     ]);
   });
 
+  // Verifies adopt mode with a BLOCKED report stays fail-closed (diagnosed error, no result shape).
   it("adopt mode with a BLOCKED report stays fail-closed (diagnosed error, no result shape)", async () => {
     const spreadsheet = foreignSpreadsheet();
     // identityFrom alias whose header differs from the PK property name is an
@@ -279,6 +287,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     expect(spreadsheet.sheets[0]!.cells.has("0,4")).toBe(false);
   });
 
+  // Verifies adopt mode refuses a cell-kind mismatch before ANY mutation (live-incident regression).
   it("adopt mode refuses a cell-kind mismatch before ANY mutation (live-incident regression)", async () => {
     // The live-smoke incident: numeric sheet `total` cells bound to a
     // string-declared property. The seeding must fail closed at startup —
@@ -328,6 +337,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     expect(spreadsheet.sheets[0]!.cell(1, 3)?.userEnteredValue?.numberValue).toBe(100);
   });
 
+  // Verifies adopt mode with columnMap: legacy headers survive, seeding works end to end (design §12).
   it("adopt mode with columnMap: legacy headers survive, seeding works end to end (design §12)", async () => {
     // The §12 scenario: sheet headers differ from the property names. The
     // translation table rides on the adopted route's definition — the tab's
@@ -418,6 +428,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     }
   });
 
+  // Verifies adopt mode runs the full pipeline over the stub transport.
   it("adopt mode runs the full pipeline over the stub transport", async () => {
     const spreadsheet = foreignSpreadsheet();
     const result = await createTypedSheetsWithSyncInternal({
@@ -453,6 +464,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     }
   });
 
+  // Verifies B1: dry-run reports BOTH entities ready in one runtime (two-entity adopt).
   it("B1: dry-run reports BOTH entities ready in one runtime (two-entity adopt)", async () => {
     const spreadsheet = twoEntitySpreadsheet();
     const result = await createTypedSheetsWithSyncInternal({
@@ -486,6 +498,7 @@ describe("adoption behavior behind the public bridge (stub transport)", () => {
     expect(spreadsheet.sheets.map((sheet) => sheet.title)).toEqual(["Invoices", "Customers"]);
   });
 
+  // Verifies B1: adopts TWO entities; a human edit on one leaves the other.
   it("B1: adopts TWO entities; a human edit on one leaves the other's projection untouched", async () => {
     const spreadsheet = twoEntitySpreadsheet();
     const result = await createTypedSheetsWithSyncInternal({

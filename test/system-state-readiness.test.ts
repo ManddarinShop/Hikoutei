@@ -57,6 +57,7 @@ const fullProjections = {
   },
 };
 
+// Verifies the internal System_State readiness controller keyed by runtime identity.
 describe("System_State readiness controller", () => {
   const services: InternalSyncService[] = [];
 
@@ -96,6 +97,7 @@ describe("System_State readiness controller", () => {
     await em.flush();
   }
 
+  // Verifies unregistered local-only runtimes report ready without touching storage.
   it("reports ready immediately for an unregistered local-only runtime", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [User] });
     try {
@@ -113,6 +115,7 @@ describe("System_State readiness controller", () => {
     });
   });
 
+  // Verifies draining is reported for pending effects and ready once they turn terminal.
   it("reports draining while System_State effects are nonterminal and ready once terminal", async () => {
     const service = await openService();
     // The bootstrap registered the runtime; a clean outbox is ready.
@@ -150,6 +153,7 @@ describe("System_State readiness controller", () => {
     });
   });
 
+  // Verifies a conflict-blocked follower reports ready until its heads are released.
   it("reports ready (not draining) when a pending follower sits behind a conflict predecessor", async () => {
     const service = await openService();
     await queuePendingSystemStateEffects(service);
@@ -192,6 +196,7 @@ describe("System_State readiness controller", () => {
     });
   });
 
+  // Verifies each runtime's readiness is tracked independently in the WeakMap registry.
   it("tracks runtimes independently through the WeakMap registry", async () => {
     const draining = await openService();
     const clean = await openService();
@@ -214,6 +219,7 @@ describe("System_State readiness controller", () => {
     });
   });
 
+  // Verifies register/unregister are idempotent for internal sync bootstrap callers.
   it("exposes idempotent register/unregister for internal callers", async () => {
     const hikoutei = await createTypedSheets({ dbName: ":memory:", entities: [User] });
     try {

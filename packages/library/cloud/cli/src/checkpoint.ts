@@ -70,7 +70,11 @@
  *
  * A `complete` checkpoint may additionally carry `pool`, the provisioned
  * credential pool for `--sa-count` runs (entry 1 duplicates the primary
- * fields; entries 2..N are the additional accounts). The pool is
+ * fields; entries 2..N are the additional accounts), and `poolKeyStarted`,
+ * the write-ahead for one in-flight pool key (marker plus baseline,
+ * persisted before that entry's single key create and cleared when the
+ * entry joins `pool`; a resume reconciles it only and never creates a
+ * second key). The pool is
  * append-reconciled on resume: a stored pool never conflicts with a new
  * `--sa-count` (saCount is a run option, not checkpoint state), and
  * already-recorded entries are skipped.
@@ -127,6 +131,7 @@ import {
   nonBlockFlag,
   setupLockPath,
   setupStateTempPath,
+  poolKeyPath,
   writeAllSync,
   type SetupStateWriteFs,
 } from "./setupPaths.js";
@@ -170,20 +175,15 @@ export const SETUP_STATE_VERSION = 1;
 /** Checkpoint file permission after write (owner read/write only). */
 export const SETUP_STATE_FILE_MODE = 0o600;
 
-/** Service-account key file permission after setup (owner read/write only). */
-export const SERVICE_ACCOUNT_KEY_FILE_MODE = 0o600;
-
-/**
- * Restricted format of a service-account key id (`private_key_id`).
- *
- * Google user-managed service-account key ids are 16 lowercase hex digits;
- * the pattern accepts 16-40 hex digits so the setup never rejects a valid
- * key, while still refusing arbitrary payload text. The key id is NOT
- * secret: it is the last segment of the key's IAM resource name
- * (`projects/<project>/serviceAccounts/<email>/keys/<id>`) and is used to
- * match a local key file against the cloud key list during reconciliation.
- */
-export const SERVICE_ACCOUNT_KEY_ID_PATTERN = /^[0-9a-fA-F]{16,40}$/;
+// Compat re-exports: the shared key constants moved verbatim to the
+// dependency-free `keyContract.ts` leaf, breaking the previous
+// checkpoint ↔ keyMaterial module cycle. The checkpoint module path stays
+// stable for existing importers (tests, setupFlow, keyProvision).
+export {
+  SERVICE_ACCOUNT_KEY_FILE_MODE,
+  SERVICE_ACCOUNT_KEY_ID_PATTERN,
+} from "./keyContract.js";
+import { SERVICE_ACCOUNT_KEY_ID_PATTERN } from "./keyContract.js";
 
 /**
  * Restricted format of a creation marker: a lowercase UUID v4 as produced by
@@ -319,6 +319,31 @@ export interface SetupPoolEntry {
   readonly keyPath: string;
 }
 
+/**
+ * Write-ahead marker for one in-flight credential-pool key (entries 2..N).
+ *
+ * Persisted on the `complete` checkpoint BEFORE the single gcloud key
+ * create for that pool entry so a crash at any pool-key boundary resumes
+ * by reconciliation instead of creating a second key: the stored marker
+ * derives the deterministic private sibling staging directory and the
+ * stored baseline scopes the current user-managed key list. Only the
+ * invocation that just persisted this write-ahead may issue the one
+ * create for the entry; every resume is reconcile-only. Cleared when the
+ * entry is persisted to `pool`. Non-secret identities only — never key
+ * material.
+ */
+export interface PoolKeyWriteAhead {
+  /** 1-based pool index of the in-flight entry (always >= 2). */
+  readonly index: number;
+  readonly saName: string;
+  readonly saEmail: string;
+  readonly keyPath: string;
+  /** UUID marker deriving the deterministic private staging path of the key. */
+  readonly keyMarker: string;
+  /** Sorted/deduplicated baseline of pre-existing user-managed key resource names. */
+  readonly keyBaseline: readonly string[];
+}
+
 /** Progression statuses of a setup run; later statuses mean earlier work is done. */
 export type SetupStateStatus =
   | "project_selected"
@@ -411,6 +436,13 @@ export type SetupState =
      * resume (a stored pool never conflicts with a new --sa-count).
      */
     readonly pool?: readonly SetupPoolEntry[];
+    /**
+     * Write-ahead for one in-flight pool key (see `PoolKeyWriteAhead`).
+     * Present only while entries 2..N are being provisioned; cleared when
+     * the entry joins `pool`. A resume reconciles this entry only and
+     * never issues a second create for it.
+     */
+    readonly poolKeyStarted?: PoolKeyWriteAhead;
   });
 
 /** Result of loading the checkpoint file from disk. */
@@ -435,37 +467,14 @@ export type StateCompatibility =
   | { readonly status: "ok" }
   | { readonly status: "conflict"; readonly message: string };
 
-/** Validated metadata of a service-account key JSON file. */
-export interface ServiceAccountKeyMetadata {
-  readonly projectId: string;
-  readonly clientEmail: string;
-  /** Non-secret `private_key_id`; matches the last segment of the IAM key resource name. */
-  readonly keyId: string;
-}
-
-/**
- * Result of reading and validating a service-account key file.
- *
- * Only the descriptor-based secure reader is used; the plain pathname
- * reader was removed because a check-then-read sequence cannot be secured
- * against a mid-read alias swap.
- */
-export type KeyMetadataResult =
-  | { readonly status: "ok"; readonly metadata: ServiceAccountKeyMetadata }
-  | { readonly status: "invalid"; readonly message: string };
-
-/**
- * Result of the secure, descriptor-based key file read.
- *
- * `absent` means the path does not exist (the caller decides whether a
- * missing key is valid for the current checkpoint status); `invalid` means
- * the path exists but is not a regular file, could not be secured to mode
- * 0600, or does not parse as a service-account key for any project.
- */
-export type SecureKeyReadResult =
-  | { readonly status: "absent" }
-  | { readonly status: "ok"; readonly metadata: ServiceAccountKeyMetadata }
-  | { readonly status: "invalid"; readonly message: string };
+// Compat re-exports: the shared key metadata/result types moved verbatim
+// to the `keyContract.ts` leaf with the constants above; the checkpoint
+// module path stays stable for existing importers.
+export {
+  type KeyMetadataResult,
+  type SecureKeyReadResult,
+  type ServiceAccountKeyMetadata,
+} from "./keyContract.js";
 
 /**
  * Filesystem operations the secure checkpoint load uses; injectable for
@@ -665,7 +674,8 @@ export function validateSetupState(value: unknown): SetupState | null {
       value.keyBaseline !== undefined ||
       value.keyOrigin !== undefined ||
       value.shareOrigin !== undefined ||
-      value.pool !== undefined
+      value.pool !== undefined ||
+      value.poolKeyStarted !== undefined
     ) {
       return null;
     }
@@ -682,7 +692,8 @@ export function validateSetupState(value: unknown): SetupState | null {
       value.creationMarker !== undefined ||
       value.keyOrigin !== undefined ||
       value.shareOrigin !== undefined ||
-      value.pool !== undefined
+      value.pool !== undefined ||
+      value.poolKeyStarted !== undefined
     ) {
       return null;
     }
@@ -709,7 +720,8 @@ export function validateSetupState(value: unknown): SetupState | null {
       value.keyMarker !== undefined ||
       value.keyBaseline !== undefined ||
       value.shareOrigin !== undefined ||
-      value.pool !== undefined
+      value.pool !== undefined ||
+      value.poolKeyStarted !== undefined
     ) {
       return null;
     }
@@ -731,7 +743,8 @@ export function validateSetupState(value: unknown): SetupState | null {
       value.keyMarker !== undefined ||
       value.keyBaseline !== undefined ||
       value.shareOrigin !== undefined ||
-      value.pool !== undefined
+      value.pool !== undefined ||
+      value.poolKeyStarted !== undefined
     ) {
       return null;
     }
@@ -764,7 +777,7 @@ export function validateSetupState(value: unknown): SetupState | null {
     // ensured — `spreadsheet_share_started` is the write-ahead BEFORE that
     // ensure, so it must never carry a shareOrigin). The pool only exists
     // after completion, so a pre-complete status carrying it is rejected.
-    if (value.shareOrigin !== undefined || value.pool !== undefined) {
+    if (value.shareOrigin !== undefined || value.pool !== undefined || value.poolKeyStarted !== undefined) {
       return null;
     }
     return { ...common, status, spreadsheetId, keyOrigin };
@@ -772,7 +785,7 @@ export function validateSetupState(value: unknown): SetupState | null {
   if (status === "spreadsheet_shared") {
     // The pool only exists after completion: a shared-but-incomplete state
     // carrying it is contradictory.
-    if (value.pool !== undefined) {
+    if (value.pool !== undefined || value.poolKeyStarted !== undefined) {
       return null;
     }
     const shareOrigin = requireShareOrigin(value.shareOrigin);
@@ -784,13 +797,22 @@ export function validateSetupState(value: unknown): SetupState | null {
   // complete: the share step is done, so the non-secret shareOrigin
   // provenance discriminant is REQUIRED (the verify phase depends on it
   // across resumes). The optional pool carries the provisioned credential
-  // pool; absent for single-SA runs.
+  // pool; absent for single-SA runs. The optional poolKeyStarted carries
+  // the write-ahead for one in-flight pool key; a resume reconciles it
+  // only and never creates a second key for the entry.
   const shareOrigin = requireShareOrigin(value.shareOrigin);
   if (shareOrigin === null) {
     return null;
   }
   const pool = requireSetupPool(value.pool, common);
   if (pool === null && value.pool !== undefined) {
+    return null;
+  }
+  const poolKeyStarted = requirePoolKeyWriteAhead(value.poolKeyStarted, common);
+  if (poolKeyStarted === null && value.poolKeyStarted !== undefined) {
+    return null;
+  }
+  if (poolKeyStarted !== null && (pool === null || poolKeyStarted.index !== pool.length + 1)) {
     return null;
   }
   return {
@@ -800,6 +822,7 @@ export function validateSetupState(value: unknown): SetupState | null {
     keyOrigin,
     shareOrigin,
     ...(pool !== null ? { pool } : {}),
+    ...(poolKeyStarted !== null ? { poolKeyStarted } : {}),
   };
 }
 
@@ -809,13 +832,60 @@ function requireShareOrigin(value: unknown): ShareOrigin | null {
 }
 
 /**
+ * Promotes a validated pool-key write-ahead, or null when malformed.
+ *
+ * Absent input (undefined) means no in-flight pool key and promotes to
+ * null; callers distinguish it from a present-but-malformed value by
+ * checking the input separately. The index must be >= 2 and the
+ * name/email/path must be canonical for it. The marker must be a UUID v4,
+ * and the baseline must be a sorted/deduplicated list of key resource
+ * names for this project and service account.
+ */
+function requirePoolKeyWriteAhead(value: unknown, common: SetupStateCommon): PoolKeyWriteAhead | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  const index = value.index;
+  const saName = requireValidServiceAccountName(value.saName);
+  const saEmail = requireNonEmptyString(value.saEmail);
+  const keyPath = requireNonEmptyString(value.keyPath);
+  if (!Number.isSafeInteger(index) || (index as number) < 2 || saName === null || saEmail === null || keyPath === null) {
+    return null;
+  }
+  const expectedSaName = `${common.saName}-${index as number}`;
+  if (
+    saName !== expectedSaName ||
+    saEmail !== serviceAccountEmail(expectedSaName, common.projectId) ||
+    keyPath !== poolKeyPath(common.keyPath, index as number)
+  ) {
+    return null;
+  }
+  if (!isValidKeyMarker(value.keyMarker)) {
+    return null;
+  }
+  if (!isValidKeyBaseline(value.keyBaseline, common.projectId, saEmail)) {
+    return null;
+  }
+  return {
+    index: index as number,
+    saName,
+    saEmail,
+    keyPath,
+    keyMarker: value.keyMarker as string,
+    keyBaseline: [...(value.keyBaseline as readonly string[])],
+  };
+}
+
+/**
  * Promotes a validated credential pool, or null when malformed.
  *
  * Callers distinguish "absent" (undefined input → null return meaning no
  * pool) from "present but malformed" by checking the input separately:
- * an empty array, a non-record entry, a malformed service-account name,
- * a non-matching email derivation, an empty key path, or an entry 1 that
- * disagrees with the primary fields is invalid (omit the pool instead of
+ * an empty array, a non-record entry, or an entry whose position, name,
+ * email, or key path is not canonical is invalid (omit the pool instead of
  * storing an empty array; entry 1 duplicates the primary fields).
  */
 function requireSetupPool(
@@ -829,7 +899,7 @@ function requireSetupPool(
     return null;
   }
   const pool: SetupPoolEntry[] = [];
-  for (const entry of value) {
+  for (const [position, entry] of value.entries()) {
     if (!isRecord(entry)) {
       return null;
     }
@@ -839,17 +909,17 @@ function requireSetupPool(
     if (saName === null || saEmail === null || keyPath === null) {
       return null;
     }
-    // Same canonical-identity rule as the primary fields: the stored email
-    // must equal the derivation from the entry name and project.
-    if (saEmail !== serviceAccountEmail(saName, common.projectId)) {
+    const index = position + 1;
+    const expectedSaName = index === 1 ? common.saName : `${common.saName}-${index}`;
+    const expectedKeyPath = index === 1 ? common.keyPath : poolKeyPath(common.keyPath, index);
+    if (
+      saName !== expectedSaName ||
+      saEmail !== serviceAccountEmail(expectedSaName, common.projectId) ||
+      keyPath !== expectedKeyPath
+    ) {
       return null;
     }
     pool.push({ saName, saEmail, keyPath });
-  }
-  // Entry 1 duplicates the primary fields; anything else is contradictory.
-  const first = pool[0] as SetupPoolEntry;
-  if (first.saName !== common.saName || first.saEmail !== common.saEmail || first.keyPath !== common.keyPath) {
-    return null;
   }
   return pool;
 }

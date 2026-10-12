@@ -1,3 +1,8 @@
+/**
+ * sync effect outbound performance tests. Covers outbound effect dispatch batching; route grouping and predecessor order; groups effects by physical route and preserves selection order within each route; chunks an oversized route at the Apps Script bounded effect batch; leaves a route that already fits the batch as a single group; chunks each distinct route at the Apps Script bounded effect batch.
+ *
+ * Exercises the behavior through fake providers and SQLite fixtures with no live credentials.
+ */
 import {
   defineEntity,
   MikroORM,
@@ -69,8 +74,11 @@ const ROUTE_BETA: RouteSpec = {
   schemaVersion: 1,
 };
 
+// Covers: outbound effect dispatch batching.
 describe("outbound effect dispatch batching", () => {
+  // Covers: route grouping and predecessor order.
   describe("route grouping and predecessor order", () => {
+    // Verifies: groups effects by physical route and preserves selection order within each route.
     it("groups effects by physical route and preserves selection order within each route", () => {
       // Route grouping is per physical-sheet route (physical sheet + projection
       // + tab + range + schema), so distinct routes group SEPARATELY and the
@@ -97,6 +105,7 @@ describe("outbound effect dispatch batching", () => {
       expect(alpha.routeKey).not.toBe(beta.routeKey);
     });
 
+    // Verifies: chunks an oversized route at the Apps Script bounded effect batch.
     it("chunks an oversized route at the Apps Script bounded effect batch", () => {
       const oversized = Array.from({ length: EFFECT_BATCH_LIMIT * 2 + 5 }, (_, index) =>
         makeItem(ROUTE_ALPHA, `a-${index}`),
@@ -120,6 +129,7 @@ describe("outbound effect dispatch batching", () => {
       }
     });
 
+    // Verifies: leaves a route that already fits the batch as a single group.
     it("leaves a route that already fits the batch as a single group", () => {
       const items = Array.from({ length: EFFECT_BATCH_LIMIT }, (_, index) =>
         makeItem(ROUTE_ALPHA, `a-${index}`),
@@ -131,6 +141,7 @@ describe("outbound effect dispatch batching", () => {
       expect(chunked[0]!.items).toHaveLength(EFFECT_BATCH_LIMIT);
     });
 
+    // Verifies: chunks each distinct route at the Apps Script bounded effect batch.
     it("chunks each distinct route at the Apps Script bounded effect batch", () => {
       // Distinct tabs group SEPARATELY by route, so the oversized alpha route
       // chunks at the bounded batch into [100, 3] and the small beta route
@@ -154,6 +165,7 @@ describe("outbound effect dispatch batching", () => {
     });
   });
 
+  // Covers: batch-cap draining through the worker.
   describe("batch-cap draining through the worker", () => {
     const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -161,6 +173,7 @@ describe("outbound effect dispatch batching", () => {
       await Promise.all(openOrms.splice(0).map((orm) => orm.close(true)));
     });
 
+    // Verifies: drains an oversized route in bounded passes without partial-response churn.
     it("drains an oversized route in bounded passes without partial-response churn", async () => {
       const count = EFFECT_BATCH_LIMIT * 2 + 5; // 205 effects on one route
       const orm = await createOrm();
@@ -198,6 +211,24 @@ describe("outbound effect dispatch batching", () => {
           workerId: "perf-worker",
           now: 1_000 + pass,
           maxEffects: count + 5,
+          // The default wall-clock lease knobs assume an un-instrumented
+          // runner: under coverage instrumentation a 1,000-effect claim pass
+          // can exceed the 180s writer lease (self-takeover → epoch bump →
+          // silent pass abort with applied: 0) and the 15s heartbeat-stale
+          // bound. A pass of this shape is not testing takeover, so widen all
+          // three lease knobs.
+          // Wall-clock lease knobs sized for the coverage-instrumented
+          // verify stage: under `--coverage` the per-effect postcondition
+          // verification of a 1,000-effect batch takes minutes, exceeding the
+          // default 120s effect lease and 600s writer lease, so every settle
+          // CAS refuses (`lease_until > now`) and the pass reports applied: 0
+          // even though the remote writes succeeded (verified via CI
+          // outbox-row diagnostics). This test exercises bounded batch
+          // draining, not lease takeover, so all three knobs are widened
+          // (writer lease must stay longer than the effect lease).
+          writerLeaseDurationMs: 900_000,
+          writerLeaseHeartbeatStaleMs: 600_000,
+          effectLeaseDurationMs: 600_000,
         }));
       }
 
@@ -216,6 +247,7 @@ describe("outbound effect dispatch batching", () => {
       await expect(allApplied(adapter, count)).resolves.toBe(true);
     });
 
+    // Verifies: recovers a regular-path response loss through batched postcondition read-back.
     it("recovers a regular-path response loss through batched postcondition read-back", async () => {
       const orm = await createOrm();
       openOrms.push(orm);
@@ -260,6 +292,7 @@ describe("outbound effect dispatch batching", () => {
       await expect(allApplied(adapter, 1)).resolves.toBe(true);
     });
 
+    // Verifies: converges a backlog across passes while preserving route order.
     it("converges a backlog across passes while preserving route order", async () => {
       // A fixed backlog larger than the worker's maxEffects (10): converges
       // across three passes (10 + 10 + 7) independent of EFFECT_BATCH_LIMIT.

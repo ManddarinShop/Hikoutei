@@ -11,7 +11,7 @@
 
 import type { SyncServiceStorage } from "./compositionPorts.js";
 import type { TypedSheetsEntityMappingRegistry } from "../../orm/mapping/contracts.js";
-import type { TypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import type {
   InternalSyncProvider,
   InternalSyncServiceOptions,

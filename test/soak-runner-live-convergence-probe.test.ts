@@ -94,6 +94,7 @@ beforeEach(soakTestBeforeEach);
 afterEach(soakTestAfterEach);
 afterAll(soakTestAfterAll);
 
+// Suite: soak runner replay oracle probe override (Luna).
 describe("soak runner replay oracle probe override (Luna)", () => {
   /**
    * Minimal live-mode replay fixture: a valid state plus one record per
@@ -132,6 +133,7 @@ describe("soak runner replay oracle probe override (Luna)", () => {
     });
   }
 
+  // Verifies: applies a proven cycle-10 human edit to the replay oracle so a later cycle's plan anchors on the edited value.
   it(
     "applies a proven cycle-10 human edit to the replay oracle so a later cycle's plan anchors on the edited value",
     { timeout: 30_000 },
@@ -159,6 +161,7 @@ describe("soak runner replay oracle probe override (Luna)", () => {
     },
   );
 
+  // Verifies: rejects failed, missing, and tampered probe evidence: the replay oracle is never mutated.
   it(
     "rejects failed, missing, and tampered probe evidence: the replay oracle is never mutated",
     { timeout: 30_000 },
@@ -193,6 +196,7 @@ describe("soak runner replay oracle probe override (Luna)", () => {
     },
   );
 
+  // Verifies: denies the override without DB-backed evidence and reports the ok probe as ungranted.
   it(
     "denies the override without DB-backed evidence and reports the ok probe as ungranted",
     { timeout: 30_000 },
@@ -224,6 +228,7 @@ describe("soak runner replay oracle probe override (Luna)", () => {
     },
   );
 
+  // Verifies: grants the override only when the authority contains the deterministic human-edit value.
   it(
     "grants the override only when the authority contains the deterministic human-edit value",
     { timeout: 30_000 },
@@ -250,7 +255,9 @@ describe("soak runner replay oracle probe override (Luna)", () => {
 });
 
 
+// Suite: soak runner live convergence tombstone accounting.
 describe("soak runner live convergence tombstone accounting", () => {
+  // Verifies: converges when the projection holds durable tombstone rows.
   it("converges when the projection holds durable tombstone rows", async () => {
     // System_State retains deleted entities as tombstone rows; they must
     // not count as extra ids, so the check succeeds against an oracle
@@ -274,6 +281,7 @@ describe("soak runner live convergence tombstone accounting", () => {
     expect(readTabRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: still fails with extra rows when a blank-id content row carries a tombstone display.
   it("still fails with extra rows when a blank-id content row carries a tombstone display", async () => {
     // A tombstone without an id is malformed; the physical row with real
     // content must surface as an extra row, never be hidden.
@@ -300,7 +308,9 @@ describe("soak runner live convergence tombstone accounting", () => {
 });
 
 
+// Suite: soak runner live convergence batched reads.
 describe("soak runner live convergence batched reads", () => {
+  // Verifies: uses ONE batched readTabsRows request per round when the client provides it.
   it("uses ONE batched readTabsRows request per round when the client provides it", async () => {
     // The batch client reads every active System tab in a single call;
     // the runner must issue exactly one request per round and never fall
@@ -337,6 +347,7 @@ describe("soak runner live convergence batched reads", () => {
     expect(readTabRows).not.toHaveBeenCalled();
   });
 
+  // Verifies: falls back to one readTabRows call per entity when the batch method is absent.
   it("falls back to one readTabRows call per entity when the batch method is absent", async () => {
     // A client that only implements the old per-tab method keeps the
     // previous per-entity request behavior unchanged.
@@ -364,6 +375,7 @@ describe("soak runner live convergence batched reads", () => {
     });
   });
 
+  // Verifies: treats a missing batch key as an empty tab: fails the round cleanly, never crashes.
   it("treats a missing batch key as an empty tab: fails the round cleanly, never crashes", async () => {
     // The batch response omits Order_System entirely: the runner must
     // treat it like an empty read (no header -> not converged) instead
@@ -391,6 +403,7 @@ describe("soak runner live convergence batched reads", () => {
     expect(readTabRows).not.toHaveBeenCalled();
   });
 
+  // Verifies: still detects probe silent overwrites against batched reads.
   it("still detects probe silent overwrites against batched reads", async () => {
     const readTabsRows = vi.fn().mockResolvedValue({
       User_System: [
@@ -418,6 +431,7 @@ describe("soak runner live convergence batched reads", () => {
     expect(result.projectionMismatch).toBe(true);
   });
 
+  // Verifies: accepts a probe value visible through batched reads.
   it("accepts a probe value visible through batched reads", async () => {
     const readTabsRows = vi.fn().mockResolvedValue({
       User_System: [
@@ -447,7 +461,9 @@ describe("soak runner live convergence batched reads", () => {
   });
 });
 
+// Suite: soak runner live convergence bounded read retry.
 describe("soak runner live convergence bounded read retry", () => {
+  // Verifies: retries a transient GET once and succeeds on the second read.
   it("retries a transient GET once and succeeds on the second read", async () => {
     // A retryable DirectSheetsError (timeout) on the first convergence
     // read is retried once within the phase deadline; the second read
@@ -475,6 +491,7 @@ describe("soak runner live convergence bounded read retry", () => {
     expect(readTabsRows).toHaveBeenCalledTimes(2);
   });
 
+  // Verifies: bounds a second transient failure to one retry and propagates it.
   it("bounds a second transient failure to one retry and propagates it", async () => {
     // Two consecutive retryable failures: the read is retried exactly
     // once, then the second failure propagates (the cycle aborts with the
@@ -500,6 +517,7 @@ describe("soak runner live convergence bounded read retry", () => {
     expect(readTabsRows).toHaveBeenCalledTimes(2);
   });
 
+  // Verifies: never retries a permanent (non-retryable) failure.
   it("never retries a permanent (non-retryable) failure", async () => {
     // A non-retryable DirectSheetsError (permanent 4xx) propagates
     // immediately with no retry.
@@ -522,6 +540,7 @@ describe("soak runner live convergence bounded read retry", () => {
     expect(readTabsRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: never retries a missing-tab/header/identity harness failure.
   it("never retries a missing-tab/header/identity harness failure", async () => {
     // A deterministic missing state is a harness invariant, never
     // retryable: it propagates immediately.
@@ -544,6 +563,7 @@ describe("soak runner live convergence bounded read retry", () => {
     expect(readTabsRows).toHaveBeenCalledTimes(1);
   });
 
+  // Verifies: never retries a deadline-expired failure.
   it("never retries a deadline-expired failure", async () => {
     // A deadline-expired DirectSheetsError is a harness invariant, never
     // retryable: it propagates immediately with no retry.

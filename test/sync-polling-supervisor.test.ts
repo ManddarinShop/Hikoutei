@@ -1,3 +1,8 @@
+/**
+ * sync polling supervisor tests. Covers SyncPollingSupervisor; drains an externally triggered pass before stop resolves; rejects non-positive intervalMs with the typed error code; rejects non-positive errorBackoffInitialMs with the typed error code; rejects non-positive errorBackoffMaxMs with the typed error code; rejects errorBackoffMaxMs < errorBackoffInitialMs with the backoff order code.
+ *
+ * Exercises the behavior through fake providers and SQLite fixtures with no live credentials.
+ */
 import { describe, expect, it } from "vitest";
 
 import { SyncPollingSupervisor } from "@hikoutei/sync-engine/sync/service/SyncPollingSupervisor.js";
@@ -6,7 +11,9 @@ import {
   PollingSupervisorOptionsError,
 } from "@hikoutei/sync-engine/sync/service/errors.js";
 
+// Covers: SyncPollingSupervisor.
 describe("SyncPollingSupervisor", () => {
+  // Verifies: drains an externally triggered pass before stop resolves.
   it("drains an externally triggered pass before stop resolves", async () => {
     let resolvePass!: () => void;
     const pendingPass = new Promise<void>((resolve) => {
@@ -29,6 +36,7 @@ describe("SyncPollingSupervisor", () => {
     expect(stopped).toBe(true);
   });
 
+  // Verifies: rejects non-positive intervalMs with the typed error code.
   it("rejects non-positive intervalMs with the typed error code", () => {
     expect.assertions(3);
     try {
@@ -42,6 +50,7 @@ describe("SyncPollingSupervisor", () => {
     }
   });
 
+  // Verifies: rejects non-positive errorBackoffInitialMs with the typed error code.
   it("rejects non-positive errorBackoffInitialMs with the typed error code", () => {
     expect.assertions(3);
     try {
@@ -58,6 +67,7 @@ describe("SyncPollingSupervisor", () => {
     }
   });
 
+  // Verifies: rejects non-positive errorBackoffMaxMs with the typed error code.
   it("rejects non-positive errorBackoffMaxMs with the typed error code", () => {
     expect.assertions(3);
     try {
@@ -74,6 +84,7 @@ describe("SyncPollingSupervisor", () => {
     }
   });
 
+  // Verifies: rejects errorBackoffMaxMs < errorBackoffInitialMs with the backoff order code.
   it("rejects errorBackoffMaxMs < errorBackoffInitialMs with the backoff order code", () => {
     expect.assertions(3);
     try {

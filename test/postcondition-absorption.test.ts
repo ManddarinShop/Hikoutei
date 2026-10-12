@@ -84,6 +84,7 @@ const cell = {
   number: (value: number): NormalizedCell => ({ kind: "number", value }),
 };
 
+// Covers postcondition absorption (Phase 4, design §10).
 describe("postcondition absorption (Phase 4, design §10)", () => {
   const openOrms: Array<Awaited<ReturnType<typeof createOrm>>> = [];
 
@@ -176,6 +177,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
     return transport.getSpreadsheetRequests.slice(from).length;
   }
 
+  // Verifies absorbs a same-route landed head into the batch cycle: one enumeration, head settles applied.
   it("absorbs a same-route landed head into the batch cycle: one enumeration, head settles applied", async () => {
     const t = await setupWorker();
     const head = createEffect("head", 1);
@@ -218,6 +220,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
     expect(t.transport.batchUpdateCalls - writesBefore).toBe(1);
   });
 
+  // Verifies absorbs a human-edited head as changed through the unchanged terminal transition.
   it("absorbs a human-edited head as changed through the unchanged terminal transition", async () => {
     const t = await setupWorker();
     const head = createEffect("edited", 1);
@@ -237,6 +240,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
     expect(await t.status(batch.effectId)).toBe("applied");
   });
 
+  // Verifies redrives an absorbed unapplied head on the +1s gate without breaking per-target ordering.
   it("redrives an absorbed unapplied head on the +1s gate without breaking per-target ordering", async () => {
     const t = await setupWorker();
     // Head never landed (no row, no receipt): the absorbed probe must
@@ -280,6 +284,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
     expect(await t.row("Orders", 3)).toEqual({ id: "order-redrive", status: "shipped" });
   });
 
+  // Verifies settles an isolated head through the unchanged standalone idle-pass probe (D4).
   it("settles an isolated head through the unchanged standalone idle-pass probe (D4)", async () => {
     const t = await setupWorker();
     const head = createEffect("idle", 1);
@@ -296,6 +301,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
     expect(enumerations(t.transport, from)).toBe(1);
   });
 
+  // Verifies does NOT absorb a cross-route head: the standalone probe still runs it (D1).
   it("does NOT absorb a cross-route head: the standalone probe still runs it (D1)", async () => {
     const t = await setupWorker();
     const head = createEffect("xroute", 1); // Orders route
@@ -314,6 +320,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
     expect(enumerations(t.transport, from)).toBe(2);
   });
 
+  // Verifies falls back when a SUCCESS envelope omits probeResults entirely (standalone probe still settles).
   it("falls back when a SUCCESS envelope omits probeResults entirely (standalone probe still settles)", async () => {
     const t = await setupWorker();
     const head = createEffect("fallback", 1);
@@ -337,6 +344,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
     expect(enumerations(t.transport, from)).toBe(2);
   });
 
+  // Verifies falls back per-effect on a PARTIAL probeResults envelope (omitted entry probes standalone).
   it("falls back per-effect on a PARTIAL probeResults envelope (omitted entry probes standalone)", async () => {
     const t = await setupWorker();
     const headA = createEffect("partial-a", 1);
@@ -366,6 +374,7 @@ describe("postcondition absorption (Phase 4, design §10)", () => {
   });
 });
 
+// Covers absorbed-probe preflight lane serialization (D1).
 describe("absorbed-probe preflight lane serialization (D1)", () => {
   const LANE_SHEET = "physical-absorption-lane";
 
@@ -446,6 +455,7 @@ describe("absorbed-probe preflight lane serialization (D1)", () => {
     identityField: "id",
   };
 
+  // Verifies holds a probe-riding preflight behind an in-flight same-route write, and keeps a probeless preflight lock-free.
   it("holds a probe-riding preflight behind an in-flight same-route write, and keeps a probeless preflight lock-free", async () => {
     const inner = new PreflightRecorderProvider([laneSheetInput]);
     const coordinator = new CoordinatedSheetsProvider({ inner });
@@ -490,6 +500,7 @@ describe("absorbed-probe preflight lane serialization (D1)", () => {
     expect(inner.preflightCalls).toEqual([{ probes: 0 }, { probes: 1 }]);
   });
 
+  // Verifies leaves preflight lock-free on a provider without a mutation lane (bare provider parity).
   it("leaves preflight lock-free on a provider without a mutation lane (bare provider parity)", async () => {
     const inner = new PreflightRecorderProvider([laneSheetInput]);
     const dispatcher = new SheetsEffectDispatcher({ provider: inner, storage: LANE_ONLY_STORAGE });
@@ -508,6 +519,7 @@ describe("absorbed-probe preflight lane serialization (D1)", () => {
   });
 });
 
+// Covers absorbed-probe evidence gate (D6, unit).
 describe("absorbed-probe evidence gate (D6, unit)", () => {
   const cursorHarness = () => {
     const cursor = new ReceiptReadCursor<PreflightReceipt>();
@@ -532,6 +544,7 @@ describe("absorbed-probe evidence gate (D6, unit)", () => {
     },
   } as unknown as SyncProjectionEffect;
 
+  // Verifies cold cursor proves a miss; a live cursor proves coverage; a mid-read drop is unknown.
   it("cold cursor proves a miss; a live cursor proves coverage; a mid-read drop is unknown", async () => {
     const { cursor, deps } = cursorHarness();
     const context = {
@@ -560,6 +573,7 @@ describe("absorbed-probe evidence gate (D6, unit)", () => {
       .toBe("bands");
   });
 
+  // Verifies format-ambiguous identity evidence forces the whole-table decision.
   it("format-ambiguous identity evidence forces the whole-table decision", () => {
     const { deps } = cursorHarness();
     const context = {
@@ -570,7 +584,9 @@ describe("absorbed-probe evidence gate (D6, unit)", () => {
   });
 });
 
+// Covers absorbed fast-append fallback read (D6/D7, provider e2e).
 describe("absorbed fast-append fallback read (D6/D7, provider e2e)", () => {
+  // Verifies decides a format-ambiguous probe through exactly ONE full fallback read.
   it("decides a format-ambiguous probe through exactly ONE full fallback read", async () => {
     const spreadsheet = new StubSpreadsheet();
     // Row 2 carries a NUMBER identity cell: the values-only scoped base read

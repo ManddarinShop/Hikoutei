@@ -179,7 +179,9 @@ async function captureInvalidResponse(
   }
 }
 
+// Covers invalid provider-response classification (issue #357).
 describe("invalid provider-response classification (issue #357)", () => {
+  // Verifies classifies a malformed batchUpdate 2xx reply as batch_update_reply/malformed_reply.
   it("classifies a malformed batchUpdate 2xx reply as batch_update_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -207,6 +209,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("malformed-batch-1");
   });
 
+  // Verifies classifies a malformed get 2xx reply as get_reply/malformed_reply.
   it("classifies a malformed get 2xx reply as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -232,6 +235,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("malformed-get-1");
   });
 
+  // Verifies classifies a field-level malformed get guard as get_reply/malformed_reply.
   it("classifies a field-level malformed get guard as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -259,6 +263,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("malformed-get-field-1");
   });
 
+  // Verifies classifies a malformed raw GET cell value as get_reply/malformed_reply.
   it("classifies a malformed raw GET cell value as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -288,6 +293,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("malformed-cell-1");
   });
 
+  // Verifies classifies a malformed raw GET cell numberFormat as get_reply/malformed_reply.
   it("classifies a malformed raw GET cell numberFormat as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -318,6 +324,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("malformed-format-1");
   });
 
+  // Verifies classifies a primitive CellData wrapper as get_reply/malformed_reply.
   it("classifies a primitive CellData wrapper as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -347,6 +354,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("u6");
   });
 
+  // Verifies classifies a primitive userEnteredFormat wrapper as get_reply/malformed_reply.
   it("classifies a primitive userEnteredFormat wrapper as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -379,6 +387,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("u7");
   });
 
+  // Verifies fails a literal cell with a malformed effectiveValue as get_reply/malformed_reply.
   it("fails a literal cell with a malformed effectiveValue as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -412,6 +421,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("malformed-literal-primitive-1");
   });
 
+  // Verifies does not let a valid entered format hide a malformed effective numberFormat.
   it("does not let a valid entered format hide a malformed effective numberFormat", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -444,6 +454,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("bogus");
   });
 
+  // Verifies fails provisioning on a primitive CellData child wrapper as get_reply/malformed_reply.
   it("fails provisioning on a primitive CellData child wrapper as get_reply/malformed_reply", async () => {
     const spreadsheet = new StubSpreadsheet();
     const tab = spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -466,6 +477,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("raw-provider-sentinel-9f2c");
   });
 
+  // Verifies does not mislabel a missing tab in a generic table read as malformed.
   it("does not mislabel a missing tab in a generic table read as malformed", async () => {
     // The registered tab is absent from the spreadsheet: a structurally valid
     // GET can simply lack the tab. A generic table read has no missing-tab
@@ -492,6 +504,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("Users_System");
   });
 
+  // Verifies classifies a fast-append identity already present without a receipt as preflight/identity_already_exists.
   it("classifies a fast-append identity already present without a receipt as preflight/identity_already_exists", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", {
@@ -522,6 +535,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("identity-exists-1");
   });
 
+  // Verifies does not mislabel a current-request duplicate as a remote identity collision.
   it("does not mislabel a current-request duplicate as a remote identity collision", async () => {
     const spreadsheet = new StubSpreadsheet();
     spreadsheet.addTab("Users_System", { headers: [...SYSTEM_HEADERS] });
@@ -549,6 +563,7 @@ describe("invalid provider-response classification (issue #357)", () => {
     expect(JSON.stringify(event)).not.toContain("dup");
   });
 
+  // Verifies classifies a postcondition read with a missing tab as postcondition_read/missing_tab.
   it("classifies a postcondition read with a missing tab as postcondition_read/missing_tab", async () => {
     // The registered tab is absent from the spreadsheet, so the postcondition
     // recovery read's preflight cannot resolve it.
@@ -567,7 +582,9 @@ describe("invalid provider-response classification (issue #357)", () => {
   });
 });
 
+// Covers invalid provider-response classification valid pair contract (issue #357).
 describe("invalid provider-response classification valid pair contract (issue #357)", () => {
+  // Verifies permits exactly the proven operation/reason pairs (compile-time).
   it("permits exactly the proven operation/reason pairs (compile-time)", () => {
     // Every proven pair satisfies the discriminated union.
     const valid: SyncInvalidProviderClassification[] = [

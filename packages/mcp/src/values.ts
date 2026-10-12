@@ -6,7 +6,8 @@
  * the entity's declared properties before it reaches the EntityManager:
  * unknown fields, wrong scalar types, and bad operator names are rejected
  * with corrective messages instead of leaking storage errors. Dates cross
- * the boundary as ISO 8601 strings and become `Date` instances internally.
+ * the boundary as canonical UTC ISO strings (`YYYY-MM-DDTHH:mm:ss.sssZ`)
+ * and become `Date` instances internally.
  */
 
 import type { HikouteiMcpConfig, HikouteiMcpScalarType } from "./config.js";
@@ -118,6 +119,11 @@ export function validateRecordData(
       );
       continue;
     }
+    // A numeric primary key is SQLite-generated (AUTOINCREMENT), so an
+    // explicitly-undefined value on create counts as omitted, not missing.
+    if (mode === "create" && property.primary && entity.primaryType === "number" && isUndefined(raw)) {
+      continue;
+    }
     const coerced = coerceScalar(property.type, property.nullable, raw, key);
     if (coerced === undefined) {
       if (isUndefined(raw)) {
@@ -133,14 +139,24 @@ export function validateRecordData(
   }
   if (mode === "create") {
     for (const property of entity.properties.values()) {
-      if (!property.nullable && !(property.name in data)) {
-        problems.push(
-          `field "${property.name}" (${property.type}) is required for create.`,
-        );
-      }
+      // Own input properties only: inherited names (e.g. "toString") must
+      // not satisfy required-field checks via the prototype chain.
+      if (property.nullable || Object.hasOwn(data, property.name)) continue;
+      // A numeric primary key is SQLite-generated, so omitting it on create
+      // is valid; a supplied value is still type-checked above.
+      if (property.primary && entity.primaryType === "number") continue;
+      problems.push(
+        `field "${property.name}" (${property.type}) is required for create.`,
+      );
     }
-    const primary = data[entity.primaryKey];
-    if (isUndefined(primary) && !entity.properties.get(entity.primaryKey)?.nullable) {
+    const primaryOwn = Object.hasOwn(data, entity.primaryKey)
+      ? (data as Record<string, unknown>)[entity.primaryKey]
+      : undefined;
+    if (
+      isUndefined(primaryOwn) &&
+      !entity.properties.get(entity.primaryKey)?.nullable &&
+      entity.primaryType !== "number"
+    ) {
       problems.push(`primary key "${entity.primaryKey}" is required for create.`);
     }
   }
@@ -329,10 +345,10 @@ function coerceScalar(
     case "boolean":
       return typeof raw === "boolean" ? raw : undefined;
     case "date": {
-      if (typeof raw !== "string" || raw.trim() === "") return undefined;
-      const parsed = new Date(raw);
-      if (Number.isNaN(parsed.getTime())) return undefined;
-      return parsed;
+      // Canonical UTC ISO only (YYYY-MM-DDTHH:mm:ss.sssZ), matching the
+      // MCP input contract and the library's serialized Date form.
+      if (typeof raw !== "string" || !isCanonicalUtcIsoDate(raw)) return undefined;
+      return new Date(raw);
     }
   }
 }
@@ -340,7 +356,7 @@ function coerceScalar(
 /** Human-readable coercion failure for one field. */
 function coercionProblem(type: HikouteiMcpScalarType, key: string, raw: unknown): string {
   if (type === "date") {
-    return `field "${key}" must be an ISO 8601 date-time string (got ${JSON.stringify(raw)}).`;
+    return `field "${key}" must be a canonical UTC ISO 8601 date-time string in YYYY-MM-DDTHH:mm:ss.sssZ form (got ${JSON.stringify(raw)}).`;
   }
   if (type === "number") {
     return `field "${key}" must be a finite number (got ${JSON.stringify(raw)}).`;
@@ -366,4 +382,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** True only for JavaScript `undefined`. */
 function isUndefined(value: unknown): boolean {
   return value === undefined;
+}
+
+/** Canonical UTC ISO date check (YYYY-MM-DDTHH:mm:ss.sssZ with round-trip). */
+function isCanonicalUtcIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }

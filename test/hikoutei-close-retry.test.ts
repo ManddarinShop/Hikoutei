@@ -34,7 +34,9 @@ function openScriptedRuntime(provider: ScalarEntityPersistenceProvider, beforeCl
   return createInternalHikoutei(provider, new Map([[descriptor.name, descriptor]]), beforeClose);
 }
 
+// Covers retryable runtime close.
 describe("retryable runtime close", () => {
+  // Verifies leaves a failed close retryable and rethrows the ORIGINAL failure.
   it("leaves a failed close retryable and rethrows the ORIGINAL failure", async () => {
     const provider = new ScriptedCloseProvider(1);
     const runtime = openScriptedRuntime(provider);
@@ -47,6 +49,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(2);
   });
 
+  // Verifies makes a successful close terminal and idempotent.
   it("makes a successful close terminal and idempotent", async () => {
     const provider = new ScriptedCloseProvider(0);
     const runtime = openScriptedRuntime(provider);
@@ -59,6 +62,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(1);
   });
 
+  // Verifies shares one attempt between concurrent close calls (single-flight).
   it("shares one attempt between concurrent close calls (single-flight)", async () => {
     const provider = new ScriptedCloseProvider(0);
     const runtime = openScriptedRuntime(provider);
@@ -70,6 +74,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(1);
   });
 
+  // Verifies propagates the same original failure to every concurrent caller and stays retryable.
   it("propagates the same original failure to every concurrent caller and stays retryable", async () => {
     const provider = new ScriptedCloseProvider(1);
     const runtime = openScriptedRuntime(provider);
@@ -89,6 +94,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(2);
   });
 
+  // Verifies retries the full cleanup including a failed beforeClose hook.
   it("retries the full cleanup including a failed beforeClose hook", async () => {
     const provider = new ScriptedCloseProvider(0);
     let beforeCloseCalls = 0;
@@ -106,6 +112,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(2);
   });
 
+  // Verifies aggregates a beforeClose failure with a provider failure on one attempt.
   it("aggregates a beforeClose failure with a provider failure on one attempt", async () => {
     const provider = new ScriptedCloseProvider(1);
     const beforeClose = async () => {
@@ -127,6 +134,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(2);
   });
 
+  // Verifies returns to open after EVERY failure: repeated failures stay retryable until success.
   it("returns to open after EVERY failure: repeated failures stay retryable until success", async () => {
     // Regression for the explicit state machine: a failed performClose()
     // must transition closing -> open (not linger in "closing"), so two
@@ -141,6 +149,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(3);
   });
 
+  // Verifies re-runs BOTH hooks on the retry after an aggregate failure.
   it("re-runs BOTH hooks on the retry after an aggregate failure", async () => {
     // A first attempt where beforeClose AND the provider both fail must
     // leave the runtime retryable: the second attempt re-runs the
@@ -168,6 +177,7 @@ describe("retryable runtime close", () => {
     expect(beforeCloseCalls).toBe(2);
   });
 
+  // Verifies resolves a synchronous reentrant close from a beforeClose hook without a second cleanup.
   it("resolves a synchronous reentrant close from a beforeClose hook without a second cleanup", async () => {
     // MEDIUM 5: the close slot is reserved BEFORE beforeClose runs, so a
     // close hook that synchronously calls close() again must never start a
@@ -196,6 +206,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(1);
   });
 
+  // Verifies an outer close failure still reaches the outer caller and stays retryable.
   it("an outer close failure still reaches the outer caller and stays retryable", async () => {
     // MEDIUM 5: on a failing attempt, the hook-internal reentrant call
     // resolves immediately, but the OUTER close() rejects with the ORIGINAL
@@ -218,6 +229,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(2);
   });
 
+  // Verifies settles an AWAITED reentrant close from a beforeClose hook without self-deadlock.
   it("settles an AWAITED reentrant close from a beforeClose hook without self-deadlock", async () => {
     // MEDIUM 5 regression: awaiting runtime.close() from INSIDE the active
     // beforeClose hook previously returned the pending attempt promise,
@@ -243,6 +255,7 @@ describe("retryable runtime close", () => {
     expect(hookCalls).toBe(1);
   });
 
+  // Verifies keeps an awaited-reentrant close retryable when the provider close fails.
   it("keeps an awaited-reentrant close retryable when the provider close fails", async () => {
     // MEDIUM 5: with an awaited reentrant hook call AND a failing provider
     // close, the outer close rejects with the ORIGINAL error, the runtime
@@ -264,6 +277,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(2);
   });
 
+  // Verifies treats a throw-undefined beforeClose hook as a failed retryable close.
   it("treats a throw-undefined beforeClose hook as a failed retryable close", async () => {
     // MEDIUM 3: boolean failure flags, never `error !== undefined` — a
     // hook that throws `undefined` must keep the attempt FAILED and
@@ -287,6 +301,7 @@ describe("retryable runtime close", () => {
     expect(provider.closeCalls).toBe(2);
   });
 
+  // Verifies treats a throw-undefined provider close as a failed retryable close.
   it("treats a throw-undefined provider close as a failed retryable close", async () => {
     // MEDIUM 3: the same boolean-flag contract applies to the provider
     // close — a provider that rejects with `undefined` (never an Error)
@@ -313,6 +328,7 @@ describe("retryable runtime close", () => {
     expect(throwingProvider.closeCalls).toBe(2);
   });
 
+  // Verifies aggregate failure preserves a non-Error hook value alongside the provider error.
   it("aggregate failure preserves a non-Error hook value alongside the provider error", async () => {
     // Luna: when the beforeClose hook throws a non-Error value (undefined /
     // null are legitimate thrown values) AND the provider close also fails,

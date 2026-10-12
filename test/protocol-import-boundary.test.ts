@@ -145,7 +145,9 @@ function checkImport(imp: KernelImport): string | undefined {
   return undefined;
 }
 
+// Covers ikisaki protocol import boundary.
 describe("ikisaki protocol import boundary", () => {
+  // Verifies keeps provider/Sheets/entity imports out of packages/protocol/ikisaki/src.
   it("keeps provider/Sheets/entity imports out of packages/protocol/ikisaki/src", () => {
     const violations: string[] = [];
     for (const file of collectSources(kernelSrc)) {
@@ -160,6 +162,7 @@ describe("ikisaki protocol import boundary", () => {
     expect(violations).toEqual([]);
   });
 
+  // Verifies never interprets domain kinds inside packages/protocol/ikisaki/src (opaque dispatchClass only).
   it("never interprets domain kinds inside packages/protocol/ikisaki/src (opaque dispatchClass only)", () => {
     // Step-2 vocabulary: the worker routes SOLELY on the entity-stamped
     // opaque `dispatchClass` label. Domain-kind tables, provider effect
@@ -212,6 +215,7 @@ describe("ikisaki protocol import boundary", () => {
     expect(violations).toEqual([]);
   });
 
+  // Verifies never branches on effect_kind or raw domain literals inside the dispatch hot path.
   it("never branches on effect_kind or raw domain literals inside the dispatch hot path", () => {
     // The deny-list above catches entity-vocabulary reintroduction
     // tree-wide, but a worker branch on the bare `effect_kind` column or on
@@ -240,6 +244,7 @@ describe("ikisaki protocol import boundary", () => {
     expect(violations).toEqual([]);
   });
 
+  // Verifies branches dispatch routing on the opaque dispatchClass hint.
   it("branches dispatch routing on the opaque dispatchClass hint", () => {
     const routing = readFileSync(join(kernelSrc, "worker", "dispatch", "routing.ts"), "utf8");
     expect(routing).toContain("dispatch_class");
@@ -251,7 +256,9 @@ describe("ikisaki protocol import boundary", () => {
   });
 });
 
+// Covers sheets provider import boundary.
 describe("sheets provider import boundary", () => {
+  // Verifies keeps @hikoutei/sync-engine imports out of packages/library/cloud/sheets/src.
   it("keeps @hikoutei/sync-engine imports out of packages/library/cloud/sheets/src", () => {
     // Batch E removed the only wrong-direction package edge (sheets ->
     // sync-engine, previously just the shared/observability log modules now
@@ -376,7 +383,9 @@ function extractStorageSeamImports(source: string): StorageSeamImport[] {
   return found;
 }
 
+// Covers storage protocol-seam import boundary.
 describe("storage protocol-seam import boundary", () => {
+  // Verifies keeps @hikoutei/ikisaki imports inside storage on the narrow port surface.
   it("keeps @hikoutei/ikisaki imports inside storage on the narrow port surface", () => {
     const storageSrc = resolve(here, "..", "packages", "library", "core", "storage", "src");
     const violations: string[] = [];
@@ -403,6 +412,7 @@ describe("storage protocol-seam import boundary", () => {
     expect(violations).toEqual([]);
   });
 
+  // Verifies keeps @hikoutei/sheets out of storage except the single audit-planning edge.
   it("keeps @hikoutei/sheets out of storage except the single audit-planning edge", () => {
     // The Sync_Conflicts audit projection is Sheets-tab semantics owned by
     // `@hikoutei/sheets`, but its rows are planned inside the shared flush
@@ -428,6 +438,7 @@ describe("storage protocol-seam import boundary", () => {
     expect(violations).toEqual([]);
   });
 
+  // Verifies leaves no sheetsContract remnant behind in storage or its importers.
   it("leaves no sheetsContract remnant behind in storage or its importers", () => {
     // The Batch-B move empties the old storage-side sheets-contract home:
     // no storage source may reference it (relative or by package), and no

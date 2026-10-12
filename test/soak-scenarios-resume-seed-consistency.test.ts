@@ -74,7 +74,9 @@ function plannedEntityName(plan: Record<string, any>): string | undefined {
   return typeof entityName === "string" ? entityName : undefined;
 }
 
+// Covers: deterministic batch reconstruction from (seed, cycle, subset) — issue #359.
 describe("deterministic batch reconstruction from (seed, cycle, subset) — issue #359", () => {
+  // Verifies: recomposes a byte-identical batch for the same (seed, cycle, subset).
   it("recomposes a byte-identical batch for the same (seed, cycle, subset)", () => {
     // Same inputs, twice: identical id/phase/order/TAG/plan, in the same
     // array order (JSON equality is byte-identical, so even ordering is
@@ -94,6 +96,7 @@ describe("deterministic batch reconstruction from (seed, cycle, subset) — issu
     }
   });
 
+  // Verifies: keeps id/phase/order identical across different active subsets.
   it("keeps id/phase/order identical across different active subsets", () => {
     // The scheduler's selection/phase/order never read the active subset
     // (drawIds/assignPhase are pure functions of seed/cycle/registry), so
@@ -107,6 +110,7 @@ describe("deterministic batch reconstruction from (seed, cycle, subset) — issu
     }
   });
 
+  // Verifies: selects every plan target from the active subset (and its soak table).
   it("selects every plan target from the active subset (and its soak table)", () => {
     for (const activeEntities of [FULL_SUBSET, ONE_TABLE_SUBSET]) {
       const names = new Set(activeEntities.map((entry) => entry.name));
@@ -132,6 +136,7 @@ describe("deterministic batch reconstruction from (seed, cycle, subset) — issu
     }
   });
 
+  // Verifies: composes a different batch for a different seed (determinism contrast).
   it("composes a different batch for a different seed (determinism contrast)", () => {
     // Determinism is the property under test; the contrast is a sanity
     // check that seeds actually drive composition. With an empty registry
@@ -151,7 +156,9 @@ describe("deterministic batch reconstruction from (seed, cycle, subset) — issu
   });
 });
 
+// Covers: resume replay binds a recorded batch to the seed — issue #359.
 describe("resume replay binds a recorded batch to the seed — issue #359", () => {
+  // Verifies: planResumeRecovery returns the interrupted cycle for an incomplete checkpoint.
   it("planResumeRecovery returns the interrupted cycle for an incomplete checkpoint", () => {
     const state = { lastCompletedCycle: 5 };
     const checkpoint = (cycle: number, status: "in-flight" | "completed") =>
@@ -179,6 +186,7 @@ describe("resume replay binds a recorded batch to the seed — issue #359", () =
     });
   });
 
+  // Verifies: replayDeterministicHistory reconstructs the identical workload plan from the seed alone.
   it("replayDeterministicHistory reconstructs the identical workload plan from the seed alone", () => {
     // The deterministic history replay is a pure function of the stored
     // seed/params/active subset — never of any fixture. Running it twice
@@ -215,6 +223,7 @@ describe("resume replay binds a recorded batch to the seed — issue #359", () =
     );
   });
 
+  // Verifies: a recorded scenario batch matches the seed reconstruction and fails closed when tampered.
   it("a recorded scenario batch matches the seed reconstruction and fails closed when tampered", () => {
     const seed = 4242;
     const cycle = 1;
@@ -272,7 +281,9 @@ describe("resume replay binds a recorded batch to the seed — issue #359", () =
   });
 });
 
+// Covers: fixture-registry consistency (no hardcoded drift) — issue #359.
 describe("fixture-registry consistency (no hardcoded drift) — issue #359", () => {
+  // Verifies: derives the scenario vocabulary exactly from the registered modules.
   it("derives the scenario vocabulary exactly from the registered modules", () => {
     // The resume schema validates recorded batches against this derived
     // vocabulary, so a vocabulary that drifts from the registry would let a
@@ -289,6 +300,7 @@ describe("fixture-registry consistency (no hardcoded drift) — issue #359", () 
     }
   });
 
+  // Verifies: a composed batch is itself a schema-valid recordable fixture.
   it("a composed batch is itself a schema-valid recordable fixture", () => {
     // The fixture this suite records is always derived from the real
     // registry composition. Round-tripping it through the resume schema

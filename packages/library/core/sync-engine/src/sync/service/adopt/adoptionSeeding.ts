@@ -74,7 +74,7 @@ import {
   SYNC_SNAPSHOT_READ_MODES,
 } from "@hikoutei/contracts/sheets/constants.js";
 import type { TypedSheetsEntityMapping } from "../../../orm/mapping/contracts.js";
-import type { TypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import type { InternalSyncProvider } from "../serviceOptions.js";
 import type {
   ExistingSheetAdoptionStartupPlan,

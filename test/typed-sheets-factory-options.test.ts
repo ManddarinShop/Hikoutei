@@ -1,3 +1,11 @@
+/**
+ * Factory-option resolution coverage for `createTypedSheets`.
+ *
+ * Verifies the optional-argument surface: the `HIKOUTEI_DB_PATH` fallback,
+ * the module-level entity registry default, per-call registry snapshots,
+ * duplicate/shared-table rejection, and the `resolveDefaultDbPath` helper.
+ */
+
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -53,6 +61,7 @@ function defineUser(name = "User", tableName = "users") {
   });
 }
 
+// Verifies the optional dbName/entities arguments resolve against env and registry.
 describe("createTypedSheets optional arguments", () => {
   const runtimes: Hikoutei[] = [];
 
@@ -85,6 +94,7 @@ describe("createTypedSheets optional arguments", () => {
     ]);
   }
 
+  // Verifies explicit dbName + entities still open a working runtime (regression).
   it("keeps explicit dbName + entities behavior identical (regression)", async () => {
     const User = defineUser();
     const hikoutei = await openRuntime({ dbName: ":memory:", entities: [User] });
@@ -98,6 +108,7 @@ describe("createTypedSheets optional arguments", () => {
     });
   });
 
+  // Verifies the HIKOUTEI_DB_PATH env value is used when dbName is omitted.
   it("uses the HIKOUTEI_DB_PATH env value when dbName is omitted", async () => {
     const User = defineUser();
     const dbPath = await tempDbPath();
@@ -122,6 +133,7 @@ describe("createTypedSheets optional arguments", () => {
     }
   });
 
+  // Verifies module-registered entities are used when entities is omitted.
   it("uses registered entities when entities is omitted", async () => {
     const User = defineUser();
     const Counter = defineTypedSheetsEntity({
@@ -139,6 +151,7 @@ describe("createTypedSheets optional arguments", () => {
     expect(await em.findOne(Counter, { id: "reg-counter" })).toMatchObject({ value: 3 });
   });
 
+  // Verifies a no-argument call resolves both env db path and registered entities.
   it("supports a no-argument call with env db path and registered entities", async () => {
     const User = defineUser();
     const dbPath = await tempDbPath();
@@ -162,6 +175,7 @@ describe("createTypedSheets optional arguments", () => {
     }
   });
 
+  // Verifies a call without entities rejects when the registry is empty.
   it("rejects a call without entities when the registry is empty", async () => {
     await expect(createTypedSheets({ dbName: ":memory:" })).rejects.toMatchObject({
       code: HIKOUTEI_ERROR_CODES.INVALID_ENTITY_DESCRIPTOR,
@@ -179,6 +193,7 @@ describe("createTypedSheets optional arguments", () => {
     });
   });
 
+  // Verifies registry entities keep their registration order in the runtime.
   it("preserves registry registration order", async () => {
     const first = defineUser("First", "first_entities");
     const second = defineTypedSheetsEntity({
@@ -208,6 +223,7 @@ describe("createTypedSheets optional arguments", () => {
     void first;
   });
 
+  // Verifies explicit entities override the registry and unlisted tokens are rejected.
   it("lets explicit entities win over the registry", async () => {
     const RegistryUser = defineUser("RegistryUser", "registry_users");
     const ExplicitUser = defineUser("ExplicitUser", "explicit_users");
@@ -232,6 +248,7 @@ describe("createTypedSheets optional arguments", () => {
     });
   });
 
+  // Verifies each call snapshots the registry so late registrations don't leak in.
   it("uses a per-call registry snapshot", async () => {
     const First = defineUser("FirstSnapshot", "first_snapshot");
     const firstRuntime = await openRuntime({ dbName: ":memory:" });
@@ -258,6 +275,7 @@ describe("createTypedSheets optional arguments", () => {
     void First;
   });
 
+  // Verifies duplicate entity names via the registry default are rejected.
   it("rejects duplicate registrations through the registry default", async () => {
     defineUser("Dup", "dup_a");
     defineUser("Dup", "dup_b");
@@ -267,6 +285,7 @@ describe("createTypedSheets optional arguments", () => {
     });
   });
 
+  // Verifies a shared table name via the registry default is rejected.
   it("rejects a shared table name through the registry default", async () => {
     defineUser("SharedOne", "shared_table");
     defineUser("SharedTwo", "shared_table");
@@ -276,6 +295,7 @@ describe("createTypedSheets optional arguments", () => {
     });
   });
 
+  // Verifies option validation for provided values matches the explicit-args path.
   it("keeps option validation identical when values are provided", async () => {
     const User = defineUser();
     await expect(createTypedSheets({ dbName: "   ", entities: [User] })).rejects.toMatchObject({
@@ -292,22 +312,27 @@ describe("createTypedSheets optional arguments", () => {
   });
 });
 
+// Verifies the default db-path resolver honors HIKOUTEI_DB_PATH with trimming.
 describe("resolveDefaultDbPath", () => {
+  // Verifies the default path is used when the env var is unset.
   it("falls back to ./hikoutei.sqlite when the env var is unset", () => {
     expect(resolveDefaultDbPath({})).toBe("./hikoutei.sqlite");
   });
 
+  // Verifies a non-empty HIKOUTEI_DB_PATH value takes precedence.
   it("prefers a non-empty HIKOUTEI_DB_PATH value", () => {
     expect(resolveDefaultDbPath({ HIKOUTEI_DB_PATH: "/tmp/custom.sqlite" })).toBe(
       "/tmp/custom.sqlite",
     );
   });
 
+  // Verifies empty or whitespace-only env values fall back to the default.
   it("ignores an empty or whitespace-only HIKOUTEI_DB_PATH value", () => {
     expect(resolveDefaultDbPath({ HIKOUTEI_DB_PATH: "" })).toBe("./hikoutei.sqlite");
     expect(resolveDefaultDbPath({ HIKOUTEI_DB_PATH: "   " })).toBe("./hikoutei.sqlite");
   });
 
+  // Verifies a padded env value is trimmed before use.
   it("trims a padded HIKOUTEI_DB_PATH value", () => {
     expect(resolveDefaultDbPath({ HIKOUTEI_DB_PATH: "  /tmp/padded.sqlite  " })).toBe(
       "/tmp/padded.sqlite",

@@ -62,7 +62,9 @@ const SYMLINK_SUPPORTED = (() => {
   }
 })();
 
+// Verifies the soak artifacts: log collection suite.
 describe("soak artifacts: log collection", () => {
+  // Verifies: collects and resets ONLY canonical logger-created backups: never .0, leading-zero, or beyond-retention files.
   it("collects and resets ONLY canonical logger-created backups: never .0, leading-zero, or beyond-retention files", async () => {
     // Regression (Luna review): backup matching must accept exactly the
     // index shape the library rotation produces — canonical positive
@@ -128,6 +130,7 @@ describe("soak artifacts: log collection", () => {
     }
   });
 
+  // Verifies: never matches backups whose base-name or suffix case differs from the logger.
   it("never matches backups whose base-name or suffix case differs from the logger's canonical shape", async () => {
     // Regression (Luna review): backup matching is EXACT-case. The logger
     // always writes the lowercase `.txt` suffix and preserves only the
@@ -181,6 +184,7 @@ describe("soak artifacts: log collection", () => {
     }
   });
 
+  // Verifies: honors a pinned retention: beyond-retention and zero-retention backups are never matched.
   it("honors a pinned retention: beyond-retention and zero-retention backups are never matched", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "soak-artifacts-"));
     try {
@@ -223,6 +227,7 @@ describe("soak artifacts: log collection", () => {
     }
   });
 
+  // Verifies: resolves the retention from HIKOUTEI_LOG_BACKUPS exactly like the library logger.
   it("resolves the retention from HIKOUTEI_LOG_BACKUPS exactly like the library logger", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "soak-artifacts-"));
     const prior = process.env.HIKOUTEI_LOG_BACKUPS;
@@ -261,6 +266,7 @@ describe("soak artifacts: log collection", () => {
     }
   });
 
+  // Verifies: never collects SQLite database, WAL, or journal files.
   it("never collects SQLite database, WAL, or journal files", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "soak-artifacts-"));
     try {
@@ -284,6 +290,7 @@ describe("soak artifacts: log collection", () => {
     }
   });
 
+  // Verifies: drops malicious pre-existing log/backup content instead of byte-copying it.
   it("drops malicious pre-existing log/backup content instead of byte-copying it", async () => {
     // Regression: a pre-existing file that merely shares the log name (a
     // leftover backup, an operator note, an attacker-placed file) must
@@ -328,6 +335,7 @@ describe("soak artifacts: log collection", () => {
     }
   });
 
+  // Verifies: trims whitespace-padded custom log paths exactly like the logger before collecting.
   it("trims whitespace-padded custom log paths exactly like the logger before collecting", async () => {
     // The library logger trims HIKOUTEI_LOG_FILE before normalizing the
     // extension; the collector must follow the same rule so a padded
@@ -357,6 +365,7 @@ describe("soak artifacts: log collection", () => {
     }
   });
 
+  // Verifies: normalizes extensionless custom log paths to .txt before collecting.
   it("normalizes extensionless custom log paths to .txt before collecting", async () => {
     expect(normalizeSoakLogFilePath("operator-log")).toBe("operator-log.txt");
     expect(normalizeSoakLogFilePath("deep/nested/operator-log")).toBe("deep/nested/operator-log.txt");

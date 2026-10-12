@@ -11,7 +11,7 @@
 
 import type { SyncServiceStorage } from "./compositionPorts.js";
 import type { TypedSheetsEntityMapping } from "../../orm/mapping/contracts.js";
-import type { TypedSheetsEntityWriterOptions } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import type { InternalSyncServiceOptions } from "./serviceOptions.js";
 import type { RequestTelemetry } from "./requestTelemetry.js";
 import type { SyncSheetsProvider } from "@hikoutei/contracts/sheets/syncSheets.js";
@@ -31,7 +31,7 @@ import {
   type WorkerReport,
 } from "@hikoutei/ikisaki";
 import { SheetsEffectDispatcher } from "../outbound/SheetsEffectDispatcher.js";
-import type { SyncTimingSink } from "@hikoutei/storage/sync/telemetry/syncTiming.js";
+import type { SyncTimingSink } from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import {
   describeErrorForInternalLog,
   HIKOUTEI_LOG_LEVELS,

@@ -36,11 +36,12 @@ import { isNormalizedCell } from "@hikoutei/contracts/encoding/index.js";
 import { GOOGLE_SHEETS_API_DEFAULTS } from "../constants.js";
 import { invalidProviderRequest, invalidProviderState } from "../errors.js";
 import { identityFromNormalizedCell } from "../model/valueNormalization.js";
-import type { PreflightContext, PreflightRow } from "../model/preflightContext.js";
+import type { PreflightContext, PreflightRow } from "../model/preflightTypes.js";
 import type { PlannedReceipt, WorkingRow } from "../model/plannerContracts.js";
 import {
   buildAppendBatchRequests,
   buildCombinedAppendRequests,
+  largestFittingCount,
   resolveAppendBudget,
   type CombinedAppendRoute,
 } from "../model/batchBuilder.js";
@@ -499,17 +500,8 @@ function resolveCombinedAppendBudget(
 ): { readonly includeCount: number; readonly hasMore: boolean } {
   const total = routes.reduce((sum, route) => sum + route.rows.length, 0);
   if (total === 0) return { includeCount: 0, hasMore: false };
-  let low = 1;
-  let high = total;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (build(mid).bytes <= maxBatchBytes) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return { includeCount: low, hasMore: low < total };
+  const includeCount = largestFittingCount(total, build, maxBatchBytes, 1);
+  return { includeCount, hasMore: includeCount < total };
 }
 
 /**

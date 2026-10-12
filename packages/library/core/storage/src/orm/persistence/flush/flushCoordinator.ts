@@ -11,7 +11,7 @@ import {
   EMPTY_STRING_LENGTH_ZERO,
   POSITIVE_SAFE_INTEGER_MINIMUM,
 } from "@hikoutei/contracts/constants.js";
-import { SYNC_TIMING_SCOPES } from "../../../sync/telemetry/syncTiming.js";
+import { SYNC_TIMING_SCOPES } from "@hikoutei/contracts/shared/observability/syncTiming.js";
 import {
   awaitTakeoverableWriterLeaseWithAdapter,
   WRITER_LEASE_CLAIM_RESULT_KINDS,

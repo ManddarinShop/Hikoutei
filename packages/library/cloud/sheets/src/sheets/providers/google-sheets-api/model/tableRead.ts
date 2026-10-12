@@ -21,7 +21,7 @@ import {
   gridRowCells,
 } from "./preflightRows.js";
 import { readRegisteredHeaders } from "./preflightHeaders.js";
-import type { ParsedGridData } from "./preflightContext.js";
+import type { ParsedGridData } from "./preflightTypes.js";
 import {
   computedValueFromApiCell,
   isComputedBlankCell,

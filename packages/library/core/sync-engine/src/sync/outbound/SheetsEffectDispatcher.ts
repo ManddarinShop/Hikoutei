@@ -79,7 +79,7 @@ import {
   SYNC_SHEETS_ERROR_CODES,
   SyncSheetsContractError,
 } from "@hikoutei/contracts/sheets/errors.js";
-import { fromSqlNullable } from "@hikoutei/storage/storage/sqlite/sqlState.js";
+import { fromSqlNullable } from "@hikoutei/contracts/storage/sql.js";
 import {
   PreparedDispatchError,
   safeProviderErrorMessage,

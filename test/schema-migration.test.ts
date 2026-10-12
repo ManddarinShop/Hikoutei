@@ -143,7 +143,9 @@ async function seedPreV7Rows(sql: SqlExecutor): Promise<void> {
   );
 }
 
+// Verifies the SQLite schema v7 cleanup migration suite.
 describe("SQLite schema v7 cleanup migration", () => {
+  // Verifies: installs the v9 schema fresh: no projection_row_binding, no dead columns, straight version stamp.
   it("installs the v9 schema fresh: no projection_row_binding, no dead columns, straight version stamp", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -179,6 +181,7 @@ describe("SQLite schema v7 cleanup migration", () => {
       .resolves.toEqual({ user_version: 9 });
   });
 
+  // Verifies: migrates a genuine v6 store to v7 in place: drops the orphan table and dead columns, keeps row data.
   it("migrates a genuine v6 store to v7 in place: drops the orphan table and dead columns, keeps row data", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -245,6 +248,7 @@ describe("SQLite schema v7 cleanup migration", () => {
       .resolves.toEqual({ user_version: 9 });
   });
 
+  // Verifies: is idempotent on reopen: an already-current database applies no steps.
   it("is idempotent on reopen: an already-current database applies no steps", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -270,6 +274,7 @@ describe("SQLite schema v7 cleanup migration", () => {
     });
   });
 
+  // Verifies: refuses a database stamped newer than the current schema.
   it("refuses a database stamped newer than the current schema", async () => {
     const adapter = await initializeMikroOrmSqliteAdapter({
       dbName: ":memory:",
@@ -286,6 +291,7 @@ describe("SQLite schema v7 cleanup migration", () => {
     });
   });
 
+  // Verifies: keeps api/entity.ts and the verification in agreement: projection_row_binding REMAINS reserved after v7.
   it("keeps api/entity.ts and the verification in agreement: projection_row_binding REMAINS reserved after v7", () => {
     // The orphan table is dropped by the v7 DDL, but the name stays reserved:
     // verifyDroppedColumns permanently checks its absence, and only the
@@ -297,6 +303,7 @@ describe("SQLite schema v7 cleanup migration", () => {
     expect(RESERVED_TABLE_NAMES.has("sheet_effect_outbox")).toBe(true);
   });
 
+  // Verifies: fresh-startup trap: an entity literally named projection_row_binding fails with the reserved-table-name error, never schema_version_inval....
   it("fresh-startup trap: an entity literally named projection_row_binding fails with the reserved-table-name error, never schema_version_invalid (descriptor gate + mapped-runtime resolution order)", async () => {
     // Pin for the Terra reproduction: while the name was un-reserved, a user
     // entity could legally bring its own `projection_row_binding` table to

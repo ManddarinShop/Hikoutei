@@ -49,7 +49,7 @@ import { SYNC_ROW_CHECK_HEADER } from "@hikoutei/contracts/sheets/rowCheck.js";
 import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import { GOOGLE_SHEETS_API_ROW_CHECK_FIELDS } from "../model/preflightFields.js";
 import { invalidProviderRequest } from "../errors.js";
-import type { ParsedGridData } from "../model/preflightContext.js";
+import type { ParsedGridData } from "../model/preflightTypes.js";
 import { apiStringValue } from "../model/preflightParsing.js";
 import {
   anchorColumnFor,
@@ -205,15 +205,15 @@ function buildRowChecksResult(
       resolveGridCell(grids, rowNumber, route.anchorAbsolute),
     );
     const checkText = provenCheckText(checkCell, route, rowNumber);
-    // A row is visible when the identity or check band holds content —
-    // EXACTLY the historical rule where an anchor-only row stays invisible
-    // to every read (the system row-id column never marks content).
-    // Key-blank drift inside the content area surfaces to the caller as an
-    // invalid identity (the polling decision escalates it); rows hidden
-    // entirely below the last visible row are the documented scoped-read
-    // ceiling the periodic forceFull safety scan covers (see
-    // preflightRows.ts readRows docs).
-    if (identity === null && checkText === null) continue;
+    // Every row inside the band-content span is returned — even one blank
+    // in all three bands. Data columns are unread here, so a populated row
+    // with a blank identity and a missing/foreign/literal check cell is
+    // indistinguishable from a truly empty row without the whole-table
+    // observation (the scoped-read contiguity rule in preflightRows.ts
+    // `readRows`); the polling gate escalates any row without a usable
+    // identity to that full-field read, which owns quarantine/orphan
+    // handling. Rows below the span stay the documented forceFull
+    // safety-scan ceiling.
     rows.push({
       rowNumber,
       identity,

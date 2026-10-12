@@ -22,7 +22,7 @@ import type {
   ParsedRowData,
   ParsedSheet,
   ParsedSpreadsheetDocument,
-} from "./preflightContext.js";
+} from "./preflightTypes.js";
 
 /** Promotes an untrusted `spreadsheets.get` body with runtime guards. */
 export function parseSpreadsheetDocument(

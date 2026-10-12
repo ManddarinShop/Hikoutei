@@ -69,7 +69,7 @@ import type {
   ParsedGridData,
   ParsedMergedCell,
   ParsedSheet,
-} from "./preflightContext.js";
+} from "./preflightTypes.js";
 import {
   computedValueFromApiCell,
   isComputedBlankCell,

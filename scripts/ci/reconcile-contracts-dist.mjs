@@ -204,8 +204,11 @@ function makeResolver(distRelPaths) {
 /** Extract relative (module-internal) specifiers a file references. */
 function extractRelativeSpecifiers(source) {
   const specs = new Set();
+  // The `import` branch is split into "paren form" and "space form" so no
+  // branch nests two adjacent whitespace runs; the unsplit version
+  // (`import\s*\(?\s*`) is quadratic on whitespace runs (S8786).
   for (const match of source.matchAll(
-    /(?:\bfrom\s*|\bimport\s*\(?\s*|\bexport\s+\*\s+from\s*|\brequire\s*\(\s*)['"](\.[^'"]+)['"]/g,
+    /(?:\bfrom\s*|\bimport(?:\s*\(\s*|\s+)|\bexport\s+\*\s+from\s*|\brequire\s*\(\s*)['"](\.[^'"]+)['"]/g,
   )) {
     specs.add(match[1]);
   }

@@ -1,3 +1,12 @@
+/**
+ * Tests for CoordinatedSheetsProvider, the lane-serializing wrapper around the Sheets provider.
+ *
+ * Covers mutation-lane serialization, lock-free value reads that bypass the lane, recovery-barrier
+ * reads through the lane, multi-lane batch observation with deadlock-free acquisition, redacted lane
+ * telemetry and metrics, in-lane preconditions, and direct prepared-effect application including
+ * its closed failure modes.
+ */
+
 import { describe, expect, it } from "vitest";
 import {
   COORDINATED_PREPARED_STATE_ERROR_CODES,
@@ -288,7 +297,9 @@ function fastAppendRequest(): Parameters<Inner["fastAppendRows"]>[0] {
   };
 }
 
+// Covers CoordinatedSheetsProvider.
 describe("CoordinatedSheetsProvider", () => {
+  // Verifies serializes concurrent mutations through one lane.
   it("serializes concurrent mutations through one lane", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -311,6 +322,7 @@ describe("CoordinatedSheetsProvider", () => {
     ]);
   });
 
+  // Verifies keeps value reads lock-free and parallel.
   it("keeps value reads lock-free and parallel", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -326,6 +338,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationCalls).toBe(0);
   });
 
+  // Verifies lets a value read overlap a mutation because reads bypass the lane.
   it("lets a value read overlap a mutation because reads bypass the lane", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -341,6 +354,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.readMaxConcurrent).toBeGreaterThanOrEqual(1);
   });
 
+  // Verifies releases the lane when a mutation throws so the next mutation proceeds.
   it("releases the lane when a mutation throws so the next mutation proceeds", async () => {
     const inner = new MockProvider();
     inner.fastAppendFail = true;
@@ -355,6 +369,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationMaxConcurrent).toBe(1);
   });
 
+  // Verifies serializes recovery barrier reads through the mutation lane.
   it("serializes recovery barrier reads through the mutation lane", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -369,6 +384,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationCalls).toBe(2);
   });
 
+  // Verifies acquires every involved lane for batch observation without deadlock.
   it("acquires every involved lane for batch observation without deadlock", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({
@@ -391,6 +407,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationMaxConcurrent).toBe(1);
   });
 
+  // Verifies delegates batch observation to the inner one-request capability.
   it("delegates batch observation to the inner one-request capability", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({
@@ -410,6 +427,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.observedBatch).toBe(true);
   });
 
+  // Verifies falls back to sequential per-request observation without the batch capability.
   it("falls back to sequential per-request observation without the batch capability", async () => {
     const inner = new SequentialOnlyProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -425,6 +443,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.snapshotCalls).toBe(2);
   });
 
+  // Verifies emits redacted lane telemetry without payload or secret material.
   it("emits redacted lane telemetry without payload or secret material", async () => {
     const inner = new MockProvider();
     const events: CoordinatorLaneEvent[] = [];
@@ -457,6 +476,7 @@ describe("CoordinatedSheetsProvider", () => {
     }
   });
 
+  // Verifies reports lane metrics for diagnostics.
   it("reports lane metrics for diagnostics", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -466,6 +486,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(metrics.get("default")?.completed).toBe(1);
   });
 
+  // Verifies runs the in-lane precondition after the queue wait and before the inner call.
   it("runs the in-lane precondition after the queue wait and before the inner call", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -512,6 +533,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(order).toEqual(["holder-end", "renew", "inner"]);
   });
 
+  // Verifies aborts before the inner call when the precondition rejects and releases the lane.
   it("aborts before the inner call when the precondition rejects and releases the lane", async () => {
     const inner = new MockProvider();
     const events: CoordinatorLaneEvent[] = [];
@@ -543,6 +565,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationCalls).toBe(1);
   });
 
+  // Verifies passes the inner provider to the remote closure without re-entering the lane.
   it("passes the inner provider to the remote closure without re-entering the lane", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -560,6 +583,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationMaxConcurrent).toBe(1);
   });
 
+  // Verifies serializes direct applyPreparedEffects calls through the mutation lane.
   it("serializes direct applyPreparedEffects calls through the mutation lane", async () => {
     // Regression: the coordinator's `applyPreparedEffects` used to forward to
     // the inner provider WITHOUT acquiring a mutation lane. The dispatcher
@@ -583,6 +607,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(stats.callOrder.filter((entry) => entry === "start:applyPreparedEffects").length).toBe(2);
   });
 
+  // Verifies serializes a direct applyPreparedEffects against a concurrent fastAppendRows on the same lane.
   it("serializes a direct applyPreparedEffects against a concurrent fastAppendRows on the same lane", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -598,6 +623,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.stats().mutationMaxConcurrent).toBe(1);
   });
 
+  // Verifies acquires every involved lane for a multi-route prepared apply.
   it("acquires every involved lane for a multi-route prepared apply", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({
@@ -618,6 +644,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationCalls).toBe(1);
   });
 
+  // Verifies fails closed when a prepared token carries no effect routes.
   it("fails closed when a prepared token carries no effect routes", async () => {
     const inner = new MockProvider();
     const coordinator = new CoordinatedSheetsProvider<Inner>({ inner });
@@ -629,6 +656,7 @@ describe("CoordinatedSheetsProvider", () => {
     expect(inner.mutationCalls).toBe(0);
   });
 
+  // Verifies throws CoordinatedPreparedStateError with PREPARED_APPLY_ROUTES_REQUIRED for empty effects.
   it("throws CoordinatedPreparedStateError with PREPARED_APPLY_ROUTES_REQUIRED for empty effects", async () => {
     expect.assertions(4);
     const inner = new MockProvider();
@@ -649,6 +677,7 @@ describe("CoordinatedSheetsProvider", () => {
     }
   });
 
+  // Verifies throws CoordinatedPreparedStateError with PREPARED_APPLY_ROUTES_REQUIRED for null prepared token.
   it("throws CoordinatedPreparedStateError with PREPARED_APPLY_ROUTES_REQUIRED for null prepared token", async () => {
     expect.assertions(4);
     const inner = new MockProvider();
@@ -665,6 +694,7 @@ describe("CoordinatedSheetsProvider", () => {
     }
   });
 
+  // Verifies throws CoordinatedPreparedStateError with PREPARED_APPLY_EFFECT_SHEET_ID_REQUIRED for missing physicalSheetId.
   it("throws CoordinatedPreparedStateError with PREPARED_APPLY_EFFECT_SHEET_ID_REQUIRED for missing physicalSheetId", async () => {
     expect.assertions(4);
     const inner = new MockProvider();

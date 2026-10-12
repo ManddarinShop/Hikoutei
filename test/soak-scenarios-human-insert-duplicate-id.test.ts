@@ -134,7 +134,9 @@ class FakeClient {
 // Tests.
 // ---------------------------------------------------------------------------
 
+// Suite: humanInsertDuplicateId scenario.
 describe("humanInsertDuplicateId scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -143,6 +145,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(ids).toContain("human-insert-duplicate-id");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("human-insert-duplicate-id");
     expect(scenario.kind).toBe("data");
@@ -169,6 +172,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(plan.jitterMs).toBeGreaterThan(0);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = dupPlan();
     const context = {
@@ -186,6 +190,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: records a clean exact-identity rejection as the transient skip and leaves the existing row untouched.
   it("records a clean exact-identity rejection as the transient skip and leaves the existing row untouched", async () => {
     const plan = dupPlan();
     const client = new FakeClient();
@@ -220,6 +225,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: matches boolean/date cells by their typed projected strings (TRUE / ISO).
   it("matches boolean/date cells by their typed projected strings (TRUE / ISO)", async () => {
     // SoakCustomer has boolean `active` and date `signupAt`. The scenario's
     // direct-Sheet re-read must compare against the PROJECTED cell strings
@@ -244,6 +250,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: detects an overwrite when a typed boolean/date cell differs from the projected string.
   it("detects an overwrite when a typed boolean/date cell differs from the projected string", async () => {
     // A leak that overwrites the Sheet with the duplicate-insert (string)
     // values must be caught: the typed boolean/date cells no longer carry
@@ -261,6 +268,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: fails when a rejected duplicate insert still leaks an overwrite to the Sheet.
   it("fails when a rejected duplicate insert still leaks an overwrite to the Sheet", async () => {
     // The authority read alone reports the existing row unchanged, but a
     // write-then-postcondition failure that leaked the duplicate values onto
@@ -280,6 +288,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-identity_shifted insert rejection as a real failure.
   it("classifies a non-identity_shifted insert rejection as a real failure", async () => {
     // A rejected duplicate insert is an expected fail-closed conflict ONLY
     // on the exact `identity_shifted` evidence. A transport/validation
@@ -297,6 +306,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = dupPlan();
     const client = new FakeClient();
@@ -313,6 +323,7 @@ describe("humanInsertDuplicateId scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: guarantees cleanup removes the dedicated row even when the seam fails to reject.
   it("guarantees cleanup removes the dedicated row even when the seam fails to reject", async () => {
     // A seam that fails to reject the duplicate (a bug) is the corruption
     // failure this scenario hunts -> failed, but the guaranteed finally still

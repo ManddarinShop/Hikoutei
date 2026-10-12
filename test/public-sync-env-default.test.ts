@@ -38,6 +38,7 @@ const SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/sync-test-1/edit
 const CREDENTIALS_ENV = "GOOGLE_APPLICATION_CREDENTIALS";
 const URL_ENV = "HIKOUTEI_SYNC_SPREADSHEET_URL";
 
+// Covers createTypedSheetsWithSync public env default.
 describe("createTypedSheetsWithSync public env default", () => {
   const saved: Record<string, string | undefined> = {};
   const created: string[] = [];
@@ -68,6 +69,7 @@ describe("createTypedSheetsWithSync public env default", () => {
     process.env[key] = value;
   }
 
+  // Verifies defaults env to process.env so autostart resolves host variables.
   it("defaults env to process.env so autostart resolves host variables", async () => {
     // A valid URL plus a credentials path that does not exist: the bridge
     // validates the credentials file BEFORE any remote contact, so the
@@ -92,6 +94,7 @@ describe("createTypedSheetsWithSync public env default", () => {
     expect(diagnostics[0]?.level).toBe("error");
   });
 
+  // Verifies reads process.env at call time (local-only when the host env is empty).
   it("reads process.env at call time (local-only when the host env is empty)", async () => {
     // No env vars set anywhere: without the URL the documented behavior is
     // the local-only runtime plus the "sync disabled" info diagnostic.
@@ -113,6 +116,7 @@ describe("createTypedSheetsWithSync public env default", () => {
     await result.hikoutei.close();
   });
 
+  // Verifies an explicit options.env overrides the host process env.
   it("an explicit options.env overrides the host process env", async () => {
     // The host process env points at a valid autostart configuration; the
     // explicit env omits the URL, so the explicit value must win and the

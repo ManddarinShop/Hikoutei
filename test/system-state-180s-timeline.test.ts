@@ -211,7 +211,9 @@ function simulateSystemStateCompletion(
   return lastSystemCompletion;
 }
 
+// Verifies the simulated 180 s convergence critical path under pre-fix and post-fix drain orders.
 describe("System_State 180 s convergence critical path", () => {
+  // Verifies the pre-fix ordering plus scan/poll interference misses the deadline.
   it("proves the pre-fix critical path misses the 180 s deadline", () => {
     // Pre-fix: the first polling pass and the first reconciliation scan
     // arrive immediately at t=0 and then every 60 s, competing with the
@@ -235,6 +237,7 @@ describe("System_State 180 s convergence critical path", () => {
     expect(completionMs).toBeGreaterThan(CONVERGENCE_DEADLINE_MS);
   });
 
+  // Verifies the post-fix prioritized drain with gated interference fits the deadline.
   it("proves the post-fix critical path fits inside the 180 s deadline", () => {
     // Post-fix: System_State fast appends and regular followers drain FIRST;
     // the first reconciliation is delayed and gated while the outbox is
@@ -250,6 +253,7 @@ describe("System_State 180 s convergence critical path", () => {
     expect(completionMs).toBeLessThanOrEqual(2 * INTERFERENCE_CADENCE_MS);
   });
 
+  // Verifies the pre-fix drain alone fits, isolating interference as the cause of the miss.
   it("documents that the pre-fix drain alone would fit without interference", () => {
     // Control: with no interference the same 56-effect drain finishes well
     // inside the deadline under either order; the pre-fix miss above comes

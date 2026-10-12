@@ -7,10 +7,8 @@
  * releases mirrored from every claim site wired into the bootstrap.
  */
 
-import {
-  DEFAULT_MAPPED_WRITER_ROLE,
-  type TypedSheetsEntityWriterOptions,
-} from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import { DEFAULT_MAPPED_WRITER_ROLE } from "@hikoutei/storage/orm/persistence/support/contracts.js";
+import type { TypedSheetsEntityWriterOptions } from "@hikoutei/contracts/sync-orm/writer.js";
 import type { SyncServiceStorage } from "./compositionPorts.js";
 import {
   DEFAULT_WORKER_ROLE,

@@ -122,6 +122,7 @@ class FakeClient {
 // ---------------------------------------------------------------------------
 
 describe("localHumanWriteRace scenario", () => {
+  // Verifies: is registered among the registered scenarios.
   it("is registered among the registered scenarios", () => {
     // Registry-agnostic: assert this scenario is registered without binding
     // to the full ordered id list, so later scenario PRs never need to touch
@@ -130,6 +131,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(ids).toContain("local-human-write-race");
   });
 
+  // Verifies: exposes the scheduler contract and a deterministic plan for a valid entity.
   it("exposes the scheduler contract and a deterministic plan for a valid entity", () => {
     expect(scenario.id).toBe("local-human-write-race");
     expect(scenario.kind).toBe("data");
@@ -155,6 +157,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(plan.jitterMs).toBeGreaterThan(0);
   });
 
+  // Verifies: skips when the plan's entity is not in the active subset (local-mode).
   it("skips when the plan's entity is not in the active subset (local-mode)", async () => {
     const plan = racePlan("update");
     const context = {
@@ -172,6 +175,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(result.failures).toBe(0);
   });
 
+  // Verifies: verifies a local update race winner when the local write commits (ok).
   it("verifies a local update race winner when the local write commits (ok)", async () => {
     const plan = racePlan("update");
     const client = new FakeClient();
@@ -191,6 +195,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: verifies a human winner is never silently lost when the authority observes it (ok).
   it("verifies a human winner is never silently lost when the authority observes it (ok)", async () => {
     // Core hypothesis: a local write raced with a human edit must never
     // silently lose the human value. When the authority (public reads) shows
@@ -217,6 +222,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: verifies a delete race winner when our delete provably committed (ok).
   it("verifies a delete race winner when our delete provably committed (ok)", async () => {
     const plan = racePlan("delete");
     const client = new FakeClient();
@@ -230,6 +236,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-stale local rejection as a real failure (scenario-error).
   it("classifies a non-stale local rejection as a real failure (scenario-error)", async () => {
     // A rejected local write is an expected stale conflict ONLY on exact
     // CAS/stale evidence. A non-stale (validation/transport) rejection is a
@@ -257,6 +264,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: treats an exact stale-write conflict as not a failure and truthfully skips when the winner is unobse.
   it("treats an exact stale-write conflict as not a failure and truthfully skips when the winner is unobserved", async () => {
     // On a delete race, a rejected local delete is EXPECTED when the error
     // carries an exact CAS/stale/hash-mismatch code. It is not a failure; the
@@ -285,6 +293,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: classifies a non-stale human-write rejection on an update race as a failure.
   it("classifies a non-stale human-write rejection on an update race as a failure", async () => {
     const plan = racePlan("update");
     const client = new FakeClient();
@@ -301,6 +310,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records an identity-shifted human-write rejection as a transient skip, not a failure.
   it("records an identity-shifted human-write rejection as a transient skip, not a failure", async () => {
     // The direct client's identity-shift guard rejects the human write with
     // the stable `identity_shifted` class when a CONCURRENT actor shifted
@@ -322,6 +332,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: skips truthfully when the dedicated row's projection never appears (gating).
   it("skips truthfully when the dedicated row's projection never appears (gating)", async () => {
     const plan = racePlan("update");
     const client = new FakeClient();
@@ -338,6 +349,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: accepts an OPEN sync_conflict as conflict-recorded when the winner never settles (ok).
   it("accepts an OPEN sync_conflict as conflict-recorded when the winner never settles (ok)", async () => {
     // Core harness fix: neither candidate value settles in the authority
     // within the bound (the outbox-gated poll skips the row), but the human
@@ -385,6 +397,7 @@ describe("localHumanWriteRace scenario", () => {
     });
   });
 
+  // Verifies: records cleanup-unresolved-conflict and keeps the row when the conflict never clears.
   it("records cleanup-unresolved-conflict and keeps the row when the conflict never clears", async () => {
     // The resolve-then-delete cleanup advances the conflicted field, but the
     // conflict record never leaves the blocking state within the bound (a
@@ -421,6 +434,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(typeof kept === "string" && kept.endsWith(SYSTEM_WINS_RESOLVE_SUFFIX)).toBe(true);
   });
 
+  // Verifies: waits for the binding outbox to drain, then deletes after a verified winner (ok).
   it("waits for the binding outbox to drain, then deletes after a verified winner (ok)", async () => {
     // Live-evidence regression: a `race-winner-verified` row with NO
     // conflict still fails closed when candidate effects for its binding
@@ -450,6 +464,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows()).toEqual([]);
   });
 
+  // Verifies: records cleanup-outbox-busy and keeps the row when the binding outbox never drains.
   it("records cleanup-outbox-busy and keeps the row when the binding outbox never drains", async () => {
     // The binding effect is stuck in flight past the bounded wait (a wedged
     // candidate cycle). The row must be KEPT — never deleted through a
@@ -473,6 +488,7 @@ describe("localHumanWriteRace scenario", () => {
     expect(em.rows().length).toBe(1);
   });
 
+  // Verifies: still skips winner-not-verified when the winner never settles and no conflict is recorded.
   it("still skips winner-not-verified when the winner never settles and no conflict is recorded", async () => {
     // The negative control: an unobserved winner with NO conflict record is
     // still a truthful skip, never an unobserved ok.

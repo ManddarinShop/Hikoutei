@@ -9,6 +9,7 @@
  * ./errors.js for the setupPathSafetyError carrier factory and SETUP_ERROR_CODES.
  */
 
+import { basename, dirname, join } from "node:path";
 import {
   type Stats,
   closeSync,
@@ -45,6 +46,15 @@ export function setupStateTempPath(statePath: string): string {
 /** Exclusive setup lock path for a state file. */
 export function setupLockPath(statePath: string): string {
   return `${statePath}${SETUP_LOCK_SUFFIX}`;
+}
+
+/** Canonical key path for credential-pool entry `index` (2-based). */
+export function poolKeyPath(primaryKeyPath: string, index: number): string {
+  const base = basename(primaryKeyPath);
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  return join(dirname(primaryKeyPath), `${stem}-${index}${ext}`);
 }
 
 // ---------------------------------------------------------------------------

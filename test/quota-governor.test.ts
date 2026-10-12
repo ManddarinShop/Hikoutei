@@ -32,7 +32,9 @@ import {
   RollingQuotaBudget,
 } from "@hikoutei/ikisaki";
 
+// Covers RollingQuotaBudget.
 describe("RollingQuotaBudget", () => {
+  // Verifies refuses starts beyond the window budget WITHOUT reserving.
   it("refuses starts beyond the window budget WITHOUT reserving", async () => {
     let now = 1_000_000;
     const budget = new RollingQuotaBudget({
@@ -61,6 +63,7 @@ describe("RollingQuotaBudget", () => {
     expect(budget.reservedCount()).toBe(3);
   });
 
+  // Verifies makes a budget violation impossible under concurrent admission.
   it("makes a budget violation impossible under concurrent admission", async () => {
     // Frozen clock + no-op sleep: every concurrent caller decides against the
     // SAME window state within one synchronous tick.
@@ -88,6 +91,7 @@ describe("RollingQuotaBudget", () => {
     }
   });
 
+  // Verifies slides the window: refused slots stay open and admit once budget frees.
   it("slides the window: refused slots stay open and admit once budget frees", async () => {
     let now = 0;
     const budget = new RollingQuotaBudget({
@@ -117,6 +121,7 @@ describe("RollingQuotaBudget", () => {
     );
   });
 
+  // Verifies waits for the window slot when the bounded wait covers it.
   it("waits for the window slot when the bounded wait covers it", async () => {
     let now = 0;
     const budget = new RollingQuotaBudget({
@@ -137,6 +142,7 @@ describe("RollingQuotaBudget", () => {
     expect(now).toBe(1_000);
   });
 
+  // Verifies rolls back a provisional reservation without advancing the window.
   it("rolls back a provisional reservation without advancing the window", async () => {
     // Frozen clock, budget 1/window: after an admitted reservation the window
     // is full until t=1_000. A rollback must free EXACTLY that reservation:
@@ -176,6 +182,7 @@ describe("RollingQuotaBudget", () => {
     expect(budget.reservedCount()).toBe(0);
   });
 
+  // Verifies keeps reservations chronological across rollback + out-of-order re-admission.
   it("keeps reservations chronological across rollback + out-of-order re-admission", async () => {
     // Terra round-3 regression: rollback removed an OLDER reservation while
     // a later queued (future-`reservedAt`) reservation stayed in the list, so
@@ -221,6 +228,7 @@ describe("RollingQuotaBudget", () => {
     expect(budget.reservedCount()).toBe(2);
   });
 
+  // Verifies treats an Infinity budget as unlimited and rejects invalid rates.
   it("treats an Infinity budget as unlimited and rejects invalid rates", async () => {
     const unlimited = new RollingQuotaBudget({
       maxStartsPerWindow: Number.POSITIVE_INFINITY,
@@ -241,6 +249,7 @@ describe("RollingQuotaBudget", () => {
     ).rejects.toThrow(RateLimitOptionsError);
   });
 
+  // Verifies exposes the budget error code for invalid constructor rates.
   it("exposes the budget error code for invalid constructor rates", () => {
     expect.assertions(2);
     try {
@@ -254,7 +263,9 @@ describe("RollingQuotaBudget", () => {
   });
 });
 
+// Covers QuotaPacingGovernor.
 describe("QuotaPacingGovernor", () => {
+  // Verifies stays nominal at 1x (base interval) until a 429 is observed.
   it("stays nominal at 1x (base interval) until a 429 is observed", () => {
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 800, now: () => 0 });
     expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.READ)).toBe(800);
@@ -269,6 +280,7 @@ describe("QuotaPacingGovernor", () => {
     );
   });
 
+  // Verifies grows the interval x2 per 429, capped at 4x base, per lane.
   it("grows the interval x2 per 429, capped at 4x base, per lane", () => {
     let now = 1_000;
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 1_000, now: () => now });
@@ -288,6 +300,7 @@ describe("QuotaPacingGovernor", () => {
     expect(governor.intervalMsFor(QUOTA_GOVERNOR_LANES.WRITE)).toBe(1_000);
   });
 
+  // Verifies recovers by halving per quiet window after the success threshold and never below base.
   it("recovers by halving per quiet window after the success threshold and never below base", () => {
     let now = 0;
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 1_000, now: () => now });
@@ -321,6 +334,7 @@ describe("QuotaPacingGovernor", () => {
     });
   });
 
+  // Verifies steps down after elapsed quiet time alone.
   it("steps down after elapsed quiet time alone", () => {
     let now = 10_000;
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 1_000, now: () => now });
@@ -337,6 +351,7 @@ describe("QuotaPacingGovernor", () => {
     });
   });
 
+  // Verifies recovers lazily on observation with NO request starts at all.
   it("recovers lazily on observation with NO request starts at all", () => {
     let now = 10_000;
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 1_000, now: () => now });
@@ -361,7 +376,9 @@ describe("QuotaPacingGovernor", () => {
   });
 });
 
+// Covers quota governor composition with the interval limiters.
 describe("quota governor composition with the interval limiters", () => {
+  // Verifies paces through the governor interval and never advances the horizon on refusal under backoff.
   it("paces through the governor interval and never advances the horizon on refusal under backoff", async () => {
     let now = 1_000_000;
     const governor = new QuotaPacingGovernor({ baseIntervalMs: 1_000, now: () => now });
@@ -393,6 +410,7 @@ describe("quota governor composition with the interval limiters", () => {
     expect(limiter.lastStart()).toBe(1_004_000);
   });
 
+  // Verifies isQuotaLimitedOutcome matches 429 status or RESOURCE_EXHAUSTED code only.
   it("isQuotaLimitedOutcome matches 429 status or RESOURCE_EXHAUSTED code only", () => {
     expect(isQuotaLimitedOutcome({
       httpStatus: presentValue(GOOGLE_SHEETS_API_DEFAULTS.QUOTA_LIMIT_HTTP_STATUS),

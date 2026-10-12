@@ -90,7 +90,7 @@ export function buildToolDefinitions(
     {
       name: "create_record",
       description:
-        "Create one record in the local SQLite authority. Delivery to the Google Sheet is asynchronous; check get_sync_status afterwards. All non-nullable fields are required; dates are ISO 8601 strings.",
+        "Create one record in the local SQLite authority. Delivery to the Google Sheet is asynchronous; check get_sync_status afterwards. All non-nullable fields are required; dates use canonical UTC ISO 8601 form YYYY-MM-DDTHH:mm:ss.sssZ.",
       inputSchema: {
         type: "object",
         properties: {
