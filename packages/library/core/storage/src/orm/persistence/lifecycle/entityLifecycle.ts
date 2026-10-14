@@ -131,6 +131,7 @@ export async function applyMappedChange(
       rowBindingId,
       anchor,
       encodedEntity,
+      options,
     );
   }
   emitTiming(writer, {
@@ -357,6 +358,7 @@ async function deleteMappedEntity(
   rowBindingId: string,
   anchor: string,
   encodedEntity: Readonly<Record<string, NormalizedCell>>,
+  options: { readonly suppressUserProjection?: boolean },
 ): Promise<string> {
   await requireActiveRowBinding(sql, mapping, rowBindingId, entityId, anchor);
   const entityRevision = await requireActiveCanonicalEntityRevision(sql, mapping, entityId);
@@ -387,6 +389,7 @@ async function deleteMappedEntity(
         [],
         commitId,
         result.entityRevision,
+        { includeUserProjection: !options.suppressUserProjection },
       );
     },
   };

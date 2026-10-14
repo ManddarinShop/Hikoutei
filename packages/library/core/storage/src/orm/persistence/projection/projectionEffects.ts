@@ -147,6 +147,15 @@ export async function projectionEffects(
     (projection) => projection.projection === SYNC_PROJECTIONS.USER_INPUT,
   );
   if (userProjection === undefined) return effects;
+  // A suppressed delete commits the System_State tombstone only, leaving a
+  // live User_Input candidate row untouched for resolution/cleanup instead of
+  // enqueueing a delete that would overwrite it.
+  if (
+    changeKind === SCALAR_ENTITY_CHANGE_KINDS.DELETE &&
+    options.includeUserProjection === false
+  ) {
+    return effects;
+  }
   const shouldReconcileUserInput = options.includeUserProjection !== false &&
     userProjection !== undefined &&
     changeKind !== SCALAR_ENTITY_CHANGE_KINDS.DELETE &&

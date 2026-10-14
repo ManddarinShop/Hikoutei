@@ -937,7 +937,7 @@ describe("issue #196 system-advance conflict resolution", () => {
     ).resolves.toMatchObject({ status: "human-edit" });
   });
 
-  it("10. a mapped delete with an unresolved conflict fails closed and rolls back completely", async () => {
+  it("10. a mapped delete with an unresolved conflict commits the tombstone while suppressing the User_Input delete", async () => {
     const provider = buildProvider();
     const service = await openService(provider);
     const anchor = await createEntity(service, provider, "u1", "pending");
@@ -948,36 +948,43 @@ describe("issue #196 system-advance conflict resolution", () => {
     const effectsBefore = await service.storage.read(({ sql }) => sql.all<{
       readonly effect_id: string;
     }>(
-      "SELECT effect_id FROM sheet_effect_outbox ORDER BY stream_sequence",
+      "SELECT effect_id FROM sheet_effect_outbox WHERE projection = ? ORDER BY stream_sequence",
+      [SYNC_PROJECTIONS.USER_INPUT],
     ));
     const em = service.hikoutei.em.fork();
     const user = await em.findOne(User, { id: "u1" });
     if (user === null) throw new Error("expected the conflicted entity");
     em.remove(user);
-    await expect(em.flush()).rejects.toMatchObject({
-      code: "projection_outbox_blocked",
-    });
+    // A live User_Input candidate suppresses the User_Input projection
+    // effect but never blocks the canonical lifecycle: the delete still
+    // commits entity/canonical/System_State so the row cannot wedge behind
+    // the unresolved candidate. Delivery-time gating still protects the
+    // sheet row.
+    await expect(em.flush()).resolves.toBeUndefined();
 
-    // Nothing changed: entity, canonical state, binding, conflict, outbox.
-    await expect(service.hikoutei.em.fork().findOne(User, { id: "u1" })).resolves.toMatchObject({
-      status: "canonical",
-    });
+    // Canonical lifecycle committed: entity is gone and tombstoned.
+    await expect(service.hikoutei.em.fork().findOne(User, { id: "u1" })).resolves.toBeNull();
     const canonical = await service.storage.read(({ sql }) => sql.get<{
       readonly status: string;
     }>(
       "SELECT status FROM entity_state WHERE entity_id = ?",
       ["entity:conflict_users:u1"],
     ));
-    expect(canonical).toEqual({ status: "active" });
+    expect(canonical).toEqual({ status: "tombstoned" });
     await expect(readConflictRow(service)).resolves.toMatchObject({ status: "OPEN" });
     const effectsAfter = await service.storage.read(({ sql }) => sql.all<{
       readonly effect_id: string;
     }>(
-      "SELECT effect_id FROM sheet_effect_outbox ORDER BY stream_sequence",
+      "SELECT effect_id FROM sheet_effect_outbox WHERE projection = ? ORDER BY stream_sequence",
+      [SYNC_PROJECTIONS.USER_INPUT],
     ));
     expect(effectsAfter.map((effect) => effect.effect_id)).toEqual(
       effectsBefore.map((effect) => effect.effect_id),
     );
+    expect(provider.readRow(USER_INPUT_SHEET_ID, anchor).fields.status).toEqual({
+      kind: "string",
+      value: "human-edit",
+    });
     await expect(readCommands(service)).resolves.toEqual([]);
   });
 

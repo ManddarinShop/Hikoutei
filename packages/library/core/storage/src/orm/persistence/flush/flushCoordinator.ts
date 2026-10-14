@@ -43,9 +43,6 @@ import {
   type TypedSheetsEntityMapping,
   type TypedSheetsEntityMappingRegistry,
 } from "../../mapping/entityMapping.js";
-import {
-  requireTypedSheetsEntityProjection,
-} from "../../mapping/projection.js";
 import { SYNC_PROJECTIONS } from "@hikoutei/contracts/sheets/constants.js";
 import {
   TYPED_SHEETS_ORM_ERROR_CODES,
@@ -67,7 +64,6 @@ import {
 } from "../support/canonicalState.js";
 import {
   requireChangeEntityId,
-  throwProjectionBlocked,
 } from "../support/helpers.js";
 import {
   countsForPlans,
@@ -132,18 +128,11 @@ export function createMappedTypedSheetsFlushCoordinator(
           context.sql,
           plan,
         );
-        if (
-          plan.change.kind === SCALAR_ENTITY_CHANGE_KINDS.DELETE &&
-          hasActiveCandidate
-        ) {
-          // Fail closed BEFORE any entity, canonical, or outbox change: a
-          // delete must never materialize over a live user candidate.
-          throwProjectionBlocked(
-            plan.mapping,
-            requireTypedSheetsEntityProjection(plan.mapping, SYNC_PROJECTIONS.USER_INPUT),
-            "delete is blocked by an unresolved User_Input candidate",
-          );
-        }
+        // A live User_Input candidate suppresses the User_Input projection
+        // effect but never blocks the canonical lifecycle: the delete still
+        // commits entity/canonical/System_State, so the row can never wedge
+        // behind an unresolved candidate. Delivery-time candidate gating
+        // still protects the sheet row.
         const { commitId } = await applyMappedChange(
           context.sql,
           fence,
@@ -151,7 +140,8 @@ export function createMappedTypedSheetsFlushCoordinator(
           plan,
           {
             suppressUserProjection: hasActiveCandidate &&
-              plan.change.kind === SCALAR_ENTITY_CHANGE_KINDS.UPDATE,
+              (plan.change.kind === SCALAR_ENTITY_CHANGE_KINDS.UPDATE ||
+                plan.change.kind === SCALAR_ENTITY_CHANGE_KINDS.DELETE),
           },
         );
         if (syncFlushHook !== undefined) {
